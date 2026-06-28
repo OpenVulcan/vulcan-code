@@ -317,6 +317,7 @@ pub fn build_native_tool_catalog(
     let snapshot = Arc::new(snapshot);
     let shell_support =
         HostCommandShellSupport::from_configured_default_id(configured_default_command_shell_id);
+    let rtk_support = RtkRoutingSupport::from_configuration(&config.host_tools.rtk);
 
     let definitions = vec![
         build_workspace_describe_tool(snapshot.clone()),
@@ -328,7 +329,7 @@ pub fn build_native_tool_catalog(
         build_create_goal_tool(),
         build_update_goal_tool(),
         build_prompt_skill_detail_tool(),
-        build_shell_command_tool(shell_support.clone()),
+        build_shell_command_tool(shell_support.clone(), rtk_support),
         build_terminal_session_tool(command_session_runtime, shell_support),
         build_mcp_server_list_tool(snapshot.clone()),
         build_vmm_memory_search_tool(snapshot.clone()),

@@ -82,6 +82,10 @@ pub struct WorkbenchSnapshot {
     /// 从共享配置文件解析出的 Git 提交弹窗设置。
     #[serde(default)]
     pub git_commit: GitCommitSettingsSummary,
+    /// Host-owned tool settings resolved from the shared configuration file.
+    /// 从共享配置文件解析出的宿主自有工具设置。
+    #[serde(default)]
+    pub host_tools: HostToolsSettingsSummary,
     /// AI capability route summaries shown by the composer quick controls.
     /// 输入区快捷控制展示的 AI 能力路由摘要。
     #[serde(default)]

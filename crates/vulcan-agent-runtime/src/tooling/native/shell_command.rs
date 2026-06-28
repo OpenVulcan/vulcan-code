@@ -1,9 +1,17 @@
 use super::*;
+use crate::provider_config::{PersistedRtkRouteMode, PersistedRtkToolConfiguration};
+use crate::runtime_assets;
+use std::collections::BTreeSet;
+
+/// Hard timeout for the lightweight RTK rewrite probe.
+/// 轻量 RTK rewrite 探测使用的硬超时。
+const RTK_REWRITE_TIMEOUT_MS: u64 = 1_500;
 
 /// Builds the one-shot shell-command host-owned native tool.
 /// 构建一次性 shell 命令宿主自有原生工具。
 pub(crate) fn build_shell_command_tool(
     shell_support: HostCommandShellSupport,
+    rtk_support: RtkRoutingSupport,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from("shell_command"),
@@ -16,10 +24,13 @@ pub(crate) fn build_shell_command_tool(
 
     build_native_tool_definition(
         descriptor,
-        shell_command_args_schema(&shell_support),
+        shell_command_args_schema(&shell_support, &rtk_support),
         move |request: NativeToolExecutionRequest| {
             let shell_support = shell_support.clone();
-            Box::pin(async move { execute_shell_command_tool(request, &shell_support).await })
+            let rtk_support = rtk_support.clone();
+            Box::pin(async move {
+                execute_shell_command_tool(request, &shell_support, &rtk_support).await
+            })
         },
     )
 }
@@ -43,6 +54,175 @@ pub(crate) struct ShellCommandToolArgs {
     /// Optional shell family selector such as `auto`, `powershell`, `cmd`, or `bash`.
     /// 可选 shell 类型选择器，例如 `auto`、`powershell`、`cmd` 或 `bash`。
     shell: Option<String>,
+    /// Optional per-call bypass for RTK routing when RTK support is exposed.
+    /// RTK 支持已暴露时用于单次调用绕过 RTK 路由的可选开关。
+    #[serde(default)]
+    disabled_rtk: bool,
+}
+
+/// RTK routing support captured when the shell-command tool is registered.
+/// 注册 shell-command 工具时捕获的 RTK 路由支持信息。
+#[derive(Debug, Clone)]
+pub(crate) struct RtkRoutingSupport {
+    /// Persisted RTK route configuration.
+    /// 持久化 RTK 路由配置。
+    configuration: PersistedRtkToolConfiguration,
+    /// Bundled RTK executable resolved from output root.
+    /// 从 output root 解析得到的随包 RTK 可执行文件。
+    executable_path: Option<PathBuf>,
+}
+
+impl RtkRoutingSupport {
+    /// Builds RTK support from persisted host-tool configuration and output-root assets.
+    /// 根据持久化宿主工具配置与 output-root 资产构建 RTK 支持信息。
+    pub(crate) fn from_configuration(configuration: &PersistedRtkToolConfiguration) -> Self {
+        let executable_path = if configuration.enabled
+            && configuration.route_mode != PersistedRtkRouteMode::Disabled
+        {
+            runtime_assets::resolve_bundled_rtk_executable_path()
+        } else {
+            None
+        };
+        Self {
+            configuration: configuration.clone(),
+            executable_path,
+        }
+    }
+
+    /// Builds disabled RTK support for tests and fallback construction.
+    /// 为测试与回退构建禁用态 RTK 支持信息。
+    #[cfg(test)]
+    pub(crate) fn disabled() -> Self {
+        Self {
+            configuration: PersistedRtkToolConfiguration {
+                enabled: false,
+                ..PersistedRtkToolConfiguration::default()
+            },
+            executable_path: None,
+        }
+    }
+
+    /// Builds RTK support from explicit test parts.
+    /// 根据显式测试部件构建 RTK 支持信息。
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(
+        configuration: PersistedRtkToolConfiguration,
+        executable_path: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            configuration,
+            executable_path,
+        }
+    }
+
+    /// Returns whether RTK routing can be used by shell_command.
+    /// 返回 shell_command 当前是否可以使用 RTK 路由。
+    pub(crate) fn is_available(&self) -> bool {
+        self.configuration.enabled
+            && self.configuration.route_mode != PersistedRtkRouteMode::Disabled
+            && self
+                .executable_path
+                .as_ref()
+                .is_some_and(|path| path.is_file())
+    }
+
+    /// Returns the directory containing the bundled RTK executable.
+    /// 返回随包 RTK 可执行文件所在目录。
+    fn executable_directory(&self) -> Option<PathBuf> {
+        self.executable_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(Path::to_path_buf)
+    }
+
+    /// Returns whether every RTK route in one rewritten command is allowed.
+    /// 返回某个改写命令中的全部 RTK 路由是否都被允许。
+    pub(crate) fn allows_routes(&self, routes: &BTreeSet<String>) -> bool {
+        if routes.is_empty() {
+            return false;
+        }
+
+        routes.iter().all(|route| {
+            if self.configuration.disabled_routes.contains(route) {
+                return false;
+            }
+            match self.configuration.route_mode {
+                PersistedRtkRouteMode::Disabled => false,
+                PersistedRtkRouteMode::Selected => {
+                    self.configuration.enabled_routes.contains(route)
+                }
+                PersistedRtkRouteMode::All => true,
+            }
+        })
+    }
+}
+
+/// One RTK routing decision captured for command execution and host audit payloads.
+/// 为命令执行与宿主审计载荷捕获的单条 RTK 路由决策。
+#[derive(Debug, Clone)]
+pub(crate) struct RtkRoutingDecision {
+    /// Whether the original command was replaced by an RTK rewrite result.
+    /// 原始命令是否已被 RTK rewrite 结果替换。
+    applied: bool,
+    /// Original command provided by the model.
+    /// 模型提供的原始命令。
+    original_command: String,
+    /// Rewritten command returned by RTK when available.
+    /// RTK 返回的可用改写命令。
+    rewritten_command: Option<String>,
+    /// RTK route names detected in the rewritten command.
+    /// 在改写命令中检测到的 RTK 路由名称集合。
+    routes: Vec<String>,
+    /// Bypass or failure reason when RTK was not applied.
+    /// 未应用 RTK 时的绕过或失败原因。
+    bypass_reason: Option<String>,
+}
+
+impl RtkRoutingDecision {
+    /// Builds an applied RTK routing decision.
+    /// 构建已应用的 RTK 路由决策。
+    fn applied(
+        original_command: &str,
+        rewritten_command: String,
+        routes: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            applied: true,
+            original_command: original_command.to_string(),
+            rewritten_command: Some(rewritten_command),
+            routes: routes.into_iter().collect(),
+            bypass_reason: None,
+        }
+    }
+
+    /// Builds a bypassed RTK routing decision.
+    /// 构建已绕过的 RTK 路由决策。
+    fn bypassed(
+        original_command: &str,
+        rewritten_command: Option<String>,
+        routes: BTreeSet<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            applied: false,
+            original_command: original_command.to_string(),
+            rewritten_command,
+            routes: routes.into_iter().collect(),
+            bypass_reason: Some(reason.into()),
+        }
+    }
+}
+
+/// Process execution options derived from RTK routing and host policy.
+/// 根据 RTK 路由与宿主策略派生的进程执行选项。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ShellCommandProcessOptions {
+    /// Directory prepended to PATH for this child process.
+    /// 为当前子进程前置到 PATH 的目录。
+    path_prefix: Option<PathBuf>,
+    /// Whether RTK telemetry should be disabled for this child process.
+    /// 当前子进程是否应禁用 RTK 遥测。
+    rtk_telemetry_disabled: bool,
 }
 
 /// One internal execution status returned by the host-owned shell-command runner.
@@ -110,8 +290,11 @@ pub(crate) fn shell_command_tool_description() -> String {
 
 /// Builds the JSON Schema advertised to the model for the host-owned `shell_command` tool.
 /// 为宿主自有 `shell_command` 工具构建对模型声明的 JSON Schema。
-pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport) -> Value {
-    json!({
+pub(crate) fn shell_command_args_schema(
+    shell_support: &HostCommandShellSupport,
+    rtk_support: &RtkRoutingSupport,
+) -> Value {
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "command": {
@@ -140,7 +323,24 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
         },
         "required": ["command"],
         "additionalProperties": false
-    })
+    });
+
+    if rtk_support.is_available() {
+        if let Some(properties) = schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert(
+                String::from("disabled_rtk"),
+                json!({
+                    "type": "boolean",
+                    "description": "Optional per-call RTK bypass. Set true to run the raw command exactly as provided without RTK rewrite routing. Default: false."
+                }),
+            );
+        }
+    }
+
+    schema
 }
 
 pub(crate) fn parse_shell_command_tool_arguments(
@@ -211,12 +411,231 @@ pub(crate) fn resolve_shell_command_launcher(
     Ok(resolved_shell.build_launcher(command_text))
 }
 
+/// Applies process options that are not part of the model-visible shell arguments.
+/// 应用不属于模型可见 shell 参数的进程执行选项。
+fn apply_shell_command_process_options(
+    command: &mut TokioCommand,
+    process_options: &ShellCommandProcessOptions,
+) {
+    if let Some(path_prefix) = process_options.path_prefix.as_deref() {
+        let mut paths = vec![path_prefix.to_path_buf()];
+        if let Some(existing_path) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing_path));
+        }
+        if let Ok(joined_path) = std::env::join_paths(paths) {
+            command.env("PATH", joined_path);
+        }
+    }
+
+    if process_options.rtk_telemetry_disabled {
+        command.env("RTK_TELEMETRY_DISABLED", "1");
+    }
+}
+
+/// Resolves whether RTK should rewrite one shell command before execution.
+/// 解析 RTK 是否应在执行前改写某条 shell 命令。
+async fn resolve_rtk_routing_decision(
+    parsed_args: &ShellCommandToolArgs,
+    effective_cwd: &Path,
+    rtk_support: &RtkRoutingSupport,
+) -> Option<RtkRoutingDecision> {
+    if parsed_args.disabled_rtk {
+        return Some(RtkRoutingDecision::bypassed(
+            &parsed_args.command,
+            None,
+            BTreeSet::new(),
+            "disabled_by_invocation",
+        ));
+    }
+
+    if !rtk_support.is_available() {
+        return None;
+    }
+
+    let rewritten_command = match rewrite_shell_command_with_rtk(
+        &parsed_args.command,
+        effective_cwd,
+        rtk_support,
+    )
+    .await
+    {
+        Ok(command) => command,
+        Err(reason) => {
+            return Some(RtkRoutingDecision::bypassed(
+                &parsed_args.command,
+                None,
+                BTreeSet::new(),
+                reason,
+            ));
+        }
+    };
+    let routes = collect_rtk_route_names(&rewritten_command);
+    if !rtk_support.allows_routes(&routes) {
+        return Some(RtkRoutingDecision::bypassed(
+            &parsed_args.command,
+            Some(rewritten_command),
+            routes,
+            "route_not_allowed",
+        ));
+    }
+
+    Some(RtkRoutingDecision::applied(
+        &parsed_args.command,
+        rewritten_command,
+        routes,
+    ))
+}
+
+/// Invokes `rtk rewrite` and returns the rewritten command text from stdout.
+/// 调用 `rtk rewrite` 并从 stdout 返回改写后的命令文本。
+async fn rewrite_shell_command_with_rtk(
+    command_text: &str,
+    effective_cwd: &Path,
+    rtk_support: &RtkRoutingSupport,
+) -> Result<String, String> {
+    let Some(executable_path) = rtk_support.executable_path.as_deref() else {
+        return Err(String::from("rtk_executable_missing"));
+    };
+
+    let mut command = TokioCommand::new(executable_path);
+    command.arg("rewrite");
+    command.arg(command_text);
+    command.current_dir(effective_cwd);
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    command.kill_on_drop(true);
+    if rtk_support.configuration.telemetry_disabled {
+        command.env("RTK_TELEMETRY_DISABLED", "1");
+    }
+
+    let output = match timeout(
+        Duration::from_millis(RTK_REWRITE_TIMEOUT_MS),
+        command.output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => return Err(format!("rtk_rewrite_spawn_failed: {error}")),
+        Err(_) => return Err(String::from("rtk_rewrite_timed_out")),
+    };
+
+    let stdout_text = decode_shell_output_bytes(&output.stdout);
+    if let Some(rewritten_command) = stdout_text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+    {
+        return Ok(rewritten_command.to_string());
+    }
+
+    let stderr_text = decode_shell_output_bytes(&output.stderr);
+    let status = output
+        .status
+        .code()
+        .map_or_else(|| String::from("signal"), |code| code.to_string());
+    let stderr_suffix = stderr_text.trim();
+    if stderr_suffix.is_empty() {
+        Err(format!("rtk_rewrite_no_match_or_empty_output:{status}"))
+    } else {
+        Err(format!(
+            "rtk_rewrite_no_match_or_empty_output:{status}:{stderr_suffix}"
+        ))
+    }
+}
+
+/// Collects RTK route names from a rewritten command.
+/// 从改写后的命令中收集 RTK 路由名称。
+pub(crate) fn collect_rtk_route_names(rewritten_command: &str) -> BTreeSet<String> {
+    let mut routes = BTreeSet::new();
+    let mut previous_token_was_rtk = false;
+
+    for raw_token in tokenize_rewritten_shell_command(rewritten_command) {
+        let token = raw_token.trim_matches(|value| value == '"' || value == '\'');
+        if previous_token_was_rtk {
+            if !token.is_empty() && !shell_operator_token(token) && !token.starts_with('-') {
+                routes.insert(token.to_ascii_lowercase());
+            }
+            previous_token_was_rtk = false;
+        }
+        if rtk_executable_token(token) {
+            previous_token_was_rtk = true;
+        }
+    }
+
+    routes
+}
+
+/// Tokenizes the RTK rewrite output enough to inspect shell segment boundaries.
+/// 对 RTK rewrite 输出做足够用于检查 shell 片段边界的分词。
+fn tokenize_rewritten_shell_command(rewritten_command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = rewritten_command.chars().peekable();
+    while let Some(value) = chars.next() {
+        match value {
+            value if value.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            '&' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                if chars.peek().is_some_and(|next| *next == '&') {
+                    let _ = chars.next();
+                    tokens.push(String::from("&&"));
+                } else {
+                    tokens.push(String::from("&"));
+                }
+            }
+            '|' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                if chars.peek().is_some_and(|next| *next == '|') {
+                    let _ = chars.next();
+                    tokens.push(String::from("||"));
+                } else {
+                    tokens.push(String::from("|"));
+                }
+            }
+            ';' => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                tokens.push(String::from(";"));
+            }
+            _ => current.push(value),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Returns whether a token names the RTK executable.
+/// 返回某个 token 是否指向 RTK 可执行文件。
+fn rtk_executable_token(token: &str) -> bool {
+    let normalized = token.replace('\\', "/");
+    let file_name = normalized.rsplit('/').next().unwrap_or(token);
+    file_name == "rtk" || file_name.eq_ignore_ascii_case("rtk.exe")
+}
+
+/// Returns whether a token is a shell composition operator.
+/// 返回某个 token 是否为 shell 组合操作符。
+fn shell_operator_token(token: &str) -> bool {
+    matches!(token, "&&" | "||" | "|" | ";" | "&")
+}
+
 /// Executes one shell command through the selected launcher and returns a normalized execution report.
 /// 通过选定启动器执行单条 shell 命令，并返回规范化执行报告。
 pub(crate) async fn execute_shell_command_process(
     parsed_args: &ShellCommandToolArgs,
     effective_cwd: &Path,
     shell_support: &HostCommandShellSupport,
+    process_options: &ShellCommandProcessOptions,
 ) -> ShellCommandExecutionReport {
     let started_at = std::time::Instant::now();
     let (program, program_args, shell_label) = match resolve_shell_command_launcher(
@@ -248,6 +667,7 @@ pub(crate) async fn execute_shell_command_process(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     command.kill_on_drop(true);
+    apply_shell_command_process_options(&mut command, process_options);
     if parsed_args.stdin.is_some() {
         command.stdin(Stdio::piped());
     }
@@ -383,6 +803,7 @@ pub(crate) async fn execute_shell_command_process(
 pub(crate) fn build_shell_command_text_render_input(
     parsed_args: &ShellCommandToolArgs,
     execution_report: &ShellCommandExecutionReport,
+    rtk_decision: Option<&RtkRoutingDecision>,
 ) -> HostTextRenderInput {
     let mut lines = vec![
         format!("Command: {}", parsed_args.command),
@@ -399,6 +820,14 @@ pub(crate) fn build_shell_command_text_render_input(
     }
     if let Some(reason) = execution_report.failure_reason.as_deref() {
         lines.push(format!("Reason: {reason}"));
+    }
+    if let Some(decision) = rtk_decision {
+        if decision.applied {
+            lines.push(format!("RTK: applied ({})", decision.routes.join(", ")));
+            lines.push(format!("Original command: {}", decision.original_command));
+        } else if let Some(reason) = decision.bypass_reason.as_deref() {
+            lines.push(format!("RTK: bypassed ({reason})"));
+        }
     }
 
     let mut content = lines.join("\n");
@@ -463,8 +892,9 @@ pub(crate) fn build_shell_command_host_payload(
     parsed_args: &ShellCommandToolArgs,
     execution_report: &ShellCommandExecutionReport,
     combined_output_overflowed: bool,
+    rtk_decision: Option<&RtkRoutingDecision>,
 ) -> Value {
-    json!({
+    let mut payload = json!({
         "session_id": session_id.map(|value| value.to_string()),
         "command": parsed_args.command,
         "cwd": normalized_workspace_path_text_from_path(&execution_report.cwd),
@@ -476,12 +906,25 @@ pub(crate) fn build_shell_command_host_payload(
         "stderr_bytes": execution_report.stderr_text.len(),
         "combined_output_overflowed": combined_output_overflowed,
         "failure_reason": execution_report.failure_reason,
-    })
+    });
+
+    if let Some(decision) = rtk_decision {
+        payload["rtk"] = json!({
+            "applied": decision.applied,
+            "original_command": decision.original_command,
+            "rewritten_command": decision.rewritten_command,
+            "routes": decision.routes,
+            "bypass_reason": decision.bypass_reason,
+        });
+    }
+
+    payload
 }
 
 pub(crate) async fn execute_shell_command_tool(
     request: NativeToolExecutionRequest,
     shell_support: &HostCommandShellSupport,
+    rtk_support: &RtkRoutingSupport,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
     let effective_cwd = resolve_shell_command_working_directory(
@@ -493,15 +936,37 @@ pub(crate) async fn execute_shell_command_tool(
         request.workspace_root.as_deref(),
         &effective_cwd,
     );
-    let execution_report =
-        execute_shell_command_process(&parsed_args, &effective_cwd, shell_support).await;
-    let render_input = build_shell_command_text_render_input(&parsed_args, &execution_report);
+    let rtk_decision =
+        resolve_rtk_routing_decision(&parsed_args, &effective_cwd, rtk_support).await;
+    let mut effective_args = parsed_args.clone();
+    let mut process_options = ShellCommandProcessOptions::default();
+    if let Some(decision) = rtk_decision.as_ref().filter(|decision| decision.applied) {
+        if let Some(rewritten_command) = decision.rewritten_command.as_ref() {
+            effective_args.command = rewritten_command.clone();
+        }
+        process_options.path_prefix = rtk_support.executable_directory();
+        process_options.rtk_telemetry_disabled = rtk_support.configuration.telemetry_disabled;
+    }
+
+    let execution_report = execute_shell_command_process(
+        &effective_args,
+        &effective_cwd,
+        shell_support,
+        &process_options,
+    )
+    .await;
+    let render_input = build_shell_command_text_render_input(
+        &effective_args,
+        &execution_report,
+        rtk_decision.as_ref(),
+    );
     let budget = default_shell_command_budget_snapshot();
     let host_payload = build_shell_command_host_payload(
         request.session_id,
-        &parsed_args,
+        &effective_args,
         &execution_report,
         shell_command_output_exceeds_inline_budget(&render_input, &budget),
+        rtk_decision.as_ref(),
     );
     let model_output = render_tool_result_text(
         &render_input,

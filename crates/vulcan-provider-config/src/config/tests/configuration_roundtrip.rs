@@ -1,13 +1,14 @@
 use super::super::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedAiToolConfiguration, PersistedLuaSkillToolRegistrationState,
-    PersistedLuaSkillsConfiguration, PersistedPromptSkillState, PersistedPromptSkillsConfiguration,
-    PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, ProviderConfigurationFile,
-    ReasoningEffortLevel, WebSearchProviderDispatchMode, WebSearchProviderKind,
-    WebSearchRoutingMode,
+    PersistedAiToolConfiguration, PersistedHostToolsConfiguration,
+    PersistedLuaSkillToolRegistrationState, PersistedLuaSkillsConfiguration,
+    PersistedPromptSkillState, PersistedPromptSkillsConfiguration, PersistedRtkRouteMode,
+    PersistedRtkToolConfiguration, PersistedWebSearchConfiguration,
+    PersistedWebSearchProviderEntry, ProviderConfigurationFile, ReasoningEffortLevel,
+    WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
 };
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use vulcan_vmm::VmmConfigLayer;
 
@@ -111,6 +112,39 @@ fn provider_configuration_round_trips_vmm_configuration() {
     let restored: ProviderConfigurationFile =
         serde_json::from_value(value).expect("provider configuration must deserialize");
     assert_eq!(restored.vmm, config.vmm);
+}
+
+/// Verifies RTK host-tool configuration keeps the stable `hostTools.rtk` shape through serialization.
+/// 验证 RTK 宿主工具配置在序列化过程中保持稳定的 `hostTools.rtk` 形状。
+#[test]
+fn provider_configuration_round_trips_rtk_host_tool_configuration() {
+    let config = ProviderConfigurationFile {
+        host_tools: PersistedHostToolsConfiguration {
+            rtk: PersistedRtkToolConfiguration {
+                enabled: false,
+                route_mode: PersistedRtkRouteMode::All,
+                enabled_routes: BTreeSet::from([String::from("git")]),
+                disabled_routes: BTreeSet::from([String::from("npm")]),
+                telemetry_disabled: false,
+            },
+        },
+        ..ProviderConfigurationFile::default()
+    };
+
+    let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+    assert_eq!(value["hostTools"]["rtk"]["enabled"], json!(false));
+    assert_eq!(value["hostTools"]["rtk"]["routeMode"], json!("all"));
+    assert_eq!(value["hostTools"]["rtk"]["enabledRoutes"], json!(["git"]));
+    assert_eq!(value["hostTools"]["rtk"]["disabledRoutes"], json!(["npm"]));
+    assert_eq!(value["hostTools"]["rtk"]["telemetryDisabled"], json!(false));
+
+    let restored: ProviderConfigurationFile =
+        serde_json::from_value(value).expect("provider configuration must deserialize");
+    assert_eq!(
+        restored.host_tools.rtk.route_mode,
+        PersistedRtkRouteMode::All
+    );
+    assert!(restored.host_tools.rtk.disabled_routes.contains("npm"));
 }
 
 /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.

@@ -134,6 +134,21 @@ export async function saveGitCommitSettings(request: {
   return serviceClient.request<WorkbenchSnapshot>("service_save_git_commit_settings", { request });
 }
 
+// saveRtkRoutingSettings persists RTK command-routing settings through the desktop service.
+// saveRtkRoutingSettings 通过桌面服务持久化 RTK 命令路由设置。
+export async function saveRtkRoutingSettings(request: {
+  enabled: boolean;
+  routeMode: "disabled" | "selected" | "all";
+  enabledRoutes: string[];
+  disabledRoutes: string[];
+  telemetryDisabled: boolean;
+}): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_save_rtk_routing_settings", { request });
+}
+
 // saveAiCapabilityVendor persists one shared AI capability vendor.
 // saveAiCapabilityVendor 持久化单个共享 AI 能力供应商。
 export async function saveAiCapabilityVendor(request: {

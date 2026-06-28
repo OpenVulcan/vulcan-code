@@ -115,6 +115,7 @@ import {
   saveProviderConfiguration,
   saveProviderEnabledModels,
   saveProviderModelOverride,
+  saveRtkRoutingSettings,
   setAiCapabilityTargetEnabled,
 } from "@/service/settings-actions-service";
 import {
@@ -926,6 +927,7 @@ export function WorkbenchLayout(props: {
               onSaveProviderEnabledModels: (request) => applySkillWorkbenchAction(async () => (await saveProviderEnabledModels(request)) ?? workbenchStateRef.current),
               onSaveProviderModelOverride: (request) => applySkillWorkbenchAction(async () => (await saveProviderModelOverride(request)) ?? workbenchStateRef.current),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
+              onSaveRtkRoutingSettings: (request) => applySkillWorkbenchAction(async () => (await saveRtkRoutingSettings(request)) ?? workbenchStateRef.current),
               onSaveAiCapabilityVendor: (request) => applySkillWorkbenchAction(async () => (await saveAiCapabilityVendor(request)) ?? workbenchStateRef.current),
               onRemoveAiCapabilityVendor: (vendorId) => applySkillWorkbenchAction(async () => (await removeAiCapabilityVendor(vendorId)) ?? workbenchStateRef.current),
               onSetAiCapabilityTargetEnabled: (request) => applySkillWorkbenchAction(async () => (await setAiCapabilityTargetEnabled(request)) ?? workbenchStateRef.current),

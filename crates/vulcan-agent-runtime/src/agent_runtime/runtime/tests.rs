@@ -7,7 +7,9 @@ use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
 };
 use crate::mcp::configured_mcp_runtime_access;
-use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
+use crate::provider_config::{
+    PersistedHostToolsConfiguration, PersistedLuaSkillsConfiguration, ProviderConfigurationFile,
+};
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
@@ -374,6 +376,7 @@ fn test_runtime_config(agents: Vec<RuntimeAgentDefinition>) -> AgentRuntimeConfi
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        host_tools: PersistedHostToolsConfiguration::default(),
     }
 }
 

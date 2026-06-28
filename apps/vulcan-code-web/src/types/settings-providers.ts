@@ -33,6 +33,34 @@ export interface SettingSectionSummary {
   items: string[];
 }
 
+// HostToolsSettingsSummary describes shared host-owned tool settings.
+// HostToolsSettingsSummary 描述共享宿主自有工具设置。
+export interface HostToolsSettingsSummary {
+  // RTK command-routing settings.
+  // RTK 命令路由设置。
+  rtk: RtkRoutingSettingsSummary;
+}
+
+// RtkRoutingSettingsSummary describes RTK command-routing settings.
+// RtkRoutingSettingsSummary 描述 RTK 命令路由设置。
+export interface RtkRoutingSettingsSummary {
+  // Whether RTK routing is enabled when the bundled executable is present.
+  // 当随包 RTK 可执行文件存在时是否启用路由。
+  enabled: boolean;
+  // Current routing mode.
+  // 当前路由模式。
+  routeMode: "disabled" | "selected" | "all";
+  // Selected RTK route names.
+  // 已选择的 RTK 路由名称。
+  enabledRoutes: string[];
+  // Explicitly disabled RTK route names.
+  // 显式禁用的 RTK 路由名称。
+  disabledRoutes: string[];
+  // Whether RTK telemetry is disabled for routed invocations.
+  // 路由调用中是否禁用 RTK 遥测。
+  telemetryDisabled: boolean;
+}
+
 // ProviderSummary describes one provider card.
 // ProviderSummary 描述单个 Provider 卡片。
 export interface ProviderSummary {

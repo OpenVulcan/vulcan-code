@@ -226,6 +226,15 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       { value: "x-high", label: "Max" },
     ],
   },
+  hostTools: {
+    rtk: {
+      enabled: true,
+      routeMode: "selected",
+      enabledRoutes: ["cargo", "find", "git", "go", "grep", "jest", "ls", "mypy", "npm", "npx", "pnpm", "pytest", "read", "ruff", "tree", "tsc", "vitest", "wc"],
+      disabledRoutes: [],
+      telemetryDisabled: true,
+    },
+  },
   aiCapabilities: [
     {
       kind: "web_search",

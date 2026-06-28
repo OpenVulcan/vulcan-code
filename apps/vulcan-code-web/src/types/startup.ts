@@ -24,6 +24,7 @@ export type SettingsSubAreaId =
   | "mcp-servers"
   | "runtime-diagnostics"
   | "git-commit"
+  | "rtk-routing"
   | "prompt-composer"
   | "about-licenses"
   | "archived-restore";

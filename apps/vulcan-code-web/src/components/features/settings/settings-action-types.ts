@@ -69,6 +69,26 @@ export interface GitCommitSettingsSaveRequest {
   summaryExtraPrompt: string
 }
 
+// RtkRoutingSettingsSaveRequest describes one RTK routing settings submission.
+// RtkRoutingSettingsSaveRequest 描述一次 RTK 路由设置提交。
+export interface RtkRoutingSettingsSaveRequest {
+  // Whether RTK routing should be enabled when the bundled executable is present.
+  // 当随包 RTK 可执行文件存在时是否启用路由。
+  enabled: boolean
+  // Route mode requested by the WebUI.
+  // WebUI 请求的路由模式。
+  routeMode: "disabled" | "selected" | "all"
+  // Selected RTK route names.
+  // 已选择的 RTK 路由名称。
+  enabledRoutes: string[]
+  // Explicitly disabled RTK route names.
+  // 显式禁用的 RTK 路由名称。
+  disabledRoutes: string[]
+  // Whether RTK telemetry should be disabled for routed invocations.
+  // 路由调用中是否禁用 RTK 遥测。
+  telemetryDisabled: boolean
+}
+
 // GitCommitSummaryModelSelectionSaveRequest describes the saved commit-summary model mode.
 // GitCommitSummaryModelSelectionSaveRequest 描述已保存的提交总结模型模式。
 export type GitCommitSummaryModelSelectionSaveRequest =
@@ -231,6 +251,9 @@ export interface SettingsActionProps {
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>
+  // Saves RTK routing settings.
+  // 保存 RTK 路由设置。
+  onSaveRtkRoutingSettings: (request: RtkRoutingSettingsSaveRequest) => Promise<void>
   // Saves one shared AI capability vendor.
   // 保存单个共享 AI 能力供应商。
   onSaveAiCapabilityVendor: (request: AiCapabilityVendorSaveRequest) => Promise<void>

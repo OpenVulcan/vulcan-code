@@ -10,8 +10,8 @@ use super::{
 use crate::luaskills_runtime::PWD_PARAMETER_NAME;
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedAiToolConfiguration, PersistedUnderstandImageConfiguration,
-    UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
+    PersistedAiToolConfiguration, PersistedHostToolsConfiguration,
+    PersistedUnderstandImageConfiguration, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
 };
 use crate::tooling::build_native_tool_catalog;
 use luaskills::RuntimeEntryDescriptor;
@@ -252,6 +252,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config() {
         tool_policies: Default::default(),
         configured_mcp_server_ids: Vec::new(),
         enabled_mcp_server_ids: Vec::new(),
+        host_tools: PersistedHostToolsConfiguration::default(),
     };
     let global_vmm = VmmConfigLayer {
         grpc_target: Some(String::from("127.0.0.1:19090")),

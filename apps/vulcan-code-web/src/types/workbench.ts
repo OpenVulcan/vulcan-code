@@ -37,6 +37,7 @@ import type {
 } from "./runtime-context";
 import type {
   FeatureAreaSummary,
+  HostToolsSettingsSummary,
   McpServerSummary,
   ProviderSummary,
   ReasoningSelectionSummary,
@@ -108,6 +109,9 @@ export interface WorkbenchSnapshot {
   // Git commit dialog settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Git 提交弹窗设置。
   gitCommit?: GitCommitSettingsSummary;
+  // Host-owned tool settings resolved from the shared service configuration.
+  // 从共享服务配置解析出的宿主自有工具设置。
+  hostTools?: HostToolsSettingsSummary;
   // AI capability route summaries for the composer quick controls.
   // 输入区快捷控制使用的 AI 能力路由摘要。
   aiCapabilities?: AiCapabilitySummary[];

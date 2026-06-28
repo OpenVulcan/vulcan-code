@@ -87,6 +87,14 @@ pub struct ProviderConfigurationFile {
     /// 以稳定策略标识为键保存的工具策略定义集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_policies: BTreeMap<String, PersistedToolPolicyEntry>,
+    /// Persisted host-owned tool configuration such as bundled RTK routing.
+    /// 持久化宿主自有工具配置，例如随包 RTK 路由。
+    #[serde(
+        default,
+        rename = "hostTools",
+        skip_serializing_if = "PersistedHostToolsConfiguration::is_default"
+    )]
+    pub host_tools: PersistedHostToolsConfiguration,
     /// Host-managed LuaSkills visibility overrides persisted independently from package lifecycle state.
     /// 与技能包生命周期状态独立持久化的宿主管理 LuaSkills 可见性覆盖配置。
     #[serde(

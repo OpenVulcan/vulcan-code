@@ -158,6 +158,7 @@ mod execution_report_memory;
 mod fallback_workbench_projection;
 mod git;
 mod git_diff_services;
+mod host_tools_settings;
 mod mcp_settings;
 mod pending_prompt_services;
 mod pending_prompts;
@@ -251,6 +252,7 @@ use git::{
     service_save_git_commit_settings,
 };
 use git_diff_services::*;
+use host_tools_settings::{host_tools_settings, service_save_rtk_routing_settings};
 use mcp_settings::*;
 use pending_prompt_services::{
     service_edit_pending_prompt, service_remove_pending_prompt, service_reorder_pending_prompts,

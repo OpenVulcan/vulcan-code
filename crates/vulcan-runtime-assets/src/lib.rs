@@ -43,6 +43,10 @@ const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
 /// 打包在 output 根目录下的 LuaSkills 运行时根目录名称。
 const LUASKILLS_RUNTIME_ROOT_DIR_NAME: &str = "lua_runtime";
 
+/// Relative host tools directory name bundled below the output root.
+/// 打包在 output 根目录下的宿主工具目录名称。
+const TOOLS_DIR_NAME: &str = "tools";
+
 /// Relative controller binary directory name bundled into the output root.
 /// 打包到 output 根目录中的控制器二进制目录名称。
 const CONTROLLER_BIN_DIR_NAME: &str = "bin";
@@ -151,6 +155,14 @@ pub fn resolve_bundled_controller_executable_path() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
+/// Returns the bundled RTK executable path when the current process runs from one packaged output root.
+/// 当当前进程从某个打包 output 根目录运行时，返回其中的 RTK 可执行文件路径。
+pub fn resolve_bundled_rtk_executable_path() -> Option<PathBuf> {
+    let output_root = resolve_output_root()?;
+    let candidate = bundled_rtk_executable_candidate(&output_root);
+    candidate.is_file().then_some(candidate)
+}
+
 /// Resolves the active LuaSkills runtime root used by the WebUI host.
 /// 解析WebUI宿主实际使用的 LuaSkills 活动运行根目录。
 pub fn resolve_luaskills_runtime_root() -> Option<PathBuf> {
@@ -199,6 +211,7 @@ fn resolve_output_root() -> Option<PathBuf> {
             || candidate.join(CONFIG_DIR_NAME).is_dir()
             || candidate.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME).is_dir()
             || candidate.join(LUA_PACKAGES_DIR_NAME).is_dir()
+            || candidate.join(TOOLS_DIR_NAME).is_dir()
             || candidate.join(CONTROLLER_BIN_DIR_NAME).is_dir()
     })
 }
@@ -219,5 +232,37 @@ fn controller_executable_name() -> &'static str {
         "vldb-controller.exe"
     } else {
         "vldb-controller"
+    }
+}
+
+/// Builds the output-root-relative RTK executable candidate path.
+/// 构建相对于 output root 的 RTK 可执行文件候选路径。
+fn bundled_rtk_executable_candidate(output_root: &Path) -> PathBuf {
+    output_root.join(TOOLS_DIR_NAME).join(rtk_executable_name())
+}
+
+/// Returns the platform-specific RTK executable file name.
+/// 返回平台相关的 RTK 可执行文件名。
+fn rtk_executable_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "rtk.exe"
+    } else {
+        "rtk"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_rtk_candidate_uses_output_tools_directory() {
+        let candidate = bundled_rtk_executable_candidate(Path::new("output-root"));
+        assert_eq!(
+            candidate,
+            Path::new("output-root")
+                .join(TOOLS_DIR_NAME)
+                .join(rtk_executable_name())
+        );
     }
 }

@@ -1,12 +1,13 @@
 use super::{
     CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
-    CommandSessionSnapshot, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput,
-    TerminalSessionKeyEncoding, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
-    build_mcp_server_list_tool, build_shell_command_tool, build_shell_session_tool,
-    build_skill_list_tool, build_submit_plan_tool, build_terminal_session_tool,
-    build_todolist_tool, build_workspace_describe_tool, coalesce_terminal_output_chunks,
-    display_submit_plan_path, effective_start_append_newline, encode_terminal_inputs,
-    goal_response_value, normalize_terminal_session_name, resolve_session_shell_behavior,
+    CommandSessionSnapshot, NativeToolExecutionRequest, RtkRoutingSupport, SUBMIT_PLAN_MARKER,
+    TerminalSessionInput, TerminalSessionKeyEncoding, ThreadGoal, ThreadGoalStatus,
+    build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
+    build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
+    build_terminal_session_tool, build_todolist_tool, build_workspace_describe_tool,
+    coalesce_terminal_output_chunks, collect_rtk_route_names, display_submit_plan_path,
+    effective_start_append_newline, encode_terminal_inputs, goal_response_value,
+    normalize_terminal_session_name, resolve_session_shell_behavior,
     resolve_shell_command_launcher, resolve_shell_command_working_directory,
     shell_command_args_schema, shell_specific_newline, strip_simple_ansi_sequences,
     strip_terminal_transaction_sentinel, terminal_inputs_request_interrupt,
@@ -20,13 +21,16 @@ use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
     RuntimeSkillDefinition, RuntimeSkillKind,
 };
+use crate::provider_config::{
+    PersistedHostToolsConfiguration, PersistedRtkRouteMode, PersistedRtkToolConfiguration,
+};
 use crate::tooling::CommandSessionRuntime;
 use crate::tooling::command_session_runtime::{CommandSessionOutputStream, CommandSessionStatus};
 use crate::tooling::shell_host::{
     DetectedHostCommandShell, HostCommandShell, HostCommandShellSupport,
 };
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs as tokio_fs;

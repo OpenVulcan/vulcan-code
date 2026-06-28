@@ -5,7 +5,9 @@ import {
   FileText,
   GitCommitHorizontal,
   PackagePlus,
+  Route,
   RotateCcw,
+  Save,
   ScrollText,
   SlidersHorizontal,
 } from "lucide-react"
@@ -183,6 +185,206 @@ function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], valu
     modelName: model.name,
     active: Boolean(model.active),
   }) === value))
+}
+
+// RtkRoutingSettingsArea renders RTK command-routing preferences.
+// RtkRoutingSettingsArea 渲染 RTK 命令路由偏好。
+export function RtkRoutingSettingsArea(props: {
+  // Service-backed settings actions.
+  // 服务端设置操作。
+  actions: SettingsActionProps
+  // Workbench snapshot that carries the shared host-tool configuration.
+  // 携带共享宿主工具配置的工作台快照。
+  workbench: WorkbenchSnapshot
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const rtkSettings = props.workbench.hostTools?.rtk ?? DEFAULT_RTK_SETTINGS
+  const [enabled, setEnabled] = React.useState(rtkSettings.enabled)
+  const [routeMode, setRouteMode] = React.useState(rtkSettings.routeMode)
+  const [enabledRouteSet, setEnabledRouteSet] = React.useState(() => rtkCheckedRouteSetFromSettings(rtkSettings))
+  const [telemetryDisabled, setTelemetryDisabled] = React.useState(rtkSettings.telemetryDisabled)
+  const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved">("idle")
+
+  React.useEffect(() => {
+    setEnabled(rtkSettings.enabled)
+    setRouteMode(rtkSettings.routeMode)
+    setEnabledRouteSet(rtkCheckedRouteSetFromSettings(rtkSettings))
+    setTelemetryDisabled(rtkSettings.telemetryDisabled)
+  }, [rtkSettings.disabledRoutes, rtkSettings.enabled, rtkSettings.enabledRoutes, rtkSettings.routeMode, rtkSettings.telemetryDisabled])
+
+  const enabledRoutes = React.useMemo(() => normalizedRouteSetValues(enabledRouteSet), [enabledRouteSet])
+  const disabledRoutes = React.useMemo(() => {
+    if (routeMode !== "all") {
+      return []
+    }
+    return RTK_AVAILABLE_ROUTES.filter((route) => !enabledRouteSet.has(route))
+  }, [enabledRouteSet, routeMode])
+  const selectedRouteCount = enabledRoutes.length
+  const applyCuratedRoutes = React.useCallback(() => {
+    setRouteMode("selected")
+    setEnabledRouteSet(new Set(DEFAULT_RTK_ROUTES))
+  }, [])
+  const applyAllRoutes = React.useCallback(() => {
+    setRouteMode("all")
+    setEnabledRouteSet(new Set(RTK_AVAILABLE_ROUTES))
+  }, [])
+  const clearAllRoutes = React.useCallback(() => {
+    setRouteMode("disabled")
+    setEnabledRouteSet(new Set())
+  }, [])
+  const toggleRouteEnabled = React.useCallback((route: string, nextEnabled: boolean) => {
+    setRouteMode((currentMode) => currentMode === "disabled" && nextEnabled ? "selected" : currentMode)
+    setEnabledRouteSet((currentRoutes) => {
+      const nextRoutes = new Set(currentRoutes)
+      if (nextEnabled) {
+        nextRoutes.add(route)
+      } else {
+        nextRoutes.delete(route)
+      }
+      return nextRoutes
+    })
+  }, [])
+  const saveDraft = React.useCallback(async () => {
+    setSaveState("saving")
+    await props.actions.onSaveRtkRoutingSettings({
+      enabled,
+      routeMode,
+      enabledRoutes,
+      disabledRoutes,
+      telemetryDisabled,
+    })
+    setSaveState("saved")
+    window.setTimeout(() => setSaveState("idle"), 1200)
+  }, [disabledRoutes, enabled, enabledRoutes, props.actions, routeMode, telemetryDisabled])
+
+  return (
+    <section className="panel full-height settings-detail-panel">
+      <PanelTitle icon={<Route size={17} />} title={text("RTK 命令路由", "RTK command routing")} />
+      <div className="settings-form-grid">
+        <article className="settings-card">
+          <StatusPill status={enabled ? "ready" : "warning"} label={enabled ? text("已启用", "Enabled") : text("已关闭", "Disabled")} />
+          <strong>{text("shell_command 自动 rewrite", "shell_command automatic rewrite")}</strong>
+          <p>{text("随包 RTK 可执行文件存在时，shell_command 会先请求 RTK rewrite；未安装或无匹配路由时继续执行原命令。", "When the bundled RTK executable exists, shell_command asks RTK to rewrite first; missing installs or unmatched routes continue with the original command.")}</p>
+          <label className="settings-checkbox-line">
+            <input checked={enabled} onChange={(event) => setEnabled(event.currentTarget.checked)} type="checkbox" />
+            <span>{text("启用 RTK 路由", "Enable RTK routing")}</span>
+          </label>
+          <label className="settings-checkbox-line">
+            <input checked={telemetryDisabled} onChange={(event) => setTelemetryDisabled(event.currentTarget.checked)} type="checkbox" />
+            <span>{text("禁用 RTK 遥测环境变量", "Disable RTK telemetry environment variable")}</span>
+          </label>
+        </article>
+        <div className="settings-card">
+          <StatusPill
+            status={routeMode === "disabled" ? "warning" : "ready"}
+            label={routeMode === "all" ? text("全选", "All") : routeMode === "selected" ? text("精选", "Curated") : text("全关", "None")}
+          />
+          <strong>{text("路由表", "Route table")}</strong>
+          <p>{text("勾选要让 RTK 接管的命令路由；全选后取消单个路由会保存为显式禁用。", "Check the command routes RTK may handle; clearing one route after selecting all is saved as an explicit deny.")}</p>
+          <div className="settings-card-actions">
+            <button className="skill-action-button secondary" onClick={applyCuratedRoutes} type="button">{text("只选精选", "Curated")}</button>
+            <button className="skill-action-button secondary" onClick={applyAllRoutes} type="button">{text("全选", "Select all")}</button>
+            <button className="skill-action-button secondary" onClick={clearAllRoutes} type="button">{text("全部取消", "Clear all")}</button>
+          </div>
+          <div className="settings-route-table-wrap">
+            <table className="settings-route-table">
+              <thead>
+                <tr>
+                  <th>{text("启用", "Enable")}</th>
+                  <th>{text("路由", "Route")}</th>
+                  <th>{text("类型", "Type")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {RTK_AVAILABLE_ROUTES.map((route) => {
+                  const routeEnabled = enabledRouteSet.has(route)
+                  return (
+                    <tr key={route}>
+                      <td>
+                        <input checked={routeEnabled} onChange={(event) => toggleRouteEnabled(route, event.currentTarget.checked)} type="checkbox" />
+                      </td>
+                      <td><strong>{route}</strong></td>
+                      <td>{DEFAULT_RTK_ROUTE_SET.has(route) ? text("精选", "Curated") : text("扩展", "Extended")}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <small className="settings-muted-line">{text(`当前将应用 ${selectedRouteCount} 个 RTK 路由。`, `${selectedRouteCount} RTK routes will be applied.`)}</small>
+        </div>
+        <div className="settings-card">
+          <StatusPill status="ready" label={text("AI 参数", "AI argument")} />
+          <strong>disabled_rtk</strong>
+          <p>{text("只有 RTK 已启用且可执行文件存在时，shell_command 才会向 AI 暴露该单次禁用参数。", "shell_command exposes this per-call bypass only when RTK is enabled and the executable exists.")}</p>
+          <div className="settings-card-actions">
+            {enabledRoutes.slice(0, 12).map((route) => <Badge key={route} variant="outline">{route}</Badge>)}
+          </div>
+        </div>
+        <div className="settings-card-actions">
+          <button className="skill-action-button" disabled={saveState === "saving"} onClick={() => void saveDraft()} type="button">
+            <Save size={14} />
+            <span>{saveState === "saving" ? text("保存中", "Saving") : saveState === "saved" ? text("已保存", "Saved") : text("保存", "Save")}</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// DEFAULT_RTK_ROUTES mirrors the backend selected-route default for offline fallback snapshots.
+// DEFAULT_RTK_ROUTES 对齐后端精选路由默认值，用于离线回退快照。
+const DEFAULT_RTK_ROUTES = ["cargo", "find", "git", "go", "grep", "jest", "ls", "mypy", "npm", "npx", "pnpm", "pytest", "read", "ruff", "tree", "tsc", "vitest", "wc"]
+
+// RTK_AVAILABLE_ROUTES mirrors RTK v0.42.4 rewrite route names after the `rtk` executable token.
+// RTK_AVAILABLE_ROUTES 对齐 RTK v0.42.4 在 `rtk` 可执行文件 token 后暴露的 rewrite 路由名。
+const RTK_AVAILABLE_ROUTES = [
+  "ansible-playbook", "aws", "brew", "bundle", "cargo", "composer", "curl", "df", "diff", "docker",
+  "dotnet", "du", "fail2ban-client", "find", "gcloud", "gh", "git", "glab", "go", "golangci-lint",
+  "gradlew", "grep", "gt", "hadolint", "helm", "iptables", "jest", "kubectl", "lint", "liquibase",
+  "ls", "make", "markdownlint", "mix", "mvn", "mypy", "next", "npm", "npx", "oc", "ping", "pio",
+  "pip", "playwright", "pnpm", "poetry", "pre-commit", "prettier", "prisma", "ps", "psql", "pulumi",
+  "pytest", "quarto", "rake", "read", "rg", "rspec", "rsync", "rubocop", "ruff", "shellcheck", "shopify",
+  "sops", "swift", "systemctl", "terraform", "tofu", "tree", "trunk", "tsc", "uv", "vitest", "wc",
+  "wget", "yamllint",
+]
+
+// DEFAULT_RTK_ROUTE_SET provides O(1) curated-route lookup for table labels.
+// DEFAULT_RTK_ROUTE_SET 为表格标签提供 O(1) 精选路由查找。
+const DEFAULT_RTK_ROUTE_SET = new Set(DEFAULT_RTK_ROUTES)
+
+// DEFAULT_RTK_SETTINGS provides a stable fallback object when the service snapshot is older.
+// DEFAULT_RTK_SETTINGS 在服务快照较旧时提供稳定的回退对象。
+const DEFAULT_RTK_SETTINGS = {
+  enabled: true,
+  routeMode: "selected" as const,
+  enabledRoutes: DEFAULT_RTK_ROUTES,
+  disabledRoutes: [],
+  telemetryDisabled: true,
+}
+
+// rtkCheckedRouteSetFromSettings restores the route-table check state from persisted routing mode.
+// rtkCheckedRouteSetFromSettings 根据持久化路由模式恢复路由表勾选状态。
+function rtkCheckedRouteSetFromSettings(settings: {
+  routeMode: "disabled" | "selected" | "all"
+  enabledRoutes: string[]
+  disabledRoutes: string[]
+}): Set<string> {
+  if (settings.routeMode === "disabled") {
+    return new Set()
+  }
+  if (settings.routeMode === "all") {
+    const disabledRouteSet = new Set(settings.disabledRoutes)
+    return new Set(RTK_AVAILABLE_ROUTES.filter((route) => !disabledRouteSet.has(route)))
+  }
+  return new Set(settings.enabledRoutes)
+}
+
+// normalizedRouteSetValues converts a draft route set into a stable lowercase route list.
+// normalizedRouteSetValues 将草稿路由集合转换为稳定的小写路由列表。
+function normalizedRouteSetValues(value: Set<string>): string[] {
+  return Array.from(new Set(Array.from(value).map((item) => item.trim().toLowerCase()).filter(Boolean))).sort()
 }
 
 // PromptComposerSettingsArea renders composer command and capability settings status.

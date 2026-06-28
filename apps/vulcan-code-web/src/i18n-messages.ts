@@ -167,6 +167,7 @@ export type TranslationKey =
   | "settings.mcpServers"
   | "settings.runtimeDiagnostics"
   | "settings.gitCommit"
+  | "settings.rtkRouting"
   | "settings.promptComposer"
   | "settings.aboutLicenses"
   | "settings.archivedRestore"
@@ -185,6 +186,7 @@ export type TranslationKey =
   | "settings.mcpServers.description"
   | "settings.runtimeDiagnostics.description"
   | "settings.gitCommit.description"
+  | "settings.rtkRouting.description"
   | "settings.gitCommit.active"
   | "settings.gitCommit.autoSummary"
   | "settings.gitCommit.summaryModel"
@@ -455,6 +457,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers": "MCP 服务器",
     "settings.runtimeDiagnostics": "运行诊断",
     "settings.gitCommit": "Git 提交",
+    "settings.rtkRouting": "RTK 路由",
     "settings.promptComposer": "提示词组合",
     "settings.aboutLicenses": "关于与许可证",
     "settings.archivedRestore": "归档恢复",
@@ -473,6 +476,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers.description": "MCP Runtime、服务连接、工具、提示词与资源状态。",
     "settings.runtimeDiagnostics.description": "启动链路、运行时模块与诊断日志。",
     "settings.gitCommit.description": "提交弹窗的新分支命名前缀与默认分支名规则。",
+    "settings.rtkRouting.description": "shell_command 的 RTK rewrite、路由白名单与单次禁用参数。",
     "settings.gitCommit.active": "已生效",
     "settings.gitCommit.autoSummary": "自动总结",
     "settings.gitCommit.summaryModel": "提交总结模型",
@@ -740,6 +744,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers": "MCP servers",
     "settings.runtimeDiagnostics": "Runtime diagnostics",
     "settings.gitCommit": "Git commit",
+    "settings.rtkRouting": "RTK routing",
     "settings.promptComposer": "Prompt composer",
     "settings.aboutLicenses": "About and licenses",
     "settings.archivedRestore": "Archived restore",
@@ -758,6 +763,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers.description": "MCP runtime, server connections, tools, prompts, and resources.",
     "settings.runtimeDiagnostics.description": "Startup flow, runtime modules, and diagnostic logs.",
     "settings.gitCommit.description": "New-branch naming prefix and default branch-name rules for the commit dialog.",
+    "settings.rtkRouting.description": "RTK rewrite, route allowlists, and per-call bypass for shell_command.",
     "settings.gitCommit.active": "Active",
     "settings.gitCommit.autoSummary": "Auto summary",
     "settings.gitCommit.summaryModel": "Commit summary model",

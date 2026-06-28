@@ -288,6 +288,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![String::from("server-a")],
         enabled_mcp_server_ids: vec![String::from("server-a")],
+        host_tools: PersistedHostToolsConfiguration::default(),
     };
 
     let tool = build_agent_list_tool(snapshot, &config);
@@ -342,6 +343,7 @@ fn host_diagnostic_tools_are_hidden_from_ai() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![String::from("server-a")],
         enabled_mcp_server_ids: vec![String::from("server-a")],
+        host_tools: PersistedHostToolsConfiguration::default(),
     };
 
     let workspace_tool = build_workspace_describe_tool(Arc::clone(&snapshot));
@@ -386,6 +388,7 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![],
         enabled_mcp_server_ids: vec![],
+        host_tools: PersistedHostToolsConfiguration::default(),
     };
 
     let tool = build_skill_list_tool(snapshot, &config);
