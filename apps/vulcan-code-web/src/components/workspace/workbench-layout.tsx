@@ -544,6 +544,7 @@ export function WorkbenchLayout(props: {
     handleSubmitUserPromptEdit,
     handleForkConversation,
     handleSelectWorkbenchReasoningEffort,
+    handleSelectWorkbenchThinkingDisplayMode,
   } = useWorkbenchConversationActions({
     translate: i18n.t,
     selectedConversation,
@@ -864,6 +865,7 @@ export function WorkbenchLayout(props: {
             onListWorkbenchModelSecondaryRoutes={handleListWorkbenchModelSecondaryRoutes}
             onSelectWorkbenchModelSecondaryRoute={handleSelectWorkbenchModelSecondaryRoute}
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
+            onSelectWorkbenchThinkingDisplayMode={handleSelectWorkbenchThinkingDisplayMode}
             skillActions={skillActions}
             memoryActions={{
               onRunVmmAction: runVmmMemoryAction,

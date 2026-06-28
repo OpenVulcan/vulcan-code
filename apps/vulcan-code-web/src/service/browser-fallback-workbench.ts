@@ -226,6 +226,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       { value: "x-high", label: "Max" },
     ],
   },
+  thinkingDisplayMode: "first_inline_with_popup",
   hostTools: {
     rtk: {
       enabled: true,

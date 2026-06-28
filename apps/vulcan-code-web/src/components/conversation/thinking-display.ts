@@ -5,43 +5,36 @@ import type {
 import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
 import { metadataValue } from "@/components/conversation/conversation-metadata";
 
-// ThinkingDisplayMode stores the WebUI-only display preference for reasoning output.
-// ThinkingDisplayMode 保存仅 WebUI 使用的思考过程展示偏好。
+// ThinkingDisplayMode stores the persisted display preference for reasoning output.
+// ThinkingDisplayMode 保存持久化的思考过程展示偏好。
 export type ThinkingDisplayMode =
   | "popup_only"
   | "inline_output"
   | "first_inline_with_popup"
   | "first_inline_only";
 
+// DEFAULT_THINKING_DISPLAY_MODE is used when the backend has no persisted display preference yet.
+// DEFAULT_THINKING_DISPLAY_MODE 用于后端尚未持久化展示偏好时的默认值。
+export const DEFAULT_THINKING_DISPLAY_MODE: ThinkingDisplayMode = "first_inline_with_popup";
+
 // ThinkingDisplayModeOption describes one selectable display mode in the composer menu.
 // ThinkingDisplayModeOption 描述输入区菜单中的单个可选展示模式。
 export interface ThinkingDisplayModeOption {
-  // Stable value stored in localStorage and passed through component props.
-  // 存入 localStorage 并通过组件属性传递的稳定值。
+  // Stable value stored in the shared Vulcan configuration and passed through component props.
+  // 存入共享 Vulcan 配置并通过组件属性传递的稳定值。
   value: ThinkingDisplayMode;
   // Chinese label shown as the primary menu text.
   // 菜单中作为主文案展示的中文名称。
   labelZh: string;
-  // English label shown as the secondary menu text.
-  // 菜单中作为辅助文案展示的英文名称。
-  labelEn: string;
 }
-
-// THINKING_DISPLAY_STORAGE_KEY persists the current four-state display mode.
-// THINKING_DISPLAY_STORAGE_KEY 持久化当前四态思考展示模式。
-export const THINKING_DISPLAY_STORAGE_KEY = "vulcan-webui-thinking-display-mode";
-
-// LEGACY_THINKING_OVERLAY_STORAGE_KEY is read once to migrate the old boolean preference.
-// LEGACY_THINKING_OVERLAY_STORAGE_KEY 仅用于只读迁移旧版布尔偏好。
-export const LEGACY_THINKING_OVERLAY_STORAGE_KEY = "vulcan-webui-thinking-overlay-enabled";
 
 // THINKING_DISPLAY_MODE_OPTIONS lists every user-facing thinking display mode.
 // THINKING_DISPLAY_MODE_OPTIONS 列出所有面向用户的思考展示模式。
 export const THINKING_DISPLAY_MODE_OPTIONS: ThinkingDisplayModeOption[] = [
-  { value: "popup_only", labelZh: "弹窗显示", labelEn: "Popup Then Inline" },
-  { value: "inline_output", labelZh: "直接输出", labelEn: "Inline Output" },
-  { value: "first_inline_with_popup", labelZh: "首段输出+弹窗", labelEn: "First Inline + Popup" },
-  { value: "first_inline_only", labelZh: "仅首段输出", labelEn: "First Inline Only" },
+  { value: "popup_only", labelZh: "弹窗显示" },
+  { value: "inline_output", labelZh: "直接输出" },
+  { value: "first_inline_with_popup", labelZh: "首段输出+弹窗" },
+  { value: "first_inline_only", labelZh: "仅首段输出" },
 ];
 
 // parseThinkingDisplayMode returns a supported display mode or null for unknown values.
@@ -52,18 +45,10 @@ export function parseThinkingDisplayMode(value: string | null | undefined): Thin
     : null;
 }
 
-// initialThinkingDisplayMode resolves the persisted mode and migrates the legacy boolean setting.
-// initialThinkingDisplayMode 解析持久化模式，并迁移旧版布尔设置。
-export function initialThinkingDisplayMode(storage: Storage = window.localStorage): ThinkingDisplayMode {
-  const storedMode = parseThinkingDisplayMode(storage.getItem(THINKING_DISPLAY_STORAGE_KEY));
-  if (storedMode) {
-    return storedMode;
-  }
-  const legacyOverlayEnabled = storage.getItem(LEGACY_THINKING_OVERLAY_STORAGE_KEY);
-  if (legacyOverlayEnabled === "false") {
-    return "inline_output";
-  }
-  return "popup_only";
+// normalizeThinkingDisplayMode resolves an optional backend value to the effective display mode.
+// normalizeThinkingDisplayMode 将可选后端值解析为实际展示模式。
+export function normalizeThinkingDisplayMode(value: string | null | undefined): ThinkingDisplayMode {
+  return parseThinkingDisplayMode(value) ?? DEFAULT_THINKING_DISPLAY_MODE;
 }
 
 // activeThinkingOverlayBlock returns the live thinking block that should use the floating surface.

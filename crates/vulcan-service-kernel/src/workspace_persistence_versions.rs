@@ -309,6 +309,42 @@ pub(crate) fn reasoning_effort_wire_value(effort: ReasoningEffortLevel) -> &'sta
     }
 }
 
+/// Converts the WebUI thinking display string into the shared provider-config enum.
+/// 将 WebUI 思考展示字符串转换为共享 provider-config 枚举。
+pub(crate) fn parse_thinking_display_mode(value: &str) -> Option<WorkbenchThinkingDisplayMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "popup_only" => Some(WorkbenchThinkingDisplayMode::PopupOnly),
+        "inline_output" => Some(WorkbenchThinkingDisplayMode::InlineOutput),
+        "first_inline_with_popup" => Some(WorkbenchThinkingDisplayMode::FirstInlineWithPopup),
+        "first_inline_only" => Some(WorkbenchThinkingDisplayMode::FirstInlineOnly),
+        _ => None,
+    }
+}
+
+/// Converts one shared thinking display enum into the WebUI wire value.
+/// 将单个共享思考展示枚举转换为 WebUI 传输值。
+pub(crate) fn thinking_display_mode_wire_value(mode: WorkbenchThinkingDisplayMode) -> &'static str {
+    match mode {
+        WorkbenchThinkingDisplayMode::PopupOnly => "popup_only",
+        WorkbenchThinkingDisplayMode::InlineOutput => "inline_output",
+        WorkbenchThinkingDisplayMode::FirstInlineWithPopup => "first_inline_with_popup",
+        WorkbenchThinkingDisplayMode::FirstInlineOnly => "first_inline_only",
+    }
+}
+
+/// Resolves the WebUI thinking display mode from the shared provider configuration.
+/// 从共享 Provider 配置解析 WebUI 思考展示模式。
+pub(crate) fn workbench_thinking_display_mode(
+    provider_configuration: &ProviderConfigurationFile,
+) -> String {
+    thinking_display_mode_wire_value(
+        provider_configuration
+            .workbench_thinking_display_mode
+            .unwrap_or_default(),
+    )
+    .to_string()
+}
+
 /// Resolves the effective reasoning effort for the active model using the shared selector view.
 /// 使用共享选择器视图解析当前激活模型的生效思考档位。
 pub(crate) fn active_reasoning_selection_effort(

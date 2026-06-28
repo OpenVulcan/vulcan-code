@@ -79,6 +79,15 @@ export async function selectWorkbenchReasoningEffort(effort: string): Promise<Wo
   return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", { effort });
 }
 
+// selectWorkbenchThinkingDisplayMode persists one thinking display preference through the desktop service router.
+// selectWorkbenchThinkingDisplayMode 通过桌面服务路由持久化单个思考展示偏好。
+export async function selectWorkbenchThinkingDisplayMode(mode: string): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_thinking_display_mode", { mode });
+}
+
 // saveProviderConfiguration persists one provider form through the desktop service.
 // saveProviderConfiguration 通过桌面服务持久化单个 Provider 表单。
 export async function saveProviderConfiguration(request: { providerId: string; fields: Record<string, string> }): Promise<WorkbenchSnapshot | null> {

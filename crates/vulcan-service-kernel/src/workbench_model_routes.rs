@@ -12,7 +12,8 @@ use vulcan_workbench_model::SessionAddonNamespace;
 
 use super::{
     SharedServiceBridgeState, active_reasoning_selection_effort, current_unix_millis_text,
-    emit_workbench_event, parse_reasoning_effort, refresh_workbench_runtime_controls_locked,
+    emit_workbench_event, parse_reasoning_effort, parse_thinking_display_mode,
+    refresh_settings_projection_locked, refresh_workbench_runtime_controls_locked,
     selected_session_runtime_state_mut, session_addon_state_from_workspace_snapshot,
     spawn_workspace_session_addon_state_persist_task,
 };
@@ -400,6 +401,50 @@ pub(super) async fn service_select_workbench_reasoning_effort(
             Some(String::from("reasoning_selection")),
         );
     }
+
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Persists the WebUI thinking-output display mode in the shared Vulcan configuration file.
+/// 将 WebUI 思考输出展示模式持久化到共享 Vulcan 配置文件中。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the refreshed workbench snapshot to connected WebUI clients.
+/// `app` 用于向已连接的 WebUI 客户端发送刷新后的工作台快照。
+/// `state` owns the active service runtime and retained workbench snapshot.
+/// `state` 持有当前服务运行时和保留的工作台快照。
+/// `mode` is the stable WebUI thinking display mode wire value.
+/// `mode` 是稳定的 WebUI 思考展示模式传输值。
+///
+/// # Returns
+/// 返回值
+/// Returns the refreshed workbench snapshot after the preference is persisted.
+/// 返回偏好持久化后的刷新工作台快照。
+pub(super) async fn service_select_workbench_thinking_display_mode(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    mode: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let selected_mode = parse_thinking_display_mode(mode.trim())
+        .ok_or_else(|| format!("未知思考展示模式：{mode}"))?;
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        next_configuration.workbench_thinking_display_mode = Some(selected_mode);
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存思考展示模式失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
+        guard.workbench.clone()
+    };
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)

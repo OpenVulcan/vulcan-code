@@ -11,6 +11,33 @@ pub fn normalize_session_transcript_turn_page_size(value: Option<usize>) -> usiz
     }
 }
 
+/// Workbench thinking-output display mode persisted for the WebUI.
+/// 为 WebUI 持久化的工作台思考输出展示模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkbenchThinkingDisplayMode {
+    /// Shows the live thinking block in the popup and then leaves it inline after streaming ends.
+    /// 在弹窗中展示实时思考块，并在流式结束后保留到主输出中。
+    PopupOnly,
+    /// Shows every thinking block directly in the main transcript.
+    /// 将所有思考块直接展示在主会话转录中。
+    InlineOutput,
+    /// Shows the first thinking block inline while keeping the live popup for later thinking blocks.
+    /// 首段思考内联展示，同时为后续思考块保留实时弹窗。
+    FirstInlineWithPopup,
+    /// Shows only the first thinking block inline and hides later thinking blocks.
+    /// 仅内联展示首段思考，并隐藏后续思考块。
+    FirstInlineOnly,
+}
+
+impl Default for WorkbenchThinkingDisplayMode {
+    /// Returns the default thinking display mode used when no user configuration exists.
+    /// 返回没有用户配置时使用的默认思考展示模式。
+    fn default() -> Self {
+        Self::FirstInlineWithPopup
+    }
+}
+
 /// Root provider configuration file saved in the Vulcan home directory.
 /// 保存到 Vulcan 家目录中的根级供应商配置文件。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -26,6 +53,13 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub workbench_reasoning_effort: Option<ReasoningEffortLevel>,
+    /// Remembered workbench thinking-output display mode selected by the user.
+    /// 由用户选择并记忆的工作台思考输出展示模式。
+    #[serde(
+        rename = "workbenchThinkingDisplayMode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workbench_thinking_display_mode: Option<WorkbenchThinkingDisplayMode>,
     /// Remembered WebUI locale identifier selected by the user.
     /// 由用户选择并记忆的WebUI语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]

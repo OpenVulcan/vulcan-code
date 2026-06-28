@@ -544,6 +544,7 @@ pub(crate) fn workbench_from_runtime(
         providers: providers(provider_configuration),
         mcp_servers: mcp_servers(provider_configuration),
         reasoning_selection: reasoning_selection(provider_configuration),
+        thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
         git_commit: git_commit_settings(provider_configuration),
         host_tools: host_tools_settings(provider_configuration),
         ai_capabilities: ai_capabilities(

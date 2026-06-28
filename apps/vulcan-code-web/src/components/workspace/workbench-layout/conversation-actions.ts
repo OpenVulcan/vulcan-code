@@ -1,6 +1,7 @@
 import React from "react";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
+import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import {
   compactSelectedConversationContext,
@@ -22,6 +23,7 @@ import {
   selectWorkbenchModel,
   selectWorkbenchModelSecondaryRoute,
   selectWorkbenchReasoningEffort,
+  selectWorkbenchThinkingDisplayMode,
 } from "@/service/settings-actions-service";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
@@ -507,7 +509,22 @@ const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: st
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, []);
+}, [mergeWorkbenchWithLocalCaches, setWorkbenchState]);
+
+// handleSelectWorkbenchThinkingDisplayMode persists one thinking display preference through the shared service router.
+// handleSelectWorkbenchThinkingDisplayMode 通过共享服务路由持久化单个思考展示偏好。
+const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: ThinkingDisplayMode): Promise<boolean> => {
+  try {
+    const snapshot = await selectWorkbenchThinkingDisplayMode(mode);
+    if (snapshot) {
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    }
+    return true;
+  } catch (nextError) {
+    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    return false;
+  }
+}, [mergeWorkbenchWithLocalCaches, setWorkbenchState]);
 
 
   return {
@@ -528,5 +545,6 @@ const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: st
     handleSubmitUserPromptEdit,
     handleForkConversation,
     handleSelectWorkbenchReasoningEffort,
+    handleSelectWorkbenchThinkingDisplayMode,
   };
 }

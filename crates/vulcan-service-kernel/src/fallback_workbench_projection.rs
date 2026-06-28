@@ -76,6 +76,9 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         providers: providers(&ProviderConfigurationFile::default()),
         mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
+        thinking_display_mode: workbench_thinking_display_mode(
+            &ProviderConfigurationFile::default(),
+        ),
         git_commit: git_commit_settings(&ProviderConfigurationFile::default()),
         host_tools: host_tools_settings(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),

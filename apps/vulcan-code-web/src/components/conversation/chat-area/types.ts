@@ -4,6 +4,7 @@ import type {
   ComposerSlashCommandResult,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
+import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type {
@@ -75,6 +76,9 @@ export interface ChatAreaProps {
   // Selects the active reasoning effort.
   // 选择当前推理强度。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  // Persists the active thinking display mode.
+  // 持久化当前思考展示模式。
+  onSelectWorkbenchThinkingDisplayMode: (mode: ThinkingDisplayMode) => Promise<boolean>;
   // Routes one composer slash command.
   // 路由一个输入区斜杠命令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;

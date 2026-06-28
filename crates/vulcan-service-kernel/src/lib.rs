@@ -49,6 +49,7 @@ use vulcan_agent_runtime::{
     },
     provider_config::{
         self, PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
+        WorkbenchThinkingDisplayMode,
     },
     provider_input_normalizer::normalize_provider_user_input_for_model,
     session_event_runtime::{
@@ -339,6 +340,7 @@ use workbench_model_routes::{
     provider_secondary_route_summary_from_openrouter_selection,
     service_list_workbench_model_secondary_routes, service_select_workbench_model,
     service_select_workbench_model_secondary_route, service_select_workbench_reasoning_effort,
+    service_select_workbench_thinking_display_mode,
 };
 use workbench_refresh::*;
 use workbench_session_panels::*;

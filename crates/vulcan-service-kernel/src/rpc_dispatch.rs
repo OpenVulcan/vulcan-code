@@ -384,6 +384,14 @@ pub(super) async fn dispatch_service_rpc(
             )
             .await,
         ),
+        "service_select_workbench_thinking_display_mode" => rpc_json_result(
+            service_select_workbench_thinking_display_mode(
+                app,
+                state,
+                rpc_required_param(&params, "mode")?,
+            )
+            .await,
+        ),
         "service_save_provider_configuration" => rpc_json_result(
             service_save_provider_configuration(
                 app,

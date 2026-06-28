@@ -6,6 +6,7 @@ use super::super::{
     PersistedRtkToolConfiguration, PersistedWebSearchConfiguration,
     PersistedWebSearchProviderEntry, ProviderConfigurationFile, ReasoningEffortLevel,
     WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
+    WorkbenchThinkingDisplayMode,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,6 +30,29 @@ fn provider_configuration_round_trips_workbench_reasoning_effort() {
     assert_eq!(
         restored.workbench_reasoning_effort,
         Some(ReasoningEffortLevel::High)
+    );
+}
+
+/// Verifies the remembered workbench thinking display mode keeps the stable camelCase field name and round-trips through the shared provider configuration file.
+/// 验证已记忆的工作台思考展示模式会保持稳定的 camelCase 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。
+#[test]
+fn provider_configuration_round_trips_workbench_thinking_display_mode() {
+    let config = ProviderConfigurationFile {
+        workbench_thinking_display_mode: Some(WorkbenchThinkingDisplayMode::FirstInlineWithPopup),
+        ..ProviderConfigurationFile::default()
+    };
+
+    let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+    assert_eq!(
+        value.get("workbenchThinkingDisplayMode"),
+        Some(&json!("first_inline_with_popup"))
+    );
+
+    let restored: ProviderConfigurationFile =
+        serde_json::from_value(value).expect("provider configuration must deserialize");
+    assert_eq!(
+        restored.workbench_thinking_display_mode,
+        Some(WorkbenchThinkingDisplayMode::FirstInlineWithPopup)
     );
 }
 

@@ -118,7 +118,6 @@ export function ComposerAttachmentMenu(props: {
               <DropdownMenuItem key={option.value} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
                 <span className="composer-thinking-mode-label">
                   <span>{option.labelZh}</span>
-                  <small>{option.labelEn}</small>
                 </span>
                 {props.thinkingDisplayMode === option.value ? <CheckCircle2 size={14} /> : null}
               </DropdownMenuItem>

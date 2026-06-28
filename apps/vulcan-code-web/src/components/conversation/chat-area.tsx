@@ -21,10 +21,10 @@ import {
   normalizedSessionRunPhase,
 } from "@/components/conversation/conversation-runtime";
 import {
-  THINKING_DISPLAY_STORAGE_KEY,
   activeThinkingOverlayBlock,
   hiddenThinkingBlockIdsForDisplayMode,
-  initialThinkingDisplayMode,
+  normalizeThinkingDisplayMode,
+  type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
 import {
   generatedMediaAttachmentsFromToolDetailPayload,
@@ -106,7 +106,9 @@ export function ChatArea(props: ChatAreaProps) {
   });
   // thinkingDisplayMode controls how thinking blocks flow between the popup and transcript.
   // thinkingDisplayMode 控制思考块在弹窗与会话面板之间的展示方式。
-  const [thinkingDisplayMode, setThinkingDisplayMode] = React.useState(() => initialThinkingDisplayMode());
+  const [thinkingDisplayMode, setThinkingDisplayMode] = React.useState<ThinkingDisplayMode>(() => (
+    normalizeThinkingDisplayMode(props.workbench.thinkingDisplayMode)
+  ));
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
@@ -851,8 +853,19 @@ export function ChatArea(props: ChatAreaProps) {
   }, [activeSurfaceConversationId, conversationStreamSignature, updateConversationBottomState]);
 
   React.useEffect(() => {
-    window.localStorage.setItem(THINKING_DISPLAY_STORAGE_KEY, thinkingDisplayMode);
-  }, [thinkingDisplayMode]);
+    setThinkingDisplayMode(normalizeThinkingDisplayMode(props.workbench.thinkingDisplayMode));
+  }, [props.workbench.thinkingDisplayMode]);
+
+  // handleThinkingDisplayModeChange applies the WebUI preference immediately and persists it through the service.
+  // handleThinkingDisplayModeChange 立即应用 WebUI 偏好，并通过服务持久化该设置。
+  const handleThinkingDisplayModeChange = React.useCallback((mode: ThinkingDisplayMode) => {
+    setThinkingDisplayMode(mode);
+    void props.onSelectWorkbenchThinkingDisplayMode(mode).then((saved) => {
+      if (!saved) {
+        setThinkingDisplayMode(normalizeThinkingDisplayMode(props.workbench.thinkingDisplayMode));
+      }
+    });
+  }, [props.onSelectWorkbenchThinkingDisplayMode, props.workbench.thinkingDisplayMode]);
 
   React.useEffect(() => {
     if (displayedStreamingThinkingBlock) {
@@ -931,7 +944,7 @@ export function ChatArea(props: ChatAreaProps) {
       sessionReviewSummary={props.sessionReviewSummary}
       onComposerDockHeightChange={handleComposerDockHeightChange}
       onScrollToBottom={() => scrollConversationToBottom()}
-      onThinkingDisplayModeChange={setThinkingDisplayMode}
+      onThinkingDisplayModeChange={handleThinkingDisplayModeChange}
     />
   );
   // conversationSurfaceContent keeps transcript, overlays, and composer in one adaptive content coordinate space.

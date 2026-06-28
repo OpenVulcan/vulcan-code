@@ -14,6 +14,7 @@ import type {
   ConversationMessage,
   ConversationSummary,
 } from "./conversation";
+import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type {
   MemorySummary,
   VmmMemorySnapshot,
@@ -106,6 +107,9 @@ export interface WorkbenchSnapshot {
   // Backend-resolved reasoning selector view for the active model.
   // 后端根据当前激活模型解析出的思考选择器视图。
   reasoningSelection?: ReasoningSelectionSummary | null;
+  // Thinking-output display mode resolved from the shared service configuration.
+  // 从共享服务配置解析出的思考输出展示模式。
+  thinkingDisplayMode?: ThinkingDisplayMode | null;
   // Git commit dialog settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Git 提交弹窗设置。
   gitCommit?: GitCommitSettingsSummary;
