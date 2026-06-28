@@ -183,7 +183,7 @@ export async function diffFileFromWorkspaceDetailAsync(
       ...fallbackFile,
       ...workspaceDiffFileFieldsFromSummary(response.file),
       isPartial: true,
-      fileDiffLoadState: { status: "loaded", message: response.notice ?? "该文件超过 WebUI 展示阈值，未传输 diff 正文。" },
+      fileDiffLoadState: { status: "loaded", message: response.notice ?? null },
       contextLineCount: response.contextLines ?? fallbackFile.contextLineCount,
       rawDiff: fallbackFile.rawDiff,
       hunks: [],
@@ -226,9 +226,9 @@ function diffFileFromParsedWorkspaceDetail(
     estimatedHunkCount,
     isPartial: hunkScopedSummaryDetail || Boolean(response.truncated),
     fileDiffLoadState: hunkScopedSummaryDetail
-      ? { status: "loaded", message: response.notice ?? "已加载搜索命中的 hunk，完整文件内容仍可按需加载。" }
+      ? { status: "loaded", message: response.notice ?? null }
       : response.truncated
-      ? { status: "loaded", message: response.notice ?? "文件 diff 详情已加载，但内容仍被截断。" }
+      ? { status: "loaded", message: response.notice ?? null }
       : { status: "loaded", message: response.notice ?? null },
     rawDiff: response.unifiedDiff || file.rawDiff || fallbackFile.rawDiff,
     contextLineCount: response.contextLines ?? fallbackFile.contextLineCount,
@@ -604,7 +604,7 @@ function mergeWorkspaceDiffSummaries(
       isPartial: (truncated || summary.tooLargeToDisplay) && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length,
       fileDiffLoadState: parsedFile?.fileDiffLoadState
         ?? (summary.tooLargeToDisplay && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length
-          ? { status: "loaded", message: "该文件超过 WebUI 展示阈值，未传输 diff 正文。" }
+          ? { status: "loaded" }
           : truncated && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length
             ? { status: "idle" }
           : parsedFile?.hunks.length

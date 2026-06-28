@@ -2,6 +2,7 @@ import React from "react";
 import { CheckCircle2, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProgressRing } from "@/components/ui/progress-ring";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { SessionTodolistItemSummary, SessionTodolistSummary } from "@/types";
 export function ComposerSessionProgressCapsule(props: {
@@ -12,21 +13,24 @@ export function ComposerSessionProgressCapsule(props: {
   // 可选 Git 审查摘要，仅作为紧凑变更计数展示。
   reviewSummary: ConversationSessionReviewSummary | null;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const currentStepNumber = composerSessionCurrentStepNumber(props.todolist);
   const progressValue = composerSessionProgressValue(currentStepNumber, props.todolist.totalCount);
   const reviewSummary = props.reviewSummary?.changedFiles ? props.reviewSummary : null;
   return (
     <div className="composer-session-progress-root">
       <button
-        aria-label="查看当前进程"
+        aria-label={t("composer.progress.open")}
         className="composer-session-progress-capsule"
         type="button"
       >
-        <ProgressRing aria-label={`进程进度 ${currentStepNumber}/${props.todolist.totalCount}`} size={14} value={progressValue} />
-        <span>第 {currentStepNumber} / {props.todolist.totalCount} 步</span>
+        <ProgressRing aria-label={formatProgressTranslation(t, "composer.progress.progressLabel", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })} size={14} value={progressValue} />
+        <span>{formatProgressTranslation(t, "composer.progress.step", { current: String(currentStepNumber), total: String(props.todolist.totalCount) })}</span>
         {reviewSummary ? (
           <span className="composer-session-progress-review-summary">
-            <span>· {reviewSummary.changedFiles} 个文件已更改</span>
+            <span>· {formatProgressTranslation(t, "composer.progress.changedFiles", { count: String(reviewSummary.changedFiles) })}</span>
             <span className="added">+{reviewSummary.additions}</span>
             <span className="removed">-{reviewSummary.deletions}</span>
           </span>
@@ -36,7 +40,7 @@ export function ComposerSessionProgressCapsule(props: {
         <div className="composer-session-progress-list">
           {props.todolist.items.map((item, index) => (
             <div className={cn("composer-session-progress-row", `status-${item.status}`)} key={`${index}-${item.status}-${item.step}`}>
-              {composerSessionProgressStatusIcon(item.status)}
+              {composerSessionProgressStatusIcon(item.status, t)}
               <span>{item.step}</span>
             </div>
           ))}
@@ -67,13 +71,26 @@ function composerSessionCurrentStepNumber(todolist: SessionTodolistSummary): num
 
 // composerSessionProgressStatusIcon returns the compact icon for one progress status.
 // composerSessionProgressStatusIcon 返回单个进程状态的紧凑图标。
-function composerSessionProgressStatusIcon(status: SessionTodolistItemSummary["status"]): React.ReactNode {
+function composerSessionProgressStatusIcon(status: SessionTodolistItemSummary["status"], t: (key: TranslationKey) => string): React.ReactNode {
   if (status === "completed") {
     return <CheckCircle2 size={15} />;
   }
   if (status === "in_progress") {
-    return <ProgressRing aria-label="步骤进行中" size={15} value={null} />;
+    return <ProgressRing aria-label={t("composer.progress.stepInProgress")} size={15} value={null} />;
   }
   return <Circle size={15} />;
+}
+
+// formatProgressTranslation replaces named placeholders in localized progress labels.
+// formatProgressTranslation 替换进度胶囊本地化标签中的具名占位符。
+function formatProgressTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }
 

@@ -17,6 +17,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   PendingQuestionOptionSummary,
@@ -90,6 +91,9 @@ interface AskQuestionOptionDescriptor {
 // AskQuestionDialog renders the blocking WebUI ask tool as a compact question bar.
 // AskQuestionDialog 将阻塞式 WebUI ask 工具渲染为紧凑 question bar。
 export function AskQuestionDialog(props: AskQuestionDialogProps) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // request is the latest pending ask request projected by the service layer.
   // request 是服务层投影出的最新待处理 ask 请求。
   const request = props.request;
@@ -145,8 +149,8 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // renderedOptions describes visible option rows including the custom lane.
   // renderedOptions 描述包含自定义通道在内的可见选项行。
   const renderedOptions = React.useMemo(
-    () => activeQuestion ? buildAskQuestionOptionDescriptors(activeQuestion) : [],
-    [activeQuestion],
+    () => activeQuestion ? buildAskQuestionOptionDescriptors(activeQuestion, t) : [],
+    [activeQuestion, t],
   );
 
   React.useEffect(() => {
@@ -192,7 +196,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     if (!activeQuestion || !activeDraft) {
       return;
     }
-    const descriptor = buildAskQuestionOptionDescriptors(activeQuestion)[optionIndex];
+    const descriptor = renderedOptions[optionIndex];
     if (!descriptor) {
       return;
     }
@@ -222,7 +226,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
       customSelected: false,
       selectedLabels: [descriptor.option.label],
     });
-  }, [activeDraft, activeQuestion, safeActiveIndex, updateDraft]);
+  }, [activeDraft, activeQuestion, renderedOptions, safeActiveIndex, updateDraft]);
 
   // moveOption changes the keyboard-highlighted option row without wrapping around.
   // moveOption 以不循环方式移动键盘高亮选项行。
@@ -238,7 +242,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     if (!request) {
       return;
     }
-    const nextValidation = collectAskQuestionAnswers(request.questions, drafts);
+    const nextValidation = collectAskQuestionAnswers(request.questions, drafts, t);
     if (nextValidation.error) {
       setActiveIndex(nextValidation.errorIndex ?? 0);
       setStage("answering");
@@ -247,7 +251,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     }
     setStage("submitConfirm");
     setValidationError(null);
-  }, [drafts, request]);
+  }, [drafts, request, t]);
 
   // advanceQuestion validates the current page before moving forward or opening submit confirmation.
   // advanceQuestion 校验当前页面，然后前进或打开提交确认。
@@ -255,7 +259,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     if (!activeQuestion || !activeDraft || !request) {
       return;
     }
-    const currentResult = collectAskQuestionPromptAnswers(activeQuestion, activeDraft);
+    const currentResult = collectAskQuestionPromptAnswers(activeQuestion, activeDraft, t);
     if (currentResult.error) {
       setValidationError(currentResult.error);
       setStage("answering");
@@ -268,7 +272,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     setValidationError(null);
     setStage("answering");
     setActiveIndex((current) => Math.min(current + 1, questionCount - 1));
-  }, [activeDraft, activeQuestion, openSubmitConfirmation, questionCount, request, safeActiveIndex]);
+  }, [activeDraft, activeQuestion, openSubmitConfirmation, questionCount, request, safeActiveIndex, t]);
 
   // handleSubmit validates answers, then resumes the backend ask runtime.
   // handleSubmit 校验答案并恢复后端 ask 运行时。
@@ -276,7 +280,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     if (!request) {
       return;
     }
-    const nextValidation = collectAskQuestionAnswers(request.questions, drafts);
+    const nextValidation = collectAskQuestionAnswers(request.questions, drafts, t);
     if (nextValidation.error) {
       setValidationError(nextValidation.error);
       setStage("answering");
@@ -289,7 +293,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     } finally {
       setBusy(false);
     }
-  }, [drafts, props, request]);
+  }, [drafts, props, request, t]);
 
   // handleReject confirms cancellation and rejects the backend ask runtime.
   // handleReject 确认取消并拒绝后端 ask 运行时。
@@ -371,12 +375,12 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // primaryLabel is the current primary action label.
   // primaryLabel 是当前主操作按钮文案。
   const primaryLabel = stage === "submitConfirm"
-    ? "确认提交"
+    ? t("ask.action.confirmSubmit")
     : stage === "rejectConfirm"
-      ? "确认终止"
+      ? t("ask.action.confirmReject")
       : isLastQuestion
-        ? "提交"
-        : "继续";
+        ? t("ask.action.submit")
+        : t("ask.action.continue");
   // primaryAction is the current primary action callback.
   // primaryAction 是当前主操作回调。
   const primaryAction = stage === "submitConfirm"
@@ -399,9 +403,9 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
           tabIndex={-1}
         >
           <div className="flex max-h-[min(420px,calc(100vh-2rem))] min-h-0 flex-col gap-2.5 p-3.5">
-            <h2 className="sr-only" id={titleId}>ask 需要你的确认</h2>
+            <h2 className="sr-only" id={titleId}>{t("ask.title")}</h2>
             <p className="sr-only" id={descriptionId}>
-              当前 AI 调用正在等待你的回答，提交后会继续执行。
+              {t("ask.description")}
             </p>
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1 text-sm leading-5 font-semibold text-popover-foreground">
@@ -412,6 +416,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
                 disabled={busy}
                 onNext={() => moveQuestion(1)}
                 onPrevious={() => moveQuestion(-1)}
+                t={t}
                 total={questionCount}
               />
             </div>
@@ -436,6 +441,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
                     optionIndex={optionIndex}
                     question={activeQuestion}
                     selected={askQuestionOptionIsSelected(activeQuestion, activeDraft, descriptor)}
+                    t={t}
                   />
                 ))}
               </div>
@@ -445,7 +451,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
                 {validationError}
               </div>
             ) : null}
-            <AskQuestionConfirmPanel stage={stage} />
+            <AskQuestionConfirmPanel stage={stage} t={t} />
             <div className="flex items-center justify-end gap-1.5">
               <Button
                 className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
@@ -461,7 +467,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
                 type="button"
                 variant="ghost"
               >
-                <span>{stage === "answering" ? "忽略" : "返回修改"}</span>
+                <span>{stage === "answering" ? t("ask.action.ignore") : t("ask.action.backToEdit")}</span>
                 <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">ESC</span>
               </Button>
               <Button
@@ -471,7 +477,7 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
                 size="sm"
                 type="button"
               >
-                <span>{busy ? "处理中..." : primaryLabel}</span>
+                <span>{busy ? t("ask.action.processing") : primaryLabel}</span>
                 <CornerDownLeft className="size-3.5" />
               </Button>
             </div>
@@ -497,6 +503,9 @@ function AskQuestionProgress(props: {
   // Moves to the previous question.
   // 移动到上一题。
   onPrevious: () => void;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string;
   // Total question count.
   // 问题总数。
   total: number;
@@ -504,7 +513,7 @@ function AskQuestionProgress(props: {
   return (
     <div className="flex shrink-0 items-center gap-0.5 text-[11px] leading-4 text-muted-foreground">
       <Button
-        aria-label="上一题"
+        aria-label={props.t("ask.progress.previous")}
         disabled={props.disabled || props.activeIndex <= 0}
         onClick={props.onPrevious}
         size="icon-xs"
@@ -515,7 +524,7 @@ function AskQuestionProgress(props: {
       </Button>
       <span className="tabular-nums">{props.activeIndex + 1} of {props.total}</span>
       <Button
-        aria-label="下一题"
+        aria-label={props.t("ask.progress.next")}
         disabled={props.disabled || props.activeIndex >= props.total - 1}
         onClick={props.onNext}
         size="icon-xs"
@@ -558,6 +567,9 @@ function AskQuestionOptionRow(props: {
   // Whether this row is selected.
   // 该行是否已选中。
   selected: boolean;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string;
 }) {
   // showsInlineEditor indicates whether this row should render an embedded textarea.
   // showsInlineEditor 表示该行是否应渲染内嵌多行输入框。
@@ -601,7 +613,7 @@ function AskQuestionOptionRow(props: {
         <AskQuestionInfoTooltip descriptor={props.descriptor} />
         {props.selected ? (
           <span className="rounded-md bg-background px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground">
-            已选
+            {props.t("ask.option.selected")}
           </span>
         ) : null}
       </span>
@@ -666,14 +678,17 @@ function AskQuestionConfirmPanel(props: {
   // Current question bar lifecycle stage.
   // 当前 question bar 生命周期阶段。
   stage: AskQuestionStage;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string;
 }) {
   if (props.stage === "answering") {
     return null;
   }
-  const confirmTitle = props.stage === "submitConfirm" ? "确认提交？" : "确认终止当前会话？";
+  const confirmTitle = props.stage === "submitConfirm" ? props.t("ask.confirm.submitTitle") : props.t("ask.confirm.rejectTitle");
   const confirmBody = props.stage === "submitConfirm"
-    ? "按 Enter 确认提交，按 Esc 返回修改。"
-    : "终止后等待中的 ask 工具调用会失败结束，按 Esc 返回修改。";
+    ? props.t("ask.confirm.submitBody")
+    : props.t("ask.confirm.rejectBody");
   return (
     <div className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-muted/45 px-2.5 py-1.5">
       <CircleAlert className={cn("size-4 shrink-0", props.stage === "rejectConfirm" ? "text-destructive" : "text-muted-foreground")} />
@@ -703,7 +718,10 @@ function buildAskQuestionDraft(question: PendingQuestionPromptSummary): AskQuest
 
 // buildAskQuestionOptionDescriptors creates visible rows for structured choices plus the custom lane.
 // buildAskQuestionOptionDescriptors 为结构化选项和自定义通道创建可见行。
-function buildAskQuestionOptionDescriptors(question: PendingQuestionPromptSummary): AskQuestionOptionDescriptor[] {
+function buildAskQuestionOptionDescriptors(
+  question: PendingQuestionPromptSummary,
+  t: (key: TranslationKey) => string,
+): AskQuestionOptionDescriptor[] {
   const optionRows = question.options.map((option) => ({
     label: option.label,
     description: option.description,
@@ -713,8 +731,8 @@ function buildAskQuestionOptionDescriptors(question: PendingQuestionPromptSummar
   return [
     ...optionRows,
     {
-      label: question.options.length === 0 ? "请输入回答" : "否，请告知 Codex 如何调整",
-      description: "输入自定义回答。支持自动换行，按 Shift+Enter 手动换行。",
+      label: question.options.length === 0 ? t("ask.custom.textPlaceholder") : t("ask.custom.adjustCodex"),
+      description: t("ask.custom.description"),
       custom: true,
       option: null,
     },
@@ -760,12 +778,13 @@ function askQuestionTextareaRows(value: string): number {
 function collectAskQuestionAnswers(
   questions: PendingQuestionPromptSummary[],
   drafts: AskQuestionDraft[],
+  t: (key: TranslationKey) => string,
 ): AskQuestionValidationResult {
   const answers: string[][] = [];
   for (let index = 0; index < questions.length; index += 1) {
     const question = questions[index];
     const draft = drafts[index] ?? buildAskQuestionDraft(question);
-    const result = collectAskQuestionPromptAnswers(question, draft);
+    const result = collectAskQuestionPromptAnswers(question, draft, t);
     if (result.error) {
       return { answers, error: result.error, errorIndex: index };
     }
@@ -779,22 +798,33 @@ function collectAskQuestionAnswers(
 function collectAskQuestionPromptAnswers(
   question: PendingQuestionPromptSummary,
   draft: AskQuestionDraft,
+  t: (key: TranslationKey) => string,
 ): { answers: string[]; error: string | null } {
   const trimmedCustom = draft.customText.trim();
   if (question.options.length === 0) {
     return trimmedCustom
       ? { answers: [trimmedCustom], error: null }
-      : { answers: [], error: `请先填写“${question.header}”的回答。` };
+      : { answers: [], error: formatAskQuestionMessage(t, "ask.validation.requiredAnswer", question.header) };
   }
   const answers = [...draft.selectedLabels];
   if (draft.customSelected) {
     if (!trimmedCustom) {
-      return { answers: [], error: `请先填写“${question.header}”的其他回答。` };
+      return { answers: [], error: formatAskQuestionMessage(t, "ask.validation.requiredOther", question.header) };
     }
     answers.push(trimmedCustom);
   }
   if (answers.length === 0) {
-    return { answers: [], error: `请先选择“${question.header}”的答案或填写其他回答。` };
+    return { answers: [], error: formatAskQuestionMessage(t, "ask.validation.requiredSelectionOrOther", question.header) };
   }
   return { answers, error: null };
+}
+
+// formatAskQuestionMessage fills the one supported ask validation placeholder.
+// formatAskQuestionMessage 填充 ask 校验消息当前支持的单个占位符。
+function formatAskQuestionMessage(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  header: string,
+): string {
+  return t(key).replace("{header}", header);
 }

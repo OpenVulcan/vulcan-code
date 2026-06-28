@@ -1,6 +1,7 @@
 import { Database } from "lucide-react"
 
 import { PanelTitle, StatusPill } from "@/components/shared/status"
+import { useI18n } from "@/i18n"
 import type { RuntimeModuleSnapshot } from "@/types"
 
 // RuntimeModulesPanel renders module status cards.
@@ -10,9 +11,10 @@ export function RuntimeModulesPanel(props: {
   // 以卡片展示的运行时模块。
   modules: RuntimeModuleSnapshot[]
 }) {
+  const { t } = useI18n()
   return (
     <section className="panel modules-panel">
-      <PanelTitle icon={<Database size={17} />} title="运行时模块" />
+      <PanelTitle icon={<Database size={17} />} title={t("settings.diagnostics.runtimeModules")} />
       <div className="module-grid">
         {props.modules.map((module) => (
           <article className="module-card" key={module.id}>

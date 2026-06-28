@@ -63,7 +63,7 @@ import type {
   MemorySubAreaId,
 } from "@/components/features/memory/MemoryArea";
 import { cn } from "@/lib/utils";
-import { useI18n, type LocaleCode } from "@/i18n";
+import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
 import type {
   AgentSkillsCatalogSummary,
   ComposerSlashCommandSummary,
@@ -117,6 +117,7 @@ import {
   saveProviderEnabledModels,
   saveProviderModelOverride,
   saveRtkRoutingSettings,
+  selectWebuiLocale,
   setAiCapabilityTargetEnabled,
 } from "@/service/settings-actions-service";
 import {
@@ -226,17 +227,6 @@ export function WorkbenchLayout(props: {
   // i18n provides localized shell labels and the active language.
   // i18n 提供本地化外壳标签与当前语言。
   const i18n = useI18n();
-  // shellChrome owns app-wide theme, window controls, and titlebar gesture handlers.
-  // shellChrome 持有应用级主题、窗口控制与标题栏手势处理器。
-  const {
-    shellChromeActions,
-    showWindowControls,
-    handleTitlebarDoubleClick,
-  } = useWorkbenchShellChrome({
-    startup: props.startup,
-    locale: i18n.locale,
-    onChangeLocale: i18n.setLocale,
-  });
   // localizedPrimaryFeatureAreas stores the translated top navigation metadata.
   // localizedPrimaryFeatureAreas 保存已翻译的顶部导航元数据。
   const localizedPrimaryFeatureAreas = React.useMemo(
@@ -310,11 +300,45 @@ export function WorkbenchLayout(props: {
   // expandedProjectIdsLocallyEditedRef records whether the user has touched project expansion in this session.
   // expandedProjectIdsLocallyEditedRef 记录本轮会话中用户是否已经手动修改过项目展开状态。
   const expandedProjectIdsLocallyEditedRef = React.useRef(false);
+  // localeSaveSeqRef prevents older locale-save responses from overriding newer choices.
+  // localeSaveSeqRef 防止较早的语言保存响应覆盖较新的选择。
+  const localeSaveSeqRef = React.useRef(0);
   // mergeWorkbenchWithLocalCaches centralizes service snapshot merges that must preserve loaded child surfaces.
   // mergeWorkbenchWithLocalCaches 集中处理必须保留已载入子代理界面的服务快照合并。
   const mergeWorkbenchWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => (
     mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(current, incoming, subagentSurfaceMessageCacheRef.current)
   ), []);
+  // handleWebuiLocaleChange applies the locale immediately and persists it through the service.
+  // handleWebuiLocaleChange 立即应用语言，并通过服务持久化。
+  const handleWebuiLocaleChange = React.useCallback((locale: LocaleCode) => {
+    const previousLocale = i18n.locale;
+    const requestSeq = localeSaveSeqRef.current + 1;
+    localeSaveSeqRef.current = requestSeq;
+    i18n.setLocale(locale);
+    void selectWebuiLocale(locale).then((snapshot) => {
+      if (snapshot && localeSaveSeqRef.current === requestSeq) {
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      }
+    }).catch((error) => {
+      if (localeSaveSeqRef.current === requestSeq) {
+        i18n.setLocale(previousLocale);
+        toast.error(formatWorkbenchTranslation(i18n.t, "global.languageSaveFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    });
+  }, [i18n, mergeWorkbenchWithLocalCaches]);
+  // shellChrome owns app-wide theme, window controls, and titlebar gesture handlers.
+  // shellChrome 持有应用级主题、窗口控制与标题栏手势处理器。
+  const {
+    shellChromeActions,
+    showWindowControls,
+    handleTitlebarDoubleClick,
+  } = useWorkbenchShellChrome({
+    startup: props.startup,
+    locale: i18n.locale,
+    onChangeLocale: handleWebuiLocaleChange,
+  });
   // applySkillWorkbenchAction runs one skill-page service action and merges the returned snapshot.
   // applySkillWorkbenchAction 执行单个技能页面服务动作并合并返回快照。
   const applySkillWorkbenchAction = React.useCallback(async (action: () => Promise<WorkbenchSnapshot>) => {
@@ -575,10 +599,10 @@ export function WorkbenchLayout(props: {
           const next = new Set(current);
           if (next.has(conversation.id)) {
             next.delete(conversation.id);
-            toast.success(`已取消置顶对话：${conversation.title}`);
+            toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.unpinned", { conversation: conversation.title }));
           } else {
             next.add(conversation.id);
-            toast.success(`已置顶对话：${conversation.title}`);
+            toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.pinned", { conversation: conversation.title }));
           }
           return next;
         });
@@ -591,38 +615,38 @@ export function WorkbenchLayout(props: {
         } else {
           applyProjectActionSnapshot(applyPreviewConversationAction(workbenchState, conversation.id, action).snapshot);
         }
-        toast.success(`已归档对话：${conversation.title}`);
+        toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archived", { conversation: conversation.title }));
         return;
       }
       if (action === "open-directory") {
         const project = projectForConversation(workbenchState, conversation);
         if (!project) {
-          toast.error("没有找到这个对话所属的项目。");
+          toast.error(i18n.t("workbenchConversation.noProject"));
           return;
         }
         const message = await openProjectDirectoryPath(project.path);
-        toast.success(message ?? `已请求打开项目目录：${project.name}`);
+        toast.success(message ?? formatWorkbenchTranslation(i18n.t, "projectActions.openRequested", { project: project.name }));
         return;
       }
       if (action === "copy-workdir") {
         const project = projectForConversation(workbenchState, conversation);
         if (!project) {
-          toast.error("没有找到这个对话所属的项目。");
+          toast.error(i18n.t("workbenchConversation.noProject"));
           return;
         }
         await navigator.clipboard.writeText(project.path);
-        toast.success("已复制工作目录。");
+        toast.success(i18n.t("workbenchConversation.copiedWorkspace"));
         return;
       }
       if (action === "copy-session-id") {
         await navigator.clipboard.writeText(conversation.id);
-        toast.success("已复制会话 ID。");
+        toast.success(i18n.t("workbenchConversation.copiedSessionId"));
         return;
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [applyProjectActionSnapshot, workbenchState]);
+  }, [applyProjectActionSnapshot, i18n.t, workbenchState]);
 
   // handleSelectConversation selects a conversation and persists its read marker.
   // handleSelectConversation 选择会话并持久化它的已读标记。
@@ -657,7 +681,7 @@ export function WorkbenchLayout(props: {
   const handleRenameConfirm = React.useCallback(async (target: RenameTarget, name: string) => {
     const normalizedName = name.trim();
     if (!normalizedName && target.kind !== "project") {
-      toast.error("名称不能为空。");
+      toast.error(i18n.t("workbenchConversation.nameEmpty"));
       return;
     }
     const project = target.kind === "project"
@@ -678,13 +702,13 @@ export function WorkbenchLayout(props: {
       setRenameTarget(null);
       toast.success(target.kind === "project"
         ? normalizedName
-          ? `已重命名项目：${effectiveProjectName}`
-          : `已还原项目名称：${effectiveProjectName}`
-        : `已重命名对话：${normalizedName}`);
+          ? formatWorkbenchTranslation(i18n.t, "workbenchConversation.projectRenamed", { project: effectiveProjectName })
+          : formatWorkbenchTranslation(i18n.t, "workbenchConversation.projectNameRestored", { project: effectiveProjectName })
+        : formatWorkbenchTranslation(i18n.t, "workbenchConversation.conversationRenamed", { conversation: normalizedName }));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [applyProjectActionSnapshot, workbenchState]);
+  }, [applyProjectActionSnapshot, i18n.t, workbenchState]);
 
   // handleArchiveProjectConfirm archives all conversations under the selected project.
   // handleArchiveProjectConfirm 归档选定项目下的全部对话。
@@ -700,14 +724,16 @@ export function WorkbenchLayout(props: {
       } else {
         applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, archiveProjectTarget.id, "archive-conversations").snapshot);
       }
-      toast.success(`已归档 ${projectConversationCount(workbenchState, archiveProjectTarget.id)} 个对话。`);
+      toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedCount", {
+        count: String(projectConversationCount(workbenchState, archiveProjectTarget.id)),
+      }));
       setArchiveProjectTarget(null);
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setArchiveProjectSubmitting(false);
     }
-  }, [applyProjectActionSnapshot, archiveProjectSubmitting, archiveProjectTarget, workbenchState]);
+  }, [applyProjectActionSnapshot, archiveProjectSubmitting, archiveProjectTarget, i18n.t, workbenchState]);
 
   // handleRemoveProjectConfirm archives conversations and removes the selected project.
   // handleRemoveProjectConfirm 归档对话并移除选中的项目。
@@ -723,14 +749,14 @@ export function WorkbenchLayout(props: {
       } else {
         applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, removeProjectTarget.id, "remove-project").snapshot);
       }
-      toast.success(`已归档并移除项目：${removeProjectTarget.name}`);
+      toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedAndRemovedProject", { project: removeProjectTarget.name }));
       setRemoveProjectTarget(null);
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setRemoveProjectSubmitting(false);
     }
-  }, [applyProjectActionSnapshot, removeProjectSubmitting, removeProjectTarget, workbenchState]);
+  }, [applyProjectActionSnapshot, i18n.t, removeProjectSubmitting, removeProjectTarget, workbenchState]);
 
   // handlePendingQuestionSubmit resumes a blocked ask tool call with validated modal answers.
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
@@ -740,11 +766,11 @@ export function WorkbenchLayout(props: {
       if (snapshot) {
         setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
-      toast.success("已提交 ask 回答。");
+      toast.success(i18n.t("workbenchAsk.submitted"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [mergeWorkbenchWithLocalCaches]);
+  }, [i18n.t, mergeWorkbenchWithLocalCaches]);
 
   // handlePendingQuestionReject cancels a blocked ask tool call after a second confirmation.
   // handlePendingQuestionReject 在二次确认后取消被阻塞的 ask 工具调用。
@@ -754,11 +780,11 @@ export function WorkbenchLayout(props: {
       if (snapshot) {
         setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
-      toast.info("已取消 ask 请求。");
+      toast.info(i18n.t("workbenchAsk.cancelled"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [mergeWorkbenchWithLocalCaches]);
+  }, [i18n.t, mergeWorkbenchWithLocalCaches]);
 
   React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
@@ -903,7 +929,7 @@ export function WorkbenchLayout(props: {
             resolveMediaSourceUrl={localMediaSourceUrl}
             footer={(
               <footer className="statusbar workspace-statusbar">
-                <span>版本 {props.workbench.appVersion}</span>
+                <span>{formatWorkbenchTranslation(i18n.t, "workspaceShell.version", { version: props.workbench.appVersion })}</span>
                 <StatusbarRuntimeActivities activities={statusbarRuntimeActivities} />
                 <RepositoryLink onOpenExternalUrl={openExternalUrl} />
               </footer>
@@ -990,6 +1016,19 @@ export function WorkbenchLayout(props: {
         onSubmitPendingQuestion={handlePendingQuestionSubmit}
       />
     </div>
+  );
+}
+
+// formatWorkbenchTranslation replaces named placeholders in localized workbench messages.
+// formatWorkbenchTranslation 替换工作台本地化消息中的具名占位符。
+function formatWorkbenchTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
   );
 }
 

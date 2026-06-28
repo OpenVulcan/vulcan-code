@@ -25,13 +25,13 @@ export function hydrateCommandExecutionPresentation(
   return mergeCommandExecutionDisplay(presentation, display);
 }
 
-// commandPresentationStatusLabel returns the short Chinese state label shown in collapsed rows.
-// commandPresentationStatusLabel 返回折叠行展示的短中文状态文案。
+// commandPresentationStatusLabel returns the short fallback state label shown in collapsed rows.
+// commandPresentationStatusLabel 返回折叠行展示的短兜底状态文案。
 export function commandPresentationStatusLabel(state: ToolPresentationDisplayState): string {
-  if (state === "running") return "执行中";
-  if (state === "failed") return "执行失败";
-  if (state === "stopped") return "已停止";
-  return "已执行";
+  if (state === "running") return "Running";
+  if (state === "failed") return "Failed";
+  if (state === "stopped") return "Stopped";
+  return "Completed";
 }
 
 // TerminalSessionDisplay stores normalized terminal-session metadata for command presentation.
@@ -164,7 +164,7 @@ function terminalSessionInputLabelsFromArguments(inputs: unknown[]): string | nu
     return null;
   }
   const visibleLabels = labels.slice(0, 3).join(" + ");
-  return labels.length > 3 ? `${visibleLabels} 等 ${labels.length} 项` : visibleLabels;
+  return labels.length > 3 ? `${visibleLabels} and ${labels.length} items` : visibleLabels;
 }
 
 // terminalSessionInputLabelFromArgument formats one fixed terminal_session input item.
@@ -176,10 +176,10 @@ function terminalSessionInputLabelFromArgument(value: unknown): string | null {
   }
   const kind = stringValue(input.kind);
   if (kind === "text") {
-    return compactTerminalSessionInputText(stringValue(input.text), "输入");
+    return compactTerminalSessionInputText(stringValue(input.text), "Input");
   }
   if (kind === "paste") {
-    return compactTerminalSessionInputText(stringValue(input.text), "粘贴");
+    return compactTerminalSessionInputText(stringValue(input.text), "Paste");
   }
   if (kind === "key") {
     return stringValue(input.key);
@@ -278,22 +278,22 @@ function terminalSessionDisplayCommand(
 ): string | null {
   const sessionLabel = terminalSessionConversationLabel(name, terminalSessionId);
   if (action === "start") {
-    return name || terminalSessionId ? `启动${sessionLabel}` : command ? `启动终端 ${command}` : "启动终端会话";
+    return name || terminalSessionId ? `Start ${sessionLabel}` : command ? `Start terminal ${command}` : "Start terminal session";
   }
   if (action === "send") {
-    return inputLabels ? `向${sessionLabel}发送 ${inputLabels}` : `发送到${sessionLabel}`;
+    return inputLabels ? `Send ${inputLabels} to ${sessionLabel}` : `Send to ${sessionLabel}`;
   }
   if (action === "list") {
-    return "列出终端会话";
+    return "List terminal sessions";
   }
   if (action === "read") {
-    return `读取${sessionLabel}`;
+    return `Read ${sessionLabel}`;
   }
   if (action === "snapshot") {
-    return `检查${sessionLabel}`;
+    return `Inspect ${sessionLabel}`;
   }
   if (action === "stop") {
-    return `停止${sessionLabel}`;
+    return `Stop ${sessionLabel}`;
   }
   return sessionLabel;
 }
@@ -302,7 +302,7 @@ function terminalSessionDisplayCommand(
 // terminalSessionConversationLabel 格式化稳定可见的终端会话名称。
 function terminalSessionConversationLabel(name: string | null, terminalSessionId: string | null): string {
   const targetLabel = (name ?? "").trim() || (terminalSessionId ? shortenTerminalSessionId(terminalSessionId) : "");
-  return targetLabel ? `终端[${targetLabel}]的会话` : "终端会话";
+  return targetLabel ? `terminal session [${targetLabel}]` : "terminal session";
 }
 
 // resolveCommandExecutionPresentation recognizes one-shot shell_command rows and excludes command sessions.

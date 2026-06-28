@@ -52,6 +52,10 @@ pub struct StartupSnapshot {
     /// Overall service readiness flag.
     /// 服务整体是否就绪。
     pub ready: bool,
+    /// WebUI locale resolved from the persisted configuration when available.
+    /// 从持久化配置解析出的 WebUI 语言，可用时用于启动前界面。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_locale: Option<String>,
     /// Current service startup phase label.
     /// 当前服务启动阶段标签。
     pub phase: String,

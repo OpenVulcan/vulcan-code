@@ -18,6 +18,7 @@ import {
   User,
 } from "lucide-react"
 
+import type { useI18n } from "@/i18n"
 import type { VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
 
 import {
@@ -96,6 +97,9 @@ export interface VmmSectionRenderProps {
   // Detailed VMM snapshot.
   // 详细 VMM 快照。
   snapshot: VmmMemorySnapshot
+  // Translation helper for user-facing VMM section labels.
+  // 用户可见 VMM 分区标签的翻译辅助函数。
+  t: ReturnType<typeof useI18n>["t"]
   // Turn ids input.
   // 回合标识输入。
   turnIds: string
@@ -164,22 +168,23 @@ export interface VmmSectionRenderProps {
 // renderVmmSectionDetail renders the active VMM management section.
 // renderVmmSectionDetail 渲染当前激活的 VMM 管理分区。
 export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
+  const { t } = props;
   if (props.activeSection === "project_manager") {
     return (
       <section className="vmm-section-panel">
-        <VmmPanelHeading icon={<FolderTree size={16} />} title="项目管理" subtitle="项目路径预检、创建确认、删除确认和迁移确认。" />
+        <VmmPanelHeading icon={<FolderTree size={16} />} title={t("vmm.section.project.title")} subtitle={t("vmm.section.project.subtitle")} />
         <div className="vmm-form-grid">
-          <VmmTextField label="项目路径" placeholder="Team/Space/Project" value={props.projectPath} onChange={props.setProjectPath} />
-          <label className="vmm-check-row"><input checked={props.projectDeleteConfirmed} onChange={(event) => props.setProjectDeleteConfirmed(event.target.checked)} type="checkbox" />确认删除</label>
-          <VmmTextField label="迁移源项目" placeholder="OldTeam/OldSpace/OldProject" value={props.migrateSource} onChange={props.setMigrateSource} />
-          <VmmTextField label="迁移目标项目" placeholder="NewTeam/NewSpace/NewProject" value={props.migrateTarget} onChange={props.setMigrateTarget} />
-          <label className="vmm-check-row"><input checked={props.migrateConfirmed} onChange={(event) => props.setMigrateConfirmed(event.target.checked)} type="checkbox" />确认迁移</label>
+          <VmmTextField label={t("vmm.field.projectPath")} placeholder="Team/Space/Project" value={props.projectPath} onChange={props.setProjectPath} />
+          <label className="vmm-check-row"><input checked={props.projectDeleteConfirmed} onChange={(event) => props.setProjectDeleteConfirmed(event.target.checked)} type="checkbox" />{t("vmm.field.confirmDelete")}</label>
+          <VmmTextField label={t("vmm.field.migrateSource")} placeholder="OldTeam/OldSpace/OldProject" value={props.migrateSource} onChange={props.setMigrateSource} />
+          <VmmTextField label={t("vmm.field.migrateTarget")} placeholder="NewTeam/NewSpace/NewProject" value={props.migrateTarget} onChange={props.setMigrateTarget} />
+          <label className="vmm-check-row"><input checked={props.migrateConfirmed} onChange={(event) => props.setMigrateConfirmed(event.target.checked)} type="checkbox" />{t("vmm.field.confirmMigrate")}</label>
         </div>
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "ensure_project"} icon={<Search size={15} />} label="预检项目" onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: false })} />
-          <VmmActionButton busy={props.busyAction === "ensure_project"} icon={<PackagePlus size={15} />} label="确认创建" onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: true })} />
-          <VmmActionButton danger busy={props.busyAction === "delete_project"} icon={<Trash2 size={15} />} label="删除项目" onClick={() => props.onRunAction("delete_project", { projectPath: props.projectPath, confirmDelete: props.projectDeleteConfirmed })} />
-          <VmmActionButton danger busy={props.busyAction === "migrate_project"} icon={<GitBranch size={15} />} label="执行迁移" onClick={() => props.onRunAction("migrate_project", { sourceProjectPath: props.migrateSource, targetProjectPath: props.migrateTarget, confirmMigrate: props.migrateConfirmed })} />
+          <VmmActionButton busy={props.busyAction === "ensure_project"} icon={<Search size={15} />} label={t("vmm.action.precheckProject")} onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: false })} />
+          <VmmActionButton busy={props.busyAction === "ensure_project"} icon={<PackagePlus size={15} />} label={t("vmm.action.confirmCreate")} onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: true })} />
+          <VmmActionButton danger busy={props.busyAction === "delete_project"} icon={<Trash2 size={15} />} label={t("vmm.action.deleteProject")} onClick={() => props.onRunAction("delete_project", { projectPath: props.projectPath, confirmDelete: props.projectDeleteConfirmed })} />
+          <VmmActionButton danger busy={props.busyAction === "migrate_project"} icon={<GitBranch size={15} />} label={t("vmm.action.runMigrate")} onClick={() => props.onRunAction("migrate_project", { sourceProjectPath: props.migrateSource, targetProjectPath: props.migrateTarget, confirmMigrate: props.migrateConfirmed })} />
         </div>
         <VmmProjectRows result={props.result} />
       </section>
@@ -188,22 +193,22 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
   if (props.activeSection === "profile_center") {
     return (
       <section className="vmm-section-panel">
-        <VmmPanelHeading icon={<BrainCircuit size={16} />} title="画像中心" subtitle="读取 active profile nodes，并向当前目标提交手工画像指令。" />
+        <VmmPanelHeading icon={<BrainCircuit size={16} />} title={t("vmm.section.profile.title")} subtitle={t("vmm.section.profile.subtitle")} />
         <div className="vmm-form-grid">
           <label className="vmm-field">
-            <span>画像目标</span>
+            <span>{t("vmm.field.profileTarget")}</span>
             <select value={props.profileTarget} onChange={(event) => props.setProfileTarget(event.target.value)}>
-              <option value="user">用户画像</option>
-              <option value="project">项目画像</option>
-              <option value="team">团队画像</option>
-              <option value="space">空间画像</option>
+              <option value="user">{t("vmm.profile.user")}</option>
+              <option value="project">{t("vmm.profile.project")}</option>
+              <option value="team">{t("vmm.profile.team")}</option>
+              <option value="space">{t("vmm.profile.space")}</option>
             </select>
           </label>
-          <VmmTextField label="手工画像指令" placeholder="例如：降低某条偏好权重" value={props.profileInstruction} onChange={props.setProfileInstruction} />
+          <VmmTextField label={t("vmm.field.profileInstruction")} placeholder={t("vmm.placeholder.profileInstruction")} value={props.profileInstruction} onChange={props.setProfileInstruction} />
         </div>
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "load_profile_nodes"} icon={<RefreshCw size={15} />} label="刷新节点" onClick={() => props.onRunAction("load_profile_nodes", { target: props.profileTarget })} />
-          <VmmActionButton busy={props.busyAction === "apply_profile_instruction"} icon={<Hammer size={15} />} label="应用指令" onClick={() => props.onRunAction("apply_profile_instruction", { target: props.profileTarget, instruction: props.profileInstruction })} />
+          <VmmActionButton busy={props.busyAction === "load_profile_nodes"} icon={<RefreshCw size={15} />} label={t("vmm.action.refreshNodes")} onClick={() => props.onRunAction("load_profile_nodes", { target: props.profileTarget })} />
+          <VmmActionButton busy={props.busyAction === "apply_profile_instruction"} icon={<Hammer size={15} />} label={t("vmm.action.applyInstruction")} onClick={() => props.onRunAction("apply_profile_instruction", { target: props.profileTarget, instruction: props.profileInstruction })} />
         </div>
         <VmmProfileRows result={props.result} />
       </section>
@@ -212,9 +217,9 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
   if (props.activeSection === "profile_bundle") {
     return (
       <section className="vmm-section-panel">
-        <VmmPanelHeading icon={<ScrollText size={16} />} title="画像 Bundle 测试" subtitle="读取当前 user/project 的 FULL bundle，检查画像组合结果。" />
+        <VmmPanelHeading icon={<ScrollText size={16} />} title={t("vmm.section.bundle.title")} subtitle={t("vmm.section.bundle.subtitle")} />
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "load_profile_bundle"} icon={<RefreshCw size={15} />} label="读取完整画像" onClick={() => props.onRunAction("load_profile_bundle")} />
+          <VmmActionButton busy={props.busyAction === "load_profile_bundle"} icon={<RefreshCw size={15} />} label={t("vmm.action.loadProfileBundle")} onClick={() => props.onRunAction("load_profile_bundle")} />
         </div>
         <VmmBundlePreview result={props.result} />
       </section>
@@ -223,15 +228,15 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
   if (props.activeSection === "tools_debug") {
     return (
       <section className="vmm-section-panel">
-        <VmmPanelHeading icon={<TerminalSquare size={16} />} title="工具调试" subtitle="模拟 VMM AI 专属工具：检索记忆、展开 turn、主动写入记忆。" />
+        <VmmPanelHeading icon={<TerminalSquare size={16} />} title={t("vmm.section.tool.title")} subtitle={t("vmm.section.tool.subtitle")} />
         <div className="vmm-form-grid">
-          <VmmTextField label="检索查询" placeholder="多条用 | 分隔" value={props.searchQueries} onChange={props.setSearchQueries} />
+          <VmmTextField label={t("vmm.field.searchQueries")} placeholder={t("vmm.placeholder.multiPipe")} value={props.searchQueries} onChange={props.setSearchQueries} />
           <VmmTextField label="Top K" placeholder="5" value={props.searchTopK} onChange={props.setSearchTopK} />
-          <VmmTextField label="Turn IDs" placeholder="用逗号或 | 分隔" value={props.turnIds} onChange={props.setTurnIds} />
-          <VmmTextField label="删除 Memory IDs" placeholder="用逗号或 | 分隔" value={props.deleteMemoryIds} onChange={props.setDeleteMemoryIds} />
-          <VmmTextField label="删除原因" placeholder="错误、过期或用户要求删除" value={props.deleteReason} onChange={props.setDeleteReason} />
-          <VmmTextField label="主动写入摘要" placeholder="记忆摘要" value={props.writeAbstract} onChange={props.setWriteAbstract} />
-          <VmmTextField label="主动写入详情" placeholder="完整内容" value={props.writeDetails} onChange={props.setWriteDetails} />
+          <VmmTextField label="Turn IDs" placeholder={t("vmm.placeholder.commaOrPipe")} value={props.turnIds} onChange={props.setTurnIds} />
+          <VmmTextField label="Memory IDs" placeholder={t("vmm.placeholder.commaOrPipe")} value={props.deleteMemoryIds} onChange={props.setDeleteMemoryIds} />
+          <VmmTextField label={t("vmm.field.deleteReason")} placeholder={t("vmm.placeholder.deleteReason")} value={props.deleteReason} onChange={props.setDeleteReason} />
+          <VmmTextField label={t("vmm.field.writeAbstract")} placeholder={t("vmm.placeholder.writeAbstract")} value={props.writeAbstract} onChange={props.setWriteAbstract} />
+          <VmmTextField label={t("vmm.field.writeDetails")} placeholder={t("vmm.placeholder.writeDetails")} value={props.writeDetails} onChange={props.setWriteDetails} />
           <VmmTextField label="Scope" placeholder="2" value={props.writeScopeLevel} onChange={props.setWriteScopeLevel} />
           <VmmTextField label="Category" placeholder="1" value={props.writeCategory} onChange={props.setWriteCategory} />
           <VmmTextField label="Priority" placeholder="2" value={props.writePriority} onChange={props.setWritePriority} />
@@ -256,10 +261,10 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
   if (props.activeSection === "memory_settings") {
     return (
       <section className="vmm-section-panel">
-        <VmmPanelHeading icon={<SlidersHorizontal size={16} />} title="记忆设置" subtitle="配置记忆开关、AI 工具、临时 TTL、画像刷新和注入说明。" />
+        <VmmPanelHeading icon={<SlidersHorizontal size={16} />} title={t("vmm.section.memory.title")} subtitle={t("vmm.section.memory.subtitle")} />
         <VmmSettingsForm draft={props.activeDraft} mode="memory" onChange={props.setActiveDraft} />
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === `save-${props.scope}`} icon={<Save size={15} />} label={props.scope === "global" ? "保存到全局" : "保存到项目"} onClick={() => props.onSaveDraft()} />
+          <VmmActionButton busy={props.busyAction === `save-${props.scope}`} icon={<Save size={15} />} label={props.scope === "global" ? t("vmm.action.saveGlobal") : t("vmm.action.saveProject")} onClick={() => props.onSaveDraft()} />
         </div>
       </section>
     );
@@ -267,25 +272,25 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
   if (props.activeSection === "grpc_transport") {
     return (
       <section className="vmm-section-panel">
-        <VmmPanelHeading icon={<PlugZap size={16} />} title="gRPC 传输" subtitle="连接地址、API key、超时、最大接收字节数与 keepalive 策略。" />
+        <VmmPanelHeading icon={<PlugZap size={16} />} title={t("vmm.section.transport.title")} subtitle={t("vmm.section.transport.subtitle")} />
         <VmmSettingsForm draft={props.globalDraft} mode="transport" onChange={(patch) => props.setGlobalDraft((draft) => ({ ...draft, ...patch }))} />
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "save-global"} icon={<Save size={15} />} label="保存到全局" onClick={() => props.onSaveDraft("global")} />
+          <VmmActionButton busy={props.busyAction === "save-global"} icon={<Save size={15} />} label={t("vmm.action.saveGlobal")} onClick={() => props.onSaveDraft("global")} />
         </div>
       </section>
     );
   }
   return (
     <section className="vmm-section-panel">
-      <VmmPanelHeading icon={<User size={16} />} title="用户管理" subtitle="长期用户列表、解析用户引用、创建确认和删除确认。" />
+      <VmmPanelHeading icon={<User size={16} />} title={t("vmm.section.user.title")} subtitle={t("vmm.section.user.subtitle")} />
       <div className="vmm-form-grid">
-        <VmmTextField label="用户引用" placeholder="ID 或用户名" value={props.userRef} onChange={props.setUserRef} />
-        <VmmTextField label="删除确认码" placeholder="首次删除后返回" value={props.userConfirmationCode} onChange={props.setUserConfirmationCode} />
+        <VmmTextField label={t("vmm.field.userRef")} placeholder={t("vmm.placeholder.userRef")} value={props.userRef} onChange={props.setUserRef} />
+        <VmmTextField label={t("vmm.field.deleteConfirmationCode")} placeholder={t("vmm.placeholder.deleteConfirmationCode")} value={props.userConfirmationCode} onChange={props.setUserConfirmationCode} />
       </div>
       <div className="vmm-action-row">
-        <VmmActionButton busy={props.busyAction === "resolve_user"} icon={<Search size={15} />} label="解析用户" onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: false })} />
-        <VmmActionButton busy={props.busyAction === "resolve_user"} icon={<PackagePlus size={15} />} label="确认创建" onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: true })} />
-        <VmmActionButton danger busy={props.busyAction === "delete_user"} icon={<Trash2 size={15} />} label="删除用户" onClick={() => props.onRunAction("delete_user", { userRef: props.userRef, confirmationCode: props.userConfirmationCode })} />
+        <VmmActionButton busy={props.busyAction === "resolve_user"} icon={<Search size={15} />} label={t("vmm.action.resolveUser")} onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: false })} />
+        <VmmActionButton busy={props.busyAction === "resolve_user"} icon={<PackagePlus size={15} />} label={t("vmm.action.confirmCreate")} onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: true })} />
+        <VmmActionButton danger busy={props.busyAction === "delete_user"} icon={<Trash2 size={15} />} label={t("vmm.action.deleteUser")} onClick={() => props.onRunAction("delete_user", { userRef: props.userRef, confirmationCode: props.userConfirmationCode })} />
       </div>
       <VmmUserRows result={props.result} />
     </section>

@@ -176,6 +176,7 @@ pub(crate) fn refresh_settings_projection_locked(
         })
         .unwrap_or_else(|| ai_tool_configuration.clone());
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
     guard.workbench.providers = providers(provider_configuration);
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
     guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);

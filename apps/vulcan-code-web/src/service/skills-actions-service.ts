@@ -19,12 +19,12 @@ export type AgentSkillProjectState = "inherit" | "enabled" | "disabled";
 // luaSkillRegistrationLabel 返回单个 LuaSkill 工具注册状态的预览标签。
 function luaSkillRegistrationLabel(registrationState: string): string {
   if (registrationState === "explicit") {
-    return "显式启用";
+    return "Explicit";
   }
   if (registrationState === "implicit") {
-    return "隐式启用";
+    return "Implicit";
   }
-  return "禁用";
+  return "Disabled";
 }
 
 // refreshLuaSkillsCatalog refreshes the Lua Skills catalog through the local service.

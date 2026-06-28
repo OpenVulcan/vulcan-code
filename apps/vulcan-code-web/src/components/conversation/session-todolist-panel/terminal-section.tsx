@@ -2,6 +2,7 @@ import React from "react";
 import { Maximize2, Minimize2, Square, TerminalSquare } from "lucide-react";
 import {
   terminalStateClass,
+  type TerminalVisualState,
   type TerminalSessionViewModel,
 } from "@/components/conversation/conversation-terminal-model";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
@@ -22,6 +23,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { CommandSessionSummary } from "@/types";
 
@@ -44,19 +46,22 @@ export function ConversationSessionTerminalSection(props: {
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <section className="conversation-session-tool-section conversation-session-terminal-section">
       <div className={cn("conversation-session-tool-section-title", props.showCollapse && "with-action")}>
         <span className="conversation-session-tool-section-title-main">
-          <span>终端</span>
+          <span>{t("sessionTools.terminal")}</span>
           <strong>{props.terminalSessions.length}</strong>
         </span>
         {props.showCollapse ? (
           <button
-            aria-label="折叠会话工具"
+            aria-label={t("sessionTools.collapse")}
             className="workspace-tool-panel-menu-icon-button"
             onClick={props.onCollapse}
-            title="折叠会话工具"
+            title={t("sessionTools.collapse")}
             type="button"
           >
             <Minimize2 size={13} />
@@ -90,6 +95,9 @@ function ConversationSessionTerminalRow(props: {
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const [stopping, setStopping] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [screenOpen, setScreenOpen] = React.useState(false);
@@ -117,7 +125,8 @@ function ConversationSessionTerminalRow(props: {
     }
     setConfirmOpen(open);
   }, [stopping]);
-  const tooltipText = terminalSessionTooltipText(props.session, props.summary);
+  const tooltipText = terminalSessionTooltipText(props.session, props.summary, t);
+  const stateLabel = localizedTerminalStateLabel(props.session.state, t);
   return (
     <div className="workspace-tool-panel-menu-row conversation-session-terminal-row">
       <Tooltip>
@@ -132,21 +141,21 @@ function ConversationSessionTerminalRow(props: {
         </TooltipContent>
       </Tooltip>
       <button
-        aria-label="打开终端屏幕"
+        aria-label={t("terminalSession.openScreen")}
         className="conversation-session-terminal-action conversation-session-terminal-screen-button"
         disabled={!props.summary}
         onClick={() => setScreenOpen(true)}
-        title={props.summary ? "打开终端屏幕" : "暂无终端屏幕"}
+        title={props.summary ? t("terminalSession.openScreen") : t("terminalSession.noScreen")}
         type="button"
       >
         <Maximize2 size={12} />
       </button>
       <button
-        aria-label="强制终止终端会话"
+        aria-label={t("terminalSession.forceStopSession")}
         className="conversation-session-terminal-action conversation-session-terminal-stop-button"
         disabled={!props.session.canStop || stopping}
         onClick={handleStopRequest}
-        title={props.session.canStop ? "强制终止" : props.session.label}
+        title={props.session.canStop ? t("terminalSession.forceStop") : stateLabel}
         type="button"
       >
         <Square fill="currentColor" size={11} strokeWidth={0} />
@@ -185,6 +194,9 @@ function TerminalScreenDialog(props: {
   // 更新浮动终端屏幕打开状态。
   onOpenChange: (open: boolean) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const [sending, setSending] = React.useState(false);
   const [liveSummary, setLiveSummary] = React.useState<CommandSessionSummary | null>(props.summary);
   React.useEffect(() => {
@@ -248,7 +260,7 @@ function TerminalScreenDialog(props: {
         </DialogDescription>
         <TerminalOutputView
           className="conversation-session-terminal-screen-frame"
-          emptyText="暂无终端屏幕内容"
+          emptyText={t("terminalSession.emptyScreen")}
           onKeyDown={handleKeyDown}
           suppressBlackBackground
           tabIndex={0}
@@ -324,32 +336,56 @@ function terminalSessionTooltipText(
   // Original backend summary with raw runtime fields.
   // 带原始运行时字段的后端摘要。
   summary: CommandSessionSummary | null,
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string,
 ): string {
+  const labelSeparator = t("global.labelSeparator");
+  const stateLabel = localizedTerminalStateLabel(session.state, t);
   const lines = [
-    `状态：${session.label}`,
-    `命令：${session.command}`,
+    `${t("terminalSession.tooltip.status")}${labelSeparator}${stateLabel}`,
+    `${t("terminalSession.tooltip.command")}${labelSeparator}${session.command}`,
   ];
   if (summary?.cwd) {
-    lines.push(`目录：${summary.cwd}`);
+    lines.push(`${t("terminalSession.tooltip.cwd")}${labelSeparator}${summary.cwd}`);
   }
   if (summary?.shellLabel) {
-    lines.push(`Shell：${summary.shellLabel}`);
+    lines.push(`${t("terminalSession.tooltip.shell")}${labelSeparator}${summary.shellLabel}`);
   }
   if (summary?.backend) {
-    lines.push(`后端：${summary.backend}`);
+    lines.push(`${t("terminalSession.tooltip.backend")}${labelSeparator}${summary.backend}`);
   }
   if (summary?.screenFrameSeq) {
-    lines.push(`屏幕帧：${summary.screenFrameSeq}`);
+    lines.push(`${t("terminalSession.tooltip.screenFrame")}${labelSeparator}${summary.screenFrameSeq}`);
   }
   if (typeof session.exitCode === "number") {
-    lines.push(`退出码：${session.exitCode}`);
+    lines.push(`${t("terminalSession.tooltip.exitCode")}${labelSeparator}${session.exitCode}`);
   }
   if (summary?.failureReason) {
-    lines.push(`错误：${summary.failureReason}`);
+    lines.push(`${t("terminalSession.tooltip.error")}${labelSeparator}${summary.failureReason}`);
   }
   if (session.preview) {
-    lines.push(`输出：${session.preview}`);
+    lines.push(`${t("terminalSession.tooltip.output")}${labelSeparator}${session.preview}`);
   }
-  lines.push(`会话：${session.id}`);
+  lines.push(`${t("terminalSession.tooltip.session")}${labelSeparator}${session.id}`);
   return lines.join("\n");
+}
+
+// localizedTerminalStateLabel returns the active-language terminal lifecycle label.
+// localizedTerminalStateLabel 返回当前语言下的终端生命周期文案。
+function localizedTerminalStateLabel(
+  // Normalized terminal lifecycle state.
+  // 归一化后的终端生命周期状态。
+  state: TerminalVisualState,
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string,
+): string {
+  if (state === "running") return t("terminalState.running");
+  if (state === "waiting") return t("terminalState.waiting");
+  if (state === "success") return t("terminalState.success");
+  if (state === "failed") return t("terminalState.failed");
+  if (state === "stopped") return t("terminalState.stopped");
+  if (state === "lost") return t("terminalState.lost");
+  return t("terminalState.unknown");
 }

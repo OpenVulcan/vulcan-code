@@ -3,6 +3,7 @@ import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   ProjectSummary,
@@ -41,6 +42,7 @@ export function ProjectOverviewSection(props: {
   // 项目本地 Agent Skill 覆盖映射。
   agentOverrides: Record<string, string>;
 }) {
+  const { t } = useI18n();
   const overrideCount = Object.keys(props.agentOverrides).length;
   return (
     <div className="project-settings-section">
@@ -53,22 +55,22 @@ export function ProjectOverviewSection(props: {
       </div>
       <div className="project-settings-grid">
         <div className="project-settings-panel">
-          <strong>项目空间</strong>
-          <p>项目标识：{props.project.id}</p>
-          <p>对话数量：{props.conversationCount}</p>
-          <p>置顶状态：{props.project.pinned ? "已置顶" : "未置顶"}</p>
+          <strong>{t("projectSettings.projectSpace")}</strong>
+          <p>{t("projectSettings.projectId").replace("{id}", props.project.id)}</p>
+          <p>{t("projectSettings.conversationCount").replace("{count}", String(props.conversationCount))}</p>
+          <p>{t("projectSettings.pinStatus").replace("{status}", props.project.pinned ? t("projectSettings.pinned") : t("projectSettings.notPinned"))}</p>
         </div>
         <div className="project-settings-panel">
-          <strong>附件缓存</strong>
+          <strong>{t("projectSettings.attachmentCache")}</strong>
           <p>{props.attachmentRoot}</p>
         </div>
         <div className="project-settings-panel">
-          <strong>VMM 记忆</strong>
-          <p>{props.vmmDraft?.hasOverride ? "当前项目已启用独立覆盖。" : "当前项目继承全局 VMM 设置。"}</p>
+          <strong>{t("projectSettings.vmmMemory")}</strong>
+          <p>{props.vmmDraft?.hasOverride ? t("projectSettings.vmmHasOverride") : t("projectSettings.vmmInheritsGlobal")}</p>
         </div>
         <div className="project-settings-panel">
           <strong>Agent Skills</strong>
-          <p>{overrideCount > 0 ? `当前项目有 ${overrideCount} 条覆盖。` : "未设置项目级覆盖，继承全局规则。"}</p>
+          <p>{overrideCount > 0 ? t("projectSettings.agentOverrideCount").replace("{count}", String(overrideCount)) : t("projectSettings.agentInheritsGlobal")}</p>
         </div>
       </div>
     </div>
@@ -91,17 +93,18 @@ export function ProjectVmmSection(props: {
   // 持久化当前 VMM 草稿。
   onSaveDraft: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading">
         <BrainCircuit size={18} />
         <div>
-          <strong>项目级 VMM 记忆</strong>
-          <span>覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。</span>
+          <strong>{t("projectSettings.vmmTitle")}</strong>
+          <span>{t("projectSettings.vmmDescription")}</span>
         </div>
       </header>
       {props.vmmBusy === "loading" || !props.vmmDraft ? (
-        <p className="project-settings-muted">正在加载项目 VMM 设置...</p>
+        <p className="project-settings-muted">{t("projectSettings.vmmLoading")}</p>
       ) : (
         <>
           <label className="project-settings-toggle-row">
@@ -111,39 +114,39 @@ export function ProjectVmmSection(props: {
               type="checkbox"
             />
             <span>
-              <strong>启用项目覆盖</strong>
-              <small>{props.vmmDraft.hasOverride ? "保存后当前项目使用下方设置。" : "保存后清空项目覆盖并继承全局设置。"}</small>
+              <strong>{t("projectSettings.enableProjectOverride")}</strong>
+              <small>{props.vmmDraft.hasOverride ? t("projectSettings.overrideEnabledHint") : t("projectSettings.overrideDisabledHint")}</small>
             </span>
           </label>
           <div className={cn("project-settings-form-grid", !props.vmmDraft.hasOverride && "disabled")}>
             <label className="project-settings-check-row">
               <input checked={props.vmmDraft.enabled} disabled={!props.vmmDraft.hasOverride} onChange={(event) => props.onUpdateDraft({ enabled: event.target.checked })} type="checkbox" />
-              启用记忆连接
+              {t("vmm.settings.enableMemoryConnection")}
             </label>
             <label className="project-settings-check-row">
               <input checked={props.vmmDraft.aiToolsEnabled} disabled={!props.vmmDraft.hasOverride} onChange={(event) => props.onUpdateDraft({ aiToolsEnabled: event.target.checked })} type="checkbox" />
-              暴露 AI 工具
+              {t("vmm.settings.exposeAiTools")}
             </label>
             <label className="project-settings-check-row">
               <input checked={props.vmmDraft.precheckEnabled} disabled={!props.vmmDraft.hasOverride} onChange={(event) => props.onUpdateDraft({ precheckEnabled: event.target.checked })} type="checkbox" />
-              自动前置召回
+              {t("vmm.settings.autoPrecheck")}
             </label>
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label="用户 ID" value={props.vmmDraft.userId} onChange={(userId) => props.onUpdateDraft({ userId })} />
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label="项目 ID" value={props.vmmDraft.projectId} onChange={(projectId) => props.onUpdateDraft({ projectId })} />
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label="临时记忆 TTL" value={props.vmmDraft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onUpdateDraft({ implicitMemoryTurns })} />
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label="画像刷新间隔" value={props.vmmDraft.profileRefreshTurns} onChange={(profileRefreshTurns) => props.onUpdateDraft({ profileRefreshTurns })} />
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label="画像节点上限" value={props.vmmDraft.profileNodeLimit} onChange={(profileNodeLimit) => props.onUpdateDraft({ profileNodeLimit })} />
-            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label="注入标签" value={props.vmmDraft.injectionTag} onChange={(injectionTag) => props.onUpdateDraft({ injectionTag })} />
+            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.userId")} value={props.vmmDraft.userId} onChange={(userId) => props.onUpdateDraft({ userId })} />
+            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.projectId")} value={props.vmmDraft.projectId} onChange={(projectId) => props.onUpdateDraft({ projectId })} />
+            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.implicitMemoryTtl")} value={props.vmmDraft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onUpdateDraft({ implicitMemoryTurns })} />
+            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.profileRefreshInterval")} value={props.vmmDraft.profileRefreshTurns} onChange={(profileRefreshTurns) => props.onUpdateDraft({ profileRefreshTurns })} />
+            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.profileNodeLimit")} value={props.vmmDraft.profileNodeLimit} onChange={(profileNodeLimit) => props.onUpdateDraft({ profileNodeLimit })} />
+            <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.injectionTag")} value={props.vmmDraft.injectionTag} onChange={(injectionTag) => props.onUpdateDraft({ injectionTag })} />
             <label className="project-settings-field wide">
-              <span>注入说明</span>
+              <span>{t("vmm.settings.injectionDescription")}</span>
               <Textarea disabled={!props.vmmDraft.hasOverride} value={props.vmmDraft.injectionDescription} onChange={(event) => props.onUpdateDraft({ injectionDescription: event.target.value })} />
             </label>
           </div>
-          <p className="project-settings-muted">项目级设置继承全局 gRPC 连接与 API Key；连接参数请在 VMM 记忆的全局配置中调整。</p>
+          <p className="project-settings-muted">{t("projectSettings.vmmTransportHint")}</p>
           <div className="project-settings-actions">
             <Button disabled={props.vmmBusy === "saving"} onClick={props.onSaveDraft} type="button">
               <Save size={15} />
-              {props.vmmBusy === "saving" ? "保存中" : "保存 VMM 设置"}
+              {props.vmmBusy === "saving" ? t("composer.capability.save.saving") : t("projectSettings.saveVmm")}
             </Button>
           </div>
         </>
@@ -171,23 +174,24 @@ export function ProjectAgentSkillsSection(props: {
   // 持久化单个技能覆盖。
   onSetProjectAgentSkill: (name: string, stateKey: ProjectAgentSkillState) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading">
         <Bot size={18} />
         <div>
-          <strong>项目级 Agent Skills</strong>
-          <span>对系统与用户提示词技能建立当前项目专属启停覆盖。</span>
+          <strong>{t("projectSettings.agentTitle")}</strong>
+          <span>{t("projectSettings.agentDescription")}</span>
         </div>
       </header>
       <div className="project-settings-panel compact">
-        <StatusPill status={props.workbench.agentSkills.globalEnabled ? "ready" : "pending"} label={props.workbench.agentSkills.globalEnabled ? "全局已启用" : "全局已关闭"} />
+        <StatusPill status={props.workbench.agentSkills.globalEnabled ? "ready" : "pending"} label={props.workbench.agentSkills.globalEnabled ? t("projectSettings.agent.globalEnabled") : t("projectSettings.agent.globalDisabled")} />
         <p>{props.workbench.agentSkills.notice}</p>
       </div>
       {props.agentLoading ? (
-        <p className="project-settings-muted">正在加载项目技能覆盖...</p>
+        <p className="project-settings-muted">{t("projectSettings.agentLoading")}</p>
       ) : props.workbench.agentSkills.skills.length === 0 ? (
-        <p className="project-settings-muted">系统与用户目录暂未发现提示词技能。</p>
+        <p className="project-settings-muted">{t("projectSettings.agentEmpty")}</p>
       ) : (
         <div className="project-settings-skill-list">
           {props.workbench.agentSkills.skills.map((skill) => {
@@ -198,8 +202,8 @@ export function ProjectAgentSkillsSection(props: {
                   <strong>{skill.displayName || skill.name}</strong>
                   <small>{skill.description || skill.skillFile}</small>
                 </span>
-                <StatusPill status={projectState === "inherit" ? "pending" : "ready"} label={projectAgentSkillStateLabel(skill.enabled, projectState)} />
-                <div className="project-settings-segmented" role="group" aria-label={`${skill.displayName || skill.name} 项目状态`}>
+                <StatusPill status={projectState === "inherit" ? "pending" : "ready"} label={projectAgentSkillStateLabel(skill.enabled, projectState, t)} />
+                <div className="project-settings-segmented" role="group" aria-label={t("projectSettings.agent.projectStateAria").replace("{skill}", skill.displayName || skill.name)}>
                   {(["inherit", "enabled", "disabled"] as ProjectAgentSkillState[]).map((stateKey) => (
                     <button
                       className={cn("project-settings-segmented-button", projectState === stateKey && "active")}
@@ -208,7 +212,7 @@ export function ProjectAgentSkillsSection(props: {
                       onClick={() => props.onSetProjectAgentSkill(skill.name, stateKey)}
                       type="button"
                     >
-                      {projectAgentSkillOptionLabel(stateKey, skill.enabled)}
+                      {projectAgentSkillOptionLabel(stateKey, skill.enabled, t)}
                     </button>
                   ))}
                 </div>
@@ -261,22 +265,23 @@ export function ProjectAttachmentCleanupSection(props: {
   // 执行清理。
   onExecuteCleanup: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading">
         <Database size={18} />
         <div>
-          <strong>项目附件缓存清理</strong>
-          <span>按日期和附件类型筛选当前项目的托管历史附件。</span>
+          <strong>{t("projectSettings.cleanupTitle")}</strong>
+          <span>{t("projectSettings.cleanupDescription")}</span>
         </div>
       </header>
       <div className="project-settings-panel">
-        <strong>托管目录</strong>
+        <strong>{t("projectSettings.managedDirectory")}</strong>
         <p>{props.attachmentRoot}</p>
       </div>
       <div className="project-settings-cleanup-grid">
         <label className="project-settings-field">
-          <span>截止日期</span>
+          <span>{t("projectSettings.cutoffDate")}</span>
           <Input
             value={props.cleanupCutoffDate}
             onChange={(event) => props.onChangeCleanupCutoffDate(event.target.value)}
@@ -291,7 +296,7 @@ export function ProjectAttachmentCleanupSection(props: {
                 onChange={(event) => props.onChangeCleanupKinds({ ...props.cleanupKinds, [kind]: event.target.checked })}
                 type="checkbox"
               />
-              {projectAttachmentKindLabel(kind)}
+              {projectAttachmentKindLabel(kind, t)}
             </label>
           ))}
         </div>
@@ -304,20 +309,20 @@ export function ProjectAttachmentCleanupSection(props: {
           variant="secondary"
         >
           <Calendar size={15} />
-          {props.cleanupBusy === "preview" ? "预览中" : "预览清理范围"}
+          {props.cleanupBusy === "preview" ? t("projectSettings.cleanup.previewing") : t("projectSettings.cleanup.preview")}
         </Button>
         <Button disabled={!props.cleanupPreviewMatchesCurrent || props.cleanupBusy !== "idle"} onClick={props.onExecuteCleanup} type="button">
           <Trash2 size={15} />
-          {props.cleanupBusy === "execute" ? "清理中" : "执行清理"}
+          {props.cleanupBusy === "execute" ? t("projectSettings.cleanup.cleaning") : t("projectSettings.cleanup.execute")}
         </Button>
       </div>
       <div className="project-settings-panel compact">
-        <strong>最近一次预览</strong>
+        <strong>{t("projectSettings.lastPreview")}</strong>
         <p>{props.cleanupPreview ? props.cleanupPreview.summary : props.cleanupNotice}</p>
       </div>
       <div className="project-settings-panel compact">
-        <strong>最近一次执行</strong>
-        <p>{props.cleanupReport ? props.cleanupReport.summary : "尚未执行历史附件缓存清理。"}</p>
+        <strong>{t("projectSettings.lastExecution")}</strong>
+        <p>{props.cleanupReport ? props.cleanupReport.summary : t("projectSettings.cleanup.notExecuted")}</p>
       </div>
     </div>
   );

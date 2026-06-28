@@ -128,17 +128,6 @@ export const DIFF_VIRTUAL_OVERSCAN_PX = 900;
 // DIFF_SCROLL_STATE_GRANULARITY_PX 在 React 虚拟化计算前合并像素级滚动更新。
 export const DIFF_SCROLL_STATE_GRANULARITY_PX = 8;
 
-// LARGE_DIFF_REASON_LABELS maps internal reason ids to compact Chinese descriptions.
-// LARGE_DIFF_REASON_LABELS 将内部原因标识映射为紧凑中文描述。
-export const LARGE_DIFF_REASON_LABELS: Record<string, string> = {
-  total_files: `文件数超过 ${DIFF_TOTAL_FILES_LIMIT}`,
-  total_changed_lines: `总变更行超过 ${DIFF_TOTAL_CHANGED_LINES_LIMIT}`,
-  total_changed_bytes: `总变更体积超过 ${formatBytes(DIFF_TOTAL_CHANGED_BYTES_LIMIT)}`,
-  file_changed_lines: `单文件变更行超过 ${DIFF_FILE_CHANGED_LINES_LIMIT}`,
-  file_changed_bytes: `单文件变更体积超过 ${formatBytes(DIFF_FILE_CHANGED_BYTES_LIMIT)}`,
-  file_max_line_bytes: `单行体积超过 ${formatBytes(DIFF_FILE_MAX_LINE_BYTES_LIMIT)}`,
-};
-
 // diffFileLargeReasons returns target-compatible large-file reasons for one parsed file.
 // diffFileLargeReasons 返回单个已解析文件的目标兼容大文件原因。
 export function diffFileLargeReasons(file: Pick<DiffFile, "changedLines" | "changedBytes" | "maxChangedLineBytes">): string[] {
@@ -171,12 +160,6 @@ export function diffStatsLargeReasons(stats: Pick<DiffStats, "files" | "totalCha
   return reasons;
 }
 
-// formatLargeReasons turns reason ids into display labels with stable fallbacks.
-// formatLargeReasons 将原因标识转换为显示标签，并提供稳定兜底。
-export function formatLargeReasons(reasons: readonly string[]): string {
-  return reasons.map((reason) => LARGE_DIFF_REASON_LABELS[reason] ?? reason).join("、");
-}
-
 // shouldUseLightweightDiffRendering returns whether expensive detail rendering should be skipped.
 // shouldUseLightweightDiffRendering 返回是否应该省略昂贵的细节渲染。
 export function shouldUseLightweightDiffRendering(file: Pick<DiffFile, "changedLines" | "isLarge" | "isBinary" | "isGitlink">): boolean {
@@ -184,16 +167,4 @@ export function shouldUseLightweightDiffRendering(file: Pick<DiffFile, "changedL
     || file.isGitlink
     || file.isLarge
     || file.changedLines > DIFF_LIGHTWEIGHT_DETAIL_CHANGED_LINES_LIMIT;
-}
-
-// formatBytes formats byte thresholds for compact UI notes.
-// formatBytes 将字节阈值格式化为紧凑界面提示。
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${Math.round(bytes / 1024 / 1024)} MiB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)} KiB`;
-  }
-  return `${bytes} B`;
 }

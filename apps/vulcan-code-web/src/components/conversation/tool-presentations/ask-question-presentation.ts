@@ -27,9 +27,9 @@ export function hydrateAskQuestionPresentation(
 // askQuestionStatusLabel returns the compact state label shown for ask rows.
 // askQuestionStatusLabel 返回提问展示行使用的紧凑状态文案。
 export function askQuestionStatusLabel(state: ToolPresentationDisplayState): string {
-  if (state === "running") return "提问中";
-  if (state === "failed" || state === "stopped") return "已忽略";
-  return "已提问";
+  if (state === "running") return "Asking";
+  if (state === "failed" || state === "stopped") return "Ignored";
+  return "Asked";
 }
 
 // resolveAskQuestionPresentation recognizes the native ask tool and projects structured question display data.
@@ -56,11 +56,11 @@ export function resolveAskQuestionPresentation(
   return {
     detailRef,
     id: askQuestionPresentationId(blocks, questions),
-    ignoredAnswerText: display?.ignoredAnswerText ?? "用户忽略回答",
+    ignoredAnswerText: display?.ignoredAnswerText ?? "User ignored the answer",
     kind: "ask_question",
     questions,
     state: displayState,
-    title: display?.title ?? "向用户提问",
+    title: display?.title ?? "Ask the user",
   };
 }
 
@@ -92,9 +92,9 @@ function askQuestionDisplayFromPayload(payload: Record<string, unknown> | null):
     return null;
   }
   return {
-    ignoredAnswerText: stringValue(display.ignored_answer_text ?? display.ignoredAnswerText) ?? "用户忽略回答",
+    ignoredAnswerText: stringValue(display.ignored_answer_text ?? display.ignoredAnswerText) ?? "User ignored the answer",
     questions,
-    title: stringValue(display.title) ?? "向用户提问",
+    title: stringValue(display.title) ?? "Ask the user",
   };
 }
 
@@ -111,7 +111,7 @@ function askQuestionItemFromDisplay(value: unknown, index: number): AskQuestionP
   if (!item) {
     return null;
   }
-  const header = stringValue(item.header) ?? `问题 ${index + 1}`;
+  const header = stringValue(item.header) ?? `Question ${index + 1}`;
   const question = stringValue(item.question) ?? header;
   const answers = askQuestionAnswerList(item.answers);
   const answered = item.answered === true && answers.length > 0;
@@ -150,7 +150,7 @@ function askQuestionItemFromArguments(value: unknown, index: number): AskQuestio
   if (!item) {
     return null;
   }
-  const header = stringValue(item.header) ?? `问题 ${index + 1}`;
+  const header = stringValue(item.header) ?? `Question ${index + 1}`;
   const question = stringValue(item.question) ?? header;
   return {
     answered: false,

@@ -223,9 +223,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // visibleSessionTerminalSessions 对齐终端面板自身的可渲染过滤条件。
   const visibleSessionTerminalSessions = React.useMemo(
     () => sessionTerminalSessions
-      .map(terminalSessionViewModel)
+      .map((summary) => terminalSessionViewModel(summary, t))
       .filter((session) => session.canStop || session.state === "lost" || session.state === "waiting"),
-    [sessionTerminalSessions],
+    [sessionTerminalSessions, t],
   );
   // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
   // effectiveRightPanelOpen 在选中新建草稿会话时屏蔽残留的右侧面板状态。
@@ -251,9 +251,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const openContextTab = React.useCallback((kind: WorkspaceContextTabKind) => {
     setContextTabStateEntry((current) => ({
       ...current,
-      state: openWorkspaceContextTab(current.state, kind),
+      state: openWorkspaceContextTab(current.state, kind, t),
     }));
-  }, []);
+  }, [t]);
   // closeContextTab removes one opened right context tab and selects a nearby tab.
   // closeContextTab 移除一个已打开的右侧上下文页签并选择相邻页签。
   const closeContextTab = React.useCallback((tabId: string) => {
@@ -275,9 +275,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const updateFileContextTabTitle = React.useCallback((tabId: string, title: string) => {
     setContextTabStateEntry((current) => ({
       ...current,
-      state: renameWorkspaceFileContextTab(current.state, tabId, title),
+      state: renameWorkspaceFileContextTab(current.state, tabId, title, t),
     }));
-  }, []);
+  }, [t]);
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -616,7 +616,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   }, [props.activeSkillSubArea, props.skillActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
   // memoryHeaderMeta stores the active memory page title detail for descriptor generation.
   // memoryHeaderMeta 保存当前记忆页 descriptor 使用的标题详情。
-  const memoryHeaderMeta = memorySubAreaMeta(props.activeMemorySubArea, props.workbench);
+  const memoryHeaderMeta = memorySubAreaMeta(props.activeMemorySubArea, props.workbench, t);
 
   React.useEffect(() => {
     const element = shellRef.current;
@@ -683,7 +683,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     ),
     detail: `${skillSubAreaLabel(props.activeSkillSubArea)} · ${skillHeaderSummary.detail}`,
     headerActions: skillHeaderActions,
-    title: "技能设置",
+    title: t("workspaceShell.skillsTitle"),
     toolPanels: [{
       className: "workspace-tool-panel-page workspace-skills-settings",
       contentClassName: "workspace-skills-content",
@@ -710,7 +710,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     ),
     detail: `${memoryHeaderMeta.label} · ${memoryHeaderMeta.detail}`,
     headerActions: null,
-    title: "记忆设置",
+    title: t("workspaceShell.memoryTitle"),
     toolPanels: [{
       className: "workspace-tool-panel-page workspace-skills-settings workspace-memory-settings",
       contentClassName: "workspace-skills-content workspace-memory-content",

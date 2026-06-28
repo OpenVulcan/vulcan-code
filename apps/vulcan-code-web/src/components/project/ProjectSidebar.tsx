@@ -234,7 +234,6 @@ export function ProjectSidebar(props: {
         isConversationListExpanded={expandedConversationProjectIds.has(project.id)}
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
         key={project.id}
-        locale={locale}
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
         onProjectMenuAction={props.onProjectMenuAction}

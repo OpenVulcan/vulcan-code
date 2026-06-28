@@ -84,15 +84,15 @@ export function WorkspaceMemoryPanel(props: {
         },
       });
       hideDeleteTarget(target);
-      setDeleteNotice(result.summary || "已在当前会话中隐藏该动态记忆。");
+      setDeleteNotice(result.summary || t("workspaceMemory.suppressedNotice"));
       setPendingDelete(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setDeleteNotice(`隐藏失败：${message}`);
+      setDeleteNotice(t("workspaceMemory.suppressFailed").replace("{error}", message));
     } finally {
       setBusyDeleteKey(null);
     }
-  }, [busyDeleteKey, hideDeleteTarget, props]);
+  }, [busyDeleteKey, hideDeleteTarget, props, t]);
 
   // handlePermanentDeleteTarget deletes one durable VMM memory id.
   // handlePermanentDeleteTarget 删除单个长期 VMM 记忆标识。
@@ -115,18 +115,18 @@ export function WorkspaceMemoryPanel(props: {
       });
       if (vmmDeletedMemoryIds(result.response).has(target.memoryId)) {
         hideDeleteTarget(target);
-        setDeleteNotice("记忆已删除。");
+        setDeleteNotice(t("workspaceMemory.deletedNotice"));
         setPendingDelete(null);
       } else {
-        setDeleteNotice(result.summary || "删除已执行，但服务端未返回已删除 ID。");
+        setDeleteNotice(result.summary || t("workspaceMemory.deletedWithoutId"));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setDeleteNotice(`删除失败：${message}`);
+      setDeleteNotice(t("workspaceMemory.deleteFailed").replace("{error}", message));
     } finally {
       setBusyDeleteKey(null);
     }
-  }, [busyDeleteKey, hideDeleteTarget, props]);
+  }, [busyDeleteKey, hideDeleteTarget, props, t]);
 
   // handleLookupTurn loads one full VMM turn detail and opens a dialog.
   // handleLookupTurn 加载单条完整 VMM 回合详情并打开弹窗。
@@ -294,6 +294,7 @@ function VmmStaticProfileView(props: {
   // 需要渲染的结构化 VMM 画像快照。
   profile: VmmStaticProfileSummary;
 }) {
+  const { t } = useI18n();
   return (
     <div className="vmm-static-profile">
       {props.profile.sections.map((section) => (
@@ -422,6 +423,7 @@ function ContextInjectionCardView(props: {
   // 可选回合回查回调。
   onLookupTurn?: (target: ContextInjectionLookupTarget) => void;
 }) {
+  const { t } = useI18n();
   const sourceLabel = contextInjectionCardSourceLabel(props.card);
   return (
     <>
@@ -449,10 +451,10 @@ function ContextInjectionCardView(props: {
               <span className="context-injection-item-actions">
                 {canLookup ? (
                   <button
-                    aria-label={`查看详情 ${turnId}`}
+                    aria-label={t("workspaceMemory.viewDetailsWithTurn").replace("{turnId}", String(turnId))}
                     className="context-injection-lookup-button"
                     onClick={() => props.onLookupTurn?.(lookupTarget)}
-                    title={`查看详情 ${turnId}`}
+                    title={t("workspaceMemory.viewDetailsWithTurn").replace("{turnId}", String(turnId))}
                     type="button"
                   >
                     <Search size={14} />
@@ -460,7 +462,7 @@ function ContextInjectionCardView(props: {
                 ) : null}
                 {canDelete ? (
                   <button
-                    aria-label={memoryId > 0 ? `处理记忆 ${memoryId}` : "处理动态记忆"}
+                    aria-label={memoryId > 0 ? t("workspaceMemory.handleMemoryWithId").replace("{memoryId}", String(memoryId)) : t("workspaceMemory.handleDynamicMemory")}
                     className="context-injection-delete-button"
                     disabled={props.busyDeleteKey === deleteKey}
                     onClick={(event) => {
@@ -468,7 +470,7 @@ function ContextInjectionCardView(props: {
                       event.stopPropagation();
                       props.onRequestDelete?.(deleteTarget);
                     }}
-                    title={memoryId > 0 ? `处理记忆 ${memoryId}` : "处理动态记忆"}
+                    title={memoryId > 0 ? t("workspaceMemory.handleMemoryWithId").replace("{memoryId}", String(memoryId)) : t("workspaceMemory.handleDynamicMemory")}
                     type="button"
                   >
                     <Trash2 size={14} />
@@ -573,6 +575,7 @@ function ContextInjectionDeleteDialog(props: {
   // 仅在本会话中抑制该条目。
   onSuppress: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <Dialog open onOpenChange={(open) => !props.busy && !open && props.onCancel()}>
       <DialogContent
@@ -590,17 +593,17 @@ function ContextInjectionDeleteDialog(props: {
         showCloseButton={!props.busy}
       >
         <DialogHeader>
-          <DialogTitle>处理动态记忆</DialogTitle>
+          <DialogTitle>{t("workspaceMemory.handleDynamicMemory")}</DialogTitle>
           <DialogDescription className="context-injection-dialog-preview">
             {props.target.content}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="context-injection-delete-dialog-actions">
           <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="ghost">
-            取消
+            {t("conversation.action.cancel")}
           </Button>
           <Button disabled={props.busy} onClick={props.onSuppress} type="button" variant="outline">
-            仅本会话不再注入
+            {t("workspaceMemory.suppressForSession")}
           </Button>
           <Button
             disabled={props.busy || props.target.memoryId <= 0}
@@ -608,7 +611,7 @@ function ContextInjectionDeleteDialog(props: {
             type="button"
             variant="destructive"
           >
-            永久删除无效记忆
+            {t("workspaceMemory.permanentDeleteInvalid")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -626,25 +629,26 @@ function ContextInjectionLookupDialog(props: {
   // 关闭回查弹窗。
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const turnEntries = contextInjectionLookupTurns(props.state.result);
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent className="context-injection-lookup-dialog">
         <DialogHeader>
-          <DialogTitle>查看详情</DialogTitle>
-          <DialogDescription>对话编号 {props.state.target.turnId}</DialogDescription>
+          <DialogTitle>{t("workspaceMemory.viewDetails")}</DialogTitle>
+          <DialogDescription>{t("workspaceMemory.turnId").replace("{turnId}", String(props.state.target.turnId))}</DialogDescription>
         </DialogHeader>
         <p className="context-injection-dialog-preview">{props.state.target.content}</p>
-        {props.state.loading ? <p className="context-injection-delete-notice">正在查询完整 TURN 记录...</p> : null}
-        {props.state.error ? <p className="context-injection-delete-notice">查询失败：{props.state.error}</p> : null}
+        {props.state.loading ? <p className="context-injection-delete-notice">{t("workspaceMemory.loadingTurn")}</p> : null}
+        {props.state.error ? <p className="context-injection-delete-notice">{t("workspaceMemory.lookupFailed").replace("{error}", props.state.error)}</p> : null}
         {!props.state.loading && !props.state.error ? (
           turnEntries.length > 0 ? (
             <div className="context-injection-turn-list">
               {turnEntries.map((turn, index) => (
                 <article className="context-injection-turn-entry" key={index}>
                   <strong>TURNID:{String(turn.turnId ?? props.state.target.turnId)}</strong>
-                  <span>用户：{String(turn.userQuestion ?? "")}</span>
-                  <span>助手：{String(turn.assistantAnswer ?? "")}</span>
+                  <span>{t("workspaceMemory.user").replace("{content}", String(turn.userQuestion ?? ""))}</span>
+                  <span>{t("workspaceMemory.assistant").replace("{content}", String(turn.assistantAnswer ?? ""))}</span>
                   {turn.detail ? <pre>{String(turn.detail)}</pre> : null}
                 </article>
               ))}

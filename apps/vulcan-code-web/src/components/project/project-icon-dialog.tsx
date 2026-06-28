@@ -21,6 +21,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ProjectSummary } from "@/types";
 import {
@@ -67,6 +68,7 @@ export function ProjectIconDialog(props: {
   // 将选中项目还原为默认文件夹图标。
   onReset: (project: ProjectSummary) => void;
 }) {
+  const { t } = useI18n();
   const project = props.target?.project ?? null;
   // selectedIcon stores the currently selected built-in icon.
   // selectedIcon 保存当前选中的内置图标。
@@ -183,13 +185,13 @@ export function ProjectIconDialog(props: {
         onInteractOutside={handleDialogInteractOutside}
       >
         <DialogHeader>
-          <DialogTitle>设置项目图标</DialogTitle>
+          <DialogTitle>{t("projectIcon.title")}</DialogTitle>
           <DialogDescription>
-            为 {project.name} 选择固定图标，或生成一个字母徽标。还原后会重新使用默认文件夹开关图标。
+            {t("projectIcon.description").replace("{project}", project.name)}
           </DialogDescription>
         </DialogHeader>
         <div className="project-icon-layout">
-          <div className="project-icon-preview" aria-label="项目图标预览">
+          <div className="project-icon-preview" aria-label={t("projectIcon.previewAria")}>
             <ProjectIcon project={{ ...project, iconPack: finalSelection.pack, iconKey: finalSelection.key }} size={42} />
             <strong>{project.name}</strong>
           </div>
@@ -198,7 +200,7 @@ export function ProjectIconDialog(props: {
               <TabsTrigger value="skill-icons">Skill Icons</TabsTrigger>
               <TabsTrigger value="material-icon-theme">Material Icon Theme</TabsTrigger>
               <TabsTrigger value="lucide">Lucide</TabsTrigger>
-              <TabsTrigger value="badge">自定义</TabsTrigger>
+              <TabsTrigger value="badge">{t("projectIcon.customTab")}</TabsTrigger>
             </TabsList>
             {(["skill-icons", "material-icon-theme", "lucide"] as ProjectIconPack[]).map((pack) => (
               <TabsContent className="project-icon-tab-content" key={pack} value={pack}>
@@ -207,7 +209,7 @@ export function ProjectIconDialog(props: {
                     <div className="project-icon-filter">
                       <Input
                         onChange={(event) => setIconSearch(event.target.value)}
-                        placeholder={`过滤 ${projectIconPackLabel(pack)} 图标`}
+                        placeholder={t("projectIcon.filterPlaceholder").replace("{pack}", projectIconPackLabel(pack))}
                         value={iconSearch}
                       />
                       <span>{streamedIconOptions.length} / {visibleIconOptions.length} / {activeIconOptions.length}</span>
@@ -240,7 +242,7 @@ export function ProjectIconDialog(props: {
                           onClick={() => setVisibleIconLimit((current) => Math.min(current + PROJECT_ICON_STREAM_BATCH_SIZE, visibleIconOptions.length))}
                           type="button"
                         >
-                          加载更多
+                          {t("projectIcon.loadMore")}
                         </button>
                       ) : null}
                     </div>
@@ -251,41 +253,41 @@ export function ProjectIconDialog(props: {
             <TabsContent className="project-icon-tab-content badge-tab" value="badge">
               <div className="badge-editor">
                 <label>
-                  <span>文字</span>
+                  <span>{t("projectIcon.text")}</span>
                   <Input
                     maxLength={4}
                     onChange={(event) => updateBadgeText(event.target.value)}
-                    placeholder="中文 1 个或英文 2 个"
+                    placeholder={t("projectIcon.textPlaceholder")}
                     value={badgeConfig.text}
                   />
                 </label>
                 <div className="badge-editor-field">
-                  <span>形状</span>
+                  <span>{t("projectIcon.shape")}</span>
                   <Select
                     value={badgeConfig.shape}
                     onValueChange={(shape) => setBadgeConfig((current) => ({ ...current, shape: shape as ProjectIconBadgeShape }))}
                   >
                     <SelectTrigger className="badge-shape-trigger">
-                      <span>{badgeShapeLabel(badgeConfig.shape)}</span>
+                      <span>{badgeShapeLabel(badgeConfig.shape, t)}</span>
                     </SelectTrigger>
                     <SelectContent className="project-icon-select-content" position="popper">
-                      <SelectItem value="circle">圆形</SelectItem>
-                      <SelectItem value="square">方形</SelectItem>
+                      <SelectItem value="circle">{t("projectIcon.shapeCircle")}</SelectItem>
+                      <SelectItem value="square">{t("projectIcon.shapeSquare")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <ColorPickerRow
-                  label="背景色"
+                  label={t("projectIcon.backgroundColor")}
                   value={badgeConfig.background}
                   onChange={(background) => setBadgeConfig((current) => ({ ...current, background }))}
                 />
                 <ColorPickerRow
-                  label="边框色"
+                  label={t("projectIcon.borderColor")}
                   value={badgeConfig.border}
                   onChange={(border) => setBadgeConfig((current) => ({ ...current, border }))}
                 />
                 <ColorPickerRow
-                  label="字体色"
+                  label={t("projectIcon.foregroundColor")}
                   value={badgeConfig.foreground}
                   onChange={(foreground) => setBadgeConfig((current) => ({ ...current, foreground }))}
                 />
@@ -294,9 +296,9 @@ export function ProjectIconDialog(props: {
           </Tabs>
         </div>
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
-          <Button type="button" variant="outline" onClick={() => props.onReset(project)}>还原默认</Button>
-          <Button type="button" onClick={() => props.onConfirm(project, finalSelection)}>设置</Button>
+          <Button type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
+          <Button type="button" variant="outline" onClick={() => props.onReset(project)}>{t("projectIcon.resetDefault")}</Button>
+          <Button type="button" onClick={() => props.onConfirm(project, finalSelection)}>{t("projectIcon.set")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -342,13 +344,13 @@ function ColorPickerRow(props: {
   );
 }
 
-// badgeShapeLabel returns the Chinese label for a generated badge shape.
-// badgeShapeLabel 返回生成式徽标形状的中文标签。
-function badgeShapeLabel(shape: ProjectIconBadgeShape): string {
+// badgeShapeLabel returns the localized label for a generated badge shape.
+// badgeShapeLabel 返回生成式徽标形状的本地化标签。
+function badgeShapeLabel(shape: ProjectIconBadgeShape, t: (key: TranslationKey) => string): string {
   switch (shape) {
     case "circle":
-      return "圆形";
+      return t("projectIcon.shapeCircle");
     case "square":
-      return "方形";
+      return t("projectIcon.shapeSquare");
   }
 }

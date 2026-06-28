@@ -443,6 +443,7 @@ pub(crate) fn workbench_from_runtime(
         .collect::<BTreeSet<_>>();
     WorkbenchSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
+        ui_locale: provider_configuration.ui_locale.clone(),
         modules: runtime_modules(
             controller,
             luaskills_catalog,

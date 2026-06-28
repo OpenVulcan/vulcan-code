@@ -1,4 +1,5 @@
 import type { CommandSessionSummary } from "@/types";
+import type { TranslationKey } from "@/i18n-messages";
 
 // TerminalVisualState is the compact state used by terminal rows and badges.
 // TerminalVisualState 是终端行与徽标使用的紧凑状态。
@@ -45,14 +46,14 @@ export function shortenTerminalSessionId(value: string): string {
 
 // terminalSessionViewModel normalizes one backend command-session summary for rendering.
 // terminalSessionViewModel 将单条后端命令会话摘要归一化为渲染模型。
-export function terminalSessionViewModel(summary: CommandSessionSummary): TerminalSessionViewModel {
+export function terminalSessionViewModel(summary: CommandSessionSummary, t?: (key: TranslationKey) => string): TerminalSessionViewModel {
   const state = terminalVisualState(summary.status, summary.exitCode ?? null, Boolean(summary.lost));
   return {
     id: summary.id,
     name: (summary.name ?? "").trim() || shortenTerminalSessionId(summary.id),
     command: summary.command || summary.id,
     state,
-    label: terminalStateLabel(state),
+    label: terminalStateLabel(state, t),
     preview: summary.preview ?? "",
     exitCode: summary.exitCode ?? null,
     canStop: terminalStateCanStop(state),
@@ -90,24 +91,24 @@ export function terminalVisualState(
   }
 }
 
-// terminalStateLabel returns the Chinese label for a normalized terminal state.
-// terminalStateLabel 返回归一化终端状态对应的中文文案。
-export function terminalStateLabel(state: TerminalVisualState): string {
+// terminalStateLabel returns the localized label for a normalized terminal state.
+// terminalStateLabel 返回归一化终端状态对应的本地化文案。
+export function terminalStateLabel(state: TerminalVisualState, t?: (key: TranslationKey) => string): string {
   switch (state) {
     case "running":
-      return "运行中";
+      return t ? t("terminalState.running") : "Running";
     case "waiting":
-      return "等待输入";
+      return t ? t("terminalState.waiting") : "Waiting for input";
     case "success":
-      return "已完成";
+      return t ? t("terminalState.success") : "Completed";
     case "failed":
-      return "执行失败";
+      return t ? t("terminalState.failed") : "Failed";
     case "stopped":
-      return "已停止";
+      return t ? t("terminalState.stopped") : "Stopped";
     case "lost":
-      return "已丢失";
+      return t ? t("terminalState.lost") : "Lost";
     default:
-      return "未知";
+      return t ? t("terminalState.unknown") : "Unknown";
   }
 }
 

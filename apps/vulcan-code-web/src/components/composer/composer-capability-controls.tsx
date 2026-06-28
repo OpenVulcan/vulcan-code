@@ -41,7 +41,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useI18n, type LocaleCode } from "@/i18n";
+import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
 import type {
   AiCapabilitySummary,
   AiCapabilityTargetSummary,
@@ -156,6 +156,9 @@ export function ComposerAiCapabilityControl(props: {
   // 持久化单个会话级能力配置草稿。
   onSaveConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // open tracks whether the full capability dialog is visible.
   // open 跟踪完整能力对话框是否可见。
   const [open, setOpen] = React.useState(false);
@@ -209,9 +212,10 @@ export function ComposerAiCapabilityControl(props: {
     return Boolean(capability?.available) && !activeDisabledKinds.has(option.value);
   });
   const enabledCount = enabledCapabilityEntries.length;
-  const triggerSubtitle = props.locale === "zh-CN"
-    ? `${enabledCount}/${visibleCapabilities.length} 已启用`
-    : `${enabledCount}/${visibleCapabilities.length} enabled`;
+  const triggerSubtitle = formatComposerTranslation(t, "composer.capability.enabledCount", {
+    enabled: String(enabledCount),
+    total: String(visibleCapabilities.length),
+  });
   const selectedEntry = visibleCapabilities.find(({ option }) => option.value === selectedKind) ?? visibleCapabilities[0];
   const selectedCapability = selectedEntry?.capability;
   const selectedTargets = orderedAiCapabilityTargets(selectedCapability, draftTargetOrder);
@@ -227,8 +231,10 @@ export function ComposerAiCapabilityControl(props: {
       activeDisabledKinds,
       props.disabledTargetSelectors,
       props.targetOrder,
+      props.locale,
+      t,
     ),
-    [activeDisabledKinds, props.disabledTargetSelectors, props.targetOrder, visibleCapabilities],
+    [activeDisabledKinds, props.disabledTargetSelectors, props.locale, props.targetOrder, t, visibleCapabilities],
   );
   // resetDraftFromProps refreshes the dialog draft from the latest session snapshot.
   // resetDraftFromProps 根据最新会话快照刷新弹窗草稿。
@@ -439,21 +445,19 @@ export function ComposerAiCapabilityControl(props: {
           </DialogTrigger>
         </TooltipTrigger>
         <TooltipContent className="composer-control-tooltip" side="top">
-          <strong>点击设置扩展能力</strong>
+          <strong>{t("composer.capability.tooltipTitle")}</strong>
           {capabilityTooltipRows.length ? (
             capabilityTooltipRows.map((row) => <span key={row}>{row}</span>)
           ) : (
-            <span>暂无已启用模块</span>
+            <span>{t("composer.capability.tooltipEmpty")}</span>
           )}
         </TooltipContent>
       </Tooltip>
       <DialogContent className="composer-capability-dialog">
         <DialogHeader>
-          <DialogTitle>{props.locale === "zh-CN" ? "当前会话能力设置" : "Current session capabilities"}</DialogTitle>
+          <DialogTitle>{t("composer.capability.dialogTitle")}</DialogTitle>
           <DialogDescription className="composer-capability-dialog-note">
-            {props.locale === "zh-CN"
-              ? "调整排序与勾选后需要点击保存，保存后会写入当前会话的独立配置，并影响下一次对话的缓存命中。"
-              : "Changes are saved to this session only after you click Save, and affect the next turn's cache hit rate."}
+            {t("composer.capability.dialogDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="composer-capability-dialog-grid">
@@ -464,15 +468,9 @@ export function ComposerAiCapabilityControl(props: {
               const targetCount = capability?.targets.length ?? 0;
               const sourceLabel = capability?.native
                 ? targetCount > 0
-                  ? props.locale === "zh-CN"
-                    ? `模型原生 + ${targetCount} 个目标`
-                    : `Native + ${targetCount} targets`
-                  : props.locale === "zh-CN"
-                    ? "模型原生"
-                    : "Native model"
-                : props.locale === "zh-CN"
-                  ? `${targetCount} 个目标`
-                  : `${targetCount} targets`;
+                  ? formatComposerTranslation(t, "composer.capability.source.nativeWithTargets", { count: String(targetCount) })
+                  : t("composer.capability.source.native")
+                : formatComposerTranslation(t, "composer.capability.source.targets", { count: String(targetCount) });
               return (
                 <div
                   className={cn(
@@ -509,9 +507,7 @@ export function ComposerAiCapabilityControl(props: {
                       <small>
                         {available
                           ? sourceLabel
-                          : props.locale === "zh-CN"
-                            ? "暂无可用目标"
-                            : "No targets"}
+                          : t("composer.capability.source.noTargets")}
                       </small>
                     </span>
                   </span>
@@ -544,12 +540,8 @@ export function ComposerAiCapabilityControl(props: {
             ) : (
               <div className="composer-capability-dialog-empty">
                 {selectedCapability?.native
-                  ? props.locale === "zh-CN"
-                    ? "当前能力由所选模型原生处理。"
-                    : "This capability is handled natively by the selected model."
-                  : props.locale === "zh-CN"
-                    ? "当前能力暂无已配置目标。"
-                    : "This capability has no configured targets."}
+                  ? t("composer.capability.empty.native")
+                  : t("composer.capability.empty.noTargets")}
               </div>
             )}
           </section>
@@ -557,20 +549,12 @@ export function ComposerAiCapabilityControl(props: {
         <DialogFooter className="composer-capability-dialog-footer">
           <span className="composer-capability-dialog-save-hint">
             {externalUpdateNotice
-              ? props.locale === "zh-CN"
-                ? "其他窗口已更新此会话配置，当前草稿尚未同步。"
-                : "This session was updated elsewhere; the current draft is not synced."
+              ? t("composer.capability.saveHint.externalUpdate")
               : isSaving
-              ? props.locale === "zh-CN"
-                ? "正在保存到当前会话..."
-                : "Saving to this session..."
+              ? t("composer.capability.saveHint.saving")
               : hasUnsavedChanges
-                ? props.locale === "zh-CN"
-                  ? "有未保存变更。"
-                  : "Unsaved changes."
-                : props.locale === "zh-CN"
-                  ? "当前没有未保存变更。"
-                  : "No unsaved changes."}
+                ? t("composer.capability.saveHint.unsaved")
+                : t("composer.capability.saveHint.clean")}
           </span>
           <button
             className="skill-action-button secondary composer-capability-default-button"
@@ -578,7 +562,7 @@ export function ComposerAiCapabilityControl(props: {
             onClick={handleUseDefaultConfiguration}
             type="button"
           >
-            {props.locale === "zh-CN" ? "使用默认配置" : "Use defaults"}
+            {t("composer.capability.useDefaults")}
           </button>
           <button
             className={cn("skill-action-button composer-capability-save-button", saveState === "saved" && "saved")}
@@ -593,39 +577,31 @@ export function ComposerAiCapabilityControl(props: {
           >
             {isSaving ? <Loader2 className="composer-capability-save-spinner" size={14} /> : saveState === "saved" ? <Check size={14} /> : <Save size={14} />}
             {isSaving
-              ? props.locale === "zh-CN"
-                ? "保存中"
-                : "Saving"
+              ? t("composer.capability.save.saving")
               : saveState === "saved"
-                ? props.locale === "zh-CN"
-                  ? "已保存"
-                  : "Saved"
-                : props.locale === "zh-CN"
-                  ? "保存"
-                  : "Save"}
+                ? t("composer.capability.save.saved")
+                : t("composer.capability.save")}
           </button>
         </DialogFooter>
       </DialogContent>
       <Dialog open={confirmCloseOpen} onOpenChange={setConfirmCloseOpen}>
         <DialogContent className="composer-capability-close-confirm-dialog">
           <DialogHeader>
-            <DialogTitle>{props.locale === "zh-CN" ? "保存更改？" : "Save changes?"}</DialogTitle>
+            <DialogTitle>{t("composer.capability.close.title")}</DialogTitle>
             <DialogDescription>
-              {props.locale === "zh-CN"
-                ? "当前会话能力设置有未保存变更。"
-                : "This session capability dialog has unsaved changes."}
+              {t("composer.capability.close.description")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <button className="skill-action-button secondary" disabled={isSaving} onClick={discardDraft} type="button">
-              {props.locale === "zh-CN" ? "不保存" : "Discard"}
+              {t("composer.capability.close.discard")}
             </button>
             <button className="skill-action-button secondary" disabled={isSaving} onClick={() => setConfirmCloseOpen(false)} type="button">
-              {props.locale === "zh-CN" ? "继续编辑" : "Keep editing"}
+              {t("composer.capability.close.keepEditing")}
             </button>
             <button className="skill-action-button" disabled={isSaving} onClick={() => void saveDraft({ closeAfterSave: true })} type="button">
               {isSaving ? <Loader2 className="composer-capability-save-spinner" size={14} /> : <Save size={14} />}
-              {props.locale === "zh-CN" ? "保存" : "Save"}
+              {t("composer.capability.save")}
             </button>
           </DialogFooter>
         </DialogContent>
@@ -688,12 +664,14 @@ function composerCapabilityTooltipRows(
   disabledKinds: Set<AiCapabilityKind>,
   disabledTargetSelectors: Set<string>,
   targetOrder: Map<AiCapabilityKind, string[]>,
+  locale: LocaleCode,
+  t: (key: TranslationKey) => string,
 ): string[] {
   return entries.flatMap(({ option, capability }) => {
     if (!capability?.available || disabledKinds.has(option.value)) {
       return [];
     }
-    const sourceLabels = capability.native ? ["模型原生"] : [];
+    const sourceLabels = capability.native ? [t("composer.capability.source.native")] : [];
     const targetLabels = orderedAiCapabilityTargets(capability, targetOrder)
       .filter((target) => target.enabled && !disabledTargetSelectors.has(target.targetSelector))
       .map(composerCapabilityTargetTooltipLabel);
@@ -703,8 +681,22 @@ function composerCapabilityTooltipRows(
     }
     const visibleLabels = routeLabels.slice(0, 4);
     const suffix = routeLabels.length > visibleLabels.length ? "..." : "";
-    return [`${option.labelZh}：${visibleLabels.join("、")}${suffix}`];
+    const optionLabel = locale === "zh-CN" ? option.labelZh : option.labelEn;
+    return [`${optionLabel}${t("global.labelSeparator")}${visibleLabels.join(t("global.listDelimiter"))}${suffix}`];
   });
+}
+
+// formatComposerTranslation replaces simple named placeholders in localized composer templates.
+// formatComposerTranslation 替换输入区本地化模板中的简单具名占位符。
+function formatComposerTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }
 
 // composerCapabilityTargetTooltipLabel returns the shortest useful display label for one capability target.

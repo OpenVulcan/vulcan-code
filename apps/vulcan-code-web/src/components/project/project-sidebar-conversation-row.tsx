@@ -11,7 +11,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import type { LocaleCode } from "@/i18n";
+import { useI18n, type LocaleCode } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 
@@ -119,6 +119,7 @@ function ConversationRowLeading(props: {
   // 处理行级置顶操作。
   onAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
 }) {
+  const { t } = useI18n();
   const isRunning = props.conversation.status.toLowerCase() === "running";
   if (props.archiveConfirming) {
     return <span className="conversation-tree-leading" />;
@@ -127,18 +128,18 @@ function ConversationRowLeading(props: {
     <span className={cn("conversation-tree-leading", isRunning && "running")}>
       <span className={cn("conversation-tree-leading-status", isRunning && "running")}>
         {isRunning ? (
-          <span className="conversation-tree-status-mark" aria-label="会话正在运行">
-            <LoaderCircle aria-label="会话正在运行" className="conversation-tree-running-spinner spin" size={14} />
+          <span className="conversation-tree-status-mark" aria-label={t("conversationRow.running")}>
+            <LoaderCircle aria-label={t("conversationRow.running")} className="conversation-tree-running-spinner spin" size={14} />
           </span>
         ) : props.conversation.unread && !props.isSelected ? (
           <span className="conversation-tree-status-mark">
-            <span className="conversation-tree-unread-dot" aria-label="未读" />
+            <span className="conversation-tree-unread-dot" aria-label={t("conversationRow.unread")} />
           </span>
         ) : null}
       </span>
       <span className={cn("conversation-tree-leading-actions", isRunning && "running")} aria-hidden="false">
         <span
-          aria-label={props.isPinned ? "取消置顶对话" : "置顶对话"}
+          aria-label={props.isPinned ? t("conversationMenu.unpin") : t("conversationMenu.pin")}
           className="conversation-tree-quick-action"
           onClick={(event) => {
             event.stopPropagation();
@@ -176,6 +177,7 @@ function ConversationRowTrailing(props: {
   // 进入行内归档确认模式。
   onRequestArchiveConfirm: () => void;
 }) {
+  const { t } = useI18n();
   const isRunning = props.conversation.status.toLowerCase() === "running";
   if (isRunning) {
     return <span className="conversation-tree-trailing running" />;
@@ -188,7 +190,7 @@ function ConversationRowTrailing(props: {
         onMouseDown={(event) => event.preventDefault()}
       >
         <span
-          aria-label="确认归档对话"
+          aria-label={t("conversationRow.confirmArchive")}
           className="conversation-tree-confirm-action"
           onClick={(event) => {
             event.stopPropagation();
@@ -196,7 +198,7 @@ function ConversationRowTrailing(props: {
           }}
           role="button"
         >
-          确认
+          {t("projectDialog.confirm")}
         </span>
       </span>
     );
@@ -208,7 +210,7 @@ function ConversationRowTrailing(props: {
       </span>
       <span className="conversation-tree-quick-actions" aria-hidden="false">
         <span
-          aria-label="归档对话"
+          aria-label={t("conversationMenu.archive")}
           className="conversation-tree-quick-action"
           onClick={(event) => {
             event.stopPropagation();

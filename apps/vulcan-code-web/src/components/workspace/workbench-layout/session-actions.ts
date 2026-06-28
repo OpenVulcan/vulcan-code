@@ -12,6 +12,7 @@ import {
   updateSessionGoalStatus,
 } from "@/service/conversation-actions-service";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
+import { useI18n } from "@/i18n";
 import { toast } from "sonner";
 
 // WorkbenchSessionActionsOptions groups active session state and snapshot update bridges.
@@ -34,6 +35,9 @@ interface WorkbenchSessionActionsOptions {
 // useWorkbenchSessionActions owns active-session AI capability, goal, plan-mode, and prompt-edit callbacks.
 // useWorkbenchSessionActions 持有当前会话 AI 能力、目标、计划模式与提示词编辑回调。
 export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptions) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const {
     selectedConversation,
     selectedDraftConversation,
@@ -51,11 +55,11 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       ? null
       : selectedConversation?.id ?? null;
     if (!activeProjectId) {
-      toast.error("当前会话没有明确关联项目，无法保存 AI 能力设置。");
+      toast.error(t("sessionActions.noProjectForCapability"));
       return false;
     }
     if (!activeConversationId) {
-      toast.error("请先创建或选择一个会话，再保存 AI 能力设置。");
+      toast.error(t("sessionActions.noConversationForCapability"));
       return false;
     }
     try {
@@ -67,99 +71,99 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
         request.aiCapabilityTargetOrderOverrides,
       );
       if (!snapshot) {
-        toast.info("浏览器预览模式下无法保存会话 AI 能力设置。");
+        toast.info(t("sessionActions.previewCannotSaveCapability"));
         return false;
       }
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("已保存当前会话 AI 能力设置。");
+      toast.success(t("sessionActions.capabilitySaved"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
 
   // handleSaveSessionGoal persists one explicit session goal from the composer dialog.
   // handleSaveSessionGoal 从输入区弹窗持久化一个显式会话目标。
   const handleSaveSessionGoal = React.useCallback(async (objective: string, tokenBudget?: number | null): Promise<boolean> => {
     const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
     if (!activeConversationId) {
-      toast.error("请先创建或选择一个会话，再设置目标。");
+      toast.error(t("sessionActions.noConversationForGoalSave"));
       return false;
     }
     try {
       const snapshot = await saveSessionGoal(activeConversationId, objective, tokenBudget);
       if (!snapshot) {
-        toast.info("浏览器预览模式下无法保存目标。");
+        toast.info(t("sessionActions.previewCannotSaveGoal"));
         return false;
       }
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("目标已保存。");
+      toast.success(t("sessionActions.goalSaved"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
 
   // handleResumeSessionGoal resumes a stopped goal as a fresh budget stage.
   // handleResumeSessionGoal 将已停止目标恢复为新的预算阶段。
   const handleResumeSessionGoal = React.useCallback(async (objective: string, tokenBudget?: number | null): Promise<boolean> => {
     const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
     if (!activeConversationId) {
-      toast.error("请先选择一个已有会话。");
+      toast.error(t("sessionActions.noExistingConversation"));
       return false;
     }
     try {
       const snapshot = await resumeSessionGoal(activeConversationId, objective, tokenBudget);
       if (!snapshot) {
-        toast.info("浏览器预览模式下无法继续目标。");
+        toast.info(t("sessionActions.previewCannotResumeGoal"));
         return false;
       }
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("目标已继续。");
+      toast.success(t("sessionActions.goalResumed"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
 
   // handleClearSessionGoal removes the current explicit session goal.
   // handleClearSessionGoal 移除当前显式会话目标。
   const handleClearSessionGoal = React.useCallback(async (): Promise<boolean> => {
     const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
     if (!activeConversationId) {
-      toast.error("请先选择一个已有会话。");
+      toast.error(t("sessionActions.noExistingConversation"));
       return false;
     }
     try {
       const snapshot = await clearSessionGoal(activeConversationId);
       if (!snapshot) {
-        toast.info("浏览器预览模式下无法清理目标。");
+        toast.info(t("sessionActions.previewCannotClearGoal"));
         return false;
       }
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("目标已清理。");
+      toast.success(t("sessionActions.goalCleared"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
 
   // handleUpdateSessionGoalStatus updates the current goal lifecycle state.
   // handleUpdateSessionGoalStatus 更新当前目标生命周期状态。
   const handleUpdateSessionGoalStatus = React.useCallback(async (status: string): Promise<boolean> => {
     const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
     if (!activeConversationId) {
-      toast.error("请先选择一个已有会话。");
+      toast.error(t("sessionActions.noExistingConversation"));
       return false;
     }
     try {
       const snapshot = await updateSessionGoalStatus(activeConversationId, status);
       if (!snapshot) {
-        toast.info("浏览器预览模式下无法更新目标状态。");
+        toast.info(t("sessionActions.previewCannotUpdateGoal"));
         return false;
       }
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
@@ -168,30 +172,30 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
 
   // handleSetSessionPlanMode persists the current conversation Plan-mode toggle.
   // handleSetSessionPlanMode 持久化当前会话的计划模式开关。
   const handleSetSessionPlanMode = React.useCallback(async (enabled: boolean): Promise<boolean> => {
     const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
     if (!activeConversationId) {
-      toast.error("请先创建或选择一个会话，再切换计划模式。");
+      toast.error(t("sessionActions.noConversationForPlanMode"));
       return false;
     }
     try {
       const snapshot = await setSessionPlanMode(activeConversationId, enabled);
       if (!snapshot) {
-        toast.info("浏览器预览模式下无法切换计划模式。");
+        toast.info(t("sessionActions.previewCannotTogglePlanMode"));
         return false;
       }
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success(enabled ? "计划模式已开启。" : "计划模式已关闭。");
+      toast.success(enabled ? t("sessionActions.planModeEnabled") : t("sessionActions.planModeDisabled"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
 
   // handleEditPendingPrompt restores one queued prompt back into the active composer.
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。

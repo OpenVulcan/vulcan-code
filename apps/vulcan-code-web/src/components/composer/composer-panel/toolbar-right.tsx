@@ -5,6 +5,7 @@ import {
   ContextUsageOrb,
 } from "@/components/composer/composer-controls";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ContextUsageSnapshot } from "@/types";
 
@@ -58,6 +59,9 @@ export interface ComposerPanelToolbarRightProps {
 // ComposerPanelToolbarRight renders the right side of the composer toolbar.
 // ComposerPanelToolbarRight 渲染输入区工具栏右侧区域。
 export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const draftHasContent = props.draftInput.trim().length > 0;
   const hasAttachments = props.attachmentCount > 0;
   const stopOnly = props.isConversationRunning && !draftHasContent && !hasAttachments;
@@ -73,7 +77,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
         onValueChange={props.onReasoningEffortChange}
         openSignal={props.reasoningPickerOpenSignal}
         options={props.reasoningEffortOptions}
-        tooltip={<strong>思考级别</strong>}
+        tooltip={<strong>{t("composer.reasoning.tooltip")}</strong>}
         value={props.reasoningEffort}
       />
       {props.isConversationRunning && (draftHasContent || hasAttachments) ? (

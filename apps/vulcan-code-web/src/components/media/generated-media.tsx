@@ -11,6 +11,7 @@ import {
   generatedMediaIcon,
   useGeneratedMediaSource,
 } from "./generated-media-utils";
+import { useI18n } from "@/i18n";
 
 export { GeneratedMediaPlayerWindow } from "./generated-media-player";
 export type {
@@ -124,6 +125,9 @@ export function GeneratedMediaDetail(props: {
   // onOpenMedia 打开独立媒体播放窗口。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const [zoom, setZoom] = React.useState(1);
   const primary = props.attachments[0];
   const primarySource = useGeneratedMediaSource(primary?.localPath ?? "", primary?.mimeType);
@@ -161,7 +165,7 @@ export function GeneratedMediaDetail(props: {
             <Play size={22} fill="currentColor" />
           </span>
           <span>
-            <strong>打开视频播放器</strong>
+            <strong>{t("media.openVideoPlayer")}</strong>
             <small>{primary.fileName}</small>
           </span>
         </button>

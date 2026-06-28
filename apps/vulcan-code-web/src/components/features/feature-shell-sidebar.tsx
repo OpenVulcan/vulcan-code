@@ -73,7 +73,7 @@ function FeatureSidebar(props: {
 }) {
   const { t } = useI18n()
   const feature = primaryFeatureAreas(t).find((area) => area.id === props.activeArea)
-  const headerLabel = props.activeArea === "settings" ? "系统设置" : feature?.label ?? "工作台"
+  const headerLabel = props.activeArea === "settings" ? t("settings.systemSettings") : feature?.label ?? t("sidebar.console")
 
   return (
     <Sidebar collapsible="icon" variant="inset">
@@ -210,10 +210,10 @@ function SettingsSidebarMenu(props: {
           <SidebarMenuButton
             className="workspace-sidebar-feature-button settings-back-menu-row"
             onClick={props.onBackToWorkspace}
-            tooltip="返回工作台"
+            tooltip={t("settings.backToWorkspace")}
           >
             <Undo2 size={16} />
-            <span className="vcn-sidebar-label workspace-sidebar-feature-label">返回工作台</span>
+            <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("settings.backToWorkspace")}</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
         {groups.map((group) => (
@@ -432,7 +432,7 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
   }
   if (activeArea === "memory") {
     return [
-      { id: "status", label: "状态", detail: workbench.vmmMemory.notice, icon: <BrainCircuit size={16} /> },
+      { id: "status", label: t("workspaceToolPanel.status"), detail: workbench.vmmMemory.notice, icon: <BrainCircuit size={16} /> },
       ...workbench.vmmMemory.sections.map((section) => ({
         id: section.id,
         label: section.label,

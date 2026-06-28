@@ -477,7 +477,7 @@ function planArtifactAttributesFromPayload(payload: unknown): { name: string; pa
     return null;
   }
   const object = payload as Record<string, unknown>;
-  const name = stringFromUnknown(object.name) ?? "计划";
+  const name = stringFromUnknown(object.name) ?? "Plan";
   const path = stringFromUnknown(object.path) ?? "";
   const content = stringFromUnknown(object.content) ?? "";
   const updatedAt = stringFromUnknown(object.updatedAt ?? object.updated_at) ?? "";
@@ -497,12 +497,12 @@ function stringFromUnknown(value: unknown): string | null {
 // compactTextPreview 返回用于卡片与弹窗标题区的单行短预览。
 function compactTextPreview(source: string): string {
   const text = source
-    .replace(/```[\s\S]*?```/g, "代码块")
+    .replace(/```[\s\S]*?```/g, "code block")
     .replace(/[#>*_`|~-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (!text) {
-    return "无正文内容";
+    return "No body content";
   }
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
 }

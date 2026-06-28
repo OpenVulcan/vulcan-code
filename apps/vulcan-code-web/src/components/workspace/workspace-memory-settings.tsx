@@ -10,6 +10,7 @@ import {
   type MemoryActionProps,
   type MemorySubAreaId,
 } from "@/components/features/memory/MemoryArea";
+import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 
 // WorkspaceMemorySettings renders the embedded VMM memory settings page.
@@ -60,19 +61,20 @@ export function FloatingMemoryMenu(props: {
   // 包含 VMM 记忆分区的工作台快照。
   workbench: WorkbenchSnapshot;
 }) {
+  const { t } = useI18n();
   // rows stores the embedded memory menu rows.
   // rows 保存内嵌记忆菜单行。
-  const rows = memoryMenuRows(props.workbench);
+  const rows = memoryMenuRows(props.workbench, t);
   // activeMeta stores the selected menu label for the collapsed pill.
   // activeMeta 保存收起胶囊展示的当前菜单标签。
-  const activeMeta = memorySubAreaMeta(props.activeSubArea, props.workbench);
+  const activeMeta = memorySubAreaMeta(props.activeSubArea, props.workbench, t);
 
   if (!props.expanded) {
     return (
       <button
         className="workspace-tool-panel-menu-collapsed"
         onClick={() => props.onExpandedChange(true)}
-        title="展开状态"
+        title={t("workspaceToolPanel.expandState")}
         type="button"
       >
         <span>{activeMeta.label}</span>
@@ -82,11 +84,11 @@ export function FloatingMemoryMenu(props: {
   }
 
   return (
-    <aside className="workspace-tool-panel-menu" aria-label="记忆设置菜单">
+    <aside className="workspace-tool-panel-menu" aria-label={t("workspaceToolPanel.memorySettingsMenu")}>
       <div className="workspace-tool-panel-menu-header">
-        <span>菜单</span>
+        <span>{t("workspaceToolPanel.menu")}</span>
         <button
-          aria-label="收起为胶囊"
+          aria-label={t("workspaceToolPanel.collapseToPill")}
           className="workspace-tool-panel-menu-icon-button"
           onClick={() => props.onExpandedChange(false)}
           type="button"
@@ -114,13 +116,13 @@ export function FloatingMemoryMenu(props: {
 
 // memoryMenuRows builds embedded memory menu rows from the snapshot.
 // memoryMenuRows 根据快照构建内嵌记忆菜单行。
-function memoryMenuRows(workbench: WorkbenchSnapshot): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
+function memoryMenuRows(workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ detail: string; icon: React.ReactNode; id: MemorySubAreaId; label: string }> {
   return [
     {
       detail: workbench.vmmMemory.notice,
       icon: <BrainCircuit size={15} />,
       id: "status",
-      label: "状态",
+      label: t("workspaceToolPanel.status"),
     },
     ...workbench.vmmMemory.sections.map((section) => ({
       detail: section.description,
@@ -133,10 +135,10 @@ function memoryMenuRows(workbench: WorkbenchSnapshot): Array<{ detail: string; i
 
 // memorySubAreaMeta returns the compact label and detail for one embedded memory page.
 // memorySubAreaMeta 返回单个内嵌记忆页面的紧凑标签与详情。
-export function memorySubAreaMeta(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot): { detail: string; label: string } {
-  const row = memoryMenuRows(workbench).find((item) => item.id === subArea);
+export function memorySubAreaMeta(subArea: MemorySubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): { detail: string; label: string } {
+  const row = memoryMenuRows(workbench, t).find((item) => item.id === subArea);
   return {
     detail: row?.detail ?? workbench.vmmMemory.notice,
-    label: row?.label ?? "状态",
+    label: row?.label ?? t("workspaceToolPanel.status"),
   };
 }

@@ -135,13 +135,16 @@ export function ConversationSessionTodolistPanel(props: {
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const hasReviewSummary = Boolean(props.reviewSummary?.branchName);
   const hasTodolist = Boolean(props.todolist?.items.length);
   const terminalSessions = React.useMemo(
     () => props.terminalSessions
-      .map(terminalSessionViewModel)
+      .map((summary) => terminalSessionViewModel(summary, t))
       .filter((session) => session.canStop || session.state === "lost" || session.state === "waiting"),
-    [props.terminalSessions],
+    [props.terminalSessions, t],
   );
   const terminalSummaryById = React.useMemo(
     () => new Map(props.terminalSessions.map((summary) => [summary.id, summary])),
@@ -204,34 +207,34 @@ export function ConversationSessionTodolistPanel(props: {
   if (!renderExpanded) {
     return (
       <button
-        aria-label="展开会话工具"
+        aria-label={t("sessionTools.expand")}
         className={cn(
           "workspace-tool-panel-menu-collapsed conversation-session-todolist-collapsed conversation-session-tool-collapsed conversation-session-tool-surface",
           (hasReviewSummary || hasTerminalSessions) && hasTodolist && "has-progress",
           transitionClassName,
         )}
         onClick={() => requestExpandedChange(true)}
-        title="展开会话工具"
+        title={t("sessionTools.expand")}
         type="button"
       >
         {props.reviewSummary ? (
           <span className="conversation-session-tool-collapsed-row">
             <FileDiff size={15} />
-            <span>更改</span>
+            <span>{t("sessionTools.changes")}</span>
             {conversationSessionReviewDelta(props.reviewSummary)}
           </span>
         ) : null}
         {props.todolist ? (
           <span className="conversation-session-tool-collapsed-row">
             <ClipboardList size={15} />
-            <span>进程</span>
+            <span>{t("sessionTools.progress")}</span>
             <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
           </span>
         ) : null}
         {hasTerminalSessions ? (
           <span className="conversation-session-tool-collapsed-row">
             <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(terminalSessions[0].state))} size={15} />
-            <span>终端</span>
+            <span>{t("sessionTools.terminal")}</span>
             <strong>{terminalSessions.length}</strong>
           </span>
         ) : null}
@@ -246,7 +249,7 @@ export function ConversationSessionTodolistPanel(props: {
         "workspace-tool-panel-menu conversation-session-todolist-menu conversation-session-tool-surface",
         transitionClassName,
       )}
-      aria-label="会话工具菜单"
+      aria-label={t("sessionTools.menu")}
     >
       {props.reviewSummary ? (
         <ConversationSessionReviewSection
@@ -299,6 +302,8 @@ function ConversationSessionReviewSection(props: {
   // 折叠当前展开的会话工具面板。
   onCollapse: () => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
 
   return (
@@ -306,10 +311,10 @@ function ConversationSessionReviewSection(props: {
       <div className="conversation-session-tool-section-title with-action">
         <span>{t("gitCommitDialog.toolsTitle")}</span>
         <button
-          aria-label="折叠会话工具"
+          aria-label={t("sessionTools.collapse")}
           className="workspace-tool-panel-menu-icon-button"
           onClick={props.onCollapse}
-          title="折叠会话工具"
+          title={t("sessionTools.collapse")}
           type="button"
         >
           <Minimize2 size={13} />
@@ -377,6 +382,8 @@ export function ConversationSessionCommitDialog(props: {
   // 后端 Git 动作完成后刷新紧凑 Git 审查摘要。
   onRefreshReviewSummary: () => Promise<void>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
 
   return (
@@ -845,19 +852,22 @@ function ConversationSessionProgressSection(props: {
   // 当进程为第一个区域时使用的可选折叠动作。
   onCollapse?: () => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <section className="conversation-session-tool-section conversation-session-progress-section">
       <div className={cn("conversation-session-tool-section-title", props.onCollapse && "with-action")}>
         <span className="conversation-session-tool-section-title-main">
-          <span>进程</span>
+          <span>{t("sessionTools.progress")}</span>
           <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
         </span>
         {props.onCollapse ? (
           <button
-            aria-label="折叠会话工具"
+            aria-label={t("sessionTools.collapse")}
             className="workspace-tool-panel-menu-icon-button"
             onClick={props.onCollapse}
-            title="折叠会话工具"
+            title={t("sessionTools.collapse")}
             type="button"
           >
             <Minimize2 size={13} />

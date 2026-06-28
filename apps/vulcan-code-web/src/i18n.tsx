@@ -27,28 +27,44 @@ const I18nContext = React.createContext<I18nContextValue | null>(null)
 
 // initialLocale returns the persisted language or a browser-derived default.
 // initialLocale 返回持久化语言或从浏览器推导出的默认语言。
-function initialLocale(): LocaleCode {
-  const stored = window.localStorage.getItem("vulcan-webui-locale")
-  if (stored === "zh-CN" || stored === "en-US") {
-    return stored
+// normalizeLocaleCode validates one persisted or service-provided locale code.
+// normalizeLocaleCode 校验单个持久化或服务提供的语言代码。
+export function normalizeLocaleCode(value: string | null | undefined): LocaleCode | null {
+  if (value === "zh-CN" || value === "en-US") {
+    return value
   }
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US"
+  return null
+}
+
+// initialLocale returns the service-provided language or a browser-derived default.
+// initialLocale 返回服务提供的语言或从浏览器推导出的默认语言。
+function initialLocale(serviceLocale: string | null | undefined): LocaleCode {
+  return normalizeLocaleCode(serviceLocale)
+    ?? (navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US")
 }
 
 // I18nProvider owns the WebUI language state.
 // I18nProvider 管理 WebUI 语言状态。
 function I18nProvider(props: {
+  // Initial locale resolved before the provider mounts.
+  // Provider 挂载前解析出的初始语言。
+  initialLocale?: string | null
   // Child tree that consumes localized shell labels.
   // 消费本地化外壳标签的子树。
   children: React.ReactNode
 }) {
   // locale stores the active WebUI language.
   // locale 保存当前 WebUI 语言。
-  const [locale, setLocaleState] = React.useState<LocaleCode>(initialLocale)
-  // setLocale persists and applies one selected language.
-  // setLocale 持久化并应用选中的语言。
+  const [locale, setLocaleState] = React.useState<LocaleCode>(() => initialLocale(props.initialLocale))
+  React.useEffect(() => {
+    const nextLocale = normalizeLocaleCode(props.initialLocale)
+    if (nextLocale) {
+      setLocaleState(nextLocale)
+    }
+  }, [props.initialLocale])
+  // setLocale applies one selected language.
+  // setLocale 应用选中的语言。
   const setLocale = React.useCallback((nextLocale: LocaleCode) => {
-    window.localStorage.setItem("vulcan-webui-locale", nextLocale)
     setLocaleState(nextLocale)
   }, [])
   // t translates one stable key using the current language.

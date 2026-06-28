@@ -11,7 +11,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import type { LocaleCode } from "@/i18n";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 
@@ -47,9 +47,6 @@ export function SortableProjectRow(props: {
   // Currently selected conversation id.
   // 当前选中的会话标识。
   selectedConversationId: string | null;
-  // Active locale used for empty labels.
-  // 用于空状态标签的当前语言。
-  locale: LocaleCode;
   // Checks whether a conversation is pinned.
   // 检查某个会话是否置顶。
   isPinnedConversation: (conversationId: string) => boolean;
@@ -75,6 +72,7 @@ export function SortableProjectRow(props: {
   // 使用共享侧栏样式渲染单个会话行。
   renderConversationRow: (conversation: ConversationSummary, compactPinned?: boolean) => React.ReactNode;
 }) {
+  const { t } = useI18n();
   const sortable = useVerticalSortableItem(props.project.id);
   const folderName = projectFolderName(props.project.path);
   const showOriginalFolderName = folderName.length > 0 && folderName !== props.project.name;
@@ -85,12 +83,12 @@ export function SortableProjectRow(props: {
     : props.conversations;
   const isSidebarCollapsed = props.sidebarState === "collapsed";
   const conversationOverflowLabel = props.isConversationListExpanded
-    ? props.locale === "zh-CN" ? "折叠显示" : "Collapse"
-    : props.locale === "zh-CN" ? "展开显示" : "Show more";
+    ? t("projectRow.collapseConversations")
+    : t("projectRow.showMoreConversations");
   const projectFolderButton = (
     <SidebarMenuButton
       aria-expanded={isSidebarCollapsed ? undefined : props.isOpen}
-      aria-label={isSidebarCollapsed ? `${props.project.name} 会话菜单` : undefined}
+      aria-label={isSidebarCollapsed ? t("projectRow.conversationMenuAria").replace("{project}", props.project.name) : undefined}
       className={cn(
         "project-folder-button",
         isSidebarCollapsed && "collapsed-project-button",
@@ -142,7 +140,7 @@ export function SortableProjectRow(props: {
           </ProjectContextMenu>
         )}
         <SidebarMenuAction
-          aria-label={`在 ${props.project.name} 中创建新会话`}
+          aria-label={t("projectRow.createConversationAria").replace("{project}", props.project.name)}
           className="project-create-conversation"
           onClick={(event) => {
             event.stopPropagation();
@@ -150,7 +148,7 @@ export function SortableProjectRow(props: {
           }}
           data-project-row-action
           showOnHover
-          title="新建会话"
+          title={t("projectMenu.newConversation")}
           type="button"
         >
           <SquarePen size={13} />
@@ -178,7 +176,7 @@ export function SortableProjectRow(props: {
             </>
           ) : (
             <SidebarMenuItem>
-              <div className="conversation-empty-row">{props.locale === "zh-CN" ? "暂无对话" : "No conversations"}</div>
+              <div className="conversation-empty-row">{t("projectRow.noConversations")}</div>
             </SidebarMenuItem>
           )}
         </SidebarMenu>

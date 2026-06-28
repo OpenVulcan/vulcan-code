@@ -6,6 +6,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useI18n } from "@/i18n";
 import type { DiffFile, DiffReviewSelection, WorkspaceGitFileActionKind } from "../types";
 // DiffReviewFloatingGitActionsProps describes the bottom floating Git action bar.
 // DiffReviewFloatingGitActionsProps 描述底部浮动 Git 操作条。
@@ -27,6 +28,9 @@ export interface DiffReviewFloatingGitActionsProps {
 // DiffReviewFloatingGitActions renders file-level Git actions over the review panel bottom edge.
 // DiffReviewFloatingGitActions 在审核面板底部边缘渲染文件级 Git 操作。
 export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActionsProps) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const selectedFileDisabled = props.busy || !props.selectedFile;
   const runAction = (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => {
     if (props.busy) {
@@ -44,12 +48,12 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
           type="button"
         >
           <Undo2 size={14} />
-          <span>取消全部暂存</span>
+          <span>{t("diffAction.unstageAll")}</span>
         </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              aria-label="更多暂存操作"
+              aria-label={t("diffAction.moreStaging")}
               className="diff-review-floating-action-button icon-only"
               disabled={props.busy}
               type="button"
@@ -63,7 +67,7 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
               onSelect={() => runAction("unstageFile", props.selectedFile)}
             >
               <Undo2 size={14} />
-              <span>取消当前文件暂存</span>
+              <span>{t("diffAction.unstageFile")}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -79,7 +83,7 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
         type="button"
       >
         <RotateCcw size={14} />
-        <span>还原全部</span>
+        <span>{t("diffAction.restoreAll")}</span>
       </button>
       <button
         className="diff-review-floating-action-button"
@@ -88,12 +92,12 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
         type="button"
       >
         <Plus size={14} />
-        <span>暂存全部</span>
+        <span>{t("diffAction.stageAll")}</span>
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
-            aria-label="更多暂存操作"
+            aria-label={t("diffAction.moreStaging")}
             className="diff-review-floating-action-button icon-only"
             disabled={props.busy}
             type="button"
@@ -107,14 +111,14 @@ export function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActions
             onSelect={() => runAction("stageFile", props.selectedFile)}
           >
             <Plus size={14} />
-            <span>暂存此文件</span>
+            <span>{t("diffAction.stageFile")}</span>
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={selectedFileDisabled}
             onSelect={() => runAction("restoreFile", props.selectedFile)}
           >
             <RotateCcw size={14} />
-            <span>还原此文件</span>
+            <span>{t("diffAction.restoreFile")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

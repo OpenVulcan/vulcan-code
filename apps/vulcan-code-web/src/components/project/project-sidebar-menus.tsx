@@ -25,6 +25,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
@@ -51,6 +52,9 @@ export function CollapsedProjectMenu(props: {
   // 选择一个已有会话。
   onSelectConversation: (conversationId: string) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // anchorRef points at the collapsed folder row used to place the hover flyout.
   // anchorRef 指向折叠后的文件夹行，用于定位悬停浮层。
   const anchorRef = React.useRef<HTMLDivElement | null>(null);
@@ -128,7 +132,7 @@ export function CollapsedProjectMenu(props: {
       </div>
       {flyoutOpen && flyoutPosition ? (
         <div
-          aria-label={`${props.project.name} 会话`}
+          aria-label={t("projectMenu.conversationsAria").replace("{project}", props.project.name)}
           className="collapsed-project-flyout"
           onMouseEnter={openFlyout}
           onMouseLeave={scheduleClose}
@@ -140,7 +144,7 @@ export function CollapsedProjectMenu(props: {
           </div>
           <button className="collapsed-project-flyout-item" onClick={createConversation} role="menuitem" type="button">
             <SquarePen size={15} />
-            <span>新建会话</span>
+            <span>{t("projectMenu.newConversation")}</span>
           </button>
           <div className="collapsed-project-flyout-separator" role="separator" />
           {props.conversations.length > 0 ? (
@@ -160,7 +164,7 @@ export function CollapsedProjectMenu(props: {
             ))
           ) : (
             <div className="collapsed-project-flyout-item disabled" role="presentation">
-              <span>暂无会话</span>
+              <span>{t("projectMenu.noConversations")}</span>
             </div>
           )}
         </div>
@@ -182,43 +186,46 @@ export function ProjectContextMenu(props: {
   // 处理单个项目菜单动作。
   onAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
       <ContextMenuContent className="project-context-menu">
         <ContextMenuItem onSelect={() => props.onAction("toggle-pin", props.project)}>
           <PinOff size={15} />
-          <span>{props.project.pinned ? "取消置顶项目" : "置顶项目"}</span>
+          <span>{props.project.pinned ? t("projectMenu.unpin") : t("projectMenu.pin")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("open-directory", props.project)}>
           <FolderOpen size={15} />
-          <span>在资源管理器中打开</span>
+          <span>{t("projectMenu.openDirectory")}</span>
         </ContextMenuItem>
         <ContextMenuItem disabled>
           <PanelTopOpen size={15} />
-          <span>创建永久工作树</span>
+          <span>{t("projectMenu.createWorktree")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("rename", props.project)}>
           <Pencil size={15} />
-          <span>重命名项目</span>
+          <span>{t("projectMenu.renameProject")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("set-icon", props.project)}>
           <Palette size={15} />
-          <span>设置项目图标</span>
+          <span>{t("projectMenu.setIcon")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("archive-conversations", props.project)}>
           <Archive size={15} />
-          <span>归档对话</span>
+          <span>{t("projectMenu.archiveConversations")}</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => props.onAction("remove-project", props.project)} variant="destructive">
           <Trash2 size={15} />
-          <span>移除项目</span>
+          <span>{t("projectMenu.removeProject")}</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => props.onAction("settings", props.project)}>
           <FolderCog size={15} />
-          <span>项目设置</span>
+          <span>{t("projectMenu.projectSettings")}</span>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -241,56 +248,59 @@ export function ConversationContextMenu(props: {
   // 处理单个会话菜单动作。
   onAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
       <ContextMenuContent className="conversation-context-menu">
         <ContextMenuItem onSelect={() => props.onAction("pin", props.conversation)}>
           <Pin size={15} />
-          <span>{props.isPinned ? "取消置顶对话" : "置顶对话"}</span>
+          <span>{props.isPinned ? t("conversationMenu.unpin") : t("conversationMenu.pin")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("rename", props.conversation)}>
           <Pencil size={15} />
-          <span>重命名对话</span>
+          <span>{t("conversationMenu.rename")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("archive", props.conversation)}>
           <Archive size={15} />
-          <span>归档对话</span>
+          <span>{t("conversationMenu.archive")}</span>
         </ContextMenuItem>
         <ContextMenuItem disabled>
           <MailOpen size={15} />
-          <span>标记为未读</span>
+          <span>{t("conversationMenu.markUnread")}</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => props.onAction("open-directory", props.conversation)}>
           <FolderOpen size={15} />
-          <span>在资源管理器中打开</span>
+          <span>{t("conversationMenu.openDirectory")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("copy-workdir", props.conversation)}>
           <Copy size={15} />
-          <span>复制工作目录</span>
+          <span>{t("conversationMenu.copyWorkspace")}</span>
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("copy-session-id", props.conversation)}>
           <FileText size={15} />
-          <span>复制会话 ID</span>
+          <span>{t("conversationMenu.copySessionId")}</span>
         </ContextMenuItem>
         <ContextMenuItem disabled>
           <Link size={15} />
-          <span>复制深度链接</span>
+          <span>{t("conversationMenu.copyDeepLink")}</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem disabled>
           <GitBranch size={15} />
-          <span>派生到本地</span>
+          <span>{t("conversationMenu.forkLocal")}</span>
         </ContextMenuItem>
         <ContextMenuItem disabled>
           <GitBranch size={15} />
-          <span>派生到新工作树</span>
+          <span>{t("conversationMenu.forkWorktree")}</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem disabled>
           <ExternalLink size={15} />
-          <span>在新窗口中打开</span>
+          <span>{t("conversationMenu.openNewWindow")}</span>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

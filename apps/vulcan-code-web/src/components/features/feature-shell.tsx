@@ -242,7 +242,7 @@ function FeatureShell(props: {
     ),
     detail: headerFeature?.description,
     headerActions: skillHeaderAction ?? settingsHeaderAction,
-    title: headerFeature?.label ?? "工作台",
+    title: headerFeature?.label ?? t("sidebar.console"),
   }
 
   return (
@@ -298,6 +298,7 @@ function FeatureHeader(props: {
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void
 }) {
+  const { t } = useI18n()
   return (
     <header className="console-header">
       <div className="console-header-main">
@@ -308,7 +309,7 @@ function FeatureHeader(props: {
           data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
           onDoubleClick={props.onTitlebarDoubleClick}
         >
-          <h1>{props.descriptor.title ?? "工作台"}</h1>
+          <h1>{props.descriptor.title ?? t("sidebar.console")}</h1>
           {props.descriptor.detail ? <small>{props.descriptor.detail}</small> : null}
         </div>
         <span

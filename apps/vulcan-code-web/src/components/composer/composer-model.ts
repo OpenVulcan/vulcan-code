@@ -72,7 +72,7 @@ export interface ComposerSlashCommandResult {
 
 // SLASH_SKILL_PROMPT matches the native workbench prompt inserted by /skill.
 // SLASH_SKILL_PROMPT 对齐原生工作台中 /skill 插入的提示词。
-export const SLASH_SKILL_PROMPT = "请根据当前任务判断是否需要调用 `skill` 工具加载已启用的提示词技能详情。";
+export const SLASH_SKILL_PROMPT = "Decide whether the current task needs the `skill` tool to load details for enabled prompt skills.";
 
 // ComposerSelectOption describes one local-only composer dropdown choice.
 // ComposerSelectOption 描述一个仅用于输入区本地预览的下拉选项。

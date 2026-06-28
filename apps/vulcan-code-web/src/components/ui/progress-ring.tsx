@@ -1,5 +1,6 @@
 import React from "react";
 
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 // ProgressRingProps describes the compact static progress ring contract.
@@ -25,6 +26,7 @@ export interface ProgressRingProps {
 // ProgressRing renders a non-animated circular progress crescent.
 // ProgressRing 渲染一个非动画的圆形进度月牙。
 export function ProgressRing(props: ProgressRingProps) {
+  const { t } = useI18n();
   const size = props.size ?? 14;
   const strokeWidth = props.strokeWidth ?? 2;
   const center = size / 2;
@@ -32,7 +34,7 @@ export function ProgressRing(props: ProgressRingProps) {
   const circumference = 2 * Math.PI * radius;
   const progressValue = typeof props.value === "number" ? clampProgressValue(props.value) : 0.18;
   const dashOffset = circumference * (1 - progressValue);
-  const ariaLabel = props["aria-label"] ?? "进度";
+  const ariaLabel = props["aria-label"] ?? t("global.progress");
   return (
     <svg
       aria-label={ariaLabel}

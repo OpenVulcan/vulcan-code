@@ -582,13 +582,13 @@ export function ConversationWorkspace(props: {
               {props.error ? (
                 <article className="message-card system error-message">
                   <span>system</span>
-                  <p>会话正文加载失败：{props.error}</p>
+                  <p>{t("conversation.bodyLoadFailed").replace("{error}", props.error)}</p>
                 </article>
               ) : null}
               {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
                 <article className="message-card system">
                   <span>system</span>
-                  <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
+                  <p>{props.conversation ? t("conversation.emptyLoaded") : t("conversation.emptyWaiting")}</p>
                 </article>
               ) : null}
               {props.hasMoreHistory ? (

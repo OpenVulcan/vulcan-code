@@ -4,6 +4,7 @@ import type {
 } from "@/components/conversation/conversation-model";
 import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
 import { metadataValue } from "@/components/conversation/conversation-metadata";
+import type { TranslationKey } from "@/i18n";
 
 // ThinkingDisplayMode stores the persisted display preference for reasoning output.
 // ThinkingDisplayMode 保存持久化的思考过程展示偏好。
@@ -23,18 +24,18 @@ export interface ThinkingDisplayModeOption {
   // Stable value stored in the shared Vulcan configuration and passed through component props.
   // 存入共享 Vulcan 配置并通过组件属性传递的稳定值。
   value: ThinkingDisplayMode;
-  // Chinese label shown as the primary menu text.
-  // 菜单中作为主文案展示的中文名称。
-  labelZh: string;
+  // Translation key used for the primary menu text.
+  // 用于菜单主文案的翻译键。
+  labelKey: TranslationKey;
 }
 
 // THINKING_DISPLAY_MODE_OPTIONS lists every user-facing thinking display mode.
 // THINKING_DISPLAY_MODE_OPTIONS 列出所有面向用户的思考展示模式。
 export const THINKING_DISPLAY_MODE_OPTIONS: ThinkingDisplayModeOption[] = [
-  { value: "popup_only", labelZh: "弹窗显示" },
-  { value: "inline_output", labelZh: "直接输出" },
-  { value: "first_inline_with_popup", labelZh: "首段输出+弹窗" },
-  { value: "first_inline_only", labelZh: "仅首段输出" },
+  { value: "popup_only", labelKey: "thinkingDisplay.popupOnly" },
+  { value: "inline_output", labelKey: "thinkingDisplay.inlineOutput" },
+  { value: "first_inline_with_popup", labelKey: "thinkingDisplay.firstInlineWithPopup" },
+  { value: "first_inline_only", labelKey: "thinkingDisplay.firstInlineOnly" },
 ];
 
 // parseThinkingDisplayMode returns a supported display mode or null for unknown values.

@@ -114,7 +114,7 @@ export function deleteRows(file: Record<string, unknown>): FileChangeDiffRow[] {
     const tailStart = Math.max(head.length + 1, total - tail.length + 1);
     return [
       ...head.map((line, index) => ({ content: line, kind: "delete" as const, lineNumber: index + 1 })),
-      ...(omitted > 0 ? [{ content: `已省略 ${omitted} 行`, kind: "omit" as const, lineNumber: null }] : []),
+      ...(omitted > 0 ? [{ content: `${omitted} lines omitted`, kind: "omit" as const, lineNumber: null }] : []),
       ...tail.map((line, index) => ({ content: line, kind: "delete" as const, lineNumber: tailStart + index })),
     ];
   }

@@ -124,7 +124,7 @@ export function FeatureNav(props: {
     <div className="feature-nav-shell">
       {navOverflow.left ? (
         <Button
-          aria-label="Scroll main features left"
+          aria-label={t("appChrome.scrollFeaturesLeft")}
           className="feature-nav-arrow"
           onClick={() => scrollNav(-1)}
           size="icon-sm"
@@ -152,7 +152,7 @@ export function FeatureNav(props: {
       </nav>
       {navOverflow.right ? (
         <Button
-          aria-label="Scroll main features right"
+          aria-label={t("appChrome.scrollFeaturesRight")}
           className="feature-nav-arrow"
           onClick={() => scrollNav(1)}
           size="icon-sm"
@@ -209,7 +209,7 @@ export function GlobalActions(props: {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          aria-label="打开应用菜单"
+          aria-label={t("appChrome.menu")}
           className="window-control-button app-chrome-menu-button"
           size="icon"
           type="button"
@@ -220,38 +220,38 @@ export function GlobalActions(props: {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="app-chrome-menu" side="bottom" sideOffset={0}>
         <DropdownMenuItem className="app-chrome-menu-status" disabled>
-          <span>状态</span>
+          <span>{t("appChrome.status")}</span>
           <StatusPill status={statusKind} label={statusLabel} />
         </DropdownMenuItem>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="app-chrome-menu-row">
             {props.theme === "dark" ? <Moon size={15} /> : <Sun size={15} />}
-            <span>主题</span>
-            <small>{props.theme === "dark" ? "暗色" : "亮色"}</small>
+            <span>{t("appChrome.theme")}</span>
+            <small>{props.theme === "dark" ? t("appChrome.theme.dark") : t("appChrome.theme.light")}</small>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="app-chrome-menu-sub">
             <DropdownMenuItem onSelect={() => selectTheme("light")}>
               <Sun size={15} />
-              <span>亮色</span>
+              <span>{t("appChrome.theme.light")}</span>
               {props.theme === "light" ? <Check className="app-chrome-menu-check" size={14} /> : null}
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => selectTheme("dark")}>
               <Moon size={15} />
-              <span>暗色</span>
+              <span>{t("appChrome.theme.dark")}</span>
               {props.theme === "dark" ? <Check className="app-chrome-menu-check" size={14} /> : null}
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="app-chrome-menu-row">
-            <span className="app-chrome-menu-language-mark">{props.locale === "zh-CN" ? "中" : "EN"}</span>
-            <span>语言</span>
-            <small>{props.locale === "zh-CN" ? "中文" : "English"}</small>
+            <span className="app-chrome-menu-language-mark">{props.locale === "zh-CN" ? "ZH" : "EN"}</span>
+            <span>{t("global.language")}</span>
+            <small>{props.locale === "zh-CN" ? t("appChrome.language.zh") : "English"}</small>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="app-chrome-menu-sub">
             <DropdownMenuItem onSelect={() => props.onChangeLocale("zh-CN")}>
-              <span className="app-chrome-menu-language-mark">中</span>
-              <span>中文</span>
+              <span className="app-chrome-menu-language-mark">ZH</span>
+              <span>{t("appChrome.language.zh")}</span>
               {props.locale === "zh-CN" ? <Check className="app-chrome-menu-check" size={14} /> : null}
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => props.onChangeLocale("en-US")}>
@@ -306,6 +306,9 @@ export function WindowControls(props: {
   // 在原生窗口操作后刷新最大化状态。
   onMaximizeStateRefresh: () => Promise<void>;
 }) {
+  // t translates window control labels and error messages.
+  // t 翻译窗口控制标签与错误消息。
+  const { t } = useI18n();
   // runWindowAction invokes one native window command and reports failures as toasts.
   // runWindowAction 调用单个原生窗口命令，并用 toast 报告失败。
   const runWindowAction = React.useCallback(async (action: "minimize" | "close") => {
@@ -317,9 +320,9 @@ export function WindowControls(props: {
       }
       await props.onMaximizeStateRefresh();
     } catch (error) {
-      toast.error(`窗口操作失败：${error instanceof Error ? error.message : String(error)}`);
+      toast.error(`${t("appChrome.windowActionFailed")}${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [props]);
+  }, [props, t]);
 
   // handleMaximizeClick shares the same maximize/restore behavior as titlebar double-click.
   // handleMaximizeClick 与标题栏双击共享同一套最大化/还原行为。
@@ -327,15 +330,15 @@ export function WindowControls(props: {
     try {
       await props.onMaximizeToggle();
     } catch (error) {
-      toast.error(`窗口操作失败：${error instanceof Error ? error.message : String(error)}`);
+      toast.error(`${t("appChrome.windowActionFailed")}${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [props]);
+  }, [props, t]);
 
   return (
     <div className="window-controls" data-no-drag>
       {props.leadingControl}
       <Button
-        aria-label="最小化窗口"
+        aria-label={t("appChrome.window.minimize")}
         className="window-control-button"
         onClick={() => void runWindowAction("minimize")}
         size="icon"
@@ -345,7 +348,7 @@ export function WindowControls(props: {
         <MinusIcon size={16} />
       </Button>
       <Button
-        aria-label={props.isMaximized ? "还原窗口" : "最大化窗口"}
+        aria-label={props.isMaximized ? t("appChrome.window.restore") : t("appChrome.window.maximize")}
         className="window-control-button"
         onClick={() => void handleMaximizeClick()}
         size="icon"
@@ -355,7 +358,7 @@ export function WindowControls(props: {
         {props.isMaximized ? <Minimize2 size={15} /> : <SquareIcon size={13} />}
       </Button>
       <Button
-        aria-label="关闭窗口"
+        aria-label={t("appChrome.window.close")}
         className="window-control-button close"
         onClick={() => void runWindowAction("close")}
         size="icon"
@@ -375,18 +378,21 @@ export function RepositoryLink(props: {
   // 通过当前宿主壳打开仓库地址。
   onOpenExternalUrl: (url: string) => Promise<void>;
 }) {
+  // t translates repository link accessibility labels.
+  // t 翻译仓库链接无障碍标签。
+  const { t } = useI18n();
   // handleClick opens the repository externally in Tauri and in a new tab in browsers.
   // handleClick 在 Tauri 中外部打开仓库，在浏览器中打开新标签。
   const handleClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     void props.onOpenExternalUrl(GITHUB_REPOSITORY_URL).catch((error) => {
-      toast.error(`打开 GitHub 失败：${error instanceof Error ? error.message : String(error)}`);
+      toast.error(`${t("appChrome.githubOpenFailed")}${error instanceof Error ? error.message : String(error)}`);
     });
-  }, [props]);
+  }, [props, t]);
 
   return (
     <a
-      aria-label="打开 OpenVulcan/vulcan-code GitHub 仓库"
+      aria-label={t("appChrome.githubAria")}
       className="repository-link"
       href={GITHUB_REPOSITORY_URL}
       onClick={handleClick}

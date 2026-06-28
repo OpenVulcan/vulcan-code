@@ -23,6 +23,7 @@ import {
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { parseUnifiedDiffAsync } from "@/diff/diff-parse-worker-client";
 import { hasRenderableDiff } from "@/diff/parseDiff";
+import { useI18n, type TranslationKey } from "@/i18n";
 
 // LazyDiffReviewPanel loads the heavy diff review renderer only for diff detail modals.
 // LazyDiffReviewPanel 仅在 diff 详情弹窗中加载较重的 diff 审核渲染器。
@@ -104,6 +105,9 @@ export function ConversationDetailModal(props: {
   // 通过宿主提供的剪贴板路径复制文本。
   onCopyText: (value: string) => void | Promise<void>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // loadedToolDetail stores the hidden structured tool result loaded after the modal opens.
   // loadedToolDetail 保存弹窗打开后按需加载到的隐藏结构化工具结果。
   const [loadedToolDetail, setLoadedToolDetail] = React.useState<ToolDetailPayload | null>(null);
@@ -189,7 +193,7 @@ export function ConversationDetailModal(props: {
     };
   }, [diffBody, props.detail.kind]);
   const DetailIcon = conversationDetailIcon(props.detail.kind);
-  const detailType = conversationDetailTitle(props.detail.kind);
+  const detailType = conversationDetailTitle(props.detail.kind, t);
   const detailSubtitle = props.detail.metadata
     ?.map(([label, value]) => `${label}: ${value}`)
     .join(" · ");
@@ -213,7 +217,7 @@ export function ConversationDetailModal(props: {
     },
     completeness: "complete",
     isTruncated: false,
-    notice: diffDetailEmptyBody(diffParseLoading, diffParseError),
+    notice: diffDetailEmptyBody(diffParseLoading, diffParseError, t),
     rawDiff: fullBody,
   } satisfies DiffPanelSnapshot;
   return (
@@ -231,10 +235,10 @@ export function ConversationDetailModal(props: {
             </div>
           </div>
           <div className="detail-modal-actions">
-            <Button aria-label="复制详情" className="icon-button" onClick={() => void props.onCopyText(fullBody)} size="icon" type="button" variant="outline">
+            <Button aria-label={t("conversation.detail.copy")} className="icon-button" onClick={() => void props.onCopyText(fullBody)} size="icon" type="button" variant="outline">
               <Copy size={17} />
             </Button>
-            <Button aria-label="关闭详情" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
+            <Button aria-label={t("conversation.detail.close")} className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
               <X size={17} />
             </Button>
           </div>
@@ -249,7 +253,7 @@ export function ConversationDetailModal(props: {
           {props.detail.kind === "diff" ? (
             <React.Suspense fallback={<DiffDetailPanelLoading />}>
               <LazyDiffReviewPanel
-                emptyBody={diffDetailEmptyBody(diffParseLoading, diffParseError)}
+                emptyBody={diffDetailEmptyBody(diffParseLoading, diffParseError, t)}
                 emptyTitle="Git Diff"
                 loading={diffParseLoading}
                 snapshot={diffDetailSnapshot}
@@ -277,23 +281,49 @@ async function parseDiffDetailBodyAsync(diffBody: string): Promise<DiffPanelSnap
 // DiffDetailPanelLoading renders while the diff review panel chunk is loading.
 // DiffDetailPanelLoading 渲染 diff 审核面板 chunk 加载期间的轻量状态。
 function DiffDetailPanelLoading() {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <div className="detail-empty-state">
-      <span>正在加载 Git Diff 审核面板。</span>
+      <span>{t("conversation.diff.loadingPanel")}</span>
     </div>
   );
 }
 
 // diffDetailEmptyBody formats the detail modal empty-state message for async diff parsing.
 // diffDetailEmptyBody 格式化详情弹窗异步 diff 解析的空态文案。
-function diffDetailEmptyBody(loading: boolean, error: string | null): string {
+function diffDetailEmptyBody(
+  // Whether worker parsing is still running.
+  // Worker 解析是否仍在进行。
+  loading: boolean,
+  // Optional worker parse failure message.
+  // 可选的 Worker 解析失败信息。
+  error: string | null,
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string,
+): string {
   if (loading) {
-    return "正在通过 Worker 解析 diff 内容。";
+    return t("conversation.diff.parsingWorker");
   }
   if (error) {
-    return `Diff 解析失败：${error}`;
+    return formatConversationDetailTranslation(t, "conversation.diff.parseFailed", { error });
   }
-  return "当前 diff 内容无法结构化解析，已保留原始文本供复制。";
+  return t("conversation.diff.unstructuredFallback");
+}
+
+// formatConversationDetailTranslation replaces named placeholders in localized detail templates.
+// formatConversationDetailTranslation 替换详情弹窗本地化模板中的具名占位符。
+function formatConversationDetailTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }
 
 // conversationDetailIcon returns the icon component used by one detail modal kind.
@@ -308,14 +338,14 @@ function conversationDetailIcon(kind: string) {
 
 // conversationDetailTitle returns the user-visible title for one detail modal kind.
 // conversationDetailTitle 返回单个详情弹窗类型的用户可见标题。
-function conversationDetailTitle(kind: string): string {
-  if (kind === "tool-call") return "工具调用";
-  if (kind === "tool-result") return "工具结果";
-  if (kind === "command") return "命令";
+function conversationDetailTitle(kind: string, t: (key: TranslationKey) => string): string {
+  if (kind === "tool-call") return t("conversation.block.toolCall");
+  if (kind === "tool-result") return t("conversation.block.toolResult");
+  if (kind === "command") return t("conversation.block.command");
   if (kind === "diff") return "Git Diff";
-  if (kind === "thinking") return "思考";
-  if (kind === "notice") return "提示";
-  return "详情";
+  if (kind === "thinking") return t("conversation.block.thinking");
+  if (kind === "notice") return t("conversation.block.notice");
+  return t("conversation.block.detail");
 }
 
 // renderToolDetailPayloadMarkdown converts structured tool detail metadata into Markdown for the modal.

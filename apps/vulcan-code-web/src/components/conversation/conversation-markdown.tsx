@@ -15,6 +15,7 @@ import {
   normalizeShikiLanguage,
   tokenSpansToHtml,
 } from "@/diff/diff-shiki-shared";
+import { useI18n } from "@/i18n";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 
 // MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT caps Shiki work per fenced Markdown code block.
@@ -222,6 +223,9 @@ function MarkdownCodeBlock(props: {
   // ReactMarkdown 中由 pre 包裹的 code 元素子节点。
   children?: React.ReactNode;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const codeElement = markdownCodeElement(props.children);
   const className = codeElement?.props.className;
   const rawCode = markdownCodeText(codeElement?.props.children ?? props.children);
@@ -265,10 +269,10 @@ function MarkdownCodeBlock(props: {
         </span>
         <span className="markdown-code-actions">
           <button
-            aria-label={wrapped ? "关闭自动换行" : "开启自动换行"}
+            aria-label={wrapped ? t("markdown.wrap.disable") : t("markdown.wrap.enable")}
             className="markdown-code-action"
             onClick={() => setWrapped((current) => !current)}
-            title={wrapped ? "关闭自动换行" : "开启自动换行"}
+            title={wrapped ? t("markdown.wrap.disable") : t("markdown.wrap.enable")}
             type="button"
           >
             {wrapped ? <Text size={14} /> : <TextWrap size={14} />}
@@ -278,7 +282,7 @@ function MarkdownCodeBlock(props: {
             onClick={() => {
               void copyMarkdownCode(code).then(() => setCopied(true));
             }}
-            title={copied ? "已复制" : "复制代码"}
+            title={copied ? t("markdown.copied") : t("markdown.copyCode")}
             type="button"
           >
             {copied ? <Check size={14} /> : <Copy size={14} />}

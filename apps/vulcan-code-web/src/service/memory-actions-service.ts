@@ -25,7 +25,7 @@ export async function runVmmMemoryAction(request: VmmMemoryActionRequest): Promi
   if (!hasServiceRuntime()) {
     return {
       action: request.action,
-      summary: `预览模式已执行 ${request.action}`,
+      summary: `Preview mode executed ${request.action}`,
       kind: request.action,
       request,
       response: previewVmmActionResponse(request.action),
@@ -64,7 +64,7 @@ export async function executeProjectAttachmentCleanup(request: ProjectAttachment
       failedDeleteCount: 0,
       purgedByteLenLabel: "0 B",
       impactedSessionCount: 0,
-      summary: "预览模式不会删除托管附件。",
+      summary: "Preview mode does not delete managed attachments.",
     };
   }
   return serviceClient.request<ProjectAttachmentCleanupReportSummary>("service_execute_project_attachment_cleanup", { request });
@@ -112,14 +112,14 @@ function previewVmmActionResponse(action: string): unknown {
   if (action === "load_profile_nodes") {
     return {
       nodes: [
-        { profileNodeId: 1, content: "用户偏好工程化闭环。", priority: "high", level: "user", bindId: 20000 },
-        { profileNodeId: 2, content: "当前项目正在迁移 WebUI。", priority: "normal", level: "project", bindId: 1001 },
+        { profileNodeId: 1, content: "User prefers engineering closure.", priority: "high", level: "user", bindId: 20000 },
+        { profileNodeId: 2, content: "The current project is migrating the WebUI.", priority: "normal", level: "project", bindId: 1001 },
       ],
     };
   }
   if (action === "search_memory_events") {
     return {
-      results: [{ query: "webui", hits: [{ memoryId: 1, sourceTurnId: 42, abstractText: "技能页迁移到 WebUI。" }] }],
+      results: [{ query: "webui", hits: [{ memoryId: 1, sourceTurnId: 42, abstractText: "The skills page migrated to WebUI." }] }],
       traceId: "preview-trace",
     };
   }
@@ -138,11 +138,11 @@ function previewVmmActionResponse(action: string): unknown {
 // projectAttachmentPreviewFallback 为纯浏览器模式构建无副作用清理预览。
 function projectAttachmentPreviewFallback(request: ProjectAttachmentCleanupRequest): ProjectAttachmentCleanupPreviewSummary {
   const selectedKinds = projectAttachmentSelectedKindLabels(request.selection);
-  let summary = `预览模式将检查 ${request.cutoffDate} 之前的 ${selectedKinds.join("、")} 托管附件。`;
+  let summary = `Preview mode will inspect managed ${selectedKinds.join(", ")} attachments before ${request.cutoffDate}.`;
   if (!request.cutoffDate) {
-    summary = "请选择有效的截止日期。";
+    summary = "Select a valid cutoff date.";
   } else if (selectedKinds.length === 0) {
-    summary = "至少选择一种附件类型后才能预览。";
+    summary = "Select at least one attachment kind before previewing.";
   }
   return {
     cutoffDate: request.cutoffDate,
@@ -159,11 +159,11 @@ function projectAttachmentPreviewFallback(request: ProjectAttachmentCleanupReque
 function projectAttachmentKindLabel(kind: keyof ProjectAttachmentCleanupRequest["selection"]): string {
   switch (kind) {
     case "image":
-      return "图片";
+      return "image";
     case "audio":
-      return "音频";
+      return "audio";
     case "video":
-      return "视频";
+      return "video";
     case "pdf":
       return "PDF";
   }

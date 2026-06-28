@@ -50,6 +50,9 @@ export interface WorkbenchSnapshot {
   // Application version.
   // 应用版本。
   appVersion: string;
+  // WebUI locale resolved from the shared service configuration.
+  // 从共享服务配置解析出的 WebUI 语言。
+  uiLocale?: string | null;
   // Runtime module cards.
   // 运行时模块卡片。
   modules: RuntimeModuleSnapshot[];

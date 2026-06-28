@@ -148,7 +148,7 @@ export async function runWorkspaceGitFileAction(
       repositoryRoot: workspacePath,
       action: request.action,
       affectedPathCount: request.files?.length ?? 0,
-      summary: "浏览器预览模式不会修改 Git 暂存区。",
+      summary: "Browser preview mode does not modify the Git index.",
     };
   }
   return serviceClient.request<WorkspaceGitFileActionResult>("workspace.git.fileAction", {
@@ -209,7 +209,7 @@ export async function loadConversationMessages(sessionId: string): Promise<Conve
       sessionId,
       status: "ready" as const,
       phase: "done",
-      message: "会话载入完成。",
+      message: "Conversation loaded.",
       percent: 100,
     };
     const messages = loadBrowserFallbackConversationMessages(sessionId);
@@ -313,7 +313,7 @@ function loadBrowserFallbackWorkspaceFileDirectory(
     filters,
     truncated: false,
     entryCount: entries.length,
-    notice: "浏览器预览模式使用静态文件树示例。",
+    notice: "Browser preview mode is using a static file-tree sample.",
   };
 }
 
@@ -333,9 +333,9 @@ function loadBrowserFallbackWorkspaceFilePreview(
     kind: "code",
     mimeType: "text/plain",
     sizeBytes: 64,
-    content: `// Browser preview file\n// 浏览器预览文件\n${relativePath || "README.md"}\n`,
+    content: `// Browser preview file\n${relativePath || "README.md"}\n`,
     encoding: "utf-8",
-    lineCount: 3,
+    lineCount: 2,
     truncated: false,
   };
 }

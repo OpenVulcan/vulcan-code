@@ -8,6 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useI18n } from "@/i18n";
 
 // TerminalStopConfirmDialog renders the shared confirmation UI for force-stopping terminal sessions.
 // TerminalStopConfirmDialog 渲染强制终止终端会话的共享确认界面。
@@ -31,13 +32,16 @@ export function TerminalStopConfirmDialog(props: {
   // 确认执行强制终止动作。
   onConfirm: () => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="terminal-stop-confirm-dialog" showCloseButton={!props.stopping}>
         <DialogHeader>
-          <DialogTitle>确认强制终止终端会话？</DialogTitle>
+          <DialogTitle>{t("terminalStop.title")}</DialogTitle>
           <DialogDescription>
-            该操作会停止正在运行的终端进程，请确认当前会话不再需要继续输出。
+            {t("terminalStop.description")}
           </DialogDescription>
         </DialogHeader>
         <div className="terminal-stop-confirm-body">
@@ -51,7 +55,7 @@ export function TerminalStopConfirmDialog(props: {
             type="button"
             variant="outline"
           >
-            取消
+            {t("conversation.action.cancel")}
           </Button>
           <Button
             disabled={props.stopping}
@@ -59,7 +63,7 @@ export function TerminalStopConfirmDialog(props: {
             type="button"
             variant="destructive"
           >
-            {props.stopping ? "正在终止" : "确认终止"}
+            {props.stopping ? t("terminalStop.stopping") : t("terminalStop.confirm")}
           </Button>
         </DialogFooter>
       </DialogContent>

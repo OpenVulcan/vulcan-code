@@ -27,6 +27,7 @@ import type {
   WorkspaceDiffSnapshotResponse,
 } from "@/diff/types";
 import { cn } from "@/lib/utils";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
   ConversationMessage,
@@ -380,6 +381,10 @@ function WorkspaceContextTabButton(props: {
   // 关闭单个页签。
   onCloseTab: (tab: WorkspaceContextTabItem) => void;
 }) {
+  const { t } = useI18n();
+  // displayTitle resolves singleton tab titles from the current locale at render time.
+  // displayTitle 在渲染时按当前语言解析单例页签标题。
+  const displayTitle = workspaceContextTabDisplayTitle(props.tab, t);
   return (
     <div
       className={cn("context-dynamic-tab", props.active && "active")}
@@ -388,7 +393,7 @@ function WorkspaceContextTabButton(props: {
     >
       <span className="context-dynamic-tab-icon">{workspaceContextTabIcon(props.tab.kind, 14)}</span>
       <button
-        aria-label={`关闭${props.tab.title}`}
+        aria-label={t("workspaceContext.closeTab").replace("{title}", displayTitle)}
         className="context-dynamic-tab-close"
         onClick={(event) => {
           event.stopPropagation();
@@ -403,10 +408,10 @@ function WorkspaceContextTabButton(props: {
         className="context-dynamic-tab-label"
         onClick={() => props.onActivateTab(props.tab.id)}
         role="tab"
-        title={props.tab.title}
+        title={displayTitle}
         type="button"
       >
-        <span>{props.tab.title}</span>
+        <span>{displayTitle}</span>
       </button>
     </div>
   );
@@ -425,6 +430,7 @@ function WorkspaceContextTabSwitcher(props: {
   // 激活单个页签。
   onActivateTab: (tabId: string) => void;
 }) {
+  const { t } = useI18n();
   // query stores the local tab filter text.
   // query 保存本地页签筛选文本。
   const [query, setQuery] = React.useState("");
@@ -435,12 +441,12 @@ function WorkspaceContextTabSwitcher(props: {
     if (!normalized) {
       return props.tabs;
     }
-    return props.tabs.filter((tab) => tab.title.toLowerCase().includes(normalized));
-  }, [props.tabs, query]);
+    return props.tabs.filter((tab) => workspaceContextTabDisplayTitle(tab, t).toLowerCase().includes(normalized));
+  }, [props.tabs, query, t]);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button aria-label="切换右侧页签" className="context-dynamic-icon-button" type="button">
+        <button aria-label={t("workspaceContext.switchTabs")} className="context-dynamic-icon-button" type="button">
           <ChevronsDown size={15} />
         </button>
       </DropdownMenuTrigger>
@@ -448,15 +454,15 @@ function WorkspaceContextTabSwitcher(props: {
         <label className="context-dynamic-tabs-menu-search">
           <Search size={13} />
           <input
-            aria-label="搜索标签页"
+            aria-label={t("workspaceContext.searchTabs")}
             onChange={(event) => setQuery(event.currentTarget.value)}
             onKeyDown={(event) => event.stopPropagation()}
-            placeholder="搜索标签页..."
+            placeholder={t("workspaceContext.searchTabsPlaceholder")}
             value={query}
           />
           {query ? (
             <button
-              aria-label="清空标签页搜索"
+              aria-label={t("workspaceContext.clearTabSearch")}
               className="context-dynamic-tabs-menu-search-clear"
               onClick={() => setQuery("")}
               type="button"
@@ -465,17 +471,20 @@ function WorkspaceContextTabSwitcher(props: {
             </button>
           ) : null}
         </label>
-        <DropdownMenuLabel>打开的标签页</DropdownMenuLabel>
-        {visibleTabs.map((tab) => (
-          <DropdownMenuItem
-            className={cn("context-dynamic-tabs-menu-item", tab.id === props.activeTabId && "active")}
-            key={tab.id}
-            onClick={() => props.onActivateTab(tab.id)}
-          >
-            {workspaceContextTabIcon(tab.kind, 14)}
-            <span>{tab.title}</span>
-          </DropdownMenuItem>
-        ))}
+        <DropdownMenuLabel>{t("workspaceContext.openTabs")}</DropdownMenuLabel>
+        {visibleTabs.map((tab) => {
+          const displayTitle = workspaceContextTabDisplayTitle(tab, t);
+          return (
+            <DropdownMenuItem
+              className={cn("context-dynamic-tabs-menu-item", tab.id === props.activeTabId && "active")}
+              key={tab.id}
+              onClick={() => props.onActivateTab(tab.id)}
+            >
+              {workspaceContextTabIcon(tab.kind, 14)}
+              <span>{displayTitle}</span>
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -488,15 +497,16 @@ function WorkspaceContextAddMenu(props: {
   // 打开单个页签类型。
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
+  const { t } = useI18n();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button aria-label="打开右侧页面" className="context-dynamic-icon-button add" type="button">
+        <button aria-label={t("workspaceContext.openRightPage")} className="context-dynamic-icon-button add" type="button">
           <Plus size={15} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="context-dynamic-add-menu">
-        <DropdownMenuLabel>打开页面</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("workspaceContext.openPage")}</DropdownMenuLabel>
         <WorkspaceContextOpenMenuItem kind="files" onOpenTab={props.onOpenTab} />
         <DropdownMenuSeparator />
         <WorkspaceContextOpenMenuItem kind="review" onOpenTab={props.onOpenTab} />
@@ -516,10 +526,11 @@ function WorkspaceContextOpenMenuItem(props: {
   // 打开单个页签类型。
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
+  const { t } = useI18n();
   return (
     <DropdownMenuItem onClick={() => props.onOpenTab(props.kind)}>
       {workspaceContextTabIcon(props.kind, 14)}
-      <span>{workspaceContextTabDefaultTitle(props.kind)}</span>
+      <span>{workspaceContextTabDefaultTitle(props.kind, t)}</span>
     </DropdownMenuItem>
   );
 }
@@ -531,26 +542,27 @@ function WorkspaceContextLauncher(props: {
   // 打开单个页签类型。
   onOpenTab: (kind: WorkspaceContextTabKind) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="context-launcher">
       <WorkspaceContextLauncherCard
-        description="浏览项目文件"
+        description={t("workspaceContext.launcher.filesDescription")}
         kind="files"
         shortcut="Ctrl+P"
-        title="文件"
+        title={t("contextPanel.files")}
         onOpenTab={props.onOpenTab}
       />
       <WorkspaceContextLauncherCard
-        description="查看代码更改"
+        description={t("workspaceContext.launcher.reviewDescription")}
         kind="review"
         shortcut="Ctrl+Shift+G"
-        title="审查"
+        title={t("contextPanel.review")}
         onOpenTab={props.onOpenTab}
       />
       <WorkspaceContextLauncherCard
-        description="查看会话记忆"
+        description={t("workspaceContext.launcher.memoryDescription")}
         kind="memory"
-        title="记忆"
+        title={t("contextPanel.memory")}
         onOpenTab={props.onOpenTab}
       />
     </div>
@@ -679,14 +691,23 @@ function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): R
 
 // workspaceContextTabDefaultTitle returns the initial title for one tab kind.
 // workspaceContextTabDefaultTitle 返回单个页签类型的初始标题。
-export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind): string {
+export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind, t?: (key: TranslationKey) => string): string {
   if (kind === "files") {
-    return "打开文件";
+    return t ? t("workspaceFilePreview.openFile") : "Open file";
   }
   if (kind === "memory") {
-    return "记忆";
+    return t ? t("contextPanel.memory") : "Memory";
   }
-  return "审查";
+  return t ? t("contextPanel.review") : "Review";
+}
+
+// workspaceContextTabDisplayTitle returns the locale-aware visible title for one opened tab.
+// workspaceContextTabDisplayTitle 返回单个已打开页签按当前语言显示的标题。
+function workspaceContextTabDisplayTitle(tab: WorkspaceContextTabItem, t: (key: TranslationKey) => string): string {
+  if (tab.kind === "files") {
+    return tab.title || workspaceContextTabDefaultTitle("files", t);
+  }
+  return workspaceContextTabDefaultTitle(tab.kind, t);
 }
 
 // selectedContextProjectId resolves the current project id for project-scoped VMM actions.
@@ -704,9 +725,10 @@ function selectedContextProjectId(props: WorkspaceContextPanelProps): string | n
 // WorkspaceReviewPanelLoading renders while the review panel chunk is loading.
 // WorkspaceReviewPanelLoading 渲染审核面板 chunk 加载期间的轻量状态。
 function WorkspaceReviewPanelLoading() {
+  const { t } = useI18n();
   return (
     <div className="context-panel-loading-state">
-      <span>正在加载审核面板。</span>
+      <span>{t("workspaceContext.loadingReviewPanel")}</span>
     </div>
   );
 }
@@ -714,9 +736,10 @@ function WorkspaceReviewPanelLoading() {
 // WorkspaceFilesPanelLoading renders while the file panel chunk is loading.
 // WorkspaceFilesPanelLoading 渲染文件面板 chunk 加载期间的轻量状态。
 function WorkspaceFilesPanelLoading() {
+  const { t } = useI18n();
   return (
     <div className="context-panel-loading-state">
-      <span>正在加载文件面板。</span>
+      <span>{t("workspaceContext.loadingFilesPanel")}</span>
     </div>
   );
 }

@@ -33,6 +33,7 @@ import {
   THINKING_DISPLAY_MODE_OPTIONS,
   type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary } from "@/types";
 
@@ -63,6 +64,9 @@ export function ComposerAttachmentMenu(props: {
   // 从加号菜单打开会话目标编辑器。
   onOpenGoal: () => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf"].includes(capability.kind));
   return (
     <DropdownMenu>
@@ -70,7 +74,7 @@ export function ComposerAttachmentMenu(props: {
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
             <Button
-              aria-label="添加附件"
+              aria-label={t("composer.attachment.add")}
               className="composer-add-button"
               size="icon"
               type="button"
@@ -81,29 +85,32 @@ export function ComposerAttachmentMenu(props: {
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent className="composer-control-tooltip" side="top">
-          <strong>扩展</strong>
+          <strong>{t("composer.attachment.extension")}</strong>
         </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="start" className="composer-attachment-menu" side="top" sideOffset={8}>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <Paperclip size={15} />
-            <span>附件</span>
+            <span>{t("composer.attachment.menu")}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             {menuCapabilities.length ? (
-              menuCapabilities.map((capability) => (
-                <DropdownMenuItem
-                  key={capability.kind}
-                  onSelect={() => props.onPick(capability.kind)}
-                >
-                  <ComposerAttachmentKindIcon kind={capability.kind} />
-                  <span>{capability.label}</span>
-                </DropdownMenuItem>
-              ))
+              menuCapabilities.map((capability) => {
+                const labelKey = composerAttachmentKindLabelKey(capability.kind);
+                return (
+                  <DropdownMenuItem
+                    key={capability.kind}
+                    onSelect={() => props.onPick(capability.kind)}
+                  >
+                    <ComposerAttachmentKindIcon kind={capability.kind} />
+                    <span>{labelKey ? t(labelKey) : capability.label}</span>
+                  </DropdownMenuItem>
+                );
+              })
             ) : (
               <DropdownMenuItem disabled>
-                <span>当前无可用附件类型</span>
+                <span>{t("composer.attachment.empty")}</span>
               </DropdownMenuItem>
             )}
           </DropdownMenuSubContent>
@@ -111,13 +118,13 @@ export function ComposerAttachmentMenu(props: {
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <BrainCircuit size={15} />
-            <span>思考过程</span>
+            <span>{t("composer.thinkingProcess")}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="composer-thinking-menu">
             {THINKING_DISPLAY_MODE_OPTIONS.map((option) => (
               <DropdownMenuItem key={option.value} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
                 <span className="composer-thinking-mode-label">
-                  <span>{option.labelZh}</span>
+                  <span>{t(option.labelKey)}</span>
                 </span>
                 {props.thinkingDisplayMode === option.value ? <CheckCircle2 size={14} /> : null}
               </DropdownMenuItem>
@@ -130,15 +137,25 @@ export function ComposerAttachmentMenu(props: {
           onSelect={(event) => event.preventDefault()}
         >
           <ListChecks size={15} />
-          <span>计划模式</span>
+          <span>{t("composer.planMode")}</span>
         </DropdownMenuCheckboxItem>
         <DropdownMenuItem onSelect={props.onOpenGoal}>
           <Target size={15} />
-          <span>目标</span>
+          <span>{t("composer.goal")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+// composerAttachmentKindLabelKey returns the localized label key for one attachment kind.
+// composerAttachmentKindLabelKey 返回单个附件类型的本地化标签键。
+function composerAttachmentKindLabelKey(kind: string): TranslationKey | null {
+  if (kind === "image") return "composer.attachment.kind.image";
+  if (kind === "video") return "composer.attachment.kind.video";
+  if (kind === "audio") return "composer.attachment.kind.audio";
+  if (kind === "pdf") return "composer.attachment.kind.pdf";
+  return null;
 }
 
 // ComposerAttachmentKindIcon renders a compact icon for one attachment type.
@@ -170,6 +187,9 @@ export function ComposerAttachmentStrip(props: {
   // 按索引移除单个附件。
   onRemove?: (index: number) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <div className="composer-attachment-strip">
       {props.attachments.map((attachment, index) => (
@@ -187,7 +207,7 @@ export function ComposerAttachmentStrip(props: {
           )}
           {props.onRemove ? (
             <span
-              aria-label="移除附件"
+              aria-label={t("composer.attachment.remove")}
               className="composer-attachment-remove"
               onClick={(event) => {
                 event.stopPropagation();

@@ -1,6 +1,8 @@
 import React from "react";
 import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
 
+import { useI18n } from "@/i18n";
+import type { TranslationKey } from "@/i18n-messages";
 import type { DiffFile, DiffHunkExpansionDirection, DiffHunkExpansionRequest, DiffRenderPreferences, DiffViewMode, WorkspaceDiffSearchFileMatch } from "./types";
 import {
   diffLanguageForFile,
@@ -9,13 +11,18 @@ import {
   useHighlightLanguage,
 } from "./diff-highlight";
 import {
+  DIFF_FILE_CHANGED_BYTES_LIMIT,
+  DIFF_FILE_CHANGED_LINES_LIMIT,
+  DIFF_FILE_MAX_LINE_BYTES_LIMIT,
   DIFF_LIGHTWEIGHT_DETAIL_CHANGED_LINES_LIMIT,
   DIFF_FILE_VIRTUALIZATION_THRESHOLD,
   DIFF_HUNK_HEADER_HEIGHT,
   DIFF_LINE_HEIGHT,
   DIFF_SCROLL_STATE_GRANULARITY_PX,
   DIFF_SHIKI_TOKEN_ROW_LIMIT,
-  formatLargeReasons,
+  DIFF_TOTAL_CHANGED_BYTES_LIMIT,
+  DIFF_TOTAL_CHANGED_LINES_LIMIT,
+  DIFF_TOTAL_FILES_LIMIT,
   shouldUseLightweightDiffRendering,
 } from "./limits";
 import {
@@ -136,16 +143,17 @@ export function DiffFileHeader(props: {
   // 记录用户触发的折叠切换。
   onToggle: () => void;
 }) {
+  const { t } = useI18n();
   const ToggleIcon = props.collapsed ? ChevronRight : ChevronDown;
   return (
     <button className={props.className ? `diff-file-header ${props.className}` : "diff-file-header"} onClick={props.onToggle} type="button">
       <ToggleIcon size={15} />
       <div className="diff-file-paths">
         <strong>
-          {props.file.tooLargeToDisplay ? <AlertTriangle aria-label="超大文件未展示" className="diff-file-large-icon" size={13} /> : null}
+          {props.file.tooLargeToDisplay ? <AlertTriangle aria-label={t("diff.file.tooLarge")} className="diff-file-large-icon" size={13} /> : null}
           <span>{displayPath(props.file)}</span>
-          {props.file.status === "added" ? <span aria-label="新增文件" className="diff-file-status-dot added" /> : null}
-          {props.file.status === "deleted" ? <span aria-label="删除文件" className="diff-file-status-dot deleted" /> : null}
+          {props.file.status === "added" ? <span aria-label={t("diff.file.added")} className="diff-file-status-dot added" /> : null}
+          {props.file.status === "deleted" ? <span aria-label={t("diff.file.deleted")} className="diff-file-status-dot deleted" /> : null}
         </strong>
         {props.file.status === "renamed" ? <span>{`${props.file.oldPath} -> ${props.file.newPath}`}</span> : null}
       </div>
@@ -160,6 +168,7 @@ export function DiffFileHeader(props: {
 // DiffFileCard renders one file-level diff card.
 // DiffFileCard 渲染单个文件级 diff 卡片。
 export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCardProps) {
+  const { t } = useI18n();
   const rowCount = React.useMemo(() => targetDiffFileVisualRowCount(props.file, props.viewMode), [props.file, props.viewMode]);
   const lightweightRendering = shouldUseLightweightDiffRendering(props.file);
   const shouldUseShikiTokens = !lightweightRendering && rowCount <= DIFF_SHIKI_TOKEN_ROW_LIMIT;
@@ -183,7 +192,7 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
           {props.file.isBinary ? (
             <div className="diff-binary-note">Binary file not shown</div>
           ) : props.file.isGitlink ? (
-            <div className="diff-binary-note">子模块指针变更，未渲染文本内容。</div>
+            <div className="diff-binary-note">{t("diff.file.gitlink")}</div>
           ) : props.file.hunks.length ? (
             <>
               <DiffRenderPolicyNote file={props.file} lightweightRendering={lightweightRendering} rowCount={rowCount} />
@@ -211,9 +220,9 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
               onRevealFile={props.onRevealFile}
             />
           ) : props.file.status === "renamed" ? (
-            <div className="diff-binary-note">File renamed without changes</div>
+            <div className="diff-binary-note">{t("diff.file.renamedNoChanges")}</div>
           ) : (
-            <div className="diff-binary-note">No content</div>
+            <div className="diff-binary-note">{t("diff.file.noContent")}</div>
           )}
         </div>
       ) : null}
@@ -234,20 +243,73 @@ function DiffRenderPolicyNote(props: {
   // 该文件预先计算的可视行数。
   rowCount: number;
 }) {
+  const { t } = useI18n();
   if (!props.lightweightRendering) {
     return null;
   }
   const reasonText = props.file.largeReasons.length
-    ? formatLargeReasons(props.file.largeReasons)
+    ? formatLargeReasons(props.file.largeReasons, t)
     : props.file.changedLines > DIFF_LIGHTWEIGHT_DETAIL_CHANGED_LINES_LIMIT
-      ? `变更行超过 ${DIFF_LIGHTWEIGHT_DETAIL_CHANGED_LINES_LIMIT}，高亮细节已按轻量策略省略`
-      : "高亮细节已按轻量策略省略";
+      ? formatDiffCardTranslation(t, "diff.render.changedLinesSkipped", { limit: String(DIFF_LIGHTWEIGHT_DETAIL_CHANGED_LINES_LIMIT) })
+      : t("diff.render.skipped");
   return (
     <div className="diff-render-policy-note">
       <span>{reasonText}</span>
-      <span>{`${props.rowCount} 行按轻量模式渲染`}</span>
+      <span>{formatDiffCardTranslation(t, "diff.render.rowsLightweight", { count: String(props.rowCount) })}</span>
     </div>
   );
+}
+
+// formatLargeReasons converts stable backend reason ids into localized display labels.
+// formatLargeReasons 将稳定后端原因标识转换为本地化展示文案。
+function formatLargeReasons(reasons: readonly string[], t: (key: TranslationKey) => string): string {
+  return reasons.map((reason) => largeReasonLabel(reason, t)).join(t("global.listDelimiter"));
+}
+
+// largeReasonLabel maps one known large-diff reason id to its localized label.
+// largeReasonLabel 将单个已知大 diff 原因标识映射为本地化标签。
+function largeReasonLabel(reason: string, t: (key: TranslationKey) => string): string {
+  if (reason === "total_files") {
+    return formatDiffCardTranslation(t, "diff.large.totalFiles", { limit: String(DIFF_TOTAL_FILES_LIMIT) });
+  }
+  if (reason === "total_changed_lines") {
+    return formatDiffCardTranslation(t, "diff.large.totalChangedLines", { limit: String(DIFF_TOTAL_CHANGED_LINES_LIMIT) });
+  }
+  if (reason === "total_changed_bytes") {
+    return formatDiffCardTranslation(t, "diff.large.totalChangedBytes", { limit: formatDiffBytes(DIFF_TOTAL_CHANGED_BYTES_LIMIT) });
+  }
+  if (reason === "file_changed_lines") {
+    return formatDiffCardTranslation(t, "diff.large.fileChangedLines", { limit: String(DIFF_FILE_CHANGED_LINES_LIMIT) });
+  }
+  if (reason === "file_changed_bytes") {
+    return formatDiffCardTranslation(t, "diff.large.fileChangedBytes", { limit: formatDiffBytes(DIFF_FILE_CHANGED_BYTES_LIMIT) });
+  }
+  if (reason === "file_max_line_bytes") {
+    return formatDiffCardTranslation(t, "diff.large.fileMaxLineBytes", { limit: formatDiffBytes(DIFF_FILE_MAX_LINE_BYTES_LIMIT) });
+  }
+  return reason;
+}
+
+// formatDiffCardTranslation applies small named placeholders for diff card labels.
+// formatDiffCardTranslation 为 diff 文件卡片标签替换少量具名占位符。
+function formatDiffCardTranslation(t: (key: TranslationKey) => string, key: TranslationKey, values: Record<string, string>): string {
+  let text = t(key);
+  for (const [name, value] of Object.entries(values)) {
+    text = text.replace(`{${name}}`, value);
+  }
+  return text;
+}
+
+// formatDiffBytes formats byte thresholds for compact localized notes.
+// formatDiffBytes 将字节阈值格式化为紧凑本地化提示。
+function formatDiffBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${Math.round(bytes / 1024 / 1024)} MiB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KiB`;
+  }
+  return `${bytes} B`;
 }
 
 // DiffFileLines switches between direct and virtualized rendering for one file.

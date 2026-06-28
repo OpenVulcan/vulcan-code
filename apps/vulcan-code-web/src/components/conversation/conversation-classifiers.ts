@@ -1,5 +1,6 @@
 import type { ConversationBlock, ConversationBlockKind } from "@/components/conversation/conversation-model";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
+import type { TranslationKey } from "@/i18n-messages";
 
 // isContextCompactionBlock detects host-provided context-compaction status rows.
 // isContextCompactionBlock 检测宿主提供的上下文压缩状态行。
@@ -18,15 +19,15 @@ export function isMergeableToolBlock(block: ConversationBlock): block is ToolExe
 
 // blockTitle returns a localized title for one semantic transcript block.
 // blockTitle 返回单个语义转录块的本地化标题。
-export function blockTitle(kind: ConversationBlockKind, toolName?: string): string {
-  if (kind === "tool-call") return toolName ? `工具调用 · ${toolName}` : "工具调用";
-  if (kind === "tool-result") return toolName ? `工具返回 · ${toolName}` : "工具返回";
-  if (kind === "command") return "命令会话";
+export function blockTitle(kind: ConversationBlockKind, toolName?: string, t?: (key: TranslationKey) => string): string {
+  if (kind === "tool-call") return toolName ? `${t ? t("conversation.block.toolCall") : "Tool call"} · ${toolName}` : t ? t("conversation.block.toolCall") : "Tool call";
+  if (kind === "tool-result") return toolName ? `${t ? t("conversation.block.toolResult") : "Tool result"} · ${toolName}` : t ? t("conversation.block.toolResult") : "Tool result";
+  if (kind === "command") return t ? t("conversation.block.command") : "Command session";
   if (kind === "diff") return "Git Diff";
-  if (kind === "thinking") return "思考过程";
+  if (kind === "thinking") return t ? t("conversation.block.thinking") : "Thinking process";
   if (kind === "turn-stats") return "Turn Stats";
-  if (kind === "plan-artifact") return "计划";
-  if (kind === "notice") return "运行提示";
+  if (kind === "plan-artifact") return t ? t("conversation.block.plan") : "Plan";
+  if (kind === "notice") return t ? t("conversation.block.notice") : "Run notice";
   return "Markdown";
 }
 

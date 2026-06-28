@@ -338,9 +338,9 @@ use webui_turn_chaining::{
 use workbench_context_usage::*;
 use workbench_model_routes::{
     provider_secondary_route_summary_from_openrouter_selection,
-    service_list_workbench_model_secondary_routes, service_select_workbench_model,
-    service_select_workbench_model_secondary_route, service_select_workbench_reasoning_effort,
-    service_select_workbench_thinking_display_mode,
+    service_list_workbench_model_secondary_routes, service_select_webui_locale,
+    service_select_workbench_model, service_select_workbench_model_secondary_route,
+    service_select_workbench_reasoning_effort, service_select_workbench_thinking_display_mode,
 };
 use workbench_refresh::*;
 use workbench_session_panels::*;
@@ -381,10 +381,19 @@ use vulcan_service_runtime::token_budget_bridge::TauriTokenBudgetRuntime;
 pub fn create_service_bridge_state(
     shell_host: Arc<dyn ServiceShellHost>,
 ) -> SharedServiceBridgeState {
+    // initial_ui_locale mirrors the persisted WebUI locale before bootstrap finishes.
+    // initial_ui_locale 在 bootstrap 完成前镜像已持久化的 WebUI 语言。
+    let initial_ui_locale = provider_config::load_configuration_file()
+        .ok()
+        .and_then(|configuration| configuration.ui_locale);
+    let mut startup = startup_snapshot_with_phase("pending", Vec::new(), &[]);
+    startup.ui_locale = initial_ui_locale.clone();
+    let mut workbench = fallback_workbench_snapshot(&[]);
+    workbench.ui_locale = initial_ui_locale;
     Arc::new(Mutex::new(ServiceBridgeState {
         shell_host,
-        startup: startup_snapshot_with_phase("pending", Vec::new(), &[]),
-        workbench: fallback_workbench_snapshot(&[]),
+        startup,
+        workbench,
         workbench_generation: 0,
         workspace_snapshot: None,
         hydrated_conversation_windows: BTreeMap::new(),

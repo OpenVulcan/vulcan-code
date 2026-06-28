@@ -26,7 +26,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { LocaleCode } from "@/i18n";
+import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
 import type { ComposerSlashCommandSummary, PendingPromptSummary } from "@/types";
 import { composerSlashCommandDescription } from "@/components/composer/composer-model";
 
@@ -55,6 +55,9 @@ export function PendingPromptQueueStrip(props: {
   // 持久化重排后的条目标识列表。
   onReorder: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // sensors keeps accidental clicks from turning into drag operations.
   // sensors 防止普通点击误触发拖拽。
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -81,7 +84,7 @@ export function PendingPromptQueueStrip(props: {
   }, [entryIds, props]);
 
   return (
-    <div className="pending-prompt-strip" aria-label="待发送队列">
+    <div className="pending-prompt-strip" aria-label={t("pendingPrompt.queue")}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={entryIds} strategy={verticalListSortingStrategy}>
           <div className="pending-prompt-list">
@@ -121,9 +124,14 @@ function PendingPromptQueueRow(props: {
   // 从队列移除当前条目。
   onRemove: (entryId: string) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const sortable = useVerticalSortableItem(props.entry.id, props.entry.state === "inserted");
-  const attachmentText = props.entry.attachments.length ? `  · ${props.entry.attachments.length} 个附件` : "";
-  const previewText = `${props.entry.preview || props.entry.prompt || "附件消息"}${attachmentText}`;
+  const attachmentText = props.entry.attachments.length
+    ? `  · ${formatPendingPromptTranslation(t, "pendingPrompt.attachmentCount", { count: String(props.entry.attachments.length) })}`
+    : "";
+  const previewText = `${props.entry.preview || props.entry.prompt || t("pendingPrompt.attachmentMessage")}${attachmentText}`;
   return (
     <div
       className={cn("pending-prompt-row", sortable.isDragging && "dragging", props.entry.state === "inserted" && "inserted")}
@@ -131,7 +139,7 @@ function PendingPromptQueueRow(props: {
       style={sortable.sortableStyle}
     >
       <div
-        aria-label="拖动待发送提示词"
+        aria-label={t("pendingPrompt.drag")}
         className="pending-prompt-row-handle"
         {...sortable.attributes}
         {...sortable.listeners}
@@ -150,7 +158,7 @@ function PendingPromptQueueRow(props: {
           <TooltipTrigger asChild>
             <Button
               className={cn("pending-prompt-guide-button", props.entry.state === "inserted" && "inserted")}
-              aria-label={props.entry.state === "inserted" ? "已引导待发送提示词" : "引导待发送提示词"}
+              aria-label={props.entry.state === "inserted" ? t("pendingPrompt.inserted") : t("pendingPrompt.insert")}
               disabled={props.entry.state === "inserted"}
               onClick={() => {
                 props.onTrace?.("pending_prompt.row.insert", {
@@ -164,15 +172,15 @@ function PendingPromptQueueRow(props: {
               variant="ghost"
             >
               <CornerDownRight size={13} />
-              <span>{props.entry.state === "inserted" ? "已引导" : "引导"}</span>
+              <span>{props.entry.state === "inserted" ? t("pendingPrompt.insertedShort") : t("pendingPrompt.insertShort")}</span>
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="top">{props.entry.state === "inserted" ? "已引导" : "引导"}</TooltipContent>
+          <TooltipContent side="top">{props.entry.state === "inserted" ? t("pendingPrompt.inserted") : t("pendingPrompt.insert")}</TooltipContent>
         </Tooltip>
         {props.entry.state === "inserted" ? null : (
           <>
             <Button
-              aria-label="删除待发送提示词"
+              aria-label={t("pendingPrompt.delete")}
               onClick={() => {
                 props.onTrace?.("pending_prompt.row.remove", { entryId: props.entry.id });
                 props.onRemove(props.entry.id);
@@ -184,7 +192,7 @@ function PendingPromptQueueRow(props: {
               <Trash2 size={13} />
             </Button>
             <Button
-              aria-label="编辑待发送提示词"
+              aria-label={t("pendingPrompt.edit")}
               onClick={() => {
                 props.onTrace?.("pending_prompt.row.edit", { entryId: props.entry.id });
                 props.onEdit(props.entry.id);
@@ -199,6 +207,19 @@ function PendingPromptQueueRow(props: {
         )}
       </div>
     </div>
+  );
+}
+
+// formatPendingPromptTranslation replaces named placeholders in localized queued-prompt labels.
+// formatPendingPromptTranslation 替换待发送队列本地化标签中的具名占位符。
+function formatPendingPromptTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
   );
 }
 

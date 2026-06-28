@@ -5,6 +5,7 @@ import {
   MAX_COMPOSER_ATTACHMENTS,
 } from "@/components/composer/composer-model";
 import { inferComposerAttachmentKindFromFile } from "@/components/composer/composer-attachment-media";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
@@ -84,6 +85,9 @@ export interface UseComposerAttachmentsState {
 // useComposerAttachments owns attachment validation, staging, drag-drop, and paste behavior.
 // useComposerAttachments 管理附件校验、暂存、拖拽投放与粘贴行为。
 export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseComposerAttachmentsState {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // attachments stores staged composer attachments submitted with the next prompt.
   // attachments 保存下一条提示词将携带的已暂存输入区附件。
   const [attachments, setAttachments] = React.useState<ComposerAttachmentSummary[]>(() => args.initialAttachments ?? []);
@@ -122,17 +126,17 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       return Boolean(kind && (!preferredKind || kind === preferredKind) && enabledAttachmentKinds.has(kind));
     });
     if (!candidates.length) {
-      toast.info("当前模型或扩展能力不支持这些附件。");
+      toast.info(t("composer.attachment.unsupported"));
       return;
     }
     const availableSlots = MAX_COMPOSER_ATTACHMENTS - attachments.length;
     if (availableSlots <= 0) {
-      toast.info(`最多只能添加 ${MAX_COMPOSER_ATTACHMENTS} 个附件。`);
+      toast.info(formatComposerAttachmentTranslation(t, "composer.attachment.maxLimit", { count: String(MAX_COMPOSER_ATTACHMENTS) }));
       return;
     }
     const acceptedFiles = candidates.slice(0, availableSlots);
     if (candidates.length > acceptedFiles.length) {
-      toast.info(`已达到 ${MAX_COMPOSER_ATTACHMENTS} 个附件上限，部分文件未添加。`);
+      toast.info(formatComposerAttachmentTranslation(t, "composer.attachment.partialMaxLimit", { count: String(MAX_COMPOSER_ATTACHMENTS) }));
     }
     const staged: ComposerAttachmentSummary[] = [];
     for (const file of acceptedFiles) {
@@ -160,7 +164,7 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       });
       return [...current, ...unique].slice(0, MAX_COMPOSER_ATTACHMENTS);
     });
-  }, [args, attachments.length, enabledAttachmentKinds]);
+  }, [args, attachments.length, enabledAttachmentKinds, t]);
 
   // openAttachmentPicker opens the browser file picker with a kind-specific accept filter.
   // openAttachmentPicker 使用类型特定 accept 过滤器打开浏览器文件选择器。
@@ -248,4 +252,17 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
     handleComposerDrop,
     removeComposerAttachment,
   };
+}
+
+// formatComposerAttachmentTranslation replaces named placeholders in localized attachment messages.
+// formatComposerAttachmentTranslation 替换附件本地化消息中的具名占位符。
+function formatComposerAttachmentTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }

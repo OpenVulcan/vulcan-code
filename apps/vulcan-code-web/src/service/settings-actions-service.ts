@@ -88,6 +88,15 @@ export async function selectWorkbenchThinkingDisplayMode(mode: string): Promise<
   return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_thinking_display_mode", { mode });
 }
 
+// selectWebuiLocale persists one WebUI locale through the desktop service router.
+// selectWebuiLocale 通过桌面服务路由持久化单个 WebUI 语言。
+export async function selectWebuiLocale(locale: string): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_select_webui_locale", { locale });
+}
+
 // saveProviderConfiguration persists one provider form through the desktop service.
 // saveProviderConfiguration 通过桌面服务持久化单个 Provider 表单。
 export async function saveProviderConfiguration(request: { providerId: string; fields: Record<string, string> }): Promise<WorkbenchSnapshot | null> {

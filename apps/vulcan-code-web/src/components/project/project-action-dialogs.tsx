@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { useI18n } from "@/i18n";
 import type { ProjectSummary } from "@/types";
 
 // RenameTarget describes one pending rename dialog target.
@@ -39,6 +40,7 @@ export function RenameDialog(props: {
   // 确认当前目标的编辑后名称。
   onConfirm: (target: RenameTarget, name: string) => void;
 }) {
+  const { t } = useI18n();
   // value stores the pending display name edited by the user.
   // value 保存用户正在编辑的显示名称。
   const [value, setValue] = React.useState("");
@@ -47,10 +49,10 @@ export function RenameDialog(props: {
     setValue(props.target?.name ?? "");
   }, [props.target]);
 
-  const title = props.target?.kind === "project" ? "重命名项目" : "重命名对话";
+  const title = props.target?.kind === "project" ? t("projectDialog.renameProjectTitle") : t("projectDialog.renameConversationTitle");
   const description = props.target?.kind === "project"
-    ? "输入新的项目显示名称。项目路径不会改变；留空确认会还原为项目文件夹名。"
-    : "输入新的对话名称。";
+    ? t("projectDialog.renameProjectDescription")
+    : t("projectDialog.renameConversationDescription");
 
   return (
     <Dialog open={Boolean(props.target)} onOpenChange={(open) => !open && props.onCancel()}>
@@ -72,11 +74,11 @@ export function RenameDialog(props: {
             autoFocus
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="输入新的名称"
+            placeholder={t("projectDialog.renamePlaceholder")}
           />
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
-            <Button type="submit">确认</Button>
+            <Button type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
+            <Button type="submit">{t("projectDialog.confirm")}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -106,14 +108,15 @@ export function ArchiveProjectDialog(props: {
   // 确认归档或移除动作。
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
   const title = props.mode === "remove"
-    ? "归档并移除项目？"
-    : `归档 ${props.conversationCount} 个对话？`;
+    ? t("projectDialog.archiveRemoveTitle")
+    : t("projectDialog.archiveTitle").replace("{count}", String(props.conversationCount));
   const description = props.mode === "remove"
-    ? `这会先归档 ${props.project?.name ?? "当前项目"} 中的 ${props.conversationCount} 个对话，然后从项目列表移除该项目。重新添加这个项目后，已归档对话才会出现在归档恢复中。`
-    : `这会将 ${props.project?.name ?? "当前项目"} 中的对话归档，项目本身会保留在左侧项目列表中。`;
-  const confirmLabel = props.mode === "remove" ? "归档并移除" : "全部归档";
-  const busyLabel = props.mode === "remove" ? "移除中" : "归档中";
+    ? t("projectDialog.archiveRemoveDescription").replace("{project}", props.project?.name ?? t("projectDialog.currentProject")).replace("{count}", String(props.conversationCount))
+    : t("projectDialog.archiveDescription").replace("{project}", props.project?.name ?? t("projectDialog.currentProject"));
+  const confirmLabel = props.mode === "remove" ? t("projectDialog.archiveAndRemove") : t("projectDialog.archiveAll");
+  const busyLabel = props.mode === "remove" ? t("projectDialog.removing") : t("projectDialog.archiving");
 
   return (
     <Dialog open={Boolean(props.project)} onOpenChange={(open) => !props.busy && !open && props.onCancel()}>
@@ -138,7 +141,7 @@ export function ArchiveProjectDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button disabled={props.busy} type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
+          <Button disabled={props.busy} type="button" variant="ghost" onClick={props.onCancel}>{t("conversation.action.cancel")}</Button>
           <Button disabled={props.busy} type="button" variant="destructive" onClick={props.onConfirm}>
             {props.busy ? <Spinner className="size-4" /> : null}
             {props.busy ? busyLabel : confirmLabel}

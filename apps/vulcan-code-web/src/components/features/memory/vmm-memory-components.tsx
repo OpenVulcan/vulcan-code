@@ -2,6 +2,7 @@ import * as React from "react"
 import { FileText, History, Trash2 } from "lucide-react"
 
 import { StatusPill } from "@/components/shared/status"
+import { useI18n } from "@/i18n"
 import type { MemorySummary, VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
 
 // VmmEffectiveOverview renders compact effective-config cards.
@@ -14,31 +15,32 @@ export function VmmEffectiveOverview(props: {
   // 详细 VMM 快照。
   snapshot: VmmMemorySnapshot
 }) {
+  const { t } = useI18n();
   const effective = props.snapshot.effective;
   return (
     <div className="vmm-overview-grid">
       <article className="vmm-overview-card">
-        <StatusPill status={effective.diagnostic === "ready" ? "ready" : "warning"} label={vmmDiagnosticLabel(effective.diagnostic)} />
-        <strong>有效配置</strong>
-        <span>gRPC：{effective.grpcTarget || "未配置"}</span>
+        <StatusPill status={effective.diagnostic === "ready" ? "ready" : "warning"} label={vmmDiagnosticLabel(effective.diagnostic, t)} />
+        <strong>{t("vmm.overview.effectiveConfig")}</strong>
+        <span>{t("vmm.overview.grpc")}{effective.grpcTarget || t("vmm.common.notConfigured")}</span>
         <span>user/project：{effective.userId ?? "-"} / {effective.projectId ?? "-"}</span>
       </article>
       <article className="vmm-overview-card">
-        <StatusPill status={effective.precheckDiagnostic === "ready" ? "ready" : "warning"} label={vmmDiagnosticLabel(effective.precheckDiagnostic)} />
-        <strong>召回策略</strong>
-        <span>TTL：{effective.implicitMemoryTurns} 回合</span>
-        <span>前置召回：{effective.precheckEnabled ? "启用" : "关闭"} · AI 工具：{effective.aiToolsEnabled ? "启用" : "关闭"}</span>
+        <StatusPill status={effective.precheckDiagnostic === "ready" ? "ready" : "warning"} label={vmmDiagnosticLabel(effective.precheckDiagnostic, t)} />
+        <strong>{t("vmm.overview.recallPolicy")}</strong>
+        <span>{t("vmm.overview.ttlTurns").replace("{turns}", String(effective.implicitMemoryTurns))}</span>
+        <span>{t("vmm.overview.precheckAiTools").replace("{precheck}", effective.precheckEnabled ? t("vmm.common.enabled") : t("vmm.common.disabled")).replace("{tools}", effective.aiToolsEnabled ? t("vmm.common.enabled") : t("vmm.common.disabled"))}</span>
       </article>
       <article className="vmm-overview-card">
         <StatusPill status="ready" label="runtime" />
-        <strong>运行态</strong>
-        <span>outbox：{props.snapshot.runtime.outboxCount} · 画像节点：{props.snapshot.runtime.profileSyncCount}</span>
-        <span>已完成回合：{props.snapshot.runtime.completedTurns}</span>
+        <strong>{t("vmm.overview.runtime")}</strong>
+        <span>{t("vmm.overview.outboxProfiles").replace("{outbox}", String(props.snapshot.runtime.outboxCount)).replace("{profiles}", String(props.snapshot.runtime.profileSyncCount))}</span>
+        <span>{t("vmm.overview.completedTurns").replace("{turns}", String(props.snapshot.runtime.completedTurns))}</span>
       </article>
       <article className="vmm-overview-card">
         <StatusPill status="warning" label="summary" />
-        <strong>摘要入口</strong>
-        <span>{props.memories.map((memory) => `${memory.title} ${memory.state}`).join("；") || "暂无摘要"}</span>
+        <strong>{t("vmm.overview.summaryEntry")}</strong>
+        <span>{props.memories.map((memory) => `${memory.title} ${memory.state}`).join(t("global.listDelimiter")) || t("vmm.overview.noSummary")}</span>
       </article>
     </div>
   );
@@ -51,16 +53,17 @@ export function VmmRuntimePanel(props: {
   // 详细 VMM 快照。
   snapshot: VmmMemorySnapshot
 }) {
+  const { t } = useI18n();
   return (
     <section className="vmm-side-card">
-      <VmmPanelHeading icon={<History size={15} />} title="运行态" subtitle="当前会话的 VMM hook 与画像缓存。" />
+      <VmmPanelHeading icon={<History size={15} />} title={t("vmm.runtime.title")} subtitle={t("vmm.runtime.subtitle")} />
       <dl className="vmm-stat-list">
-        <div><dt>会话</dt><dd>{props.snapshot.selectedConversationId ?? "未选择"}</dd></div>
+        <div><dt>{t("vmm.runtime.session")}</dt><dd>{props.snapshot.selectedConversationId ?? t("vmm.common.notSelected")}</dd></div>
         <div><dt>outbox</dt><dd>{props.snapshot.runtime.outboxCount}</dd></div>
-        <div><dt>画像节点</dt><dd>{props.snapshot.runtime.profileSyncCount}</dd></div>
-        <div><dt>更新时间</dt><dd>{props.snapshot.runtime.updatedAt ?? "暂无"}</dd></div>
+        <div><dt>{t("vmm.runtime.profileNodes")}</dt><dd>{props.snapshot.runtime.profileSyncCount}</dd></div>
+        <div><dt>{t("vmm.runtime.updatedAt")}</dt><dd>{props.snapshot.runtime.updatedAt ?? t("vmm.common.none")}</dd></div>
       </dl>
-      <pre className="vmm-preview-text">{props.snapshot.runtime.profilePreview || "暂无画像基点。"}</pre>
+      <pre className="vmm-preview-text">{props.snapshot.runtime.profilePreview || t("vmm.runtime.noProfileBase")}</pre>
     </section>
   );
 }
@@ -72,17 +75,18 @@ export function VmmResultPanel(props: {
   // 最近动作结果。
   result: VmmMemoryActionResult | null
 }) {
+  const { t } = useI18n();
   return (
     <section className="vmm-side-card">
-      <VmmPanelHeading icon={<FileJson2Icon />} title="动作结果" subtitle={props.result?.summary ?? "尚未执行 VMM 动作。"} />
+      <VmmPanelHeading icon={<FileJson2Icon />} title={t("vmm.result.title")} subtitle={props.result?.summary ?? t("vmm.result.emptySummary")} />
       {props.result ? (
         <>
           <strong className="vmm-result-kind">{props.result.kind}</strong>
-          <VmmJsonPreview title="请求" value={props.result.request} />
-          <VmmJsonPreview title="响应" value={props.result.response} />
+          <VmmJsonPreview title={t("vmm.result.request")} value={props.result.request} />
+          <VmmJsonPreview title={t("vmm.result.response")} value={props.result.response} />
         </>
       ) : (
-        <span className="vmm-muted">点击左侧动作后会显示请求与响应。</span>
+        <span className="vmm-muted">{t("vmm.result.emptyHint")}</span>
       )}
     </section>
   );
@@ -161,9 +165,10 @@ export function VmmActionButton(props: {
   // 执行动作。
   onClick: () => void
 }) {
+  const { t } = useI18n();
   return (
     <button className={`vmm-icon-button${props.danger ? " danger" : ""}`} disabled={props.busy} onClick={props.onClick} type="button">
-      {props.icon}{props.busy ? "执行中" : props.label}
+      {props.icon}{props.busy ? t("vmm.common.running") : props.label}
     </button>
   );
 }
@@ -181,32 +186,33 @@ export function VmmSettingsForm(props: {
   // 应用单次局部草稿更新。
   onChange: (patch: Partial<VmmConfigDraftSummary>) => void
 }) {
+  const { t } = useI18n();
   if (props.mode === "transport") {
     return (
       <div className="vmm-form-grid">
-        <VmmTextField label="gRPC 地址" placeholder="127.0.0.1:50051" value={props.draft.grpcTarget} onChange={(grpcTarget) => props.onChange({ grpcTarget })} />
-        <VmmTextField label="API Key" placeholder="可选" value={props.draft.grpcApiKey} onChange={(grpcApiKey) => props.onChange({ grpcApiKey })} />
-        <VmmTextField label="请求超时" placeholder="30000" value={props.draft.receiveTimeoutMs} onChange={(receiveTimeoutMs) => props.onChange({ receiveTimeoutMs })} />
-        <VmmTextField label="握手超时" placeholder="8000" value={props.draft.handshakeTimeoutMs} onChange={(handshakeTimeoutMs) => props.onChange({ handshakeTimeoutMs })} />
-        <VmmTextField label="最大接收字节" placeholder="可选" value={props.draft.maxReceiveMessageBytes} onChange={(maxReceiveMessageBytes) => props.onChange({ maxReceiveMessageBytes })} />
-        <VmmTextField label="keepalive 间隔" placeholder="30000" value={props.draft.grpcKeepaliveTimeMs} onChange={(grpcKeepaliveTimeMs) => props.onChange({ grpcKeepaliveTimeMs })} />
-        <VmmTextField label="keepalive 超时" placeholder="10000" value={props.draft.grpcKeepaliveTimeoutMs} onChange={(grpcKeepaliveTimeoutMs) => props.onChange({ grpcKeepaliveTimeoutMs })} />
-        <label className="vmm-check-row"><input checked={props.draft.grpcKeepalivePermitWithoutCalls} onChange={(event) => props.onChange({ grpcKeepalivePermitWithoutCalls: event.target.checked })} type="checkbox" />空闲 keepalive</label>
+        <VmmTextField label={t("vmm.settings.grpcTarget")} placeholder="127.0.0.1:50051" value={props.draft.grpcTarget} onChange={(grpcTarget) => props.onChange({ grpcTarget })} />
+        <VmmTextField label={t("vmm.settings.apiKey")} placeholder={t("vmm.common.optional")} value={props.draft.grpcApiKey} onChange={(grpcApiKey) => props.onChange({ grpcApiKey })} />
+        <VmmTextField label={t("vmm.settings.receiveTimeout")} placeholder="30000" value={props.draft.receiveTimeoutMs} onChange={(receiveTimeoutMs) => props.onChange({ receiveTimeoutMs })} />
+        <VmmTextField label={t("vmm.settings.handshakeTimeout")} placeholder="8000" value={props.draft.handshakeTimeoutMs} onChange={(handshakeTimeoutMs) => props.onChange({ handshakeTimeoutMs })} />
+        <VmmTextField label={t("vmm.settings.maxReceiveBytes")} placeholder={t("vmm.common.optional")} value={props.draft.maxReceiveMessageBytes} onChange={(maxReceiveMessageBytes) => props.onChange({ maxReceiveMessageBytes })} />
+        <VmmTextField label={t("vmm.settings.keepaliveInterval")} placeholder="30000" value={props.draft.grpcKeepaliveTimeMs} onChange={(grpcKeepaliveTimeMs) => props.onChange({ grpcKeepaliveTimeMs })} />
+        <VmmTextField label={t("vmm.settings.keepaliveTimeout")} placeholder="10000" value={props.draft.grpcKeepaliveTimeoutMs} onChange={(grpcKeepaliveTimeoutMs) => props.onChange({ grpcKeepaliveTimeoutMs })} />
+        <label className="vmm-check-row"><input checked={props.draft.grpcKeepalivePermitWithoutCalls} onChange={(event) => props.onChange({ grpcKeepalivePermitWithoutCalls: event.target.checked })} type="checkbox" />{t("vmm.settings.idleKeepalive")}</label>
       </div>
     );
   }
   return (
     <div className="vmm-form-grid">
-      <label className="vmm-check-row"><input checked={props.draft.enabled} onChange={(event) => props.onChange({ enabled: event.target.checked })} type="checkbox" />启用记忆连接</label>
-      <label className="vmm-check-row"><input checked={props.draft.aiToolsEnabled} onChange={(event) => props.onChange({ aiToolsEnabled: event.target.checked })} type="checkbox" />暴露 AI 专属工具</label>
-      <label className="vmm-check-row"><input checked={props.draft.precheckEnabled} onChange={(event) => props.onChange({ precheckEnabled: event.target.checked })} type="checkbox" />自动前置召回</label>
-      <VmmTextField label="用户 ID" placeholder="数字" value={props.draft.userId} onChange={(userId) => props.onChange({ userId })} />
-      <VmmTextField label="项目 ID" placeholder="数字" value={props.draft.projectId} onChange={(projectId) => props.onChange({ projectId })} />
-      <VmmTextField label="临时记忆 TTL" placeholder="5" value={props.draft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onChange({ implicitMemoryTurns })} />
-      <VmmTextField label="画像刷新间隔" placeholder="3" value={props.draft.profileRefreshTurns} onChange={(profileRefreshTurns) => props.onChange({ profileRefreshTurns })} />
-      <VmmTextField label="画像节点上限" placeholder="24" value={props.draft.profileNodeLimit} onChange={(profileNodeLimit) => props.onChange({ profileNodeLimit })} />
-      <VmmTextField label="注入标签" placeholder="vmm_inject" value={props.draft.injectionTag} onChange={(injectionTag) => props.onChange({ injectionTag })} />
-      <VmmTextField label="注入说明" placeholder="VMM recalled memory" value={props.draft.injectionDescription} onChange={(injectionDescription) => props.onChange({ injectionDescription })} />
+      <label className="vmm-check-row"><input checked={props.draft.enabled} onChange={(event) => props.onChange({ enabled: event.target.checked })} type="checkbox" />{t("vmm.settings.enableMemoryConnection")}</label>
+      <label className="vmm-check-row"><input checked={props.draft.aiToolsEnabled} onChange={(event) => props.onChange({ aiToolsEnabled: event.target.checked })} type="checkbox" />{t("vmm.settings.exposeAiTools")}</label>
+      <label className="vmm-check-row"><input checked={props.draft.precheckEnabled} onChange={(event) => props.onChange({ precheckEnabled: event.target.checked })} type="checkbox" />{t("vmm.settings.autoPrecheck")}</label>
+      <VmmTextField label={t("vmm.settings.userId")} placeholder={t("vmm.common.number")} value={props.draft.userId} onChange={(userId) => props.onChange({ userId })} />
+      <VmmTextField label={t("vmm.settings.projectId")} placeholder={t("vmm.common.number")} value={props.draft.projectId} onChange={(projectId) => props.onChange({ projectId })} />
+      <VmmTextField label={t("vmm.settings.implicitMemoryTtl")} placeholder="5" value={props.draft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onChange({ implicitMemoryTurns })} />
+      <VmmTextField label={t("vmm.settings.profileRefreshInterval")} placeholder="3" value={props.draft.profileRefreshTurns} onChange={(profileRefreshTurns) => props.onChange({ profileRefreshTurns })} />
+      <VmmTextField label={t("vmm.settings.profileNodeLimit")} placeholder="24" value={props.draft.profileNodeLimit} onChange={(profileNodeLimit) => props.onChange({ profileNodeLimit })} />
+      <VmmTextField label={t("vmm.settings.injectionTag")} placeholder="vmm_inject" value={props.draft.injectionTag} onChange={(injectionTag) => props.onChange({ injectionTag })} />
+      <VmmTextField label={t("vmm.settings.injectionDescription")} placeholder="VMM recalled memory" value={props.draft.injectionDescription} onChange={(injectionDescription) => props.onChange({ injectionDescription })} />
     </div>
   );
 }
@@ -214,29 +220,32 @@ export function VmmSettingsForm(props: {
 // VmmUserRows renders user rows from a VMM result.
 // VmmUserRows 从 VMM 结果渲染用户行。
 export function VmmUserRows(props: { result: VmmMemoryActionResult | null }) {
+  const { t } = useI18n();
   const users = vmmResultArray(props.result, "users");
   if (users.length === 0) {
-    return <p className="vmm-muted">执行“刷新用户/项目”后会显示用户列表。</p>;
+    return <p className="vmm-muted">{t("vmm.rows.usersEmpty")}</p>;
   }
-  return <div className="vmm-row-list">{users.map((user, index) => <VmmDataRow key={index} title={String(user.userName ?? user.user_name ?? "未命名用户")} detail={`ID：${String(user.userId ?? user.user_id ?? "-")}`} />)}</div>;
+  return <div className="vmm-row-list">{users.map((user, index) => <VmmDataRow key={index} title={String(user.userName ?? user.user_name ?? t("vmm.rows.unnamedUser"))} detail={`ID${t("global.labelSeparator")}${String(user.userId ?? user.user_id ?? "-")}`} />)}</div>;
 }
 
 // VmmProjectRows renders project rows from a VMM result.
 // VmmProjectRows 从 VMM 结果渲染项目行。
 export function VmmProjectRows(props: { result: VmmMemoryActionResult | null }) {
+  const { t } = useI18n();
   const projects = vmmResultArray(props.result, "projects");
   if (projects.length === 0) {
-    return <p className="vmm-muted">执行“刷新用户/项目”后会显示项目列表。</p>;
+    return <p className="vmm-muted">{t("vmm.rows.projectsEmpty")}</p>;
   }
-  return <div className="vmm-row-list">{projects.map((project, index) => <VmmDataRow key={index} title={String(project.displayPath ?? project.display_path ?? "未命名项目")} detail={`ID：${String(project.projectId ?? project.project_id ?? "-")}`} />)}</div>;
+  return <div className="vmm-row-list">{projects.map((project, index) => <VmmDataRow key={index} title={String(project.displayPath ?? project.display_path ?? t("vmm.rows.unnamedProject"))} detail={`ID${t("global.labelSeparator")}${String(project.projectId ?? project.project_id ?? "-")}`} />)}</div>;
 }
 
 // VmmProfileRows renders active profile nodes from a VMM result.
 // VmmProfileRows 从 VMM 结果渲染 active 画像节点。
 export function VmmProfileRows(props: { result: VmmMemoryActionResult | null }) {
+  const { t } = useI18n();
   const nodes = vmmResultArray(props.result, "nodes");
   if (nodes.length === 0) {
-    return <p className="vmm-muted">刷新画像节点后会在这里显示 active profile nodes。</p>;
+    return <p className="vmm-muted">{t("vmm.rows.profileNodesEmpty")}</p>;
   }
   return <div className="vmm-row-list">{nodes.map((node, index) => <VmmDataRow key={index} title={`#${String(node.profileNodeId ?? node.profile_node_id ?? index + 1)}`} detail={String(node.content ?? "")} meta={`${String(node.priority ?? "-")} · ${String(node.level ?? "-")} · bind=${String(node.bindId ?? node.bind_id ?? "-")}`} />)}</div>;
 }
@@ -244,17 +253,18 @@ export function VmmProfileRows(props: { result: VmmMemoryActionResult | null }) 
 // VmmBundlePreview renders profile bundle text from a VMM result.
 // VmmBundlePreview 从 VMM 结果渲染画像 bundle 文本。
 export function VmmBundlePreview(props: { result: VmmMemoryActionResult | null }) {
+  const { t } = useI18n();
   const response = vmmObject(props.result?.response);
   const parts = [
-    ["完整画像", response.combinedText ?? response.combined_text],
-    ["团队画像", response.teamProfile ?? response.team_profile],
-    ["空间画像", response.spaceProfile ?? response.space_profile],
-    ["项目画像", response.projectProfile ?? response.project_profile],
-    ["用户画像", response.userProfile ?? response.user_profile],
+    [t("vmm.profile.full"), response.combinedText ?? response.combined_text],
+    [t("vmm.profile.team"), response.teamProfile ?? response.team_profile],
+    [t("vmm.profile.space"), response.spaceProfile ?? response.space_profile],
+    [t("vmm.profile.project"), response.projectProfile ?? response.project_profile],
+    [t("vmm.profile.user"), response.userProfile ?? response.user_profile],
   ]
     .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0);
   if (parts.length === 0) {
-    return <p className="vmm-muted">读取完整画像后会显示 bundle 内容。</p>;
+    return <p className="vmm-muted">{t("vmm.rows.bundleEmpty")}</p>;
   }
   return <div className="vmm-bundle-preview">{parts.map(([label, value]) => <section key={label}><strong>{label}</strong><pre>{String(value)}</pre></section>)}</div>;
 }
@@ -269,8 +279,9 @@ export function VmmToolResult(props: {
   // 检索行使用的可选记忆删除回调。
   onDeleteMemory?: (memoryId: number) => void
 }) {
+  const { t } = useI18n();
   if (!props.result) {
-    return <p className="vmm-muted">工具调试结果会按动作显示。</p>;
+    return <p className="vmm-muted">{t("vmm.rows.toolResultEmpty")}</p>;
   }
   if (props.result.kind === "search_memory_events") {
     const groups = vmmResultArray(props.result, "results");
@@ -285,7 +296,7 @@ export function VmmToolResult(props: {
               detail={String(hit.abstractText ?? hit.abstract_text ?? "")}
               meta={`memory=${String(memoryId || "-")} · turn=${String(hit.sourceTurnId ?? hit.source_turn_id ?? "-")}`}
               action={memoryId > 0 && props.onDeleteMemory ? {
-                label: "删除记忆",
+                label: t("vmm.action.deleteMemory"),
                 onClick: () => props.onDeleteMemory?.(memoryId),
               } : undefined}
             />
@@ -306,12 +317,12 @@ export function VmmToolResult(props: {
     const response = vmmObject(props.result.response);
     return (
       <div className="vmm-row-list">
-        <VmmDataRow title="已删除" detail={vmmIdListText(response.deletedMemoryIds ?? response.deleted_memory_ids)} meta={`向量行 ${String(response.deletedVectorRows ?? response.deleted_vector_rows ?? 0)}`} />
-        <VmmDataRow title="未找到" detail={vmmIdListText(response.notFoundMemoryIds ?? response.not_found_memory_ids)} meta={`trace=${String(response.traceId ?? response.trace_id ?? "-")}`} />
+        <VmmDataRow title={t("vmm.rows.deleted")} detail={vmmIdListText(response.deletedMemoryIds ?? response.deleted_memory_ids, t)} meta={t("vmm.rows.vectorRows").replace("{count}", String(response.deletedVectorRows ?? response.deleted_vector_rows ?? 0))} />
+        <VmmDataRow title={t("vmm.rows.notFound")} detail={vmmIdListText(response.notFoundMemoryIds ?? response.not_found_memory_ids, t)} meta={`trace=${String(response.traceId ?? response.trace_id ?? "-")}`} />
       </div>
     );
   }
-  return <VmmJsonPreview title="结果" value={props.result.response} />;
+  return <VmmJsonPreview title={t("vmm.result.generic")} value={props.result.response} />;
 }
 
 // VmmDataRow renders one compact result row.
@@ -361,14 +372,14 @@ export function VmmJsonPreview(props: {
 
 // vmmDiagnosticLabel returns a user-facing diagnostic label.
 // vmmDiagnosticLabel 返回面向用户的诊断标签。
-function vmmDiagnosticLabel(value: string): string {
+function vmmDiagnosticLabel(value: string, t: ReturnType<typeof useI18n>["t"]): string {
   const labels: Record<string, string> = {
     ready: "ready",
-    disabled_by_config: "已关闭",
-    missing_grpc_target: "缺少 gRPC",
-    grpc_offline: "gRPC 离线",
-    missing_user_id: "缺少用户",
-    missing_project_id: "缺少项目",
+    disabled_by_config: t("vmm.diagnostic.disabledByConfig"),
+    missing_grpc_target: t("vmm.diagnostic.missingGrpcTarget"),
+    grpc_offline: t("vmm.diagnostic.grpcOffline"),
+    missing_user_id: t("vmm.diagnostic.missingUserId"),
+    missing_project_id: t("vmm.diagnostic.missingProjectId"),
   };
   return labels[value] ?? value;
 }
@@ -406,9 +417,9 @@ function vmmNumber(value: unknown): number {
 
 // vmmIdListText renders one unknown id list as compact text.
 // vmmIdListText 将未知 ID 列表渲染为紧凑文本。
-function vmmIdListText(value: unknown): string {
+function vmmIdListText(value: unknown, t: ReturnType<typeof useI18n>["t"]): string {
   if (!Array.isArray(value) || value.length === 0) {
-    return "无";
+    return t("vmm.common.none");
   }
-  return value.map(String).join("、");
+  return value.map(String).join(t("global.listDelimiter"));
 }

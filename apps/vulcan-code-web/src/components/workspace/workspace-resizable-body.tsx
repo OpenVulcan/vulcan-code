@@ -189,6 +189,7 @@ export function WorkspaceResizableBody(props: {
   // 从嵌套控制台控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
 }) {
+  const { t } = useI18n();
   // rightPanelTransition keeps the context panel mounted long enough for exit animation.
   // rightPanelTransition 让右侧上下文面板在退出动画结束前保持挂载。
   const [rightPanelTransition, setRightPanelTransition] = React.useState(() => ({
@@ -347,7 +348,7 @@ export function WorkspaceResizableBody(props: {
         {dockedPanelMounted ? (
           <>
             <div
-              aria-label="调整右侧面板宽度"
+              aria-label={t("workspacePanel.resizeRight")}
               aria-orientation="vertical"
               className={cn("workspace-context-resize-handle", rightPanelVisualState)}
               onPointerDown={handleDockedResizePointerDown}

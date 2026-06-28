@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n";
 
 // ComposerGoalDialogProps carries the controlled goal editing dialog state.
 // ComposerGoalDialogProps 承载受控目标编辑弹窗状态。
@@ -43,35 +44,38 @@ export interface ComposerGoalDialogProps {
 // ComposerGoalDialog renders goal creation, editing, and resume confirmation.
 // ComposerGoalDialog 渲染目标创建、编辑与继续确认弹窗。
 export function ComposerGoalDialog(props: ComposerGoalDialogProps) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="composer-goal-dialog">
         <DialogHeader>
-          <DialogTitle>{props.mode === "resume" ? "继续任务" : "编辑目标"}</DialogTitle>
+          <DialogTitle>{props.mode === "resume" ? t("composer.goalDialog.resumeTitle") : t("composer.goalDialog.editTitle")}</DialogTitle>
         </DialogHeader>
         <div className="composer-goal-dialog-body">
           <Textarea
-            aria-label="目标内容"
+            aria-label={t("composer.goalDialog.objectiveAria")}
             className="composer-goal-objective-input"
             onChange={(event) => props.onObjectiveChange(event.currentTarget.value)}
-            placeholder="输入当前会话要持续推进的目标"
+            placeholder={t("composer.goalDialog.objectivePlaceholder")}
             value={props.objective}
           />
           <input
-            aria-label="Token 预算"
+            aria-label={t("composer.goalDialog.tokenBudgetAria")}
             className="composer-goal-budget-input"
             inputMode="numeric"
             onChange={(event) => props.onTokenBudgetChange(event.currentTarget.value.replace(/[^\d]/g, ""))}
-            placeholder="Token 预算（可选）"
+            placeholder={t("composer.goalDialog.tokenBudgetPlaceholder")}
             value={props.tokenBudget}
           />
         </div>
         <DialogFooter>
           <Button disabled={props.saving} onClick={() => props.onOpenChange(false)} type="button" variant="secondary">
-            取消
+            {t("conversation.action.cancel")}
           </Button>
           <Button disabled={props.saving} onClick={props.onSave} type="button">
-            {props.mode === "resume" ? "继续任务" : "保存"}
+            {props.mode === "resume" ? t("composer.goalDialog.resumeTitle") : t("composer.goalDialog.save")}
           </Button>
         </DialogFooter>
       </DialogContent>

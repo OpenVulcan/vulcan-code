@@ -114,7 +114,7 @@ export function AiCapabilitySettingsArea(props: {
   if (!capability) {
     return (
       <div className="settings-direct-content">
-        <PanelTitle icon={<SlidersHorizontal size={17} />} title={props.headerTitle || "AI 能力"} />
+        <PanelTitle icon={<SlidersHorizontal size={17} />} title={props.headerTitle || text("AI 能力", "AI capability")} />
         <article className="settings-card">
           <StatusPill status="warning" label="reserved" />
           <strong>{props.headerTitle || props.activeArea}</strong>

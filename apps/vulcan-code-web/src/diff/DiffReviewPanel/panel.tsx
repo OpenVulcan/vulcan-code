@@ -2,6 +2,7 @@ import React from "react";
 import { FileText, RefreshCw } from "lucide-react";
 
 import { WorkspaceDefaultFileIcon, WorkspaceFileTreeDrawer, WorkspaceFileTreeStats } from "@/components/workspace/WorkspaceFileTreeDrawer";
+import { useI18n } from "@/i18n";
 import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "../diff-file-card";
 import { DiffPanelToolbar } from "../diff-review-toolbar";
@@ -99,6 +100,7 @@ export function DiffReviewPanel(props: {
   // 打开共享 Git 提交或推送弹窗。
   onOpenGitCommitAction?: () => void;
 }) {
+  const { t } = useI18n();
   const fileListRef = React.useRef<HTMLDivElement | null>(null);
   const summarySearchRequestSeqRef = React.useRef(0);
   const summarySearchResolvedKeyRef = React.useRef<string | null>(null);
@@ -509,11 +511,11 @@ export function DiffReviewPanel(props: {
         <div className="diff-empty-state">
           <FileText size={22} />
           <strong>{props.emptyTitle ?? "Git Diff"}</strong>
-          <span>{props.emptyBody ?? "当前没有可展示的 Git Diff。"}</span>
+          <span>{props.emptyBody ?? t("diff.emptyBody")}</span>
           {props.onRefresh ? (
             <button className="diff-action-button" disabled={refreshBusy} onClick={handleRefreshClick} type="button">
               <RefreshCw className={refreshBusy ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
-              <span>{refreshBusy ? "加载中" : "刷新"}</span>
+              <span>{refreshBusy ? t("diff.loading") : t("diff.refresh")}</span>
             </button>
           ) : null}
         </div>
@@ -547,7 +549,7 @@ export function DiffReviewPanel(props: {
         onViewModeChange={setViewMode}
         renderPreferences={renderPreferences}
         searchQuery={searchQuery}
-        searchResultLabel={searchWorkerError ? "索引不可用" : searchResultLabel(searchIndex.matches.length, safeActiveSearchIndex, searchIndex.truncated)}
+        searchResultLabel={searchWorkerError ? t("diff.search.indexUnavailable") : searchResultLabel(searchIndex.matches.length, safeActiveSearchIndex, searchIndex.truncated)}
         searchResultTruncated={searchIndex.truncated}
         viewMode={viewMode}
       />
@@ -556,7 +558,7 @@ export function DiffReviewPanel(props: {
           <WorkspaceFileTreeDrawer
             activeFileKey={effectiveExpandedFileKey}
             collapseOnSelect
-            emptyLabel="没有匹配的文件"
+            emptyLabel={t("diff.noMatchingFiles")}
             fileIconClassName={(node) => node.file?.status ?? "modified"}
             fileKey={(file) => file.key}
             fileTitle={(file, node) => diffRevealRelativePath(file) ?? node.name}
@@ -638,7 +640,7 @@ export function DiffReviewPanel(props: {
             <div className="diff-empty-state in-list">
               <FileText size={20} />
               <strong>{props.emptyTitle ?? "Git Diff"}</strong>
-              <span>{snapshot.notice ?? props.emptyBody ?? "当前没有可展示的 Git Diff。"}</span>
+              <span>{snapshot.notice ?? props.emptyBody ?? t("diff.emptyBody")}</span>
             </div>
           )}
         </div>

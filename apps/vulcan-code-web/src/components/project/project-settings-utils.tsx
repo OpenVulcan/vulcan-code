@@ -1,4 +1,5 @@
 import { Bot, BrainCircuit, Database, FolderCog } from "lucide-react";
+import type { TranslationKey } from "@/i18n";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
 import type {
   ProjectAgentSkillState,
@@ -10,31 +11,31 @@ import type {
 
 // projectSettingsSections builds the left-side project settings navigation.
 // projectSettingsSections 构建项目设置左侧导航。
-export function projectSettingsSections(project: ProjectSummary, workbench: WorkbenchSnapshot): ProjectSettingsSectionSummary[] {
+export function projectSettingsSections(project: ProjectSummary, workbench: WorkbenchSnapshot, t: (key: TranslationKey) => string): ProjectSettingsSectionSummary[] {
   return [
     {
       id: "overview",
       icon: <FolderCog size={16} />,
-      label: "概览",
-      detail: project.pinned ? "已置顶项目" : "项目空间摘要",
+      label: t("projectSettings.overview"),
+      detail: project.pinned ? t("projectSettings.pinnedProject") : t("projectSettings.projectSpaceSummary"),
     },
     {
       id: "vmm",
       icon: <BrainCircuit size={16} />,
-      label: "VMM 记忆",
-      detail: workbench.vmmMemory.projectDraft.hasOverride ? "项目覆盖" : "继承全局",
+      label: t("projectSettings.vmmMemory"),
+      detail: workbench.vmmMemory.projectDraft.hasOverride ? t("projectSettings.projectOverride") : t("projectSettings.inheritGlobal"),
     },
     {
       id: "agent-skills",
       icon: <Bot size={16} />,
       label: "Agent Skills",
-      detail: `${workbench.agentSkills.skills.length} 个提示词技能`,
+      detail: t("projectSettings.promptSkillCount").replace("{count}", String(workbench.agentSkills.skills.length)),
     },
     {
       id: "attachments",
       icon: <Database size={16} />,
-      label: "附件缓存",
-      detail: "历史附件清理",
+      label: t("projectSettings.attachmentCache"),
+      detail: t("projectSettings.attachmentCleanup"),
     },
   ];
 }
@@ -63,47 +64,47 @@ export function projectAgentSkillCurrentState(overrideState?: string): ProjectAg
 
 // projectAgentSkillStateLabel returns the status label for one Agent Skill row.
 // projectAgentSkillStateLabel 返回单个 Agent Skill 行的状态标签。
-export function projectAgentSkillStateLabel(inheritedEnabled: boolean, stateKey: ProjectAgentSkillState): string {
+export function projectAgentSkillStateLabel(inheritedEnabled: boolean, stateKey: ProjectAgentSkillState, t: (key: TranslationKey) => string): string {
   if (stateKey === "enabled") {
-    return "项目启用";
+    return t("projectSettings.agent.projectEnabled");
   }
   if (stateKey === "disabled") {
-    return "项目关闭";
+    return t("projectSettings.agent.projectDisabled");
   }
-  return inheritedEnabled ? "继承启用" : "继承关闭";
+  return inheritedEnabled ? t("projectSettings.agent.inheritEnabled") : t("projectSettings.agent.inheritDisabled");
 }
 
 // projectAgentSkillOptionLabel returns the segmented-control label for one project state.
 // projectAgentSkillOptionLabel 返回单个项目状态的分段控件标签。
-export function projectAgentSkillOptionLabel(stateKey: ProjectAgentSkillState, inheritedEnabled: boolean): string {
+export function projectAgentSkillOptionLabel(stateKey: ProjectAgentSkillState, inheritedEnabled: boolean, t: (key: TranslationKey) => string): string {
   if (stateKey === "inherit") {
-    return inheritedEnabled ? "继承全局（启用）" : "继承全局（关闭）";
+    return inheritedEnabled ? t("projectSettings.agent.optionInheritEnabled") : t("projectSettings.agent.optionInheritDisabled");
   }
   if (stateKey === "enabled") {
-    return "启用";
+    return t("skills.action.enable");
   }
-  return "关闭";
+  return t("skills.label.closed");
 }
 
 // projectAgentSkillSaveMessage returns the toast message for one project state save.
 // projectAgentSkillSaveMessage 返回单个项目状态保存后的提示消息。
-export function projectAgentSkillSaveMessage(name: string, stateKey: ProjectAgentSkillState): string {
+export function projectAgentSkillSaveMessage(name: string, stateKey: ProjectAgentSkillState, t: (key: TranslationKey) => string): string {
   if (stateKey === "inherit") {
-    return `已将 ${name} 改为继承全局设置`;
+    return t("projectActions.skillInherited").replace("{skill}", name);
   }
-  return stateKey === "enabled" ? `已在项目中启用 ${name}` : `已在项目中关闭 ${name}`;
+  return (stateKey === "enabled" ? t("projectActions.skillEnabled") : t("projectActions.skillDisabled")).replace("{skill}", name);
 }
 
 // projectAttachmentKindLabel returns the localized label for an attachment kind.
 // projectAttachmentKindLabel 返回附件类型的本地化标签。
-export function projectAttachmentKindLabel(kind: keyof ProjectAttachmentCleanupKinds): string {
+export function projectAttachmentKindLabel(kind: keyof ProjectAttachmentCleanupKinds, t: (key: TranslationKey) => string): string {
   switch (kind) {
     case "image":
-      return "图片";
+      return t("projectSettings.attachmentKind.image");
     case "audio":
-      return "音频";
+      return t("projectSettings.attachmentKind.audio");
     case "video":
-      return "视频";
+      return t("projectSettings.attachmentKind.video");
     case "pdf":
       return "PDF";
   }
@@ -111,13 +112,13 @@ export function projectAttachmentKindLabel(kind: keyof ProjectAttachmentCleanupK
 
 // projectAttachmentPreviewFallback builds a no-op cleanup preview for browser-only mode.
 // projectAttachmentPreviewFallback 为纯浏览器模式构建无副作用清理预览。
-export function projectAttachmentPreviewFallback(request: ProjectAttachmentCleanupRequest): ProjectAttachmentCleanupPreviewSummary {
-  const selectedKinds = projectAttachmentSelectedKindLabels(request.selection);
-  let summary = `预览模式将检查 ${request.cutoffDate} 之前的 ${selectedKinds.join("、")} 托管附件。`;
+export function projectAttachmentPreviewFallback(request: ProjectAttachmentCleanupRequest, t: (key: TranslationKey) => string): ProjectAttachmentCleanupPreviewSummary {
+  const selectedKinds = projectAttachmentSelectedKindLabels(request.selection, t);
+  let summary = t("projectSettings.cleanup.previewFallback").replace("{date}", request.cutoffDate).replace("{kinds}", selectedKinds.join(t("global.listDelimiter")));
   if (!request.cutoffDate) {
-    summary = "请选择有效的截止日期。";
+    summary = t("projectSettings.cleanup.invalidDate");
   } else if (selectedKinds.length === 0) {
-    summary = "至少选择一种附件类型后才能预览。";
+    summary = t("projectSettings.cleanup.selectKind");
   }
   return {
     cutoffDate: request.cutoffDate,
@@ -131,8 +132,8 @@ export function projectAttachmentPreviewFallback(request: ProjectAttachmentClean
 
 // projectAttachmentSelectedKindLabels returns selected cleanup-kind labels.
 // projectAttachmentSelectedKindLabels 返回选中的清理类型标签。
-export function projectAttachmentSelectedKindLabels(kinds: ProjectAttachmentCleanupKinds): string[] {
+export function projectAttachmentSelectedKindLabels(kinds: ProjectAttachmentCleanupKinds, t: (key: TranslationKey) => string): string[] {
   return (Object.keys(kinds) as Array<keyof ProjectAttachmentCleanupKinds>)
     .filter((kind) => kinds[kind])
-    .map(projectAttachmentKindLabel);
+    .map((kind) => projectAttachmentKindLabel(kind, t));
 }

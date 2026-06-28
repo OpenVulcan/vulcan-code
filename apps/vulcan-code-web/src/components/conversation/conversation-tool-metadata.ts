@@ -49,8 +49,8 @@ export function turnStatsSummary(metadata: unknown): string | null {
     return null;
   }
   const parts = [
-    `${numberMetadata(stats.provider_call_count ?? stats.providerCallCount)} 次调用`,
-    `${numberMetadata(stats.tool_call_count ?? stats.toolCallCount)} 个工具`,
+    `${numberMetadata(stats.provider_call_count ?? stats.providerCallCount)} calls`,
+    `${numberMetadata(stats.tool_call_count ?? stats.toolCallCount)} tools`,
   ];
   const totalTokens = numberMetadata(stats.total_tokens ?? stats.totalTokens);
   if (totalTokens > 0) {
@@ -58,7 +58,7 @@ export function turnStatsSummary(metadata: unknown): string | null {
   }
   const cachedTokens = numberMetadata(stats.cached_input_tokens ?? stats.cachedInputTokens);
   if (cachedTokens > 0) {
-    parts.push(`缓存命中 ${cachedTokens}`);
+    parts.push(`cache hit ${cachedTokens}`);
   }
   const speed = numericMetadata(stats.output_tokens_per_second ?? stats.outputTokensPerSecond);
   if (speed && Number.isFinite(speed) && speed > 0) {

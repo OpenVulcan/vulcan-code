@@ -73,7 +73,7 @@ export function ContextCompactionBlock(props: {
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const startBlock = props.blocks.find((block) => block.compactionRole === "start") ?? props.blocks[0];
   // progressBlocks contains diagnostic progress lines emitted before final summary text is available.
   // progressBlocks 包含最终总结文本可用前发出的诊断进度行。
@@ -268,7 +268,7 @@ export function ThinkingBlock(props: {
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const content = props.block.body.trim() || props.block.summary || t("contextCompaction.emptyThinking");
   const shouldAutoExpand = props.autoExpanded || (props.streaming && (props.autoExpandWhileStreaming ?? true));
   const collapseId = `thinking:${props.block.id}`;
@@ -290,7 +290,7 @@ export function ThinkingBlock(props: {
     wasStreamingRef.current = props.streaming;
   }, [props.streaming, setExpanded, shouldAutoExpand]);
 
-  const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block);
+  const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block, locale, t);
 
   return (
     <section className={cn("thinking-block", expanded && "expanded")}>
@@ -324,13 +324,13 @@ export function ThinkingBlock(props: {
 
 // thinkingDurationLabel reads a concrete thinking duration from transcript metadata.
 // thinkingDurationLabel 从转录元数据中读取明确记录的思考耗时。
-function thinkingDurationLabel(block: ConversationDisplayBlock): string | null {
+function thinkingDurationLabel(block: ConversationDisplayBlock, locale: "zh-CN" | "en-US", t: (key: import("@/i18n-messages").TranslationKey) => string): string | null {
   const durationMs = thinkingDurationMs(block.rawMetadata);
   if (durationMs === null) {
     return null;
   }
-  const formatted = formatWorkProcessDuration(durationMs);
-  return formatted ? `持续 ${formatted}` : null;
+  const formatted = formatWorkProcessDuration(durationMs, locale);
+  return formatted ? t("conversation.process.duration").replace("{duration}", formatted) : null;
 }
 
 // thinkingDurationMs extracts known duration or elapsed fields without fabricating fallback values.

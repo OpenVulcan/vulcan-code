@@ -20,6 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   GeneratedMediaAttachment,
@@ -51,6 +52,9 @@ export function GeneratedMediaPlayerWindow(props: {
   // onClose 关闭媒体播放弹窗。
   onClose: () => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const imageStageRef = React.useRef<HTMLDivElement | null>(null);
   const imageElementRef = React.useRef<HTMLImageElement | null>(null);
   const imageInitializedRef = React.useRef(false);
@@ -291,7 +295,7 @@ export function GeneratedMediaPlayerWindow(props: {
               />
             ) : null}
             <Button
-              aria-label={isMaximized ? "还原播放器" : "最大化播放器"}
+              aria-label={isMaximized ? t("mediaPlayer.restore") : t("mediaPlayer.maximize")}
               className="icon-button"
               onClick={() => setIsMaximized((value) => !value)}
               size="icon"
@@ -300,7 +304,7 @@ export function GeneratedMediaPlayerWindow(props: {
             >
               {isMaximized ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
             </Button>
-            <Button aria-label="关闭播放器" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
+            <Button aria-label={t("mediaPlayer.close")} className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
               <X size={17} />
             </Button>
           </span>
@@ -404,6 +408,9 @@ function GeneratedMediaImageZoomControl(props: {
   // 当前相对图片原始尺寸的缩放比例。
   scale: number;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const hasOffset = generatedMediaHasImageOffset(props.offset);
   const percent = Math.round(props.scale * 100);
   const canUseZoom = props.canUseZoom && props.naturalSize !== null;
@@ -416,26 +423,26 @@ function GeneratedMediaImageZoomControl(props: {
       <GeneratedMediaImageZoomIconButton
         disabled={!canFitWindow}
         icon={<Scan size={16} />}
-        label="自适应窗口"
+        label={t("mediaPlayer.fitWindow")}
         onClick={props.onFit}
       />
       <GeneratedMediaImageZoomIconButton
         disabled={!canUseOriginalSize}
         icon={<SquareIcon size={15} />}
-        label="原始尺寸"
+        label={t("mediaPlayer.originalSize")}
         onClick={props.onOriginalSize}
       />
       <GeneratedMediaImageZoomIconButton
         disabled={!canZoomOut}
         icon={<Minus size={16} />}
-        label="缩小图片"
+        label={t("mediaPlayer.zoomOut")}
         onClick={props.onZoomOut}
       />
       <strong>{percent}%</strong>
       <GeneratedMediaImageZoomIconButton
         disabled={!canZoomIn}
         icon={<Plus size={16} />}
-        label="放大图片"
+        label={t("mediaPlayer.zoomIn")}
         onClick={props.onZoomIn}
       />
     </span>

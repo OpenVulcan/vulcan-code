@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { useI18n } from "@/i18n";
 import type { ProjectDirectoryListing } from "@/types";
 
 // projectFolderPickerPathKey normalizes a path for picker root matching.
@@ -51,6 +52,7 @@ export function ProjectFolderPickerDialog({
   onConfirm,
   onOpenChange,
 }: ProjectFolderPickerDialogProps) {
+  const { t } = useI18n();
   // listing stores the current directory listing returned by the service.
   // listing 保存服务返回的当前目录列表。
   const [listing, setListing] = React.useState<ProjectDirectoryListing | null>(null);
@@ -167,11 +169,11 @@ export function ProjectFolderPickerDialog({
         showCloseButton={!submitting}
       >
         <DialogHeader>
-          <DialogTitle>选择项目目录</DialogTitle>
+          <DialogTitle>{t("projectFolderPicker.title")}</DialogTitle>
         </DialogHeader>
         <form className="project-folder-picker-path-row" onSubmit={handlePathSubmit}>
           <Input
-            aria-label="目录路径"
+            aria-label={t("projectFolderPicker.pathAria")}
             disabled={loading || submitting}
             onChange={(event) => setPathInput(event.target.value)}
             value={pathInput}
@@ -189,7 +191,7 @@ export function ProjectFolderPickerDialog({
             variant="outline"
           >
             <ArrowUp size={15} />
-            上级
+            {t("projectFolderPicker.parent")}
           </Button>
           <Button
             disabled={!listing || loading || submitting}
@@ -199,11 +201,11 @@ export function ProjectFolderPickerDialog({
             variant="outline"
           >
             <RefreshCw size={15} />
-            刷新
+            {t("skills.action.refresh")}
           </Button>
         </div>
         <div className="project-folder-picker-browser">
-          <aside aria-label="盘符" className="project-folder-picker-roots">
+          <aside aria-label={t("projectFolderPicker.rootsAria")} className="project-folder-picker-roots">
             {directoryRoots.map((root) => (
               <button
                 className={root.path === activeRootPath ? "project-folder-picker-root active" : "project-folder-picker-root"}
@@ -217,13 +219,13 @@ export function ProjectFolderPickerDialog({
               </button>
             ))}
             {listing && directoryRoots.length === 0 ? (
-              <div className="project-folder-picker-empty">没有可用盘符</div>
+              <div className="project-folder-picker-empty">{t("projectFolderPicker.noRoots")}</div>
             ) : null}
           </aside>
           <section className="project-folder-picker-directory">
             <div className="project-folder-picker-current">
               <FolderOpen size={16} />
-              <span>{listing?.path ?? "正在加载..."}</span>
+              <span>{listing?.path ?? t("workspaceFiles.loading")}</span>
             </div>
             <div className="project-folder-picker-list" role="list">
               {listing?.entries.map((entry) => (
@@ -236,11 +238,11 @@ export function ProjectFolderPickerDialog({
                 >
                   <Folder size={16} />
                   <span>{entry.name}</span>
-                  {entry.hidden ? <small>隐藏</small> : null}
+                  {entry.hidden ? <small>{t("projectFolderPicker.hidden")}</small> : null}
                 </button>
               ))}
               {listing && listing.entries.length === 0 ? (
-                <div className="project-folder-picker-empty">没有可进入的子目录</div>
+                <div className="project-folder-picker-empty">{t("projectFolderPicker.noChildren")}</div>
               ) : null}
             </div>
           </section>
@@ -249,11 +251,11 @@ export function ProjectFolderPickerDialog({
         {listing?.notice ? <div className="project-folder-picker-notice">{listing.notice}</div> : null}
         <DialogFooter>
           <Button disabled={submitting} onClick={() => onOpenChange(false)} type="button" variant="outline">
-            取消
+            {t("conversation.action.cancel")}
           </Button>
           <Button disabled={!listing?.canSelect || submitting || loading} onClick={handleConfirm} type="button">
             {submitting ? <Spinner className="size-4" /> : <Check size={16} />}
-            {submitting ? "添加中" : "添加"}
+            {submitting ? t("projectFolderPicker.adding") : t("sidebar.addProject")}
           </Button>
         </DialogFooter>
       </DialogContent>

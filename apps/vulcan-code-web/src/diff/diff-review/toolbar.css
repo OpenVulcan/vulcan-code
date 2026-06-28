@@ -130,8 +130,9 @@
 
 .diff-style-menu,
 .diff-style-sub-menu {
-  min-width: 180px;
-  width: 180px;
+  min-width: min(246px, calc(100vw - 32px));
+  width: max-content;
+  max-width: calc(100vw - 32px);
 }
 
 .diff-mode-menu [data-slot="dropdown-menu-item"],
@@ -142,6 +143,7 @@
   justify-content: space-between;
   min-height: 30px;
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .diff-menu-check-spacer {
@@ -153,6 +155,13 @@
 .diff-style-toggle-item {
   justify-content: flex-start !important;
   gap: 8px;
+}
+
+.diff-style-toggle-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .diff-style-toggle-item svg {

@@ -38,6 +38,7 @@ import type {
   WorkspaceFileFilterOptions,
   WorkspaceFileReadResponse,
 } from "@/types";
+import { useI18n } from "@/i18n";
 import "@/diff/diffReview.css";
 
 // workspaceFilesPanelCacheLimit caps retained file panel states across rail collapse cycles.
@@ -118,6 +119,9 @@ export function WorkspaceFilesPanelHost(props: {
   // 更新父级动态页签标题。
   onTitleChange: (title: string) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // activeSurfaceId stores the conversation or subagent surface represented by this panel.
   // activeSurfaceId 保存当前面板代表的会话或子代理界面标识。
   const activeSurfaceId = activeWorkbenchSurfaceId(props.workbench, props.selectedConversationId);
@@ -274,9 +278,9 @@ export function WorkspaceFilesPanelHost(props: {
     setPanelError(null);
     setSelectedPath(null);
     setSelectedEntrySnapshot(null);
-    props.onTitleChange("打开文件");
+    props.onTitleChange(t("workspaceFilePreview.openFile"));
     void loadDirectory(null);
-  }, [listingFiltersKey, loadDirectory, props.onTitleChange, workspacePath]);
+  }, [listingFiltersKey, loadDirectory, props.onTitleChange, t, workspacePath]);
 
   React.useEffect(() => {
     const cacheEntry: WorkspaceFilesPanelCacheEntry = {
@@ -346,11 +350,11 @@ export function WorkspaceFilesPanelHost(props: {
       );
       setPreview(response);
     } catch (error) {
-      setPreviewError(workspaceFilePreviewErrorMessage(error, entry));
+      setPreviewError(workspaceFilePreviewErrorMessage(error, entry, t));
     } finally {
       setPreviewLoading(false);
     }
-  }, [props.loadWorkspaceFilePreview, props.selectedConversationId, workspacePath, workspaceProjectId]);
+  }, [props.loadWorkspaceFilePreview, props.selectedConversationId, t, workspacePath, workspaceProjectId]);
 
   React.useEffect(() => {
     // Restored file tabs must reload their previous preview even before the tree is reopened.
@@ -376,7 +380,7 @@ export function WorkspaceFilesPanelHost(props: {
     }
     setSelectedPath(entry.path);
     setSelectedEntrySnapshot(entry);
-    props.onTitleChange(entry.name || workspaceFileNameFromPath(entry.relativePath || entry.path));
+    props.onTitleChange(entry.name || workspaceFileNameFromPath(entry.relativePath || entry.path, t("workspaceFilePreview.openFile")));
     if (entry.kind === "other") {
       setPreview(null);
       setPreviewError(null);
@@ -392,7 +396,7 @@ export function WorkspaceFilesPanelHost(props: {
       return;
     }
     await loadFilePreview(entry, filters);
-  }, [filters, loadFilePreview, props.onTitleChange, workspacePath]);
+  }, [filters, loadFilePreview, props.onTitleChange, t, workspacePath]);
 
   // allowMediaPreview grants one media kind and immediately opens the selected media file.
   // allowMediaPreview 授权单个媒体类型并立即打开已选中的媒体文件。
@@ -420,7 +424,7 @@ export function WorkspaceFilesPanelHost(props: {
         filters,
       );
       props.onCopyText(response.content ?? "");
-      toast.success("已复制文件内容。");
+      toast.success(t("workspaceFiles.copyContentSuccess"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -447,16 +451,16 @@ export function WorkspaceFilesPanelHost(props: {
     setMediaPermissionEntry(null);
     setPreviewLoading(false);
     setFileTreeDrawerPinnedOpen(true);
-    props.onTitleChange("打开文件");
-  }, [props.onTitleChange]);
+    props.onTitleChange(t("workspaceFilePreview.openFile"));
+  }, [props.onTitleChange, t]);
 
   if (!workspacePath) {
     return (
       <section className="workspace-files-panel empty">
         <div className="context-empty-state">
           <Folder size={24} />
-          <strong>文件</strong>
-          <span>当前会话没有关联项目目录。</span>
+          <strong>{t("contextPanel.files")}</strong>
+          <span>{t("workspaceFiles.noProjectDirectory")}</span>
         </div>
       </section>
     );
@@ -468,14 +472,14 @@ export function WorkspaceFilesPanelHost(props: {
         <WorkspaceFileTreeDrawer
           activeFileKey={selectedPath}
           collapseOnSelect
-          emptyLabel={panelError ?? (rootListing ? "没有匹配的文件。" : "暂无可显示文件。")}
+          emptyLabel={panelError ?? (rootListing ? t("workspaceFiles.noMatchedFiles") : t("workspaceFiles.noDisplayableFiles"))}
           extraFilterActions={<WorkspaceFilesFilterMenu filters={filters} onFilterChange={updateFilter} />}
           fileIconClassName={(node) => workspaceFileTreeIconClassName(node.file)}
           fileKey={(entry) => entry.path}
           fileTitle={(entry) => entry.relativePath || entry.name}
           filter={filterText}
-          filterPlaceholder="筛选文件..."
-          loadingDirectoryLabel="正在加载。"
+          filterPlaceholder={t("workspaceFiles.filterPlaceholder")}
+          loadingDirectoryLabel={t("workspaceFiles.loading")}
           loadingDirectoryPaths={loadingDirectories}
           lockedOpen={!selectedEntry}
           openDirectoryPaths={expandedPaths}
@@ -496,7 +500,7 @@ export function WorkspaceFilesPanelHost(props: {
           onSelectFile={selectFile}
         />
         {!rootListing && loadingDirectories.has(workspacePath) ? (
-          <div className="workspace-files-panel-notice">正在加载文件树。</div>
+          <div className="workspace-files-panel-notice">{t("workspaceFiles.loadingTree")}</div>
         ) : null}
         {panelError ? <div className="workspace-files-panel-notice error">{panelError}</div> : null}
         <WorkspaceFilePreview
@@ -525,44 +529,45 @@ function WorkspaceFilesFilterMenu(props: {
   // 更新单个过滤值。
   onFilterChange: (key: keyof WorkspaceFileFilterOptions, value: boolean) => void;
 }) {
+  const { t } = useI18n();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button aria-label="文件过滤规则" size="icon-sm" type="button" variant="ghost">
+        <Button aria-label={t("workspaceFiles.filterRules")} size="icon-sm" type="button" variant="ghost">
           <MoreHorizontal size={16} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="workspace-files-filter-menu">
-        <DropdownMenuLabel>隐藏规则</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("workspaceFiles.hiddenRules")}</DropdownMenuLabel>
         <DropdownMenuCheckboxItem
           checked={props.filters.ignoreHidden}
           onCheckedChange={(value) => props.onFilterChange("ignoreHidden", Boolean(value))}
         >
-          忽略隐藏文件
+          {t("workspaceFiles.ignoreHiddenFiles")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
           checked={props.filters.ignoreDotNames}
           onCheckedChange={(value) => props.onFilterChange("ignoreDotNames", Boolean(value))}
         >
-          忽略点开头名称
+          {t("workspaceFiles.ignoreDotNames")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
           checked={props.filters.useIgnoreFiles}
           onCheckedChange={(value) => props.onFilterChange("useIgnoreFiles", Boolean(value))}
         >
-          使用 .ignore 规则
+          {t("workspaceFiles.useIgnoreRules")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
           checked={props.filters.useGitignore}
           onCheckedChange={(value) => props.onFilterChange("useGitignore", Boolean(value))}
         >
-          使用 .gitignore 规则
+          {t("workspaceFiles.useGitignoreRules")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
           checked={props.filters.filterNonPreviewFiles}
           onCheckedChange={(value) => props.onFilterChange("filterNonPreviewFiles", Boolean(value))}
         >
-          过滤非代码、图片、视频文件
+          {t("workspaceFiles.filterNonPreviewFiles")}
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -582,28 +587,29 @@ function WorkspaceFileRowMenu(props: {
   // 通过后端预览路径复制单个代码文件内容。
   onCopyFileContent: (entry: WorkspaceFileEntrySummary) => void;
 }) {
+  const { t } = useI18n();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button aria-label="文件操作" className="workspace-file-row-menu-trigger" size="icon-xs" type="button" variant="ghost">
+        <Button aria-label={t("workspaceFiles.fileActions")} className="workspace-file-row-menu-trigger" size="icon-xs" type="button" variant="ghost">
           <MoreHorizontal size={13} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="workspace-file-row-menu">
         <DropdownMenuItem onClick={() => props.onCopyText(props.entry.path)}>
           <Copy size={14} />
-          复制路径
+          {t("workspaceFiles.copyPath")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => props.onCopyText(props.entry.relativePath)}>
           <Copy size={14} />
-          复制相对路径
+          {t("workspaceFiles.copyRelativePath")}
         </DropdownMenuItem>
         <DropdownMenuItem
           disabled={props.entry.kind !== "code"}
           onClick={() => props.onCopyFileContent(props.entry)}
         >
           <FileText size={14} />
-          复制文件内容
+          {t("workspaceFiles.copyFileContent")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -919,9 +925,12 @@ function workspaceFileNameFromPath(
   // Relative or absolute file path.
   // 相对或绝对文件路径。
   path: string,
+  // Fallback label used when the path has no visible file name.
+  // 路径没有可见文件名时使用的回退标签。
+  fallback: string,
 ): string {
   // normalizedPath stores slash-normalized path text.
   // normalizedPath 保存斜杠规整后的路径文本。
   const normalizedPath = path.replace(/\\/g, "/");
-  return normalizedPath.split("/").filter(Boolean).pop() ?? "打开文件";
+  return normalizedPath.split("/").filter(Boolean).pop() ?? fallback;
 }

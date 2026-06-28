@@ -11,6 +11,8 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useI18n } from "@/i18n";
+import type { TranslationKey } from "@/i18n-messages";
 
 import type {
   DiffBranchSummary,
@@ -24,11 +26,11 @@ import type {
 
 // DIFF_REVIEW_MODE_LABELS maps review modes to compact UI labels.
 // DIFF_REVIEW_MODE_LABELS 将审核模式映射为紧凑界面标签。
-const DIFF_REVIEW_MODE_LABELS: Record<DiffReviewMode, string> = {
-  unstaged: "未暂存",
-  staged: "已暂存",
-  commit: "提交",
-  branch: "分支",
+const DIFF_REVIEW_MODE_LABEL_KEYS: Record<DiffReviewMode, TranslationKey> = {
+  unstaged: "diff.mode.unstaged",
+  staged: "diff.mode.staged",
+  commit: "diff.mode.commit",
+  branch: "diff.mode.branch",
 };
 
 // BranchSelectorOption stores one deduplicated branch menu option.
@@ -118,6 +120,7 @@ export function DiffPanelToolbar(props: {
   // 可选选择变更处理器。
   onSelectionChange?: (selection: DiffReviewSelection) => void;
 }) {
+  const { t } = useI18n();
   const selectedCommit = selectedDiffCommit(props.snapshot.recentCommits ?? [], props.selection.commitHash ?? props.snapshot.selectedCommitHash);
   const baseBranch = props.selection.baseBranch ?? props.snapshot.selectedBaseBranch ?? props.snapshot.currentBranch ?? "";
   const compareBranch = props.selection.compareBranch ?? props.snapshot.selectedCompareBranch ?? props.snapshot.defaultBranch ?? "";
@@ -142,13 +145,13 @@ export function DiffPanelToolbar(props: {
           <div className="diff-branch-compare-row">
             <BranchReadOnlyDisplay
               branches={props.snapshot.branches ?? []}
-              fallbackLabel={baseBranch || "当前分支"}
+              fallbackLabel={baseBranch || t("diff.branch.current")}
               value={baseBranch}
             />
             <span className="diff-branch-arrow">→</span>
             <BranchSelector
               branches={props.snapshot.branches ?? []}
-              fallbackLabel={compareBranch || "主分支"}
+              fallbackLabel={compareBranch || t("diff.branch.main")}
               value={compareBranch}
               onChange={(branch) => props.onSelectionChange?.({ ...props.selection, compareBranch: branch || null })}
             />
@@ -165,7 +168,7 @@ export function DiffPanelToolbar(props: {
         <button
           className="diff-icon-button"
           onClick={() => props.onViewModeChange(props.viewMode === "split" ? "unified" : "split")}
-          title={props.viewMode === "split" ? "切换到统一视图" : "切换到分栏视图"}
+          title={props.viewMode === "split" ? t("diff.view.toUnified") : t("diff.view.toSplit")}
           type="button"
         >
           {props.viewMode === "split" ? <Rows3 size={12} /> : <Columns2 size={12} />}
@@ -199,7 +202,7 @@ export function DiffPanelToolbar(props: {
           />
         ) : null}
         {props.onRefresh ? (
-          <button className="diff-icon-button" disabled={props.loading} onClick={() => props.onRefresh?.()} title="刷新 diff" type="button">
+          <button className="diff-icon-button" disabled={props.loading} onClick={() => props.onRefresh?.()} title={t("diff.refresh")} type="button">
             <RefreshCw className={props.loading ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={12} />
           </button>
         ) : null}
@@ -224,6 +227,7 @@ function DiffMoreMenu(props: {
   // 偏好变更处理器。
   onPreferencesChange: (preferences: DiffRenderPreferences) => void;
 }) {
+  const { t } = useI18n();
   const copyRawDiff = React.useCallback(() => {
     props.onCopyRaw?.(props.rawDiff);
   }, [props]);
@@ -251,7 +255,7 @@ function DiffMoreMenu(props: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className="diff-icon-button" title="更多 diff 操作" type="button">
+        <button className="diff-icon-button" title={t("diff.moreActions")} type="button">
           <MoreHorizontal size={12} />
         </button>
       </DropdownMenuTrigger>
@@ -260,26 +264,26 @@ function DiffMoreMenu(props: {
           <>
             <DropdownMenuItem className="diff-style-toggle-item" onSelect={copyRawDiff}>
               <Copy size={13} />
-              <span>复制 raw diff</span>
+              <span>{t("diff.copyRaw")}</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
           </>
         ) : null}
         <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleInlineDiff}>
           <Diff size={13} />
-          <span>{props.preferences.inlineDiff ? "禁用文字差异" : "启用文字差异"}</span>
+          <span>{props.preferences.inlineDiff ? t("diff.inline.disable") : t("diff.inline.enable")}</span>
         </DropdownMenuItem>
         <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleOverflowMode}>
           <WrapText size={13} />
-          <span>{props.preferences.overflowMode === "wrap" ? "禁用自动换行" : "启用自动换行"}</span>
+          <span>{props.preferences.overflowMode === "wrap" ? t("diff.wrap.disable") : t("diff.wrap.enable")}</span>
         </DropdownMenuItem>
         <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleHunkSeparatorStyle}>
           {props.preferences.hunkSeparatorStyle === "line-info" ? <Rows3 size={13} /> : <ListCollapse size={13} />}
-          <span>{props.preferences.hunkSeparatorStyle === "line-info" ? "隐藏上下文展开控件" : "显示上下文展开控件"}</span>
+          <span>{props.preferences.hunkSeparatorStyle === "line-info" ? t("diff.contextControls.hide") : t("diff.contextControls.show")}</span>
         </DropdownMenuItem>
         <DropdownMenuItem className="diff-style-toggle-item" onSelect={toggleIndicatorStyle}>
           {props.preferences.indicatorStyle === "bars" ? <SquarePlus size={13} /> : <GitCompareArrows size={13} />}
-          <span>{props.preferences.indicatorStyle === "bars" ? "使用 +/- 行标" : "使用颜色线条行标"}</span>
+          <span>{props.preferences.indicatorStyle === "bars" ? t("diff.indicator.useClassic") : t("diff.indicator.useBars")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -317,6 +321,7 @@ function DiffSearchControl(props: {
   // Enter 导航使用的搜索提交处理器。
   onSearchSubmit?: () => void;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   React.useEffect(() => {
@@ -349,10 +354,10 @@ function DiffSearchControl(props: {
     <div className="diff-panel-search-anchor" onBlur={handleBlur} onKeyDown={handleKeyDown}>
       <button
         aria-expanded={open}
-        aria-label="打开 diff 搜索"
+        aria-label={t("diff.search.open")}
         className={`diff-icon-button diff-search-toggle${props.query ? " active" : ""}`}
         onClick={() => setOpen((current) => !current)}
-        title="搜索 diff"
+        title={t("diff.search.label")}
         type="button"
       >
         <Search size={12} />
@@ -362,14 +367,14 @@ function DiffSearchControl(props: {
           <div className="diff-panel-search">
             <Search size={13} />
             <input
-              aria-label="搜索 diff"
+              aria-label={t("diff.search.label")}
               onChange={(event) => props.onQueryChange(event.currentTarget.value)}
-              placeholder="搜索 diff"
+              placeholder={t("diff.search.label")}
               ref={inputRef}
               value={props.query}
             />
             {props.query ? (
-              <span className="diff-search-count" title={props.resultTruncated ? "结果已截断" : undefined}>
+              <span className="diff-search-count" title={props.resultTruncated ? t("diff.search.truncated") : undefined}>
                 {props.resultLabel}
               </span>
             ) : null}
@@ -377,7 +382,7 @@ function DiffSearchControl(props: {
               className="diff-search-step"
               disabled={!props.canSearchPrevious}
               onClick={() => props.onPrevious?.()}
-              title="上一条"
+              title={t("diff.search.previous")}
               type="button"
             >
               <ChevronUp size={13} />
@@ -386,7 +391,7 @@ function DiffSearchControl(props: {
               className="diff-search-step"
               disabled={!props.canSearchNext}
               onClick={() => props.onNext?.()}
-              title="下一条"
+              title={t("diff.search.next")}
               type="button"
             >
               <ChevronDown size={13} />
@@ -414,6 +419,7 @@ function DiffModeMenu(props: {
   // 可选选择变更处理器。
   onSelectionChange?: (selection: DiffReviewSelection) => void;
 }) {
+  const { t } = useI18n();
   const selectMode = React.useCallback((mode: DiffReviewMode) => {
     props.onSelectionChange?.({ ...props.selection, mode });
   }, [props]);
@@ -423,23 +429,23 @@ function DiffModeMenu(props: {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button className="diff-mode-trigger" type="button">
-          <span>{DIFF_REVIEW_MODE_LABELS[props.selection.mode]}</span>
+          <span>{t(DIFF_REVIEW_MODE_LABEL_KEYS[props.selection.mode])}</span>
           {shouldShowFileCount ? <span className="diff-mode-count">{props.changedFileCount}</span> : null}
           <ChevronDown size={13} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="diff-mode-menu" sideOffset={4}>
         <DropdownMenuItem onSelect={() => selectMode("unstaged")}>
-          <span>未暂存</span>
+          <span>{t("diff.mode.unstaged")}</span>
           {props.selection.mode === "unstaged" ? <Check size={14} /> : null}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => selectMode("staged")}>
-          <span>已暂存</span>
+          <span>{t("diff.mode.staged")}</span>
           {props.selection.mode === "staged" ? <Check size={14} /> : null}
         </DropdownMenuItem>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="diff-mode-sub-trigger">
-            <span>提交</span>
+            <span>{t("diff.mode.commit")}</span>
             {props.selection.mode === "commit" ? <Check size={14} /> : null}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="diff-commit-menu" sideOffset={8}>
@@ -454,12 +460,12 @@ function DiffModeMenu(props: {
                 {selectedCommitHash === commit.hash ? <Check size={14} /> : null}
               </DropdownMenuItem>
             )) : (
-              <DropdownMenuItem disabled>暂无提交记录</DropdownMenuItem>
+              <DropdownMenuItem disabled>{t("diff.commit.none")}</DropdownMenuItem>
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuItem onSelect={() => selectMode("branch")}>
-          <span>分支</span>
+          <span>{t("diff.mode.branch")}</span>
           {props.selection.mode === "branch" ? <Check size={14} /> : null}
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -506,6 +512,7 @@ function BranchSelector(props: {
   // 选择变更处理器。
   onChange: (branch: string) => void;
 }) {
+  const { t } = useI18n();
   const [query, setQuery] = React.useState("");
   const branchOptions = React.useMemo(
     () => buildBranchSelectorOptions(props.branches, props.value),
@@ -535,13 +542,13 @@ function BranchSelector(props: {
         <div className="diff-branch-search" onKeyDown={(event) => event.stopPropagation()}>
           <Search size={13} />
           <input
-            aria-label="搜索分支"
+            aria-label={t("diff.branch.search")}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="搜索分支"
+            placeholder={t("diff.branch.search")}
             value={query}
           />
         </div>
-        <div className="diff-branch-menu-label">分支</div>
+        <div className="diff-branch-menu-label">{t("diff.branch.label")}</div>
         {filteredBranches.length ? filteredBranches.map((option) => (
           <DropdownMenuItem
             className="diff-branch-menu-item"
@@ -553,7 +560,7 @@ function BranchSelector(props: {
             {branchNamesEquivalent(props.value, option.branch.name) ? <Check size={14} /> : null}
           </DropdownMenuItem>
         )) : (
-          <DropdownMenuItem disabled>没有匹配分支</DropdownMenuItem>
+          <DropdownMenuItem disabled>{t("diff.branch.noMatches")}</DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

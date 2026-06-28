@@ -1,5 +1,6 @@
 import type { StartupSnapshot, StartupStepSnapshot } from "@/types";
 import { CircleAlert } from "lucide-react";
+import { useI18n } from "@/i18n";
 
 // LoadingScreen renders the earliest frontend loading state.
 // LoadingScreen 渲染最早期的前端加载状态。
@@ -8,6 +9,7 @@ export function LoadingScreen(props: {
   // 在工作台快照就绪前已经收到的启动快照。
   startup?: StartupSnapshot | null;
 }) {
+  const { t } = useI18n();
   return (
     <main className="loading-screen">
       <StartupProgressPanel startup={props.startup ?? null} />
@@ -36,6 +38,7 @@ function StartupProgressPanel(props: {
   // 最近一次服务启动快照；服务端点仍在发现时为 null。
   startup: StartupSnapshot | null;
 }) {
+  const { t } = useI18n();
   // activeStep selects the current startup row for the progress headline.
   // activeStep 选择当前启动步骤作为进度标题。
   const activeStep = props.startup ? activeStartupStep(props.startup.steps) : null;
@@ -44,7 +47,7 @@ function StartupProgressPanel(props: {
   const percent = startupProgressPercent(props.startup);
   // message shows the current startup phase without expanding the full step list.
   // message 展示当前启动阶段，而不展开完整步骤列表。
-  const message = activeStep?.message ?? (props.startup ? "正在加载项目与会话索引" : "正在连接 Vulcan Core Service");
+  const message = activeStep?.message ?? (props.startup ? t("startup.loadingProjectIndex") : t("startup.connectingService"));
   return (
     <section className="startup-progress-panel" aria-live="polite" aria-busy={!props.startup?.ready}>
       <div className="startup-logo-stage" aria-hidden="true">
@@ -52,10 +55,10 @@ function StartupProgressPanel(props: {
       </div>
       <div className="startup-progress-content">
         <div className="conversation-loading-heading startup-progress-heading">
-          <strong>{activeStep ? `正在加载 ${activeStep.label}` : "正在加载 Workspace"}</strong>
+          <strong>{activeStep ? t("startup.loadingStep").replace("{step}", activeStep.label) : t("startup.loadingWorkspace")}</strong>
           <span>{Math.round(percent)}%</span>
         </div>
-        <div className="conversation-loading-bar startup-progress-bar" aria-label="正在加载 Workspace" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
+        <div className="conversation-loading-bar startup-progress-bar" aria-label={t("startup.loadingWorkspace")} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
           <div className="conversation-loading-bar-value" style={{ width: `${percent}%` }} />
         </div>
         <p className="startup-progress-message">{message}</p>
@@ -104,10 +107,11 @@ export function ErrorScreen(props: {
   // 启动失败后展示的错误消息。
   error: string;
 }) {
+  const { t } = useI18n();
   return (
     <main className="loading-screen error">
       <CircleAlert size={28} />
-      <span>启动失败：{props.error}</span>
+      <span>{t("startup.failed").replace("{error}", props.error)}</span>
     </main>
   );
 }

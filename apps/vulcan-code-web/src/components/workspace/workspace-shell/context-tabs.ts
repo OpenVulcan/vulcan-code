@@ -4,6 +4,7 @@ import {
   type WorkspaceContextTabKind,
   type WorkspaceContextTabState,
 } from "@/components/workspace/WorkspaceContextPanel";
+import type { TranslationKey } from "@/i18n";
 import {
   activeWorkbenchSurfaceId,
   selectedConversationWorkspacePath,
@@ -87,6 +88,9 @@ export function openWorkspaceContextTab(
   // Context tab kind to open.
   // 需要打开的上下文页签类型。
   kind: WorkspaceContextTabKind,
+  // Translation helper for default tab titles.
+  // 默认页签标题的翻译辅助函数。
+  t: (key: TranslationKey) => string,
 ): WorkspaceContextTabState {
   // current stores a normalized base state before modification.
   // current 保存修改前规整后的基础状态。
@@ -101,7 +105,7 @@ export function openWorkspaceContextTab(
   }
   // nextTab stores the newly created context tab.
   // nextTab 保存新创建的上下文页签。
-  const nextTab = createWorkspaceContextTab(kind);
+  const nextTab = createWorkspaceContextTab(kind, t);
   return {
     activeTabId: nextTab.id,
     tabs: [...current.tabs, nextTab],
@@ -170,10 +174,13 @@ export function renameWorkspaceFileContextTab(
   // New visible title.
   // 新的可见标题。
   title: string,
+  // Translation helper for empty file-tab title fallback.
+  // 空文件页签标题回退的翻译辅助函数。
+  t: (key: TranslationKey) => string,
 ): WorkspaceContextTabState {
   // normalizedTitle stores the non-empty title fallback.
   // normalizedTitle 保存非空标题回退值。
-  const normalizedTitle = title.trim() || workspaceContextTabDefaultTitle("files");
+  const normalizedTitle = title.trim() || workspaceContextTabDefaultTitle("files", t);
   return {
     activeTabId: state.activeTabId,
     tabs: state.tabs.map((tab) => (
@@ -190,6 +197,9 @@ function createWorkspaceContextTab(
   // Context tab kind to create.
   // 需要创建的上下文页签类型。
   kind: WorkspaceContextTabKind,
+  // Translation helper for default tab titles.
+  // 默认页签标题的翻译辅助函数。
+  t: (key: TranslationKey) => string,
 ): WorkspaceContextTabItem {
   // createdAt stores the runtime creation time for this tab.
   // createdAt 保存该页签的运行期创建时间。
@@ -202,7 +212,7 @@ function createWorkspaceContextTab(
     id,
     kind,
     selectedFileName: null,
-    title: workspaceContextTabDefaultTitle(kind),
+    title: workspaceContextTabDefaultTitle(kind, t),
   };
 }
 

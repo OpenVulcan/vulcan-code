@@ -1,5 +1,6 @@
 import React from "react";
 import { ChevronDown, ChevronRight, FileWarning, Folder, ListCollapse, ListTree, Search } from "lucide-react";
+import { useI18n } from "@/i18n";
 
 // WORKSPACE_FILE_TREE_HOVER_DELAY_MS delays drawer hover changes to avoid accidental drag-triggered opens.
 // WORKSPACE_FILE_TREE_HOVER_DELAY_MS 延迟目录抽屉 hover 状态变化，避免拖拽时误触展开。
@@ -261,6 +262,7 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
     setHoverOpen(false);
     setSuppressHoverOpen(true);
   }, [clearHoverCloseTimeout, clearHoverOpenTimeout, props]);
+  const { t } = useI18n();
   return (
     <aside
       className={`diff-file-tree-drawer${drawerOpen ? " open" : " collapsed"}${props.lockedOpen ? " locked-open" : ""}`}
@@ -268,7 +270,7 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
       onMouseLeave={handleDrawerMouseLeave}
     >
       <button
-        aria-label={drawerOpen ? "收起文件目录" : "展开文件目录"}
+        aria-label={drawerOpen ? t("workspaceFileTree.collapseDirectory") : t("workspaceFileTree.expandDirectory")}
         className="diff-file-tree-handle"
         onClick={handleDrawerToggle}
         type="button"
@@ -279,26 +281,26 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
         <div className="diff-file-tree-filter">
           <Search size={14} />
           <input
-            aria-label="筛选文件"
+            aria-label={t("workspaceFiles.filterFiles")}
             onChange={(event) => props.onFilterChange(event.currentTarget.value)}
-            placeholder={props.filterPlaceholder ?? "筛选文件..."}
+            placeholder={props.filterPlaceholder ?? t("workspaceFiles.filterPlaceholder")}
             value={props.filter}
           />
           <span className="diff-file-tree-filter-actions">
             <button
-              aria-label="全部展开"
+              aria-label={t("workspaceFileTree.expandAll")}
               disabled={fallbackOpenDirectoryPaths.size === 0}
               onClick={expandAllDirectories}
-              title="全部展开"
+              title={t("workspaceFileTree.expandAll")}
               type="button"
             >
               <ListTree size={13} />
             </button>
             <button
-              aria-label="全部折叠"
+              aria-label={t("workspaceFileTree.collapseAll")}
               disabled={fallbackOpenDirectoryPaths.size === 0}
               onClick={collapseAllDirectories}
-              title="全部折叠"
+              title={t("workspaceFileTree.collapseAll")}
               type="button"
             >
               <ListCollapse size={13} />
@@ -326,7 +328,7 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
               renderFileTrailing={props.renderFileTrailing}
             />
           )) : (
-            <div className="diff-file-tree-empty">{props.emptyLabel ?? "没有匹配的文件"}</div>
+            <div className="diff-file-tree-empty">{props.emptyLabel ?? t("workspaceFiles.noMatchedFiles")}</div>
           )}
         </div>
       </div>
@@ -380,6 +382,7 @@ function WorkspaceFileTreeNodeView<RowFile>(props: {
   // 渲染文件行末尾的附加内容。
   renderFileTrailing?: (node: WorkspaceFileTreeNode<RowFile>) => React.ReactNode;
 }) {
+  const { t } = useI18n();
   // isDirectory stores whether the current node can contain child nodes.
   // isDirectory 保存当前节点是否可以包含子节点。
   const isDirectory = !props.node.file;
@@ -428,7 +431,7 @@ function WorkspaceFileTreeNodeView<RowFile>(props: {
           />
         )) : null}
         {isOpen && isLoading ? (
-          <div className="diff-file-tree-empty">{props.loadingDirectoryLabel ?? "正在加载。"}</div>
+          <div className="diff-file-tree-empty">{props.loadingDirectoryLabel ?? t("workspaceFiles.loading")}</div>
         ) : null}
         {isOpen && !isLoading && props.node.children.length === 0 && props.emptyDirectoryLabel ? (
           <div className="diff-file-tree-empty">{props.emptyDirectoryLabel}</div>

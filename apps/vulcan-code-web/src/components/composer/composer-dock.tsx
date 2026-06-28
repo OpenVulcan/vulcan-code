@@ -20,6 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
   AiCapabilitySummary,
@@ -180,6 +181,9 @@ export function ComposerDock(props: {
   // runtimeCue 在输入区附近显示当前会话的进行中活动。
   runtimeCue: ComposerRuntimeCue | null;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   // dockRef measures only in-flow composer content; floating status rows stay outside this height.
   // dockRef 只测量布局流内的输入区内容；浮动状态行不参与该高度。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
@@ -217,7 +221,7 @@ export function ComposerDock(props: {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    aria-label="滚动到底部"
+                    aria-label={t("composer.scrollToBottom")}
                     className="scroll-to-bottom-button"
                     onClick={props.onScrollToBottom}
                     size="icon"
@@ -227,7 +231,7 @@ export function ComposerDock(props: {
                     <ArrowDown size={18} />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="top">滚动到底部</TooltipContent>
+                <TooltipContent side="top">{t("composer.scrollToBottom")}</TooltipContent>
               </Tooltip>
             </div>
           ) : null}

@@ -17,7 +17,7 @@ export function applyPreviewProjectAction(
 ): { snapshot: WorkbenchSnapshot; message: string } {
   const project = workbench.projects.find((candidate) => candidate.id === projectId);
   if (!project) {
-    return { snapshot: workbench, message: "没有找到对应项目。" };
+    return { snapshot: workbench, message: "The project was not found." };
   }
 
   if (action === "toggle-pin") {
@@ -27,7 +27,7 @@ export function applyPreviewProjectAction(
         ...workbench,
         projects: workbench.projects.map((candidate) => candidate.id === projectId ? { ...candidate, pinned } : candidate),
       },
-      message: pinned ? `已将项目 ${project.name} 置顶。` : `已取消项目 ${project.name} 的置顶状态。`,
+      message: pinned ? `Pinned project ${project.name}.` : `Unpinned project ${project.name}.`,
     };
   }
 
@@ -57,8 +57,8 @@ export function applyPreviewProjectAction(
       messages: workbench.messages.filter((message) => !archivedConversationIds.has(message.conversationId)),
     },
     message: action === "remove-project"
-      ? `已归档并移除项目 ${project.name}。`
-      : `已归档项目 ${project.name} 下的对话。`,
+      ? `Archived and removed project ${project.name}.`
+      : `Archived conversations under project ${project.name}.`,
   };
 }
 

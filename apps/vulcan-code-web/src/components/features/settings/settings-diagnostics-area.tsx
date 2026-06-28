@@ -3,6 +3,7 @@ import {
   PlugZap,
 } from "lucide-react";
 import { PanelTitle, StatusIcon, StatusPill } from "@/components/shared/status";
+import { useI18n } from "@/i18n";
 import type {
   LogEntrySummary,
   StartupSnapshot,
@@ -18,11 +19,12 @@ export function LogsArea(props: {
   // 启动状态旁展示的诊断日志。
   logs: LogEntrySummary[];
 }) {
+  const { t } = useI18n();
   return (
     <div className="area-grid two-columns">
       <StartupPanel startup={props.startup} />
       <section className="panel">
-        <PanelTitle icon={<History size={17} />} title="诊断日志" />
+        <PanelTitle icon={<History size={17} />} title={t("settings.diagnostics.logs")} />
         <div className="log-list">
           {props.logs.map((log) => (
             <article className="log-row" key={log.id}>
@@ -44,16 +46,17 @@ function StartupPanel(props: {
   // 以步骤行展示的启动快照。
   startup: StartupSnapshot;
 }) {
+  const { t } = useI18n();
   return (
     <section className="panel startup-panel">
-      <PanelTitle icon={<PlugZap size={17} />} title="启动状态" />
+      <PanelTitle icon={<PlugZap size={17} />} title={t("settings.diagnostics.startupStatus")} />
       <div className="step-list">
         {props.startup.steps.map((step) => (
           <div className="step-item" key={step.id}>
             <StatusIcon status={step.status} />
             <div>
               <strong>{step.label}</strong>
-              <span>{step.message ?? "等待状态更新"}</span>
+              <span>{step.message ?? t("settings.diagnostics.waitingStatus")}</span>
             </div>
           </div>
         ))}

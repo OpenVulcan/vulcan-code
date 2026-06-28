@@ -32,6 +32,7 @@ import type {
   ToolExecutionTraceCallback,
 } from "./conversation-tool-execution-types";
 import type { CommandSessionSummary } from "@/types";
+import { useI18n } from "@/i18n";
 import { ToolPresentationCard } from "./conversation-tool-presentation-card";
 import { terminalSummaryById } from "./conversation-terminal-model";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
@@ -89,6 +90,7 @@ export function ToolExecutionBlock(props: {
   // 用于本地 UI 诊断的可选埋点回调。
   onTrace?: ToolExecutionTraceCallback;
 }) {
+  const { t } = useI18n();
   const callBlock = props.blocks.find((block) => block.kind === "tool-call");
   const resultBlock = props.blocks.find((block) => block.kind === "tool-result");
   const commandBlock = props.blocks.find((block) => block.kind === "command");
@@ -97,7 +99,7 @@ export function ToolExecutionBlock(props: {
     return null;
   }
 
-  const summary = toolExecutionSummary(props.blocks, props.sessionRunning);
+  const summary = toolExecutionSummary(props.blocks, props.sessionRunning, t);
   const toolName = toolExecutionName(props.blocks);
   const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
@@ -139,11 +141,11 @@ export function ToolExecutionBlock(props: {
   );
   const displayedMediaAttachments = mergeGeneratedMediaAttachments(mediaAttachments, hydratedMediaAttachments);
   const metadata = [
-    ...(toolName ? [["工具", toolName] as [string, string]] : []),
-    ...(identifier ? [["标识", identifier] as [string, string]] : []),
-    ...(errorPreview ? [["错误", errorPreview] as [string, string]] : []),
-    ["状态", toolDisplayStateLabel(displayState)] as [string, string],
-    ...(resultBlock ? [["结果", "已返回"] as [string, string]] : []),
+    ...(toolName ? [[t("conversation.metadata.tool"), toolName] as [string, string]] : []),
+    ...(identifier ? [[t("conversation.metadata.identifier"), identifier] as [string, string]] : []),
+    ...(errorPreview ? [[t("conversation.metadata.error"), errorPreview] as [string, string]] : []),
+    [t("conversation.metadata.status"), toolDisplayStateLabel(displayState, t)] as [string, string],
+    ...(resultBlock ? [[t("conversation.metadata.result"), t("conversation.metadata.returned")] as [string, string]] : []),
   ];
 
   if (presentation) {
@@ -171,7 +173,7 @@ export function ToolExecutionBlock(props: {
     props.onOpenDetail({
       title: summary,
       kind: primaryBlock.kind,
-      body: buildToolExecutionDetailBody(props.blocks),
+      body: buildToolExecutionDetailBody(props.blocks, t),
       detailRef,
       metadata,
       mediaAttachments: displayedMediaAttachments,

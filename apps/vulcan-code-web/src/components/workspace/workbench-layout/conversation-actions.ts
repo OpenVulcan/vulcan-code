@@ -126,7 +126,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     ?? selectedConversation?.projectId
     ?? null;
   if (!activeProjectId) {
-    toast.error("当前会话没有明确关联项目，无法发送。");
+    toast.error(translate("conversationActions.noProjectForSend"));
     return false;
   }
   const activeConversationId = selectedDraftConversation
@@ -146,7 +146,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       submission.aiCapabilityTargetOrderOverrides,
     );
     if (!snapshot) {
-      toast.info("浏览器预览模式下无法发送真实会话。");
+      toast.info(translate("conversationActions.previewCannotSend"));
       return false;
     }
     setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
@@ -162,7 +162,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, [selectedConversation, selectedConversationId, selectedDraftConversation]);
+}, [selectedConversation, selectedConversationId, selectedDraftConversation, translate]);
 
 // handleInsertPendingPrompt routes one queued prompt through the shared backend queue router.
 // handleInsertPendingPrompt 通过共享后端队列路由引导单条排队提示词。
@@ -201,7 +201,7 @@ const handleCompactSelectedConversationContext = React.useCallback(async (): Pro
   try {
     const snapshot = await compactSelectedConversationContext();
     if (!snapshot) {
-      toast.info("浏览器预览模式下无法执行真实上下文压缩。");
+      toast.info(translate("conversationActions.previewCannotCompact"));
       return false;
     }
     setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
@@ -210,7 +210,7 @@ const handleCompactSelectedConversationContext = React.useCallback(async (): Pro
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, []);
+}, [translate]);
 
 // handleOpenSubagentPanel asks the backend to display one child task surface and reports whether it succeeded.
 // handleOpenSubagentPanel 请求后端显示单个子任务界面，并返回是否打开成功。
@@ -383,14 +383,17 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
     const snapshot = await selectWorkbenchModel(choice);
     if (snapshot) {
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success(`当前模型已切换为 ${choice.modelName}（${choice.providerName}）。`);
+      toast.success(formatConversationActionTranslation(translate, "conversationActions.modelSwitched", {
+        model: choice.modelName,
+        provider: choice.providerName,
+      }));
     }
     return true;
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, []);
+}, [mergeWorkbenchWithLocalCaches, setWorkbenchState, translate]);
 
 // handleStopCommandSession force-stops one live terminal session from context panels.
 // handleStopCommandSession 从上下文面板强制停止单条实时终端会话。
@@ -431,14 +434,14 @@ const handleSelectWorkbenchModelSecondaryRoute = React.useCallback(async (
     const snapshot = await selectWorkbenchModelSecondaryRoute(providerId, modelId, route);
     if (snapshot) {
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success(route ? "二级供应商已切换。" : "二级供应商已恢复 Auto。");
+      toast.success(translate(route ? "composer.secondaryRoute.switched" : "composer.secondaryRoute.restoredAuto"));
     }
     return true;
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, []);
+}, [mergeWorkbenchWithLocalCaches, setWorkbenchState, translate]);
 
 // handleGetUserPromptEditDraft loads one backend-validated edit draft.
 // handleGetUserPromptEditDraft 加载单条后端校验过的编辑草稿。
@@ -547,4 +550,17 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleSelectWorkbenchReasoningEffort,
     handleSelectWorkbenchThinkingDisplayMode,
   };
+}
+
+// formatConversationActionTranslation replaces named placeholders in localized workbench action messages.
+// formatConversationActionTranslation 替换工作台动作本地化消息中的具名占位符。
+function formatConversationActionTranslation(
+  translate: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    translate(key),
+  );
 }

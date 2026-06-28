@@ -18,13 +18,10 @@ import { FileTypeIcon } from "@/components/conversation/conversation-file-type-i
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
 import {
   terminalStateClass,
-  terminalStateLabel,
+  type TerminalVisualState,
 } from "@/components/conversation/conversation-terminal-model";
 import {
-  askQuestionStatusLabel,
-  commandPresentationStatusLabel,
   hydrateAskQuestionPresentation,
-  fileChangeStatusLabel,
   hydrateCommandExecutionPresentation,
   type AskQuestionPresentation,
   type AskQuestionPresentationItem,
@@ -33,7 +30,9 @@ import {
   type FileChangeOperation,
   type FileChangePresentation,
   type ToolPresentation,
+  type ToolPresentationDisplayState,
 } from "@/components/conversation/conversation-tool-presentations";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 // ToolPresentationCard renders one recognized tool presentation with shared expansion behavior.
@@ -96,6 +95,35 @@ const commandPresentationDetailCache = new Map<string, CommandExecutionPresentat
 // askQuestionPresentationDetailCache 避免虚拟滚动重挂后重复请求已完成 ask 答案。
 const askQuestionPresentationDetailCache = new Map<string, AskQuestionPresentation>();
 
+// FILE_CHANGE_OPERATION_LABEL_KEYS maps file-change operations and phases to checked translation keys.
+// FILE_CHANGE_OPERATION_LABEL_KEYS 将文件变更操作与阶段映射到受类型检查的翻译键。
+const FILE_CHANGE_OPERATION_LABEL_KEYS: Record<FileChangeOperation, Record<"running" | "failed" | "preview" | "completed", TranslationKey>> = {
+  create: {
+    running: "toolPresentation.file.create.running",
+    failed: "toolPresentation.file.create.failed",
+    preview: "toolPresentation.file.create.preview",
+    completed: "toolPresentation.file.create.completed",
+  },
+  modify: {
+    running: "toolPresentation.file.modify.running",
+    failed: "toolPresentation.file.modify.failed",
+    preview: "toolPresentation.file.modify.preview",
+    completed: "toolPresentation.file.modify.completed",
+  },
+  delete: {
+    running: "toolPresentation.file.delete.running",
+    failed: "toolPresentation.file.delete.failed",
+    preview: "toolPresentation.file.delete.preview",
+    completed: "toolPresentation.file.delete.completed",
+  },
+  mixed: {
+    running: "toolPresentation.file.mixed.running",
+    failed: "toolPresentation.file.mixed.failed",
+    preview: "toolPresentation.file.mixed.preview",
+    completed: "toolPresentation.file.mixed.completed",
+  },
+};
+
 // CommandExecutionPresentationCard renders the command-line specific compact and expanded states.
 // CommandExecutionPresentationCard 渲染命令行专用的紧凑与展开状态。
 function CommandExecutionPresentationCard(props: {
@@ -112,6 +140,9 @@ function CommandExecutionPresentationCard(props: {
   // 加载单条隐藏工具详情记录用于命令输出。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const {
     expanded,
     onExpandedChange,
@@ -163,10 +194,10 @@ function CommandExecutionPresentationCard(props: {
   const exitCodeState = commandExitCodeState(hydratedPresentation.exitCode);
   const terminalState = hydratedPresentation.terminalState;
   const statusLabel = hydratedPresentation.commandSessionAction
-    ? commandSessionActionStatusLabel(hydratedPresentation.commandSessionAction, hydratedPresentation.state)
-    : commandPresentationStatusLabel(hydratedPresentation.state);
-  const sessionMetaLabel = commandSessionMetaLabel(hydratedPresentation);
-  const detailHeading = commandDetailHeading(hydratedPresentation);
+    ? commandSessionActionStatusLabel(hydratedPresentation.commandSessionAction, hydratedPresentation.state, t)
+    : commandPresentationStatusLabel(hydratedPresentation.state, t);
+  const sessionMetaLabel = commandSessionMetaLabel(hydratedPresentation, t);
+  const detailHeading = commandDetailHeading(hydratedPresentation, t);
   const handleToggle = React.useCallback(() => {
     dispatchConversationManualViewportInteraction();
     onExpandedChange(presentation.id, !expanded);
@@ -202,7 +233,7 @@ function CommandExecutionPresentationCard(props: {
           <div className="tool-presentation-output-scroll">
             <TerminalOutputView
               className="tool-presentation-output-text"
-              emptyText={loadingDetail ? "正在加载输出..." : "无输出"}
+              emptyText={loadingDetail ? t("toolPresentation.output.loading") : t("toolPresentation.output.empty")}
               text={outputText}
             />
           </div>
@@ -212,7 +243,7 @@ function CommandExecutionPresentationCard(props: {
           <div className="tool-presentation-footer">
             <span>{sessionMetaLabel}</span>
             {hydratedPresentation.exitCode !== null ? (
-              <span className={cn("tool-presentation-exit-code", exitCodeState)}>退出代码 {exitCodeLabel}</span>
+              <span className={cn("tool-presentation-exit-code", exitCodeState)}>{t("toolPresentation.exitCode")} {exitCodeLabel}</span>
             ) : null}
           </div>
         </div>
@@ -223,40 +254,47 @@ function CommandExecutionPresentationCard(props: {
 
 // commandSessionActionStatusLabel returns an action result label instead of the session lifecycle label.
 // commandSessionActionStatusLabel 返回动作结果文案，而不是会话生命周期文案。
-function commandSessionActionStatusLabel(action: string, state: CommandExecutionPresentation["state"]): string {
+function commandSessionActionStatusLabel(
+  action: string,
+  state: CommandExecutionPresentation["state"],
+  t: (key: TranslationKey) => string,
+): string {
   if (state === "failed") {
-    if (action === "start") return "启动失败";
-    if (action === "read") return "读取失败";
-    if (action === "send") return "发送失败";
-    if (action === "write") return "写入失败";
-    if (action === "stop") return "停止失败";
-    return "执行失败";
+    if (action === "start") return t("toolPresentation.command.start.failed");
+    if (action === "read") return t("toolPresentation.command.read.failed");
+    if (action === "send") return t("toolPresentation.command.send.failed");
+    if (action === "write") return t("toolPresentation.command.write.failed");
+    if (action === "stop") return t("toolPresentation.command.stop.failed");
+    return t("toolPresentation.command.failed");
   }
   if (state === "running") {
-    if (action === "start") return "启动中";
-    if (action === "read") return "读取中";
-    if (action === "send") return "发送中";
-    if (action === "write") return "写入中";
-    if (action === "stop") return "停止中";
-    return "执行中";
+    if (action === "start") return t("toolPresentation.command.start.running");
+    if (action === "read") return t("toolPresentation.command.read.running");
+    if (action === "send") return t("toolPresentation.command.send.running");
+    if (action === "write") return t("toolPresentation.command.write.running");
+    if (action === "stop") return t("toolPresentation.command.stop.running");
+    return t("toolPresentation.command.running");
   }
-  if (action === "start") return "已启动";
-  if (action === "list") return "已列出";
-  if (action === "read") return "已读取";
-  if (action === "send") return "已发送";
-  if (action === "write") return "已写入";
-  if (action === "stop") return "已停止";
-  return commandPresentationStatusLabel(state);
+  if (action === "start") return t("toolPresentation.command.start.completed");
+  if (action === "list") return t("toolPresentation.command.list.completed");
+  if (action === "read") return t("toolPresentation.command.read.completed");
+  if (action === "send") return t("toolPresentation.command.send.completed");
+  if (action === "write") return t("toolPresentation.command.write.completed");
+  if (action === "stop") return t("toolPresentation.command.stop.completed");
+  return commandPresentationStatusLabel(state, t);
 }
 
 // commandDetailHeading names the expanded content by command-session action.
 // commandDetailHeading 根据命令会话动作命名展开内容。
-function commandDetailHeading(presentation: CommandExecutionPresentation): string {
-  if (presentation.commandSessionAction === "start") return "启动命令";
-  if (presentation.commandSessionAction === "read") return "读取输出";
-  if (presentation.commandSessionAction === "send") return "发送内容";
-  if (presentation.commandSessionAction === "write") return "写入内容";
-  if (presentation.commandSessionAction === "stop") return "停止会话";
+function commandDetailHeading(
+  presentation: CommandExecutionPresentation,
+  t: (key: TranslationKey) => string,
+): string {
+  if (presentation.commandSessionAction === "start") return t("toolPresentation.command.heading.start");
+  if (presentation.commandSessionAction === "read") return t("toolPresentation.command.heading.read");
+  if (presentation.commandSessionAction === "send") return t("toolPresentation.command.heading.send");
+  if (presentation.commandSessionAction === "write") return t("toolPresentation.command.heading.write");
+  if (presentation.commandSessionAction === "stop") return t("toolPresentation.command.heading.stop");
   return "$";
 }
 
@@ -271,18 +309,51 @@ function commandDetailText(presentation: CommandExecutionPresentation): string {
 
 // commandSessionMetaLabel builds the footer text without making old actions look failed.
 // commandSessionMetaLabel 构建页脚文本，避免让历史动作看起来失败。
-function commandSessionMetaLabel(presentation: CommandExecutionPresentation): string {
+function commandSessionMetaLabel(
+  presentation: CommandExecutionPresentation,
+  t: (key: TranslationKey) => string,
+): string {
   if (!presentation.commandSessionId) {
     return "";
   }
   const id = presentation.commandSessionId.length > 8 ? presentation.commandSessionId.slice(0, 8) : presentation.commandSessionId;
   if (presentation.lost) {
-    return `命令会话 ${id} · 实时状态已丢失`;
+    return `${t("toolPresentation.command.session")} ${id} · ${t("toolPresentation.command.lost")}`;
   }
   if (presentation.terminalState) {
-    return `命令会话 ${id} · 当前${terminalStateLabel(presentation.terminalState)}`;
+    const currentState = formatTranslation(t, "toolPresentation.command.currentState", {
+      state: localizedTerminalStateLabel(presentation.terminalState, t),
+    });
+    return `${t("toolPresentation.command.session")} ${id} · ${currentState}`;
   }
-  return `命令会话 ${id}`;
+  return `${t("toolPresentation.command.session")} ${id}`;
+}
+
+// commandPresentationStatusLabel returns the localized command lifecycle label.
+// commandPresentationStatusLabel 返回本地化后的命令生命周期文案。
+function commandPresentationStatusLabel(
+  state: ToolPresentationDisplayState,
+  t: (key: TranslationKey) => string,
+): string {
+  if (state === "running") return t("toolPresentation.command.running");
+  if (state === "failed") return t("toolPresentation.command.failed");
+  if (state === "stopped") return t("toolPresentation.command.stopped");
+  return t("toolPresentation.command.completed");
+}
+
+// localizedTerminalStateLabel returns the localized terminal lifecycle label.
+// localizedTerminalStateLabel 返回本地化后的终端生命周期文案。
+function localizedTerminalStateLabel(
+  state: TerminalVisualState,
+  t: (key: TranslationKey) => string,
+): string {
+  if (state === "running") return t("terminalState.running");
+  if (state === "waiting") return t("terminalState.waiting");
+  if (state === "success") return t("terminalState.success");
+  if (state === "failed") return t("terminalState.failed");
+  if (state === "stopped") return t("terminalState.stopped");
+  if (state === "lost") return t("terminalState.lost");
+  return t("terminalState.unknown");
 }
 
 // AskQuestionPresentationCard renders compact and expanded ask/question display.
@@ -301,6 +372,9 @@ function AskQuestionPresentationCard(props: {
   // 加载单条隐藏工具详情记录用于补全完成态答案。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const {
     expanded,
     onExpandedChange,
@@ -355,7 +429,7 @@ function AskQuestionPresentationCard(props: {
         type="button"
       >
         <MessageCircleQuestionMark className="ask-question-icon" size={15} />
-        <span className="tool-presentation-state">{askQuestionStatusLabel(hydratedPresentation.state)}</span>
+        <span className="tool-presentation-state">{askQuestionStatusLabel(hydratedPresentation.state, t)}</span>
         <span className="tool-presentation-command">{hydratedPresentation.title}</span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -372,6 +446,7 @@ function AskQuestionPresentationCard(props: {
               item={question}
               key={question.id}
               state={hydratedPresentation.state}
+              t={t}
             />
           ))}
         </div>
@@ -404,16 +479,19 @@ function AskQuestionAnswerItem(props: {
   // Parent presentation state.
   // 父级展示状态。
   state: AskQuestionPresentation["state"];
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string;
 }) {
-  const answerText = askQuestionAnswerText(props.item, props.ignoredAnswerText, props.state);
+  const answerText = askQuestionAnswerText(props.item, props.ignoredAnswerText, props.state, props.t);
   return (
     <div className="ask-question-item">
       <div className="ask-question-item-header">
-        <span>{props.item.header || `问题 ${props.index + 1}`}</span>
+        <span>{props.item.header || formatTranslation(props.t, "toolPresentation.ask.questionFallback", { index: String(props.index + 1) })}</span>
       </div>
       <div className="ask-question-prompt">{props.item.question}</div>
       <div className={cn("ask-question-answer", !props.item.answered && props.state !== "running" && "ignored")}>
-        <span className="ask-question-answer-label">用户回答</span>
+        <span className="ask-question-answer-label">{props.t("toolPresentation.ask.userAnswer")}</span>
         <span className="ask-question-answer-text">{answerText}</span>
       </div>
     </div>
@@ -426,14 +504,26 @@ function askQuestionAnswerText(
   item: AskQuestionPresentationItem,
   ignoredAnswerText: string,
   state: AskQuestionPresentation["state"],
+  t: (key: TranslationKey) => string,
 ): string {
   if (item.answered && item.answers.length) {
     return item.answers.join(", ");
   }
   if (state === "running") {
-    return "等待用户回答";
+    return t("toolPresentation.ask.waitingAnswer");
   }
   return ignoredAnswerText;
+}
+
+// askQuestionStatusLabel returns the localized ask lifecycle label.
+// askQuestionStatusLabel 返回本地化后的 ask 生命周期文案。
+function askQuestionStatusLabel(
+  state: ToolPresentationDisplayState,
+  t: (key: TranslationKey) => string,
+): string {
+  if (state === "running") return t("toolPresentation.ask.running");
+  if (state === "failed" || state === "stopped") return t("toolPresentation.ask.ignored");
+  return t("toolPresentation.ask.completed");
 }
 
 // FileChangePresentationCard renders compact file operation rows and lazy diff bodies.
@@ -452,6 +542,9 @@ function FileChangePresentationCard(props: {
   // 更新界面级展开状态。
   onExpandedChange: (presentationId: string, expanded: boolean) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const {
     expanded,
     expandedToolPresentationIds,
@@ -484,12 +577,14 @@ function FileChangePresentationCard(props: {
           file={singleFile}
           interactive={presentation.interactive}
           presentation={presentation}
+          t={t}
           onToggle={handleTopToggle}
         />
         <ConversationMeasuredCollapse collapseId={`file-change:${presentation.id}:single`} expanded={effectiveExpanded}>
           <FileChangeExpandableBody
             errorDetail={presentation.state === "failed" ? presentation.errorDetail : null}
             file={singleFile}
+            t={t}
           />
         </ConversationMeasuredCollapse>
       </div>
@@ -507,9 +602,9 @@ function FileChangePresentationCard(props: {
         type="button"
       >
         <FileChangeOperationIcon operation={presentation.operation} />
-        <span className="tool-presentation-state">{fileChangeStatusLabel(presentation, presentation.operation)} {presentation.files.length} 个文件</span>
+        <span className="tool-presentation-state">{fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
         <span className="file-change-path multi">
-          <span className="file-change-path-text">多文件变更</span>
+          <span className="file-change-path-text">{t("toolPresentation.file.multiChange")}</span>
           <FileChangeCounts added={presentation.totalAdded} failed={presentation.state === "failed"} removed={presentation.totalRemoved} />
         </span>
         {presentation.interactive ? (effectiveExpanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
@@ -527,6 +622,7 @@ function FileChangePresentationCard(props: {
                   file={file}
                   interactive={file.expandable}
                   presentation={presentation}
+                  t={t}
                   showOperationIcon={false}
                   showStatusLabel={false}
                   onToggle={() => {
@@ -538,7 +634,7 @@ function FileChangePresentationCard(props: {
                   }}
                 />
                 <ConversationMeasuredCollapse collapseId={fileExpansionId(presentation, file)} expanded={fileExpanded}>
-                  <FileChangeExpandableBody file={file} />
+                  <FileChangeExpandableBody file={file} t={t} />
                 </ConversationMeasuredCollapse>
               </div>
             );
@@ -564,6 +660,9 @@ function FileChangeSummaryButton(props: {
   // Parent file change presentation.
   // 父级文件变更展示。
   presentation: FileChangePresentation;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string;
   // Whether to show the left operation icon before the status label.
   // 是否在状态文案前显示左侧操作图标。
   showOperationIcon?: boolean;
@@ -590,7 +689,7 @@ function FileChangeSummaryButton(props: {
       type="button"
     >
       {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
-      {showStatusLabel ? <span className="tool-presentation-state">{fileChangeStatusLabel(props.presentation, props.file.operation)}</span> : null}
+      {showStatusLabel ? <span className="tool-presentation-state">{fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>
@@ -636,6 +735,35 @@ function FileChangeCounts(props: {
   );
 }
 
+// fileChangeStatusLabel returns the localized file-change lifecycle label.
+// fileChangeStatusLabel 返回本地化后的文件变更生命周期文案。
+function fileChangeStatusLabel(
+  presentation: FileChangePresentation,
+  operation: FileChangeOperation,
+  t: (key: TranslationKey) => string,
+): string {
+  if (presentation.state === "running") {
+    return fileChangeOperationLabel(operation, "running", t);
+  }
+  if (presentation.state === "failed") {
+    return fileChangeOperationLabel(operation, "failed", t);
+  }
+  if (presentation.mode === "preview") {
+    return fileChangeOperationLabel(operation, "preview", t);
+  }
+  return fileChangeOperationLabel(operation, "completed", t);
+}
+
+// fileChangeOperationLabel maps one operation and phase to a stable translation key.
+// fileChangeOperationLabel 将操作与阶段映射为稳定翻译键。
+function fileChangeOperationLabel(
+  operation: FileChangeOperation,
+  phase: "running" | "failed" | "preview" | "completed",
+  t: (key: TranslationKey) => string,
+): string {
+  return t(FILE_CHANGE_OPERATION_LABEL_KEYS[operation][phase]);
+}
+
 // FileChangeExpandableBody renders either an error detail or file diff rows.
 // FileChangeExpandableBody 渲染错误详情或文件 diff 行。
 function FileChangeExpandableBody(props: {
@@ -645,6 +773,9 @@ function FileChangeExpandableBody(props: {
   // File row model.
   // 文件行模型。
   file: FileChangeFilePresentation;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string;
 }) {
   if (props.errorDetail) {
     return <FileChangeErrorDetail detail={props.errorDetail} />;
@@ -659,7 +790,7 @@ function FileChangeExpandableBody(props: {
   return (
     <div className="file-change-detail">
       <div className="file-change-code-scroll">
-        <div className="file-change-empty">无可展示内容</div>
+        <div className="file-change-empty">{props.t("toolPresentation.file.empty")}</div>
       </div>
     </div>
   );
@@ -683,6 +814,19 @@ function FileChangeErrorDetail(props: {
 // fileExpansionId 构建多文件行使用的子级展开标识。
 function fileExpansionId(presentation: FileChangePresentation, file: FileChangeFilePresentation): string {
   return `${presentation.id}:file:${file.id}`;
+}
+
+// formatTranslation replaces simple named placeholders in localized UI templates.
+// formatTranslation 替换本地化 UI 模板中的简单具名占位符。
+function formatTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }
 
 // commandOutputText combines stdout and stderr without exposing tool metadata labels.

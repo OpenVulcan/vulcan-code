@@ -98,7 +98,7 @@ function browserFallbackDiffProfileForSelection(selection: DiffReviewSelection):
       key: "staged",
       pathSegment: "staged-index",
       marker: "staged-index",
-      label: "已暂存",
+      label: "staged",
       selectedBaseBranch: null,
       selectedCompareBranch: null,
       selectedCommitHash: null,
@@ -111,7 +111,7 @@ function browserFallbackDiffProfileForSelection(selection: DiffReviewSelection):
       key: `commit:${commitHash}`,
       pathSegment: `commit-${browserFallbackSafePathSegment(shortHash)}`,
       marker: `commit-${browserFallbackSafePathSegment(shortHash)}`,
-      label: "提交",
+      label: "commit",
       selectedBaseBranch: null,
       selectedCompareBranch: null,
       selectedCommitHash: commitHash,
@@ -124,7 +124,7 @@ function browserFallbackDiffProfileForSelection(selection: DiffReviewSelection):
       key: `branch:${baseBranch}->${compareBranch}`,
       pathSegment: `branch-${browserFallbackSafePathSegment(baseBranch)}-to-${browserFallbackSafePathSegment(compareBranch)}`,
       marker: `branch-${browserFallbackSafePathSegment(baseBranch)}-to-${browserFallbackSafePathSegment(compareBranch)}`,
-      label: "分支",
+      label: "branch",
       selectedBaseBranch: baseBranch,
       selectedCompareBranch: compareBranch,
       selectedCommitHash: null,
@@ -134,7 +134,7 @@ function browserFallbackDiffProfileForSelection(selection: DiffReviewSelection):
     key: "unstaged",
     pathSegment: "unstaged-working-tree",
     marker: "unstaged-working-tree",
-    label: "未暂存",
+    label: "unstaged",
     selectedBaseBranch: null,
     selectedCompareBranch: null,
     selectedCommitHash: null,
@@ -170,7 +170,7 @@ export async function loadBrowserFallbackWorkspaceDiffSnapshot(
     totalChangedLines: store.totalChangedLines,
     totalChangedBytes: store.totalChangedBytes,
     truncated: true,
-    notice: `浏览器预览模式使用${profile.label}目标式大 diff 样本：summary 先行，文件详情按需加载。`,
+    notice: `Browser preview mode is using a target-shaped large ${profile.label} diff sample: summaries first, file details on demand.`,
     currentBranch: "codex/webui-diff-preview",
     defaultBranch: "main",
     selectedBaseBranch: profile.selectedBaseBranch,
@@ -182,8 +182,8 @@ export async function loadBrowserFallbackWorkspaceDiffSnapshot(
       { name: "feature/large-review", current: false, remote: false },
     ],
     recentCommits: [
-      { hash: "f00dbabe", shortHash: "f00dbab", subject: "预览 WebUI diff 高性能渲染", relativeTime: "刚刚" },
-      { hash: "c0ffee42", shortHash: "c0ffee4", subject: "补齐 summary/detail 审核数据", relativeTime: "1 小时" },
+      { hash: "f00dbabe", shortHash: "f00dbab", subject: "Preview high-performance WebUI diff rendering", relativeTime: "now" },
+      { hash: "c0ffee42", shortHash: "c0ffee4", subject: "Complete summary/detail review data", relativeTime: "1 hour" },
     ],
   };
 }
@@ -203,7 +203,7 @@ export async function loadBrowserFallbackWorkspaceDiffFileDetail(
     file: record?.summary ?? null,
     unifiedDiff: record?.unifiedDiff ?? "",
     truncated: false,
-    notice: record ? "浏览器预览模式已按需加载文件 diff 详情。" : "浏览器预览模式未找到请求的文件 diff。",
+    notice: record ? "Browser preview mode loaded the file diff detail on demand." : "Browser preview mode could not find the requested file diff.",
     contextLines: file.contextLines ?? null,
     hunkIndex: file.hunkIndex ?? null,
     hunkExpansionDirection: file.hunkExpansionDirection ?? null,
@@ -260,7 +260,7 @@ export async function loadBrowserFallbackWorkspaceDiffSearch(
         truncated: true,
         scannedFiles: store.records.length,
         scannedLines,
-        notice: "浏览器预览搜索结果已按上限截断。",
+        notice: "Browser preview search results were truncated at the limit.",
       };
     }
   }
@@ -544,7 +544,7 @@ function throwIfBrowserFallbackAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) {
     return;
   }
-  const error = new Error("浏览器预览 diff 请求已中止。");
+  const error = new Error("Browser preview diff request was aborted.");
   error.name = "AbortError";
   throw error;
 }

@@ -12,6 +12,7 @@ import type {
   VmmConfigDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
+import { useI18n } from "@/i18n";
 import {
   ProjectAgentSkillsSection,
   ProjectAttachmentCleanupSection,
@@ -80,6 +81,9 @@ export function ProjectSettingsDialog(props: {
   // 执行当前项目的一次托管附件清理。
   onExecuteAttachmentCleanup: (request: ProjectAttachmentCleanupRequest) => Promise<ProjectAttachmentCleanupReportSummary>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const project = props.target?.project ?? null;
   // activeSection stores the selected settings category.
   // activeSection 保存当前选中的设置分类。
@@ -112,7 +116,7 @@ export function ProjectSettingsDialog(props: {
   const [cleanupCutoffDate, setCleanupCutoffDate] = React.useState("");
   // cleanupNotice stores the modal-local attachment cleanup status.
   // cleanupNotice 保存弹窗内的附件清理状态。
-  const [cleanupNotice, setCleanupNotice] = React.useState("选择截止日期和附件类型后可预览当前项目的托管附件清理范围。");
+  const [cleanupNotice, setCleanupNotice] = React.useState(t("projectSettings.cleanup.initialNotice"));
   // cleanupBusy stores the current attachment cleanup phase.
   // cleanupBusy 保存当前附件清理阶段。
   const [cleanupBusy, setCleanupBusy] = React.useState<"idle" | "preview" | "execute">("idle");
@@ -136,7 +140,7 @@ export function ProjectSettingsDialog(props: {
     setAgentBusySkill(null);
     setCleanupKinds({ image: true, audio: true, video: true, pdf: true });
     setCleanupCutoffDate(new Date().toISOString().slice(0, 10));
-    setCleanupNotice("选择截止日期和附件类型后可预览当前项目的托管附件清理范围。");
+    setCleanupNotice(t("projectSettings.cleanup.initialNotice"));
     setCleanupBusy("idle");
     setCleanupPreview(null);
     setCleanupReport(null);
@@ -178,13 +182,13 @@ export function ProjectSettingsDialog(props: {
     return () => {
       cancelled = true;
     };
-  }, [project, props.onLoadAgentSkillOverrides, props.onLoadVmmDraft]);
+  }, [project, props.onLoadAgentSkillOverrides, props.onLoadVmmDraft, t]);
 
   if (!project) {
     return null;
   }
 
-  const sections = projectSettingsSections(project, props.workbench);
+  const sections = projectSettingsSections(project, props.workbench, t);
   const attachmentRoot = projectAttachmentRoot(project);
   const conversationCount = projectConversationCount(props.workbench, project.id);
 
@@ -269,7 +273,7 @@ export function ProjectSettingsDialog(props: {
       setCleanupReport(report);
       setCleanupPreview(null);
       setCleanupNotice(report.summary);
-      toast.success("项目附件缓存清理已完成。");
+      toast.success(t("projectSettings.cleanupCompleted"));
     } catch (error) {
       setCleanupNotice(error instanceof Error ? error.message : String(error));
       toast.error(error instanceof Error ? error.message : String(error));
@@ -288,11 +292,11 @@ export function ProjectSettingsDialog(props: {
     <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
       <DialogContent className="project-settings-dialog">
         <DialogHeader>
-          <DialogTitle>项目设置：{project.name}</DialogTitle>
-          <DialogDescription>项目级配置与缓存清理只作用于当前项目空间。</DialogDescription>
+          <DialogTitle>{t("projectSettings.dialogTitle").replace("{project}", project.name)}</DialogTitle>
+          <DialogDescription>{t("projectSettings.dialogDescription")}</DialogDescription>
         </DialogHeader>
         <div className="project-settings-layout">
-          <nav className="project-settings-nav" aria-label="项目设置分类">
+          <nav className="project-settings-nav" aria-label={t("projectSettings.categoryAria")}>
             {sections.map((section) => (
               <button
                 className={cn("project-settings-nav-button", activeSection === section.id && "active")}

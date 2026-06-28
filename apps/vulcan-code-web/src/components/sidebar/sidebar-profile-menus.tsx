@@ -19,6 +19,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { useI18n } from "@/i18n";
 import type { MainAreaId } from "@/types";
 
 // SidebarBrandMenu renders the static product header and optional settings shortcut.
@@ -34,6 +35,9 @@ export function SidebarBrandMenu(props: {
   // 从头部快捷入口选择一个顶层区域。
   onSelectArea: (area: MainAreaId) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -45,10 +49,10 @@ export function SidebarBrandMenu(props: {
           </span>
           {props.activeArea !== "settings" ? (
             <button
-              aria-label="打开设置"
+              aria-label={t("global.openSettings")}
               className="sidebar-brand-settings-button"
               onClick={() => props.onSelectArea("settings")}
-              title="设置"
+              title={t("area.settings")}
               type="button"
             >
               <Settings size={15} />
@@ -67,15 +71,18 @@ export function SidebarUserMenu(props: {
   // 从用户菜单打开设置区域。
   onOpenSettings: () => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <SidebarMenuButton className="sidebar-profile-button sidebar-user-button" tooltip="本地用户">
+            <SidebarMenuButton className="sidebar-profile-button sidebar-user-button" tooltip={t("sidebar.user.local")}>
               <span aria-hidden="true" className="sidebar-user-avatar">V</span>
               <span className="vcn-sidebar-label sidebar-profile-label">
-                <strong>本地用户</strong>
+                <strong>{t("sidebar.user.local")}</strong>
                 <small>Vulcan Code</small>
               </span>
               <ChevronsUpDown className="sidebar-profile-chevron" size={15} />
@@ -85,7 +92,7 @@ export function SidebarUserMenu(props: {
             <DropdownMenuLabel className="sidebar-user-menu-label">
               <span aria-hidden="true" className="sidebar-user-avatar">V</span>
               <span>
-                <strong>本地用户</strong>
+                <strong>{t("sidebar.user.local")}</strong>
                 <small>Vulcan Code</small>
               </span>
             </DropdownMenuLabel>
@@ -93,17 +100,17 @@ export function SidebarUserMenu(props: {
             <DropdownMenuGroup>
               <DropdownMenuItem className="sidebar-profile-menu-item">
                 <BadgeCheck size={15} />
-                <span>账户</span>
+                <span>{t("sidebar.user.account")}</span>
               </DropdownMenuItem>
               <DropdownMenuItem className="sidebar-profile-menu-item" onClick={props.onOpenSettings}>
                 <Settings size={15} />
-                <span>设置</span>
+                <span>{t("area.settings")}</span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="sidebar-profile-menu-item muted">
               <LogOut size={15} />
-              <span>退出登录</span>
+              <span>{t("sidebar.user.logout")}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

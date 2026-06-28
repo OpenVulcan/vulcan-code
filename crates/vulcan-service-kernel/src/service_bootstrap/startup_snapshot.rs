@@ -10,6 +10,7 @@ pub(crate) fn startup_snapshot_with_phase(
 ) -> StartupSnapshot {
     StartupSnapshot {
         ready: phase == "ready",
+        ui_locale: None,
         phase: phase.to_string(),
         steps: if steps.is_empty() {
             startup_steps_with_status(

@@ -4,19 +4,19 @@ import type { FileChangeDiffRow, FileChangeFilePresentation, FileChangeOperation
 import { argumentsFromMetadata, arrayValue, compactHash, fixedHostPayload, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
 import { deleteRows, fileChangeDiffFile, insertRows, modifyRows, splitTextLines } from "./file-change-diff-presentation";
 
-// fileChangeStatusLabel returns the compact Chinese status label for a file-change card.
-// fileChangeStatusLabel 返回文件变更卡片使用的紧凑中文状态文案。
+// fileChangeStatusLabel returns the compact fallback status label for a file-change card.
+// fileChangeStatusLabel 返回文件变更卡片使用的紧凑兜底状态文案。
 export function fileChangeStatusLabel(presentation: FileChangePresentation, operation: FileChangeOperation): string {
   if (presentation.state === "running") {
-    return operationLabel(operation, "正在写入", "正在编辑", "正在删除", "正在变更");
+    return operationLabel(operation, "Writing", "Editing", "Deleting", "Changing");
   }
   if (presentation.state === "failed") {
-    return operationLabel(operation, "写入失败", "编辑失败", "删除失败", "变更失败");
+    return operationLabel(operation, "Write failed", "Edit failed", "Delete failed", "Change failed");
   }
   if (presentation.mode === "preview") {
-    return operationLabel(operation, "将写入", "将编辑", "将删除", "将变更");
+    return operationLabel(operation, "Will write", "Will edit", "Will delete", "Will change");
   }
-  return operationLabel(operation, "已写入", "已编辑", "已删除", "已变更");
+  return operationLabel(operation, "Written", "Edited", "Deleted", "Changed");
 }
 
 // resolveFileChangePresentation recognizes native vulcan-file calls and completed host change sets.
@@ -81,7 +81,7 @@ function buildNativeVulcanFilePresentation(
   options: ToolPresentationResolveOptions,
 ): FileChangePresentation | null {
   const paths = nativeVulcanFilePaths(blocks);
-  const displayPaths = paths.length ? paths : ["文件"];
+  const displayPaths = paths.length ? paths : ["File"];
   const files = displayPaths.map((path, index) => {
     const rows = displayState === "failed" ? errorRowsFromBlocks(blocks) : [];
     return buildFilePresentation({

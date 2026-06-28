@@ -11,6 +11,7 @@ import {
   type SkillActionProps,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
+import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 
 // WorkspaceSkillsSettings renders the embedded skills settings page.
@@ -72,6 +73,7 @@ export function FloatingSkillMenu(props: {
   // 选择一个内嵌技能子页面。
   onSelectSubArea: (subArea: SkillSubAreaId) => void;
 }) {
+  const { t } = useI18n();
   // rows stores the static embedded skills menu rows.
   // rows 保存静态内嵌技能菜单行。
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
@@ -87,7 +89,7 @@ export function FloatingSkillMenu(props: {
       <button
         className="workspace-tool-panel-menu-collapsed"
         onClick={() => props.onExpandedChange(true)}
-        title="展开状态"
+        title={t("workspaceToolPanel.expandState")}
         type="button"
       >
         <span>{activeLabel}</span>
@@ -97,11 +99,11 @@ export function FloatingSkillMenu(props: {
   }
 
   return (
-    <aside className="workspace-tool-panel-menu" aria-label="技能设置菜单">
+    <aside className="workspace-tool-panel-menu" aria-label={t("workspaceToolPanel.skillsSettingsMenu")}>
       <div className="workspace-tool-panel-menu-header">
-        <span>菜单</span>
+        <span>{t("workspaceToolPanel.menu")}</span>
         <button
-          aria-label="收起为胶囊"
+          aria-label={t("workspaceToolPanel.collapseToPill")}
           className="workspace-tool-panel-menu-icon-button"
           onClick={() => props.onExpandedChange(false)}
           type="button"

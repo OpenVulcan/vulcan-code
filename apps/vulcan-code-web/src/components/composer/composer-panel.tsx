@@ -539,7 +539,7 @@ export function ComposerPanel(props: {
     if (props.isConversationRunning && !hasSubmittableContent) {
       const stopped = await props.onStopConversationRun();
       if (!stopped) {
-        toast.error("停止当前会话失败。");
+        toast.error(t("composer.error.stopCurrentFailed"));
       }
       return;
     }
@@ -547,7 +547,7 @@ export function ComposerPanel(props: {
       return;
     }
     if (!hasSubmittableContent) {
-      toast.info("请输入任务指令。");
+      toast.info(t("composer.error.promptEmpty"));
       return;
     }
     // submittedInput preserves the exact textarea content for a failure-only restore.
@@ -597,7 +597,7 @@ export function ComposerPanel(props: {
     } finally {
       setIsComposerRunning(false);
     }
-  }, [aiCapabilityTargetOrder, attachments, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, submittedReasoningEffort]);
+  }, [aiCapabilityTargetOrder, attachments, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, submittedReasoningEffort, t]);
 
   // handleComposerStop stops the active backend conversation without consuming draft text.
   // handleComposerStop 在不消费草稿文本的前提下停止活跃后端会话。
@@ -609,9 +609,9 @@ export function ComposerPanel(props: {
     });
     const stopped = await props.onStopConversationRun();
     if (!stopped) {
-      toast.error("停止当前会话失败。");
+      toast.error(t("composer.error.stopCurrentFailed"));
     }
-  }, [attachments.length, draftInput, props]);
+  }, [attachments.length, draftInput, props, t]);
 
   // handlePendingPromptEdit restores one queued prompt into the composer draft.
   // handlePendingPromptEdit 将单条排队提示词恢复到输入区草稿。
@@ -663,7 +663,7 @@ export function ComposerPanel(props: {
   // handlePlanModeChange 通过持久化服务 API 切换会话计划模式。
   const handlePlanModeChange = React.useCallback(async (enabled: boolean) => {
     if (enabled && visibleSessionGoal) {
-      toast.error("计划模式与目标模式不能同时开启。");
+      toast.error(t("composer.planMode.goalConflict"));
       return false;
     }
     if (!props.conversationId) {
@@ -676,7 +676,7 @@ export function ComposerPanel(props: {
       setExecutionMode(enabled ? "plan" : "build");
     }
     return saved;
-  }, [props, visibleSessionGoal]);
+  }, [props, t, visibleSessionGoal]);
 
   // activateSlashCommand dispatches one selected command and applies its UI route result.
   // activateSlashCommand 分派单个选中的指令并应用其 UI 路由结果。
@@ -729,11 +729,11 @@ export function ComposerPanel(props: {
     const tokenBudgetText = goalTokenBudgetDraft.trim();
     const tokenBudget = tokenBudgetText ? Number(tokenBudgetText) : null;
     if (!objective) {
-      toast.error("目标内容不能为空。");
+      toast.error(t("composer.goal.error.empty"));
       return;
     }
     if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
-      toast.error("Token 预算必须是正整数。");
+      toast.error(t("composer.goal.error.budgetInvalid"));
       return;
     }
     setGoalSaving(true);
@@ -767,7 +767,7 @@ export function ComposerPanel(props: {
     } finally {
       setGoalSaving(false);
     }
-  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, executionMode, goalDialogMode, goalObjectiveDraft, goalTokenBudgetDraft, isComposerRunning, props, submittedReasoningEffort, visibleSessionGoal]);
+  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, executionMode, goalDialogMode, goalObjectiveDraft, goalTokenBudgetDraft, isComposerRunning, props, submittedReasoningEffort, t, visibleSessionGoal]);
 
   // handleGoalStatusToggle pauses or resumes the current goal.
   // handleGoalStatusToggle 暂停或恢复当前目标。

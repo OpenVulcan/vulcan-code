@@ -215,7 +215,7 @@ export function parseUnifiedDiff(rawDiff: string, source: DiffPanelSource = "mes
     completeness: "complete",
     isTruncated: false,
     rawDiff,
-    notice: files.length ? undefined : "当前没有可展示的 Git Diff。",
+    notice: undefined,
   };
 }
 

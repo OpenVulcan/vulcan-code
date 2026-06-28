@@ -392,6 +392,9 @@ pub(super) async fn dispatch_service_rpc(
             )
             .await,
         ),
+        "service_select_webui_locale" => rpc_json_result(
+            service_select_webui_locale(app, state, rpc_required_param(&params, "locale")?).await,
+        ),
         "service_save_provider_configuration" => rpc_json_result(
             service_save_provider_configuration(
                 app,

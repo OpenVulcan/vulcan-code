@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 // TerminalOutputToken stores one safe rendered text segment after ANSI parsing.
@@ -68,6 +69,7 @@ export function TerminalOutputView(props: {
   // 是否将黑色 ANSI 背景视为终端表面的默认背景。
   suppressBlackBackground?: boolean;
 }) {
+  const { t } = useI18n();
   const tokens = React.useMemo(
     () => parseAnsiTerminalOutput(props.text, { suppressBlackBackground: props.suppressBlackBackground }),
     [props.suppressBlackBackground, props.text],
@@ -79,7 +81,7 @@ export function TerminalOutputView(props: {
         onKeyDown={props.onKeyDown}
         tabIndex={props.tabIndex}
       >
-        {props.emptyText ?? "无输出"}
+        {props.emptyText ?? t("toolPresentation.output.empty")}
       </pre>
     );
   }

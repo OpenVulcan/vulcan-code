@@ -1,5 +1,7 @@
 import React from "react";
 
+import { useI18n } from "@/i18n";
+import type { TranslationKey } from "@/i18n-messages";
 import type { DiffFile, WorkspaceDiffSearchFileMatch } from "../types";
 import {
   DIFF_HUNK_HEADER_HEIGHT,
@@ -31,9 +33,10 @@ export function DiffFileLoadStateNote(props: {
   // 用于在磁盘中定位后端跳过文件的可选动作。
   onRevealFile?: (file: DiffFile) => void;
 }) {
+  const { t } = useI18n();
   const loadState = props.file.fileDiffLoadState;
   const status = loadState?.status ?? "idle";
-  const message = loadState?.message ?? diffFileLoadStateMessage(status);
+  const message = loadState?.message ?? diffFileLoadStateMessage(status, t);
   const metrics = props.file.tooLargeToDisplay ? null : diffSummaryPlaceholderMetrics(props.file, props.summarySearchMatch);
   // canRetry exposes manual recovery only for terminal lazy-load states.
   // canRetry 仅为终止态懒加载状态提供手动恢复入口。
@@ -50,15 +53,17 @@ export function DiffFileLoadStateNote(props: {
       ) : null}
       <div className="diff-summary-placeholder-note">
         <span>{message}</span>
-        {metrics && (status === "idle" || status === "loading") ? <small>{`${metrics.rowCount} 行待加载，约 ${metrics.hunkCount} 个 hunk`}</small> : null}
+        {metrics && (status === "idle" || status === "loading") ? (
+          <small>{formatDiffLoadTranslation(t, "diff.load.rowsPending", { rows: String(metrics.rowCount), hunks: String(metrics.hunkCount) })}</small>
+        ) : null}
         {canRetry ? (
           <button className="diff-file-load-retry" onClick={() => props.onRetry?.(props.file)} type="button">
-            重试
+            {t("diff.load.retry")}
           </button>
         ) : null}
         {canReveal ? (
           <button className="diff-file-load-retry" onClick={() => props.onRevealFile?.(props.file)} type="button">
-            打开位置
+            {t("diff.load.reveal")}
           </button>
         ) : null}
       </div>
@@ -68,9 +73,9 @@ export function DiffFileLoadStateNote(props: {
           data-diff-summary-search-file-key={props.summarySearchMatch.key}
           style={metrics?.searchStyle}
         >
-          <strong>{diffSummarySearchMatchLocation(props.summarySearchMatch)}</strong>
+          <strong>{diffSummarySearchMatchLocation(props.summarySearchMatch, t)}</strong>
           <div className="diff-summary-search-previews">
-            {renderSummarySearchPreviews(props.summarySearchMatch)}
+            {renderSummarySearchPreviews(props.summarySearchMatch, t)}
           </div>
         </div>
       ) : null}
@@ -110,8 +115,8 @@ function renderSummaryPlaceholderLines(hunk: DiffSummaryPlaceholderHunk): React.
 
 // renderSummarySearchPreviews renders bounded backend snippets without JSX map callbacks.
 // renderSummarySearchPreviews 渲染受限后端片段，避免 JSX map 回调。
-function renderSummarySearchPreviews(match: WorkspaceDiffSearchFileMatch): React.ReactNode[] {
-  const previews = diffSummarySearchMatchPreviews(match);
+function renderSummarySearchPreviews(match: WorkspaceDiffSearchFileMatch, t: (key: TranslationKey) => string): React.ReactNode[] {
+  const previews = diffSummarySearchMatchPreviews(match, t);
   const nodes: React.ReactNode[] = new Array(previews.length);
   for (let index = 0; index < previews.length; index += 1) {
     nodes[index] = <code key={`${match.key}-${index}`}>{previews[index]}</code>;
@@ -335,8 +340,8 @@ function diffSummaryPlaceholderLineWidthStyles(hunkIndex: number, lineCount: num
 
 // diffSummarySearchMatchLocation formats one backend search hit location for summary placeholders.
 // diffSummarySearchMatchLocation 为摘要占位提示格式化单个后端搜索命中位置。
-function diffSummarySearchMatchLocation(match: WorkspaceDiffSearchFileMatch): string {
-  const parts = [`${match.matchCount} 条命中`];
+function diffSummarySearchMatchLocation(match: WorkspaceDiffSearchFileMatch, t: (key: TranslationKey) => string): string {
+  const parts = [formatDiffLoadTranslation(t, "diff.load.matchCount", { count: String(match.matchCount) })];
   if (match.firstHunkIndex != null) {
     parts.push(`hunk ${match.firstHunkIndex + 1}`);
   }
@@ -350,7 +355,7 @@ function diffSummarySearchMatchLocation(match: WorkspaceDiffSearchFileMatch): st
 
 // diffSummarySearchMatchPreviews returns bounded backend snippets for summary-only search display.
 // diffSummarySearchMatchPreviews 返回摘要态搜索展示使用的受限后端片段。
-function diffSummarySearchMatchPreviews(match: WorkspaceDiffSearchFileMatch): string[] {
+function diffSummarySearchMatchPreviews(match: WorkspaceDiffSearchFileMatch, t: (key: TranslationKey) => string): string[] {
   const sourcePreviews = match.previews?.length ? match.previews : [match.firstPreview];
   const previews: string[] = [];
   for (const preview of sourcePreviews) {
@@ -362,23 +367,33 @@ function diffSummarySearchMatchPreviews(match: WorkspaceDiffSearchFileMatch): st
       }
     }
   }
-  return previews.length ? previews : ["后端完整 diff 命中该文件。"];
+  return previews.length ? previews : [t("diff.load.backendMatchFallback")];
 }
 
 // diffFileLoadStateMessage returns a user-facing lazy detail status message.
 // diffFileLoadStateMessage 返回面向用户的懒加载详情状态文案。
-function diffFileLoadStateMessage(status: NonNullable<DiffFile["fileDiffLoadState"]>["status"]): string {
+function diffFileLoadStateMessage(status: NonNullable<DiffFile["fileDiffLoadState"]>["status"], t: (key: TranslationKey) => string): string {
   if (status === "loading") {
-    return "正在加载文件 diff 详情。";
+    return t("diff.load.loadingDetail");
   }
   if (status === "timed-out") {
-    return "文件 diff 详情加载超时。";
+    return t("diff.load.timeout");
   }
   if (status === "failed") {
-    return "文件 diff 详情加载失败。";
+    return t("diff.load.failed");
   }
   if (status === "loaded") {
-    return "文件 diff 详情已加载，但没有可展示的文本内容。";
+    return t("diff.load.loadedEmpty");
   }
-  return "该文件为摘要状态，进入视口后将按需加载详情。";
+  return t("diff.load.summaryIdle");
+}
+
+// formatDiffLoadTranslation applies small named placeholders for load-state labels.
+// formatDiffLoadTranslation 为加载状态标签替换少量具名占位符。
+function formatDiffLoadTranslation(t: (key: TranslationKey) => string, key: TranslationKey, values: Record<string, string>): string {
+  let text = t(key);
+  for (const [name, value] of Object.entries(values)) {
+    text = text.replace(`{${name}}`, value);
+  }
+  return text;
 }

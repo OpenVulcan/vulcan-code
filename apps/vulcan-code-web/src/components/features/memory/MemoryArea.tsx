@@ -1,6 +1,7 @@
 import * as React from "react"
 import { ListRestart, RefreshCw } from "lucide-react"
 
+import { useI18n } from "@/i18n"
 import type {
   MemorySummary,
   VmmConfigDraftSummary,
@@ -46,6 +47,7 @@ export function MemoryArea(props: {
   // 详细 VMM 快照。
   snapshot: VmmMemorySnapshot
 }) {
+  const { t } = useI18n();
   const [scope, setScope] = React.useState<VmmScope>("global");
   const [projectId, setProjectId] = React.useState(props.snapshot.selectedProjectId ?? props.snapshot.projectScopes[0]?.projectId ?? "");
   const [globalDraft, setGlobalDraft] = React.useState(props.snapshot.globalDraft);
@@ -92,7 +94,7 @@ export function MemoryArea(props: {
 
   const runAction = async (action: string, payload: Record<string, unknown> = {}) => {
     setBusyAction(action);
-    setNotice(`正在执行 VMM 动作：${action}`);
+    setNotice(t("memory.vmm.action.running").replace("{action}", action));
     try {
       const nextResult = await props.actions.onRunVmmAction({
         action,
@@ -104,7 +106,7 @@ export function MemoryArea(props: {
       setNotice(nextResult.summary);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setNotice(`VMM 动作失败：${message}`);
+      setNotice(t("memory.vmm.action.failed").replace("{message}", message));
     } finally {
       setBusyAction(null);
     }
@@ -113,17 +115,17 @@ export function MemoryArea(props: {
   const saveDraft = async (targetScope: VmmScope = scope) => {
     const draft = targetScope === "global" ? globalDraft : projectDraft;
     setBusyAction(`save-${targetScope}`);
-    setNotice(targetScope === "global" ? "正在保存全局 VMM 配置。" : "正在保存项目 VMM 配置。");
+    setNotice(targetScope === "global" ? t("memory.vmm.save.global.running") : t("memory.vmm.save.project.running"));
     try {
       await props.actions.onSaveVmmConfig({
         scope: targetScope,
         projectId: targetScope === "project" ? projectId : null,
         draft,
       });
-      setNotice(targetScope === "global" ? "已保存全局 VMM 配置。" : "已保存项目 VMM 配置。");
+      setNotice(targetScope === "global" ? t("memory.vmm.save.global.completed") : t("memory.vmm.save.project.completed"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setNotice(`保存 VMM 配置失败：${message}`);
+      setNotice(t("memory.vmm.save.failed").replace("{message}", message));
     } finally {
       setBusyAction(null);
     }
@@ -173,6 +175,7 @@ export function MemoryArea(props: {
     setWritePriority,
     setWriteScopeLevel,
     snapshot: props.snapshot,
+    t,
     turnIds,
     userConfirmationCode,
     userRef,
@@ -210,14 +213,14 @@ export function MemoryArea(props: {
         <main className="vmm-memory-main">
           <div className="vmm-scope-bar">
             <label>
-              <span>作用域</span>
+              <span>{t("memory.scope")}</span>
               <select value={scope} onChange={(event) => setScope(event.target.value as VmmScope)}>
-                <option value="global">全局配置</option>
-                <option value="project">项目配置</option>
+                <option value="global">{t("memory.scope.global")}</option>
+                <option value="project">{t("memory.scope.project")}</option>
               </select>
             </label>
             <label>
-              <span>项目</span>
+              <span>{t("memory.project")}</span>
               <select disabled={scope !== "project"} value={projectId} onChange={(event) => setProjectId(event.target.value)}>
                 {props.snapshot.projectScopes.map((project) => (
                   <option key={project.projectId} value={project.projectId}>{project.name}</option>
@@ -225,10 +228,10 @@ export function MemoryArea(props: {
               </select>
             </label>
             <button className="vmm-icon-button" onClick={() => runAction("healthz")} type="button">
-              <RefreshCw size={15} />测试连接
+              <RefreshCw size={15} />{t("memory.action.testConnection")}
             </button>
             <button className="vmm-icon-button" onClick={() => runAction("load_users_projects")} type="button">
-              <ListRestart size={15} />刷新用户/项目
+              <ListRestart size={15} />{t("memory.action.refreshUsersProjects")}
             </button>
           </div>
           {activeSectionDetail}

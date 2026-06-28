@@ -12,8 +12,10 @@ pub(crate) fn update_startup<F>(
 ) where
     F: FnOnce(OffsetDateTime) -> Vec<StartupStepSnapshot>,
 {
-    let startup = startup_snapshot_with_phase(phase, build_steps(OffsetDateTime::now_utc()), logs);
+    let mut startup =
+        startup_snapshot_with_phase(phase, build_steps(OffsetDateTime::now_utc()), logs);
     if let Ok(mut guard) = state.lock() {
+        startup.ui_locale = guard.startup.ui_locale.clone();
         guard.startup = startup.clone();
     }
     emit_service_event_with_trace(
@@ -85,13 +87,15 @@ pub(crate) fn update_service_failure(
             normalized_workspace_path_text_from_path(&workspace_root())
         ),
     ];
-    let startup = startup_snapshot_with_phase(
+    let mut startup = startup_snapshot_with_phase(
         "failed",
         startup_failure_steps(OffsetDateTime::now_utc(), &error),
         &logs,
     );
-    let workbench = fallback_workbench_snapshot(&logs);
+    let mut workbench = fallback_workbench_snapshot(&logs);
     if let Ok(mut guard) = state.lock() {
+        startup.ui_locale = guard.startup.ui_locale.clone();
+        workbench.ui_locale = guard.startup.ui_locale.clone();
         guard.startup = startup.clone();
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench = workbench.clone();

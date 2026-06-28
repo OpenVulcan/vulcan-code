@@ -101,6 +101,9 @@ export function SubagentNavigationMenu(props: {
   // 为菜单动作输出本地点击诊断。
   onTrace: SubagentNavigationTrace;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const navigation = props.navigation;
   const tasks = navigation?.tasks ?? [];
   const activeTaskId = navigation?.activeTaskId ?? null;
@@ -113,7 +116,7 @@ export function SubagentNavigationMenu(props: {
     <div className={cn("subagent-title-menu", runningCount > 0 && "running")}>
       {canReturnToParent ? (
         <Button
-          aria-label="返回主会话"
+          aria-label={t("conversation.subagent.return")}
           className="subagent-title-return"
           onClick={() => {
             props.onTrace("subagent.menu.return", {
@@ -124,7 +127,7 @@ export function SubagentNavigationMenu(props: {
             void props.onCloseSubagentPanel();
           }}
           size="icon-sm"
-          title="返回主会话"
+          title={t("conversation.subagent.return")}
           type="button"
           variant="ghost"
         >
@@ -132,7 +135,7 @@ export function SubagentNavigationMenu(props: {
         </Button>
       ) : null}
       <Button
-        aria-label={runningCount > 0 ? `${runningCount} 个子代理正在运行` : "子代理调度"}
+        aria-label={runningCount > 0 ? formatConversationChromeTranslation(t, "conversation.subagent.runningCount", { count: String(runningCount) }) : t("conversation.subagent.schedule")}
         className="subagent-title-trigger"
         size="icon-sm"
         type="button"
@@ -140,7 +143,7 @@ export function SubagentNavigationMenu(props: {
       >
         <Bot size={15} />
       </Button>
-      <nav className="subagent-title-flyout" aria-label="子代理调度切换">
+      <nav className="subagent-title-flyout" aria-label={t("conversation.subagent.switch")}>
         {tasks.map((task) => (
           <div className={cn("subagent-title-row-group", task.isActive && "active")} key={task.taskId}>
             <Button
@@ -160,11 +163,11 @@ export function SubagentNavigationMenu(props: {
             >
               <Boxes size={14} />
               <span>{task.label}</span>
-              <span className={cn("subagent-navigation-status", task.runState)}>{subagentRunStateLabel(task.runState)}</span>
+              <span className={cn("subagent-navigation-status", task.runState)}>{subagentRunStateLabel(task.runState, t)}</span>
             </Button>
             {task.isRunning ? (
               <Button
-                aria-label={`停止子代理 ${task.label}`}
+                aria-label={t("conversation.subagent.stopTask").replace("{task}", task.label)}
                 className="subagent-title-stop"
                 onClick={() => {
                   props.onTrace("subagent.menu.stop_task", {
@@ -190,15 +193,28 @@ export function SubagentNavigationMenu(props: {
 
 // subagentRunStateLabel maps backend run-state keys to compact WebUI labels.
 // subagentRunStateLabel 将后端运行状态键映射为紧凑 WebUI 标签。
-function subagentRunStateLabel(runState: string): string {
+function subagentRunStateLabel(runState: string, t: (key: TranslationKey) => string): string {
   switch (runState) {
     case "running":
-      return "运行中";
+      return t("conversation.subagent.state.running");
     case "stopped":
-      return "已停止";
+      return t("conversation.subagent.state.stopped");
     case "failed":
-      return "失败";
+      return t("conversation.subagent.state.failed");
     default:
-      return "已完成";
+      return t("conversation.subagent.state.completed");
   }
+}
+
+// formatConversationChromeTranslation replaces named placeholders in localized conversation chrome labels.
+// formatConversationChromeTranslation 替换会话 chrome 本地化标签中的具名占位符。
+function formatConversationChromeTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }

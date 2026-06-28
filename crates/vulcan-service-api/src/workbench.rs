@@ -8,6 +8,10 @@ pub struct WorkbenchSnapshot {
     /// Active application version.
     /// 当前应用版本。
     pub app_version: String,
+    /// WebUI locale resolved from the shared configuration file.
+    /// 从共享配置文件解析出的 WebUI 语言。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_locale: Option<String>,
     /// Runtime modules shown by the dashboard.
     /// 仪表盘展示的运行时模块。
     pub modules: Vec<RuntimeModuleSnapshot>,

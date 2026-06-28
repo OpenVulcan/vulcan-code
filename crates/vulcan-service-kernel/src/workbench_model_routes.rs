@@ -449,3 +449,57 @@ pub(super) async fn service_select_workbench_thinking_display_mode(
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
+
+/// Persists the WebUI locale in the shared Vulcan configuration file.
+/// 将 WebUI 语言持久化到共享 Vulcan 配置文件中。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the refreshed workbench snapshot to connected WebUI clients.
+/// `app` 用于向已连接的 WebUI 客户端发送刷新后的工作台快照。
+/// `state` owns the active service runtime and retained workbench snapshot.
+/// `state` 持有当前服务运行时和保留的工作台快照。
+/// `locale` is the stable WebUI locale wire value.
+/// `locale` 是稳定的 WebUI 语言传输值。
+///
+/// # Returns
+/// 返回值
+/// Returns the refreshed workbench snapshot after the locale is persisted.
+/// 返回语言持久化后的刷新工作台快照。
+pub(super) async fn service_select_webui_locale(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    locale: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let selected_locale = parse_webui_locale(locale.trim())
+        .ok_or_else(|| format!("unsupported WebUI locale: {locale}"))?;
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        next_configuration.ui_locale = Some(selected_locale.clone());
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("failed to save WebUI locale: {error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        guard.startup.ui_locale = Some(selected_locale);
+        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
+        guard.workbench.clone()
+    };
+
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Parses one WebUI locale wire value.
+/// 解析单个 WebUI 语言传输值。
+fn parse_webui_locale(value: &str) -> Option<String> {
+    match value {
+        "zh-CN" | "en-US" => Some(value.to_string()),
+        _ => None,
+    }
+}

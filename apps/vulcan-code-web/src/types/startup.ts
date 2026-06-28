@@ -52,6 +52,9 @@ export interface StartupSnapshot {
   // Overall readiness flag.
   // 整体就绪标记。
   ready: boolean;
+  // WebUI locale resolved before the main app mounts.
+  // 主应用挂载前解析出的 WebUI 语言。
+  uiLocale?: string | null;
   // Current startup phase.
   // 当前启动阶段。
   phase: string;

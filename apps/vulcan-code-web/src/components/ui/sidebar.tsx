@@ -3,6 +3,7 @@ import { PanelLeftIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useI18n } from "@/i18n"
 import { cn } from "@/lib/utils"
 
 // SidebarContextValue stores the collapsible sidebar state for one inset shell.
@@ -131,10 +132,11 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"section">) 
 // SidebarTrigger 渲染用于切换侧栏状态的按钮。
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
   const { toggleSidebar } = useSidebar()
+  const { t } = useI18n()
 
   return (
     <Button
-      aria-label="切换侧栏"
+      aria-label={t("sidebar.toggle")}
       className={cn("vcn-sidebar-trigger", className)}
       onClick={(event) => {
         onClick?.(event)

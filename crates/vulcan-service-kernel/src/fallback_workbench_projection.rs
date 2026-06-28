@@ -9,6 +9,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
     let workspace_root = workspace_root();
     WorkbenchSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
+        ui_locale: ProviderConfigurationFile::default().ui_locale,
         modules: vec![
             runtime_module(
                 "core",

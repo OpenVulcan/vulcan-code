@@ -9,7 +9,8 @@ import {
   WorkbenchLayout,
   type WorkbenchDeltaSignal,
 } from "@/components/workspace/workbench-layout";
-import { I18nProvider } from "@/i18n";
+import { I18nProvider, normalizeLocaleCode } from "@/i18n";
+import { translations, type LocaleCode, type TranslationKey } from "@/i18n-messages";
 import type {
   StartupSnapshot,
   SessionAddonChangedEvent,
@@ -130,7 +131,7 @@ function BootGate(props: {
 
   if (error) {
     return (
-      <I18nProvider>
+      <I18nProvider initialLocale={startup?.uiLocale}>
         <ErrorScreen error={error} />
         <Toaster />
       </I18nProvider>
@@ -138,7 +139,7 @@ function BootGate(props: {
   }
 
   return (
-    <I18nProvider>
+    <I18nProvider initialLocale={startup?.uiLocale}>
       <LoadingScreen startup={startup} />
       <Toaster />
     </I18nProvider>
@@ -179,6 +180,13 @@ function WorkbenchApp(props: {
   // workbenchSnapshotSeqRef rejects stale full-snapshot updates across every snapshot source.
   // workbenchSnapshotSeqRef 在所有快照来源之间拒绝过期的全量快照更新。
   const workbenchSnapshotSeqRef = React.useRef(0);
+  // appLocaleRef keeps provider-outside app toasts aligned with the latest service locale.
+  // appLocaleRef 让 Provider 外部的应用提示对齐最近一次服务语言。
+  const appLocaleRef = React.useRef<LocaleCode>(webuiAppLocale(props.initialStartup.uiLocale));
+
+  React.useEffect(() => {
+    appLocaleRef.current = webuiAppLocale(workbench?.uiLocale ?? startup.uiLocale);
+  }, [startup.uiLocale, workbench?.uiLocale]);
 
   React.useEffect(() => {
     // handleConnectionStatusChange maps transport-level connection changes to user-visible toasts.
@@ -192,7 +200,7 @@ function WorkbenchApp(props: {
         serviceHasConnectedRef.current = true;
         if (serviceWasDisconnectedRef.current) {
           serviceWasDisconnectedRef.current = false;
-          toast.success("本地服务连接已恢复。", {
+          toast.success(webuiAppTranslation(appLocaleRef.current, "app.serviceConnectionRestored"), {
             id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
             duration: 2200,
           });
@@ -204,12 +212,12 @@ function WorkbenchApp(props: {
       }
       serviceWasDisconnectedRef.current = true;
       if (detail.status === "reconnecting") {
-        toast.loading("本地服务连接已断开，正在重连...", {
+        toast.loading(webuiAppTranslation(appLocaleRef.current, "app.serviceReconnecting"), {
           id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
         });
         return;
       }
-      toast.loading("本地服务连接已断开，正在检测恢复...", {
+      toast.loading(webuiAppTranslation(appLocaleRef.current, "app.serviceCheckingRecovery"), {
         id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
         description: detail.message,
       });
@@ -347,7 +355,7 @@ function WorkbenchApp(props: {
 
   if (!workbench) {
     return (
-      <I18nProvider>
+      <I18nProvider initialLocale={startup.uiLocale}>
         <LoadingScreen startup={startup} />
         <Toaster />
       </I18nProvider>
@@ -355,11 +363,25 @@ function WorkbenchApp(props: {
   }
 
   return (
-    <I18nProvider>
+    <I18nProvider initialLocale={workbench.uiLocale ?? startup.uiLocale}>
       <TooltipProvider>
         <WorkbenchLayout startup={startup} workbench={workbench} workbenchDelta={workbenchDelta} />
         <Toaster />
       </TooltipProvider>
     </I18nProvider>
   );
+}
+
+// webuiAppLocale resolves a service-provided locale before the React i18n provider is available.
+// webuiAppLocale 在 React i18n provider 可用前解析服务提供的语言。
+function webuiAppLocale(value: string | null | undefined): LocaleCode {
+  const browserLanguage = typeof navigator === "undefined" ? "" : navigator.language;
+  return normalizeLocaleCode(value)
+    ?? (browserLanguage.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US");
+}
+
+// webuiAppTranslation reads one localized app-shell label outside the i18n provider.
+// webuiAppTranslation 在 i18n provider 外读取单个本地化应用外壳文案。
+function webuiAppTranslation(locale: LocaleCode, key: TranslationKey): string {
+  return translations[locale][key] ?? translations["zh-CN"][key];
 }

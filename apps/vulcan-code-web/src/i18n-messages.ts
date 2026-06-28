@@ -6,6 +6,9 @@ export type LocaleCode = "zh-CN" | "en-US"
 // TranslationKey 描述当前在外壳层支持本地化的文本键。
 export type TranslationKey =
   | "app.subtitle"
+  | "app.serviceConnectionRestored"
+  | "app.serviceReconnecting"
+  | "app.serviceCheckingRecovery"
   | "area.chat"
   | "area.skills"
   | "area.memory"
@@ -20,8 +23,118 @@ export type TranslationKey =
   | "global.toggleDark"
   | "global.toggleLight"
   | "global.language"
+  | "global.languageSaveFailed"
   | "global.online"
   | "global.preview"
+  | "global.progress"
+  | "global.labelSeparator"
+  | "global.listDelimiter"
+  | "appChrome.menu"
+  | "appChrome.status"
+  | "appChrome.theme"
+  | "appChrome.theme.dark"
+  | "appChrome.theme.light"
+  | "appChrome.language.zh"
+  | "appChrome.scrollFeaturesLeft"
+  | "appChrome.scrollFeaturesRight"
+  | "appChrome.windowActionFailed"
+  | "appChrome.window.minimize"
+  | "appChrome.window.restore"
+  | "appChrome.window.maximize"
+  | "appChrome.window.close"
+  | "appChrome.githubOpenFailed"
+  | "appChrome.githubAria"
+  | "sidebar.user.local"
+  | "sidebar.user.account"
+  | "sidebar.user.logout"
+  | "projectMenu.conversationsAria"
+  | "projectMenu.newConversation"
+  | "projectMenu.noConversations"
+  | "projectMenu.pin"
+  | "projectMenu.unpin"
+  | "projectMenu.openDirectory"
+  | "projectMenu.createWorktree"
+  | "projectMenu.renameProject"
+  | "projectMenu.setIcon"
+  | "projectMenu.archiveConversations"
+  | "projectMenu.removeProject"
+  | "projectMenu.projectSettings"
+  | "conversationMenu.pin"
+  | "conversationMenu.unpin"
+  | "conversationMenu.rename"
+  | "conversationMenu.archive"
+  | "conversationMenu.markUnread"
+  | "conversationMenu.openDirectory"
+  | "conversationMenu.copyWorkspace"
+  | "conversationMenu.copySessionId"
+  | "conversationMenu.copyDeepLink"
+  | "conversationMenu.forkLocal"
+  | "conversationMenu.forkWorktree"
+  | "conversationMenu.openNewWindow"
+  | "diffAction.moreStaging"
+  | "diffAction.unstageAll"
+  | "diffAction.unstageFile"
+  | "diffAction.restoreAll"
+  | "diffAction.stageAll"
+  | "diffAction.stageFile"
+  | "diffAction.restoreFile"
+  | "diff.mode.unstaged"
+  | "diff.mode.staged"
+  | "diff.mode.commit"
+  | "diff.mode.branch"
+  | "diff.branch.current"
+  | "diff.branch.main"
+  | "diff.view.toUnified"
+  | "diff.view.toSplit"
+  | "diff.refresh"
+  | "diff.loading"
+  | "diff.moreActions"
+  | "diff.copyRaw"
+  | "diff.inline.disable"
+  | "diff.inline.enable"
+  | "diff.wrap.disable"
+  | "diff.wrap.enable"
+  | "diff.contextControls.hide"
+  | "diff.contextControls.show"
+  | "diff.indicator.useClassic"
+  | "diff.indicator.useBars"
+  | "diff.search.open"
+  | "diff.search.label"
+  | "diff.search.truncated"
+  | "diff.search.previous"
+  | "diff.search.next"
+  | "diff.search.indexUnavailable"
+  | "diff.commit.none"
+  | "diff.branch.search"
+  | "diff.branch.label"
+  | "diff.branch.noMatches"
+  | "diff.emptyBody"
+  | "diff.noMatchingFiles"
+  | "diff.file.tooLarge"
+  | "diff.file.added"
+  | "diff.file.deleted"
+  | "diff.file.gitlink"
+  | "diff.file.renamedNoChanges"
+  | "diff.file.noContent"
+  | "diff.render.changedLinesSkipped"
+  | "diff.render.skipped"
+  | "diff.render.rowsLightweight"
+  | "diff.large.totalFiles"
+  | "diff.large.totalChangedLines"
+  | "diff.large.totalChangedBytes"
+  | "diff.large.fileChangedLines"
+  | "diff.large.fileChangedBytes"
+  | "diff.large.fileMaxLineBytes"
+  | "diff.load.rowsPending"
+  | "diff.load.retry"
+  | "diff.load.reveal"
+  | "diff.load.matchCount"
+  | "diff.load.backendMatchFallback"
+  | "diff.load.loadingDetail"
+  | "diff.load.timeout"
+  | "diff.load.failed"
+  | "diff.load.loadedEmpty"
+  | "diff.load.summaryIdle"
   | "console.title"
   | "console.newConversation"
   | "console.emptyPrompt"
@@ -43,6 +156,28 @@ export type TranslationKey =
   | "conversation.action.forkSucceeded"
   | "conversation.forkSource.label"
   | "conversation.forkSource.missing"
+  | "conversation.block.toolCall"
+  | "conversation.block.toolResult"
+  | "conversation.block.command"
+  | "conversation.block.thinking"
+  | "conversation.block.plan"
+  | "conversation.block.notice"
+  | "conversation.block.detail"
+  | "conversation.metadata.type"
+  | "conversation.metadata.status"
+  | "conversation.metadata.tool"
+  | "conversation.metadata.identifier"
+  | "conversation.metadata.error"
+  | "conversation.metadata.result"
+  | "conversation.metadata.returned"
+  | "conversation.stats.providerCalls"
+  | "conversation.stats.toolCalls"
+  | "conversation.stats.cachedTokens"
+  | "conversation.subagent.stopTask"
+  | "conversation.process.header"
+  | "conversation.process.stoppedAfter"
+  | "conversation.process.stopped"
+  | "conversation.process.duration"
   | "conversation.action.editPrompt"
   | "conversation.action.editPromptFailed"
   | "conversation.action.cancel"
@@ -97,12 +232,36 @@ export type TranslationKey =
   | "sidebar.waitingWorkspace"
   | "sidebar.overview"
   | "sidebar.settingsCategories"
+  | "sidebar.toggle"
   | "composer.mode.execute"
   | "composer.mode.plan"
   | "composer.capability.extended"
   | "composer.capability.extended.subtitle"
   | "composer.capability.basic"
   | "composer.capability.basic.subtitle"
+  | "composer.capability.enabledCount"
+  | "composer.capability.tooltipTitle"
+  | "composer.capability.tooltipEmpty"
+  | "composer.capability.dialogTitle"
+  | "composer.capability.dialogDescription"
+  | "composer.capability.source.nativeWithTargets"
+  | "composer.capability.source.native"
+  | "composer.capability.source.targets"
+  | "composer.capability.source.noTargets"
+  | "composer.capability.empty.native"
+  | "composer.capability.empty.noTargets"
+  | "composer.capability.saveHint.externalUpdate"
+  | "composer.capability.saveHint.saving"
+  | "composer.capability.saveHint.unsaved"
+  | "composer.capability.saveHint.clean"
+  | "composer.capability.useDefaults"
+  | "composer.capability.save.saving"
+  | "composer.capability.save.saved"
+  | "composer.capability.save"
+  | "composer.capability.close.title"
+  | "composer.capability.close.description"
+  | "composer.capability.close.discard"
+  | "composer.capability.close.keepEditing"
   | "composer.reasoning.off"
   | "composer.reasoning.low"
   | "composer.reasoning.medium"
@@ -121,6 +280,612 @@ export type TranslationKey =
   | "composer.aria.stop"
   | "composer.modelPicker.filter"
   | "composer.modelPicker.noMatches"
+  | "composer.attachment.add"
+  | "composer.attachment.extension"
+  | "composer.attachment.menu"
+  | "composer.attachment.empty"
+  | "composer.attachment.remove"
+  | "composer.attachment.unsupported"
+  | "composer.attachment.maxLimit"
+  | "composer.attachment.partialMaxLimit"
+  | "composer.attachment.kind.image"
+  | "composer.attachment.kind.audio"
+  | "composer.attachment.kind.video"
+  | "composer.attachment.kind.pdf"
+  | "composer.thinkingProcess"
+  | "composer.planMode"
+  | "composer.goal"
+  | "composer.scrollToBottom"
+  | "composer.goalDialog.resumeTitle"
+  | "composer.goalDialog.editTitle"
+  | "composer.goalDialog.objectiveAria"
+  | "composer.goalDialog.objectivePlaceholder"
+  | "composer.goalDialog.tokenBudgetAria"
+  | "composer.goalDialog.tokenBudgetPlaceholder"
+  | "composer.goalDialog.save"
+  | "composer.goal.status.active"
+  | "composer.goal.status.paused"
+  | "composer.goal.status.blocked"
+  | "composer.goal.status.usageLimited"
+  | "composer.goal.status.budgetLimited"
+  | "composer.goal.status.completed"
+  | "composer.goal.tooltip.apiCalls"
+  | "composer.goal.tooltip.toolCalls"
+  | "composer.goal.tooltip.usage"
+  | "composer.goal.tooltip.input"
+  | "composer.goal.tooltip.cache"
+  | "composer.goal.tooltip.output"
+  | "composer.goal.tooltip.total"
+  | "composer.goal.action.edit"
+  | "composer.goal.action.resumeTask"
+  | "composer.goal.action.resume"
+  | "composer.goal.action.pause"
+  | "composer.goal.action.clear"
+  | "composer.goal.error.empty"
+  | "composer.goal.error.budgetInvalid"
+  | "composer.planMode.label"
+  | "composer.planMode.goalConflict"
+  | "composer.error.stopCurrentFailed"
+  | "composer.error.promptEmpty"
+  | "composer.modelPicker.tooltipTitle"
+  | "composer.modelPicker.currentModel"
+  | "composer.modelPicker.currentProvider"
+  | "composer.secondaryRoute.select"
+  | "composer.secondaryRoute.search"
+  | "composer.secondaryRoute.autoEndpoint"
+  | "composer.secondaryRoute.loading"
+  | "composer.secondaryRoute.noMatches"
+  | "composer.secondaryRoute.switchFailed"
+  | "composer.secondaryRoute.switched"
+  | "composer.secondaryRoute.restoredAuto"
+  | "composer.progress.open"
+  | "composer.progress.progressLabel"
+  | "composer.progress.step"
+  | "composer.progress.changedFiles"
+  | "composer.progress.stepInProgress"
+  | "composer.reasoning.tooltip"
+  | "pendingPrompt.queue"
+  | "pendingPrompt.drag"
+  | "pendingPrompt.delete"
+  | "pendingPrompt.edit"
+  | "pendingPrompt.insert"
+  | "pendingPrompt.inserted"
+  | "pendingPrompt.insertShort"
+  | "pendingPrompt.insertedShort"
+  | "pendingPrompt.attachmentCount"
+  | "pendingPrompt.attachmentMessage"
+  | "sessionActions.noProjectForCapability"
+  | "sessionActions.noConversationForCapability"
+  | "sessionActions.previewCannotSaveCapability"
+  | "sessionActions.capabilitySaved"
+  | "sessionActions.noConversationForGoalSave"
+  | "sessionActions.previewCannotSaveGoal"
+  | "sessionActions.goalSaved"
+  | "sessionActions.noExistingConversation"
+  | "sessionActions.previewCannotResumeGoal"
+  | "sessionActions.goalResumed"
+  | "sessionActions.previewCannotClearGoal"
+  | "sessionActions.goalCleared"
+  | "sessionActions.previewCannotUpdateGoal"
+  | "sessionActions.noConversationForPlanMode"
+  | "sessionActions.previewCannotTogglePlanMode"
+  | "sessionActions.planModeEnabled"
+  | "sessionActions.planModeDisabled"
+  | "conversationActions.noProjectForSend"
+  | "conversationActions.previewCannotSend"
+  | "conversationActions.previewCannotCompact"
+  | "conversationActions.modelSwitched"
+  | "projectActions.vmmSaved"
+  | "projectActions.openRequested"
+  | "projectActions.unpinned"
+  | "projectActions.pinned"
+  | "projectActions.iconUpdated"
+  | "projectActions.iconReset"
+  | "projectActions.listUpdated"
+  | "projectActions.skillInherited"
+  | "projectActions.skillEnabled"
+  | "projectActions.skillDisabled"
+  | "projectSettings.cleanupCompleted"
+  | "projectDialog.renameProjectTitle"
+  | "projectDialog.renameConversationTitle"
+  | "projectDialog.renameProjectDescription"
+  | "projectDialog.renameConversationDescription"
+  | "projectDialog.renamePlaceholder"
+  | "projectDialog.confirm"
+  | "projectDialog.archiveRemoveTitle"
+  | "projectDialog.archiveTitle"
+  | "projectDialog.archiveRemoveDescription"
+  | "projectDialog.archiveDescription"
+  | "projectDialog.currentProject"
+  | "projectDialog.archiveAndRemove"
+  | "projectDialog.archiveAll"
+  | "projectDialog.removing"
+  | "projectDialog.archiving"
+  | "projectRow.conversationMenuAria"
+  | "projectRow.createConversationAria"
+  | "projectRow.collapseConversations"
+  | "projectRow.showMoreConversations"
+  | "projectRow.noConversations"
+  | "conversationRow.running"
+  | "conversationRow.unread"
+  | "conversationRow.confirmArchive"
+  | "projectFolderPicker.title"
+  | "projectFolderPicker.pathAria"
+  | "projectFolderPicker.parent"
+  | "projectFolderPicker.rootsAria"
+  | "projectFolderPicker.noRoots"
+  | "projectFolderPicker.hidden"
+  | "projectFolderPicker.noChildren"
+  | "projectFolderPicker.adding"
+  | "projectIcon.title"
+  | "projectIcon.description"
+  | "projectIcon.previewAria"
+  | "projectIcon.customTab"
+  | "projectIcon.filterPlaceholder"
+  | "projectIcon.loadMore"
+  | "projectIcon.text"
+  | "projectIcon.textPlaceholder"
+  | "projectIcon.shape"
+  | "projectIcon.shapeCircle"
+  | "projectIcon.shapeSquare"
+  | "projectIcon.backgroundColor"
+  | "projectIcon.borderColor"
+  | "projectIcon.foregroundColor"
+  | "projectIcon.resetDefault"
+  | "projectIcon.set"
+  | "projectSettings.dialogTitle"
+  | "projectSettings.dialogDescription"
+  | "projectSettings.categoryAria"
+  | "projectSettings.overview"
+  | "projectSettings.pinnedProject"
+  | "projectSettings.projectSpaceSummary"
+  | "projectSettings.vmmMemory"
+  | "projectSettings.projectOverride"
+  | "projectSettings.inheritGlobal"
+  | "projectSettings.promptSkillCount"
+  | "projectSettings.attachmentCache"
+  | "projectSettings.attachmentCleanup"
+  | "projectSettings.projectSpace"
+  | "projectSettings.projectId"
+  | "projectSettings.conversationCount"
+  | "projectSettings.pinStatus"
+  | "projectSettings.pinned"
+  | "projectSettings.notPinned"
+  | "projectSettings.vmmHasOverride"
+  | "projectSettings.vmmInheritsGlobal"
+  | "projectSettings.agentOverrideCount"
+  | "projectSettings.agentInheritsGlobal"
+  | "projectSettings.vmmTitle"
+  | "projectSettings.vmmDescription"
+  | "projectSettings.vmmLoading"
+  | "projectSettings.enableProjectOverride"
+  | "projectSettings.overrideEnabledHint"
+  | "projectSettings.overrideDisabledHint"
+  | "projectSettings.vmmTransportHint"
+  | "projectSettings.saveVmm"
+  | "projectSettings.agentTitle"
+  | "projectSettings.agentDescription"
+  | "projectSettings.agent.globalEnabled"
+  | "projectSettings.agent.globalDisabled"
+  | "projectSettings.agentLoading"
+  | "projectSettings.agentEmpty"
+  | "projectSettings.agent.projectEnabled"
+  | "projectSettings.agent.projectDisabled"
+  | "projectSettings.agent.inheritEnabled"
+  | "projectSettings.agent.inheritDisabled"
+  | "projectSettings.agent.optionInheritEnabled"
+  | "projectSettings.agent.optionInheritDisabled"
+  | "projectSettings.agent.projectStateAria"
+  | "projectSettings.cleanupTitle"
+  | "projectSettings.cleanupDescription"
+  | "projectSettings.managedDirectory"
+  | "projectSettings.cutoffDate"
+  | "projectSettings.attachmentKind.image"
+  | "projectSettings.attachmentKind.audio"
+  | "projectSettings.attachmentKind.video"
+  | "projectSettings.cleanup.previewing"
+  | "projectSettings.cleanup.preview"
+  | "projectSettings.cleanup.cleaning"
+  | "projectSettings.cleanup.execute"
+  | "projectSettings.lastPreview"
+  | "projectSettings.lastExecution"
+  | "projectSettings.cleanup.notExecuted"
+  | "projectSettings.cleanup.previewFallback"
+  | "projectSettings.cleanup.invalidDate"
+  | "projectSettings.cleanup.selectKind"
+  | "projectSettings.cleanup.initialNotice"
+  | "shell.windowOperationFailed"
+  | "shell.openGithubFailed"
+  | "shell.minimizeWindow"
+  | "shell.maximizeWindow"
+  | "shell.restoreWindow"
+  | "shell.closeWindow"
+  | "shell.openRepository"
+  | "startup.loadingProjectIndex"
+  | "startup.connectingService"
+  | "startup.loadingStep"
+  | "startup.loadingWorkspace"
+  | "startup.failed"
+  | "workspaceFiles.copyContentSuccess"
+  | "workspaceFiles.noProjectDirectory"
+  | "workspaceFiles.noMatchedFiles"
+  | "workspaceFiles.noDisplayableFiles"
+  | "workspaceFiles.filterPlaceholder"
+  | "workspaceFiles.loading"
+  | "workspaceFiles.loadingTree"
+  | "workspaceFiles.filterRules"
+  | "workspaceFiles.hiddenRules"
+  | "workspaceFiles.ignoreHiddenFiles"
+  | "workspaceFiles.ignoreDotNames"
+  | "workspaceFiles.useIgnoreRules"
+  | "workspaceFiles.useGitignoreRules"
+  | "workspaceFiles.filterNonPreviewFiles"
+  | "workspaceFiles.fileActions"
+  | "workspaceFiles.copyPath"
+  | "workspaceFiles.copyRelativePath"
+  | "workspaceFiles.copyFileContent"
+  | "workspaceFiles.filterFiles"
+  | "workspaceFilePreview.openFile"
+  | "workspaceFilePreview.emptyHint"
+  | "workspaceFilePreview.loading"
+  | "workspaceFilePreview.unsupportedTitle"
+  | "workspaceFilePreview.unsupportedHint"
+  | "workspaceFilePreview.noContent"
+  | "workspaceFilePreview.missingTitle"
+  | "workspaceFilePreview.video"
+  | "workspaceFilePreview.image"
+  | "workspaceFilePreview.mediaBlockedTitle"
+  | "workspaceFilePreview.mediaBlockedHint"
+  | "workspaceFilePreview.allowMedia"
+  | "workspaceFilePreview.truncated"
+  | "workspaceFilePreview.missingError"
+  | "workspaceFileTree.collapseDirectory"
+  | "workspaceFileTree.expandDirectory"
+  | "workspaceFileTree.expandAll"
+  | "workspaceFileTree.collapseAll"
+  | "workspaceToolPanel.expandState"
+  | "workspaceToolPanel.memorySettingsMenu"
+  | "workspaceToolPanel.skillsSettingsMenu"
+  | "workspaceToolPanel.menu"
+  | "workspaceToolPanel.collapseToPill"
+  | "workspaceToolPanel.status"
+  | "workspaceShell.skillsTitle"
+  | "workspaceShell.memoryTitle"
+  | "workspaceShell.version"
+  | "workspacePanel.resizeRight"
+  | "workspaceContext.switchTabs"
+  | "workspaceContext.searchTabs"
+  | "workspaceContext.searchTabsPlaceholder"
+  | "workspaceContext.clearTabSearch"
+  | "workspaceContext.openTabs"
+  | "workspaceContext.closeTab"
+  | "workspaceContext.openRightPage"
+  | "workspaceContext.openPage"
+  | "workspaceContext.launcher.filesDescription"
+  | "workspaceContext.launcher.reviewDescription"
+  | "workspaceContext.launcher.memoryDescription"
+  | "workspaceContext.loadingReviewPanel"
+  | "workspaceContext.loadingFilesPanel"
+  | "workspaceMemory.handleDynamicMemory"
+  | "workspaceMemory.suppressForSession"
+  | "workspaceMemory.permanentDeleteInvalid"
+  | "workspaceMemory.viewDetails"
+  | "workspaceMemory.turnId"
+  | "workspaceMemory.loadingTurn"
+  | "workspaceMemory.lookupFailed"
+  | "workspaceMemory.user"
+  | "workspaceMemory.assistant"
+  | "workspaceMemory.viewDetailsWithTurn"
+  | "workspaceMemory.handleMemoryWithId"
+  | "workspaceMemory.suppressedNotice"
+  | "workspaceMemory.suppressFailed"
+  | "workspaceMemory.deletedNotice"
+  | "workspaceMemory.deletedWithoutId"
+  | "workspaceMemory.deleteFailed"
+  | "workspaceReview.refreshGitDiffFailed"
+  | "workspaceReview.noProjectPathForGit"
+  | "workspaceReview.gitOperationFailed"
+  | "workspaceReview.fileDetailTimeout"
+  | "workspaceReview.fileDetailFailed"
+  | "workspaceReview.noProjectPathForRefresh"
+  | "workspaceReview.fileDetailLoading"
+  | "workspaceReview.hunkExpanding"
+  | "workspaceReview.hunkDirectionUp"
+  | "workspaceReview.hunkDirectionDown"
+  | "workspaceReview.hunkDirectionBoth"
+  | "workspaceReview.hunkExpandingSpecific"
+  | "workspaceReview.fileDetailTimeoutError"
+  | "workbenchConversation.unpinned"
+  | "workbenchConversation.pinned"
+  | "workbenchConversation.archived"
+  | "workbenchConversation.noProject"
+  | "workbenchConversation.copiedWorkspace"
+  | "workbenchConversation.copiedSessionId"
+  | "workbenchConversation.nameEmpty"
+  | "workbenchConversation.projectRenamed"
+  | "workbenchConversation.projectNameRestored"
+  | "workbenchConversation.conversationRenamed"
+  | "workbenchConversation.archivedCount"
+  | "workbenchConversation.archivedAndRemovedProject"
+  | "workbenchAsk.submitted"
+  | "workbenchAsk.cancelled"
+  | "thinkingDisplay.popupOnly"
+  | "thinkingDisplay.inlineOutput"
+  | "thinkingDisplay.firstInlineWithPopup"
+  | "thinkingDisplay.firstInlineOnly"
+  | "ask.title"
+  | "ask.description"
+  | "ask.action.confirmSubmit"
+  | "ask.action.confirmReject"
+  | "ask.action.submit"
+  | "ask.action.continue"
+  | "ask.action.ignore"
+  | "ask.action.backToEdit"
+  | "ask.action.processing"
+  | "ask.progress.previous"
+  | "ask.progress.next"
+  | "ask.option.selected"
+  | "ask.confirm.submitTitle"
+  | "ask.confirm.rejectTitle"
+  | "ask.confirm.submitBody"
+  | "ask.confirm.rejectBody"
+  | "ask.custom.textPlaceholder"
+  | "ask.custom.adjustCodex"
+  | "ask.custom.description"
+  | "ask.validation.requiredAnswer"
+  | "ask.validation.requiredOther"
+  | "ask.validation.requiredSelectionOrOther"
+  | "terminalStop.title"
+  | "terminalStop.description"
+  | "terminalStop.stopping"
+  | "terminalStop.confirm"
+  | "conversation.bodyLoadFailed"
+  | "conversation.emptyLoaded"
+  | "conversation.emptyWaiting"
+  | "conversation.detail.copy"
+  | "conversation.detail.close"
+  | "conversation.userPrompt.expand"
+  | "conversation.userPrompt.collapse"
+  | "conversation.userPrompt.copy"
+  | "conversation.userPrompt.edit"
+  | "conversation.subagent.return"
+  | "conversation.subagent.runningCount"
+  | "conversation.subagent.schedule"
+  | "conversation.subagent.switch"
+  | "conversation.subagent.state.running"
+  | "conversation.subagent.state.stopped"
+  | "conversation.subagent.state.failed"
+  | "conversation.subagent.state.completed"
+  | "conversation.diff.loadingPanel"
+  | "conversation.diff.parsingWorker"
+  | "conversation.diff.parseFailed"
+  | "conversation.diff.unstructuredFallback"
+  | "sessionTools.expand"
+  | "sessionTools.collapse"
+  | "sessionTools.changes"
+  | "sessionTools.progress"
+  | "sessionTools.terminal"
+  | "sessionTools.menu"
+  | "terminalSession.openScreen"
+  | "terminalSession.noScreen"
+  | "terminalSession.forceStop"
+  | "terminalSession.forceStopSession"
+  | "terminalSession.emptyScreen"
+  | "terminalSession.tooltip.status"
+  | "terminalSession.tooltip.command"
+  | "terminalSession.tooltip.cwd"
+  | "terminalSession.tooltip.shell"
+  | "terminalSession.tooltip.backend"
+  | "terminalSession.tooltip.screenFrame"
+  | "terminalSession.tooltip.exitCode"
+  | "terminalSession.tooltip.error"
+  | "terminalSession.tooltip.output"
+  | "terminalSession.tooltip.session"
+  | "terminalState.running"
+  | "terminalState.waiting"
+  | "terminalState.success"
+  | "terminalState.failed"
+  | "terminalState.stopped"
+  | "terminalState.lost"
+  | "terminalState.unknown"
+  | "toolPresentation.output.loading"
+  | "toolPresentation.output.empty"
+  | "toolPresentation.exitCode"
+  | "toolPresentation.command.running"
+  | "toolPresentation.command.failed"
+  | "toolPresentation.command.stopped"
+  | "toolPresentation.command.completed"
+  | "toolPresentation.command.start.failed"
+  | "toolPresentation.command.read.failed"
+  | "toolPresentation.command.send.failed"
+  | "toolPresentation.command.write.failed"
+  | "toolPresentation.command.stop.failed"
+  | "toolPresentation.command.start.running"
+  | "toolPresentation.command.read.running"
+  | "toolPresentation.command.send.running"
+  | "toolPresentation.command.write.running"
+  | "toolPresentation.command.stop.running"
+  | "toolPresentation.command.start.completed"
+  | "toolPresentation.command.list.completed"
+  | "toolPresentation.command.read.completed"
+  | "toolPresentation.command.send.completed"
+  | "toolPresentation.command.write.completed"
+  | "toolPresentation.command.stop.completed"
+  | "toolPresentation.command.heading.start"
+  | "toolPresentation.command.heading.read"
+  | "toolPresentation.command.heading.send"
+  | "toolPresentation.command.heading.write"
+  | "toolPresentation.command.heading.stop"
+  | "toolPresentation.command.session"
+  | "toolPresentation.command.lost"
+  | "toolPresentation.command.current"
+  | "toolPresentation.command.currentState"
+  | "toolPresentation.ask.running"
+  | "toolPresentation.ask.ignored"
+  | "toolPresentation.ask.completed"
+  | "toolPresentation.ask.questionFallback"
+  | "toolPresentation.ask.userAnswer"
+  | "toolPresentation.ask.waitingAnswer"
+  | "toolPresentation.file.count"
+  | "toolPresentation.file.multiChange"
+  | "toolPresentation.file.empty"
+  | "toolPresentation.file.create.running"
+  | "toolPresentation.file.modify.running"
+  | "toolPresentation.file.delete.running"
+  | "toolPresentation.file.mixed.running"
+  | "toolPresentation.file.create.failed"
+  | "toolPresentation.file.modify.failed"
+  | "toolPresentation.file.delete.failed"
+  | "toolPresentation.file.mixed.failed"
+  | "toolPresentation.file.create.preview"
+  | "toolPresentation.file.modify.preview"
+  | "toolPresentation.file.delete.preview"
+  | "toolPresentation.file.mixed.preview"
+  | "toolPresentation.file.create.completed"
+  | "toolPresentation.file.modify.completed"
+  | "toolPresentation.file.delete.completed"
+  | "toolPresentation.file.mixed.completed"
+  | "markdown.wrap.enable"
+  | "markdown.wrap.disable"
+  | "markdown.copyCode"
+  | "markdown.copied"
+  | "mediaPlayer.maximize"
+  | "mediaPlayer.restore"
+  | "mediaPlayer.close"
+  | "mediaPlayer.fitWindow"
+  | "mediaPlayer.originalSize"
+  | "mediaPlayer.zoomOut"
+  | "mediaPlayer.zoomIn"
+  | "media.openVideoPlayer"
+  | "settings.backToWorkspace"
+  | "memory.scope"
+  | "memory.scope.global"
+  | "memory.scope.project"
+  | "memory.project"
+  | "memory.action.testConnection"
+  | "memory.action.refreshUsersProjects"
+  | "memory.vmm.action.running"
+  | "memory.vmm.action.failed"
+  | "memory.vmm.save.global.running"
+  | "memory.vmm.save.project.running"
+  | "memory.vmm.save.global.completed"
+  | "memory.vmm.save.project.completed"
+  | "memory.vmm.save.failed"
+  | "vmm.common.optional"
+  | "vmm.common.number"
+  | "vmm.common.enabled"
+  | "vmm.common.disabled"
+  | "vmm.common.none"
+  | "vmm.common.notConfigured"
+  | "vmm.common.notSelected"
+  | "vmm.common.running"
+  | "vmm.overview.effectiveConfig"
+  | "vmm.overview.grpc"
+  | "vmm.overview.recallPolicy"
+  | "vmm.overview.ttlTurns"
+  | "vmm.overview.precheckAiTools"
+  | "vmm.overview.runtime"
+  | "vmm.overview.outboxProfiles"
+  | "vmm.overview.completedTurns"
+  | "vmm.overview.summaryEntry"
+  | "vmm.overview.noSummary"
+  | "vmm.runtime.title"
+  | "vmm.runtime.subtitle"
+  | "vmm.runtime.session"
+  | "vmm.runtime.profileNodes"
+  | "vmm.runtime.updatedAt"
+  | "vmm.runtime.noProfileBase"
+  | "vmm.result.title"
+  | "vmm.result.emptySummary"
+  | "vmm.result.request"
+  | "vmm.result.response"
+  | "vmm.result.emptyHint"
+  | "vmm.result.generic"
+  | "vmm.settings.grpcTarget"
+  | "vmm.settings.apiKey"
+  | "vmm.settings.receiveTimeout"
+  | "vmm.settings.handshakeTimeout"
+  | "vmm.settings.maxReceiveBytes"
+  | "vmm.settings.keepaliveInterval"
+  | "vmm.settings.keepaliveTimeout"
+  | "vmm.settings.idleKeepalive"
+  | "vmm.settings.enableMemoryConnection"
+  | "vmm.settings.exposeAiTools"
+  | "vmm.settings.autoPrecheck"
+  | "vmm.settings.userId"
+  | "vmm.settings.projectId"
+  | "vmm.settings.implicitMemoryTtl"
+  | "vmm.settings.profileRefreshInterval"
+  | "vmm.settings.profileNodeLimit"
+  | "vmm.settings.injectionTag"
+  | "vmm.settings.injectionDescription"
+  | "vmm.rows.usersEmpty"
+  | "vmm.rows.projectsEmpty"
+  | "vmm.rows.profileNodesEmpty"
+  | "vmm.rows.bundleEmpty"
+  | "vmm.rows.toolResultEmpty"
+  | "vmm.rows.unnamedUser"
+  | "vmm.rows.unnamedProject"
+  | "vmm.rows.deleted"
+  | "vmm.rows.notFound"
+  | "vmm.rows.vectorRows"
+  | "vmm.profile.full"
+  | "vmm.profile.team"
+  | "vmm.profile.space"
+  | "vmm.profile.project"
+  | "vmm.profile.user"
+  | "vmm.action.deleteMemory"
+  | "vmm.action.precheckProject"
+  | "vmm.action.confirmCreate"
+  | "vmm.action.deleteProject"
+  | "vmm.action.runMigrate"
+  | "vmm.action.refreshNodes"
+  | "vmm.action.applyInstruction"
+  | "vmm.action.loadProfileBundle"
+  | "vmm.action.saveGlobal"
+  | "vmm.action.saveProject"
+  | "vmm.action.resolveUser"
+  | "vmm.action.deleteUser"
+  | "vmm.section.project.title"
+  | "vmm.section.project.subtitle"
+  | "vmm.section.profile.title"
+  | "vmm.section.profile.subtitle"
+  | "vmm.section.bundle.title"
+  | "vmm.section.bundle.subtitle"
+  | "vmm.section.tool.title"
+  | "vmm.section.tool.subtitle"
+  | "vmm.section.memory.title"
+  | "vmm.section.memory.subtitle"
+  | "vmm.section.transport.title"
+  | "vmm.section.transport.subtitle"
+  | "vmm.section.user.title"
+  | "vmm.section.user.subtitle"
+  | "vmm.field.projectPath"
+  | "vmm.field.confirmDelete"
+  | "vmm.field.migrateSource"
+  | "vmm.field.migrateTarget"
+  | "vmm.field.confirmMigrate"
+  | "vmm.field.profileTarget"
+  | "vmm.field.profileInstruction"
+  | "vmm.field.searchQueries"
+  | "vmm.field.deleteReason"
+  | "vmm.field.writeAbstract"
+  | "vmm.field.writeDetails"
+  | "vmm.field.userRef"
+  | "vmm.field.deleteConfirmationCode"
+  | "vmm.placeholder.profileInstruction"
+  | "vmm.placeholder.multiPipe"
+  | "vmm.placeholder.commaOrPipe"
+  | "vmm.placeholder.deleteReason"
+  | "vmm.placeholder.writeAbstract"
+  | "vmm.placeholder.writeDetails"
+  | "vmm.placeholder.userRef"
+  | "vmm.placeholder.deleteConfirmationCode"
+  | "vmm.diagnostic.disabledByConfig"
+  | "vmm.diagnostic.missingGrpcTarget"
+  | "vmm.diagnostic.grpcOffline"
+  | "vmm.diagnostic.missingUserId"
+  | "vmm.diagnostic.missingProjectId"
   | "planArtifact.titleFallback"
   | "planArtifact.copy"
   | "planArtifact.copied"
@@ -141,6 +906,7 @@ export type TranslationKey =
   | "runtime.subagentRunning"
   | "runtime.thinkingOverlayHint"
   | "settings.general"
+  | "settings.systemSettings"
   | "settings.projects"
   | "settings.providers"
   | "settings.tools"
@@ -185,6 +951,10 @@ export type TranslationKey =
   | "settings.aiMusicCover.description"
   | "settings.mcpServers.description"
   | "settings.runtimeDiagnostics.description"
+  | "settings.diagnostics.logs"
+  | "settings.diagnostics.startupStatus"
+  | "settings.diagnostics.waitingStatus"
+  | "settings.diagnostics.runtimeModules"
   | "settings.gitCommit.description"
   | "settings.rtkRouting.description"
   | "settings.gitCommit.active"
@@ -296,6 +1066,9 @@ export type TranslationKey =
 export const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
   "zh-CN": {
     "app.subtitle": "Ai Coding",
+    "app.serviceConnectionRestored": "本地服务连接已恢复。",
+    "app.serviceReconnecting": "本地服务连接已断开，正在重连...",
+    "app.serviceCheckingRecovery": "本地服务连接已断开，正在检测恢复...",
     "area.chat": "工作台",
     "area.skills": "技能",
     "area.memory": "记忆",
@@ -310,8 +1083,118 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "global.toggleDark": "切换为暗色主题",
     "global.toggleLight": "切换为亮色主题",
     "global.language": "语言",
+    "global.languageSaveFailed": "保存语言失败：{error}",
     "global.online": "在线",
     "global.preview": "预览",
+    "global.progress": "进度",
+    "global.labelSeparator": "：",
+    "global.listDelimiter": "、",
+    "appChrome.menu": "打开应用菜单",
+    "appChrome.status": "状态",
+    "appChrome.theme": "主题",
+    "appChrome.theme.dark": "暗色",
+    "appChrome.theme.light": "亮色",
+    "appChrome.language.zh": "中文",
+    "appChrome.scrollFeaturesLeft": "向左滚动主功能区",
+    "appChrome.scrollFeaturesRight": "向右滚动主功能区",
+    "appChrome.windowActionFailed": "窗口操作失败：",
+    "appChrome.window.minimize": "最小化窗口",
+    "appChrome.window.restore": "还原窗口",
+    "appChrome.window.maximize": "最大化窗口",
+    "appChrome.window.close": "关闭窗口",
+    "appChrome.githubOpenFailed": "打开 GitHub 失败：",
+    "appChrome.githubAria": "打开 OpenVulcan/vulcan-code GitHub 仓库",
+    "sidebar.user.local": "本地用户",
+    "sidebar.user.account": "账户",
+    "sidebar.user.logout": "退出登录",
+    "projectMenu.conversationsAria": "{project} 会话",
+    "projectMenu.newConversation": "新建会话",
+    "projectMenu.noConversations": "暂无会话",
+    "projectMenu.pin": "置顶项目",
+    "projectMenu.unpin": "取消置顶项目",
+    "projectMenu.openDirectory": "在资源管理器中打开",
+    "projectMenu.createWorktree": "创建永久工作树",
+    "projectMenu.renameProject": "重命名项目",
+    "projectMenu.setIcon": "设置项目图标",
+    "projectMenu.archiveConversations": "归档对话",
+    "projectMenu.removeProject": "移除项目",
+    "projectMenu.projectSettings": "项目设置",
+    "conversationMenu.pin": "置顶对话",
+    "conversationMenu.unpin": "取消置顶对话",
+    "conversationMenu.rename": "重命名对话",
+    "conversationMenu.archive": "归档对话",
+    "conversationMenu.markUnread": "标记为未读",
+    "conversationMenu.openDirectory": "在资源管理器中打开",
+    "conversationMenu.copyWorkspace": "复制工作目录",
+    "conversationMenu.copySessionId": "复制会话 ID",
+    "conversationMenu.copyDeepLink": "复制深度链接",
+    "conversationMenu.forkLocal": "派生到本地",
+    "conversationMenu.forkWorktree": "派生到新工作树",
+    "conversationMenu.openNewWindow": "在新窗口中打开",
+    "diffAction.moreStaging": "更多暂存操作",
+    "diffAction.unstageAll": "取消全部暂存",
+    "diffAction.unstageFile": "取消当前文件暂存",
+    "diffAction.restoreAll": "还原全部",
+    "diffAction.stageAll": "暂存全部",
+    "diffAction.stageFile": "暂存此文件",
+    "diffAction.restoreFile": "还原此文件",
+    "diff.mode.unstaged": "未暂存",
+    "diff.mode.staged": "已暂存",
+    "diff.mode.commit": "提交",
+    "diff.mode.branch": "分支",
+    "diff.branch.current": "当前分支",
+    "diff.branch.main": "主分支",
+    "diff.view.toUnified": "切换到统一视图",
+    "diff.view.toSplit": "切换到分栏视图",
+    "diff.refresh": "刷新 diff",
+    "diff.loading": "加载中",
+    "diff.moreActions": "更多 diff 操作",
+    "diff.copyRaw": "复制 raw diff",
+    "diff.inline.disable": "禁用文字差异",
+    "diff.inline.enable": "启用文字差异",
+    "diff.wrap.disable": "禁用自动换行",
+    "diff.wrap.enable": "启用自动换行",
+    "diff.contextControls.hide": "隐藏上下文展开控件",
+    "diff.contextControls.show": "显示上下文展开控件",
+    "diff.indicator.useClassic": "使用 +/- 行标",
+    "diff.indicator.useBars": "使用颜色线条行标",
+    "diff.search.open": "打开 diff 搜索",
+    "diff.search.label": "搜索 diff",
+    "diff.search.truncated": "结果已截断",
+    "diff.search.previous": "上一条",
+    "diff.search.next": "下一条",
+    "diff.search.indexUnavailable": "索引不可用",
+    "diff.commit.none": "暂无提交记录",
+    "diff.branch.search": "搜索分支",
+    "diff.branch.label": "分支",
+    "diff.branch.noMatches": "没有匹配分支",
+    "diff.emptyBody": "当前没有可展示的 Git Diff。",
+    "diff.noMatchingFiles": "没有匹配的文件",
+    "diff.file.tooLarge": "超大文件未展示",
+    "diff.file.added": "新增文件",
+    "diff.file.deleted": "删除文件",
+    "diff.file.gitlink": "子模块指针变更，未渲染文本内容。",
+    "diff.file.renamedNoChanges": "File renamed without changes",
+    "diff.file.noContent": "No content",
+    "diff.render.changedLinesSkipped": "变更行超过 {limit}，高亮细节已按轻量策略省略",
+    "diff.render.skipped": "高亮细节已按轻量策略省略",
+    "diff.render.rowsLightweight": "{count} 行按轻量模式渲染",
+    "diff.large.totalFiles": "文件数超过 {limit}",
+    "diff.large.totalChangedLines": "总变更行超过 {limit}",
+    "diff.large.totalChangedBytes": "总变更体积超过 {limit}",
+    "diff.large.fileChangedLines": "单文件变更行超过 {limit}",
+    "diff.large.fileChangedBytes": "单文件变更体积超过 {limit}",
+    "diff.large.fileMaxLineBytes": "单行体积超过 {limit}",
+    "diff.load.rowsPending": "{rows} 行待加载，约 {hunks} 个 hunk",
+    "diff.load.retry": "重试",
+    "diff.load.reveal": "打开位置",
+    "diff.load.matchCount": "{count} 条命中",
+    "diff.load.backendMatchFallback": "后端完整 diff 命中该文件。",
+    "diff.load.loadingDetail": "正在加载文件 diff 详情。",
+    "diff.load.timeout": "文件 diff 详情加载超时。",
+    "diff.load.failed": "文件 diff 详情加载失败。",
+    "diff.load.loadedEmpty": "文件 diff 详情已加载，但没有可展示的文本内容。",
+    "diff.load.summaryIdle": "该文件为摘要状态，进入视口后将按需加载详情。",
     "console.title": "会话",
     "console.newConversation": "新会话",
     "console.emptyPrompt": "我们应该在 {projectName} 中构建什么？",
@@ -333,6 +1216,28 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkSucceeded": "已创建分叉会话",
     "conversation.forkSource.label": "从对话中派生",
     "conversation.forkSource.missing": "原会话已经不存在",
+    "conversation.block.toolCall": "工具调用",
+    "conversation.block.toolResult": "工具返回",
+    "conversation.block.command": "命令会话",
+    "conversation.block.thinking": "思考过程",
+    "conversation.block.plan": "计划",
+    "conversation.block.notice": "运行提示",
+    "conversation.block.detail": "详情",
+    "conversation.metadata.type": "类型",
+    "conversation.metadata.status": "状态",
+    "conversation.metadata.tool": "工具",
+    "conversation.metadata.identifier": "标识",
+    "conversation.metadata.error": "错误",
+    "conversation.metadata.result": "结果",
+    "conversation.metadata.returned": "已返回",
+    "conversation.stats.providerCalls": "{count} 次调用",
+    "conversation.stats.toolCalls": "{count} 个工具",
+    "conversation.stats.cachedTokens": "缓存命中 {count}",
+    "conversation.subagent.stopTask": "停止子代理 {task}",
+    "conversation.process.header": "处理过程",
+    "conversation.process.stoppedAfter": "你在 {duration} 后停止了",
+    "conversation.process.stopped": "你已停止本轮工作",
+    "conversation.process.duration": "持续 {duration}",
     "conversation.action.editPrompt": "编辑用户输入",
     "conversation.action.editPromptFailed": "编辑用户输入失败",
     "conversation.action.cancel": "取消",
@@ -387,12 +1292,36 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "sidebar.waitingWorkspace": "等待 Workspace 快照载入",
     "sidebar.overview": "概览",
     "sidebar.settingsCategories": "设置分类",
+    "sidebar.toggle": "切换侧栏",
     "composer.mode.execute": "构建",
     "composer.mode.plan": "计划",
     "composer.capability.extended": "扩展能力",
     "composer.capability.extended.subtitle": "能力扩展设置",
     "composer.capability.basic": "基础能力",
     "composer.capability.basic.subtitle": "仅文本与代码",
+    "composer.capability.enabledCount": "{enabled}/{total} 已启用",
+    "composer.capability.tooltipTitle": "点击设置扩展能力",
+    "composer.capability.tooltipEmpty": "暂无已启用模块",
+    "composer.capability.dialogTitle": "当前会话能力设置",
+    "composer.capability.dialogDescription": "调整排序与勾选后需要点击保存，保存后会写入当前会话的独立配置，并影响下一次对话的缓存命中。",
+    "composer.capability.source.nativeWithTargets": "模型原生 + {count} 个目标",
+    "composer.capability.source.native": "模型原生",
+    "composer.capability.source.targets": "{count} 个目标",
+    "composer.capability.source.noTargets": "暂无可用目标",
+    "composer.capability.empty.native": "当前能力由所选模型原生处理。",
+    "composer.capability.empty.noTargets": "当前能力暂无已配置目标。",
+    "composer.capability.saveHint.externalUpdate": "其他窗口已更新此会话配置，当前草稿尚未同步。",
+    "composer.capability.saveHint.saving": "正在保存到当前会话...",
+    "composer.capability.saveHint.unsaved": "有未保存变更。",
+    "composer.capability.saveHint.clean": "当前没有未保存变更。",
+    "composer.capability.useDefaults": "使用默认配置",
+    "composer.capability.save.saving": "保存中",
+    "composer.capability.save.saved": "已保存",
+    "composer.capability.save": "保存",
+    "composer.capability.close.title": "保存更改？",
+    "composer.capability.close.description": "当前会话能力设置有未保存变更。",
+    "composer.capability.close.discard": "不保存",
+    "composer.capability.close.keepEditing": "继续编辑",
     "composer.reasoning.off": "关闭",
     "composer.reasoning.low": "低",
     "composer.reasoning.medium": "中",
@@ -411,6 +1340,612 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.stop": "停止",
     "composer.modelPicker.filter": "输入模型名称、ID 或 Provider 过滤",
     "composer.modelPicker.noMatches": "当前过滤条件下没有匹配模型。",
+    "composer.attachment.add": "添加附件",
+    "composer.attachment.extension": "扩展",
+    "composer.attachment.menu": "附件",
+    "composer.attachment.empty": "当前无可用附件类型",
+    "composer.attachment.remove": "移除附件",
+    "composer.attachment.unsupported": "当前模型或扩展能力不支持这些附件。",
+    "composer.attachment.maxLimit": "最多只能添加 {count} 个附件。",
+    "composer.attachment.partialMaxLimit": "已达到 {count} 个附件上限，部分文件未添加。",
+    "composer.attachment.kind.image": "图片",
+    "composer.attachment.kind.audio": "音频",
+    "composer.attachment.kind.video": "视频",
+    "composer.attachment.kind.pdf": "PDF",
+    "composer.thinkingProcess": "思考过程",
+    "composer.planMode": "计划模式",
+    "composer.goal": "目标",
+    "composer.scrollToBottom": "滚动到底部",
+    "composer.goalDialog.resumeTitle": "继续任务",
+    "composer.goalDialog.editTitle": "编辑目标",
+    "composer.goalDialog.objectiveAria": "目标内容",
+    "composer.goalDialog.objectivePlaceholder": "输入当前会话要持续推进的目标",
+    "composer.goalDialog.tokenBudgetAria": "Token 预算",
+    "composer.goalDialog.tokenBudgetPlaceholder": "Token 预算（可选）",
+    "composer.goalDialog.save": "保存",
+    "composer.goal.status.active": "进行中的目标",
+    "composer.goal.status.paused": "已暂停的目标",
+    "composer.goal.status.blocked": "受阻的目标",
+    "composer.goal.status.usageLimited": "受限的目标",
+    "composer.goal.status.budgetLimited": "预算用尽",
+    "composer.goal.status.completed": "已完成的目标",
+    "composer.goal.tooltip.apiCalls": "API 次数：{count}",
+    "composer.goal.tooltip.toolCalls": "工具调用：{count}",
+    "composer.goal.tooltip.usage": "用量：{tokens} tokens",
+    "composer.goal.tooltip.input": "输入：{tokens}",
+    "composer.goal.tooltip.cache": "缓存：{tokens}",
+    "composer.goal.tooltip.output": "输出：{tokens}",
+    "composer.goal.tooltip.total": "总量：{tokens}",
+    "composer.goal.action.edit": "编辑目标",
+    "composer.goal.action.resumeTask": "继续任务",
+    "composer.goal.action.resume": "恢复目标",
+    "composer.goal.action.pause": "暂停目标",
+    "composer.goal.action.clear": "清理目标",
+    "composer.goal.error.empty": "目标内容不能为空。",
+    "composer.goal.error.budgetInvalid": "Token 预算必须是正整数。",
+    "composer.planMode.label": "计划",
+    "composer.planMode.goalConflict": "计划模式与目标模式不能同时开启。",
+    "composer.error.stopCurrentFailed": "停止当前会话失败。",
+    "composer.error.promptEmpty": "请输入任务指令。",
+    "composer.modelPicker.tooltipTitle": "点击选择模型",
+    "composer.modelPicker.currentModel": "当前模型：{model}",
+    "composer.modelPicker.currentProvider": "当前供应商：{provider}",
+    "composer.secondaryRoute.select": "选择二级供应商",
+    "composer.secondaryRoute.search": "搜索二级供应商",
+    "composer.secondaryRoute.autoEndpoint": "由 OpenRouter 自动选择 endpoint",
+    "composer.secondaryRoute.loading": "正在加载二级供应商...",
+    "composer.secondaryRoute.noMatches": "没有匹配的二级供应商",
+    "composer.secondaryRoute.switchFailed": "二级供应商切换失败，已保留原选择。",
+    "composer.secondaryRoute.switched": "二级供应商已切换。",
+    "composer.secondaryRoute.restoredAuto": "二级供应商已恢复 Auto。",
+    "composer.progress.open": "查看当前进程",
+    "composer.progress.progressLabel": "进程进度 {current}/{total}",
+    "composer.progress.step": "第 {current} / {total} 步",
+    "composer.progress.changedFiles": "{count} 个文件已更改",
+    "composer.progress.stepInProgress": "步骤进行中",
+    "composer.reasoning.tooltip": "思考级别",
+    "pendingPrompt.queue": "待发送队列",
+    "pendingPrompt.drag": "拖动待发送提示词",
+    "pendingPrompt.delete": "删除待发送提示词",
+    "pendingPrompt.edit": "编辑待发送提示词",
+    "pendingPrompt.insert": "引导待发送提示词",
+    "pendingPrompt.inserted": "已引导待发送提示词",
+    "pendingPrompt.insertShort": "引导",
+    "pendingPrompt.insertedShort": "已引导",
+    "pendingPrompt.attachmentCount": "{count} 个附件",
+    "pendingPrompt.attachmentMessage": "附件消息",
+    "sessionActions.noProjectForCapability": "当前会话没有明确关联项目，无法保存 AI 能力设置。",
+    "sessionActions.noConversationForCapability": "请先创建或选择一个会话，再保存 AI 能力设置。",
+    "sessionActions.previewCannotSaveCapability": "浏览器预览模式下无法保存会话 AI 能力设置。",
+    "sessionActions.capabilitySaved": "已保存当前会话 AI 能力设置。",
+    "sessionActions.noConversationForGoalSave": "请先创建或选择一个会话，再设置目标。",
+    "sessionActions.previewCannotSaveGoal": "浏览器预览模式下无法保存目标。",
+    "sessionActions.goalSaved": "目标已保存。",
+    "sessionActions.noExistingConversation": "请先选择一个已有会话。",
+    "sessionActions.previewCannotResumeGoal": "浏览器预览模式下无法继续目标。",
+    "sessionActions.goalResumed": "目标已继续。",
+    "sessionActions.previewCannotClearGoal": "浏览器预览模式下无法清理目标。",
+    "sessionActions.goalCleared": "目标已清理。",
+    "sessionActions.previewCannotUpdateGoal": "浏览器预览模式下无法更新目标状态。",
+    "sessionActions.noConversationForPlanMode": "请先创建或选择一个会话，再切换计划模式。",
+    "sessionActions.previewCannotTogglePlanMode": "浏览器预览模式下无法切换计划模式。",
+    "sessionActions.planModeEnabled": "计划模式已开启。",
+    "sessionActions.planModeDisabled": "计划模式已关闭。",
+    "conversationActions.noProjectForSend": "当前会话没有明确关联项目，无法发送。",
+    "conversationActions.previewCannotSend": "浏览器预览模式下无法发送真实会话。",
+    "conversationActions.previewCannotCompact": "浏览器预览模式下无法执行真实上下文压缩。",
+    "conversationActions.modelSwitched": "当前模型已切换为 {model}（{provider}）。",
+    "projectActions.vmmSaved": "已保存项目 VMM 设置。",
+    "projectActions.openRequested": "已请求打开项目目录：{project}",
+    "projectActions.unpinned": "已取消置顶项目：{project}",
+    "projectActions.pinned": "已置顶项目：{project}",
+    "projectActions.iconUpdated": "已更新项目图标：{project}",
+    "projectActions.iconReset": "已还原项目图标：{project}",
+    "projectActions.listUpdated": "项目列表已更新。",
+    "projectActions.skillInherited": "已将 {skill} 改为继承全局设置",
+    "projectActions.skillEnabled": "已在项目中启用 {skill}",
+    "projectActions.skillDisabled": "已在项目中关闭 {skill}",
+    "projectSettings.cleanupCompleted": "项目附件缓存清理已完成。",
+    "projectDialog.renameProjectTitle": "重命名项目",
+    "projectDialog.renameConversationTitle": "重命名对话",
+    "projectDialog.renameProjectDescription": "输入新的项目显示名称。项目路径不会改变；留空确认会还原为项目文件夹名。",
+    "projectDialog.renameConversationDescription": "输入新的对话名称。",
+    "projectDialog.renamePlaceholder": "输入新的名称",
+    "projectDialog.confirm": "确认",
+    "projectDialog.archiveRemoveTitle": "归档并移除项目？",
+    "projectDialog.archiveTitle": "归档 {count} 个对话？",
+    "projectDialog.archiveRemoveDescription": "这会先归档 {project} 中的 {count} 个对话，然后从项目列表移除该项目。重新添加这个项目后，已归档对话才会出现在归档恢复中。",
+    "projectDialog.archiveDescription": "这会将 {project} 中的对话归档，项目本身会保留在左侧项目列表中。",
+    "projectDialog.currentProject": "当前项目",
+    "projectDialog.archiveAndRemove": "归档并移除",
+    "projectDialog.archiveAll": "全部归档",
+    "projectDialog.removing": "移除中",
+    "projectDialog.archiving": "归档中",
+    "projectRow.conversationMenuAria": "{project} 会话菜单",
+    "projectRow.createConversationAria": "在 {project} 中创建新会话",
+    "projectRow.collapseConversations": "折叠显示",
+    "projectRow.showMoreConversations": "展开显示",
+    "projectRow.noConversations": "暂无对话",
+    "conversationRow.running": "会话正在运行",
+    "conversationRow.unread": "未读",
+    "conversationRow.confirmArchive": "确认归档对话",
+    "projectFolderPicker.title": "选择项目目录",
+    "projectFolderPicker.pathAria": "目录路径",
+    "projectFolderPicker.parent": "上级",
+    "projectFolderPicker.rootsAria": "盘符",
+    "projectFolderPicker.noRoots": "没有可用盘符",
+    "projectFolderPicker.hidden": "隐藏",
+    "projectFolderPicker.noChildren": "没有可进入的子目录",
+    "projectFolderPicker.adding": "添加中",
+    "projectIcon.title": "设置项目图标",
+    "projectIcon.description": "为 {project} 选择固定图标，或生成一个字母徽标。还原后会重新使用默认文件夹开关图标。",
+    "projectIcon.previewAria": "项目图标预览",
+    "projectIcon.customTab": "自定义",
+    "projectIcon.filterPlaceholder": "过滤 {pack} 图标",
+    "projectIcon.loadMore": "加载更多",
+    "projectIcon.text": "文字",
+    "projectIcon.textPlaceholder": "中文 1 个或英文 2 个",
+    "projectIcon.shape": "形状",
+    "projectIcon.shapeCircle": "圆形",
+    "projectIcon.shapeSquare": "方形",
+    "projectIcon.backgroundColor": "背景色",
+    "projectIcon.borderColor": "边框色",
+    "projectIcon.foregroundColor": "字体色",
+    "projectIcon.resetDefault": "还原默认",
+    "projectIcon.set": "设置",
+    "projectSettings.dialogTitle": "项目设置：{project}",
+    "projectSettings.dialogDescription": "项目级配置与缓存清理只作用于当前项目空间。",
+    "projectSettings.categoryAria": "项目设置分类",
+    "projectSettings.overview": "概览",
+    "projectSettings.pinnedProject": "已置顶项目",
+    "projectSettings.projectSpaceSummary": "项目空间摘要",
+    "projectSettings.vmmMemory": "VMM 记忆",
+    "projectSettings.projectOverride": "项目覆盖",
+    "projectSettings.inheritGlobal": "继承全局",
+    "projectSettings.promptSkillCount": "{count} 个提示词技能",
+    "projectSettings.attachmentCache": "附件缓存",
+    "projectSettings.attachmentCleanup": "历史附件清理",
+    "projectSettings.projectSpace": "项目空间",
+    "projectSettings.projectId": "项目标识：{id}",
+    "projectSettings.conversationCount": "对话数量：{count}",
+    "projectSettings.pinStatus": "置顶状态：{status}",
+    "projectSettings.pinned": "已置顶",
+    "projectSettings.notPinned": "未置顶",
+    "projectSettings.vmmHasOverride": "当前项目已启用独立覆盖。",
+    "projectSettings.vmmInheritsGlobal": "当前项目继承全局 VMM 设置。",
+    "projectSettings.agentOverrideCount": "当前项目有 {count} 条覆盖。",
+    "projectSettings.agentInheritsGlobal": "未设置项目级覆盖，继承全局规则。",
+    "projectSettings.vmmTitle": "项目级 VMM 记忆",
+    "projectSettings.vmmDescription": "覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。",
+    "projectSettings.vmmLoading": "正在加载项目 VMM 设置...",
+    "projectSettings.enableProjectOverride": "启用项目覆盖",
+    "projectSettings.overrideEnabledHint": "保存后当前项目使用下方设置。",
+    "projectSettings.overrideDisabledHint": "保存后清空项目覆盖并继承全局设置。",
+    "projectSettings.vmmTransportHint": "项目级设置继承全局 gRPC 连接与 API Key；连接参数请在 VMM 记忆的全局配置中调整。",
+    "projectSettings.saveVmm": "保存 VMM 设置",
+    "projectSettings.agentTitle": "项目级 Agent Skills",
+    "projectSettings.agentDescription": "对系统与用户提示词技能建立当前项目专属启停覆盖。",
+    "projectSettings.agent.globalEnabled": "全局已启用",
+    "projectSettings.agent.globalDisabled": "全局已关闭",
+    "projectSettings.agentLoading": "正在加载项目技能覆盖...",
+    "projectSettings.agentEmpty": "系统与用户目录暂未发现提示词技能。",
+    "projectSettings.agent.projectEnabled": "项目启用",
+    "projectSettings.agent.projectDisabled": "项目关闭",
+    "projectSettings.agent.inheritEnabled": "继承启用",
+    "projectSettings.agent.inheritDisabled": "继承关闭",
+    "projectSettings.agent.optionInheritEnabled": "继承全局（启用）",
+    "projectSettings.agent.optionInheritDisabled": "继承全局（关闭）",
+    "projectSettings.agent.projectStateAria": "{skill} 项目状态",
+    "projectSettings.cleanupTitle": "项目附件缓存清理",
+    "projectSettings.cleanupDescription": "按日期和附件类型筛选当前项目的托管历史附件。",
+    "projectSettings.managedDirectory": "托管目录",
+    "projectSettings.cutoffDate": "截止日期",
+    "projectSettings.attachmentKind.image": "图片",
+    "projectSettings.attachmentKind.audio": "音频",
+    "projectSettings.attachmentKind.video": "视频",
+    "projectSettings.cleanup.previewing": "预览中",
+    "projectSettings.cleanup.preview": "预览清理范围",
+    "projectSettings.cleanup.cleaning": "清理中",
+    "projectSettings.cleanup.execute": "执行清理",
+    "projectSettings.lastPreview": "最近一次预览",
+    "projectSettings.lastExecution": "最近一次执行",
+    "projectSettings.cleanup.notExecuted": "尚未执行历史附件缓存清理。",
+    "projectSettings.cleanup.previewFallback": "预览模式将检查 {date} 之前的 {kinds} 托管附件。",
+    "projectSettings.cleanup.invalidDate": "请选择有效的截止日期。",
+    "projectSettings.cleanup.selectKind": "至少选择一种附件类型后才能预览。",
+    "projectSettings.cleanup.initialNotice": "选择截止日期和附件类型后可预览当前项目的托管附件清理范围。",
+    "shell.windowOperationFailed": "窗口操作失败：{error}",
+    "shell.openGithubFailed": "打开 GitHub 失败：{error}",
+    "shell.minimizeWindow": "最小化窗口",
+    "shell.maximizeWindow": "最大化窗口",
+    "shell.restoreWindow": "还原窗口",
+    "shell.closeWindow": "关闭窗口",
+    "shell.openRepository": "打开 OpenVulcan/vulcan-code GitHub 仓库",
+    "startup.loadingProjectIndex": "正在加载项目与会话索引",
+    "startup.connectingService": "正在连接 Vulcan Core Service",
+    "startup.loadingStep": "正在加载 {step}",
+    "startup.loadingWorkspace": "正在加载 Workspace",
+    "startup.failed": "启动失败：{error}",
+    "workspaceFiles.copyContentSuccess": "已复制文件内容。",
+    "workspaceFiles.noProjectDirectory": "当前会话没有关联项目目录。",
+    "workspaceFiles.noMatchedFiles": "没有匹配的文件。",
+    "workspaceFiles.noDisplayableFiles": "暂无可显示文件。",
+    "workspaceFiles.filterPlaceholder": "筛选文件...",
+    "workspaceFiles.loading": "正在加载。",
+    "workspaceFiles.loadingTree": "正在加载文件树。",
+    "workspaceFiles.filterRules": "文件过滤规则",
+    "workspaceFiles.hiddenRules": "隐藏规则",
+    "workspaceFiles.ignoreHiddenFiles": "忽略隐藏文件",
+    "workspaceFiles.ignoreDotNames": "忽略点开头名称",
+    "workspaceFiles.useIgnoreRules": "使用 .ignore 规则",
+    "workspaceFiles.useGitignoreRules": "使用 .gitignore 规则",
+    "workspaceFiles.filterNonPreviewFiles": "过滤非代码、图片、视频文件",
+    "workspaceFiles.fileActions": "文件操作",
+    "workspaceFiles.copyPath": "复制路径",
+    "workspaceFiles.copyRelativePath": "复制相对路径",
+    "workspaceFiles.copyFileContent": "复制文件内容",
+    "workspaceFiles.filterFiles": "筛选文件",
+    "workspaceFilePreview.openFile": "打开文件",
+    "workspaceFilePreview.emptyHint": "从文件树中选择代码或媒体文件。",
+    "workspaceFilePreview.loading": "正在加载预览。",
+    "workspaceFilePreview.unsupportedTitle": "暂不支持预览",
+    "workspaceFilePreview.unsupportedHint": "该文件会显示在文件树中，但不会自动读取内容。",
+    "workspaceFilePreview.noContent": "暂无预览内容。",
+    "workspaceFilePreview.missingTitle": "文件已被删除或移动",
+    "workspaceFilePreview.video": "视频",
+    "workspaceFilePreview.image": "图片",
+    "workspaceFilePreview.mediaBlockedTitle": "{media}文件不允许展示",
+    "workspaceFilePreview.mediaBlockedHint": "是否允许展示当前{media}文件？允许后同类文件会直接预览。",
+    "workspaceFilePreview.allowMedia": "允许显示{media}",
+    "workspaceFilePreview.truncated": "已截断",
+    "workspaceFilePreview.missingError": "文件已被删除或移动，无法预览：{path}",
+    "workspaceFileTree.collapseDirectory": "收起文件目录",
+    "workspaceFileTree.expandDirectory": "展开文件目录",
+    "workspaceFileTree.expandAll": "全部展开",
+    "workspaceFileTree.collapseAll": "全部折叠",
+    "workspaceToolPanel.expandState": "展开状态",
+    "workspaceToolPanel.memorySettingsMenu": "记忆设置菜单",
+    "workspaceToolPanel.skillsSettingsMenu": "技能设置菜单",
+    "workspaceToolPanel.menu": "菜单",
+    "workspaceToolPanel.collapseToPill": "收起为胶囊",
+    "workspaceToolPanel.status": "状态",
+    "workspaceShell.skillsTitle": "技能设置",
+    "workspaceShell.memoryTitle": "记忆设置",
+    "workspaceShell.version": "版本 {version}",
+    "workspacePanel.resizeRight": "调整右侧面板宽度",
+    "workspaceContext.switchTabs": "切换右侧页签",
+    "workspaceContext.searchTabs": "搜索标签页",
+    "workspaceContext.searchTabsPlaceholder": "搜索标签页...",
+    "workspaceContext.clearTabSearch": "清空标签页搜索",
+    "workspaceContext.openTabs": "打开的标签页",
+    "workspaceContext.closeTab": "关闭{title}",
+    "workspaceContext.openRightPage": "打开右侧页面",
+    "workspaceContext.openPage": "打开页面",
+    "workspaceContext.launcher.filesDescription": "浏览项目文件",
+    "workspaceContext.launcher.reviewDescription": "查看代码更改",
+    "workspaceContext.launcher.memoryDescription": "查看会话记忆",
+    "workspaceContext.loadingReviewPanel": "正在加载审核面板。",
+    "workspaceContext.loadingFilesPanel": "正在加载文件面板。",
+    "workspaceMemory.handleDynamicMemory": "处理动态记忆",
+    "workspaceMemory.suppressForSession": "仅本会话不再注入",
+    "workspaceMemory.permanentDeleteInvalid": "永久删除无效记忆",
+    "workspaceMemory.viewDetails": "查看详情",
+    "workspaceMemory.turnId": "对话编号 {turnId}",
+    "workspaceMemory.loadingTurn": "正在查询完整 TURN 记录...",
+    "workspaceMemory.lookupFailed": "查询失败：{error}",
+    "workspaceMemory.user": "用户：{content}",
+    "workspaceMemory.assistant": "助手：{content}",
+    "workspaceMemory.viewDetailsWithTurn": "查看详情 {turnId}",
+    "workspaceMemory.handleMemoryWithId": "处理记忆 {memoryId}",
+    "workspaceMemory.suppressedNotice": "已在当前会话中隐藏该动态记忆。",
+    "workspaceMemory.suppressFailed": "隐藏失败：{error}",
+    "workspaceMemory.deletedNotice": "记忆已删除。",
+    "workspaceMemory.deletedWithoutId": "删除已执行，但服务端未返回已删除 ID。",
+    "workspaceMemory.deleteFailed": "删除失败：{error}",
+    "workspaceReview.refreshGitDiffFailed": "刷新 Git diff 失败：{error}",
+    "workspaceReview.noProjectPathForGit": "当前会话没有关联项目路径，无法执行 Git 操作。",
+    "workspaceReview.gitOperationFailed": "Git 操作失败：{error}",
+    "workspaceReview.fileDetailTimeout": "加载文件 diff 详情超时：{error}",
+    "workspaceReview.fileDetailFailed": "加载文件 diff 详情失败：{error}",
+    "workspaceReview.noProjectPathForRefresh": "当前会话没有关联项目路径，无法刷新 Git diff。",
+    "workspaceReview.fileDetailLoading": "正在加载文件 diff 详情。",
+    "workspaceReview.hunkExpanding": "正在展开 hunk 上下文。",
+    "workspaceReview.hunkDirectionUp": "向上",
+    "workspaceReview.hunkDirectionDown": "向下",
+    "workspaceReview.hunkDirectionBoth": "双向",
+    "workspaceReview.hunkExpandingSpecific": "正在{direction}展开 hunk {index} 上下文。",
+    "workspaceReview.fileDetailTimeoutError": "单文件 diff 详情加载超过 {seconds} 秒。",
+    "workbenchConversation.unpinned": "已取消置顶对话：{conversation}",
+    "workbenchConversation.pinned": "已置顶对话：{conversation}",
+    "workbenchConversation.archived": "已归档对话：{conversation}",
+    "workbenchConversation.noProject": "没有找到这个对话所属的项目。",
+    "workbenchConversation.copiedWorkspace": "已复制工作目录。",
+    "workbenchConversation.copiedSessionId": "已复制会话 ID。",
+    "workbenchConversation.nameEmpty": "名称不能为空。",
+    "workbenchConversation.projectRenamed": "已重命名项目：{project}",
+    "workbenchConversation.projectNameRestored": "已还原项目名称：{project}",
+    "workbenchConversation.conversationRenamed": "已重命名对话：{conversation}",
+    "workbenchConversation.archivedCount": "已归档 {count} 个对话。",
+    "workbenchConversation.archivedAndRemovedProject": "已归档并移除项目：{project}",
+    "workbenchAsk.submitted": "已提交 ask 回答。",
+    "workbenchAsk.cancelled": "已取消 ask 请求。",
+    "thinkingDisplay.popupOnly": "弹窗显示",
+    "thinkingDisplay.inlineOutput": "直接输出",
+    "thinkingDisplay.firstInlineWithPopup": "首段输出+弹窗",
+    "thinkingDisplay.firstInlineOnly": "仅首段输出",
+    "ask.title": "ask 需要你的确认",
+    "ask.description": "当前 AI 调用正在等待你的回答，提交后会继续执行。",
+    "ask.action.confirmSubmit": "确认提交",
+    "ask.action.confirmReject": "确认终止",
+    "ask.action.submit": "提交",
+    "ask.action.continue": "继续",
+    "ask.action.ignore": "忽略",
+    "ask.action.backToEdit": "返回修改",
+    "ask.action.processing": "处理中...",
+    "ask.progress.previous": "上一题",
+    "ask.progress.next": "下一题",
+    "ask.option.selected": "已选",
+    "ask.confirm.submitTitle": "确认提交？",
+    "ask.confirm.rejectTitle": "确认终止当前会话？",
+    "ask.confirm.submitBody": "按 Enter 确认提交，按 Esc 返回修改。",
+    "ask.confirm.rejectBody": "终止后等待中的 ask 工具调用会失败结束，按 Esc 返回修改。",
+    "ask.custom.textPlaceholder": "请输入回答",
+    "ask.custom.adjustCodex": "否，请告知 Codex 如何调整",
+    "ask.custom.description": "输入自定义回答。支持自动换行，按 Shift+Enter 手动换行。",
+    "ask.validation.requiredAnswer": "请先填写“{header}”的回答。",
+    "ask.validation.requiredOther": "请先填写“{header}”的其他回答。",
+    "ask.validation.requiredSelectionOrOther": "请先选择“{header}”的答案或填写其他回答。",
+    "terminalStop.title": "确认强制终止终端会话？",
+    "terminalStop.description": "该操作会停止正在运行的终端进程，请确认当前会话不再需要继续输出。",
+    "terminalStop.stopping": "正在终止",
+    "terminalStop.confirm": "确认终止",
+    "conversation.bodyLoadFailed": "会话正文加载失败：{error}",
+    "conversation.emptyLoaded": "当前会话正文尚未载入或没有可见消息。",
+    "conversation.emptyWaiting": "尚未选择会话，等待工作区数据载入。",
+    "conversation.detail.copy": "复制详情",
+    "conversation.detail.close": "关闭详情",
+    "conversation.userPrompt.expand": "显示更多",
+    "conversation.userPrompt.collapse": "收起",
+    "conversation.userPrompt.copy": "复制用户提示词",
+    "conversation.userPrompt.edit": "编辑用户提示词",
+    "conversation.subagent.return": "返回主会话",
+    "conversation.subagent.runningCount": "{count} 个子代理正在运行",
+    "conversation.subagent.schedule": "子代理调度",
+    "conversation.subagent.switch": "子代理调度切换",
+    "conversation.subagent.state.running": "运行中",
+    "conversation.subagent.state.stopped": "已停止",
+    "conversation.subagent.state.failed": "失败",
+    "conversation.subagent.state.completed": "已完成",
+    "conversation.diff.loadingPanel": "正在加载 Git Diff 审核面板。",
+    "conversation.diff.parsingWorker": "正在通过 Worker 解析 diff 内容。",
+    "conversation.diff.parseFailed": "Diff 解析失败：{error}",
+    "conversation.diff.unstructuredFallback": "当前 diff 内容无法结构化解析，已保留原始文本供复制。",
+    "sessionTools.expand": "展开会话工具",
+    "sessionTools.collapse": "折叠会话工具",
+    "sessionTools.changes": "更改",
+    "sessionTools.progress": "进程",
+    "sessionTools.terminal": "终端",
+    "sessionTools.menu": "会话工具菜单",
+    "terminalSession.openScreen": "打开终端屏幕",
+    "terminalSession.noScreen": "暂无终端屏幕",
+    "terminalSession.forceStop": "强制终止",
+    "terminalSession.forceStopSession": "强制终止终端会话",
+    "terminalSession.emptyScreen": "暂无终端屏幕内容",
+    "terminalSession.tooltip.status": "状态",
+    "terminalSession.tooltip.command": "命令",
+    "terminalSession.tooltip.cwd": "目录",
+    "terminalSession.tooltip.shell": "Shell",
+    "terminalSession.tooltip.backend": "后端",
+    "terminalSession.tooltip.screenFrame": "屏幕帧",
+    "terminalSession.tooltip.exitCode": "退出码",
+    "terminalSession.tooltip.error": "错误",
+    "terminalSession.tooltip.output": "输出",
+    "terminalSession.tooltip.session": "会话",
+    "terminalState.running": "运行中",
+    "terminalState.waiting": "等待输入",
+    "terminalState.success": "已完成",
+    "terminalState.failed": "执行失败",
+    "terminalState.stopped": "已停止",
+    "terminalState.lost": "已丢失",
+    "terminalState.unknown": "未知",
+    "toolPresentation.output.loading": "正在加载输出...",
+    "toolPresentation.output.empty": "无输出",
+    "toolPresentation.exitCode": "退出代码",
+    "toolPresentation.command.running": "执行中",
+    "toolPresentation.command.failed": "执行失败",
+    "toolPresentation.command.stopped": "已停止",
+    "toolPresentation.command.completed": "已执行",
+    "toolPresentation.command.start.failed": "启动失败",
+    "toolPresentation.command.read.failed": "读取失败",
+    "toolPresentation.command.send.failed": "发送失败",
+    "toolPresentation.command.write.failed": "写入失败",
+    "toolPresentation.command.stop.failed": "停止失败",
+    "toolPresentation.command.start.running": "启动中",
+    "toolPresentation.command.read.running": "读取中",
+    "toolPresentation.command.send.running": "发送中",
+    "toolPresentation.command.write.running": "写入中",
+    "toolPresentation.command.stop.running": "停止中",
+    "toolPresentation.command.start.completed": "已启动",
+    "toolPresentation.command.list.completed": "已列出",
+    "toolPresentation.command.read.completed": "已读取",
+    "toolPresentation.command.send.completed": "已发送",
+    "toolPresentation.command.write.completed": "已写入",
+    "toolPresentation.command.stop.completed": "已停止",
+    "toolPresentation.command.heading.start": "启动命令",
+    "toolPresentation.command.heading.read": "读取输出",
+    "toolPresentation.command.heading.send": "发送内容",
+    "toolPresentation.command.heading.write": "写入内容",
+    "toolPresentation.command.heading.stop": "停止会话",
+    "toolPresentation.command.session": "命令会话",
+    "toolPresentation.command.lost": "实时状态已丢失",
+    "toolPresentation.command.current": "当前",
+    "toolPresentation.command.currentState": "当前{state}",
+    "toolPresentation.ask.running": "提问中",
+    "toolPresentation.ask.ignored": "已忽略",
+    "toolPresentation.ask.completed": "已提问",
+    "toolPresentation.ask.questionFallback": "问题 {index}",
+    "toolPresentation.ask.userAnswer": "用户回答",
+    "toolPresentation.ask.waitingAnswer": "等待用户回答",
+    "toolPresentation.file.count": "{count} 个文件",
+    "toolPresentation.file.multiChange": "多文件变更",
+    "toolPresentation.file.empty": "无可展示内容",
+    "toolPresentation.file.create.running": "正在写入",
+    "toolPresentation.file.modify.running": "正在编辑",
+    "toolPresentation.file.delete.running": "正在删除",
+    "toolPresentation.file.mixed.running": "正在变更",
+    "toolPresentation.file.create.failed": "写入失败",
+    "toolPresentation.file.modify.failed": "编辑失败",
+    "toolPresentation.file.delete.failed": "删除失败",
+    "toolPresentation.file.mixed.failed": "变更失败",
+    "toolPresentation.file.create.preview": "将写入",
+    "toolPresentation.file.modify.preview": "将编辑",
+    "toolPresentation.file.delete.preview": "将删除",
+    "toolPresentation.file.mixed.preview": "将变更",
+    "toolPresentation.file.create.completed": "已写入",
+    "toolPresentation.file.modify.completed": "已编辑",
+    "toolPresentation.file.delete.completed": "已删除",
+    "toolPresentation.file.mixed.completed": "已变更",
+    "markdown.wrap.enable": "开启自动换行",
+    "markdown.wrap.disable": "关闭自动换行",
+    "markdown.copyCode": "复制代码",
+    "markdown.copied": "已复制",
+    "mediaPlayer.maximize": "最大化播放器",
+    "mediaPlayer.restore": "还原播放器",
+    "mediaPlayer.close": "关闭播放器",
+    "mediaPlayer.fitWindow": "自适应窗口",
+    "mediaPlayer.originalSize": "原始尺寸",
+    "mediaPlayer.zoomOut": "缩小图片",
+    "mediaPlayer.zoomIn": "放大图片",
+    "media.openVideoPlayer": "打开视频播放器",
+    "settings.backToWorkspace": "返回工作台",
+    "memory.scope": "作用域",
+    "memory.scope.global": "全局配置",
+    "memory.scope.project": "项目配置",
+    "memory.project": "项目",
+    "memory.action.testConnection": "测试连接",
+    "memory.action.refreshUsersProjects": "刷新用户/项目",
+    "memory.vmm.action.running": "正在执行 VMM 动作：{action}",
+    "memory.vmm.action.failed": "VMM 动作失败：{message}",
+    "memory.vmm.save.global.running": "正在保存全局 VMM 配置。",
+    "memory.vmm.save.project.running": "正在保存项目 VMM 配置。",
+    "memory.vmm.save.global.completed": "已保存全局 VMM 配置。",
+    "memory.vmm.save.project.completed": "已保存项目 VMM 配置。",
+    "memory.vmm.save.failed": "保存 VMM 配置失败：{message}",
+    "vmm.common.optional": "可选",
+    "vmm.common.number": "数字",
+    "vmm.common.enabled": "启用",
+    "vmm.common.disabled": "关闭",
+    "vmm.common.none": "无",
+    "vmm.common.notConfigured": "未配置",
+    "vmm.common.notSelected": "未选择",
+    "vmm.common.running": "执行中",
+    "vmm.overview.effectiveConfig": "有效配置",
+    "vmm.overview.grpc": "gRPC：",
+    "vmm.overview.recallPolicy": "召回策略",
+    "vmm.overview.ttlTurns": "TTL：{turns} 回合",
+    "vmm.overview.precheckAiTools": "前置召回：{precheck} · AI 工具：{tools}",
+    "vmm.overview.runtime": "运行态",
+    "vmm.overview.outboxProfiles": "outbox：{outbox} · 画像节点：{profiles}",
+    "vmm.overview.completedTurns": "已完成回合：{turns}",
+    "vmm.overview.summaryEntry": "摘要入口",
+    "vmm.overview.noSummary": "暂无摘要",
+    "vmm.runtime.title": "运行态",
+    "vmm.runtime.subtitle": "当前会话的 VMM hook 与画像缓存。",
+    "vmm.runtime.session": "会话",
+    "vmm.runtime.profileNodes": "画像节点",
+    "vmm.runtime.updatedAt": "更新时间",
+    "vmm.runtime.noProfileBase": "暂无画像基点。",
+    "vmm.result.title": "动作结果",
+    "vmm.result.emptySummary": "尚未执行 VMM 动作。",
+    "vmm.result.request": "请求",
+    "vmm.result.response": "响应",
+    "vmm.result.emptyHint": "点击左侧动作后会显示请求与响应。",
+    "vmm.result.generic": "结果",
+    "vmm.settings.grpcTarget": "gRPC 地址",
+    "vmm.settings.apiKey": "API Key",
+    "vmm.settings.receiveTimeout": "请求超时",
+    "vmm.settings.handshakeTimeout": "握手超时",
+    "vmm.settings.maxReceiveBytes": "最大接收字节",
+    "vmm.settings.keepaliveInterval": "keepalive 间隔",
+    "vmm.settings.keepaliveTimeout": "keepalive 超时",
+    "vmm.settings.idleKeepalive": "空闲 keepalive",
+    "vmm.settings.enableMemoryConnection": "启用记忆连接",
+    "vmm.settings.exposeAiTools": "暴露 AI 专属工具",
+    "vmm.settings.autoPrecheck": "自动前置召回",
+    "vmm.settings.userId": "用户 ID",
+    "vmm.settings.projectId": "项目 ID",
+    "vmm.settings.implicitMemoryTtl": "临时记忆 TTL",
+    "vmm.settings.profileRefreshInterval": "画像刷新间隔",
+    "vmm.settings.profileNodeLimit": "画像节点上限",
+    "vmm.settings.injectionTag": "注入标签",
+    "vmm.settings.injectionDescription": "注入说明",
+    "vmm.rows.usersEmpty": "执行“刷新用户/项目”后会显示用户列表。",
+    "vmm.rows.projectsEmpty": "执行“刷新用户/项目”后会显示项目列表。",
+    "vmm.rows.profileNodesEmpty": "刷新画像节点后会在这里显示 active profile nodes。",
+    "vmm.rows.bundleEmpty": "读取完整画像后会显示 bundle 内容。",
+    "vmm.rows.toolResultEmpty": "工具调试结果会按动作显示。",
+    "vmm.rows.unnamedUser": "未命名用户",
+    "vmm.rows.unnamedProject": "未命名项目",
+    "vmm.rows.deleted": "已删除",
+    "vmm.rows.notFound": "未找到",
+    "vmm.rows.vectorRows": "向量行 {count}",
+    "vmm.profile.full": "完整画像",
+    "vmm.profile.team": "团队画像",
+    "vmm.profile.space": "空间画像",
+    "vmm.profile.project": "项目画像",
+    "vmm.profile.user": "用户画像",
+    "vmm.action.deleteMemory": "删除记忆",
+    "vmm.action.precheckProject": "预检项目",
+    "vmm.action.confirmCreate": "确认创建",
+    "vmm.action.deleteProject": "删除项目",
+    "vmm.action.runMigrate": "执行迁移",
+    "vmm.action.refreshNodes": "刷新节点",
+    "vmm.action.applyInstruction": "应用指令",
+    "vmm.action.loadProfileBundle": "读取完整画像",
+    "vmm.action.saveGlobal": "保存到全局",
+    "vmm.action.saveProject": "保存到项目",
+    "vmm.action.resolveUser": "解析用户",
+    "vmm.action.deleteUser": "删除用户",
+    "vmm.section.project.title": "项目管理",
+    "vmm.section.project.subtitle": "项目路径预检、创建确认、删除确认和迁移确认。",
+    "vmm.section.profile.title": "画像中心",
+    "vmm.section.profile.subtitle": "读取 active profile nodes，并向当前目标提交手工画像指令。",
+    "vmm.section.bundle.title": "画像 Bundle 测试",
+    "vmm.section.bundle.subtitle": "读取当前 user/project 的 FULL bundle，检查画像组合结果。",
+    "vmm.section.tool.title": "工具调试",
+    "vmm.section.tool.subtitle": "模拟 VMM AI 专属工具：检索记忆、展开 turn、主动写入记忆。",
+    "vmm.section.memory.title": "记忆设置",
+    "vmm.section.memory.subtitle": "配置记忆开关、AI 工具、临时 TTL、画像刷新和注入说明。",
+    "vmm.section.transport.title": "gRPC 传输",
+    "vmm.section.transport.subtitle": "连接地址、API key、超时、最大接收字节数与 keepalive 策略。",
+    "vmm.section.user.title": "用户管理",
+    "vmm.section.user.subtitle": "长期用户列表、解析用户引用、创建确认和删除确认。",
+    "vmm.field.projectPath": "项目路径",
+    "vmm.field.confirmDelete": "确认删除",
+    "vmm.field.migrateSource": "迁移源项目",
+    "vmm.field.migrateTarget": "迁移目标项目",
+    "vmm.field.confirmMigrate": "确认迁移",
+    "vmm.field.profileTarget": "画像目标",
+    "vmm.field.profileInstruction": "手工画像指令",
+    "vmm.field.searchQueries": "检索查询",
+    "vmm.field.deleteReason": "删除原因",
+    "vmm.field.writeAbstract": "主动写入摘要",
+    "vmm.field.writeDetails": "主动写入详情",
+    "vmm.field.userRef": "用户引用",
+    "vmm.field.deleteConfirmationCode": "删除确认码",
+    "vmm.placeholder.profileInstruction": "例如：降低某条偏好权重",
+    "vmm.placeholder.multiPipe": "多条用 | 分隔",
+    "vmm.placeholder.commaOrPipe": "用逗号或 | 分隔",
+    "vmm.placeholder.deleteReason": "错误、过期或用户要求删除",
+    "vmm.placeholder.writeAbstract": "记忆摘要",
+    "vmm.placeholder.writeDetails": "完整内容",
+    "vmm.placeholder.userRef": "ID 或用户名",
+    "vmm.placeholder.deleteConfirmationCode": "首次删除后返回",
+    "vmm.diagnostic.disabledByConfig": "已关闭",
+    "vmm.diagnostic.missingGrpcTarget": "缺少 gRPC",
+    "vmm.diagnostic.grpcOffline": "gRPC 离线",
+    "vmm.diagnostic.missingUserId": "缺少用户",
+    "vmm.diagnostic.missingProjectId": "缺少项目",
     "planArtifact.titleFallback": "计划",
     "planArtifact.copy": "复制 Markdown",
     "planArtifact.copied": "已复制 Markdown",
@@ -431,6 +1966,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.subagentRunning": "子代理工作中",
     "runtime.thinkingOverlayHint": "模型正在流式输出思考过程",
     "settings.general": "通用设置",
+    "settings.systemSettings": "系统设置",
     "settings.projects": "项目",
     "settings.providers": "模型",
     "settings.tools": "工具",
@@ -475,6 +2011,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover.description": "音乐翻唱能力的启用状态与可用目标。",
     "settings.mcpServers.description": "MCP Runtime、服务连接、工具、提示词与资源状态。",
     "settings.runtimeDiagnostics.description": "启动链路、运行时模块与诊断日志。",
+    "settings.diagnostics.logs": "诊断日志",
+    "settings.diagnostics.startupStatus": "启动状态",
+    "settings.diagnostics.waitingStatus": "等待状态更新",
+    "settings.diagnostics.runtimeModules": "运行时模块",
     "settings.gitCommit.description": "提交弹窗的新分支命名、自动总结模型与 RTK 压缩上下文。",
     "settings.rtkRouting.description": "shell_command 的 RTK rewrite、路由选择与上下文密度统计。",
     "settings.gitCommit.active": "已生效",
@@ -583,6 +2123,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
   },
   "en-US": {
     "app.subtitle": "Ai Coding",
+    "app.serviceConnectionRestored": "Local service connection restored.",
+    "app.serviceReconnecting": "Local service connection lost. Reconnecting...",
+    "app.serviceCheckingRecovery": "Local service connection lost. Checking recovery...",
     "area.chat": "Workspace",
     "area.skills": "Skills",
     "area.memory": "Memory",
@@ -597,8 +2140,118 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "global.toggleDark": "Switch to dark theme",
     "global.toggleLight": "Switch to light theme",
     "global.language": "Language",
+    "global.languageSaveFailed": "Failed to save language: {error}",
     "global.online": "Online",
     "global.preview": "Preview",
+    "global.progress": "Progress",
+    "global.labelSeparator": ": ",
+    "global.listDelimiter": ", ",
+    "appChrome.menu": "Open app menu",
+    "appChrome.status": "Status",
+    "appChrome.theme": "Theme",
+    "appChrome.theme.dark": "Dark",
+    "appChrome.theme.light": "Light",
+    "appChrome.language.zh": "Chinese",
+    "appChrome.scrollFeaturesLeft": "Scroll main features left",
+    "appChrome.scrollFeaturesRight": "Scroll main features right",
+    "appChrome.windowActionFailed": "Window action failed: ",
+    "appChrome.window.minimize": "Minimize window",
+    "appChrome.window.restore": "Restore window",
+    "appChrome.window.maximize": "Maximize window",
+    "appChrome.window.close": "Close window",
+    "appChrome.githubOpenFailed": "Failed to open GitHub: ",
+    "appChrome.githubAria": "Open the OpenVulcan/vulcan-code GitHub repository",
+    "sidebar.user.local": "Local user",
+    "sidebar.user.account": "Account",
+    "sidebar.user.logout": "Log out",
+    "projectMenu.conversationsAria": "{project} conversations",
+    "projectMenu.newConversation": "New conversation",
+    "projectMenu.noConversations": "No conversations",
+    "projectMenu.pin": "Pin project",
+    "projectMenu.unpin": "Unpin project",
+    "projectMenu.openDirectory": "Open in file explorer",
+    "projectMenu.createWorktree": "Create permanent worktree",
+    "projectMenu.renameProject": "Rename project",
+    "projectMenu.setIcon": "Set project icon",
+    "projectMenu.archiveConversations": "Archive conversations",
+    "projectMenu.removeProject": "Remove project",
+    "projectMenu.projectSettings": "Project settings",
+    "conversationMenu.pin": "Pin conversation",
+    "conversationMenu.unpin": "Unpin conversation",
+    "conversationMenu.rename": "Rename conversation",
+    "conversationMenu.archive": "Archive conversation",
+    "conversationMenu.markUnread": "Mark as unread",
+    "conversationMenu.openDirectory": "Open in file explorer",
+    "conversationMenu.copyWorkspace": "Copy workspace path",
+    "conversationMenu.copySessionId": "Copy session ID",
+    "conversationMenu.copyDeepLink": "Copy deep link",
+    "conversationMenu.forkLocal": "Fork locally",
+    "conversationMenu.forkWorktree": "Fork to new worktree",
+    "conversationMenu.openNewWindow": "Open in new window",
+    "diffAction.moreStaging": "More staging actions",
+    "diffAction.unstageAll": "Unstage all",
+    "diffAction.unstageFile": "Unstage current file",
+    "diffAction.restoreAll": "Restore all",
+    "diffAction.stageAll": "Stage all",
+    "diffAction.stageFile": "Stage this file",
+    "diffAction.restoreFile": "Restore this file",
+    "diff.mode.unstaged": "Unstaged",
+    "diff.mode.staged": "Staged",
+    "diff.mode.commit": "Commit",
+    "diff.mode.branch": "Branch",
+    "diff.branch.current": "Current branch",
+    "diff.branch.main": "Main branch",
+    "diff.view.toUnified": "Switch to unified view",
+    "diff.view.toSplit": "Switch to split view",
+    "diff.refresh": "Refresh diff",
+    "diff.loading": "Loading",
+    "diff.moreActions": "More diff actions",
+    "diff.copyRaw": "Copy raw diff",
+    "diff.inline.disable": "Disable inline differences",
+    "diff.inline.enable": "Enable inline differences",
+    "diff.wrap.disable": "Disable wrapping",
+    "diff.wrap.enable": "Enable wrapping",
+    "diff.contextControls.hide": "Hide context expansion controls",
+    "diff.contextControls.show": "Show context expansion controls",
+    "diff.indicator.useClassic": "Use +/- row markers",
+    "diff.indicator.useBars": "Use colored row bars",
+    "diff.search.open": "Open diff search",
+    "diff.search.label": "Search diff",
+    "diff.search.truncated": "Results truncated",
+    "diff.search.previous": "Previous result",
+    "diff.search.next": "Next result",
+    "diff.search.indexUnavailable": "Index unavailable",
+    "diff.commit.none": "No commit history",
+    "diff.branch.search": "Search branches",
+    "diff.branch.label": "Branch",
+    "diff.branch.noMatches": "No matching branches",
+    "diff.emptyBody": "No Git Diff is available.",
+    "diff.noMatchingFiles": "No matching files",
+    "diff.file.tooLarge": "Oversized file not shown",
+    "diff.file.added": "Added file",
+    "diff.file.deleted": "Deleted file",
+    "diff.file.gitlink": "Submodule pointer changed. Text content was not rendered.",
+    "diff.file.renamedNoChanges": "File renamed without changes",
+    "diff.file.noContent": "No content",
+    "diff.render.changedLinesSkipped": "Changed lines exceed {limit}; highlight details were skipped by the lightweight policy",
+    "diff.render.skipped": "Highlight details were skipped by the lightweight policy",
+    "diff.render.rowsLightweight": "{count} rows rendered in lightweight mode",
+    "diff.large.totalFiles": "File count exceeds {limit}",
+    "diff.large.totalChangedLines": "Total changed lines exceed {limit}",
+    "diff.large.totalChangedBytes": "Total changed size exceeds {limit}",
+    "diff.large.fileChangedLines": "File changed lines exceed {limit}",
+    "diff.large.fileChangedBytes": "File changed size exceeds {limit}",
+    "diff.large.fileMaxLineBytes": "Single-line size exceeds {limit}",
+    "diff.load.rowsPending": "{rows} rows pending, about {hunks} hunks",
+    "diff.load.retry": "Retry",
+    "diff.load.reveal": "Open location",
+    "diff.load.matchCount": "{count} matches",
+    "diff.load.backendMatchFallback": "The full backend diff matched this file.",
+    "diff.load.loadingDetail": "Loading file diff details.",
+    "diff.load.timeout": "File diff detail loading timed out.",
+    "diff.load.failed": "File diff detail loading failed.",
+    "diff.load.loadedEmpty": "File diff details loaded, but no text content can be shown.",
+    "diff.load.summaryIdle": "This file is in summary state. Details will load when it enters the viewport.",
     "console.title": "Conversation",
     "console.newConversation": "New conversation",
     "console.emptyPrompt": "What should we build in {projectName}?",
@@ -620,6 +2273,28 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkSucceeded": "Forked conversation created",
     "conversation.forkSource.label": "Derived from conversation",
     "conversation.forkSource.missing": "The original conversation no longer exists",
+    "conversation.block.toolCall": "Tool call",
+    "conversation.block.toolResult": "Tool result",
+    "conversation.block.command": "Command session",
+    "conversation.block.thinking": "Thinking process",
+    "conversation.block.plan": "Plan",
+    "conversation.block.notice": "Run notice",
+    "conversation.block.detail": "Detail",
+    "conversation.metadata.type": "Type",
+    "conversation.metadata.status": "Status",
+    "conversation.metadata.tool": "Tool",
+    "conversation.metadata.identifier": "Identifier",
+    "conversation.metadata.error": "Error",
+    "conversation.metadata.result": "Result",
+    "conversation.metadata.returned": "Returned",
+    "conversation.stats.providerCalls": "{count} calls",
+    "conversation.stats.toolCalls": "{count} tools",
+    "conversation.stats.cachedTokens": "Cache hit {count}",
+    "conversation.subagent.stopTask": "Stop subagent {task}",
+    "conversation.process.header": "Process",
+    "conversation.process.stoppedAfter": "You stopped after {duration}",
+    "conversation.process.stopped": "You stopped this turn",
+    "conversation.process.duration": "Duration {duration}",
     "conversation.action.editPrompt": "Edit user input",
     "conversation.action.editPromptFailed": "Edit user input failed",
     "conversation.action.cancel": "Cancel",
@@ -674,12 +2349,36 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "sidebar.waitingWorkspace": "Waiting for Workspace snapshot",
     "sidebar.overview": "Overview",
     "sidebar.settingsCategories": "Settings",
+    "sidebar.toggle": "Toggle sidebar",
     "composer.mode.execute": "Build",
     "composer.mode.plan": "Plan",
     "composer.capability.extended": "Extended Capability",
     "composer.capability.extended.subtitle": "Capability settings",
     "composer.capability.basic": "Basic Capability",
     "composer.capability.basic.subtitle": "Text and code only",
+    "composer.capability.enabledCount": "{enabled}/{total} enabled",
+    "composer.capability.tooltipTitle": "Configure extended capabilities",
+    "composer.capability.tooltipEmpty": "No enabled modules",
+    "composer.capability.dialogTitle": "Current session capabilities",
+    "composer.capability.dialogDescription": "Changes are saved to this session only after you click Save, and affect the next turn's cache hit rate.",
+    "composer.capability.source.nativeWithTargets": "Native + {count} targets",
+    "composer.capability.source.native": "Native model",
+    "composer.capability.source.targets": "{count} targets",
+    "composer.capability.source.noTargets": "No targets",
+    "composer.capability.empty.native": "This capability is handled natively by the selected model.",
+    "composer.capability.empty.noTargets": "This capability has no configured targets.",
+    "composer.capability.saveHint.externalUpdate": "This session was updated elsewhere; the current draft is not synced.",
+    "composer.capability.saveHint.saving": "Saving to this session...",
+    "composer.capability.saveHint.unsaved": "Unsaved changes.",
+    "composer.capability.saveHint.clean": "No unsaved changes.",
+    "composer.capability.useDefaults": "Use defaults",
+    "composer.capability.save.saving": "Saving",
+    "composer.capability.save.saved": "Saved",
+    "composer.capability.save": "Save",
+    "composer.capability.close.title": "Save changes?",
+    "composer.capability.close.description": "This session capability dialog has unsaved changes.",
+    "composer.capability.close.discard": "Discard",
+    "composer.capability.close.keepEditing": "Keep editing",
     "composer.reasoning.off": "Off",
     "composer.reasoning.low": "Low",
     "composer.reasoning.medium": "Medium",
@@ -698,6 +2397,612 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.stop": "Stop",
     "composer.modelPicker.filter": "Filter by model name, id, or provider",
     "composer.modelPicker.noMatches": "No models match the current filter.",
+    "composer.attachment.add": "Add attachment",
+    "composer.attachment.extension": "Extension",
+    "composer.attachment.menu": "Attachments",
+    "composer.attachment.empty": "No attachment types are available",
+    "composer.attachment.remove": "Remove attachment",
+    "composer.attachment.unsupported": "These attachments are not supported by the current model or extended capabilities.",
+    "composer.attachment.maxLimit": "You can add at most {count} attachments.",
+    "composer.attachment.partialMaxLimit": "The {count}-attachment limit has been reached. Some files were not added.",
+    "composer.attachment.kind.image": "Image",
+    "composer.attachment.kind.audio": "Audio",
+    "composer.attachment.kind.video": "Video",
+    "composer.attachment.kind.pdf": "PDF",
+    "composer.thinkingProcess": "Thinking",
+    "composer.planMode": "Plan mode",
+    "composer.goal": "Goal",
+    "composer.scrollToBottom": "Scroll to bottom",
+    "composer.goalDialog.resumeTitle": "Resume task",
+    "composer.goalDialog.editTitle": "Edit goal",
+    "composer.goalDialog.objectiveAria": "Goal content",
+    "composer.goalDialog.objectivePlaceholder": "Enter the goal this conversation should keep pursuing",
+    "composer.goalDialog.tokenBudgetAria": "Token budget",
+    "composer.goalDialog.tokenBudgetPlaceholder": "Token budget (optional)",
+    "composer.goalDialog.save": "Save",
+    "composer.goal.status.active": "Active goal",
+    "composer.goal.status.paused": "Paused goal",
+    "composer.goal.status.blocked": "Blocked goal",
+    "composer.goal.status.usageLimited": "Usage-limited goal",
+    "composer.goal.status.budgetLimited": "Budget exhausted",
+    "composer.goal.status.completed": "Completed goal",
+    "composer.goal.tooltip.apiCalls": "API calls: {count}",
+    "composer.goal.tooltip.toolCalls": "Tool calls: {count}",
+    "composer.goal.tooltip.usage": "Usage: {tokens} tokens",
+    "composer.goal.tooltip.input": "Input: {tokens}",
+    "composer.goal.tooltip.cache": "Cache: {tokens}",
+    "composer.goal.tooltip.output": "Output: {tokens}",
+    "composer.goal.tooltip.total": "Total: {tokens}",
+    "composer.goal.action.edit": "Edit goal",
+    "composer.goal.action.resumeTask": "Resume task",
+    "composer.goal.action.resume": "Resume goal",
+    "composer.goal.action.pause": "Pause goal",
+    "composer.goal.action.clear": "Clear goal",
+    "composer.goal.error.empty": "Goal content cannot be empty.",
+    "composer.goal.error.budgetInvalid": "Token budget must be a positive integer.",
+    "composer.planMode.label": "Plan",
+    "composer.planMode.goalConflict": "Plan mode and Goal mode cannot both be enabled.",
+    "composer.error.stopCurrentFailed": "Failed to stop the current conversation.",
+    "composer.error.promptEmpty": "Enter a task instruction.",
+    "composer.modelPicker.tooltipTitle": "Select model",
+    "composer.modelPicker.currentModel": "Current model: {model}",
+    "composer.modelPicker.currentProvider": "Current provider: {provider}",
+    "composer.secondaryRoute.select": "Select secondary provider",
+    "composer.secondaryRoute.search": "Search secondary providers",
+    "composer.secondaryRoute.autoEndpoint": "OpenRouter automatically selects the endpoint",
+    "composer.secondaryRoute.loading": "Loading secondary providers...",
+    "composer.secondaryRoute.noMatches": "No secondary providers match",
+    "composer.secondaryRoute.switchFailed": "Secondary provider switch failed. The previous selection was kept.",
+    "composer.secondaryRoute.switched": "Secondary provider switched.",
+    "composer.secondaryRoute.restoredAuto": "Secondary provider restored to Auto.",
+    "composer.progress.open": "View current progress",
+    "composer.progress.progressLabel": "Progress {current}/{total}",
+    "composer.progress.step": "Step {current} / {total}",
+    "composer.progress.changedFiles": "{count} changed files",
+    "composer.progress.stepInProgress": "Step in progress",
+    "composer.reasoning.tooltip": "Reasoning level",
+    "pendingPrompt.queue": "Queued prompts",
+    "pendingPrompt.drag": "Drag queued prompt",
+    "pendingPrompt.delete": "Delete queued prompt",
+    "pendingPrompt.edit": "Edit queued prompt",
+    "pendingPrompt.insert": "Guide queued prompt",
+    "pendingPrompt.inserted": "Queued prompt guided",
+    "pendingPrompt.insertShort": "Guide",
+    "pendingPrompt.insertedShort": "Guided",
+    "pendingPrompt.attachmentCount": "{count} attachments",
+    "pendingPrompt.attachmentMessage": "Attachment message",
+    "sessionActions.noProjectForCapability": "The current conversation is not linked to a project, so AI capability settings cannot be saved.",
+    "sessionActions.noConversationForCapability": "Create or select a conversation before saving AI capability settings.",
+    "sessionActions.previewCannotSaveCapability": "Session AI capability settings cannot be saved in browser preview mode.",
+    "sessionActions.capabilitySaved": "Saved AI capability settings for the current session.",
+    "sessionActions.noConversationForGoalSave": "Create or select a conversation before setting a goal.",
+    "sessionActions.previewCannotSaveGoal": "Goals cannot be saved in browser preview mode.",
+    "sessionActions.goalSaved": "Goal saved.",
+    "sessionActions.noExistingConversation": "Select an existing conversation first.",
+    "sessionActions.previewCannotResumeGoal": "Goals cannot be resumed in browser preview mode.",
+    "sessionActions.goalResumed": "Goal resumed.",
+    "sessionActions.previewCannotClearGoal": "Goals cannot be cleared in browser preview mode.",
+    "sessionActions.goalCleared": "Goal cleared.",
+    "sessionActions.previewCannotUpdateGoal": "Goal status cannot be updated in browser preview mode.",
+    "sessionActions.noConversationForPlanMode": "Create or select a conversation before toggling Plan mode.",
+    "sessionActions.previewCannotTogglePlanMode": "Plan mode cannot be toggled in browser preview mode.",
+    "sessionActions.planModeEnabled": "Plan mode enabled.",
+    "sessionActions.planModeDisabled": "Plan mode disabled.",
+    "conversationActions.noProjectForSend": "The current conversation is not linked to a project, so it cannot be sent.",
+    "conversationActions.previewCannotSend": "Real conversations cannot be sent in browser preview mode.",
+    "conversationActions.previewCannotCompact": "Real context compaction cannot run in browser preview mode.",
+    "conversationActions.modelSwitched": "Current model switched to {model} ({provider}).",
+    "projectActions.vmmSaved": "Project VMM settings saved.",
+    "projectActions.openRequested": "Requested to open project directory: {project}",
+    "projectActions.unpinned": "Unpinned project: {project}",
+    "projectActions.pinned": "Pinned project: {project}",
+    "projectActions.iconUpdated": "Updated project icon: {project}",
+    "projectActions.iconReset": "Reset project icon: {project}",
+    "projectActions.listUpdated": "Project list updated.",
+    "projectActions.skillInherited": "Set {skill} to inherit global settings",
+    "projectActions.skillEnabled": "Enabled {skill} for this project",
+    "projectActions.skillDisabled": "Disabled {skill} for this project",
+    "projectSettings.cleanupCompleted": "Project attachment cache cleanup completed.",
+    "projectDialog.renameProjectTitle": "Rename project",
+    "projectDialog.renameConversationTitle": "Rename conversation",
+    "projectDialog.renameProjectDescription": "Enter a new project display name. The project path will not change; confirming an empty name restores the folder name.",
+    "projectDialog.renameConversationDescription": "Enter a new conversation name.",
+    "projectDialog.renamePlaceholder": "Enter a new name",
+    "projectDialog.confirm": "Confirm",
+    "projectDialog.archiveRemoveTitle": "Archive and remove project?",
+    "projectDialog.archiveTitle": "Archive {count} conversations?",
+    "projectDialog.archiveRemoveDescription": "This archives {count} conversations in {project}, then removes the project from the project list. Archived conversations appear in archive restore after you add this project again.",
+    "projectDialog.archiveDescription": "This archives conversations in {project}. The project remains in the left project list.",
+    "projectDialog.currentProject": "current project",
+    "projectDialog.archiveAndRemove": "Archive and remove",
+    "projectDialog.archiveAll": "Archive all",
+    "projectDialog.removing": "Removing",
+    "projectDialog.archiving": "Archiving",
+    "projectRow.conversationMenuAria": "{project} conversation menu",
+    "projectRow.createConversationAria": "Create a new conversation in {project}",
+    "projectRow.collapseConversations": "Collapse",
+    "projectRow.showMoreConversations": "Show more",
+    "projectRow.noConversations": "No conversations",
+    "conversationRow.running": "Conversation is running",
+    "conversationRow.unread": "Unread",
+    "conversationRow.confirmArchive": "Confirm archive conversation",
+    "projectFolderPicker.title": "Choose project directory",
+    "projectFolderPicker.pathAria": "Directory path",
+    "projectFolderPicker.parent": "Parent",
+    "projectFolderPicker.rootsAria": "Drives",
+    "projectFolderPicker.noRoots": "No drives available",
+    "projectFolderPicker.hidden": "Hidden",
+    "projectFolderPicker.noChildren": "No enterable subdirectories",
+    "projectFolderPicker.adding": "Adding",
+    "projectIcon.title": "Set project icon",
+    "projectIcon.description": "Choose a fixed icon for {project}, or generate a letter badge. Resetting restores the default folder toggle icon.",
+    "projectIcon.previewAria": "Project icon preview",
+    "projectIcon.customTab": "Custom",
+    "projectIcon.filterPlaceholder": "Filter {pack} icons",
+    "projectIcon.loadMore": "Load more",
+    "projectIcon.text": "Text",
+    "projectIcon.textPlaceholder": "1 Chinese character or 2 English letters",
+    "projectIcon.shape": "Shape",
+    "projectIcon.shapeCircle": "Circle",
+    "projectIcon.shapeSquare": "Square",
+    "projectIcon.backgroundColor": "Background",
+    "projectIcon.borderColor": "Border",
+    "projectIcon.foregroundColor": "Text color",
+    "projectIcon.resetDefault": "Reset default",
+    "projectIcon.set": "Set",
+    "projectSettings.dialogTitle": "Project settings: {project}",
+    "projectSettings.dialogDescription": "Project-level configuration and cache cleanup only affect the current project space.",
+    "projectSettings.categoryAria": "Project settings categories",
+    "projectSettings.overview": "Overview",
+    "projectSettings.pinnedProject": "Pinned project",
+    "projectSettings.projectSpaceSummary": "Project space summary",
+    "projectSettings.vmmMemory": "VMM memory",
+    "projectSettings.projectOverride": "Project override",
+    "projectSettings.inheritGlobal": "Inherit global",
+    "projectSettings.promptSkillCount": "{count} prompt skills",
+    "projectSettings.attachmentCache": "Attachment cache",
+    "projectSettings.attachmentCleanup": "Historical attachment cleanup",
+    "projectSettings.projectSpace": "Project space",
+    "projectSettings.projectId": "Project ID: {id}",
+    "projectSettings.conversationCount": "Conversation count: {count}",
+    "projectSettings.pinStatus": "Pinned status: {status}",
+    "projectSettings.pinned": "Pinned",
+    "projectSettings.notPinned": "Not pinned",
+    "projectSettings.vmmHasOverride": "This project has an independent override enabled.",
+    "projectSettings.vmmInheritsGlobal": "This project inherits global VMM settings.",
+    "projectSettings.agentOverrideCount": "This project has {count} overrides.",
+    "projectSettings.agentInheritsGlobal": "No project-level override is set; global rules are inherited.",
+    "projectSettings.vmmTitle": "Project VMM memory",
+    "projectSettings.vmmDescription": "Override memory enablement, user/project mapping, and recall injection parameters for this project.",
+    "projectSettings.vmmLoading": "Loading project VMM settings...",
+    "projectSettings.enableProjectOverride": "Enable project override",
+    "projectSettings.overrideEnabledHint": "After saving, this project uses the settings below.",
+    "projectSettings.overrideDisabledHint": "After saving, project overrides are cleared and global settings are inherited.",
+    "projectSettings.vmmTransportHint": "Project-level settings inherit the global gRPC connection and API Key; adjust connection parameters in global VMM memory settings.",
+    "projectSettings.saveVmm": "Save VMM settings",
+    "projectSettings.agentTitle": "Project Agent Skills",
+    "projectSettings.agentDescription": "Create project-specific enablement overrides for system and user prompt skills.",
+    "projectSettings.agent.globalEnabled": "Global enabled",
+    "projectSettings.agent.globalDisabled": "Global disabled",
+    "projectSettings.agentLoading": "Loading project skill overrides...",
+    "projectSettings.agentEmpty": "No prompt skills were found in system or user directories.",
+    "projectSettings.agent.projectEnabled": "Project enabled",
+    "projectSettings.agent.projectDisabled": "Project disabled",
+    "projectSettings.agent.inheritEnabled": "Inherit enabled",
+    "projectSettings.agent.inheritDisabled": "Inherit disabled",
+    "projectSettings.agent.optionInheritEnabled": "Inherit global (enabled)",
+    "projectSettings.agent.optionInheritDisabled": "Inherit global (disabled)",
+    "projectSettings.agent.projectStateAria": "{skill} project state",
+    "projectSettings.cleanupTitle": "Project attachment cache cleanup",
+    "projectSettings.cleanupDescription": "Filter this project's managed historical attachments by date and attachment type.",
+    "projectSettings.managedDirectory": "Managed directory",
+    "projectSettings.cutoffDate": "Cutoff date",
+    "projectSettings.attachmentKind.image": "Image",
+    "projectSettings.attachmentKind.audio": "Audio",
+    "projectSettings.attachmentKind.video": "Video",
+    "projectSettings.cleanup.previewing": "Previewing",
+    "projectSettings.cleanup.preview": "Preview cleanup scope",
+    "projectSettings.cleanup.cleaning": "Cleaning",
+    "projectSettings.cleanup.execute": "Run cleanup",
+    "projectSettings.lastPreview": "Latest preview",
+    "projectSettings.lastExecution": "Latest execution",
+    "projectSettings.cleanup.notExecuted": "Historical attachment cache cleanup has not run yet.",
+    "projectSettings.cleanup.previewFallback": "Preview mode will inspect managed {kinds} attachments before {date}.",
+    "projectSettings.cleanup.invalidDate": "Choose a valid cutoff date.",
+    "projectSettings.cleanup.selectKind": "Select at least one attachment type before previewing.",
+    "projectSettings.cleanup.initialNotice": "Choose a cutoff date and attachment types to preview the managed attachment cleanup scope for this project.",
+    "shell.windowOperationFailed": "Window operation failed: {error}",
+    "shell.openGithubFailed": "Failed to open GitHub: {error}",
+    "shell.minimizeWindow": "Minimize window",
+    "shell.maximizeWindow": "Maximize window",
+    "shell.restoreWindow": "Restore window",
+    "shell.closeWindow": "Close window",
+    "shell.openRepository": "Open the OpenVulcan/vulcan-code GitHub repository",
+    "startup.loadingProjectIndex": "Loading project and conversation indexes",
+    "startup.connectingService": "Connecting to Vulcan Core Service",
+    "startup.loadingStep": "Loading {step}",
+    "startup.loadingWorkspace": "Loading Workspace",
+    "startup.failed": "Startup failed: {error}",
+    "workspaceFiles.copyContentSuccess": "Copied file content.",
+    "workspaceFiles.noProjectDirectory": "The current conversation is not linked to a project directory.",
+    "workspaceFiles.noMatchedFiles": "No matching files.",
+    "workspaceFiles.noDisplayableFiles": "No displayable files.",
+    "workspaceFiles.filterPlaceholder": "Filter files...",
+    "workspaceFiles.loading": "Loading.",
+    "workspaceFiles.loadingTree": "Loading file tree.",
+    "workspaceFiles.filterRules": "File filter rules",
+    "workspaceFiles.hiddenRules": "Hidden rules",
+    "workspaceFiles.ignoreHiddenFiles": "Ignore hidden files",
+    "workspaceFiles.ignoreDotNames": "Ignore dot-prefixed names",
+    "workspaceFiles.useIgnoreRules": "Use .ignore rules",
+    "workspaceFiles.useGitignoreRules": "Use .gitignore rules",
+    "workspaceFiles.filterNonPreviewFiles": "Filter non-code, image, and video files",
+    "workspaceFiles.fileActions": "File actions",
+    "workspaceFiles.copyPath": "Copy path",
+    "workspaceFiles.copyRelativePath": "Copy relative path",
+    "workspaceFiles.copyFileContent": "Copy file content",
+    "workspaceFiles.filterFiles": "Filter files",
+    "workspaceFilePreview.openFile": "Open file",
+    "workspaceFilePreview.emptyHint": "Select a code or media file from the file tree.",
+    "workspaceFilePreview.loading": "Loading preview.",
+    "workspaceFilePreview.unsupportedTitle": "Preview not supported",
+    "workspaceFilePreview.unsupportedHint": "This file appears in the file tree, but its content is not read automatically.",
+    "workspaceFilePreview.noContent": "No preview content.",
+    "workspaceFilePreview.missingTitle": "File was deleted or moved",
+    "workspaceFilePreview.video": "video",
+    "workspaceFilePreview.image": "image",
+    "workspaceFilePreview.mediaBlockedTitle": "{media} file display is blocked",
+    "workspaceFilePreview.mediaBlockedHint": "Allow this {media} file to display? Files of the same type will preview directly afterward.",
+    "workspaceFilePreview.allowMedia": "Allow {media}",
+    "workspaceFilePreview.truncated": "Truncated",
+    "workspaceFilePreview.missingError": "File was deleted or moved and cannot be previewed: {path}",
+    "workspaceFileTree.collapseDirectory": "Collapse file directory",
+    "workspaceFileTree.expandDirectory": "Expand file directory",
+    "workspaceFileTree.expandAll": "Expand all",
+    "workspaceFileTree.collapseAll": "Collapse all",
+    "workspaceToolPanel.expandState": "Expand state",
+    "workspaceToolPanel.memorySettingsMenu": "Memory settings menu",
+    "workspaceToolPanel.skillsSettingsMenu": "Skills settings menu",
+    "workspaceToolPanel.menu": "Menu",
+    "workspaceToolPanel.collapseToPill": "Collapse to pill",
+    "workspaceToolPanel.status": "Status",
+    "workspaceShell.skillsTitle": "Skill settings",
+    "workspaceShell.memoryTitle": "Memory settings",
+    "workspaceShell.version": "Version {version}",
+    "workspacePanel.resizeRight": "Resize right panel",
+    "workspaceContext.switchTabs": "Switch right tabs",
+    "workspaceContext.searchTabs": "Search tabs",
+    "workspaceContext.searchTabsPlaceholder": "Search tabs...",
+    "workspaceContext.clearTabSearch": "Clear tab search",
+    "workspaceContext.openTabs": "Open tabs",
+    "workspaceContext.closeTab": "Close {title}",
+    "workspaceContext.openRightPage": "Open right page",
+    "workspaceContext.openPage": "Open page",
+    "workspaceContext.launcher.filesDescription": "Browse project files",
+    "workspaceContext.launcher.reviewDescription": "Review code changes",
+    "workspaceContext.launcher.memoryDescription": "View conversation memory",
+    "workspaceContext.loadingReviewPanel": "Loading review panel.",
+    "workspaceContext.loadingFilesPanel": "Loading files panel.",
+    "workspaceMemory.handleDynamicMemory": "Handle dynamic memory",
+    "workspaceMemory.suppressForSession": "Stop injecting in this session",
+    "workspaceMemory.permanentDeleteInvalid": "Permanently delete invalid memory",
+    "workspaceMemory.viewDetails": "View details",
+    "workspaceMemory.turnId": "Turn ID {turnId}",
+    "workspaceMemory.loadingTurn": "Loading full TURN record...",
+    "workspaceMemory.lookupFailed": "Lookup failed: {error}",
+    "workspaceMemory.user": "User: {content}",
+    "workspaceMemory.assistant": "Assistant: {content}",
+    "workspaceMemory.viewDetailsWithTurn": "View details {turnId}",
+    "workspaceMemory.handleMemoryWithId": "Handle memory {memoryId}",
+    "workspaceMemory.suppressedNotice": "Hidden this dynamic memory in the current session.",
+    "workspaceMemory.suppressFailed": "Hide failed: {error}",
+    "workspaceMemory.deletedNotice": "Memory deleted.",
+    "workspaceMemory.deletedWithoutId": "Delete ran, but the service did not return a deleted ID.",
+    "workspaceMemory.deleteFailed": "Delete failed: {error}",
+    "workspaceReview.refreshGitDiffFailed": "Failed to refresh Git diff: {error}",
+    "workspaceReview.noProjectPathForGit": "The current conversation has no project path, so Git operations cannot run.",
+    "workspaceReview.gitOperationFailed": "Git operation failed: {error}",
+    "workspaceReview.fileDetailTimeout": "Timed out loading file diff details: {error}",
+    "workspaceReview.fileDetailFailed": "Failed to load file diff details: {error}",
+    "workspaceReview.noProjectPathForRefresh": "The current conversation has no project path, so Git diff cannot refresh.",
+    "workspaceReview.fileDetailLoading": "Loading file diff details.",
+    "workspaceReview.hunkExpanding": "Expanding hunk context.",
+    "workspaceReview.hunkDirectionUp": "upward",
+    "workspaceReview.hunkDirectionDown": "downward",
+    "workspaceReview.hunkDirectionBoth": "both ways",
+    "workspaceReview.hunkExpandingSpecific": "Expanding hunk {index} context {direction}.",
+    "workspaceReview.fileDetailTimeoutError": "Single-file diff details took more than {seconds} seconds to load.",
+    "workbenchConversation.unpinned": "Unpinned conversation: {conversation}",
+    "workbenchConversation.pinned": "Pinned conversation: {conversation}",
+    "workbenchConversation.archived": "Archived conversation: {conversation}",
+    "workbenchConversation.noProject": "Could not find the project for this conversation.",
+    "workbenchConversation.copiedWorkspace": "Copied workspace directory.",
+    "workbenchConversation.copiedSessionId": "Copied session ID.",
+    "workbenchConversation.nameEmpty": "Name cannot be empty.",
+    "workbenchConversation.projectRenamed": "Renamed project: {project}",
+    "workbenchConversation.projectNameRestored": "Restored project name: {project}",
+    "workbenchConversation.conversationRenamed": "Renamed conversation: {conversation}",
+    "workbenchConversation.archivedCount": "Archived {count} conversations.",
+    "workbenchConversation.archivedAndRemovedProject": "Archived and removed project: {project}",
+    "workbenchAsk.submitted": "Submitted ask answer.",
+    "workbenchAsk.cancelled": "Cancelled ask request.",
+    "thinkingDisplay.popupOnly": "Popup",
+    "thinkingDisplay.inlineOutput": "Inline output",
+    "thinkingDisplay.firstInlineWithPopup": "First inline + popup",
+    "thinkingDisplay.firstInlineOnly": "First inline only",
+    "ask.title": "ask needs your confirmation",
+    "ask.description": "The current AI call is waiting for your answer and will continue after you submit.",
+    "ask.action.confirmSubmit": "Confirm submit",
+    "ask.action.confirmReject": "Confirm stop",
+    "ask.action.submit": "Submit",
+    "ask.action.continue": "Continue",
+    "ask.action.ignore": "Ignore",
+    "ask.action.backToEdit": "Back to edit",
+    "ask.action.processing": "Processing...",
+    "ask.progress.previous": "Previous question",
+    "ask.progress.next": "Next question",
+    "ask.option.selected": "Selected",
+    "ask.confirm.submitTitle": "Confirm submit?",
+    "ask.confirm.rejectTitle": "Stop the current session?",
+    "ask.confirm.submitBody": "Press Enter to submit, or Esc to return to editing.",
+    "ask.confirm.rejectBody": "Stopping will fail the waiting ask tool call. Press Esc to return to editing.",
+    "ask.custom.textPlaceholder": "Enter an answer",
+    "ask.custom.adjustCodex": "No, tell Codex how to adjust",
+    "ask.custom.description": "Enter a custom answer. Lines wrap automatically; press Shift+Enter for a manual line break.",
+    "ask.validation.requiredAnswer": "Please answer \"{header}\" first.",
+    "ask.validation.requiredOther": "Please fill in the other answer for \"{header}\" first.",
+    "ask.validation.requiredSelectionOrOther": "Please choose an answer for \"{header}\" or fill in another answer.",
+    "terminalStop.title": "Force stop the terminal session?",
+    "terminalStop.description": "This will stop the running terminal process. Confirm that this session no longer needs to produce output.",
+    "terminalStop.stopping": "Stopping",
+    "terminalStop.confirm": "Force stop",
+    "conversation.bodyLoadFailed": "Conversation body failed to load: {error}",
+    "conversation.emptyLoaded": "The conversation body has not loaded yet or has no visible messages.",
+    "conversation.emptyWaiting": "No conversation is selected yet. Waiting for the workspace data to load.",
+    "conversation.detail.copy": "Copy detail",
+    "conversation.detail.close": "Close detail",
+    "conversation.userPrompt.expand": "Show more",
+    "conversation.userPrompt.collapse": "Collapse",
+    "conversation.userPrompt.copy": "Copy user prompt",
+    "conversation.userPrompt.edit": "Edit user prompt",
+    "conversation.subagent.return": "Return to main conversation",
+    "conversation.subagent.runningCount": "{count} subagents running",
+    "conversation.subagent.schedule": "Subagent schedule",
+    "conversation.subagent.switch": "Switch subagent schedule",
+    "conversation.subagent.state.running": "Running",
+    "conversation.subagent.state.stopped": "Stopped",
+    "conversation.subagent.state.failed": "Failed",
+    "conversation.subagent.state.completed": "Completed",
+    "conversation.diff.loadingPanel": "Loading the Git Diff review panel.",
+    "conversation.diff.parsingWorker": "Parsing diff content in a Worker.",
+    "conversation.diff.parseFailed": "Diff parse failed: {error}",
+    "conversation.diff.unstructuredFallback": "This diff content cannot be parsed into a structured view. Raw text is still available for copying.",
+    "sessionTools.expand": "Expand session tools",
+    "sessionTools.collapse": "Collapse session tools",
+    "sessionTools.changes": "Changes",
+    "sessionTools.progress": "Progress",
+    "sessionTools.terminal": "Terminal",
+    "sessionTools.menu": "Session tools menu",
+    "terminalSession.openScreen": "Open terminal screen",
+    "terminalSession.noScreen": "No terminal screen",
+    "terminalSession.forceStop": "Force stop",
+    "terminalSession.forceStopSession": "Force stop terminal session",
+    "terminalSession.emptyScreen": "No terminal screen content",
+    "terminalSession.tooltip.status": "Status",
+    "terminalSession.tooltip.command": "Command",
+    "terminalSession.tooltip.cwd": "Directory",
+    "terminalSession.tooltip.shell": "Shell",
+    "terminalSession.tooltip.backend": "Backend",
+    "terminalSession.tooltip.screenFrame": "Screen frame",
+    "terminalSession.tooltip.exitCode": "Exit code",
+    "terminalSession.tooltip.error": "Error",
+    "terminalSession.tooltip.output": "Output",
+    "terminalSession.tooltip.session": "Session",
+    "terminalState.running": "Running",
+    "terminalState.waiting": "Waiting for input",
+    "terminalState.success": "Completed",
+    "terminalState.failed": "Failed",
+    "terminalState.stopped": "Stopped",
+    "terminalState.lost": "Lost",
+    "terminalState.unknown": "Unknown",
+    "toolPresentation.output.loading": "Loading output...",
+    "toolPresentation.output.empty": "No output",
+    "toolPresentation.exitCode": "Exit code",
+    "toolPresentation.command.running": "Running",
+    "toolPresentation.command.failed": "Failed",
+    "toolPresentation.command.stopped": "Stopped",
+    "toolPresentation.command.completed": "Completed",
+    "toolPresentation.command.start.failed": "Start failed",
+    "toolPresentation.command.read.failed": "Read failed",
+    "toolPresentation.command.send.failed": "Send failed",
+    "toolPresentation.command.write.failed": "Write failed",
+    "toolPresentation.command.stop.failed": "Stop failed",
+    "toolPresentation.command.start.running": "Starting",
+    "toolPresentation.command.read.running": "Reading",
+    "toolPresentation.command.send.running": "Sending",
+    "toolPresentation.command.write.running": "Writing",
+    "toolPresentation.command.stop.running": "Stopping",
+    "toolPresentation.command.start.completed": "Started",
+    "toolPresentation.command.list.completed": "Listed",
+    "toolPresentation.command.read.completed": "Read",
+    "toolPresentation.command.send.completed": "Sent",
+    "toolPresentation.command.write.completed": "Written",
+    "toolPresentation.command.stop.completed": "Stopped",
+    "toolPresentation.command.heading.start": "Start command",
+    "toolPresentation.command.heading.read": "Read output",
+    "toolPresentation.command.heading.send": "Send input",
+    "toolPresentation.command.heading.write": "Write input",
+    "toolPresentation.command.heading.stop": "Stop session",
+    "toolPresentation.command.session": "Command session",
+    "toolPresentation.command.lost": "live status lost",
+    "toolPresentation.command.current": "current",
+    "toolPresentation.command.currentState": "current {state}",
+    "toolPresentation.ask.running": "Asking",
+    "toolPresentation.ask.ignored": "Ignored",
+    "toolPresentation.ask.completed": "Asked",
+    "toolPresentation.ask.questionFallback": "Question {index}",
+    "toolPresentation.ask.userAnswer": "User answer",
+    "toolPresentation.ask.waitingAnswer": "Waiting for user answer",
+    "toolPresentation.file.count": "{count} files",
+    "toolPresentation.file.multiChange": "Multiple file changes",
+    "toolPresentation.file.empty": "No displayable content",
+    "toolPresentation.file.create.running": "Writing",
+    "toolPresentation.file.modify.running": "Editing",
+    "toolPresentation.file.delete.running": "Deleting",
+    "toolPresentation.file.mixed.running": "Changing",
+    "toolPresentation.file.create.failed": "Write failed",
+    "toolPresentation.file.modify.failed": "Edit failed",
+    "toolPresentation.file.delete.failed": "Delete failed",
+    "toolPresentation.file.mixed.failed": "Change failed",
+    "toolPresentation.file.create.preview": "Will write",
+    "toolPresentation.file.modify.preview": "Will edit",
+    "toolPresentation.file.delete.preview": "Will delete",
+    "toolPresentation.file.mixed.preview": "Will change",
+    "toolPresentation.file.create.completed": "Written",
+    "toolPresentation.file.modify.completed": "Edited",
+    "toolPresentation.file.delete.completed": "Deleted",
+    "toolPresentation.file.mixed.completed": "Changed",
+    "markdown.wrap.enable": "Enable line wrap",
+    "markdown.wrap.disable": "Disable line wrap",
+    "markdown.copyCode": "Copy code",
+    "markdown.copied": "Copied",
+    "mediaPlayer.maximize": "Maximize player",
+    "mediaPlayer.restore": "Restore player",
+    "mediaPlayer.close": "Close player",
+    "mediaPlayer.fitWindow": "Fit to window",
+    "mediaPlayer.originalSize": "Original size",
+    "mediaPlayer.zoomOut": "Zoom out",
+    "mediaPlayer.zoomIn": "Zoom in",
+    "media.openVideoPlayer": "Open video player",
+    "settings.backToWorkspace": "Back to workspace",
+    "memory.scope": "Scope",
+    "memory.scope.global": "Global config",
+    "memory.scope.project": "Project config",
+    "memory.project": "Project",
+    "memory.action.testConnection": "Test connection",
+    "memory.action.refreshUsersProjects": "Refresh users/projects",
+    "memory.vmm.action.running": "Running VMM action: {action}",
+    "memory.vmm.action.failed": "VMM action failed: {message}",
+    "memory.vmm.save.global.running": "Saving global VMM config.",
+    "memory.vmm.save.project.running": "Saving project VMM config.",
+    "memory.vmm.save.global.completed": "Global VMM config saved.",
+    "memory.vmm.save.project.completed": "Project VMM config saved.",
+    "memory.vmm.save.failed": "Failed to save VMM config: {message}",
+    "vmm.common.optional": "Optional",
+    "vmm.common.number": "Number",
+    "vmm.common.enabled": "Enabled",
+    "vmm.common.disabled": "Off",
+    "vmm.common.none": "None",
+    "vmm.common.notConfigured": "Not configured",
+    "vmm.common.notSelected": "Not selected",
+    "vmm.common.running": "Running",
+    "vmm.overview.effectiveConfig": "Effective config",
+    "vmm.overview.grpc": "gRPC: ",
+    "vmm.overview.recallPolicy": "Recall policy",
+    "vmm.overview.ttlTurns": "TTL: {turns} turns",
+    "vmm.overview.precheckAiTools": "Precheck recall: {precheck} · AI tools: {tools}",
+    "vmm.overview.runtime": "Runtime",
+    "vmm.overview.outboxProfiles": "outbox: {outbox} · profile nodes: {profiles}",
+    "vmm.overview.completedTurns": "Completed turns: {turns}",
+    "vmm.overview.summaryEntry": "Summary entry",
+    "vmm.overview.noSummary": "No summaries",
+    "vmm.runtime.title": "Runtime",
+    "vmm.runtime.subtitle": "VMM hooks and profile cache for the current session.",
+    "vmm.runtime.session": "Session",
+    "vmm.runtime.profileNodes": "Profile nodes",
+    "vmm.runtime.updatedAt": "Updated at",
+    "vmm.runtime.noProfileBase": "No profile base yet.",
+    "vmm.result.title": "Action result",
+    "vmm.result.emptySummary": "No VMM action has run yet.",
+    "vmm.result.request": "Request",
+    "vmm.result.response": "Response",
+    "vmm.result.emptyHint": "Requests and responses appear after you run an action on the left.",
+    "vmm.result.generic": "Result",
+    "vmm.settings.grpcTarget": "gRPC address",
+    "vmm.settings.apiKey": "API Key",
+    "vmm.settings.receiveTimeout": "Request timeout",
+    "vmm.settings.handshakeTimeout": "Handshake timeout",
+    "vmm.settings.maxReceiveBytes": "Max receive bytes",
+    "vmm.settings.keepaliveInterval": "keepalive interval",
+    "vmm.settings.keepaliveTimeout": "keepalive timeout",
+    "vmm.settings.idleKeepalive": "Idle keepalive",
+    "vmm.settings.enableMemoryConnection": "Enable memory connection",
+    "vmm.settings.exposeAiTools": "Expose AI-only tools",
+    "vmm.settings.autoPrecheck": "Automatic precheck recall",
+    "vmm.settings.userId": "User ID",
+    "vmm.settings.projectId": "Project ID",
+    "vmm.settings.implicitMemoryTtl": "Temporary memory TTL",
+    "vmm.settings.profileRefreshInterval": "Profile refresh interval",
+    "vmm.settings.profileNodeLimit": "Profile node limit",
+    "vmm.settings.injectionTag": "Injection tag",
+    "vmm.settings.injectionDescription": "Injection description",
+    "vmm.rows.usersEmpty": "User rows appear after refreshing users/projects.",
+    "vmm.rows.projectsEmpty": "Project rows appear after refreshing users/projects.",
+    "vmm.rows.profileNodesEmpty": "Active profile nodes appear here after refreshing profile nodes.",
+    "vmm.rows.bundleEmpty": "Bundle content appears after loading the full profile.",
+    "vmm.rows.toolResultEmpty": "Tool debug results appear by action.",
+    "vmm.rows.unnamedUser": "Unnamed user",
+    "vmm.rows.unnamedProject": "Unnamed project",
+    "vmm.rows.deleted": "Deleted",
+    "vmm.rows.notFound": "Not found",
+    "vmm.rows.vectorRows": "Vector rows {count}",
+    "vmm.profile.full": "Full profile",
+    "vmm.profile.team": "Team profile",
+    "vmm.profile.space": "Space profile",
+    "vmm.profile.project": "Project profile",
+    "vmm.profile.user": "User profile",
+    "vmm.action.deleteMemory": "Delete memory",
+    "vmm.action.precheckProject": "Precheck project",
+    "vmm.action.confirmCreate": "Confirm create",
+    "vmm.action.deleteProject": "Delete project",
+    "vmm.action.runMigrate": "Run migration",
+    "vmm.action.refreshNodes": "Refresh nodes",
+    "vmm.action.applyInstruction": "Apply instruction",
+    "vmm.action.loadProfileBundle": "Load full profile",
+    "vmm.action.saveGlobal": "Save globally",
+    "vmm.action.saveProject": "Save to project",
+    "vmm.action.resolveUser": "Resolve user",
+    "vmm.action.deleteUser": "Delete user",
+    "vmm.section.project.title": "Project management",
+    "vmm.section.project.subtitle": "Precheck project paths, confirm creation, confirm deletion, and confirm migration.",
+    "vmm.section.profile.title": "Profile center",
+    "vmm.section.profile.subtitle": "Read active profile nodes and submit manual profile instructions to the current target.",
+    "vmm.section.bundle.title": "Profile bundle test",
+    "vmm.section.bundle.subtitle": "Read the current user/project FULL bundle and inspect the combined profile.",
+    "vmm.section.tool.title": "Tool debug",
+    "vmm.section.tool.subtitle": "Simulate VMM AI-only tools: search memory, expand turns, and write memory.",
+    "vmm.section.memory.title": "Memory settings",
+    "vmm.section.memory.subtitle": "Configure memory enablement, AI tools, temporary TTL, profile refresh, and injection notes.",
+    "vmm.section.transport.title": "gRPC transport",
+    "vmm.section.transport.subtitle": "Connection address, API key, timeouts, max receive bytes, and keepalive policy.",
+    "vmm.section.user.title": "User management",
+    "vmm.section.user.subtitle": "Long-term user list, user reference resolution, creation confirmation, and deletion confirmation.",
+    "vmm.field.projectPath": "Project path",
+    "vmm.field.confirmDelete": "Confirm delete",
+    "vmm.field.migrateSource": "Migration source project",
+    "vmm.field.migrateTarget": "Migration target project",
+    "vmm.field.confirmMigrate": "Confirm migration",
+    "vmm.field.profileTarget": "Profile target",
+    "vmm.field.profileInstruction": "Manual profile instruction",
+    "vmm.field.searchQueries": "Search query",
+    "vmm.field.deleteReason": "Delete reason",
+    "vmm.field.writeAbstract": "Manual write summary",
+    "vmm.field.writeDetails": "Manual write details",
+    "vmm.field.userRef": "User reference",
+    "vmm.field.deleteConfirmationCode": "Delete confirmation code",
+    "vmm.placeholder.profileInstruction": "Example: reduce the weight of a preference",
+    "vmm.placeholder.multiPipe": "Separate multiple values with |",
+    "vmm.placeholder.commaOrPipe": "Separate with commas or |",
+    "vmm.placeholder.deleteReason": "Wrong, expired, or requested by the user",
+    "vmm.placeholder.writeAbstract": "Memory summary",
+    "vmm.placeholder.writeDetails": "Full content",
+    "vmm.placeholder.userRef": "ID or username",
+    "vmm.placeholder.deleteConfirmationCode": "Returned after the first delete",
+    "vmm.diagnostic.disabledByConfig": "Disabled",
+    "vmm.diagnostic.missingGrpcTarget": "Missing gRPC",
+    "vmm.diagnostic.grpcOffline": "gRPC offline",
+    "vmm.diagnostic.missingUserId": "Missing user",
+    "vmm.diagnostic.missingProjectId": "Missing project",
     "planArtifact.titleFallback": "Plan",
     "planArtifact.copy": "Copy Markdown",
     "planArtifact.copied": "Copied Markdown",
@@ -718,6 +3023,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.subagentRunning": "Subagents working",
     "runtime.thinkingOverlayHint": "The model is streaming its thinking process",
     "settings.general": "General",
+    "settings.systemSettings": "System settings",
     "settings.projects": "Projects",
     "settings.providers": "Models",
     "settings.tools": "Tools",
@@ -762,6 +3068,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover.description": "Music-cover capability state and available targets.",
     "settings.mcpServers.description": "MCP runtime, server connections, tools, prompts, and resources.",
     "settings.runtimeDiagnostics.description": "Startup flow, runtime modules, and diagnostic logs.",
+    "settings.diagnostics.logs": "Diagnostic logs",
+    "settings.diagnostics.startupStatus": "Startup status",
+    "settings.diagnostics.waitingStatus": "Waiting for status update",
+    "settings.diagnostics.runtimeModules": "Runtime modules",
     "settings.gitCommit.description": "New-branch naming, automatic summary model, and RTK-compressed context for the commit dialog.",
     "settings.rtkRouting.description": "RTK rewrite, route selection, and context-density statistics for shell_command.",
     "settings.gitCommit.active": "Active",

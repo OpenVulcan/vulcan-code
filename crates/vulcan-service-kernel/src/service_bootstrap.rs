@@ -89,6 +89,10 @@ fn run_service_bootstrap(
         })?;
     let provider_configuration = vulcan_provider_config::config::load_configuration_file()
         .map_err(|error| ServiceBootstrapError::new("service-process", "Core Service", error))?;
+    if let Ok(mut guard) = state.lock() {
+        guard.startup.ui_locale = provider_configuration.ui_locale.clone();
+        guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
+    }
     let ai_tool_configuration =
         load_service_ai_tool_configuration(&provider_configuration, &mut logs);
 

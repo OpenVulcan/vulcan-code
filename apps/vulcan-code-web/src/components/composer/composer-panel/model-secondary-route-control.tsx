@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary } from "@/types";
 // parseModelPickerChoiceKey splits only the provider prefix because model ids may contain slashes.
@@ -43,6 +44,9 @@ export function ModelSecondaryRouteControl(props: {
     route: ProviderModelSecondaryRouteSelection | null,
   ) => Promise<boolean>;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -102,17 +106,17 @@ export function ModelSecondaryRouteControl(props: {
       } : null,
     );
     if (!ok) {
-      toast.error("二级供应商切换失败，已保留原选择。");
+      toast.error(t("composer.secondaryRoute.switchFailed"));
       return;
     }
     setOpen(false);
-  }, [props]);
+  }, [props, t]);
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <Button
-          aria-label="选择二级供应商"
+          aria-label={t("composer.secondaryRoute.select")}
           className="composer-secondary-route-trigger"
           type="button"
           variant="outline"
@@ -125,10 +129,10 @@ export function ModelSecondaryRouteControl(props: {
         <div className="model-picker-filter">
           <Search size={14} />
           <Input
-            aria-label="搜索二级供应商"
+            aria-label={t("composer.secondaryRoute.search")}
             autoFocus
             onChange={(event) => setFilter(event.currentTarget.value)}
-            placeholder="搜索二级供应商"
+            placeholder={t("composer.secondaryRoute.search")}
             value={filter}
           />
         </div>
@@ -142,13 +146,13 @@ export function ModelSecondaryRouteControl(props: {
               <span className="model-picker-selected-slot">{!props.selectedRoute ? <Check size={15} /> : null}</span>
               <span className="model-picker-row-copy">
                 <span className="model-picker-row-title">Auto</span>
-                <span className="model-picker-row-meta">由 OpenRouter 自动选择 endpoint</span>
+                <span className="model-picker-row-meta">{t("composer.secondaryRoute.autoEndpoint")}</span>
               </span>
             </button>
             {loading ? (
-              <div className="model-picker-empty">正在加载二级供应商...</div>
+              <div className="model-picker-empty">{t("composer.secondaryRoute.loading")}</div>
             ) : filteredRoutes.length === 0 ? (
-              <div className="model-picker-empty">没有匹配的二级供应商</div>
+              <div className="model-picker-empty">{t("composer.secondaryRoute.noMatches")}</div>
             ) : (
               filteredRoutes.map((route) => (
                 <button

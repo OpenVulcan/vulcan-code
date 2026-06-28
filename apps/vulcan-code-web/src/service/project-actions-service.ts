@@ -34,7 +34,7 @@ export async function openProjectDirectory(projectId: string): Promise<string | 
 // browseProjectDirectories 为 WebUI 选择器加载单个服务宿主目录。
 export async function browseProjectDirectories(path: string | null): Promise<ProjectDirectoryListing> {
   if (!hasServiceRuntime()) {
-    throw new Error("浏览器服务不可用，无法浏览项目目录。");
+    throw new Error("Browser service is unavailable, so project directories cannot be browsed.");
   }
   return serviceClient.request<ProjectDirectoryListing>("service_browse_project_directories", { path });
 }
@@ -43,7 +43,7 @@ export async function browseProjectDirectories(path: string | null): Promise<Pro
 // addProjectFromPath 将单个服务宿主目录注册为项目。
 export async function addProjectFromPath(path: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
-    throw new Error("浏览器服务不可用，无法添加项目。");
+    throw new Error("Browser service is unavailable, so the project cannot be added.");
   }
   return serviceClient.request<WorkbenchSnapshot | null>("service_add_project_from_path", { path });
 }

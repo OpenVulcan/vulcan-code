@@ -134,6 +134,7 @@ export function ConversationProcessGroup(props: {
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
 }) {
+  const { locale, t } = useI18n();
   const fallbackStartedAtMsRef = React.useRef(Date.now());
   React.useEffect(() => {
     fallbackStartedAtMsRef.current = Date.now();
@@ -147,9 +148,11 @@ export function ConversationProcessGroup(props: {
     ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
     : null;
   const displayedDurationMs = props.process.durationMs ?? liveDurationMs;
-  const durationLabel = formatWorkProcessDuration(displayedDurationMs);
-  const headerText = durationLabel ? `处理过程 ${durationLabel}` : "处理过程";
-  const stoppedText = durationLabel ? `你在 ${durationLabel} 后停止了` : "你已停止本轮工作";
+  const durationLabel = formatWorkProcessDuration(displayedDurationMs, locale);
+  const headerText = durationLabel ? `${t("conversation.process.header")} ${durationLabel}` : t("conversation.process.header");
+  const stoppedText = durationLabel
+    ? t("conversation.process.stoppedAfter").replace("{duration}", durationLabel)
+    : t("conversation.process.stopped");
   const bodyVisible = !props.process.collapsible || !collapsed;
   const processBodyCollapseId = `process-body:${props.process.id}`;
   return (
@@ -383,6 +386,9 @@ export function ConversationRenderItemView(props: {
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const userBody = React.useMemo(
     () => stripUserPromptHeading(props.item.userMessage?.body ?? ""),
     [props.item.userMessage?.body],
@@ -493,7 +499,7 @@ export function ConversationRenderItemView(props: {
               }}
               type="button"
             >
-              <span>{userPromptExpanded ? "收起" : "显示更多"}</span>
+              <span>{userPromptExpanded ? t("conversation.userPrompt.collapse") : t("conversation.userPrompt.expand")}</span>
               {userPromptExpanded ? (
                 <ChevronUp className="user-prompt-expand-icon" size={14} />
               ) : (
@@ -508,11 +514,11 @@ export function ConversationRenderItemView(props: {
           ) : null}
           {userBody ? (
             <button
-              aria-label="复制用户提示词"
+              aria-label={t("conversation.userPrompt.copy")}
               className="user-message-copy"
               onClick={() => void handleCopyUserPrompt()}
               onMouseLeave={() => setUserPromptCopied(false)}
-              title="复制用户提示词"
+              title={t("conversation.userPrompt.copy")}
               type="button"
             >
               {userPromptCopied ? <Check size={14} /> : <Copy size={14} />}
@@ -520,10 +526,10 @@ export function ConversationRenderItemView(props: {
           ) : null}
           {props.item.userMessage?.editableUserPrompt ? (
             <button
-              aria-label="编辑用户提示词"
+              aria-label={t("conversation.userPrompt.edit")}
               className="user-message-copy"
               onClick={() => void props.onEditUserPrompt?.(props.item.userMessage!.conversationId, props.item.userMessage!.id)}
-              title="编辑用户提示词"
+              title={t("conversation.userPrompt.edit")}
               type="button"
             >
               <Pencil size={14} />

@@ -97,7 +97,7 @@ export function applyAppendMessageBodyDelta(
         status: runPhase && !["idle", "ready", "failed", "stopped"].includes(normalizedSessionRunPhase(runPhase) ?? "")
           ? "Running"
           : conversation.status,
-        lastUpdatedLabel: "刚刚",
+        lastUpdatedLabel: "now",
       };
     }),
     subagentNavigation: updateSubagentNavigationRunPhase(workbench.subagentNavigation, delta.conversationId, runPhase),

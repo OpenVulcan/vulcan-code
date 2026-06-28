@@ -31,6 +31,7 @@ import {
   isContextCompactionBlock,
   isMergeableToolBlock,
 } from "@/components/conversation/conversation-classifiers";
+import { useI18n } from "@/i18n";
 import type {
   ConversationBlock,
   ConversationBlockKind,
@@ -245,6 +246,7 @@ function SpecialConversationBlock(props: {
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
 }) {
+  const { t } = useI18n();
   if (props.block.kind === "turn-stats") {
     return <TurnStatsBlock block={props.block} />;
   }
@@ -297,6 +299,7 @@ function SpecialConversationBlock(props: {
 
   const Icon = blockIcon(props.block.kind);
   const canOpen = detailEligibleBlockKinds.has(props.block.kind);
+  const displayTitle = localizedConversationBlockTitle(props.block, t);
   return (
     <button
       className={`special-block ${props.block.kind}`}
@@ -304,13 +307,13 @@ function SpecialConversationBlock(props: {
       onClick={() => {
         if (canOpen) {
           props.onOpenDetail({
-            title: props.block.title,
+            title: displayTitle,
             kind: props.block.kind,
             body: props.block.body,
             metadata: [
-              ["类型", blockTitle(props.block.kind, props.block.toolName)],
-              ...(props.block.status ? [["状态", props.block.status] as [string, string]] : []),
-              ...(props.block.toolName ? [["工具", props.block.toolName] as [string, string]] : []),
+              [t("conversation.metadata.type"), blockTitle(props.block.kind, props.block.toolName, t)],
+              ...(props.block.status ? [[t("conversation.metadata.status"), props.block.status] as [string, string]] : []),
+              ...(props.block.toolName ? [[t("conversation.metadata.tool"), props.block.toolName] as [string, string]] : []),
             ],
           });
         }
@@ -320,7 +323,7 @@ function SpecialConversationBlock(props: {
       <div className="special-block-main">
         <Icon size={16} />
         <div>
-          <strong>{props.block.title}</strong>
+          <strong>{displayTitle}</strong>
           <span>{props.block.summary}</span>
         </div>
       </div>
@@ -328,6 +331,16 @@ function SpecialConversationBlock(props: {
       {canOpen ? <Maximize2 size={15} /> : null}
     </button>
   );
+}
+
+// localizedConversationBlockTitle preserves explicit transcript titles and localizes parser defaults.
+// localizedConversationBlockTitle 保留显式转录标题，并本地化解析器默认标题。
+function localizedConversationBlockTitle(
+  block: ConversationBlock,
+  t: (key: import("@/i18n-messages").TranslationKey) => string,
+): string {
+  const defaultTitle = blockTitle(block.kind, block.toolName);
+  return block.title === defaultTitle ? blockTitle(block.kind, block.toolName, t) : block.title;
 }
 
 // planArtifactsMatch decides whether one transcript Plan card owns the current pending decision.

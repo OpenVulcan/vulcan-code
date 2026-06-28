@@ -10,6 +10,7 @@ import { escapeHtml, tokenSpansToHtml } from "@/diff/diff-shiki-shared";
 import type { DiffFile, DiffLine } from "@/diff/types";
 import { Button } from "@/components/ui/button";
 import { workspaceFileTreeExtensionLabel } from "@/components/workspace/WorkspaceFileTreeDrawer";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
 
 // workspaceFilePreviewMaxHighlightRows caps Shiki preview work inside the right rail.
@@ -47,6 +48,7 @@ export function WorkspaceFilePreview(props: {
   // 关闭当前预览并打开目录抽屉。
   onClosePreview: () => void;
 }) {
+  const { t } = useI18n();
   if (!props.entry) {
     if (props.missingPath) {
       return (
@@ -58,13 +60,13 @@ export function WorkspaceFilePreview(props: {
     return (
       <div className="workspace-file-preview empty">
         <FileText size={24} />
-        <strong>打开文件</strong>
-        <span>从文件树中选择代码或媒体文件。</span>
+        <strong>{t("workspaceFilePreview.openFile")}</strong>
+        <span>{t("workspaceFilePreview.emptyHint")}</span>
       </div>
     );
   }
   if (props.loading) {
-    return <div className="workspace-file-preview empty">正在加载预览。</div>;
+    return <div className="workspace-file-preview empty">{t("workspaceFilePreview.loading")}</div>;
   }
   if (props.error) {
     return <div className="workspace-file-preview empty error">{props.error}</div>;
@@ -82,12 +84,12 @@ export function WorkspaceFilePreview(props: {
       return (
         <div className="workspace-file-preview empty">
           <FileText size={24} />
-          <strong>暂不支持预览</strong>
-          <span>该文件会显示在文件树中，但不会自动读取内容。</span>
+          <strong>{t("workspaceFilePreview.unsupportedTitle")}</strong>
+          <span>{t("workspaceFilePreview.unsupportedHint")}</span>
         </div>
       );
     }
-    return <div className="workspace-file-preview empty">暂无预览内容。</div>;
+    return <div className="workspace-file-preview empty">{t("workspaceFilePreview.noContent")}</div>;
   }
   if (props.preview.kind === "image") {
     return (
@@ -120,10 +122,11 @@ function WorkspaceMissingFilePreview(props: {
   // 先前选中但已无法在目录树中解析的文件路径。
   missingPath: string;
 }) {
+  const { t } = useI18n();
   return (
     <div className="workspace-file-preview empty error">
       <FileText size={24} />
-      <strong>文件已被删除或移动</strong>
+      <strong>{t("workspaceFilePreview.missingTitle")}</strong>
       <span>{props.missingPath}</span>
     </div>
   );
@@ -139,16 +142,17 @@ function WorkspaceMediaPermissionPrompt(props: {
   // 授权媒体展示并打开已选中的媒体文件。
   onAllowMediaPreview: (entry: WorkspaceFileEntrySummary) => void;
 }) {
+  const { t } = useI18n();
   // mediaLabel stores the localized media kind name.
   // mediaLabel 保存本地化媒体类型名称。
-  const mediaLabel = props.entry.kind === "video" ? "视频" : "图片";
+  const mediaLabel = props.entry.kind === "video" ? t("workspaceFilePreview.video") : t("workspaceFilePreview.image");
   return (
     <div className="workspace-file-preview empty media-permission">
       <FileText size={24} />
-      <strong>{mediaLabel}文件不允许展示</strong>
-      <span>是否允许展示当前{mediaLabel}文件？允许后同类文件会直接预览。</span>
+      <strong>{t("workspaceFilePreview.mediaBlockedTitle").replace("{media}", mediaLabel)}</strong>
+      <span>{t("workspaceFilePreview.mediaBlockedHint").replace("{media}", mediaLabel)}</span>
       <Button size="sm" type="button" onClick={() => props.onAllowMediaPreview(props.entry)}>
-        允许显示{mediaLabel}
+        {t("workspaceFilePreview.allowMedia").replace("{media}", mediaLabel)}
       </Button>
     </div>
   );
@@ -164,6 +168,7 @@ function WorkspaceFilePreviewHeader(props: {
   // 关闭当前预览并打开目录抽屉。
   onClosePreview: () => void;
 }) {
+  const { t } = useI18n();
   // iconLabel stores the same compact file-type label used by the shared tree row.
   // iconLabel 保存与共享目录树行一致的紧凑文件类型标签。
   const iconLabel = workspaceFilePreviewIconLabel(props.preview);
@@ -176,7 +181,7 @@ function WorkspaceFilePreviewHeader(props: {
         {iconLabel}
       </span>
       <span className="workspace-file-preview-title-text">{props.preview.relativePath}</span>
-      {props.preview.truncated ? <small>已截断</small> : null}
+      {props.preview.truncated ? <small>{t("workspaceFilePreview.truncated")}</small> : null}
     </button>
   );
 }
@@ -334,6 +339,9 @@ export function workspaceFilePreviewErrorMessage(
   // File entry that was being previewed.
   // 正在预览的文件条目。
   entry: WorkspaceFileEntrySummary,
+  // Translation helper for user-facing preview errors.
+  // 用户可见预览错误的翻译辅助函数。
+  t: (key: TranslationKey) => string,
 ): string {
   // message stores the raw backend or runtime error text.
   // message 保存后端或运行时返回的原始错误文本。
@@ -348,7 +356,7 @@ export function workspaceFilePreviewErrorMessage(
     || normalizedMessage.includes("not found")
     || normalizedMessage.includes("cannot find")
   ) {
-    return `文件已被删除或移动，无法预览：${entry.relativePath || entry.path}`;
+    return t("workspaceFilePreview.missingError").replace("{path}", entry.relativePath || entry.path);
   }
   return message;
 }

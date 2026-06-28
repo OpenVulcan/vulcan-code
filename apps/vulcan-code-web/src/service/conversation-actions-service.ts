@@ -81,7 +81,7 @@ export async function stopCommandSession(commandSessionId: string, ownerSessionI
   if (!hasServiceRuntime()) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.commandSessions = snapshot.commandSessions.map((session) => session.id === commandSessionId
-        ? { ...session, ownerSessionId: ownerSessionId ?? session.ownerSessionId ?? null, status: "stopped", preview: "浏览器预览已标记停止。" }
+        ? { ...session, ownerSessionId: ownerSessionId ?? session.ownerSessionId ?? null, status: "stopped", preview: "Browser preview marked this session as stopped." }
         : session);
     });
   }
@@ -475,7 +475,7 @@ export async function stageComposerAttachmentBytes(
   file: File,
 ): Promise<ComposerAttachmentSummary | null> {
   if (!hasServiceRuntime()) {
-    throw new Error("浏览器服务不可用，无法暂存附件。");
+    throw new Error("Browser service is unavailable, so the attachment cannot be staged.");
   }
   const dataBase64 = await fileToBase64(file);
   return serviceClient.request<ComposerAttachmentSummary>("service_stage_composer_attachment_bytes", {

@@ -29,7 +29,7 @@ import type {
   WorkspaceDiffSearchResponse,
   WorkspaceDiffSnapshotResponse,
 } from "@/diff/types";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
   ConversationMessage,
@@ -313,7 +313,7 @@ export function WorkspaceReviewPanelHost(props: {
   // handleRefreshWorkspaceDiff 通过本地服务刷新当前项目 Git diff。
   const handleRefreshWorkspaceDiff = React.useCallback(async (selectionOverride?: DiffReviewSelection) => {
     if (!workspacePath) {
-      setWorkspaceReviewError("当前会话没有关联项目路径，无法刷新 Git diff。");
+      setWorkspaceReviewError(t("workspaceReview.noProjectPathForRefresh"));
       return;
     }
     const requestSelection = selectionOverride ?? diffReviewSelection;
@@ -343,7 +343,7 @@ export function WorkspaceReviewPanelHost(props: {
       }
       const message = error instanceof Error ? error.message : String(error);
       setWorkspaceReviewError(message);
-      toast.error(`刷新 Git diff 失败：${message}`);
+      toast.error(formatWorkspaceReviewTranslation(t, "workspaceReview.refreshGitDiffFailed", { error: message }));
     } finally {
       if (workspaceReviewRequestSeqRef.current === requestSeq) {
         setWorkspaceReviewLoading(false);
@@ -354,6 +354,7 @@ export function WorkspaceReviewPanelHost(props: {
     diffReviewSelection,
     props.loadWorkspaceDiffSnapshot,
     props.onWorkspaceDiffSnapshotLoaded,
+    t,
     workspacePath,
     workspaceProjectId,
   ]);
@@ -389,8 +390,8 @@ export function WorkspaceReviewPanelHost(props: {
       ? workspaceDiffSnapshotWithFileLoadState(previous, file.key, {
         status: "loading",
         message: contextLines
-          ? diffHunkExpansionLoadingMessage(expansion)
-          : "正在加载文件 diff 详情。",
+          ? diffHunkExpansionLoadingMessage(expansion, t)
+          : t("workspaceReview.fileDetailLoading"),
       })
       : previous);
     try {
@@ -420,15 +421,23 @@ export function WorkspaceReviewPanelHost(props: {
         return diffSnapshotWithWorkspaceDetailFile(previous, detailFile, file) ?? previous;
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       const timedOut = isWorkspaceDiffFileDetailTimeout(error);
+      const message = timedOut
+        ? formatWorkspaceReviewTranslation(t, "workspaceReview.fileDetailTimeoutError", {
+          seconds: String(Math.round(WORKSPACE_DIFF_FILE_DETAIL_TIMEOUT_MS / 1000)),
+        })
+        : error instanceof Error ? error.message : String(error);
       setWorkspaceReviewSnapshot((previous) => previous
         ? workspaceDiffSnapshotWithFileLoadState(previous, file.key, {
           status: timedOut ? "timed-out" : "failed",
           message,
         })
         : previous);
-      toast.error(timedOut ? `加载文件 diff 详情超时：${message}` : `加载文件 diff 详情失败：${message}`);
+      toast.error(formatWorkspaceReviewTranslation(
+        t,
+        timedOut ? "workspaceReview.fileDetailTimeout" : "workspaceReview.fileDetailFailed",
+        { error: message },
+      ));
     } finally {
       workspaceDetailPendingRef.current.delete(detailKey);
     }
@@ -438,6 +447,7 @@ export function WorkspaceReviewPanelHost(props: {
     diffReviewSelection,
     diffReviewSelectionKey,
     props.loadWorkspaceDiffFileDetail,
+    t,
     workspacePath,
     workspaceProjectId,
   ]);
@@ -474,7 +484,7 @@ export function WorkspaceReviewPanelHost(props: {
       return;
     }
     if (!workspacePath) {
-      toast.error("当前会话没有关联项目路径，无法执行 Git 操作。");
+      toast.error(t("workspaceReview.noProjectPathForGit"));
       return;
     }
     const files = file ? [{
@@ -499,7 +509,7 @@ export function WorkspaceReviewPanelHost(props: {
       await handleRefreshWorkspaceDiff(diffReviewSelection);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Git 操作失败：${message}`);
+      toast.error(formatWorkspaceReviewTranslation(t, "workspaceReview.gitOperationFailed", { error: message }));
     } finally {
       setWorkspaceGitActionPending(false);
     }
@@ -669,16 +679,19 @@ function parseConversationDiffSourceAsync(source: WorkspaceReviewConversationDif
 
 // diffHunkExpansionLoadingMessage formats the pending text for targeted hunk expansion.
 // diffHunkExpansionLoadingMessage 格式化定向 hunk 展开的等待文案。
-function diffHunkExpansionLoadingMessage(expansion: DiffHunkExpansionRequest | undefined): string {
+function diffHunkExpansionLoadingMessage(expansion: DiffHunkExpansionRequest | undefined, t: (key: TranslationKey) => string): string {
   if (!expansion) {
-    return "正在展开 hunk 上下文。";
+    return t("workspaceReview.hunkExpanding");
   }
   const directionLabel = expansion.direction === "up"
-    ? "向上"
+    ? t("workspaceReview.hunkDirectionUp")
     : expansion.direction === "down"
-      ? "向下"
-      : "双向";
-  return `正在${directionLabel}展开 hunk ${expansion.hunkIndex + 1} 上下文。`;
+      ? t("workspaceReview.hunkDirectionDown")
+      : t("workspaceReview.hunkDirectionBoth");
+  return formatWorkspaceReviewTranslation(t, "workspaceReview.hunkExpandingSpecific", {
+    direction: directionLabel,
+    index: String(expansion.hunkIndex + 1),
+  });
 }
 
 // workspaceDiffFileDetailWithTimeout applies the target-compatible lazy detail timeout.
@@ -692,7 +705,7 @@ function workspaceDiffFileDetailWithTimeout(
   const timeoutPromise = new Promise<WorkspaceDiffFileDetailResponse>((_, reject) => {
     timeoutId = globalThis.setTimeout(() => {
       controller.abort();
-      const error = new Error(`单文件 diff 详情加载超过 ${Math.round(timeoutMs / 1000)} 秒。`);
+      const error = new Error("WorkspaceDiffFileDetailTimeout");
       error.name = "WorkspaceDiffFileDetailTimeout";
       reject(error);
     }, timeoutMs);
@@ -731,4 +744,17 @@ function workspaceDiffSnapshotWithFileLoadState(
     ...snapshot,
     files,
   };
+}
+
+// formatWorkspaceReviewTranslation replaces named placeholders in localized review messages.
+// formatWorkspaceReviewTranslation 替换审核面板本地化消息中的具名占位符。
+function formatWorkspaceReviewTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }

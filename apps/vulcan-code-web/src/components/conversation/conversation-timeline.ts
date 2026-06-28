@@ -5,6 +5,7 @@ import type {
 } from "@/components/conversation/conversation-model";
 import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
 import { metadataValue } from "@/components/conversation/conversation-metadata";
+import type { LocaleCode } from "@/i18n";
 
 // projectConversationTimelineItems groups each user turn into a visible processing shell.
 // projectConversationTimelineItems 将每个用户轮次分组成可见处理过程外壳。
@@ -301,7 +302,7 @@ export function formatShortConversationTimestamp(message?: ConversationMessage):
 
 // formatWorkProcessDuration formats elapsed duration for the process header.
 // formatWorkProcessDuration 格式化过程标题使用的处理耗时。
-export function formatWorkProcessDuration(durationMs: number | null): string {
+export function formatWorkProcessDuration(durationMs: number | null, locale: LocaleCode = "en-US"): string {
   if (durationMs === null || !Number.isFinite(durationMs)) {
     return "";
   }
@@ -309,6 +310,15 @@ export function formatWorkProcessDuration(durationMs: number | null): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
+  if (locale !== "zh-CN") {
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  }
   if (hours > 0) {
     return `${hours}小时${minutes}分钟${seconds}秒`;
   }

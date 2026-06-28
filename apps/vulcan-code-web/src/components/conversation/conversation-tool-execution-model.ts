@@ -1,5 +1,6 @@
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import type { ConversationDetailRef } from "@/components/conversation/conversation-detail";
+import type { TranslationKey } from "@/i18n-messages";
 import type {
   ToolExecutionConversationBlock,
   ToolExecutionConversationBlockKind,
@@ -7,10 +8,10 @@ import type {
 
 // buildToolExecutionDetailBody builds the expensive modal body only when the user opens details.
 // buildToolExecutionDetailBody 仅在用户打开详情时构建成本较高的弹窗正文。
-export function buildToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[]): string {
+export function buildToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
   return blocks
     .map((block) => {
-      const sections = [`## ${toolBlockTitle(block.kind, block.toolName)}`];
+      const sections = [`## ${toolBlockTitle(block.kind, block.toolName, t)}`];
       const argumentsValue = metadataValue(block.rawMetadata, ["arguments"]);
       if (argumentsValue !== undefined) {
         sections.push(`### Arguments\n\n\`\`\`json\n${JSON.stringify(argumentsValue, null, 2)}\n\`\`\``);
@@ -36,23 +37,23 @@ export function buildToolExecutionDetailBody(blocks: ToolExecutionConversationBl
 
 // toolExecutionSummary builds the compact transcript row summary for one tool execution.
 // toolExecutionSummary 为单次工具执行构建紧凑转录行摘要。
-export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], sessionRunning: boolean): string {
+export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], sessionRunning: boolean, t?: (key: TranslationKey) => string): string {
   const commandBlock = blocks.find((block) => block.kind === "command");
   const toolName = toolExecutionName(blocks);
   const displayState = toolExecutionDisplayState(blocks, sessionRunning);
-  const statusLabel = toolDisplayStateLabel(displayState);
+  const statusLabel = toolDisplayStateLabel(displayState, t);
   const identifier = toolExecutionIdentifier(blocks);
   const errorPreview = displayState === "failed" ? toolExecutionErrorPreview(blocks) : null;
   if (commandBlock && !toolName) {
-    return commandBlock.summary.includes("命令")
+    return commandBlock.summary.toLowerCase().includes("command")
       ? commandBlock.summary
-      : "已运行 1 条命令";
+      : `${t ? t("conversation.block.command") : "Command session"} · ${statusLabel}`;
   }
 
   if (toolName) {
-    return `调用 ${toolName} 工具 · ${statusLabel}${errorPreview ? ` · ${errorPreview}` : ""}`;
+    return `${t ? t("conversation.block.toolCall") : "Tool call"} · ${toolName} · ${statusLabel}${errorPreview ? ` · ${errorPreview}` : ""}`;
   }
-  return `工具执行 · ${statusLabel}${identifier ? ` · ${identifier}` : ""}${errorPreview ? ` · ${errorPreview}` : ""}`;
+  return `${t ? t("conversation.block.toolCall") : "Tool execution"} · ${statusLabel}${identifier ? ` · ${identifier}` : ""}${errorPreview ? ` · ${errorPreview}` : ""}`;
 }
 
 // toolExecutionName resolves the best human-visible tool name across merged call and result blocks.
@@ -205,11 +206,11 @@ export function toolExecutionMediaAttachments(blocks: ToolExecutionConversationB
 
 // toolDisplayStateLabel returns the localized label used inside compact tool rows.
 // toolDisplayStateLabel 返回紧凑工具行中使用的本地化状态文案。
-export function toolDisplayStateLabel(status: "failed" | "completed" | "running" | string): string {
-  if (status === "failed") return "失败";
-  if (status === "completed") return "已完成";
-  if (status === "stopped") return "已停止";
-  return "进行中";
+export function toolDisplayStateLabel(status: "failed" | "completed" | "running" | string, t?: (key: TranslationKey) => string): string {
+  if (status === "failed") return t ? t("toolPresentation.command.failed") : "Failed";
+  if (status === "completed") return t ? t("toolPresentation.command.completed") : "Completed";
+  if (status === "stopped") return t ? t("toolPresentation.command.stopped") : "Stopped";
+  return t ? t("toolPresentation.command.running") : "Running";
 }
 
 // conversationDetailRefCacheKey builds a stable cache key for one hidden tool detail reference.
@@ -264,14 +265,14 @@ function taskSessionExecutionDisplayState(blocks: ToolExecutionConversationBlock
 
 // toolBlockTitle returns a localized title for one semantic transcript block.
 // toolBlockTitle 返回单个语义转录块的本地化标题。
-function toolBlockTitle(kind: ToolExecutionConversationBlockKind, toolName?: string): string {
-  if (kind === "tool-call") return toolName ? `工具调用 · ${toolName}` : "工具调用";
-  if (kind === "tool-result") return toolName ? `工具返回 · ${toolName}` : "工具返回";
-  if (kind === "command") return "命令会话";
+function toolBlockTitle(kind: ToolExecutionConversationBlockKind, toolName?: string, t?: (key: TranslationKey) => string): string {
+  if (kind === "tool-call") return toolName ? `${t ? t("conversation.block.toolCall") : "Tool call"} · ${toolName}` : t ? t("conversation.block.toolCall") : "Tool call";
+  if (kind === "tool-result") return toolName ? `${t ? t("conversation.block.toolResult") : "Tool result"} · ${toolName}` : t ? t("conversation.block.toolResult") : "Tool result";
+  if (kind === "command") return t ? t("conversation.block.command") : "Command session";
   if (kind === "diff") return "Git Diff";
-  if (kind === "thinking") return "思考过程";
+  if (kind === "thinking") return t ? t("conversation.block.thinking") : "Thinking process";
   if (kind === "turn-stats") return "Turn Stats";
-  if (kind === "notice") return "运行提示";
+  if (kind === "notice") return t ? t("conversation.block.notice") : "Run notice";
   return "Markdown";
 }
 
@@ -343,12 +344,12 @@ function normalizeToolDisplayState(status?: string | null): string | undefined {
 // compactTextPreview 返回用于卡片与弹窗标题区的单行短预览。
 function compactTextPreview(source: string): string {
   const text = source
-    .replace(/```[\s\S]*?```/g, "代码块")
+    .replace(/```[\s\S]*?```/g, "code block")
     .replace(/[#>*_`|~-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (!text) {
-    return "无正文内容";
+    return "No body content";
   }
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
 }

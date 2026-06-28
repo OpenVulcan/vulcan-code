@@ -2,7 +2,7 @@ import React from "react";
 import type { SkillActionProps } from "@/components/features/skills/SkillsArea";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
-import { projectAgentSkillSaveMessage, type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
+import { type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
 import type { ProjectMenuAction } from "@/components/project/ProjectSidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type { AgentSkillsCatalogSummary, ProjectSummary, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
@@ -30,6 +30,7 @@ import {
 } from "@/service/skills-actions-service";
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
 import { applyPreviewProjectAction, applyPreviewProjectIcon, applyPreviewProjectOrder } from "@/state/workbench-preview-actions";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { toast } from "sonner";
 
 // WorkbenchProjectActionsOptions groups state and service bridges used by project-side workbench actions.
@@ -85,6 +86,9 @@ interface WorkbenchProjectActionsOptions {
 // useWorkbenchProjectActions owns project, project-settings, icon, order, and skill action callbacks.
 // useWorkbenchProjectActions 持有项目、项目设置、图标、排序与技能动作回调。
 export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptions) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const {
     workbenchState,
     setWorkbenchState,
@@ -124,7 +128,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     try {
       if (action === "open-directory") {
         const message = await openProjectDirectory(project.id);
-        toast.success(message ?? `已请求打开项目目录：${project.name}`);
+        toast.success(message ?? formatProjectActionTranslation(t, "projectActions.openRequested", { project: project.name }));
         return;
       }
 
@@ -156,26 +160,30 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       const preview = applyPreviewProjectAction(workbenchState, project.id, action);
       applyProjectActionSnapshot(preview.snapshot);
       await toggleProjectPinned(project.id);
-      toast.success(project.pinned ? `已取消置顶项目：${project.name}` : `已置顶项目：${project.name}`);
+      toast.success(formatProjectActionTranslation(
+        t,
+        project.pinned ? "projectActions.unpinned" : "projectActions.pinned",
+        { project: project.name },
+      ));
     } catch (nextError) {
       applyProjectActionSnapshot(workbenchState);
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [applyProjectActionSnapshot, workbenchState]);
+  }, [applyProjectActionSnapshot, t, workbenchState]);
 
   // handleProjectSettingsVmmSave persists the project-scoped VMM settings draft.
   // handleProjectSettingsVmmSave 持久化项目级 VMM 设置草稿。
   const handleProjectSettingsVmmSave = React.useCallback(async (projectId: string, draft: VmmConfigDraftSummary) => {
     await applySkillWorkbenchAction(() => saveVmmMemoryConfig({ scope: "project", projectId, draft }));
-    toast.success("已保存项目 VMM 设置。");
-  }, [applySkillWorkbenchAction]);
+    toast.success(t("projectActions.vmmSaved"));
+  }, [applySkillWorkbenchAction, t]);
 
   // handleProjectSettingsAgentSkillSave persists one project Agent Skill override.
   // handleProjectSettingsAgentSkillSave 持久化单个项目 Agent Skill 覆盖。
   const handleProjectSettingsAgentSkillSave = React.useCallback(async (projectId: string, name: string, stateKey: ProjectAgentSkillState) => {
     await setAgentSkillProjectState(projectId, name, stateKey);
-    toast.success(projectAgentSkillSaveMessage(name, stateKey));
-  }, []);
+    toast.success(projectAgentSkillSaveMessage(name, stateKey, t));
+  }, [t]);
 
   // handleSetAgentSkillsEnabled persists the global Agent Skills switch with a lightweight catalog refresh.
   // handleSetAgentSkillsEnabled 使用轻量目录刷新持久化 Agent Skills 全局开关。
@@ -236,12 +244,12 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot);
       await setProjectIcon(project.id, normalizedIcon);
       setProjectIconTarget(null);
-      toast.success(`已更新项目图标：${project.name}`);
+      toast.success(formatProjectActionTranslation(t, "projectActions.iconUpdated", { project: project.name }));
     } catch (error) {
       applyProjectActionSnapshot(workbenchState);
       toast.error(error instanceof Error ? error.message : String(error));
     }
-  }, [applyProjectActionSnapshot, workbenchState]);
+  }, [applyProjectActionSnapshot, t, workbenchState]);
 
   // handleProjectIconReset clears the selected project icon override.
   // handleProjectIconReset 清除选择的项目图标覆盖。
@@ -250,12 +258,12 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot);
       await resetProjectIcon(project.id);
       setProjectIconTarget(null);
-      toast.success(`已还原项目图标：${project.name}`);
+      toast.success(formatProjectActionTranslation(t, "projectActions.iconReset", { project: project.name }));
     } catch (error) {
       applyProjectActionSnapshot(workbenchState);
       toast.error(error instanceof Error ? error.message : String(error));
     }
-  }, [applyProjectActionSnapshot, workbenchState]);
+  }, [applyProjectActionSnapshot, t, workbenchState]);
 
   // handleCreateConversation creates and selects a new empty conversation for a project.
   // handleCreateConversation 为项目创建并选中一个新的空白会话。
@@ -281,8 +289,8 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   const handleConfirmProjectFolder = React.useCallback(async (path: string) => {
     const snapshot = await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
     applyProjectActionSnapshot(snapshot);
-    toast.success("项目列表已更新。");
-  }, [applyProjectActionSnapshot]);
+    toast.success(t("projectActions.listUpdated"));
+  }, [applyProjectActionSnapshot, t]);
 
   // handleReorderProjects persists a same-section project order using the existing order model.
   // handleReorderProjects 使用现有顺序模型持久化同一分区内的项目排序。
@@ -331,4 +339,40 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     handleReorderProjects,
     handleExpandedProjectIdsChange,
   };
+}
+
+// projectAgentSkillSaveMessage returns the localized toast message for one project skill override.
+// projectAgentSkillSaveMessage 返回单个项目技能覆盖保存后的本地化提示消息。
+function projectAgentSkillSaveMessage(
+  // Agent Skill display name.
+  // Agent Skill 展示名称。
+  name: string,
+  // Saved project override state.
+  // 已保存的项目覆盖状态。
+  stateKey: ProjectAgentSkillState,
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: (key: TranslationKey) => string,
+): string {
+  if (stateKey === "inherit") {
+    return formatProjectActionTranslation(t, "projectActions.skillInherited", { skill: name });
+  }
+  return formatProjectActionTranslation(
+    t,
+    stateKey === "enabled" ? "projectActions.skillEnabled" : "projectActions.skillDisabled",
+    { skill: name },
+  );
+}
+
+// formatProjectActionTranslation replaces named placeholders in localized project action messages.
+// formatProjectActionTranslation 替换项目动作本地化消息中的具名占位符。
+function formatProjectActionTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }

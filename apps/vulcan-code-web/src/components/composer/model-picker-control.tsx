@@ -9,6 +9,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ProviderSummary } from "@/types";
 
@@ -60,6 +61,9 @@ export function ModelPickerControl(props: {
   // 可选信号，用于从外部 slash 指令路由打开筛选器。
   openSignal?: number;
 }) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState("");
   const choices = React.useMemo(() => modelPickerChoicesFromProviders(props.providers), [props.providers]);
@@ -105,9 +109,9 @@ export function ModelPickerControl(props: {
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent className="composer-control-tooltip" side="top">
-          <strong>点击选择模型</strong>
-          <span>当前模型：{selectedChoice?.modelName ?? props.fallbackLabel}</span>
-          <span>当前供应商：{selectedChoice?.providerName ?? "-"}</span>
+          <strong>{t("composer.modelPicker.tooltipTitle")}</strong>
+          <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentModel", { model: selectedChoice?.modelName ?? props.fallbackLabel })}</span>
+          <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentProvider", { provider: selectedChoice?.providerName ?? "-" })}</span>
         </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="start" className="model-picker-content" sideOffset={8}>
@@ -154,6 +158,19 @@ export function ModelPickerControl(props: {
         </ScrollArea>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// formatModelPickerTranslation replaces simple named placeholders in localized model picker templates.
+// formatModelPickerTranslation 替换模型选择器本地化模板中的简单具名占位符。
+function formatModelPickerTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
   );
 }
 
