@@ -1,3 +1,5 @@
+import type { RtkGainStatsResponse } from "@/types"
+
 // ProviderConfigurationSaveRequest describes one provider configuration submission.
 // ProviderConfigurationSaveRequest 描述单次 Provider 配置提交。
 export interface ProviderConfigurationSaveRequest {
@@ -67,6 +69,9 @@ export interface GitCommitSettingsSaveRequest {
   // User-authored extra prompt appended to commit-message generation.
   // 追加到提交信息生成中的用户额外提示词。
   summaryExtraPrompt: string
+  // Whether commit-message generation should prefer RTK-compressed Git input.
+  // 提交信息生成是否优先使用 RTK 压缩后的 Git 输入。
+  useRtkSummary: boolean
 }
 
 // RtkRoutingSettingsSaveRequest describes one RTK routing settings submission.
@@ -254,6 +259,9 @@ export interface SettingsActionProps {
   // Saves RTK routing settings.
   // 保存 RTK 路由设置。
   onSaveRtkRoutingSettings: (request: RtkRoutingSettingsSaveRequest) => Promise<void>
+  // Loads RTK gain statistics for the settings page.
+  // 加载设置页使用的 RTK gain 统计。
+  onGetRtkGainStats: () => Promise<RtkGainStatsResponse | null>
   // Saves one shared AI capability vendor.
   // 保存单个共享 AI 能力供应商。
   onSaveAiCapabilityVendor: (request: AiCapabilityVendorSaveRequest) => Promise<void>

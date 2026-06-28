@@ -424,6 +424,7 @@ pub(super) async fn dispatch_service_rpc(
             service_save_rtk_routing_settings(app, state, rpc_required_param(&params, "request")?)
                 .await,
         ),
+        "service_get_rtk_gain_stats" => rpc_json_result(service_get_rtk_gain_stats().await),
         "service_generate_git_commit_message" => rpc_json_result(
             service_generate_git_commit_message(state, rpc_required_param(&params, "request")?)
                 .await,

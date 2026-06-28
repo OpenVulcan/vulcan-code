@@ -177,6 +177,9 @@ export interface GitCommitSettingsSummary {
   // User-authored extra prompt appended to commit-message generation.
   // 追加到提交信息生成中的用户额外提示词。
   summaryExtraPrompt: string;
+  // Whether commit-message generation should prefer RTK-compressed Git input.
+  // 提交信息生成是否优先使用 RTK 压缩后的 Git 输入。
+  useRtkSummary: boolean;
 }
 
 // GitCommitSummaryModelSelectionSummary describes the automatic commit-summary model setting.

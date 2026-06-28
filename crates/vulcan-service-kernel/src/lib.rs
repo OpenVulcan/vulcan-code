@@ -252,7 +252,9 @@ use git::{
     service_save_git_commit_settings,
 };
 use git_diff_services::*;
-use host_tools_settings::{host_tools_settings, service_save_rtk_routing_settings};
+use host_tools_settings::{
+    host_tools_settings, service_get_rtk_gain_stats, service_save_rtk_routing_settings,
+};
 use mcp_settings::*;
 use pending_prompt_services::{
     service_edit_pending_prompt, service_remove_pending_prompt, service_reorder_pending_prompts,

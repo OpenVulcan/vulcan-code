@@ -1,7 +1,11 @@
 //! Git commit-message generation service logic.
 //! Git 提交信息生成服务逻辑。
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+    sync::Arc,
+};
 
 use futures_util::StreamExt;
 use vulcan_agent_runtime::{
@@ -10,6 +14,7 @@ use vulcan_agent_runtime::{
     stream_runtime_run_with_intervention,
 };
 use vulcan_context::estimate_mixed_language_text_tokens;
+use vulcan_runtime_assets::resolve_bundled_rtk_executable_path;
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, SessionNodeId};
 use vulcan_workbench_model::SessionId;
 
@@ -36,7 +41,15 @@ pub(crate) async fn service_generate_git_commit_message(
         .map_err(|error| format!("会话标识无效，无法生成提交信息：{error}"))?;
     let repository_root =
         resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
-    let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt) = {
+    let (
+        agent_runtime,
+        provider_id,
+        model_id,
+        reasoning_effort,
+        extra_prompt,
+        use_rtk_summary,
+        rtk_telemetry_disabled,
+    ) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -71,6 +84,11 @@ pub(crate) async fn service_generate_git_commit_message(
             .summary_extra_prompt
             .trim()
             .to_string();
+        let use_rtk_summary = summary_provider_configuration.git_commit.use_rtk_summary;
+        let rtk_telemetry_disabled = summary_provider_configuration
+            .host_tools
+            .rtk
+            .telemetry_disabled;
         agent_runtime.provider_configuration = summary_provider_configuration;
         (
             agent_runtime,
@@ -78,6 +96,8 @@ pub(crate) async fn service_generate_git_commit_message(
             model_id,
             reasoning_effort,
             extra_prompt,
+            use_rtk_summary,
+            rtk_telemetry_disabled,
         )
     };
     let summary_input = build_git_commit_summary_input(
@@ -85,6 +105,8 @@ pub(crate) async fn service_generate_git_commit_message(
         request.include_unstaged,
         &model_id,
         agent_runtime.token_budget_runtime.estimator(),
+        use_rtk_summary,
+        rtk_telemetry_disabled,
     )?;
     let prompt = build_git_commit_summary_prompt(&summary_input, &extra_prompt);
     let estimated_input_tokens = estimate_git_commit_prompt_tokens(
@@ -128,7 +150,26 @@ fn build_git_commit_summary_input(
     include_unstaged: bool,
     model_id: &str,
     estimator: Option<&dyn vulcan_context::ContextTokenEstimator>,
+    use_rtk_summary: bool,
+    rtk_telemetry_disabled: bool,
 ) -> Result<GitCommitSummaryInput, String> {
+    if use_rtk_summary {
+        if let Some(rtk_content) = build_git_commit_summary_rtk_input(
+            repository_root,
+            include_unstaged,
+            rtk_telemetry_disabled,
+        ) {
+            let token_estimate =
+                estimate_git_commit_prompt_tokens(model_id, &rtk_content, estimator);
+            if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
+                return Ok(GitCommitSummaryInput {
+                    content: rtk_content,
+                    truncated: false,
+                });
+            }
+        }
+    }
+
     let mut notices = Vec::new();
     let mut sections = Vec::new();
     let staged_diff = load_webui_staged_git_diff(repository_root)?;
@@ -163,6 +204,115 @@ fn build_git_commit_summary_input(
         content: build_git_commit_summary_metadata_input(repository_root, include_unstaged)?,
         truncated: true,
     })
+}
+
+/// Builds RTK-compressed Git change input for commit-message generation.
+/// 构建用于提交信息生成的 RTK 压缩 Git 变更输入。
+fn build_git_commit_summary_rtk_input(
+    repository_root: &Path,
+    include_unstaged: bool,
+    telemetry_disabled: bool,
+) -> Option<String> {
+    let rtk_path = resolve_bundled_rtk_executable_path()?;
+    let status = load_rtk_git_commit_summary_command_section(
+        repository_root,
+        &rtk_path,
+        "Status (RTK)",
+        &["git", "status", "--short", "--branch"],
+        telemetry_disabled,
+    )?;
+    let staged = load_rtk_git_commit_summary_command_section(
+        repository_root,
+        &rtk_path,
+        "Staged changes (RTK compressed)",
+        &["git", "diff", "--cached", "--no-color"],
+        telemetry_disabled,
+    )?;
+    let mut change_sections = Vec::new();
+    if !rtk_section_body_is_empty(&staged) {
+        change_sections.push(staged);
+    }
+    if include_unstaged {
+        let unstaged = load_rtk_git_commit_summary_command_section(
+            repository_root,
+            &rtk_path,
+            "Unstaged tracked changes (RTK compressed)",
+            &["git", "diff", "--no-color"],
+            telemetry_disabled,
+        )?;
+        if !rtk_section_body_is_empty(&unstaged) {
+            change_sections.push(unstaged);
+        }
+        let mut notices = Vec::new();
+        let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices).ok()?;
+        if !untracked_diff.trim().is_empty() {
+            change_sections.push(format!("## Untracked files\n\n{untracked_diff}"));
+        }
+        if !notices.is_empty() {
+            change_sections.insert(0, format!("## Notices\n\n{}", notices.join("\n")));
+        }
+    }
+    if change_sections.is_empty() {
+        return None;
+    }
+
+    let mut sections = vec![
+        String::from(
+            "## RTK input note\n\nThe Git change data below was compressed through RTK when available. Use it as the source of truth for the commit message.",
+        ),
+        status,
+    ];
+    sections.extend(change_sections);
+    Some(sections.join("\n\n"))
+}
+
+/// Runs one RTK Git command and formats its output as a prompt section.
+/// 执行单条 RTK Git 命令并将输出格式化为提示词片段。
+fn load_rtk_git_commit_summary_command_section(
+    repository_root: &Path,
+    rtk_path: &Path,
+    title: &str,
+    args: &[&str],
+    telemetry_disabled: bool,
+) -> Option<String> {
+    let mut command = Command::new(rtk_path);
+    command
+        .args(args)
+        .current_dir(repository_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if telemetry_disabled {
+        command.env("RTK_TELEMETRY_DISABLED", "1");
+    }
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let cleaned = clean_rtk_git_commit_summary_output(&stdout);
+    let body = if cleaned.trim().is_empty() {
+        "(none)".to_string()
+    } else {
+        cleaned.trim().to_string()
+    };
+    Some(format!("## {title}\n\n```text\n{body}\n```"))
+}
+
+/// Removes RTK runtime warning lines from Git summary output.
+/// 从 Git 总结输出中移除 RTK 运行时警告行。
+fn clean_rtk_git_commit_summary_output(stdout: &str) -> String {
+    stdout
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("[rtk]"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Returns whether one formatted RTK section contains no useful command output.
+/// 返回单个格式化 RTK 区块是否不包含有效命令输出。
+fn rtk_section_body_is_empty(section: &str) -> bool {
+    section.contains("\n(none)\n")
 }
 
 /// Builds a compact change-metadata fallback when the full diff is too large.
@@ -338,4 +488,17 @@ fn clean_generated_git_commit_message(message: &str) -> String {
         .trim_end_matches("```")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies RTK runtime warnings are removed before commit-summary prompts are built.
+    /// 验证构建提交总结提示词前会移除 RTK 运行时警告。
+    #[test]
+    fn cleans_rtk_warning_lines_from_commit_summary_output() {
+        let output = "[rtk] /!\\ No hook installed — run `rtk init -g`\n M src/lib.rs\n";
+        assert_eq!(clean_rtk_git_commit_summary_output(output), " M src/lib.rs");
+    }
 }

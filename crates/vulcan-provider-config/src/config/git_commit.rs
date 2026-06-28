@@ -8,6 +8,10 @@ pub const DEFAULT_GIT_COMMIT_NEW_BRANCH_PREFIX: &str = "vulcan/";
 /// 默认提交总结提示词偏好。
 const DEFAULT_GIT_COMMIT_SUMMARY_EXTRA_PROMPT: &str = "";
 
+/// Default RTK usage for commit-message summary input.
+/// 提交信息总结输入默认使用 RTK。
+const DEFAULT_GIT_COMMIT_USE_RTK_SUMMARY: bool = true;
+
 /// Returns the default Git commit new-branch namespace prefix.
 /// 返回 Git 提交新分支命名空间的默认前缀。
 pub(super) fn default_git_commit_new_branch_prefix() -> String {
@@ -38,6 +42,18 @@ pub fn normalize_git_commit_new_branch_prefix(value: &str) -> String {
 /// 返回单个提交总结提示词偏好是否为空。
 pub(super) fn git_commit_summary_extra_prompt_is_empty(value: &str) -> bool {
     value.trim().is_empty()
+}
+
+/// Returns the default RTK usage state for commit-message summary input.
+/// 返回提交信息总结输入默认 RTK 使用状态。
+pub(super) const fn default_git_commit_use_rtk_summary() -> bool {
+    DEFAULT_GIT_COMMIT_USE_RTK_SUMMARY
+}
+
+/// Returns whether commit-message summary RTK usage is still the default value.
+/// 返回提交信息总结 RTK 使用状态是否仍为默认值。
+pub(super) const fn git_commit_use_rtk_summary_is_default(value: &bool) -> bool {
+    *value == DEFAULT_GIT_COMMIT_USE_RTK_SUMMARY
 }
 
 /// Selects which model should generate Git commit summaries.
@@ -129,6 +145,13 @@ pub struct PersistedGitCommitConfiguration {
         skip_serializing_if = "git_commit_summary_extra_prompt_is_empty"
     )]
     pub summary_extra_prompt: String,
+    /// Whether commit-message generation should prefer RTK-compressed Git input.
+    /// 提交信息生成是否优先使用 RTK 压缩后的 Git 输入。
+    #[serde(
+        default = "default_git_commit_use_rtk_summary",
+        skip_serializing_if = "git_commit_use_rtk_summary_is_default"
+    )]
+    pub use_rtk_summary: bool,
 }
 
 impl Default for PersistedGitCommitConfiguration {
@@ -139,6 +162,7 @@ impl Default for PersistedGitCommitConfiguration {
             new_branch_prefix: default_git_commit_new_branch_prefix(),
             summary_model: GitCommitSummaryModelSelection::default(),
             summary_extra_prompt: String::from(DEFAULT_GIT_COMMIT_SUMMARY_EXTRA_PROMPT),
+            use_rtk_summary: DEFAULT_GIT_COMMIT_USE_RTK_SUMMARY,
         }
     }
 }

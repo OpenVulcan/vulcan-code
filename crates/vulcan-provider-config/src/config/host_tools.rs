@@ -7,10 +7,7 @@ use super::*;
 pub struct PersistedHostToolsConfiguration {
     /// RTK command-routing configuration.
     /// RTK 命令路由配置。
-    #[serde(
-        default,
-        skip_serializing_if = "PersistedRtkToolConfiguration::is_default"
-    )]
+    #[serde(default)]
     pub rtk: PersistedRtkToolConfiguration,
 }
 
@@ -67,18 +64,15 @@ pub struct PersistedRtkToolConfiguration {
     pub enabled: bool,
     /// Routing mode used after `rtk rewrite` returns one candidate command.
     /// `rtk rewrite` 返回候选命令后使用的路由模式。
-    #[serde(default, skip_serializing_if = "PersistedRtkRouteMode::is_selected")]
+    #[serde(default)]
     pub route_mode: PersistedRtkRouteMode,
     /// Explicitly enabled RTK route names used by selected mode.
     /// 精选模式下显式启用的 RTK 路由名称集合。
-    #[serde(
-        default = "default_rtk_enabled_routes",
-        skip_serializing_if = "is_default_rtk_enabled_routes"
-    )]
+    #[serde(default = "default_rtk_enabled_routes")]
     pub enabled_routes: BTreeSet<String>,
     /// Explicitly disabled RTK route names applied after allow-mode resolution.
     /// 在允许模式解析后应用的显式禁用 RTK 路由名称集合。
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default)]
     pub disabled_routes: BTreeSet<String>,
     /// Whether RTK telemetry should be disabled for host-routed invocations.
     /// 宿主路由调用中是否禁用 RTK 遥测。
@@ -138,10 +132,4 @@ fn default_rtk_enabled_routes() -> BTreeSet<String> {
     .into_iter()
     .map(String::from)
     .collect()
-}
-
-/// Returns whether one route set matches the default selected RTK routes.
-/// 返回某个路由集合是否匹配默认精选 RTK 路由。
-fn is_default_rtk_enabled_routes(routes: &BTreeSet<String>) -> bool {
-    routes == &default_rtk_enabled_routes()
 }

@@ -61,6 +61,134 @@ export interface RtkRoutingSettingsSummary {
   telemetryDisabled: boolean;
 }
 
+// RtkGainStatsResponse describes one RTK gain statistics payload.
+// RtkGainStatsResponse 描述单次 RTK gain 统计载荷。
+export interface RtkGainStatsResponse {
+  // Whether the bundled RTK executable produced statistics.
+  // 随包 RTK 可执行文件是否成功产出统计。
+  available: boolean;
+  // Unix timestamp in milliseconds when the statistics were generated.
+  // 统计生成时的 Unix 毫秒时间戳。
+  generatedAtMs: number;
+  // Global RTK gain summary.
+  // RTK gain 全局统计摘要。
+  summary: RtkGainStatsSummary;
+  // Daily RTK gain points.
+  // 按天聚合的 RTK gain 数据点。
+  daily: RtkGainDailyStats[];
+  // Weekly RTK gain points.
+  // 按周聚合的 RTK gain 数据点。
+  weekly: RtkGainWeeklyStats[];
+  // Monthly RTK gain points.
+  // 按月聚合的 RTK gain 数据点。
+  monthly: RtkGainMonthlyStats[];
+  // Top command-level RTK gain rows.
+  // RTK gain 命令级 Top 明细行。
+  byCommand: RtkGainCommandStats[];
+  // Optional unavailable or parsing error text.
+  // 可选的不可用或解析错误说明。
+  error?: string | null;
+}
+
+// RtkGainStatsSummary describes aggregate RTK token-savings statistics.
+// RtkGainStatsSummary 描述 RTK Token 节省的聚合统计。
+export interface RtkGainStatsSummary {
+  // Total routed commands recorded by RTK.
+  // RTK 记录的路由命令总数。
+  totalCommands: number;
+  // Estimated original input tokens before RTK compression.
+  // RTK 压缩前估算的原始输入 Token 数。
+  totalInput: number;
+  // Estimated output tokens after RTK compression.
+  // RTK 压缩后估算的输出 Token 数。
+  totalOutput: number;
+  // Estimated tokens saved by RTK compression.
+  // RTK 压缩估算节省的 Token 数。
+  totalSaved: number;
+  // Average token-savings percentage.
+  // 平均 Token 节省百分比。
+  avgSavingsPct: number;
+  // Total command execution time in milliseconds.
+  // 命令总执行耗时毫秒数。
+  totalTimeMs: number;
+  // Average command execution time in milliseconds.
+  // 命令平均执行耗时毫秒数。
+  avgTimeMs: number;
+}
+
+// RtkGainCommandStats describes one command-level RTK gain row.
+// RtkGainCommandStats 描述单条 RTK gain 命令级明细。
+export interface RtkGainCommandStats {
+  // Display command recorded by RTK.
+  // RTK 记录的展示命令。
+  command: string;
+  // Number of command executions.
+  // 命令执行次数。
+  count: number;
+  // Estimated tokens saved by this command group.
+  // 此命令组估算节省的 Token 数。
+  savedTokens: number;
+  // Average token-savings percentage for this command group.
+  // 此命令组的平均 Token 节省百分比。
+  avgSavingsPct: number;
+  // Average command execution time in milliseconds.
+  // 命令平均执行耗时毫秒数。
+  avgTimeMs: number;
+}
+
+// RtkGainDailyStats describes one daily RTK gain statistics point.
+// RtkGainDailyStats 描述单个按天聚合的 RTK gain 统计点。
+export interface RtkGainDailyStats extends RtkGainPeriodStats {
+  // ISO calendar date for this point.
+  // 此统计点对应的 ISO 日历日期。
+  date: string;
+}
+
+// RtkGainWeeklyStats describes one weekly RTK gain statistics point.
+// RtkGainWeeklyStats 描述单个按周聚合的 RTK gain 统计点。
+export interface RtkGainWeeklyStats extends RtkGainPeriodStats {
+  // ISO calendar date for the start of this week.
+  // 此周起始日对应的 ISO 日历日期。
+  weekStart: string;
+  // ISO calendar date for the end of this week.
+  // 此周结束日对应的 ISO 日历日期。
+  weekEnd: string;
+}
+
+// RtkGainMonthlyStats describes one monthly RTK gain statistics point.
+// RtkGainMonthlyStats 描述单个按月聚合的 RTK gain 统计点。
+export interface RtkGainMonthlyStats extends RtkGainPeriodStats {
+  // ISO year-month label for this point.
+  // 此统计点对应的 ISO 年月标签。
+  month: string;
+}
+
+// RtkGainPeriodStats describes RTK gain fields shared by all period points.
+// RtkGainPeriodStats 描述各类周期统计点共享的 RTK gain 字段。
+export interface RtkGainPeriodStats {
+  // Commands recorded in this period.
+  // 此周期内记录的命令数。
+  commands: number;
+  // Estimated original input tokens before RTK compression.
+  // RTK 压缩前估算的原始输入 Token 数。
+  inputTokens: number;
+  // Estimated output tokens after RTK compression.
+  // RTK 压缩后估算的输出 Token 数。
+  outputTokens: number;
+  // Estimated tokens saved by RTK compression.
+  // RTK 压缩估算节省的 Token 数。
+  savedTokens: number;
+  // Token-savings percentage for this period.
+  // 此周期的 Token 节省百分比。
+  savingsPct: number;
+  // Total command execution time in milliseconds.
+  // 命令总执行耗时毫秒数。
+  totalTimeMs: number;
+  // Average command execution time in milliseconds.
+  // 命令平均执行耗时毫秒数。
+  avgTimeMs: number;
+}
+
 // ProviderSummary describes one provider card.
 // ProviderSummary 描述单个 Provider 卡片。
 export interface ProviderSummary {

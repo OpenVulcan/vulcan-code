@@ -30,6 +30,10 @@ pub(crate) struct GitCommitSettingsSaveRequest {
     /// 追加到提交信息生成中的用户额外提示词。
     #[serde(default)]
     summary_extra_prompt: String,
+    /// Whether commit-message generation should prefer RTK-compressed Git input.
+    /// 提交信息生成是否优先使用 RTK 压缩后的 Git 输入。
+    #[serde(default = "default_git_commit_use_rtk_summary")]
+    use_rtk_summary: bool,
 }
 
 /// Saves Git commit dialog settings from the WebUI settings page.
@@ -55,6 +59,7 @@ pub(crate) async fn service_save_git_commit_settings(
         next_configuration.git_commit.new_branch_prefix = normalized_prefix;
         next_configuration.git_commit.summary_model = summary_model;
         next_configuration.git_commit.summary_extra_prompt = summary_extra_prompt;
+        next_configuration.git_commit.use_rtk_summary = request.use_rtk_summary;
         next_configuration.git_commit.normalize();
         provider_config::save_configuration_file(&next_configuration)
             .map_err(|error| format!("保存 Git 提交设置失败：{error}"))?;
@@ -83,7 +88,14 @@ pub(crate) fn git_commit_settings(
             .summary_extra_prompt
             .trim()
             .to_string(),
+        use_rtk_summary: provider_configuration.git_commit.use_rtk_summary,
     }
+}
+
+/// Returns the default RTK usage state for commit-message summary save requests.
+/// 返回提交信息总结保存请求默认 RTK 使用状态。
+const fn default_git_commit_use_rtk_summary() -> bool {
+    true
 }
 
 /// Converts a persisted commit-summary model selection into the WebUI API shape.
