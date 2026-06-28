@@ -1,0 +1,228 @@
+.composer-capability-dialog {
+  width: min(860px, calc(100vw - 48px));
+  max-width: min(860px, calc(100vw - 48px));
+  height: min(520px, calc(100vh - 88px));
+  max-height: min(520px, calc(100vh - 88px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  padding: 18px;
+}
+
+.composer-capability-dialog-note {
+  margin-top: 6px;
+  border-left: 3px solid #ef4444;
+  padding: 5px 8px;
+  background: color-mix(in oklch, #ef4444 10%, transparent);
+  color: #dc2626;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.composer-capability-dialog-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.composer-capability-dialog-left,
+.composer-capability-dialog-right {
+  min-height: 0;
+  overflow: auto;
+}
+
+.composer-capability-dialog-left {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
+}
+
+.composer-capability-kind-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  padding: 5px 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-capability-kind-row:hover {
+  background: var(--accent);
+}
+
+.composer-capability-kind-row.selected {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 24%, transparent);
+}
+
+.composer-capability-kind-row.unavailable {
+  opacity: 0.55;
+}
+
+.composer-capability-kind-row input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.composer-capability-kind-select {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: inherit;
+}
+
+.composer-capability-kind-copy,
+.composer-capability-detail-copy,
+.composer-capability-target-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  line-height: 1.15;
+}
+
+.composer-capability-kind-copy span,
+.composer-capability-target-copy span {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-kind-copy small,
+.composer-capability-target-copy small,
+.composer-capability-detail-copy small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-dialog-right {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.composer-capability-target-table {
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.composer-capability-target-row {
+  display: grid;
+  grid-template-columns: 14px 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 7px 8px;
+  background: var(--background);
+  cursor: grab;
+  touch-action: none;
+}
+
+.composer-capability-target-row:hover {
+  background: var(--accent);
+}
+
+.composer-capability-target-row.dragging {
+  opacity: 0.68;
+  cursor: grabbing;
+}
+
+.composer-capability-target-handle {
+  color: var(--muted-foreground);
+}
+
+.composer-capability-target-row.disabled {
+  opacity: 0.55;
+}
+
+.composer-capability-target-row input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.composer-capability-dialog-empty {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.composer-capability-dialog-footer {
+  margin: 0 -18px -18px;
+  align-items: center;
+  flex-direction: row;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: 12px 18px;
+}
+
+.composer-capability-dialog-save-hint {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-save-button {
+  min-width: 86px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.composer-capability-default-button {
+  min-width: 112px;
+}
+
+.composer-capability-save-button.saved {
+  background: color-mix(in srgb, #16a34a 16%, var(--primary));
+}
+
+.composer-capability-save-spinner {
+  animation: composer-capability-save-spin 0.86s linear infinite;
+}
+
+.composer-capability-close-confirm-dialog {
+  width: min(390px, calc(100vw - 48px));
+}
+
+@keyframes composer-capability-save-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

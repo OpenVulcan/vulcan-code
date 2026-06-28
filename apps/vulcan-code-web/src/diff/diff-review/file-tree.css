@@ -1,0 +1,252 @@
+.diff-review-body {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diff-review-body.has-selection {
+  padding-right: 11px;
+}
+
+.diff-file-tree-drawer {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 420;
+  display: flex;
+  width: min(330px, 86%);
+  min-width: 220px;
+  max-width: calc(100% - 11px);
+  pointer-events: none;
+  transform: translateX(0);
+  transition: transform 160ms ease;
+}
+
+.diff-file-tree-drawer.open {
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.diff-file-tree-drawer.collapsed {
+  transform: translateX(calc(100% - 11px));
+}
+
+.diff-file-tree-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  order: 2;
+  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  background: var(--background);
+}
+
+.diff-file-tree-handle {
+  --diff-file-tree-handle-color: #0ea5a8;
+  order: 1;
+  display: inline-flex;
+  flex: 0 0 11px;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  min-height: 100%;
+  border: 0;
+  border-left: 1px solid color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--border));
+  border-right: 1px solid color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--border));
+  background: color-mix(in oklab, var(--diff-file-tree-handle-color) 28%, var(--background));
+  color: color-mix(in oklab, var(--diff-file-tree-handle-color) 74%, var(--foreground));
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.diff-file-tree-drawer.locked-open .diff-file-tree-handle {
+  display: none;
+}
+
+.diff-file-tree-handle:hover {
+  background: color-mix(in oklab, var(--diff-file-tree-handle-color) 42%, var(--background));
+  color: var(--foreground);
+}
+
+.diff-file-tree-filter {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  margin: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--background) 88%, var(--muted));
+  color: var(--muted-foreground);
+}
+
+.diff-file-tree-filter input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.diff-file-tree-filter-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.diff-file-tree-filter-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.diff-file-tree-filter-actions button:hover:not(:disabled) {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.diff-file-tree-filter-actions button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.diff-file-tree-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 12px;
+}
+
+.diff-file-tree-empty {
+  padding: 12px 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.diff-file-tree-node {
+  min-width: 0;
+}
+
+.diff-file-tree-row {
+  display: grid;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-file-tree-row.directory {
+  grid-template-columns: 14px 16px minmax(0, 1fr);
+  padding: 0 6px 0 calc(4px + var(--diff-tree-depth) * 10px);
+}
+
+.diff-file-tree-row.file {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0 6px 0 calc(22px + var(--diff-tree-depth) * 10px);
+}
+
+.diff-file-tree-file-main {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-file-tree-row:hover,
+.diff-file-tree-row.active {
+  background: color-mix(in oklab, var(--muted) 72%, transparent);
+}
+
+.diff-file-tree-row.active {
+  color: var(--foreground);
+}
+
+.diff-file-tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-tree-stats {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  align-items: center;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.diff-file-tree-stats .added {
+  color: #1f883d;
+}
+
+.diff-file-tree-stats .removed {
+  color: #cf222e;
+}
+
+.diff-file-tree-file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--muted) 66%, var(--background));
+  color: var(--muted-foreground);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.diff-file-tree-file-icon.added {
+  color: #0969da;
+}
+
+.diff-file-tree-file-icon.deleted {
+  color: #cf222e;
+}
+
+.diff-file-tree-file-icon.modified,
+.diff-file-tree-file-icon.renamed,
+.diff-file-tree-file-icon.copied {
+  color: #0969da;
+}
+

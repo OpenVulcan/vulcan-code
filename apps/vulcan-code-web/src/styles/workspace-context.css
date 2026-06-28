@@ -1,0 +1,309 @@
+.context-panel-shell {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+}
+
+.context-dynamic-workspace {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.context-dynamic-tabbar {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+
+.context-dynamic-tab-strip {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.context-dynamic-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.context-dynamic-tab {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 132px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.context-dynamic-tab.active {
+  border-color: color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--muted) 58%, var(--background));
+  color: var(--foreground);
+}
+
+.context-dynamic-tab-icon,
+.context-dynamic-tab-close {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-dynamic-tab-close {
+  position: absolute;
+  left: 7px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--muted-foreground) 18%, transparent);
+  color: var(--muted-foreground);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.context-dynamic-tab:hover .context-dynamic-tab-icon {
+  opacity: 0;
+}
+
+.context-dynamic-tab:hover .context-dynamic-tab-close {
+  opacity: 1;
+}
+
+.context-dynamic-tab-close:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 28%, transparent);
+  color: var(--foreground);
+}
+
+.context-dynamic-tab-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.context-dynamic-tab-label span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-dynamic-icon-button {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.context-dynamic-icon-button.add {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  margin-right: 2px;
+  border-color: color-mix(in oklab, var(--border) 88%, transparent);
+  background: color-mix(in oklab, var(--muted) 48%, var(--background));
+  color: var(--foreground);
+}
+
+.context-dynamic-icon-button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.context-dynamic-icon-button.add:hover {
+  background: color-mix(in oklab, var(--muted) 76%, var(--background));
+}
+
+.context-dynamic-tabs-menu,
+.context-dynamic-add-menu {
+  min-width: 240px;
+}
+
+.context-dynamic-tabs-menu-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted-foreground);
+}
+
+.context-dynamic-tabs-menu-search input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.context-dynamic-tabs-menu-search-clear {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.context-dynamic-tabs-menu-search-clear:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 16%, transparent);
+  color: var(--foreground);
+}
+
+.context-dynamic-tabs-menu-item {
+  gap: 8px;
+}
+
+.context-dynamic-tabs-menu-item.active {
+  background: var(--muted);
+}
+
+.context-launcher {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  padding: 28px;
+  overflow: auto;
+}
+
+.context-launcher-card {
+  width: min(100%, 330px);
+  justify-self: center;
+  min-height: 132px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  padding: 18px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--muted) 58%, var(--background));
+  color: var(--muted-foreground);
+  text-align: center;
+  cursor: pointer;
+}
+
+.context-launcher-card:hover {
+  border-color: var(--border);
+  background: color-mix(in oklab, var(--muted) 78%, var(--background));
+  color: var(--foreground);
+}
+
+.context-launcher-card strong {
+  color: var(--foreground);
+  font-size: 15px;
+}
+
+.context-launcher-card span {
+  font-size: 13px;
+}
+
+.context-launcher-card kbd {
+  min-height: 18px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--background) 70%, transparent);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.context-tab-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+}
+
+.context-tab-content.review-tab-content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.context-tab-content.files-tab-content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.context-tab-content.memory-tab-content {
+  padding: 6px 8px 8px;
+}
+
+.context-empty-state {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.context-empty-state strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.context-panel-loading-state {
+  min-width: 0;
+  min-height: 160px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-align: center;
+}

@@ -1,0 +1,341 @@
+.vmm-memory-page {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.vmm-memory-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 14px;
+  min-height: 100%;
+}
+
+.vmm-memory-shell.status-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.vmm-memory-rail,
+.vmm-memory-main,
+.vmm-memory-result {
+  min-width: 0;
+  min-height: 0;
+}
+
+.vmm-memory-rail,
+.vmm-memory-result,
+.vmm-memory-main,
+.vmm-memory-status,
+.vmm-overview-card,
+.vmm-section-panel,
+.vmm-side-card,
+.vmm-data-row,
+.vmm-json-preview {
+  display: flex;
+  flex-direction: column;
+}
+
+.vmm-memory-rail,
+.vmm-memory-result {
+  gap: 10px;
+}
+
+.vmm-memory-main {
+  gap: 12px;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.vmm-status-page {
+  padding-right: 0;
+}
+
+.vmm-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.vmm-memory-status,
+.vmm-section-button,
+.vmm-section-panel,
+.vmm-side-card,
+.vmm-overview-card,
+.vmm-data-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.vmm-memory-status,
+.vmm-section-panel,
+.vmm-side-card {
+  padding: 12px;
+}
+
+.vmm-memory-status,
+.vmm-overview-card,
+.vmm-data-row,
+.vmm-side-card,
+.vmm-json-preview {
+  gap: 7px;
+}
+
+.vmm-memory-status span,
+.vmm-section-button span,
+.vmm-overview-card span,
+.vmm-muted,
+.vmm-data-row span,
+.vmm-data-row small,
+.vmm-panel-heading span,
+.vmm-stat-list dt {
+  color: var(--muted-foreground);
+}
+
+.vmm-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow: auto;
+}
+
+.vmm-section-button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  text-align: left;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.vmm-section-button.active {
+  border-color: var(--primary);
+  background: var(--accent);
+}
+
+.vmm-section-button small {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.vmm-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vmm-overview-card {
+  min-height: 112px;
+  padding: 10px;
+}
+
+.vmm-scope-bar,
+.vmm-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.vmm-scope-bar {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--muted) 55%, transparent);
+}
+
+.vmm-scope-bar label,
+.vmm-field {
+  display: flex;
+  flex: 1;
+  min-width: 160px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vmm-scope-bar label span,
+.vmm-field span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.vmm-scope-bar select,
+.vmm-field input,
+.vmm-field select {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 10px;
+}
+
+.vmm-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  padding: 0 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vmm-icon-button.danger {
+  border-color: color-mix(in oklch, var(--destructive) 48%, var(--border));
+  color: var(--destructive);
+}
+
+.vmm-icon-button:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.vmm-section-panel {
+  gap: 12px;
+  padding: 14px;
+}
+
+.vmm-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.vmm-panel-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vmm-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vmm-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 4px;
+}
+
+.vmm-row-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vmm-data-row {
+  padding: 10px;
+}
+
+.vmm-data-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vmm-row-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--destructive);
+  cursor: pointer;
+}
+
+.vmm-row-action-button:hover {
+  background: color-mix(in oklab, var(--destructive) 12%, transparent);
+}
+
+.vmm-stat-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0;
+}
+
+.vmm-stat-list div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vmm-stat-list dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.vmm-preview-text,
+.vmm-json-preview pre,
+.vmm-bundle-preview pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 9px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.vmm-json-preview pre {
+  font-size: 11px;
+}
+
+.vmm-result-kind {
+  font-size: 12px;
+}
+
+.vmm-bundle-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 1180px) {
+  .vmm-memory-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vmm-memory-result {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vmm-overview-grid,
+  .vmm-status-grid,
+  .vmm-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .vmm-memory-shell,
+  .vmm-memory-result,
+  .vmm-overview-grid,
+  .vmm-status-grid,
+  .vmm-form-grid,
+  .vmm-row-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.full-height {
+  height: 100%;
+}

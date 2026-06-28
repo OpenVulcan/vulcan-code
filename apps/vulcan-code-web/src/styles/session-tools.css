@@ -1,0 +1,527 @@
+.conversation-session-todolist-collapsed {
+  width: fit-content;
+  min-width: 0;
+  max-width: min(260px, calc(100vw - 40px));
+}
+
+.conversation-session-tool-surface {
+  transform-origin: top right;
+  will-change: opacity;
+}
+
+.conversation-session-tool-transitioning.is-expanding {
+  animation: conversation-session-tool-expand-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.conversation-session-tool-transitioning.is-collapsing {
+  animation: conversation-session-tool-collapse-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.conversation-session-todolist-menu.conversation-session-tool-surface {
+  animation: conversation-session-tool-expand-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.conversation-session-tool-collapsed.conversation-session-tool-surface {
+  animation: conversation-session-tool-collapse-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes conversation-session-tool-expand-in {
+  from {
+    opacity: 0.28;
+  }
+
+  62% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes conversation-session-tool-collapse-in {
+  from {
+    opacity: 0.36;
+  }
+
+  66% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.conversation-session-tool-collapsed {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: max-content 0;
+  align-items: center;
+  justify-content: flex-start;
+  column-gap: 0;
+  width: fit-content;
+  height: 32px;
+  min-height: 32px;
+  padding-top: 0;
+  padding-right: 10px;
+  padding-bottom: 0;
+  padding-left: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  transition:
+    grid-template-columns 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    column-gap 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 120ms ease;
+}
+
+.conversation-session-tool-collapsed.has-progress {
+  display: grid;
+  grid-template-columns: max-content 0;
+  row-gap: 2px;
+  column-gap: 0;
+  height: auto;
+  min-height: 44px;
+  padding-top: 4px;
+  padding-right: 10px;
+  padding-bottom: 4px;
+  padding-left: 10px;
+}
+
+.conversation-session-tool-collapsed-row {
+  grid-column: 1;
+  min-width: max-content;
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 17px;
+}
+
+.conversation-session-tool-expand-hint {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: center;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.92);
+  transition:
+    width 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 120ms ease,
+    transform 120ms ease;
+  transition-delay: 0ms;
+}
+
+.conversation-session-tool-collapsed.has-progress .conversation-session-tool-expand-hint {
+  grid-row: 1 / span 2;
+}
+
+.conversation-session-tool-collapsed:hover .conversation-session-tool-expand-hint,
+.conversation-session-tool-collapsed:focus-visible .conversation-session-tool-expand-hint {
+  width: 14px;
+  opacity: 1;
+  transform: scale(1);
+  transition-delay: 45ms;
+}
+
+.conversation-session-tool-collapsed:hover,
+.conversation-session-tool-collapsed:focus-visible {
+  grid-template-columns: max-content 14px;
+  column-gap: 6px;
+}
+
+.conversation-session-tool-collapsed-row > span {
+  min-width: max-content;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.conversation-session-todolist-collapsed strong,
+.conversation-session-todolist-header-actions strong {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.conversation-session-todolist-collapsed svg {
+  flex: 0 0 auto;
+}
+
+.conversation-session-todolist-menu {
+  --workspace-tool-panel-menu-width: var(--conversation-session-todolist-width);
+  position: relative;
+  width: min(var(--conversation-session-todolist-width), calc(100vw - 40px));
+  max-height: min(460px, calc(100% - var(--composer-dock-height, 132px) - 72px));
+  overflow: auto;
+}
+
+.conversation-session-todolist-header {
+  height: auto;
+  min-height: 28px;
+}
+
+.conversation-session-todolist-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+}
+
+.conversation-session-todolist-title svg,
+.conversation-session-todolist-row svg {
+  flex: 0 0 auto;
+}
+
+.conversation-session-todolist-header-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conversation-session-tool-section {
+  margin-top: 3px;
+}
+
+.conversation-session-review-section {
+  position: relative;
+  margin-top: 0;
+}
+
+.conversation-session-tool-section + .conversation-session-tool-section {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.conversation-session-tool-section-title {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 24px;
+  padding: 0 3px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  user-select: none;
+}
+
+.conversation-session-tool-section-title.with-action {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conversation-session-tool-section-title-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 24px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.conversation-session-tool-section-title strong {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.conversation-session-review-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  height: 22px;
+  cursor: default;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.conversation-session-review-row svg {
+  color: var(--muted-foreground);
+}
+
+.conversation-session-review-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-review-row strong {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.conversation-session-review-delta {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: inherit;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.conversation-session-review-delta span {
+  min-width: auto;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.conversation-session-review-delta .added {
+  color: #238636;
+}
+
+.conversation-session-review-delta .removed {
+  color: #da3633;
+}
+
+.conversation-session-terminal-list {
+  gap: 3px;
+}
+
+.conversation-session-terminal-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  height: 26px;
+  min-height: 26px;
+  cursor: default;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.conversation-session-terminal-summary {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 28px), transparent 100%);
+}
+
+.conversation-session-terminal-summary strong,
+.conversation-session-terminal-summary .conversation-session-terminal-name,
+.conversation-session-terminal-summary small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-terminal-summary strong {
+  flex: 0 0 auto;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.conversation-session-terminal-summary .conversation-session-terminal-name {
+  flex: 0 1 auto;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.conversation-session-terminal-summary small {
+  flex: 1 2 auto;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.conversation-session-terminal-action {
+  justify-self: end;
+  flex: 0 0 auto;
+  height: 22px;
+  width: 22px;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 120ms ease, opacity 120ms ease;
+}
+
+.conversation-session-terminal-action svg {
+  flex: 0 0 auto;
+  height: 13px;
+  width: 13px;
+}
+
+.conversation-session-terminal-action:not(:disabled):hover {
+  color: var(--foreground);
+  background: transparent;
+}
+
+.conversation-session-terminal-stop-button:not(:disabled):hover {
+  color: var(--destructive);
+  background: transparent;
+}
+
+.conversation-session-terminal-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.conversation-session-terminal-tooltip {
+  max-width: min(560px, calc(100vw - 48px));
+}
+
+.conversation-session-terminal-tooltip pre {
+  margin: 0;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conversation-session-terminal-screen-dialog {
+  width: min(920px, calc(100vw - 32px));
+  max-width: min(920px, calc(100vw - 32px));
+}
+
+.conversation-session-terminal-screen-frame {
+  height: clamp(320px, calc(100vh - 220px), 640px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: #050505;
+  color: #f4f4f5;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.terminal-stop-confirm-dialog {
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.terminal-stop-confirm-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-stop-confirm-body span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-stop-confirm-body code {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 120px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.conversation-session-todolist-explanation {
+  margin: 2px 3px 1px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.conversation-session-todolist-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  height: auto;
+  min-height: 22px;
+  padding: 2px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: default;
+  font-weight: 400;
+}
+
+.conversation-session-todolist-row svg {
+  margin-top: 1px;
+  color: var(--muted-foreground);
+}
+
+.conversation-session-todolist-row span {
+  min-width: 0;
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.conversation-session-todolist-row.status-in_progress svg,
+.conversation-session-todolist-row.status-completed svg {
+  color: oklch(0.62 0.16 150);
+}
+
+.conversation-session-todolist-row.status-completed span {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+
+.two-columns {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.72fr);
+}
+
+.stack {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  overflow: auto;
+}
+
+.panel {
+  min-width: 0;
+  min-height: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  overflow: auto;
+}

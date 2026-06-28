@@ -1,0 +1,93 @@
+.diff-summary-placeholder {
+  position: relative;
+  overflow: hidden;
+  min-width: 100%;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--background) 94%, var(--muted));
+  contain: layout paint;
+}
+
+.diff-summary-placeholder.too-large {
+  display: grid;
+  min-height: 74px;
+  align-items: center;
+}
+
+.diff-summary-placeholder-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.diff-summary-hunk-placeholder {
+  position: absolute;
+  right: 0;
+  left: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 76%, transparent);
+  opacity: 0.72;
+}
+
+.diff-summary-hunk-placeholder.active {
+  opacity: 1;
+}
+
+.diff-summary-hunk-header-placeholder {
+  display: flex;
+  align-items: center;
+  height: 29px;
+  padding: 0 12px;
+  background: color-mix(in oklab, var(--muted) 66%, var(--background));
+  color: var(--muted-foreground);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.diff-summary-hunk-placeholder.active .diff-summary-hunk-header-placeholder {
+  background: color-mix(in oklab, #f2cc60 18%, var(--muted));
+  color: var(--foreground);
+}
+
+.diff-summary-hunk-lines-placeholder {
+  display: grid;
+  gap: 7px;
+  padding: 7px 12px 10px 58px;
+}
+
+.diff-summary-hunk-lines-placeholder span {
+  height: 8px;
+  max-width: min(760px, calc(100vw - 220px));
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--muted-foreground) 18%, transparent);
+}
+
+.diff-summary-placeholder-note {
+  position: sticky;
+  top: 40px;
+  z-index: 2;
+  display: grid;
+  gap: 4px;
+  width: min(100% - 16px, 760px);
+  margin: 8px;
+  padding: 9px 11px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--background) 86%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  backdrop-filter: blur(6px);
+}
+
+.diff-summary-placeholder.failed .diff-summary-placeholder-note,
+.diff-summary-placeholder.timed-out .diff-summary-placeholder-note {
+  border-color: color-mix(in oklab, #da3633 45%, var(--border));
+}
+
+.diff-summary-search-marker {
+  position: absolute;
+  right: 12px;
+  left: 12px;
+  z-index: 2;
+  max-width: 760px;
+  box-shadow: 0 10px 24px color-mix(in oklab, #d29922 16%, transparent);
+}
+

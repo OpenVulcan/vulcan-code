@@ -1,0 +1,539 @@
+.skill-actions-row,
+.skill-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-action-button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.skill-action-button:not(.secondary) {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.skill-action-button.secondary {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+.skill-action-button.danger,
+.skill-action-button.secondary.danger {
+  color: var(--destructive);
+}
+
+.skill-action-button.danger.confirm,
+.skill-action-button.secondary.danger.confirm {
+  background: color-mix(in srgb, var(--destructive) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--destructive) 30%, var(--border));
+  color: var(--destructive);
+}
+
+.skill-action-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.skill-page-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: visible;
+}
+
+.lua-skill-page-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.agent-skill-page-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.agent-skill-page-body:has(> .skill-warning-list) {
+  grid-template-rows: minmax(0, 96px) minmax(0, 1fr);
+}
+
+.skill-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.skill-summary-card,
+.skill-empty-card,
+.skill-card,
+.skill-warning-row {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 11px;
+}
+
+.skill-summary-card,
+.skill-empty-card,
+.skill-card,
+.skill-warning-row,
+.skill-meta-grid,
+.skill-tool-row > div,
+.agent-skill-title > div {
+  display: grid;
+  gap: 6px;
+}
+
+.skill-summary-card span,
+.skill-summary-card small,
+.skill-meta-grid span,
+.skill-card small,
+.skill-empty-card span,
+.skill-warning-row span,
+.skill-tool-row span {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.skill-toolbar {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px;
+  background: var(--muted);
+}
+
+.skill-toolbar input,
+.skill-toolbar select {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.skill-toolbar input {
+  flex: 1 1 210px;
+}
+
+.lua-skill-install-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px)) !important;
+}
+
+.lua-skill-install-form,
+.lua-skill-install-field {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-install-form {
+  gap: 14px;
+}
+
+.lua-skill-install-field span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-skill-install-field input,
+.lua-skill-install-field select {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.skill-card-list {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding-right: 2px;
+}
+
+.agent-skill-page-body > .skill-warning-list {
+  max-height: 96px;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.lua-skill-page-body .skill-card-list {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-items: start;
+}
+
+.agent-skill-card-list {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: start;
+}
+
+.skill-card {
+  gap: 10px;
+}
+
+.lua-skill-card,
+.agent-skill-card {
+  height: 196px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.lua-skill-card {
+  height: 164px;
+}
+
+.agent-skill-card {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.skill-card-header {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-card-title {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-card-title-line {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-card-title-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: nowrap;
+}
+
+.skill-card-header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-card-header strong span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.skill-card-badges {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.skill-card-badges [data-slot="badge"] {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.skill-card-title-meta [data-slot="badge"] {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.skill-card-enabled-badge {
+  background: color-mix(in oklch, hsl(142 62% 34%) 12%, transparent);
+  color: hsl(142 62% 34%);
+}
+
+.skill-card-summary {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-card-summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-card-metrics {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: start;
+  max-height: 42px;
+  overflow: hidden;
+}
+
+.skill-card-metrics span {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  padding: 3px 7px;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.lua-skill-action-menu {
+  min-width: 150px;
+}
+
+.lua-skill-action-menu [data-slot="dropdown-menu-item"] {
+  gap: 8px;
+}
+
+.skill-card p,
+.skill-tool-row p,
+.skill-body-preview {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.lua-skill-card .skill-actions-row,
+.agent-skill-card .skill-actions-row {
+  align-self: end;
+}
+
+.agent-skill-card > p {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.skill-tool-list,
+.skill-warning-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lua-skill-detail-dialog {
+  width: min(620px, calc(100vw - 32px));
+  max-width: min(620px, calc(100vw - 32px)) !important;
+}
+
+.lua-skill-tools-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: min(760px, calc(100vw - 32px)) !important;
+}
+
+.lua-skill-detail-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lua-skill-detail-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 10px;
+}
+
+.lua-skill-detail-grid > div.wide {
+  grid-column: 1 / -1;
+}
+
+.lua-skill-detail-grid span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-skill-detail-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.dialog-tool-list {
+  max-height: min(540px, calc(100vh - 220px));
+  min-height: 120px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.skill-tool-row {
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  padding: 9px;
+}
+
+.skill-tool-row-header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  align-items: start;
+  gap: 12px;
+}
+
+.skill-tool-row-header > div:first-child,
+.skill-tool-description {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-tool-control {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-tool-segmented {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+}
+
+.skill-tool-segmented button {
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 9px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.skill-tool-segmented button:last-child {
+  border-right: 0;
+}
+
+.skill-tool-segmented button:hover,
+.skill-tool-segmented button.active {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.skill-tool-segmented button:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.skill-sync-status {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-align: right;
+}
+
+.agent-skill-title {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.agent-skill-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  overflow: hidden;
+}
+
+.agent-skill-icon.fallback {
+  font-weight: 750;
+}
+
+.agent-skill-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.agent-skill-detail-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: min(760px, calc(100vw - 32px)) !important;
+}
+
+.agent-skill-detail-body {
+  min-width: 0;
+  max-height: min(620px, calc(100vh - 190px));
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.skill-body-preview {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 10px;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}

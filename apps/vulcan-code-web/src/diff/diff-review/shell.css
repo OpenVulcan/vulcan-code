@@ -1,0 +1,122 @@
+.diff-review-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  color: var(--foreground);
+}
+
+.diff-review-panel.empty {
+  min-height: 180px;
+  justify-content: center;
+}
+
+.diff-empty-state {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.diff-empty-state strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.diff-empty-state span {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.diff-panel-header {
+  position: relative;
+  z-index: 140;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  min-height: 29px;
+  padding: 6px 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-review-floating-actions {
+  position: absolute;
+  right: 50%;
+  bottom: 14px;
+  z-index: 520;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 28px);
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  transform: translateX(50%);
+  -webkit-backdrop-filter: blur(12px) saturate(1.14);
+  backdrop-filter: blur(12px) saturate(1.14);
+}
+
+.diff-review-floating-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  min-width: 0;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.diff-review-floating-action-button svg {
+  flex: 0 0 auto;
+}
+
+.diff-review-floating-action-button.icon-only {
+  width: 26px;
+  padding: 0;
+}
+
+.diff-review-floating-action-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-review-floating-action-button:not(:disabled):hover {
+  background: color-mix(in oklab, var(--muted) 72%, transparent);
+  color: var(--foreground);
+}
+
+.diff-review-floating-action-button:disabled {
+  cursor: default;
+  opacity: 0.46;
+}
+
+.diff-floating-action-menu {
+  min-width: 150px;
+}
+
+.diff-floating-action-menu [data-slot="dropdown-menu-item"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  font-size: 13px;
+}
+

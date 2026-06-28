@@ -1,0 +1,282 @@
+.feature-header-description {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-sidebar-row .vcn-sidebar-label {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.feature-sidebar-row .vcn-sidebar-label strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-sidebar-row .vcn-sidebar-label small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-back-menu-row {
+  color: var(--muted-foreground);
+}
+
+.project-badge-icon {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.project-icon-dialog {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.project-icon-layout {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.project-icon-preview {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--muted);
+}
+
+.project-icon-preview strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-icon-tabs {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.project-icon-tabs-list {
+  width: fit-content;
+  max-width: 100%;
+  overflow: visible;
+}
+
+.project-icon-tab-content {
+  margin: 0;
+}
+
+.project-icon-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.project-icon-filter span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.project-icon-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(106px, 1fr));
+  gap: 8px;
+}
+
+.picker-icon-grid {
+  max-height: min(48vh, 420px);
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.project-icon-option {
+  min-width: 0;
+  height: 78px;
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--foreground);
+}
+
+.picker-icon-grid .project-icon-option {
+  height: 70px;
+}
+
+.picker-icon-grid .icon-load-more {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+
+.color-icon-option svg {
+  width: 28px;
+  height: 28px;
+}
+
+.project-icon-option:hover,
+.project-icon-option.selected {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.project-icon-option.selected {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+.project-icon-option span {
+  overflow: hidden;
+  width: 100%;
+  font-size: 12px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.badge-editor label,
+.badge-editor-field,
+.color-picker-row {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.badge-editor label > span,
+.badge-editor-field > span,
+.color-picker-row > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-shape-trigger {
+  width: 100%;
+}
+
+.color-picker-input {
+  width: 100%;
+  height: 36px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.color-swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--background) 40%, transparent);
+}
+
+.feature-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.feature-main-shell {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.feature-content > .panel,
+.feature-content > .skill-management-surface,
+.feature-content > .vmm-memory-page,
+.feature-content > .settings-direct-content,
+.feature-content > .area-grid {
+  min-height: 0;
+  height: 100%;
+}
+
+.compact-stack {
+  min-height: 0;
+  align-content: stretch;
+}
+
+.vcn-sidebar-inset .chat-grid {
+  --console-scrollbar-gutter: 18px;
+  --composer-default-height: 108px;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.vcn-sidebar-inset .chat-grid::after {
+  content: "";
+  position: absolute;
+  right: var(--console-scrollbar-gutter);
+  bottom: 0;
+  left: 0;
+  z-index: 4;
+  height: min(var(--composer-dock-height, 132px), var(--composer-default-height));
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklch, var(--background) 0%, transparent) 0%,
+    color-mix(in oklch, var(--background) 28%, transparent) 20%,
+    color-mix(in oklch, var(--background) 86%, transparent) 58%,
+    var(--background) 100%
+  );
+}
+
+.vcn-sidebar-inset .chat-grid.empty-conversation-grid::after {
+  display: none;
+}
+
+.vcn-sidebar-inset .chat-grid.loading-conversation-grid::after {
+  display: none;
+}
+
+.chat-grid {
+  --conversation-session-todolist-width: 320px;
+  container-type: inline-size;
+  display: block;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}

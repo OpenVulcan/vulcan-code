@@ -1,0 +1,147 @@
+.diff-lines {
+  display: block;
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
+  overflow: visible;
+}
+
+.diff-virtual-lines {
+  display: block;
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
+  overflow: visible;
+  contain: layout style;
+}
+
+.diff-plain-rendered-window {
+  display: block;
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
+}
+
+.diff-plain-rendered-window pre[data-diff] {
+  --diffs-bg: var(--background);
+  --diffs-fg: var(--foreground);
+  --diffs-bg-buffer: color-mix(in oklab, var(--muted-foreground) 22%, transparent);
+  --diffs-bg-addition: color-mix(in oklab, #2ea043 13%, var(--background));
+  --diffs-bg-addition-number: color-mix(in oklab, #2ea043 10%, var(--background));
+  --diffs-bg-addition-emphasis: color-mix(in oklab, #2ea043 24%, transparent);
+  --diffs-bg-deletion: color-mix(in oklab, #f85149 13%, var(--background));
+  --diffs-bg-deletion-number: color-mix(in oklab, #f85149 10%, var(--background));
+  --diffs-bg-deletion-emphasis: color-mix(in oklab, #f85149 24%, transparent);
+  --diffs-number-gutter-width: calc(var(--diffs-min-number-column-width, var(--diffs-min-number-column-width-default, 4ch)) + 3ch);
+  background: var(--diffs-bg);
+  color: var(--diffs-fg);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  tab-size: 2;
+}
+
+.diff-plain-rendered-window [data-search-match],
+.diff-plain-rendered-window [data-search-active] {
+  position: relative;
+}
+
+.diff-plain-rendered-window [data-search-match]::after,
+.diff-plain-rendered-window [data-search-active]::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: 2;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, #f2cc60 55%, transparent);
+  pointer-events: none;
+}
+
+.diff-plain-rendered-window [data-search-active]::after {
+  box-shadow: inset 0 0 0 2px #d29922;
+}
+
+.diff-render-placeholder {
+  min-width: 100%;
+  contain: strict;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--muted) 38%, transparent) 0,
+      color-mix(in oklab, var(--muted) 38%, transparent) 1px,
+      transparent 1px,
+      transparent 20px
+    );
+}
+
+.diff-render-worker-note {
+  display: grid;
+  gap: 3px;
+  min-width: 100%;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 36%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.diff-render-worker-note span {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.diff-render-worker-note small {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.diff-virtual-spacer {
+  min-width: 1px;
+  contain: strict;
+  pointer-events: none;
+}
+
+.diff-hunk-header.virtual {
+  border-top: 1px solid var(--border);
+}
+
+.diff-binary-note {
+  margin: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.diff-file-load-state .diff-summary-placeholder-note > span,
+.diff-file-load-state .diff-summary-placeholder-note > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-file-load-state .diff-summary-placeholder-note > small {
+  color: color-mix(in oklab, var(--muted-foreground) 78%, var(--foreground));
+  font-size: 11px;
+}
+
+.diff-file-load-state.failed,
+.diff-file-load-state.timed-out {
+  border-color: color-mix(in oklab, #da3633 45%, var(--border));
+}
+
+.diff-file-load-retry {
+  justify-self: start;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+

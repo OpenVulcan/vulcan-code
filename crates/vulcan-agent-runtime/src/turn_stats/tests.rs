@@ -1,0 +1,675 @@
+use serde_json::json;
+use vulcan_core::types::ProviderUsageSnapshot;
+
+use super::*;
+use crate::conversation_protocol::{SessionConversationMessage, SessionConversationToolCall};
+
+/// Builds one visible transcript user record for turn-boundary tests.
+/// 为轮次边界测试构建一条可见用户转录记录。
+fn user_record(id: &str, created_at: &str, body: &str) -> SessionConversationRecord {
+    SessionConversationRecord {
+        id: id.to_string(),
+        kind: SessionMessageKind::User,
+        record_kind: SessionMessageRecordKind::Transcript,
+        visible: true,
+        title: String::from("用户指令"),
+        body: body.to_string(),
+        metadata: None,
+        created_at: created_at.to_string(),
+    }
+}
+
+/// Builds one visible interrupt user record folded into the active turn process.
+/// 构建一条折叠进当前轮次过程的可见插队用户记录。
+fn interrupt_user_record(id: &str, created_at: &str, body: &str) -> SessionConversationRecord {
+    let mut record = user_record(id, created_at, body);
+    record.metadata = Some(json!({
+        "source": "user_interrupt",
+        "starts_user_turn": false,
+        "turn_process": true,
+        "collapsed_by_default": true,
+        "editable": false,
+        "canonical_text": body,
+        "canonical_user_text": body,
+    }));
+    record
+}
+
+/// Builds one hidden summary record that closes a logical turn.
+/// 构建一条用于闭合逻辑轮次的隐藏摘要记录。
+fn summary_record(id: &str, created_at: &str) -> SessionConversationRecord {
+    SessionConversationRecord {
+        id: id.to_string(),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::SummaryOutput,
+        visible: false,
+        title: String::from("Summary"),
+        body: String::from("summary"),
+        metadata: None,
+        created_at: created_at.to_string(),
+    }
+}
+
+/// Builds one visible turn-stats record that separates completed turns.
+/// 构建一条用于分隔已完成轮次的可见统计记录。
+fn turn_stats_record(id: &str, created_at: &str) -> SessionConversationRecord {
+    SessionConversationRecord {
+        id: id.to_string(),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::TurnStats,
+        visible: true,
+        title: String::from("Turn Stats · completed"),
+        body: String::from("stats"),
+        metadata: None,
+        created_at: created_at.to_string(),
+    }
+}
+
+/// Builds one canonical user message with the provided local identifier and text.
+/// 使用指定本地标识与文本构建一条规范用户消息。
+fn user_message(id: &str, text: &str) -> SessionConversationMessage {
+    SessionConversationMessage {
+        id: id.to_string(),
+        payload: SessionConversationPayload::UserText {
+            text: text.to_string(),
+            attachments: Vec::new(),
+        },
+    }
+}
+
+/// Builds one canonical assistant message carrying usage and one optional tool call.
+/// 构建一条携带用量与可选工具调用的规范助手消息。
+fn assistant_message(
+    id: &str,
+    usage: ProviderUsageSnapshot,
+    include_tool_call: bool,
+) -> SessionConversationMessage {
+    SessionConversationMessage {
+        id: id.to_string(),
+        payload: SessionConversationPayload::Assistant {
+            text: String::from("assistant output"),
+            reasoning: String::new(),
+            provider_message_id: None,
+            provider_message_state: None,
+            usage: Some(usage),
+            tool_calls: include_tool_call
+                .then(|| SessionConversationToolCall {
+                    id: String::from("tool-item-1"),
+                    tool_call_id: Some(String::from("tool-call-1")),
+                    tool_name: String::from("vulcan_file_list"),
+                    arguments: json!({}),
+                })
+                .into_iter()
+                .collect(),
+        },
+    }
+}
+
+/// Verifies an unaligned current turn never inherits historical canonical usage or tool calls.
+/// 验证无法对齐的当前轮次不会继承历史规范用量或工具调用。
+#[test]
+fn current_turn_stats_do_not_inherit_historical_canonical_messages() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "上一轮"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(1000),
+                    output_tokens: Some(200),
+                    total_tokens: Some(1200),
+                    cached_input_tokens: Some(800),
+                    ..ProviderUsageSnapshot::default()
+                },
+                true,
+            ),
+        ],
+        records: vec![
+            user_record("user-previous", "1000", "上一轮"),
+            summary_record("summary-previous", "1002"),
+            turn_stats_record("stats-previous", "1003"),
+            user_record("user-current", "2000", "当前无工具"),
+            summary_record(closing_record_id, "2002"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 0);
+    assert_eq!(stats.tool_call_count, 0);
+    assert_eq!(stats.input_tokens, 0);
+    assert_eq!(stats.output_tokens, 0);
+    assert_eq!(stats.total_tokens, 0);
+    assert_eq!(stats.cached_input_tokens, None);
+}
+
+/// Verifies display/runtime layer separation does not map the current record to the first historical user.
+/// 验证显示层与运行层分离时不会把当前记录映射到首个历史用户。
+#[test]
+fn current_turn_stats_align_current_record_when_records_only_hold_active_turn() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "上一轮"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(1000),
+                    output_tokens: Some(200),
+                    total_tokens: Some(1200),
+                    cached_input_tokens: Some(800),
+                    ..ProviderUsageSnapshot::default()
+                },
+                true,
+            ),
+            user_message("session-1-protocol-user-2000", "当前无工具"),
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(40),
+                    output_tokens: Some(12),
+                    total_tokens: Some(52),
+                    cached_input_tokens: Some(16),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-current", "2000", "当前无工具"),
+            summary_record(closing_record_id, "2002"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.tool_call_count, 0);
+    assert_eq!(stats.input_tokens, 40);
+    assert_eq!(stats.output_tokens, 12);
+    assert_eq!(stats.total_tokens, 52);
+    assert_eq!(stats.cached_input_tokens, Some(16));
+}
+
+/// Verifies repeated user text does not let a historical user satisfy the ordinal candidate.
+/// 验证重复用户文本不会让历史用户通过序号候选校验。
+#[test]
+fn current_turn_stats_reject_historical_candidate_with_repeated_user_text() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "继续"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(900),
+                    output_tokens: Some(300),
+                    total_tokens: Some(1200),
+                    cached_input_tokens: Some(700),
+                    ..ProviderUsageSnapshot::default()
+                },
+                true,
+            ),
+            user_message("session-1-protocol-user-2000", "继续"),
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(30),
+                    output_tokens: Some(9),
+                    total_tokens: Some(39),
+                    cached_input_tokens: Some(12),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-current", "2000", "继续"),
+            summary_record(closing_record_id, "2002"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.tool_call_count, 0);
+    assert_eq!(stats.input_tokens, 30);
+    assert_eq!(stats.output_tokens, 9);
+    assert_eq!(stats.total_tokens, 39);
+    assert_eq!(stats.cached_input_tokens, Some(12));
+}
+
+/// Verifies interleaved user prompt records stay inside the original running turn.
+/// 验证中途插入的用户提示词记录仍属于原始运行轮次。
+#[test]
+fn current_turn_stats_keep_interleaved_user_prompts_inside_same_turn() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "上一轮"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(500),
+                    output_tokens: Some(100),
+                    total_tokens: Some(600),
+                    cached_input_tokens: Some(400),
+                    ..ProviderUsageSnapshot::default()
+                },
+                true,
+            ),
+            user_message("session-1-protocol-user-2000", "当前任务"),
+            user_message("session-1-protocol-user-2001", "中途补充"),
+            assistant_message(
+                "session-1-protocol-assistant-2002",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(80),
+                    output_tokens: Some(20),
+                    total_tokens: Some(100),
+                    cached_input_tokens: Some(30),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-current", "2000", "当前任务"),
+            interrupt_user_record("user-interleaved", "2001", "中途补充"),
+            summary_record(closing_record_id, "2003"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.tool_call_count, 0);
+    assert_eq!(stats.input_tokens, 80);
+    assert_eq!(stats.output_tokens, 20);
+    assert_eq!(stats.total_tokens, 100);
+    assert_eq!(stats.cached_input_tokens, Some(30));
+}
+
+/// Verifies prior interrupt user messages do not shift the next turn's canonical alignment.
+/// 验证上一轮插队用户消息不会挤偏下一轮的规范消息对齐。
+#[test]
+fn current_turn_stats_ignore_prior_interrupts_when_aligning_new_turn() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "上一轮"),
+            user_message("session-1-protocol-user-1001", "上一轮插队"),
+            assistant_message(
+                "session-1-protocol-assistant-1002",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(500),
+                    output_tokens: Some(100),
+                    total_tokens: Some(600),
+                    cached_input_tokens: Some(400),
+                    ..ProviderUsageSnapshot::default()
+                },
+                true,
+            ),
+            user_message("session-1-protocol-user-2000", "当前任务"),
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(70),
+                    output_tokens: Some(14),
+                    total_tokens: Some(84),
+                    cached_input_tokens: Some(21),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-previous", "1000", "上一轮"),
+            interrupt_user_record("user-previous-interrupt", "1001", "上一轮插队"),
+            summary_record("summary-previous", "1003"),
+            turn_stats_record("stats-previous", "1004"),
+            user_record("user-current", "2000", "当前任务"),
+            summary_record(closing_record_id, "2002"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.tool_call_count, 0);
+    assert_eq!(stats.input_tokens, 70);
+    assert_eq!(stats.output_tokens, 14);
+    assert_eq!(stats.total_tokens, 84);
+    assert_eq!(stats.cached_input_tokens, Some(21));
+}
+
+/// Verifies compacted windows can still align the current user by the shared creation timestamp.
+/// 验证压缩后的窗口仍可通过共享创建时间对齐当前用户。
+#[test]
+fn compacted_current_turn_stats_align_by_user_record_timestamp() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-2000", "当前有输出"),
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(50),
+                    output_tokens: Some(25),
+                    total_tokens: Some(75),
+                    cached_input_tokens: Some(10),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-previous", "1000", "上一轮"),
+            summary_record("summary-previous", "1002"),
+            turn_stats_record("stats-previous", "1003"),
+            user_record("user-current", "2000", "当前有输出"),
+            summary_record(closing_record_id, "2002"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.tool_call_count, 0);
+    assert_eq!(stats.input_tokens, 50);
+    assert_eq!(stats.output_tokens, 25);
+    assert_eq!(stats.total_tokens, 75);
+    assert_eq!(stats.cached_input_tokens, Some(10));
+}
+
+/// Verifies embedded compaction usage segments are aggregated into a normal user turn.
+/// 验证嵌入式压缩用量分段会聚合进普通用户轮次。
+#[test]
+fn user_turn_stats_merge_embedded_context_compaction_segment() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-2000", "当前任务"),
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(40),
+                    output_tokens: Some(12),
+                    total_tokens: Some(52),
+                    cached_input_tokens: Some(16),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-current", "2000", "当前任务"),
+            summary_record(closing_record_id, "2002"),
+        ],
+        continuation: Default::default(),
+    };
+    let mut compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::ContextCompaction,
+        1,
+        Some(&ProviderUsageSnapshot {
+            input_tokens: Some(20),
+            output_tokens: Some(4),
+            reasoning_tokens: Some(2),
+            total_tokens: Some(26),
+            cached_input_tokens: Some(5),
+            ..ProviderUsageSnapshot::default()
+        }),
+    );
+    compaction_segment.trigger = Some(String::from("auto_budget"));
+    compaction_segment.execution_profile = Some(String::from("cache_preserving_full_fidelity"));
+
+    let stats = build_session_turn_stats_from_state_with_segments(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        Some(1),
+        SessionTurnStatsKind::UserTurn,
+        vec![compaction_segment],
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.turn_kind, SessionTurnStatsKind::UserTurn);
+    assert_eq!(stats.provider_call_count, 2);
+    assert_eq!(stats.input_tokens, 60);
+    assert_eq!(stats.output_tokens, 16);
+    assert_eq!(stats.reasoning_tokens, 2);
+    assert_eq!(stats.total_tokens, 78);
+    assert_eq!(stats.cached_input_tokens, Some(21));
+    assert_eq!(stats.usage_segments.len(), 2);
+    assert_eq!(
+        stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::AssistantResponse
+    );
+    assert_eq!(
+        stats.usage_segments[1].kind,
+        SessionTurnUsageSegmentKind::ContextCompaction
+    );
+}
+
+/// Verifies assistant provider retries remain visible when compaction usage is embedded.
+/// 验证嵌入压缩用量时仍能保留助手响应的 Provider 重试次数。
+#[test]
+fn user_turn_stats_apply_provider_override_to_assistant_segment_with_compaction_segment() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-2000", "当前任务"),
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(40),
+                    output_tokens: Some(12),
+                    total_tokens: Some(52),
+                    cached_input_tokens: Some(16),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-current", "2000", "当前任务"),
+            summary_record(closing_record_id, "2002"),
+        ],
+        continuation: Default::default(),
+    };
+    let compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::ContextCompaction,
+        1,
+        Some(&ProviderUsageSnapshot {
+            input_tokens: Some(20),
+            output_tokens: Some(4),
+            total_tokens: Some(24),
+            ..ProviderUsageSnapshot::default()
+        }),
+    );
+
+    let stats = build_session_turn_stats_from_state_with_segments(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        Some(2),
+        SessionTurnStatsKind::UserTurn,
+        vec![compaction_segment],
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 3);
+    assert_eq!(stats.usage_segments.len(), 2);
+    assert_eq!(stats.usage_segments[0].provider_call_count, 2);
+    assert_eq!(stats.usage_segments[1].provider_call_count, 1);
+    assert_eq!(
+        stats
+            .usage_segments
+            .iter()
+            .map(|segment| segment.provider_call_count)
+            .sum::<usize>(),
+        stats.provider_call_count
+    );
+}
+
+/// Verifies failed assistant requests remain represented when compaction usage is embedded.
+/// 验证嵌入压缩用量时失败的助手请求仍会保留统计分段。
+#[test]
+fn user_turn_stats_keep_failed_assistant_request_segment_with_compaction_segment() {
+    let closing_record_id = "terminated-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![user_message("session-1-protocol-user-2000", "当前任务")],
+        records: vec![
+            user_record("user-current", "2000", "当前任务"),
+            SessionConversationRecord {
+                id: closing_record_id.to_string(),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnTerminated,
+                visible: true,
+                title: String::from("执行失败"),
+                body: String::from("Provider request failed before assistant usage was recorded."),
+                metadata: None,
+                created_at: String::from("2003"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+    let compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::ContextCompaction,
+        1,
+        Some(&ProviderUsageSnapshot {
+            input_tokens: Some(20),
+            output_tokens: Some(4),
+            total_tokens: Some(24),
+            ..ProviderUsageSnapshot::default()
+        }),
+    );
+
+    let stats = build_session_turn_stats_from_state_with_segments(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Failed,
+        Some(2),
+        SessionTurnStatsKind::UserTurn,
+        vec![compaction_segment],
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.status, SessionTurnStatsStatus::Failed);
+    assert_eq!(stats.provider_call_count, 3);
+    assert_eq!(stats.usage_segments.len(), 2);
+    assert_eq!(
+        stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::AssistantResponse
+    );
+    assert_eq!(stats.usage_segments[0].provider_call_count, 2);
+    assert_eq!(stats.usage_segments[0].total_tokens, 0);
+    assert_eq!(
+        stats.usage_segments[1].kind,
+        SessionTurnUsageSegmentKind::ContextCompaction
+    );
+    assert_eq!(
+        stats
+            .usage_segments
+            .iter()
+            .map(|segment| segment.provider_call_count)
+            .sum::<usize>(),
+        stats.provider_call_count
+    );
+}
+
+/// Verifies manual compaction can produce an independent context-compaction turn without a user prompt.
+/// 验证手动压缩可以在没有用户提示词的情况下生成独立上下文压缩轮次。
+#[test]
+fn context_compaction_turn_stats_can_be_built_from_explicit_segment_only() {
+    let closing_record_id = "compaction-end";
+    let conversation_state = SessionConversationState {
+        messages: Vec::new(),
+        records: vec![SessionConversationRecord {
+            id: closing_record_id.to_string(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::CompactionStatus,
+            visible: true,
+            title: String::from("context_compaction.completed"),
+            body: String::new(),
+            metadata: None,
+            created_at: String::from("3000"),
+        }],
+        continuation: Default::default(),
+    };
+    let compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::ContextCompaction,
+        1,
+        Some(&ProviderUsageSnapshot {
+            input_tokens: Some(100),
+            output_tokens: Some(30),
+            total_tokens: Some(130),
+            cache_creation_input_tokens: Some(10),
+            ..ProviderUsageSnapshot::default()
+        }),
+    );
+
+    let stats = build_session_turn_stats_from_state_with_segments(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+        SessionTurnStatsKind::ContextCompaction,
+        vec![compaction_segment],
+    )
+    .expect("context-compaction stats should be built");
+
+    assert_eq!(stats.turn_kind, SessionTurnStatsKind::ContextCompaction);
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 100);
+    assert_eq!(stats.output_tokens, 30);
+    assert_eq!(stats.total_tokens, 130);
+    assert_eq!(stats.cache_creation_input_tokens, Some(10));
+    assert_eq!(stats.usage_segments.len(), 1);
+    assert_eq!(
+        stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::ContextCompaction
+    );
+}

@@ -1,0 +1,385 @@
+//! Controller-loop tests for the product-owned host execution flow.
+//! 面向产品自有宿主执行流的控制器循环测试。
+
+use super::*;
+use crate::provider::{VulcanProviderDeltaSink, VulcanStreamingProviderAdapter};
+use crate::tool::{AllowAllToolPolicy, ExactToolSetPolicy};
+use crate::types::{
+    ConversationPayload, ConversationToolCall, ProviderContinuation, ProviderPromptLayers,
+    ProviderRequestSnapshot, ProviderRequestToolSchema, ProviderTurnDelta,
+};
+use async_trait::async_trait;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// Captures pre-planned provider turn responses and records the built request snapshots.
+/// 持有预先规划的 Provider 回合响应，并记录构建出的请求快照。
+#[derive(Debug, Clone)]
+struct MockProviderAdapter {
+    /// Stable provider identifier exposed by the mock adapter.
+    /// 由模拟适配器暴露的稳定 Provider 标识。
+    provider_id: String,
+    /// Stable model identifier exposed by the mock adapter.
+    /// 由模拟适配器暴露的稳定模型标识。
+    model_id: String,
+    /// Planned normalized provider responses returned sequentially.
+    /// 按顺序返回的规范化 Provider 响应计划队列。
+    planned_responses: Arc<Mutex<VecDeque<ProviderTurnResponse>>>,
+    /// Built request snapshots captured before execution.
+    /// 执行前捕获到的请求快照集合。
+    built_requests: Arc<Mutex<Vec<ProviderRequestSnapshot>>>,
+}
+
+impl MockProviderAdapter {
+    /// Creates one mock provider adapter from the planned turn-response sequence.
+    /// 根据计划中的回合响应序列创建一个模拟 Provider 适配器。
+    fn new(planned_responses: Vec<ProviderTurnResponse>) -> Self {
+        Self {
+            provider_id: String::from("mock-openai"),
+            model_id: String::from("mock-model"),
+            planned_responses: Arc::new(Mutex::new(VecDeque::from(planned_responses))),
+            built_requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Returns the built request snapshots captured by the adapter so far.
+    /// 返回适配器截至当前捕获到的请求快照集合。
+    fn built_requests(&self) -> Vec<ProviderRequestSnapshot> {
+        self.built_requests
+            .lock()
+            .expect("lock built requests")
+            .clone()
+    }
+}
+
+/// Captures pre-planned streaming provider responses and emits buffered turn deltas before returning the final normalized response.
+/// 持有预先规划的流式 Provider 响应，并在返回最终规范化响应前发出缓冲回合增量。
+#[derive(Debug, Clone)]
+struct MockStreamingProviderAdapter {
+    /// Stable provider identifier exposed by the mock streaming adapter.
+    /// 由模拟流式适配器暴露的稳定 Provider 标识。
+    provider_id: String,
+    /// Stable model identifier exposed by the mock streaming adapter.
+    /// 由模拟流式适配器暴露的稳定模型标识。
+    model_id: String,
+    /// Planned normalized provider responses paired with the deltas that should be emitted before each final response.
+    /// 与每次最终响应之前应发出的增量配对保存的规范化 Provider 响应计划队列。
+    planned_turns: Arc<Mutex<VecDeque<(Vec<ProviderTurnDelta>, ProviderTurnResponse)>>>,
+    /// Built request snapshots captured before execution.
+    /// 执行前捕获到的请求快照集合。
+    built_requests: Arc<Mutex<Vec<ProviderRequestSnapshot>>>,
+}
+
+impl MockStreamingProviderAdapter {
+    /// Creates one mock streaming provider adapter from the planned turn sequence.
+    /// 根据计划中的回合序列创建一个模拟流式 Provider 适配器。
+    fn new(planned_turns: Vec<(Vec<ProviderTurnDelta>, ProviderTurnResponse)>) -> Self {
+        Self {
+            provider_id: String::from("mock-openai-streaming"),
+            model_id: String::from("mock-model"),
+            planned_turns: Arc::new(Mutex::new(VecDeque::from(planned_turns))),
+            built_requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Returns the built request snapshots captured by the streaming adapter so far.
+    /// 返回流式适配器截至当前捕获到的请求快照集合。
+    fn built_requests(&self) -> Vec<ProviderRequestSnapshot> {
+        self.built_requests
+            .lock()
+            .expect("lock streaming built requests")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl VulcanProviderAdapter for MockProviderAdapter {
+    type Request = ProviderRequestSnapshot;
+    type Response = ProviderTurnResponse;
+
+    /// Returns the stable provider identifier owned by the mock adapter.
+    /// 返回由模拟适配器持有的稳定 Provider 标识。
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the stable model identifier owned by the mock adapter.
+    /// 返回由模拟适配器持有的稳定模型标识。
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Builds one request snapshot directly from the controller snapshot for later assertions.
+    /// 直接根据控制器快照构建一份请求快照，供后续断言使用。
+    async fn build_request(
+        &self,
+        snapshot: &ConversationSnapshot,
+        config: &ControllerConfig,
+    ) -> Result<Self::Request, CoreError> {
+        let request = ProviderRequestSnapshot {
+            provider_id: config.provider_id.clone(),
+            model_id: config.model_id.clone(),
+            system_prompt: config.system_prompt.clone(),
+            prompt_layers: config.prompt_layers.clone(),
+            prompt: String::from("mock-user-prompt"),
+            history: snapshot.messages.clone(),
+            temperature: config.temperature,
+            max_turns: config.max_turns,
+            tool_schemas: vec![ProviderRequestToolSchema {
+                id: String::from("mock-tool"),
+                name: String::from("mock-tool"),
+                description: String::from("mock tool"),
+                source_label: String::from("test"),
+                parameters_schema: json!({"type":"object"}),
+            }],
+            additional_params: config.additional_params.clone(),
+            request_headers: None,
+            continuation: snapshot.continuation.clone(),
+        };
+        self.built_requests
+            .lock()
+            .expect("lock built requests")
+            .push(request.clone());
+        Ok(request)
+    }
+
+    /// Returns the next pre-planned turn response or fails when the queue has been exhausted.
+    /// 返回下一个预先规划的回合响应，或在队列耗尽时失败。
+    async fn execute_request(&self, _request: Self::Request) -> Result<Self::Response, CoreError> {
+        self.planned_responses
+            .lock()
+            .expect("lock planned responses")
+            .pop_front()
+            .ok_or_else(|| CoreError::InvalidState {
+                message: String::from("模拟 Provider 响应队列已耗尽。"),
+            })
+    }
+}
+
+#[async_trait]
+impl VulcanProviderAdapter for MockStreamingProviderAdapter {
+    type Request = ProviderRequestSnapshot;
+    type Response = ProviderTurnResponse;
+
+    /// Returns the stable provider identifier owned by the mock streaming adapter.
+    /// 返回由模拟流式适配器持有的稳定 Provider 标识。
+    fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the stable model identifier owned by the mock streaming adapter.
+    /// 返回由模拟流式适配器持有的稳定模型标识。
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Builds one request snapshot directly from the controller snapshot for later assertions.
+    /// 直接根据控制器快照构建一份请求快照，供后续断言使用。
+    async fn build_request(
+        &self,
+        snapshot: &ConversationSnapshot,
+        config: &ControllerConfig,
+    ) -> Result<Self::Request, CoreError> {
+        let request = ProviderRequestSnapshot {
+            provider_id: config.provider_id.clone(),
+            model_id: config.model_id.clone(),
+            system_prompt: config.system_prompt.clone(),
+            prompt_layers: config.prompt_layers.clone(),
+            prompt: String::from("mock-streaming-user-prompt"),
+            history: snapshot.messages.clone(),
+            temperature: config.temperature,
+            max_turns: config.max_turns,
+            tool_schemas: vec![ProviderRequestToolSchema {
+                id: String::from("mock-tool"),
+                name: String::from("mock-tool"),
+                description: String::from("mock tool"),
+                source_label: String::from("test"),
+                parameters_schema: json!({"type":"object"}),
+            }],
+            additional_params: config.additional_params.clone(),
+            request_headers: None,
+            continuation: snapshot.continuation.clone(),
+        };
+        self.built_requests
+            .lock()
+            .expect("lock built requests")
+            .push(request.clone());
+        Ok(request)
+    }
+
+    /// Mock streaming adapters are expected to use `execute_request_streaming` instead of the one-shot request path.
+    /// 模拟流式适配器应当使用 `execute_request_streaming`，而不是一次性请求路径。
+    async fn execute_request(&self, _request: Self::Request) -> Result<Self::Response, CoreError> {
+        Err(CoreError::InvalidState {
+            message: String::from("模拟流式适配器不支持一次性 execute_request 调用。"),
+        })
+    }
+}
+
+#[async_trait]
+impl VulcanStreamingProviderAdapter for MockStreamingProviderAdapter {
+    /// Emits the pre-planned delta sequence into the provided sink and then returns the next final turn response.
+    /// 将预先规划的增量序列写入给定 sink，并在随后返回下一条最终回合响应。
+    async fn execute_request_streaming<S>(
+        &self,
+        _request: Self::Request,
+        sink: &mut S,
+    ) -> Result<Self::Response, CoreError>
+    where
+        S: VulcanProviderDeltaSink,
+    {
+        let (deltas, response) = self
+            .planned_turns
+            .lock()
+            .expect("lock planned streaming turns")
+            .pop_front()
+            .ok_or_else(|| CoreError::InvalidState {
+                message: String::from("模拟流式 Provider 响应队列已耗尽。"),
+            })?;
+        for delta in deltas {
+            sink.push_delta(delta);
+        }
+        Ok(response)
+    }
+}
+
+/// Executes pre-planned tool outcomes and records each incoming tool request.
+/// 执行预先规划的工具结果，并记录每一次收到的工具请求。
+#[derive(Debug, Clone, Default)]
+struct MockToolExecutor {
+    /// Pre-planned tool outcomes keyed by tool name.
+    /// 按工具名称索引的预先规划工具结果。
+    outcomes_by_tool: BTreeMap<String, Result<(String, Option<Value>, bool), String>>,
+    /// Recorded tool invocation requests received by the executor.
+    /// 被执行器收到并记录下来的工具调用请求集合。
+    executed_requests: Arc<Mutex<Vec<ToolInvocationRequest>>>,
+}
+
+impl MockToolExecutor {
+    /// Creates one empty mock tool executor.
+    /// 创建一个空白的模拟工具执行器。
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers one pre-planned tool outcome for a specific tool name.
+    /// 为指定工具名称注册一条预先规划的工具结果。
+    fn with_outcome(
+        mut self,
+        tool_name: &str,
+        model_output: &str,
+        host_result: Option<Value>,
+        is_error: bool,
+    ) -> Self {
+        self.outcomes_by_tool.insert(
+            tool_name.to_string(),
+            Ok((model_output.to_string(), host_result, is_error)),
+        );
+        self
+    }
+
+    /// Registers one pre-planned tool failure for a specific tool name.
+    /// 为指定工具名称注册一条预先规划的工具失败。
+    fn with_failure(mut self, tool_name: &str, message: &str) -> Self {
+        self.outcomes_by_tool
+            .insert(tool_name.to_string(), Err(message.to_string()));
+        self
+    }
+
+    /// Returns the recorded tool invocation requests captured by the executor so far.
+    /// 返回执行器截至当前捕获到的工具调用请求集合。
+    fn executed_requests(&self) -> Vec<ToolInvocationRequest> {
+        self.executed_requests
+            .lock()
+            .expect("lock executed requests")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl VulcanToolExecutor for MockToolExecutor {
+    /// Executes one tool request by looking up the pre-planned result for the requested tool.
+    /// 通过查找被请求工具的预设结果来执行一次工具请求。
+    async fn execute_tool(
+        &self,
+        request: &ToolInvocationRequest,
+    ) -> Result<ToolInvocationResult, CoreError> {
+        self.executed_requests
+            .lock()
+            .expect("lock executed requests")
+            .push(request.clone());
+        let (model_output, host_result, is_error) = self
+            .outcomes_by_tool
+            .get(&request.tool_name)
+            .cloned()
+            .ok_or_else(|| CoreError::InvalidState {
+                message: format!("未找到工具 `{}` 的模拟结果。", request.tool_name),
+            })?
+            .map_err(|message| CoreError::ToolFailure {
+                tool_name: request.tool_name.clone(),
+                message,
+            })?;
+        Ok(ToolInvocationResult {
+            tool_call_id: request.tool_call_id.clone(),
+            tool_name: request.tool_name.clone(),
+            model_output,
+            host_result,
+            is_error,
+        })
+    }
+}
+
+/// Records overlapping tool execution so batch-level concurrency is directly observable.
+/// 记录重叠的工具执行，使批量工具并发可以被直接观察。
+#[derive(Debug, Clone, Default)]
+struct ConcurrentToolExecutor {
+    /// Number of tool calls currently inside the mock executor.
+    /// 当前进入模拟执行器的工具调用数量。
+    current_running: Arc<AtomicUsize>,
+    /// Maximum number of simultaneously running tool calls observed by the mock executor.
+    /// 模拟执行器观测到的最大同时运行工具调用数量。
+    max_running: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl VulcanToolExecutor for ConcurrentToolExecutor {
+    /// Executes one delayed tool request while tracking concurrent in-flight calls.
+    /// 执行一次带延迟的工具请求，同时跟踪并发中的调用数量。
+    async fn execute_tool(
+        &self,
+        request: &ToolInvocationRequest,
+    ) -> Result<ToolInvocationResult, CoreError> {
+        let current = self.current_running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_running.fetch_max(current, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.current_running.fetch_sub(1, Ordering::SeqCst);
+        Ok(ToolInvocationResult {
+            tool_call_id: request.tool_call_id.clone(),
+            tool_name: request.tool_name.clone(),
+            model_output: format!("{} done", request.tool_name),
+            host_result: None,
+            is_error: false,
+        })
+    }
+}
+
+/// Builds one baseline controller configuration for loop tests.
+/// 为循环测试构建一份基线控制器配置。
+fn build_test_config(max_turns: usize) -> ControllerConfig {
+    ControllerConfig {
+        provider_id: String::from("mock-openai"),
+        model_id: String::from("mock-model"),
+        system_prompt: String::from("system"),
+        prompt_layers: ProviderPromptLayers::from_system_prompt("system"),
+        temperature: Some(0.1),
+        max_turns,
+        additional_params: Some(json!({"reasoning_effort":"medium"})),
+        context_injection: None,
+    }
+}
+
+mod interventions;
+mod loop_flow;
+mod streaming;
+mod tool_batches;

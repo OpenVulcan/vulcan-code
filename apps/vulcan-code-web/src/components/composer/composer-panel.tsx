@@ -1,5 +1,5 @@
 import React from "react";
-import { Brain, Check, CheckCircle2, Circle, Edit3, ListChecks, PauseCircle, PlayCircle, Route, Search, Send, Square, Target, Trash2, X } from "lucide-react";
+import { Check, CheckCircle2, Circle, Edit3, ListChecks, PauseCircle, PlayCircle, Route, Search, Target, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   ModelPickerControl,
@@ -30,14 +30,9 @@ import {
 import {
   ComposerAiCapabilityControl,
   ComposerAttachmentMenu,
-  ComposerAttachmentStrip,
-  ComposerSelectControl,
   ComposerSlashCommandPanel,
-  ContextUsageOrb,
   PendingPromptQueueStrip,
-  type ComposerAttachmentPreviewMedia,
 } from "@/components/composer/composer-controls";
-import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 import { useComposerAttachments } from "@/components/composer/composer-attachments";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
@@ -47,13 +42,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/compon
 import { Input } from "@/components/ui/input";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -77,94 +65,21 @@ import type { ComposerTraceCallback } from "@/components/composer/composer-contr
 
 // ComposerSessionMemoryDraft stores unsent composer content for one conversation slot.
 // ComposerSessionMemoryDraft 保存单个会话槽中尚未发送的输入区内容。
-interface ComposerSessionMemoryDraft {
-  // input is the raw textarea value, including user-authored whitespace.
-  // input 是原始输入框内容，保留用户输入的空白字符。
-  input: string;
-  // attachments are staged files that should travel with the draft input.
-  // attachments 是应随草稿输入一起保留的已暂存文件。
-  attachments: ComposerAttachmentSummary[];
-}
-
-// composerSessionDraftMemory keeps per-session composer drafts for the current WebUI process.
-// composerSessionDraftMemory 在当前 WebUI 进程内保存按会话分槽的输入区草稿。
-const composerSessionDraftMemory = new Map<string, ComposerSessionMemoryDraft>();
-
-// composerShortcutHint returns a platform-specific keyboard hint for the composer placeholder.
-// composerShortcutHint 返回输入区 placeholder 使用的平台化快捷键提示。
-function composerShortcutHint(baseHint: string): string {
-  const platformText = typeof navigator === "undefined"
-    ? ""
-    : `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
-  if (platformText.includes("mac")) {
-    return baseHint;
-  }
-  return baseHint;
-}
-
-// composerSessionDraftKey returns the in-memory slot for one selected or draft conversation.
-// composerSessionDraftKey 返回当前选中会话或新建会话对应的内存草稿槽。
-function composerSessionDraftKey(projectId: string | null, conversationId: string | null): string {
-  if (conversationId) {
-    return `conversation:${conversationId}`;
-  }
-  return `new:${projectId?.trim() || "workspace"}`;
-}
-
-// cloneComposerSessionMemoryDraft returns a detached draft copy for safe React state use.
-// cloneComposerSessionMemoryDraft 返回脱离原对象的草稿副本，供 React 状态安全使用。
-function cloneComposerSessionMemoryDraft(draft: ComposerSessionMemoryDraft): ComposerSessionMemoryDraft {
-  return {
-    input: draft.input,
-    attachments: draft.attachments.map((attachment) => ({ ...attachment })),
-  };
-}
-
-// emptyComposerSessionMemoryDraft creates an empty draft object.
-// emptyComposerSessionMemoryDraft 创建空输入区草稿对象。
-function emptyComposerSessionMemoryDraft(): ComposerSessionMemoryDraft {
-  return {
-    input: "",
-    attachments: [],
-  };
-}
-
-// readComposerSessionMemoryDraft reads one draft slot without sharing mutable arrays.
-// readComposerSessionMemoryDraft 读取单个草稿槽，并避免共享可变数组。
-function readComposerSessionMemoryDraft(key: string): ComposerSessionMemoryDraft {
-  const draft = composerSessionDraftMemory.get(key);
-  return draft ? cloneComposerSessionMemoryDraft(draft) : emptyComposerSessionMemoryDraft();
-}
-
-// writeComposerSessionMemoryDraft saves or clears one draft slot.
-// writeComposerSessionMemoryDraft 保存或清理单个草稿槽。
-function writeComposerSessionMemoryDraft(
-  key: string,
-  input: string,
-  attachments: ComposerAttachmentSummary[],
-): void {
-  if (!input && attachments.length === 0) {
-    composerSessionDraftMemory.delete(key);
-    return;
-  }
-  composerSessionDraftMemory.set(key, {
-    input,
-    attachments: attachments.map((attachment) => ({ ...attachment })),
-  });
-}
-
-// defaultAiCapabilityTargetOrderFromRecord restores a typed route order map from a saved request payload.
-// defaultAiCapabilityTargetOrderFromRecord 从已保存请求载荷恢复类型化路由顺序映射。
-function defaultAiCapabilityTargetOrderFromRecord(record: Record<string, string[]>): Map<AiCapabilityKind, string[]> {
-  const order = new Map<AiCapabilityKind, string[]>();
-  for (const [kind, selectors] of Object.entries(record)) {
-    if (isComposerAiCapabilityKind(kind)) {
-      order.set(kind, [...selectors]);
-    }
-  }
-  return order;
-}
-
+import {
+  composerSessionDraftKey,
+  composerShortcutHint,
+  defaultAiCapabilityTargetOrderFromRecord,
+  readComposerSessionMemoryDraft,
+  writeComposerSessionMemoryDraft,
+  type ComposerSessionMemoryDraft,
+} from "@/components/composer/composer-panel/helpers";
+import { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
+import { ModelSecondaryRouteControl, parseModelPickerChoiceKey } from "@/components/composer/composer-panel/model-secondary-route-control";
+import { ComposerGoalStrip, ComposerPlanModeChip } from "@/components/composer/composer-panel/goal-strip";
+import { ComposerPanelAttachmentPreviewStrip } from "@/components/composer/composer-panel/attachment-preview-strip";
+import { ComposerGoalDialog } from "@/components/composer/composer-panel/goal-dialog";
+import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
+export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 export function ComposerPanel(props: {
@@ -1001,25 +916,11 @@ export function ComposerPanel(props: {
           type="file"
         />
         {attachments.length ? (
-          <ComposerAttachmentStrip
+          <ComposerPanelAttachmentPreviewStrip
             attachments={attachments}
-            resolvePreview={(attachment): ComposerAttachmentPreviewMedia | null => {
-              const media = composerAttachmentMedia(attachment);
-              if (!media) {
-                return null;
-              }
-              return {
-                kind: media.kind,
-                sourceUrl: media.kind === "image" ? props.resolveMediaSourceUrl(media.localPath) : undefined,
-              };
-            }}
-            onOpenMedia={(attachment) => {
-              const media = composerAttachmentMedia(attachment);
-              if (media) {
-                setComposerMediaPlayer(media);
-              }
-            }}
+            onOpenMedia={setComposerMediaPlayer}
             onRemove={removeComposerAttachment}
+            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           />
         ) : null}
         {slashPanelVisible ? (
@@ -1087,416 +988,38 @@ export function ComposerPanel(props: {
               onSaveConfiguration={handleAiCapabilityConfigurationSave}
             />
           </div>
-          <div className="composer-toolbar-right">
-            <ContextUsageOrb snapshot={props.contextUsage} />
-            <ComposerSelectControl
-              ariaLabel={t("composer.aria.reasoning")}
-              className="reasoning no-indicator"
-              fallbackLabel={t("composer.selectFallback")}
-              hideTriggerSubtitle
-              icon={<Brain size={15} />}
-              onValueChange={(value) => void handleReasoningEffortChange(value)}
-              openSignal={reasoningPickerOpenSignal}
-              options={reasoningEffortOptions}
-              tooltip={<strong>思考级别</strong>}
-              value={reasoningEffort}
-            />
-            {props.isConversationRunning && (draftInput.trim() || attachments.length > 0) ? (
-              <Button
-                aria-label={t("composer.aria.stop")}
-                className="send-button running"
-                onClick={() => void handleComposerStop()}
-                size="icon"
-                type="button"
-              >
-                <Square fill="currentColor" size={15} strokeWidth={0} />
-              </Button>
-            ) : null}
-            <Button
-              aria-label={props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? t("composer.aria.stop") : t("composer.aria.send")}
-              className={cn("send-button", props.isConversationRunning && !draftInput.trim() && attachments.length === 0 && "running")}
-              onClick={() => void handleComposerSend()}
-              size="icon"
-              type="button"
-            >
-              {props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? <Square fill="currentColor" size={15} strokeWidth={0} /> : <Send size={18} />}
-            </Button>
-          </div>
+          <ComposerPanelToolbarRight
+            attachmentCount={attachments.length}
+            contextUsage={props.contextUsage}
+            draftInput={draftInput}
+            isConversationRunning={props.isConversationRunning}
+            onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
+            onSend={() => void handleComposerSend()}
+            onStop={() => void handleComposerStop()}
+            reasoningAriaLabel={t("composer.aria.reasoning")}
+            reasoningEffort={reasoningEffort}
+            reasoningEffortOptions={reasoningEffortOptions}
+            reasoningPickerOpenSignal={reasoningPickerOpenSignal}
+            selectFallbackLabel={t("composer.selectFallback")}
+            sendAriaLabel={t("composer.aria.send")}
+            stopAriaLabel={t("composer.aria.stop")}
+          />
         </div>
         {composerMediaPlayer ? (
           <GeneratedMediaPlayerWindow attachment={composerMediaPlayer} onClose={() => setComposerMediaPlayer(null)} />
         ) : null}
       </section>
-      <Dialog open={goalDialogOpen} onOpenChange={setGoalDialogOpen}>
-        <DialogContent className="composer-goal-dialog">
-          <DialogHeader>
-            <DialogTitle>{goalDialogMode === "resume" ? "继续任务" : "编辑目标"}</DialogTitle>
-          </DialogHeader>
-          <div className="composer-goal-dialog-body">
-            <Textarea
-              aria-label="目标内容"
-              className="composer-goal-objective-input"
-              onChange={(event) => setGoalObjectiveDraft(event.currentTarget.value)}
-              placeholder="输入当前会话要持续推进的目标"
-              value={goalObjectiveDraft}
-            />
-            <input
-              aria-label="Token 预算"
-              className="composer-goal-budget-input"
-              inputMode="numeric"
-              onChange={(event) => setGoalTokenBudgetDraft(event.currentTarget.value.replace(/[^\d]/g, ""))}
-              placeholder="Token 预算（可选）"
-              value={goalTokenBudgetDraft}
-            />
-          </div>
-          <DialogFooter>
-            <Button disabled={goalSaving} onClick={() => setGoalDialogOpen(false)} type="button" variant="secondary">
-              取消
-            </Button>
-            <Button disabled={goalSaving} onClick={() => void handleGoalSave()} type="button">
-              {goalDialogMode === "resume" ? "继续任务" : "保存"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ComposerGoalDialog
+        mode={goalDialogMode}
+        objective={goalObjectiveDraft}
+        onObjectiveChange={setGoalObjectiveDraft}
+        onOpenChange={setGoalDialogOpen}
+        onSave={() => void handleGoalSave()}
+        onTokenBudgetChange={setGoalTokenBudgetDraft}
+        open={goalDialogOpen}
+        saving={goalSaving}
+        tokenBudget={goalTokenBudgetDraft}
+      />
     </>
   );
-}
-
-// ComposerSessionProgressCapsule renders the transient progress summary above queue and goal strips.
-// ComposerSessionProgressCapsule 在队列与目标条上方渲染临时进程摘要。
-export function ComposerSessionProgressCapsule(props: {
-  // Current session progress todolist displayed by this capsule.
-  // 当前胶囊展示的会话进程 todolist。
-  todolist: SessionTodolistSummary;
-  // Optional Git review summary shown only as compact change counters.
-  // 可选 Git 审查摘要，仅作为紧凑变更计数展示。
-  reviewSummary: ConversationSessionReviewSummary | null;
-}) {
-  const currentStepNumber = composerSessionCurrentStepNumber(props.todolist);
-  const progressValue = composerSessionProgressValue(currentStepNumber, props.todolist.totalCount);
-  const reviewSummary = props.reviewSummary?.changedFiles ? props.reviewSummary : null;
-  return (
-    <div className="composer-session-progress-root">
-      <button
-        aria-label="查看当前进程"
-        className="composer-session-progress-capsule"
-        type="button"
-      >
-        <ProgressRing aria-label={`进程进度 ${currentStepNumber}/${props.todolist.totalCount}`} size={14} value={progressValue} />
-        <span>第 {currentStepNumber} / {props.todolist.totalCount} 步</span>
-        {reviewSummary ? (
-          <span className="composer-session-progress-review-summary">
-            <span>· {reviewSummary.changedFiles} 个文件已更改</span>
-            <span className="added">+{reviewSummary.additions}</span>
-            <span className="removed">-{reviewSummary.deletions}</span>
-          </span>
-        ) : null}
-      </button>
-      <div className="composer-session-progress-popover" role="tooltip">
-        <div className="composer-session-progress-list">
-          {props.todolist.items.map((item, index) => (
-            <div className={cn("composer-session-progress-row", `status-${item.status}`)} key={`${index}-${item.status}-${item.step}`}>
-              {composerSessionProgressStatusIcon(item.status)}
-              <span>{item.step}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// composerSessionProgressValue converts the displayed step count into a bounded ring ratio.
-// composerSessionProgressValue 将展示用步骤计数转换为受限的圆环比例。
-function composerSessionProgressValue(currentStepNumber: number, totalCount: number): number {
-  if (!Number.isFinite(currentStepNumber) || !Number.isFinite(totalCount) || totalCount <= 0) {
-    return 0;
-  }
-  return Math.min(1, Math.max(0, currentStepNumber / totalCount));
-}
-
-// composerSessionCurrentStepNumber resolves the one-based active or next step number.
-// composerSessionCurrentStepNumber 解析当前或下一步的一基序号。
-function composerSessionCurrentStepNumber(todolist: SessionTodolistSummary): number {
-  const activeIndex = todolist.items.findIndex((item) => item.status === "in_progress");
-  if (activeIndex >= 0) {
-    return activeIndex + 1;
-  }
-  return Math.min(todolist.totalCount, Math.max(1, todolist.completedCount + 1));
-}
-
-// composerSessionProgressStatusIcon returns the compact icon for one progress status.
-// composerSessionProgressStatusIcon 返回单个进程状态的紧凑图标。
-function composerSessionProgressStatusIcon(status: SessionTodolistItemSummary["status"]): React.ReactNode {
-  if (status === "completed") {
-    return <CheckCircle2 size={15} />;
-  }
-  if (status === "in_progress") {
-    return <ProgressRing aria-label="步骤进行中" size={15} value={null} />;
-  }
-  return <Circle size={15} />;
-}
-
-// parseModelPickerChoiceKey splits only the provider prefix because model ids may contain slashes.
-// parseModelPickerChoiceKey 只拆分 Provider 前缀，因为模型标识本身可能包含斜杠。
-function parseModelPickerChoiceKey(value: string): { providerId: string; modelId: string } | null {
-  const separatorIndex = value.indexOf("/");
-  if (separatorIndex <= 0 || separatorIndex >= value.length - 1) {
-    return null;
-  }
-  return {
-    providerId: value.slice(0, separatorIndex),
-    modelId: value.slice(separatorIndex + 1),
-  };
-}
-
-// ModelSecondaryRouteControl renders a compact provider-managed route picker beside the model selector.
-// ModelSecondaryRouteControl 在模型选择器旁渲染紧凑的 Provider 托管路由选择器。
-function ModelSecondaryRouteControl(props: {
-  // Stable provider identifier.
-  // 稳定 Provider 标识。
-  providerId: string;
-  // Stable model identifier.
-  // 稳定模型标识。
-  modelId: string;
-  // Currently selected secondary route.
-  // 当前选择的二级路由。
-  selectedRoute: ProviderModelSecondaryRouteSummary | null;
-  // Loads route choices.
-  // 加载路由选项。
-  onListRoutes: (providerId: string, modelId: string) => Promise<ProviderModelSecondaryRouteSummary[]>;
-  // Persists one route selection.
-  // 持久化单个路由选择。
-  onSelectRoute: (
-    providerId: string,
-    modelId: string,
-    route: ProviderModelSecondaryRouteSelection | null,
-  ) => Promise<boolean>;
-}) {
-  const [open, setOpen] = React.useState(false);
-  const [filter, setFilter] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
-  const [routes, setRoutes] = React.useState<ProviderModelSecondaryRouteSummary[]>([]);
-  const selectedLabel = props.selectedRoute?.label?.trim() || "Auto";
-  const filteredRoutes = React.useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    if (!needle) {
-      return routes;
-    }
-    return routes.filter((route) => (
-      route.label.toLowerCase().includes(needle)
-      || route.subtitle.toLowerCase().includes(needle)
-      || route.tag.toLowerCase().includes(needle)
-      || route.endpointName.toLowerCase().includes(needle)
-    ));
-  }, [filter, routes]);
-
-  React.useEffect(() => {
-    if (!open) {
-      setFilter("");
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    props.onListRoutes(props.providerId, props.modelId)
-      .then((nextRoutes) => {
-        if (!cancelled) {
-          setRoutes(nextRoutes);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : String(error));
-          setRoutes([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, props.modelId, props.onListRoutes, props.providerId]);
-
-  const chooseRoute = React.useCallback(async (route: ProviderModelSecondaryRouteSummary | null) => {
-    const ok = await props.onSelectRoute(
-      props.providerId,
-      props.modelId,
-      route ? {
-        routeId: route.routeId,
-        tag: route.tag,
-        providerName: route.providerName,
-        endpointName: route.endpointName,
-      } : null,
-    );
-    if (!ok) {
-      toast.error("二级供应商切换失败，已保留原选择。");
-      return;
-    }
-    setOpen(false);
-  }, [props]);
-
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          aria-label="选择二级供应商"
-          className="composer-secondary-route-trigger"
-          type="button"
-          variant="outline"
-        >
-          <Route size={14} />
-          <span>{selectedLabel}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="model-picker-content secondary-route-picker-content" sideOffset={8}>
-        <div className="model-picker-filter">
-          <Search size={14} />
-          <Input
-            aria-label="搜索二级供应商"
-            autoFocus
-            onChange={(event) => setFilter(event.currentTarget.value)}
-            placeholder="搜索二级供应商"
-            value={filter}
-          />
-        </div>
-        <ScrollArea className="model-picker-scroll">
-          <div className="model-picker-list">
-            <button
-              className={cn("model-picker-row", !props.selectedRoute && "selected")}
-              onClick={() => void chooseRoute(null)}
-              type="button"
-            >
-              <span className="model-picker-selected-slot">{!props.selectedRoute ? <Check size={15} /> : null}</span>
-              <span className="model-picker-row-copy">
-                <span className="model-picker-row-title">Auto</span>
-                <span className="model-picker-row-meta">由 OpenRouter 自动选择 endpoint</span>
-              </span>
-            </button>
-            {loading ? (
-              <div className="model-picker-empty">正在加载二级供应商...</div>
-            ) : filteredRoutes.length === 0 ? (
-              <div className="model-picker-empty">没有匹配的二级供应商</div>
-            ) : (
-              filteredRoutes.map((route) => (
-                <button
-                  className={cn("model-picker-row", route.active && "selected")}
-                  key={route.routeId}
-                  onClick={() => void chooseRoute(route)}
-                  type="button"
-                >
-                  <span className="model-picker-selected-slot">{route.active ? <Check size={15} /> : null}</span>
-                  <span className="model-picker-row-copy">
-                    <span className="model-picker-row-title">
-                      {route.label}
-                      {route.tag ? <span className="secondary-route-title-tag">（{route.tag}）</span> : null}
-                    </span>
-                    <span className="model-picker-row-meta">{route.subtitle}</span>
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-        </ScrollArea>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-// ComposerGoalStrip renders the current session goal above the prompt input.
-// ComposerGoalStrip 在提示词输入框上方渲染当前会话目标。
-function ComposerGoalStrip(props: {
-  // Current persisted goal.
-  // 当前持久化目标。
-  goal: SessionGoalSummary;
-  // Whether goal actions are temporarily disabled.
-  // 目标操作是否临时禁用。
-  disabled: boolean;
-  // Opens the goal editor.
-  // 打开目标编辑器。
-  onEdit: () => void;
-  // Opens the stopped-goal resume editor.
-  // 打开已停止目标的继续编辑器。
-  onResume: () => void;
-  // Pauses or resumes the goal.
-  // 暂停或恢复目标。
-  onToggleStatus: () => void;
-  // Clears the goal.
-  // 清理目标。
-  onClear: () => void;
-}) {
-  const usageTokens = props.goal.usageTokens ?? props.goal.tokensUsed;
-  const budgetText = props.goal.tokenBudget
-    ? `${usageTokens}/${props.goal.tokenBudget} tokens`
-    : `${usageTokens} tokens`;
-  const usageTooltip = [
-    `API 次数：${props.goal.apiCallCount ?? 0}`,
-    `工具调用：${props.goal.toolCallCount ?? 0}`,
-    `用量：${usageTokens} tokens`,
-    `输入：${props.goal.inputTokens ?? 0}`,
-    `缓存：${props.goal.cachedInputTokens ?? 0}`,
-    `输出：${props.goal.outputTokens ?? 0}`,
-    `总量：${props.goal.totalTokens ?? 0}`,
-  ].join("\n");
-  return (
-    <div className="composer-goal-strip">
-      <Target size={15} />
-      <span className="composer-goal-strip-status">{composerGoalStatusLabel(props.goal.status)}</span>
-      <span className="composer-goal-strip-objective">{props.goal.objective}</span>
-      <span className="composer-goal-strip-budget" title={usageTooltip}>{budgetText}</span>
-      <Button aria-label="编辑目标" className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onEdit} size="icon-sm" type="button" variant="ghost">
-        <Edit3 size={14} />
-      </Button>
-      {props.goal.status === "budget_limited" ? (
-        <Button aria-label="继续任务" className="composer-goal-strip-button text" disabled={props.disabled} onClick={props.onResume} type="button" variant="ghost">
-          <PlayCircle size={14} />
-          <span>继续任务</span>
-        </Button>
-      ) : (
-        <Button aria-label={props.goal.status === "paused" ? "恢复目标" : "暂停目标"} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onToggleStatus} size="icon-sm" type="button" variant="ghost">
-          {props.goal.status === "paused" ? <PlayCircle size={14} /> : <PauseCircle size={14} />}
-        </Button>
-      )}
-      <Button aria-label="清理目标" className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onClear} size="icon-sm" type="button" variant="ghost">
-        <Trash2 size={14} />
-      </Button>
-    </div>
-  );
-}
-
-// ComposerPlanModeChip renders the active Plan mode capsule in the toolbar.
-// ComposerPlanModeChip 在工具栏渲染已开启计划模式的胶囊。
-function ComposerPlanModeChip(props: {
-  // Optional latest plan artifact name.
-  // 可选的最近计划产物名称。
-  artifactName: string | null;
-  // Closes Plan mode.
-  // 关闭计划模式。
-  onClose: () => void;
-}) {
-  return (
-    <button className="composer-plan-mode-chip" onClick={props.onClose} title={props.artifactName ?? "计划模式"} type="button">
-      <span className="composer-plan-mode-icon">
-        <ListChecks size={14} />
-      </span>
-      <span>计划</span>
-      <span className="composer-plan-mode-close">
-        <X size={12} />
-      </span>
-    </button>
-  );
-}
-
-// composerGoalStatusLabel returns a compact Chinese status label for one goal status.
-// composerGoalStatusLabel 返回单个目标状态的紧凑中文标签。
-function composerGoalStatusLabel(status: SessionGoalSummary["status"]): string {
-  if (status === "active") return "进行中的目标";
-  if (status === "paused") return "已暂停的目标";
-  if (status === "blocked") return "受阻的目标";
-  if (status === "usage_limited") return "受限的目标";
-  if (status === "budget_limited") return "预算用尽";
-  return "已完成的目标";
 }

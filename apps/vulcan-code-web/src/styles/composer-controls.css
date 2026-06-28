@@ -1,0 +1,239 @@
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 9px 7px;
+}
+
+.composer-add-button {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.composer-add-button:hover,
+.composer-add-button:focus-visible,
+.composer-add-button[data-state="open"] {
+  background: var(--muted);
+}
+
+.composer-attachment-menu {
+  min-width: 160px;
+}
+
+.composer-attachment-menu svg {
+  color: var(--muted-foreground);
+}
+
+.composer-thinking-menu [data-slot="dropdown-menu-item"] {
+  min-width: 172px;
+  justify-content: space-between;
+}
+
+.composer-thinking-mode-label {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.composer-thinking-mode-label small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.composer-toolbar-left {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.composer-plan-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 9px;
+  background: color-mix(in srgb, var(--muted) 78%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, padding 160ms ease;
+}
+
+.composer-plan-mode-chip:hover,
+.composer-plan-mode-chip:focus-visible {
+  background: color-mix(in srgb, var(--muted) 92%, transparent);
+  color: var(--foreground);
+  outline: none;
+}
+
+.composer-plan-mode-icon,
+.composer-plan-mode-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.composer-plan-mode-close {
+  width: 16px;
+  height: 16px;
+  margin-right: -3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.composer-toolbar-right {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.context-usage-orb {
+  --context-usage-track: color-mix(in oklch, var(--muted-foreground) 24%, transparent);
+  --context-usage-progress-color: color-mix(in oklch, var(--muted-foreground) 82%, var(--foreground) 18%);
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background:
+    radial-gradient(circle at center, var(--card) 0 44%, transparent 45%),
+    conic-gradient(var(--context-usage-progress-color) var(--context-usage-progress), var(--context-usage-track) 0);
+  color: var(--foreground);
+  box-shadow: none;
+  cursor: default;
+}
+
+.context-usage-tooltip {
+  display: grid;
+  gap: 4px;
+  max-width: 360px;
+}
+
+.context-usage-tooltip strong {
+  color: inherit;
+  font-size: 12px;
+}
+
+.context-usage-tooltip span {
+  color: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.composer-control-tooltip {
+  display: grid;
+  align-items: start;
+  gap: 4px;
+  max-width: 280px;
+  white-space: normal;
+}
+
+.composer-control-tooltip strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.composer-control-tooltip span {
+  color: color-mix(in oklch, currentColor 78%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.composer-select-trigger {
+  height: 26px;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 6px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  padding: 4px 6px;
+  box-shadow: none;
+}
+
+.composer-select-trigger:hover,
+.composer-select-trigger[data-state="open"] {
+  background: var(--muted);
+}
+
+.composer-select-trigger.mode {
+  width: 46px;
+}
+
+.composer-select-trigger.model {
+  width: 141px;
+}
+
+.composer-select-trigger.capability {
+  width: 141px;
+}
+
+.composer-capability-trigger {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  border: 0;
+}
+
+.composer-capability-trigger .composer-select-copy {
+  justify-items: center;
+  text-align: center;
+}
+
+.composer-capability-icon-row {
+  min-width: 0;
+  display: inline-flex;
+  max-width: 100%;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.composer-capability-colored-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--capability-color, var(--foreground));
+}
+
+.composer-capability-colored-icon.enabled {
+  opacity: 1;
+}
+
+.composer-capability-colored-icon.disabled {
+  color: var(--muted-foreground);
+  filter: grayscale(1);
+  opacity: 0.44;
+}
+
+.composer-capability-colored-icon svg {
+  flex: 0 0 auto;
+}

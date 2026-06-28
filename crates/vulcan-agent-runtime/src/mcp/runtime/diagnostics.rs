@@ -1,0 +1,366 @@
+use super::*;
+
+/// Optional MCP runtime tool allowlist used when projecting host-visible MCP bindings.
+/// 投影宿主可见 MCP 绑定时使用的可选 MCP 运行时工具白名单。
+#[derive(Debug, Clone, Default)]
+pub struct McpRuntimeToolAllowlist {
+    /// Optional server identifier allowlist.
+    /// 可选的服务器标识白名单。
+    pub(super) allowed_server_ids: Option<BTreeSet<String>>,
+    /// Optional tool-name or qualified-name allowlist.
+    /// 可选的工具名或限定工具名白名单。
+    pub(super) allowed_tool_names: Option<BTreeSet<String>>,
+}
+
+impl McpRuntimeToolAllowlist {
+    /// Builds one MCP runtime tool allowlist from optional server and tool allowlists.
+    /// 根据可选服务器与工具白名单构建单个 MCP 运行时工具白名单。
+    pub fn new(
+        allowed_server_ids: Option<BTreeSet<String>>,
+        allowed_tool_names: Option<BTreeSet<String>>,
+    ) -> Self {
+        Self {
+            allowed_server_ids,
+            allowed_tool_names,
+        }
+    }
+
+    /// Returns the optional server identifier allowlist.
+    /// 返回可选服务器标识白名单。
+    pub fn allowed_server_ids(&self) -> Option<&BTreeSet<String>> {
+        self.allowed_server_ids.as_ref()
+    }
+
+    /// Returns the optional tool-name or qualified-name allowlist.
+    /// 返回可选工具名或限定工具名白名单。
+    pub fn allowed_tool_names(&self) -> Option<&BTreeSet<String>> {
+        self.allowed_tool_names.as_ref()
+    }
+}
+
+/// Runtime connectivity state of one configured MCP server.
+/// 某个已配置 MCP 服务器的运行时连通状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpRuntimeServerStatus {
+    /// Server is disabled in configuration and therefore does not participate in runtime registration.
+    /// 服务器在配置中被禁用，因此不参与运行时注册。
+    Disabled,
+    /// Server is enabled and currently attempting to establish a transport connection.
+    /// 服务器已启用，当前正在尝试建立传输连接。
+    Connecting,
+    /// Server is enabled and currently has an active transport connection.
+    /// 服务器已启用，当前拥有活动传输连接。
+    Connected,
+    /// Server is enabled but currently disconnected or unavailable.
+    /// 服务器已启用，但当前处于断开或不可用状态。
+    Disconnected,
+}
+
+impl McpRuntimeServerStatus {
+    /// Returns a compact human-readable status label.
+    /// 返回紧凑的人类可读状态标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Disabled => "禁用",
+            Self::Connecting => "连接中",
+            Self::Connected => "在线",
+            Self::Disconnected => "离线",
+        }
+    }
+}
+
+/// Runtime snapshot of one configured MCP server.
+/// 某个已配置 MCP 服务器的运行时快照。
+#[derive(Debug, Clone)]
+pub(super) struct McpRuntimeServerSnapshot {
+    /// Human-readable server name.
+    /// 人类可读服务器名称。
+    pub(super) name: String,
+    /// Whether the server is enabled in configuration.
+    /// 该服务器在配置中是否启用。
+    pub(super) enabled: bool,
+    /// Transport-family label used for diagnostics.
+    /// 用于诊断的传输类型标签。
+    pub(super) transport_label: String,
+    /// Compact endpoint or command summary shown in the workbench.
+    /// 展示在工作台中的紧凑端点或命令摘要。
+    pub(super) endpoint_summary: String,
+    /// Current runtime connectivity status.
+    /// 当前运行时连通状态。
+    pub(super) status: McpRuntimeServerStatus,
+    /// Latest connection or refresh warning, if any.
+    /// 最近一次连接或刷新警告（如果存在）。
+    pub(super) last_error: Option<String>,
+    /// Currently live tool descriptors registered from the active transport.
+    /// 当前从活动传输注册得到的实时工具描述集合。
+    pub(super) tools: Vec<McpRuntimeToolDescriptor>,
+    /// Last successfully discovered tool descriptors retained across reconnect attempts.
+    /// 在重连尝试之间保留的最后一次成功发现的工具描述集合。
+    pub(super) cached_tools: Vec<McpRuntimeToolDescriptor>,
+    /// Number of prompts currently reported by this server.
+    /// 当前由该服务器报告的 prompt 数量。
+    pub(super) prompt_count: usize,
+    /// Number of resources currently reported by this server.
+    /// 当前由该服务器报告的资源数量。
+    pub(super) resource_count: usize,
+}
+
+impl McpRuntimeServerSnapshot {
+    /// Returns the tool descriptors that should stay visible to upper host layers for the current connectivity state.
+    /// 返回在当前连通状态下应继续对上层宿主可见的工具描述集合。
+    pub(super) fn visible_tool_descriptors(&self) -> &[McpRuntimeToolDescriptor] {
+        match self.status {
+            McpRuntimeServerStatus::Connected => &self.tools,
+            McpRuntimeServerStatus::Connecting | McpRuntimeServerStatus::Disconnected => {
+                if self.cached_tools.is_empty() {
+                    &self.tools
+                } else {
+                    &self.cached_tools
+                }
+            }
+            McpRuntimeServerStatus::Disabled => &self.tools,
+        }
+    }
+}
+
+/// Lightweight runtime-facing diagnostic view for one enabled MCP server.
+/// 面向运行时的单个已启用 MCP 服务器轻量诊断视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpRuntimeServerDiagnostic {
+    /// Human-readable server name.
+    /// 人类可读服务器名称。
+    pub(super) name: String,
+    /// Current runtime connectivity status.
+    /// 当前运行时连通状态。
+    pub(super) status: McpRuntimeServerStatus,
+    /// Number of currently registered tools.
+    /// 当前已注册工具数量。
+    pub(super) tool_count: usize,
+    /// Number of currently discovered prompts.
+    /// 当前已发现 prompt 数量。
+    pub(super) prompt_count: usize,
+    /// Number of currently discovered resources.
+    /// 当前已发现资源数量。
+    pub(super) resource_count: usize,
+    /// Latest connection or refresh warning, if any.
+    /// 最近一次连接或刷新警告（如果存在）。
+    pub(super) last_error: Option<String>,
+}
+
+impl McpRuntimeServerDiagnostic {
+    /// Returns the human-readable server name.
+    /// 返回人类可读服务器名称。
+    pub fn server_name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the current runtime connectivity status.
+    /// 返回当前运行时连通状态。
+    pub fn status(&self) -> McpRuntimeServerStatus {
+        self.status
+    }
+
+    /// Returns the number of currently registered tools.
+    /// 返回当前已注册工具数量。
+    pub fn tool_count(&self) -> usize {
+        self.tool_count
+    }
+
+    /// Returns one human-readable runtime summary sentence.
+    /// 返回单条人类可读的运行时摘要语句。
+    pub fn summary_text(&self) -> String {
+        format!(
+            "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具、{} 个 prompt 与 {} 个资源。",
+            self.server_name(),
+            self.status().label(),
+            self.tool_count(),
+            self.prompt_count,
+            self.resource_count
+        )
+    }
+
+    /// Returns the latest warning sentence when the server has a refresh or connection error.
+    /// 当服务器存在刷新或连接错误时返回最近一次警告语句。
+    pub fn warning_text(&self) -> Option<String> {
+        self.last_error
+            .as_ref()
+            .map(|error| format!("{} 最近一次错误：{error}", self.summary_text()))
+    }
+
+    /// Returns the recommended runtime event title for UI projection.
+    /// 返回供界面投影使用的建议运行时事件标题。
+    pub fn runtime_event_title(&self) -> String {
+        if self.last_error.is_some() {
+            format!("MCP 服务器离线 · {}", self.server_name())
+        } else {
+            format!("MCP 服务器在线 · {}", self.server_name())
+        }
+    }
+}
+
+/// Lightweight MCP runtime event severity used by upper-layer projection adapters.
+/// 供上层投影适配器使用的轻量 MCP 运行时事件严重级别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum McpRuntimeEventProjectionKind {
+    /// Event represents a healthy informational server state.
+    /// 事件表示健康的提示性服务器状态。
+    Informational,
+    /// Event represents a warning or failure server state.
+    /// 事件表示告警或失败服务器状态。
+    Warning,
+}
+
+/// Stable MCP runtime event projection exported to upper runtime layers.
+/// 导出给上层运行时的稳定 MCP 运行时事件投影视图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpRuntimeEventProjection {
+    /// Recommended event kind derived from the current server diagnostic state.
+    /// 根据当前服务器诊断状态推导得到的建议事件种类。
+    pub(super) kind: McpRuntimeEventProjectionKind,
+    /// Recommended event title for UI projection.
+    /// 供界面投影使用的建议事件标题。
+    pub(super) title: String,
+    /// Recommended event body for UI projection.
+    /// 供界面投影使用的建议事件正文。
+    pub(super) body: String,
+}
+
+impl McpRuntimeEventProjection {
+    /// Returns the recommended event title for UI projection.
+    /// 返回供界面投影使用的建议事件标题。
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// Returns the recommended event body for UI projection.
+    /// 返回供界面投影使用的建议事件正文。
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
+    /// Returns whether the projected event should be treated as a warning/failure path.
+    /// 返回该投影视图是否应被视为告警或失败路径。
+    pub fn is_warning(&self) -> bool {
+        self.kind == McpRuntimeEventProjectionKind::Warning
+    }
+}
+
+/// Stable MCP runtime discovery report exported to upper runtime bootstrap flows.
+/// 导出给上层运行时 bootstrap 流程的稳定 MCP 运行时发现报告。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpRuntimeDiscoveryReport {
+    /// Recommended UI-facing runtime event projections.
+    /// 建议用于界面展示的运行时事件投影视图集合。
+    pub(super) event_projections: Vec<McpRuntimeEventProjection>,
+    /// Human-readable discovery summary rows.
+    /// 人类可读的发现摘要行集合。
+    pub(super) discovery_rows: Vec<String>,
+    /// Human-readable discovery error rows.
+    /// 人类可读的发现错误行集合。
+    pub(super) discovery_errors: Vec<String>,
+    /// Human-readable discovery warning rows.
+    /// 人类可读的发现告警行集合。
+    pub(super) discovery_warnings: Vec<String>,
+}
+
+impl McpRuntimeDiscoveryReport {
+    /// Returns whether the discovery report contains no event projections, summary rows, errors, or warnings.
+    /// 返回该发现报告是否不包含任何事件投影、摘要行、错误或告警。
+    pub fn is_empty(&self) -> bool {
+        self.event_projections.is_empty()
+            && self.discovery_rows.is_empty()
+            && self.discovery_errors.is_empty()
+            && self.discovery_warnings.is_empty()
+    }
+
+    /// Returns the recommended runtime event projections.
+    /// 返回建议的运行时事件投影视图集合。
+    pub fn event_projections(&self) -> &[McpRuntimeEventProjection] {
+        &self.event_projections
+    }
+
+    /// Returns the human-readable discovery summary rows.
+    /// 返回人类可读的发现摘要行集合。
+    pub fn discovery_rows(&self) -> &[String] {
+        &self.discovery_rows
+    }
+
+    /// Returns the human-readable discovery error rows.
+    /// 返回人类可读的发现错误行集合。
+    pub fn discovery_errors(&self) -> &[String] {
+        &self.discovery_errors
+    }
+
+    /// Returns the human-readable discovery warning rows.
+    /// 返回人类可读的发现告警行集合。
+    pub fn discovery_warnings(&self) -> &[String] {
+        &self.discovery_warnings
+    }
+}
+
+/// Stable MCP runtime overview exported to upper runtime layers.
+/// 导出给上层运行时的稳定 MCP 运行时概览。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpRuntimeOverview {
+    /// Human-readable summary rows covering all configured runtime-visible servers.
+    /// 覆盖全部已配置运行时可见服务器的人类可读摘要行集合。
+    pub(super) summary_rows: Vec<String>,
+    /// Human-readable summary rows covering only active runtime-visible servers.
+    /// 仅覆盖活动运行时可见服务器的人类可读摘要行集合。
+    pub(super) active_summary_rows: Vec<String>,
+    /// Stable discovery report exported to upper bootstrap and diagnostics flows.
+    /// 导出给上层 bootstrap 与诊断流程的稳定发现报告。
+    pub(super) discovery_report: McpRuntimeDiscoveryReport,
+}
+
+impl McpRuntimeOverview {
+    /// Builds one stable MCP runtime overview from summary rows and one discovery report.
+    /// 根据摘要行与单份发现报告构建单个稳定 MCP 运行时概览。
+    pub fn new(
+        summary_rows: Vec<String>,
+        active_summary_rows: Vec<String>,
+        discovery_report: McpRuntimeDiscoveryReport,
+    ) -> Self {
+        Self {
+            summary_rows,
+            active_summary_rows,
+            discovery_report,
+        }
+    }
+
+    /// Returns the human-readable summary rows covering all configured runtime-visible servers.
+    /// 返回覆盖全部已配置运行时可见服务器的人类可读摘要行集合。
+    pub fn summary_rows(&self) -> &[String] {
+        &self.summary_rows
+    }
+
+    /// Returns the human-readable summary rows covering only active runtime-visible servers.
+    /// 返回仅覆盖活动运行时可见服务器的人类可读摘要行集合。
+    pub fn active_summary_rows(&self) -> &[String] {
+        &self.active_summary_rows
+    }
+
+    /// Returns the stable discovery report exported to upper bootstrap and diagnostics flows.
+    /// 返回导出给上层 bootstrap 与诊断流程的稳定发现报告。
+    pub fn discovery_report(&self) -> &McpRuntimeDiscoveryReport {
+        &self.discovery_report
+    }
+}
+
+impl McpRuntimeServerDiagnostic {
+    /// Converts the current server diagnostic into one stable runtime event projection.
+    /// 将当前服务器诊断转换为单条稳定的运行时事件投影视图。
+    pub(super) fn to_runtime_event_projection(&self) -> McpRuntimeEventProjection {
+        let body = self.warning_text().unwrap_or_else(|| self.summary_text());
+        let kind = if self.last_error.is_some() {
+            McpRuntimeEventProjectionKind::Warning
+        } else {
+            McpRuntimeEventProjectionKind::Informational
+        };
+        McpRuntimeEventProjection {
+            kind,
+            title: self.runtime_event_title(),
+            body,
+        }
+    }
+}

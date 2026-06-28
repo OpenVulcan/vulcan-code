@@ -1,0 +1,323 @@
+//! MCP server settings WebUI service handlers.
+//! MCP 服务器设置 WebUI 服务处理器。
+
+use super::*;
+
+/// WebUI 设置页发送的 MCP 服务器配置保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct McpServerSaveRequest {
+    /// Existing server identifier, or `None` when creating one.
+    /// 已有服务器标识；创建新服务器时为 `None`。
+    server_id: Option<String>,
+    /// User-facing server name.
+    /// 面向用户显示的服务器名称。
+    name: String,
+    /// Whether the server should be registered by the runtime.
+    /// 该服务器是否应由运行时注册。
+    enabled: bool,
+    /// Transport key such as `stdio`, `http`, or `sse`.
+    /// 传输键，例如 `stdio`、`http` 或 `sse`。
+    transport: String,
+    /// Stdio command.
+    /// Stdio 启动命令。
+    command: String,
+    /// Stdio argument vector.
+    /// Stdio 参数列表。
+    args: Vec<String>,
+    /// Remote endpoint URL.
+    /// 远端端点 URL。
+    url: String,
+    /// Remote bearer token.
+    /// 远端 Bearer Token。
+    bearer_token: String,
+    /// Explicit HTTP headers.
+    /// 显式 HTTP 请求头。
+    headers: Vec<KeyValueInput>,
+    /// HTTP headers resolved from environment variables.
+    /// 从环境变量解析的 HTTP 请求头。
+    headers_from_env: Vec<KeyValueInput>,
+    /// OAuth client identifier.
+    /// OAuth 客户端标识。
+    oauth_client_id: String,
+    /// OAuth client secret.
+    /// OAuth 客户端密钥。
+    oauth_client_secret: String,
+    /// OAuth scope list.
+    /// OAuth scope 列表。
+    oauth_scopes: Vec<String>,
+    /// OAuth redirect URI.
+    /// OAuth 回调 URI。
+    oauth_redirect_uri: String,
+    /// Stdio working directory.
+    /// Stdio 工作目录。
+    cwd: String,
+    /// Environment variables injected into stdio servers.
+    /// 注入 stdio 服务器的环境变量。
+    env: Vec<KeyValueInput>,
+    /// Environment variable names passed through to stdio servers.
+    /// 透传给 stdio 服务器的环境变量名。
+    env_passthrough: Vec<String>,
+}
+
+/// Generic string key/value input used by settings save requests.
+/// 设置保存请求使用的通用字符串键值输入。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct KeyValueInput {
+    /// Raw key.
+    /// 原始键。
+    key: String,
+    /// Raw value.
+    /// 原始值。
+    value: String,
+}
+
+/// No-op session lifecycle hook used by the WebUI external stream lifecycle runner.
+
+/// 从 WebUI 设置页保存单个 MCP 服务器配置。
+pub(super) async fn service_save_mcp_server_configuration(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: McpServerSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let (server_id, entry) = mcp_server_entry_from_request(request)?;
+    let next_configuration = {
+        let mut configuration = provider_configuration_from_state(&state)?;
+        configuration.mcp.servers.insert(server_id.clone(), entry);
+        provider_config::save_configuration_file(&configuration)
+            .map_err(|error| format!("保存 MCP 服务器失败：{error}"))?;
+        configuration
+    };
+    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
+        .await
+        .ok();
+    let workbench = store_provider_and_mcp_configuration_after_change(
+        &state,
+        next_configuration,
+        next_mcp_runtime,
+    )?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Removes one MCP server configuration from the WebUI settings page.
+/// 从 WebUI 设置页移除单个 MCP 服务器配置。
+pub(super) async fn service_remove_mcp_server_configuration(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    server_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut next_configuration = provider_configuration_from_state(&state)?;
+    next_configuration
+        .mcp
+        .servers
+        .remove(server_id.trim())
+        .ok_or_else(|| format!("未找到 MCP 服务器 `{}`。", server_id.trim()))?;
+    provider_config::save_configuration_file(&next_configuration)
+        .map_err(|error| format!("移除 MCP 服务器失败：{error}"))?;
+    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
+        .await
+        .ok();
+    let workbench = store_provider_and_mcp_configuration_after_change(
+        &state,
+        next_configuration,
+        next_mcp_runtime,
+    )?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Opens one project folder in the host system file manager.
+
+/// 从 WebUI 请求载荷解析单个 MCP 传输键。
+pub(super) fn parse_mcp_transport(value: &str) -> Result<PersistedMcpTransportKind, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "stdio" => Ok(PersistedMcpTransportKind::Stdio),
+        "http" => Ok(PersistedMcpTransportKind::Http),
+        "sse" => Ok(PersistedMcpTransportKind::Sse),
+        other => Err(format!("不支持的 MCP 传输类型：{other}")),
+    }
+}
+
+/// Parses one AI tool kind key from the WebUI request payload.
+
+/// 将 WebUI 键值列表转换为经过校验的映射。
+pub(super) fn key_value_inputs_to_map(
+    inputs: Vec<KeyValueInput>,
+    subject_label: &str,
+    value_label: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut map = BTreeMap::new();
+    for input in inputs {
+        let key = input.key.trim();
+        let value = input.value.trim();
+        if key.is_empty() && value.is_empty() {
+            continue;
+        }
+        if key.is_empty() {
+            return Err(format!("{subject_label} 的键不能为空。"));
+        }
+        if value.is_empty() {
+            return Err(format!("{subject_label} 的{value_label}不能为空。"));
+        }
+        if map.insert(key.to_string(), value.to_string()).is_some() {
+            return Err(format!("{subject_label} `{key}` 重复，请保留一条即可。"));
+        }
+    }
+    Ok(map)
+}
+
+/// Converts optional text into an owned option after trimming.
+/// 裁剪可选文本并转换为自有可选值。
+pub(super) fn trim_to_option(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Builds one persisted MCP server entry from a WebUI save request.
+/// 从 WebUI 保存请求构建单个持久化 MCP 服务器条目。
+pub(super) fn mcp_server_entry_from_request(
+    request: McpServerSaveRequest,
+) -> Result<(String, PersistedMcpServerEntry), String> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(String::from("请先填写 MCP 服务器名称。"));
+    }
+    let server_id = request
+        .server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| stable_identifier_from_label(name));
+    let transport = parse_mcp_transport(&request.transport)?;
+    let oauth = mcp_oauth_config_from_request(&request);
+    match transport {
+        PersistedMcpTransportKind::Stdio => {
+            let command = request.command.trim();
+            if command.is_empty() {
+                return Err(String::from("请先填写 MCP 服务器启动命令。"));
+            }
+            Ok((
+                server_id,
+                PersistedMcpServerEntry {
+                    name: name.to_string(),
+                    enabled: request.enabled,
+                    transport,
+                    command: command.to_string(),
+                    args: request
+                        .args
+                        .into_iter()
+                        .map(|arg| arg.trim().to_string())
+                        .filter(|arg| !arg.is_empty())
+                        .collect(),
+                    url: None,
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    headers_from_env: BTreeMap::new(),
+                    oauth: None,
+                    cwd: trim_to_option(&request.cwd),
+                    env: key_value_inputs_to_map(request.env, "环境变量", "值")?,
+                    env_passthrough: request
+                        .env_passthrough
+                        .into_iter()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                },
+            ))
+        }
+        PersistedMcpTransportKind::Http | PersistedMcpTransportKind::Sse => {
+            let url = request.url.trim();
+            if url.is_empty() {
+                return Err(String::from("请先填写 MCP 远端服务器 URL。"));
+            }
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(String::from(
+                    "MCP 远端服务器 URL 必须以 `http://` 或 `https://` 开头。",
+                ));
+            }
+            Ok((
+                server_id,
+                PersistedMcpServerEntry {
+                    name: name.to_string(),
+                    enabled: request.enabled,
+                    transport,
+                    command: String::new(),
+                    args: Vec::new(),
+                    url: Some(url.to_string()),
+                    bearer_token: trim_to_option(&request.bearer_token),
+                    headers: key_value_inputs_to_map(request.headers, "请求头", "值")?,
+                    headers_from_env: key_value_inputs_to_map(
+                        request.headers_from_env,
+                        "来自环境变量的请求头",
+                        "环境变量名",
+                    )?,
+                    oauth,
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    env_passthrough: Vec::new(),
+                },
+            ))
+        }
+    }
+}
+
+/// Builds an optional MCP OAuth block from a WebUI save request.
+/// 从 WebUI 保存请求构建可选 MCP OAuth 配置块。
+pub(super) fn mcp_oauth_config_from_request(
+    request: &McpServerSaveRequest,
+) -> Option<PersistedMcpOAuthConfig> {
+    let client_id = trim_to_option(&request.oauth_client_id);
+    let client_secret = trim_to_option(&request.oauth_client_secret);
+    let redirect_uri = trim_to_option(&request.oauth_redirect_uri);
+    let scopes = request
+        .oauth_scopes
+        .iter()
+        .map(|scope| scope.trim().to_string())
+        .filter(|scope| !scope.is_empty())
+        .collect::<Vec<_>>();
+    if client_id.is_none() && client_secret.is_none() && redirect_uri.is_none() && scopes.is_empty()
+    {
+        None
+    } else {
+        Some(PersistedMcpOAuthConfig {
+            client_id,
+            client_secret,
+            scopes,
+            redirect_uri,
+        })
+    }
+}
+
+/// Builds one stable identifier from a human-readable label.
+/// 从人类可读标签构建单个稳定标识。
+pub(super) fn stable_identifier_from_label(label: &str) -> String {
+    let mut normalized = label
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while normalized.contains("--") {
+        normalized = normalized.replace("--", "-");
+    }
+    let trimmed = normalized.trim_matches('-');
+    if trimmed.is_empty() {
+        format!("mcp-{}", current_unix_millis_value())
+    } else {
+        trimmed.to_string()
+    }
+}

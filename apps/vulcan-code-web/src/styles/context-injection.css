@@ -1,0 +1,376 @@
+.context-injection-tabs {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px;
+}
+
+.context-injection-tabs-list {
+  width: fit-content;
+  height: 24px;
+  justify-self: start;
+  margin: 0;
+  padding: 2px;
+  border-radius: 7px;
+}
+
+.context-injection-tabs-list [data-slot="tabs-trigger"] {
+  flex: 0 0 auto;
+  min-width: 62px;
+  height: 20px;
+  gap: 4px;
+  padding: 0 11px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.context-injection-tab-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.context-injection-tab-icon.right-brain {
+  transform: scaleX(-1);
+}
+
+.context-injection-tab-content {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+}
+
+.context-injection-card-list {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.vmm-static-profile,
+.vmm-static-profile-section,
+.vmm-static-profile-date-group,
+.vmm-static-profile-node-list,
+.vmm-static-profile-node {
+  min-width: 0;
+  display: grid;
+}
+
+.vmm-static-profile {
+  gap: 12px;
+}
+
+.vmm-static-profile-section {
+  gap: 9px;
+}
+
+.vmm-static-profile-section-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.vmm-static-profile-section-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vmm-static-profile-date-group {
+  gap: 7px;
+  border-left: 2px solid color-mix(in oklab, var(--primary) 30%, transparent);
+  padding-left: 8px;
+}
+
+.vmm-static-profile-date {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  padding: 2px 7px;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vmm-static-profile-node-list {
+  gap: 8px;
+}
+
+.vmm-static-profile-node {
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--muted) 34%, transparent);
+  padding: 8px 9px;
+}
+
+.vmm-static-profile-node-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.vmm-static-profile-node-content {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.context-injection-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--card);
+}
+
+.context-injection-card-header {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.context-injection-tag {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-injection-card-header p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.context-injection-item-list {
+  display: grid;
+  gap: 8px;
+}
+
+.context-injection-item {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--muted) 42%, transparent);
+  padding: 8px 9px;
+}
+
+.context-injection-item-top {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.context-injection-item-content {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.context-injection-item-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.context-injection-item-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.context-injection-delete-button,
+.context-injection-lookup-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.context-injection-delete-button:hover {
+  background: color-mix(in oklab, var(--destructive) 12%, transparent);
+  color: var(--destructive);
+}
+
+.context-injection-lookup-button:hover {
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+
+.context-injection-delete-button:disabled,
+.context-injection-lookup-button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.context-injection-delete-notice {
+  margin: 8px 2px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.context-injection-item-footer {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.context-injection-pill {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  padding: 2px 5px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.context-injection-pill.inverse {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.context-injection-pill.success {
+  border-color: color-mix(in oklab, #16a34a 42%, transparent);
+  background: color-mix(in oklab, #16a34a 13%, transparent);
+  color: color-mix(in oklab, #15803d 88%, var(--foreground));
+}
+
+.context-injection-pill.warning {
+  border-color: color-mix(in oklab, #d97706 42%, transparent);
+  background: color-mix(in oklab, #f59e0b 15%, transparent);
+  color: color-mix(in oklab, #b45309 88%, var(--foreground));
+}
+
+.context-injection-item pre,
+.context-injection-lookup-json,
+.context-injection-turn-entry pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 9px;
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.context-injection-delete-dialog,
+.context-injection-lookup-dialog {
+  width: min(420px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: min(72vh, 640px);
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  padding: 14px;
+}
+
+.context-injection-lookup-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-width: min(680px, calc(100vw - 32px));
+  overflow-y: auto;
+}
+
+.context-injection-delete-dialog h3,
+.context-injection-lookup-dialog h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.context-injection-dialog-preview {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.context-injection-delete-dialog-actions,
+.context-injection-lookup-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.context-injection-delete-dialog-actions {
+  margin-right: -14px;
+  margin-bottom: -14px;
+  margin-left: -14px;
+  padding: 12px 14px;
+}
+
+.context-injection-delete-dialog-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.context-injection-turn-list {
+  display: grid;
+  gap: 8px;
+}
+
+.context-injection-turn-entry {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}

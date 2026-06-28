@@ -1,0 +1,232 @@
+.console-header {
+  min-width: 0;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+  padding: 0 14px;
+}
+
+.console-header-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-custom-header .console-header-main {
+  align-self: stretch;
+  align-items: center;
+}
+
+.workspace-custom-header-title {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.workspace-custom-header-title h1 {
+  flex: 0 1 auto;
+  line-height: 18px;
+}
+
+.workspace-custom-header-title small {
+  position: relative;
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.25;
+  padding-right: 20px;
+  text-overflow: clip;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent 100%);
+}
+
+.workspace-custom-header .console-header-actions {
+  align-self: stretch;
+  padding-bottom: 0;
+}
+
+.feature-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.console-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 6px;
+}
+
+.console-header h1 {
+  min-width: 0;
+  flex: 0 1 auto;
+  margin: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-header-drag-fill {
+  min-width: 32px;
+  min-height: 100%;
+  flex: 1 1 auto;
+  align-self: stretch;
+  cursor: default;
+}
+
+.subagent-title-menu {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.subagent-title-menu::after {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 19;
+  width: 260px;
+  height: 8px;
+  display: none;
+  content: "";
+}
+
+.subagent-title-trigger {
+  width: 28px;
+  height: 28px;
+  color: var(--muted-foreground);
+  border-radius: 8px;
+}
+
+.subagent-title-return {
+  width: 28px;
+  height: 28px;
+  color: var(--muted-foreground);
+  border-radius: 8px;
+}
+
+.subagent-title-return:hover {
+  color: var(--foreground);
+}
+
+.subagent-title-menu.running .subagent-title-trigger {
+  color: hsl(142 62% 34%);
+}
+
+.subagent-title-flyout {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: 0;
+  z-index: 20;
+  width: 260px;
+  max-height: min(360px, calc(100vh - 96px));
+  display: grid;
+  gap: 0;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover);
+  box-shadow: 0 10px 22px color-mix(in oklch, var(--foreground) 12%, transparent);
+  opacity: 0;
+  overflow-y: auto;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.subagent-title-menu:hover::after,
+.subagent-title-menu:focus-within::after {
+  display: block;
+}
+
+.subagent-title-menu:hover .subagent-title-flyout,
+.subagent-title-menu:focus-within .subagent-title-flyout {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.subagent-title-row-group {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.subagent-title-row-group.active,
+.subagent-title-row.active {
+  background: var(--secondary);
+}
+
+.subagent-title-row {
+  min-width: 0;
+  width: 100%;
+  height: 34px;
+  justify-content: flex-start;
+  gap: 7px;
+  border-radius: 0;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.subagent-title-row span:not(.subagent-navigation-status) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-navigation-status {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.subagent-navigation-status.running {
+  color: hsl(142 62% 34%);
+}
+
+.subagent-navigation-status.failed,
+.subagent-navigation-status.stopped {
+  color: var(--destructive);
+}
+
+.subagent-title-stop {
+  width: 30px;
+  height: 30px;
+  margin-right: 4px;
+  border-radius: 0;
+}
+
+.console-header-separator {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
+.vcn-sidebar-trigger {
+  flex: 0 0 auto;
+}

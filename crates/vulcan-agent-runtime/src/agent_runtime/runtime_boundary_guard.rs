@@ -340,39 +340,41 @@ fn service_workbench_paths_stay_on_mcp_runtime_access() {
         .ancestors()
         .nth(2)
         .expect("agent-runtime manifest should live under crates");
-    let service_kernel_path = workspace_root
+    let service_kernel_root = workspace_root
         .join("crates")
         .join("vulcan-service-kernel")
-        .join("src")
-        .join("lib.rs");
+        .join("src");
 
-    let service_kernel_source =
-        fs::read_to_string(&service_kernel_path).expect("service kernel should remain readable");
+    let service_kernel_source = collect_rust_source_files(&service_kernel_root)
+        .into_iter()
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     assert!(
         service_kernel_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
-        "service kernel should retain MCP runtime state through the stable McpRuntimeAccess field: {}",
-        service_kernel_path.display()
+        "service kernel should retain MCP runtime state through the stable McpRuntimeAccess field under: {}",
+        service_kernel_root.display()
     );
     assert!(
         !service_kernel_source.contains("mcp_runtime: Option<McpRuntimeHandle>"),
-        "service kernel must not keep a raw McpRuntimeHandle as its agent-runtime field: {}",
-        service_kernel_path.display()
+        "service kernel must not keep a raw McpRuntimeHandle as its agent-runtime field under: {}",
+        service_kernel_root.display()
     );
     assert!(
         service_kernel_source.contains("bootstrap_mcp_runtime_access"),
-        "service kernel should bootstrap the stable McpRuntimeAccess surface: {}",
-        service_kernel_path.display()
+        "service kernel should bootstrap the stable McpRuntimeAccess surface under: {}",
+        service_kernel_root.display()
     );
     assert!(
         service_kernel_source.contains("stream_runtime_run_with_intervention("),
-        "service kernel should pass the stable McpRuntimeAccess surface into the agent stream entrypoint: {}",
-        service_kernel_path.display()
+        "service kernel should pass the stable McpRuntimeAccess surface into the agent stream entrypoint under: {}",
+        service_kernel_root.display()
     );
     assert!(
         !service_kernel_source.contains("McpRuntimeAccess::from_configuration"),
-        "service kernel must not manually assemble McpRuntimeAccess through a wide constructor: {}",
-        service_kernel_path.display()
+        "service kernel must not manually assemble McpRuntimeAccess through a wide constructor under: {}",
+        service_kernel_root.display()
     );
 }
 
@@ -416,10 +418,17 @@ fn runtime_foundation_mcp_reads_stay_on_unified_overview_surface() {
         .join("src")
         .join("mcp")
         .join("runtime.rs");
+    let mcp_runtime_tools_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("mcp")
+        .join("runtime")
+        .join("tools.rs");
     let runtime_source =
         fs::read_to_string(&runtime_path).expect("agent_runtime/runtime.rs should remain readable");
     let mcp_runtime_source =
         fs::read_to_string(&mcp_runtime_path).expect("mcp/runtime.rs should remain readable");
+    let mcp_runtime_tools_source = fs::read_to_string(&mcp_runtime_tools_path)
+        .expect("mcp/runtime/tools.rs should remain readable");
 
     assert!(
         runtime_source.contains("pub fn mcp_overview(&self) -> McpRuntimeOverview"),
@@ -447,7 +456,8 @@ fn runtime_foundation_mcp_reads_stay_on_unified_overview_surface() {
         runtime_path.display()
     );
     assert!(
-        mcp_runtime_source.contains("configured_overview: McpRuntimeOverview"),
+        mcp_runtime_source.contains("configured_overview: McpRuntimeOverview")
+            || mcp_runtime_tools_source.contains("configured_overview: McpRuntimeOverview"),
         "MCP runtime should keep the configured fallback as a direct overview field: {}",
         mcp_runtime_path.display()
     );

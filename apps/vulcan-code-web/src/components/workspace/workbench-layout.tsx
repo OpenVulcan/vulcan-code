@@ -4,21 +4,14 @@ import {
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
 import {
-  GlobalActions,
   RepositoryLink,
   StatusbarRuntimeActivities,
-  WindowControls,
 } from "@/components/shell/app-chrome";
 import { StartupOverlay } from "@/components/shell/startup-screen";
 import {
-  type ModelPickerChoice,
-} from "@/components/composer/model-picker-control";
-import {
   normalizedComposerSlashCommandId,
   SLASH_SKILL_PROMPT,
-  type ComposerAiCapabilityConfigurationSave,
   type ComposerSlashCommandResult,
-  type ComposerSubmission,
 } from "@/components/composer/composer-model";
 import {
   buildStatusbarRuntimeActivities,
@@ -47,6 +40,17 @@ import {
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
 import { WorkbenchDialogs } from "@/components/workspace/workbench-dialogs";
+import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout/shell-chrome";
+import {
+  copyText,
+  webuiClickTrace,
+  type WorkbenchDeltaSignal,
+} from "@/components/workspace/workbench-layout/types";
+import { useConversationHydration } from "@/components/workspace/workbench-layout/conversation-hydration";
+import { useWorkbenchConversationActions } from "@/components/workspace/workbench-layout/conversation-actions";
+import { useWorkbenchProjectActions } from "@/components/workspace/workbench-layout/project-actions";
+import { useWorkbenchSessionActions } from "@/components/workspace/workbench-layout/session-actions";
+export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
   type WorkspaceMainView,
@@ -61,9 +65,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { useI18n, type LocaleCode } from "@/i18n";
 import type {
-  AiCapabilityTargetSummary,
   AgentSkillsCatalogSummary,
-  ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
   ConversationMessage,
   ConversationSummary,
@@ -72,39 +74,15 @@ import type {
   PendingQuestionSnapshot,
   PendingPromptSummary,
   ProjectSummary,
-  ProviderModelSecondaryRouteSelection,
-  ProviderModelSecondaryRouteSummary,
   SettingsSubAreaId,
   StartupSnapshot,
-  UserPromptEditDraftSummary,
   VmmConfigDraftSummary,
-  WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
 import {
-  closeSubagentPanel,
-  clearSessionGoal,
-  compactSelectedConversationContext,
-  editPendingPrompt,
-  forkConversation,
-  getUserPromptEditDraft,
-  insertPendingPrompt,
-  openSubagentPanel,
   rejectPendingQuestion,
-  removePendingPrompt,
-  reorderPendingPrompts,
   replyPendingQuestion,
-  resumeSessionGoal,
-  saveSessionGoal,
-  setSessionPlanMode,
   stageComposerAttachmentBytes,
-  saveSessionAiCapabilityConfiguration,
-  stopCommandSession,
-  stopConversationRun,
-  stopSubagentTask,
-  submitUserPromptEdit,
-  submitConversationPrompt,
-  updateSessionGoalStatus,
 } from "@/service/conversation-actions-service";
 import { loadCachedConversationToolDetail } from "@/service/conversation-tool-detail-service";
 import {
@@ -130,7 +108,6 @@ import {
   removeAiCapabilityVendor,
   removeMcpServerConfiguration,
   removeProviderConfiguration,
-  listWorkbenchModelSecondaryRoutes,
   saveAiCapabilityTargets,
   saveAiCapabilityVendor,
   saveGitCommitSettings,
@@ -138,9 +115,6 @@ import {
   saveProviderConfiguration,
   saveProviderEnabledModels,
   saveProviderModelOverride,
-  selectWorkbenchModel,
-  selectWorkbenchModelSecondaryRoute,
-  selectWorkbenchReasoningEffort,
   setAiCapabilityTargetEnabled,
 } from "@/service/settings-actions-service";
 import {
@@ -164,9 +138,6 @@ import {
   saveVmmMemoryConfig,
 } from "@/service/memory-actions-service";
 import {
-  loadConversationHistoryPage,
-  loadConversationMessages,
-  loadWorkbenchSnapshot,
   loadWorkspaceDiffFileDetail,
   loadWorkspaceDiffSearch,
   loadWorkspaceDiffSnapshot,
@@ -174,19 +145,14 @@ import {
   loadWorkspaceFilePreview,
   runWorkspaceGitFileAction,
 } from "@/service/workbench-snapshot-service";
-import { shellClient } from "@/service/webui-service-runtime";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
   applySubagentRoutePreference,
   applyWorkbenchDeltaWithSubagentSurfaceMessageCache,
-  canOpenCachedSubagentSurface,
   closeSubagentSurfaceForConversation,
   coalesceWorkbenchDeltaEnvelopes,
-  injectCachedSubagentSurfaceMessages,
   markConversationLocallyRead,
   mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache,
-  openSubagentSurfaceForConversation,
-  reorderPendingPromptSummaries,
   workbenchWithSubagentSurfaceMessageCache,
   type InflightSubagentOpenRequest,
   type SubagentRoutePreference,
@@ -242,48 +208,6 @@ import {
   Trash2,
 } from "lucide-react";
 
-// ThemeMode describes the two shadcn default theme modes.
-// ThemeMode 描述 shadcn 默认的两种主题模式。
-type ThemeMode = "light" | "dark";
-
-// ConversationHistoryCursor stores the backend cursor for one loaded conversation window.
-// ConversationHistoryCursor 保存单个已加载会话窗口的后端历史游标。
-interface ConversationHistoryCursor {
-  // earliestOrdinal points to the oldest loaded transcript row.
-  // earliestOrdinal 指向当前已加载的最早转录行。
-  earliestOrdinal: number | null;
-  // hasMoreHistory indicates whether an older page can be requested.
-  // hasMoreHistory 表示是否还能请求更早历史页。
-  hasMoreHistory: boolean;
-  // loading marks an in-flight older-page request for this conversation.
-  // loading 标记该会话是否正在请求更早历史页。
-  loading: boolean;
-}
-
-// WorkbenchDeltaSignal wraps the newest partial update with a React-visible sequence.
-// WorkbenchDeltaSignal 使用 React 可见序号包装最新局部更新。
-export interface WorkbenchDeltaSignal {
-  // Monotonic frontend sequence that makes repeated delta objects observable.
-  // 前端单调序号，用于让重复增量对象也能被观察到。
-  seq: number;
-  // Backend partial workbench update envelopes batched for one render frame.
-  // 单个渲染帧内批处理的后端局部工作台更新信封。
-  envelopes: WorkbenchDeltaEnvelope[];
-}
-
-// conversationHistoryCursorFromWindow converts one service-retained body window into UI cursor state.
-// conversationHistoryCursorFromWindow 将单个服务端保留正文窗口转换为 UI 游标状态。
-function conversationHistoryCursorFromWindow(
-  window: NonNullable<WorkbenchSnapshot["hydratedConversationWindows"]>[number],
-  loading: boolean,
-): ConversationHistoryCursor {
-  return {
-    earliestOrdinal: window.earliestOrdinal ?? null,
-    hasMoreHistory: window.hasMoreHistory,
-    loading,
-  };
-}
-
 // WorkbenchLayout renders the WebUI workbench shell.
 // WorkbenchLayout 渲染 WebUI 工作台外壳。
 export function WorkbenchLayout(props: {
@@ -300,6 +224,17 @@ export function WorkbenchLayout(props: {
   // i18n provides localized shell labels and the active language.
   // i18n 提供本地化外壳标签与当前语言。
   const i18n = useI18n();
+  // shellChrome owns app-wide theme, window controls, and titlebar gesture handlers.
+  // shellChrome 持有应用级主题、窗口控制与标题栏手势处理器。
+  const {
+    shellChromeActions,
+    showWindowControls,
+    handleTitlebarDoubleClick,
+  } = useWorkbenchShellChrome({
+    startup: props.startup,
+    locale: i18n.locale,
+    onChangeLocale: i18n.setLocale,
+  });
   // localizedPrimaryFeatureAreas stores the translated top navigation metadata.
   // localizedPrimaryFeatureAreas 保存已翻译的顶部导航元数据。
   const localizedPrimaryFeatureAreas = React.useMemo(
@@ -335,9 +270,6 @@ export function WorkbenchLayout(props: {
   // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
   // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
   const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("status");
-  // theme stores the current shadcn visual theme.
-  // theme 保存当前 shadcn 视觉主题。
-  const [theme, setTheme] = React.useState<ThemeMode>(() => initialThemeMode());
   // selectedConversationId stores the conversation selected in the sidebar.
   // selectedConversationId 保存侧栏当前选中的会话。
   const [selectedConversationId, setSelectedConversationId] = React.useState<string | null>(
@@ -395,15 +327,6 @@ export function WorkbenchLayout(props: {
       agentSkills,
     }));
   }, []);
-  // loadingConversationId stores the conversation currently loading from the service.
-  // loadingConversationId 保存当前正在从服务加载正文的会话标识。
-  const [loadingConversationId, setLoadingConversationId] = React.useState<string | null>(null);
-  // hydratingConversationIdsRef stores conversation ids with an active service hydration request.
-  // hydratingConversationIdsRef 保存当前已有服务端正文水合请求在途的会话标识。
-  const hydratingConversationIdsRef = React.useRef<Set<string>>(new Set());
-  // conversationLoadError stores the latest conversation hydration error.
-  // conversationLoadError 保存最近一次会话正文水合错误。
-  const [conversationLoadError, setConversationLoadError] = React.useState<string | null>(null);
   // renameTarget stores the project or conversation currently being renamed.
   // renameTarget 保存当前正在重命名的项目或会话目标。
   const [renameTarget, setRenameTarget] = React.useState<RenameTarget | null>(null);
@@ -434,9 +357,6 @@ export function WorkbenchLayout(props: {
   // activeSettingsSubArea stores the selected settings sidebar page.
   // activeSettingsSubArea 保存设置侧栏当前选择的页面。
   const [activeSettingsSubArea, setActiveSettingsSubArea] = React.useState<SettingsSubAreaId>("model-providers");
-  // conversationHistoryLoadingIds stores UI-only older-history requests currently in flight.
-  // conversationHistoryLoadingIds 保存当前进行中的仅 UI 更早历史请求。
-  const [conversationHistoryLoadingIds, setConversationHistoryLoadingIds] = React.useState<Set<string>>(() => new Set());
   // activeFeature stores the selected feature summary from the complete top navigation list.
   // activeFeature 从完整顶部导航列表中保存当前选中的功能区域摘要。
   const activeFeature = localizedTopFeatureAreas.find((area) => area.id === activeArea) ?? localizedTopFeatureAreas[0];
@@ -497,6 +417,21 @@ export function WorkbenchLayout(props: {
   // selectedConversationHydrated records whether the selected conversation body is already retained by Rust.
   // selectedConversationHydrated 记录当前选中会话正文是否已经由 Rust 保留。
   const selectedConversationHydrated = Boolean(selectedConversationHistoryCursor);
+  // conversationHydration owns backend hydration and older-history paging for the selected conversation.
+  // conversationHydration 持有当前选中会话的后端水合与更早历史分页状态。
+  const {
+    loadingConversationId,
+    conversationLoadError,
+    conversationHistoryLoadingIds,
+    handleLoadConversationHistory,
+  } = useConversationHydration({
+    selectedConversationId,
+    draftConversationId: draftConversation?.id ?? null,
+    selectedConversationHydrated,
+    hydratedConversationWindowById,
+    mergeWorkbenchWithLocalCaches,
+    setWorkbenchState,
+  });
   // selectedConversationRenderItems stores parsed rows for sidebar/runtime summaries.
   // selectedConversationRenderItems 保存侧栏与运行状态摘要复用的解析行。
   const selectedConversationRenderItems = React.useMemo(
@@ -542,878 +477,87 @@ export function WorkbenchLayout(props: {
   // showConsoleSidebar limits project and conversation context to the console view.
   // showConsoleSidebar 将项目与会话上下文限定在控制台页面内。
   const showConsoleSidebar = activeArea === "chat";
-  // showWindowControls enables the custom titlebar only inside the Tauri desktop shell.
-  // showWindowControls 仅在 Tauri 桌面壳内启用自定义标题栏。
-  const showWindowControls = shellClient.supportsWindowControls();
-  // isWindowMaximized tracks the current Tauri window maximize state for the titlebar button.
-  // isWindowMaximized 跟踪当前 Tauri 窗口最大化状态，用于标题栏按钮。
-  const [isWindowMaximized, setIsWindowMaximized] = React.useState(false);
-  // refreshWindowMaximizedState synchronizes the local titlebar state with Tauri.
-  // refreshWindowMaximizedState 将本地标题栏状态与 Tauri 同步。
-  const refreshWindowMaximizedState = React.useCallback(async () => {
-    setIsWindowMaximized(await shellClient.isWindowMaximized());
-  }, []);
-  // toggleWindowMaximize toggles native maximize state and refreshes the icon.
-  // toggleWindowMaximize 切换原生最大化状态并刷新图标。
-  const toggleWindowMaximize = React.useCallback(async () => {
-    await shellClient.toggleWindowMaximize();
-    window.setTimeout(() => void refreshWindowMaximizedState(), 40);
-  }, [refreshWindowMaximizedState]);
-  // handleTitlebarDoubleClick toggles maximize only from non-interactive titlebar space.
-  // handleTitlebarDoubleClick 仅在非交互标题栏区域双击时切换最大化。
-  const handleTitlebarDoubleClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
-    if (!showWindowControls) {
-      return;
-    }
-    const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("[data-no-drag], button, a, input, textarea, select, [role='button'], [role='menuitem']")) {
-      return;
-    }
-    void toggleWindowMaximize();
-  }, [showWindowControls, toggleWindowMaximize]);
-  React.useEffect(() => {
-    if (!showWindowControls) {
-      return;
-    }
-    void refreshWindowMaximizedState();
-  }, [refreshWindowMaximizedState, showWindowControls]);
 
-  React.useEffect(() => {
-    if (!showWindowControls) {
-      return;
-    }
+  const {
+    applyProjectActionSnapshot,
+    handleProjectMenuAction,
+    handleProjectSettingsVmmSave,
+    handleProjectSettingsAgentSkillSave,
+    skillActions,
+    handleProjectIconConfirm,
+    handleProjectIconReset,
+    handleCreateConversation,
+    handleCreateProject,
+    handleConfirmProjectFolder,
+    handleReorderProjects,
+    handleExpandedProjectIdsChange,
+  } = useWorkbenchProjectActions({
+    workbenchState,
+    setWorkbenchState,
+    mergeWorkbenchWithLocalCaches,
+    setDraftConversation,
+    setSelectedConversationId,
+    setRenameTarget,
+    setProjectIconTarget,
+    setProjectSettingsTarget,
+    setProjectFolderPickerOpen,
+    setArchiveProjectTarget,
+    setRemoveProjectTarget,
+    expandedProjectIdsLocallyEditedRef,
+    applySkillWorkbenchAction,
+    applyAgentSkillsCatalog,
+    handleOpenWorkspaceChat,
+  });
 
-    let cancelled = false;
-    let unlisten: null | (() => void) = null;
+  const {
+    handleSaveAiCapabilityConfiguration,
+    handleSaveSessionGoal,
+    handleResumeSessionGoal,
+    handleClearSessionGoal,
+    handleUpdateSessionGoalStatus,
+    handleSetSessionPlanMode,
+    handleEditPendingPrompt,
+  } = useWorkbenchSessionActions({
+    selectedConversation,
+    selectedDraftConversation,
+    setWorkbenchState,
+    mergeWorkbenchWithLocalCaches,
+  });
 
-    // subscribeWindowResize keeps the restore icon aligned when native drag-region double click changes state.
-    // subscribeWindowResize 在原生拖动区域双击改变窗口状态后同步还原图标。
-    async function subscribeWindowResize() {
-      if (cancelled) {
-        return;
-      }
-      unlisten = await shellClient.subscribeWindowResize(() => {
-        void refreshWindowMaximizedState();
-      });
-    }
-
-    void subscribeWindowResize();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [refreshWindowMaximizedState, showWindowControls]);
-  // shellChromeActions moves app-wide status and window controls into the shared content header.
-  // shellChromeActions 将应用级状态与窗口控制移动到共享内容标题栏中。
-  const shellChromeActions = (
-    <div className="app-chrome-actions" data-no-drag>
-      {showWindowControls ? (
-        <WindowControls
-          leadingControl={(
-            <GlobalActions
-              startup={props.startup}
-              theme={theme}
-              locale={i18n.locale}
-              onChangeLocale={i18n.setLocale}
-              onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-            />
-          )}
-          isMaximized={isWindowMaximized}
-          onMaximizeToggle={toggleWindowMaximize}
-          onMaximizeStateRefresh={refreshWindowMaximizedState}
-        />
-      ) : (
-        <GlobalActions
-          startup={props.startup}
-          theme={theme}
-          locale={i18n.locale}
-          onChangeLocale={i18n.setLocale}
-          onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-        />
-      )}
-    </div>
-  );
-
-  // applyProjectActionSnapshot merges a project-menu operation result into the local workbench.
-  // applyProjectActionSnapshot 将项目菜单操作结果合并进本地工作台。
-  const applyProjectActionSnapshot = React.useCallback((snapshot: WorkbenchSnapshot | null) => {
-    if (!snapshot) {
-      return;
-    }
-    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    setDraftConversation(null);
-    setSelectedConversationId((current) => {
-      if (current && snapshot.conversations.some((conversation) => conversation.id === current)) {
-        return current;
-      }
-      return snapshot.selectedConversationId ?? snapshot.conversations[0]?.id ?? null;
-    });
-  }, []);
-
-  // handleProjectMenuAction executes immediate project-tree context menu commands.
-  // handleProjectMenuAction 执行可立即处理的项目树右键菜单命令。
-  const handleProjectMenuAction = React.useCallback(async (action: ProjectMenuAction, project: ProjectSummary) => {
-    try {
-      if (action === "open-directory") {
-        const message = await openProjectDirectory(project.id);
-        toast.success(message ?? `已请求打开项目目录：${project.name}`);
-        return;
-      }
-
-      if (action === "rename") {
-        setRenameTarget({ kind: "project", id: project.id, name: project.name });
-        return;
-      }
-
-      if (action === "set-icon") {
-        setProjectIconTarget({ project });
-        return;
-      }
-
-      if (action === "archive-conversations") {
-        setArchiveProjectTarget(project);
-        return;
-      }
-
-      if (action === "remove-project") {
-        setRemoveProjectTarget(project);
-        return;
-      }
-
-      if (action === "settings") {
-        setProjectSettingsTarget({ project });
-        return;
-      }
-
-      const preview = applyPreviewProjectAction(workbenchState, project.id, action);
-      applyProjectActionSnapshot(preview.snapshot);
-      await toggleProjectPinned(project.id);
-      toast.success(project.pinned ? `已取消置顶项目：${project.name}` : `已置顶项目：${project.name}`);
-    } catch (nextError) {
-      applyProjectActionSnapshot(workbenchState);
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, [applyProjectActionSnapshot, workbenchState]);
-
-  // handleProjectSettingsVmmSave persists the project-scoped VMM settings draft.
-  // handleProjectSettingsVmmSave 持久化项目级 VMM 设置草稿。
-  const handleProjectSettingsVmmSave = React.useCallback(async (projectId: string, draft: VmmConfigDraftSummary) => {
-    await applySkillWorkbenchAction(() => saveVmmMemoryConfig({ scope: "project", projectId, draft }));
-    toast.success("已保存项目 VMM 设置。");
-  }, [applySkillWorkbenchAction]);
-
-  // handleProjectSettingsAgentSkillSave persists one project Agent Skill override.
-  // handleProjectSettingsAgentSkillSave 持久化单个项目 Agent Skill 覆盖。
-  const handleProjectSettingsAgentSkillSave = React.useCallback(async (projectId: string, name: string, stateKey: ProjectAgentSkillState) => {
-    await setAgentSkillProjectState(projectId, name, stateKey);
-    toast.success(projectAgentSkillSaveMessage(name, stateKey));
-  }, []);
-
-  // handleSetAgentSkillsEnabled persists the global Agent Skills switch with a lightweight catalog refresh.
-  // handleSetAgentSkillsEnabled 使用轻量目录刷新持久化 Agent Skills 全局开关。
-  const handleSetAgentSkillsEnabled = React.useCallback(async (enabled: boolean) => {
-    const previousAgentSkills = workbenchState.agentSkills;
-    applyAgentSkillsCatalog({
-      ...previousAgentSkills,
-      globalEnabled: enabled,
-      skills: previousAgentSkills.skills.map((skill) => ({ ...skill, enabled: enabled && skill.enabled })),
-    });
-    try {
-      applyAgentSkillsCatalog(await setAgentSkillsEnabled(enabled));
-    } catch (error) {
-      applyAgentSkillsCatalog(previousAgentSkills);
-      throw error;
-    }
-  }, [applyAgentSkillsCatalog, workbenchState.agentSkills]);
-
-  // handleSetAgentSkillEnabled persists one Agent Skill state with a lightweight catalog refresh.
-  // handleSetAgentSkillEnabled 使用轻量目录刷新持久化单个 Agent Skill 状态。
-  const handleSetAgentSkillEnabled = React.useCallback(async (name: string, enabled: boolean) => {
-    const previousAgentSkills = workbenchState.agentSkills;
-    applyAgentSkillsCatalog({
-      ...previousAgentSkills,
-      skills: previousAgentSkills.skills.map((skill) => (
-        skill.name === name ? { ...skill, enabled: enabled && previousAgentSkills.globalEnabled } : skill
-      )),
-    });
-    try {
-      applyAgentSkillsCatalog(await setAgentSkillEnabled(name, enabled));
-    } catch (error) {
-      applyAgentSkillsCatalog(previousAgentSkills);
-      throw error;
-    }
-  }, [applyAgentSkillsCatalog, workbenchState.agentSkills]);
-
-  // skillActions groups service-backed skill management actions for every skills surface.
-  // skillActions 为所有技能界面归组服务端技能管理动作。
-  const skillActions = React.useMemo<SkillActionProps>(() => ({
-    onRefreshLuaSkills: () => applySkillWorkbenchAction(refreshLuaSkillsCatalog),
-    onInstallLuaSkill: (skillId, source, sourceType) => applySkillWorkbenchAction(() => installLuaSkill(skillId, source, sourceType)),
-    onUpdateLuaSkill: (skillId) => applySkillWorkbenchAction(() => updateLuaSkill(skillId)),
-    onSetLuaSkillEnabled: (skillId, enabled) => applySkillWorkbenchAction(() => setLuaSkillEnabled(skillId, enabled)),
-    onUninstallLuaSkill: (skillId) => applySkillWorkbenchAction(() => uninstallLuaSkill(skillId)),
-    onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
-      applySkillWorkbenchAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))
-    ),
-    onRefreshAgentSkills: () => applySkillWorkbenchAction(refreshAgentSkillsCatalog),
-    onSetAgentSkillsEnabled: handleSetAgentSkillsEnabled,
-    onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
-  }), [applySkillWorkbenchAction, handleSetAgentSkillEnabled, handleSetAgentSkillsEnabled]);
-
-  // handleProjectIconConfirm persists the selected project icon override.
-  // handleProjectIconConfirm 持久化选择的项目图标覆盖。
-  const handleProjectIconConfirm = React.useCallback(async (project: ProjectSummary, icon: ProjectIconSelection) => {
-    const normalizedIcon = normalizeProjectIconSelection(icon);
-    try {
-      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot);
-      await setProjectIcon(project.id, normalizedIcon);
-      setProjectIconTarget(null);
-      toast.success(`已更新项目图标：${project.name}`);
-    } catch (error) {
-      applyProjectActionSnapshot(workbenchState);
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }, [applyProjectActionSnapshot, workbenchState]);
-
-  // handleProjectIconReset clears the selected project icon override.
-  // handleProjectIconReset 清除选择的项目图标覆盖。
-  const handleProjectIconReset = React.useCallback(async (project: ProjectSummary) => {
-    try {
-      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot);
-      await resetProjectIcon(project.id);
-      setProjectIconTarget(null);
-      toast.success(`已还原项目图标：${project.name}`);
-    } catch (error) {
-      applyProjectActionSnapshot(workbenchState);
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }, [applyProjectActionSnapshot, workbenchState]);
-
-  // handleCreateConversation creates and selects a new empty conversation for a project.
-  // handleCreateConversation 为项目创建并选中一个新的空白会话。
-  const handleCreateConversation = React.useCallback(async (project: ProjectSummary) => {
-    handleOpenWorkspaceChat();
-    const draftId = `draft-${project.id}-${Date.now()}`;
-    setDraftConversation({
-      id: draftId,
-      projectId: project.id,
-      projectName: project.name,
-    });
-    setSelectedConversationId(draftId);
-    setConversationLoadError(null);
-    setLoadingConversationId(null);
-  }, [handleOpenWorkspaceChat]);
-
-  // handleCreateProject opens the service-backed project folder picker.
-  // handleCreateProject 打开服务驱动的项目文件夹选择器。
-  const handleCreateProject = React.useCallback(() => {
-    setProjectFolderPickerOpen(true);
-  }, []);
-
-  // handleConfirmProjectFolder adds the selected service-host directory as a project.
-  // handleConfirmProjectFolder 将选中的服务宿主目录添加为项目。
-  const handleConfirmProjectFolder = React.useCallback(async (path: string) => {
-    const snapshot = await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
-    applyProjectActionSnapshot(snapshot);
-    toast.success("项目列表已更新。");
-  }, [applyProjectActionSnapshot]);
-
-  // handleReorderProjects persists a same-section project order using the existing order model.
-  // handleReorderProjects 使用现有顺序模型持久化同一分区内的项目排序。
-  const handleReorderProjects = React.useCallback(async (projectIds: string[]) => {
-    setWorkbenchState((current) => applyPreviewProjectOrder(current, projectIds).snapshot);
-    try {
-      const snapshot = await reorderProjects(projectIds);
-      if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      try {
-        const snapshot = await loadWorkbenchSnapshot();
-        applyProjectActionSnapshot(snapshot);
-      } catch {
-        // Keep the optimistic order when the refresh fallback is unavailable.
-        // 刷新回退不可用时保留乐观排序结果。
-      }
-    }
-  }, [applyProjectActionSnapshot]);
-
-  // handleExpandedProjectIdsChange persists project folder expansion without reapplying stale snapshots.
-  // handleExpandedProjectIdsChange 持久化项目文件夹展开状态，但不重新套用可能过期的快照。
-  const handleExpandedProjectIdsChange = React.useCallback((projectIds: string[]) => {
-    expandedProjectIdsLocallyEditedRef.current = true;
-    setWorkbenchState((current) => ({ ...current, expandedProjectIds: projectIds }));
-    void setExpandedTaskProjects(projectIds).catch((nextError) => {
-      console.warn("persist expanded projects failed", nextError);
-    });
-  }, []);
-
-  // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
-  // handleSubmitConversationPrompt 通过共享后端运行时发送输入区文本。
-  const handleSubmitConversationPrompt = React.useCallback(async (submission: ComposerSubmission): Promise<boolean> => {
-    // submittedSelectionId captures the sidebar choice that owned this submission.
-    // submittedSelectionId 捕获发起本次提交时所属的侧栏选择。
-    const submittedSelectionId = selectedConversationId;
-    const activeProjectId =
-      selectedDraftConversation?.projectId
-      ?? selectedConversation?.projectId
-      ?? null;
-    if (!activeProjectId) {
-      toast.error("当前会话没有明确关联项目，无法发送。");
-      return false;
-    }
-    const activeConversationId = selectedDraftConversation
-      ? null
-      : selectedConversation?.id ?? null;
-    try {
-      const snapshot = await submitConversationPrompt(
-        activeProjectId,
-        activeConversationId,
-        submission.prompt,
-        submission.hiddenModelGuidance,
-        submission.attachments,
-        submission.executionMode,
-        submission.reasoningEffort,
-        submission.disabledAiCapabilityKinds,
-        submission.disabledAiCapabilityTargetSelectors,
-        submission.aiCapabilityTargetOrderOverrides,
-      );
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法发送真实会话。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      setDraftConversation(null);
-      const nextConversationId = snapshot.selectedConversationId ?? activeConversationId;
-      if (nextConversationId) {
-        if (selectedConversationIdRef.current === submittedSelectionId) {
-          setSelectedConversationId(nextConversationId);
-        }
-      }
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [selectedConversation, selectedConversationId, selectedDraftConversation, workbenchState.projects]);
-
-  // handleSaveAiCapabilityConfiguration persists the composer capability dialog for the active session.
-  // handleSaveAiCapabilityConfiguration 持久化当前会话的输入区能力弹窗配置。
-  const handleSaveAiCapabilityConfiguration = React.useCallback(async (request: ComposerAiCapabilityConfigurationSave): Promise<boolean> => {
-    const activeProjectId =
-      selectedDraftConversation?.projectId
-      ?? selectedConversation?.projectId
-      ?? null;
-    const activeConversationId = selectedDraftConversation
-      ? null
-      : selectedConversation?.id ?? null;
-    if (!activeProjectId) {
-      toast.error("当前会话没有明确关联项目，无法保存 AI 能力设置。");
-      return false;
-    }
-    if (!activeConversationId) {
-      toast.error("请先创建或选择一个会话，再保存 AI 能力设置。");
-      return false;
-    }
-    try {
-      const snapshot = await saveSessionAiCapabilityConfiguration(
-        activeProjectId,
-        activeConversationId,
-        request.disabledAiCapabilityKinds,
-        request.disabledAiCapabilityTargetSelectors,
-        request.aiCapabilityTargetOrderOverrides,
-      );
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法保存会话 AI 能力设置。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("已保存当前会话 AI 能力设置。");
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, workbenchState.projects]);
-
-  // handleSaveSessionGoal persists one explicit session goal from the composer dialog.
-  // handleSaveSessionGoal 从输入区弹窗持久化一个显式会话目标。
-  const handleSaveSessionGoal = React.useCallback(async (objective: string, tokenBudget?: number | null): Promise<boolean> => {
-    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
-    if (!activeConversationId) {
-      toast.error("请先创建或选择一个会话，再设置目标。");
-      return false;
-    }
-    try {
-      const snapshot = await saveSessionGoal(activeConversationId, objective, tokenBudget);
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法保存目标。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("目标已保存。");
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
-
-  // handleResumeSessionGoal resumes a stopped goal as a fresh budget stage.
-  // handleResumeSessionGoal 将已停止目标恢复为新的预算阶段。
-  const handleResumeSessionGoal = React.useCallback(async (objective: string, tokenBudget?: number | null): Promise<boolean> => {
-    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
-    if (!activeConversationId) {
-      toast.error("请先选择一个已有会话。");
-      return false;
-    }
-    try {
-      const snapshot = await resumeSessionGoal(activeConversationId, objective, tokenBudget);
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法继续目标。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("目标已继续。");
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
-
-  // handleClearSessionGoal removes the current explicit session goal.
-  // handleClearSessionGoal 移除当前显式会话目标。
-  const handleClearSessionGoal = React.useCallback(async (): Promise<boolean> => {
-    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
-    if (!activeConversationId) {
-      toast.error("请先选择一个已有会话。");
-      return false;
-    }
-    try {
-      const snapshot = await clearSessionGoal(activeConversationId);
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法清理目标。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success("目标已清理。");
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
-
-  // handleUpdateSessionGoalStatus updates the current goal lifecycle state.
-  // handleUpdateSessionGoalStatus 更新当前目标生命周期状态。
-  const handleUpdateSessionGoalStatus = React.useCallback(async (status: string): Promise<boolean> => {
-    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
-    if (!activeConversationId) {
-      toast.error("请先选择一个已有会话。");
-      return false;
-    }
-    try {
-      const snapshot = await updateSessionGoalStatus(activeConversationId, status);
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法更新目标状态。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
-
-  // handleSetSessionPlanMode persists the current conversation Plan-mode toggle.
-  // handleSetSessionPlanMode 持久化当前会话的计划模式开关。
-  const handleSetSessionPlanMode = React.useCallback(async (enabled: boolean): Promise<boolean> => {
-    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
-    if (!activeConversationId) {
-      toast.error("请先创建或选择一个会话，再切换计划模式。");
-      return false;
-    }
-    try {
-      const snapshot = await setSessionPlanMode(activeConversationId, enabled);
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法切换计划模式。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      toast.success(enabled ? "计划模式已开启。" : "计划模式已关闭。");
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
-
-  // handleEditPendingPrompt restores one queued prompt back into the active composer.
-  // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
-  const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
-    try {
-      const pendingPrompt = await editPendingPrompt(entryId);
-      if (!pendingPrompt) {
-        return null;
-      }
-      const snapshot = await loadWorkbenchSnapshot();
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      return pendingPrompt;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return null;
-    }
-  }, []);
-
-  // handleInsertPendingPrompt routes one queued prompt through the shared backend queue router.
-  // handleInsertPendingPrompt 通过共享后端队列路由引导单条排队提示词。
-  const handleInsertPendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
-    webuiClickTrace("pending_prompt.insert.invoke", { entryId });
-    try {
-      const snapshot = await insertPendingPrompt(entryId);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, []);
-
-  // handleStopConversationRun stops the active backend conversation stream.
-  // handleStopConversationRun 停止当前活跃的后端会话流。
-  const handleStopConversationRun = React.useCallback(async (): Promise<boolean> => {
-    webuiClickTrace("conversation.stop.invoke");
-    try {
-      const snapshot = await stopConversationRun();
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-      return Boolean(snapshot);
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, []);
-
-  // handleCompactSelectedConversationContext starts manual compaction from slash commands.
-  // handleCompactSelectedConversationContext 从斜杠指令启动手动上下文压缩。
-  const handleCompactSelectedConversationContext = React.useCallback(async (): Promise<boolean> => {
-    webuiClickTrace("conversation.compact.invoke");
-    try {
-      const snapshot = await compactSelectedConversationContext();
-      if (!snapshot) {
-        toast.info("浏览器预览模式下无法执行真实上下文压缩。");
-        return false;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, []);
-
-  // handleOpenSubagentPanel asks the backend to display one child task surface and reports whether it succeeded.
-  // handleOpenSubagentPanel 请求后端显示单个子任务界面，并返回是否打开成功。
-  const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
-    const routeKey = `${parentConversationId}:${taskId}`;
-    const existingRequest = inflightSubagentOpenRequestRef.current;
-    if (canOpenCachedSubagentSurface(
-      workbenchStateRef.current,
-      subagentSurfaceMessageCacheRef.current,
-      parentConversationId,
-      taskId,
-    )) {
-      subagentRoutePreferenceRef.current = { parentConversationId, taskId };
-      webuiClickTrace("subagent.open.local_cache", { parentConversationId, taskId, routeKey });
-      setWorkbenchState((current) => openSubagentSurfaceForConversation(
-        injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
-        parentConversationId,
-        taskId,
-      ));
-      return true;
-    }
-    if (existingRequest?.key === routeKey) {
-      subagentRoutePreferenceRef.current = { parentConversationId, taskId };
-      webuiClickTrace("subagent.open.coalesced", { parentConversationId, taskId, routeKey });
-      setWorkbenchState((current) => openSubagentSurfaceForConversation(
-        injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
-        parentConversationId,
-        taskId,
-      ));
-      return true;
-    }
-    const requestSeq = subagentNavigationRequestSeqRef.current + 1;
-    subagentNavigationRequestSeqRef.current = requestSeq;
-    subagentRoutePreferenceRef.current = { parentConversationId, taskId };
-    webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq, routeKey });
-    setWorkbenchState((current) => openSubagentSurfaceForConversation(
-      injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
-      parentConversationId,
-      taskId,
-    ));
-    const requestPromise = openSubagentPanel(parentConversationId, taskId);
-    inflightSubagentOpenRequestRef.current = { key: routeKey, promise: requestPromise };
-    try {
-      const snapshot = await requestPromise;
-      if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
-        inflightSubagentOpenRequestRef.current = null;
-      }
-      if (snapshot) {
-        if (subagentNavigationRequestSeqRef.current !== requestSeq) {
-          webuiClickTrace("subagent.open.stale_result", {
-            parentConversationId,
-            taskId,
-            requestSeq,
-            latestRequestSeq: subagentNavigationRequestSeqRef.current,
-          });
-          return true;
-        }
-        setWorkbenchState((current) => applySubagentRoutePreference(
-          mergeWorkbenchWithLocalCaches(current, snapshot),
-          subagentRoutePreferenceRef.current,
-        ));
-      }
-      webuiClickTrace("subagent.open.result", {
-        parentConversationId,
-        taskId,
-        requestSeq,
-        opened: Boolean(snapshot),
-        activeConversationId: snapshot?.subagentNavigation?.activeConversationId ?? null,
-        activeTaskId: snapshot?.subagentNavigation?.activeTaskId ?? null,
-      });
-      return Boolean(snapshot);
-    } catch (nextError) {
-      if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
-        inflightSubagentOpenRequestRef.current = null;
-      }
-      const message = nextError instanceof Error ? nextError.message : String(nextError);
-      webuiClickTrace("subagent.open.error", { parentConversationId, taskId, message });
-      if (message.includes("不可恢复") || message.includes("没有找到可打开的子代理任务")) {
-        return false;
-      }
-      toast.error(message);
-      return false;
-    }
-  }, []);
-
-  // handleCloseSubagentPanel asks the backend to return to the parent conversation surface.
-  // handleCloseSubagentPanel 请求后端返回父会话界面。
-  const handleCloseSubagentPanel = React.useCallback(async (): Promise<void> => {
-    const parentConversationId = selectedConversationIdRef.current;
-    inflightSubagentOpenRequestRef.current = null;
-    const requestSeq = subagentNavigationRequestSeqRef.current + 1;
-    subagentNavigationRequestSeqRef.current = requestSeq;
-    if (parentConversationId) {
-      subagentRoutePreferenceRef.current = { parentConversationId, taskId: null };
-      setWorkbenchState((current) => closeSubagentSurfaceForConversation(current, parentConversationId));
-    }
-    webuiClickTrace("subagent.close.invoke", { parentConversationId, requestSeq });
-    try {
-      const snapshot = await closeSubagentPanel();
-      if (snapshot) {
-        if (subagentNavigationRequestSeqRef.current !== requestSeq) {
-          webuiClickTrace("subagent.close.stale_result", {
-            parentConversationId,
-            requestSeq,
-            latestRequestSeq: subagentNavigationRequestSeqRef.current,
-          });
-          return;
-        }
-        setWorkbenchState((current) => applySubagentRoutePreference(
-          mergeWorkbenchWithLocalCaches(current, snapshot),
-          subagentRoutePreferenceRef.current,
-        ));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, []);
-
-  // handleStopSubagentTask asks the backend to stop one running child task.
-  // handleStopSubagentTask 请求后端停止单个运行中的子任务。
-  const handleStopSubagentTask = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
-    webuiClickTrace("subagent.stop.invoke", { parentConversationId, taskId });
-    try {
-      const snapshot = await stopSubagentTask(parentConversationId, taskId);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, []);
-
-  // handleRemovePendingPrompt removes one queued prompt through the shared service queue.
-  // handleRemovePendingPrompt 通过共享服务队列移除单条排队提示词。
-  const handleRemovePendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
-    try {
-      const snapshot = await removePendingPrompt(entryId);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, []);
-
-  // handleReorderPendingPrompts persists one visible pending prompt order update.
-  // handleReorderPendingPrompts 持久化一次可见待发送提示词排序更新。
-  const handleReorderPendingPrompts = React.useCallback(async (
-    entryIds: string[],
-    draggedEntryId: string,
-    targetEntryId: string | null,
-  ): Promise<void> => {
-    setWorkbenchState((current) => ({ ...current, pendingPrompts: reorderPendingPromptSummaries(current.pendingPrompts ?? [], entryIds) }));
-    try {
-      const snapshot = await reorderPendingPrompts(selectedConversationIdRef.current, draggedEntryId, targetEntryId);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      const snapshot = await loadWorkbenchSnapshot();
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    }
-  }, []);
-
-  // handleSelectWorkbenchModel persists one model picker choice through the shared service.
-  // handleSelectWorkbenchModel 通过共享服务持久化单个模型筛选器选择。
-  const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerChoice): Promise<boolean> => {
-    try {
-      const snapshot = await selectWorkbenchModel(choice);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-        toast.success(`当前模型已切换为 ${choice.modelName}（${choice.providerName}）。`);
-      }
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, []);
-
-  // handleStopCommandSession force-stops one live terminal session from context panels.
-  // handleStopCommandSession 从上下文面板强制停止单条实时终端会话。
-  const handleStopCommandSession = React.useCallback(async (commandSessionId: string, ownerSessionId?: string | null): Promise<void> => {
-    webuiClickTrace("command_session.stop.invoke", { commandSessionId });
-    try {
-      const snapshot = await stopCommandSession(commandSessionId, ownerSessionId ?? null);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, []);
-
-  // handleListWorkbenchModelSecondaryRoutes loads backend route choices for the active model.
-  // handleListWorkbenchModelSecondaryRoutes 为当前模型加载后端路由选项。
-  const handleListWorkbenchModelSecondaryRoutes = React.useCallback(async (
-    providerId: string,
-    modelId: string,
-  ): Promise<ProviderModelSecondaryRouteSummary[]> => {
-    try {
-      return await listWorkbenchModelSecondaryRoutes(providerId, modelId);
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return [];
-    }
-  }, []);
-
-  // handleSelectWorkbenchModelSecondaryRoute persists one backend route choice.
-  // handleSelectWorkbenchModelSecondaryRoute 持久化单个后端路由选择。
-  const handleSelectWorkbenchModelSecondaryRoute = React.useCallback(async (
-    providerId: string,
-    modelId: string,
-    route: ProviderModelSecondaryRouteSelection | null,
-  ): Promise<boolean> => {
-    try {
-      const snapshot = await selectWorkbenchModelSecondaryRoute(providerId, modelId, route);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-        toast.success(route ? "二级供应商已切换。" : "二级供应商已恢复 Auto。");
-      }
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, []);
-
-  // handleGetUserPromptEditDraft loads one backend-validated edit draft.
-  // handleGetUserPromptEditDraft 加载单条后端校验过的编辑草稿。
-  const handleGetUserPromptEditDraft = React.useCallback(async (
-    conversationId: string,
-    messageId: string,
-  ): Promise<UserPromptEditDraftSummary | null> => {
-    try {
-      return await getUserPromptEditDraft(conversationId, messageId);
-    } catch (nextError) {
-      toast.error(i18n.t("conversation.action.editPromptFailed"));
-      return null;
-    }
-  }, [i18n]);
-
-  // handleSubmitUserPromptEdit submits one edit and merges the replay snapshot.
-  // handleSubmitUserPromptEdit 提交单次编辑并合并重放后的快照。
-  const handleSubmitUserPromptEdit = React.useCallback(async (request: {
-    conversationId: string;
-    messageId: string;
-    prompt: string;
-    attachments: ComposerAttachmentSummary[];
-  }): Promise<boolean> => {
-    try {
-      const snapshot = await submitUserPromptEdit(request);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-      return true;
-    } catch (nextError) {
-      toast.error(i18n.t("conversation.action.editPromptFailed"));
-      return false;
-    }
-  }, [i18n]);
-
-  // handleForkConversation creates a persisted copy of the current conversation and opens it.
-  // handleForkConversation 创建当前会话的持久化副本并打开。
-  const handleForkConversation = React.useCallback(async (conversationId: string, beforeMessageId?: string | null): Promise<boolean> => {
-    const sourceConversation = workbenchState.conversations.find((conversation) => conversation.id === conversationId);
-    const sourceTitle = sourceConversation?.title.trim() || i18n.t("console.newConversation");
-    try {
-      const snapshot = await forkConversation({
-        conversationId,
-        title: `${sourceTitle}${i18n.t("conversation.action.forkTitleSuffix")}`,
-        beforeMessageId: beforeMessageId ?? null,
-      });
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-        toast.success(i18n.t("conversation.action.forkSucceeded"));
-      }
-      return true;
-    } catch (nextError) {
-      toast.error(i18n.t("conversation.action.forkFailed"));
-      return false;
-    }
-  }, [i18n, workbenchState.conversations]);
-
-  // handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
-  // handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。
-  const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: string): Promise<boolean> => {
-    try {
-      const snapshot = await selectWorkbenchReasoningEffort(effort);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-      return true;
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-      return false;
-    }
-  }, []);
+  const {
+    handleSubmitConversationPrompt,
+    handleInsertPendingPrompt,
+    handleStopConversationRun,
+    handleCompactSelectedConversationContext,
+    handleOpenSubagentPanel,
+    handleCloseSubagentPanel,
+    handleStopSubagentTask,
+    handleRemovePendingPrompt,
+    handleReorderPendingPrompts,
+    handleSelectWorkbenchModel,
+    handleStopCommandSession,
+    handleListWorkbenchModelSecondaryRoutes,
+    handleSelectWorkbenchModelSecondaryRoute,
+    handleGetUserPromptEditDraft,
+    handleSubmitUserPromptEdit,
+    handleForkConversation,
+    handleSelectWorkbenchReasoningEffort,
+  } = useWorkbenchConversationActions({
+    translate: i18n.t,
+    selectedConversation,
+    selectedConversationId,
+    selectedDraftConversation,
+    setWorkbenchState,
+    mergeWorkbenchWithLocalCaches,
+    setDraftConversation,
+    setSelectedConversationId,
+    selectedConversationIdRef,
+    workbenchStateRef,
+    subagentNavigationRequestSeqRef,
+    subagentRoutePreferenceRef,
+    inflightSubagentOpenRequestRef,
+    subagentSurfaceMessageCacheRef,
+  });
 
   // handleConversationMenuAction executes conversation-tree context menu commands.
   // handleConversationMenuAction 执行会话树右键菜单命令。
@@ -1614,12 +758,6 @@ export function WorkbenchLayout(props: {
   }, [mergeWorkbenchWithLocalCaches]);
 
   React.useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    document.documentElement.style.colorScheme = theme;
-    window.localStorage.setItem("vulcan-webui-theme", theme);
-  }, [theme]);
-
-  React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
   }, [draftConversation?.id]);
 
@@ -1661,87 +799,6 @@ export function WorkbenchLayout(props: {
       subagentRoutePreferenceRef.current,
     ));
   }, [props.workbenchDelta]);
-
-  React.useEffect(() => {
-    if (!selectedConversationId) {
-      return;
-    }
-    if (selectedConversationId === draftConversation?.id) {
-      return;
-    }
-    const conversationId = selectedConversationId;
-    if (selectedConversationHydrated) {
-      setLoadingConversationId((current) => (current === conversationId ? null : current));
-      return;
-    }
-    if (hydratingConversationIdsRef.current.has(conversationId)) {
-      return;
-    }
-
-    let cancelled = false;
-    hydratingConversationIdsRef.current.add(conversationId);
-    setLoadingConversationId(conversationId);
-    setConversationLoadError(null);
-
-    // hydrateConversation loads the selected conversation without reloading the whole workbench.
-    // hydrateConversation 在不重载整个工作台的情况下加载当前选中会话正文。
-    async function hydrateConversation() {
-      try {
-        const response = await loadConversationMessages(conversationId);
-        if (cancelled) {
-          return;
-        }
-        const hydratedWorkbench = {
-          ...response.workbench,
-          conversationHydration: response.progress,
-        };
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, hydratedWorkbench));
-      } catch (nextError) {
-        if (!cancelled) {
-          setConversationLoadError(nextError instanceof Error ? nextError.message : String(nextError));
-        }
-      } finally {
-        hydratingConversationIdsRef.current.delete(conversationId);
-        if (!cancelled) {
-          setLoadingConversationId(null);
-        }
-      }
-    }
-
-    void hydrateConversation();
-    return () => {
-      cancelled = true;
-    };
-  }, [draftConversation?.id, mergeWorkbenchWithLocalCaches, selectedConversationHydrated, selectedConversationId]);
-
-  // handleLoadConversationHistory requests one older turn page for the selected conversation.
-  // handleLoadConversationHistory 为当前选中会话请求一页更早轮次。
-  const handleLoadConversationHistory = React.useCallback(async (conversationId: string): Promise<boolean> => {
-    const window = hydratedConversationWindowById.get(conversationId);
-    const cursor = window ? conversationHistoryCursorFromWindow(window, conversationHistoryLoadingIds.has(conversationId)) : null;
-    if (!cursor?.hasMoreHistory || cursor.earliestOrdinal == null || cursor.loading) {
-      return false;
-    }
-    setConversationHistoryLoadingIds((current) => new Set(current).add(conversationId));
-    try {
-      const response = await loadConversationHistoryPage(conversationId, cursor.earliestOrdinal);
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, response.workbench));
-      setConversationHistoryLoadingIds((current) => {
-        const next = new Set(current);
-        next.delete(conversationId);
-        return next;
-      });
-      return true;
-    } catch (error) {
-      console.error("Failed to load older conversation history", error);
-      setConversationHistoryLoadingIds((current) => {
-        const next = new Set(current);
-        next.delete(conversationId);
-        return next;
-      });
-      return false;
-    }
-  }, [conversationHistoryLoadingIds, hydratedConversationWindowById, mergeWorkbenchWithLocalCaches]);
 
   // handleComposerSlashCommand routes slash commands into existing workbench actions.
   // handleComposerSlashCommand 将 slash 指令路由到现有工作台动作。
@@ -1928,25 +985,5 @@ export function WorkbenchLayout(props: {
       />
     </div>
   );
-}
-
-// initialThemeMode returns the persisted shadcn theme, defaulting to light.
-// initialThemeMode 返回持久化的 shadcn 主题，默认使用亮色。
-function initialThemeMode(): ThemeMode {
-  const stored = window.localStorage.getItem("vulcan-webui-theme");
-  return stored === "light" || stored === "dark" ? stored : "light";
-}
-
-// webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
-// webuiClickTrace 为用户触发的 WebUI 操作输出轻量浏览器控制台诊断日志。
-function webuiClickTrace(_action: string, _detail: Record<string, unknown> = {}): void {
-  // Kept as a no-op compatibility hook so existing click paths stay unchanged without emitting dev logs.
-  // 保留为空实现兼容钩子，避免改变现有点击路径，同时不再输出开发日志。
-}
-
-// copyText writes transcript detail text to the system clipboard when available.
-// copyText 在可用时将转录详情文本写入系统剪贴板。
-async function copyText(text: string): Promise<void> {
-  await navigator.clipboard?.writeText(text);
 }
 

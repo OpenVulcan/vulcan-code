@@ -834,7 +834,7 @@ mod tests {
                 .tool_guidance
                 .contains("shell_command")
         );
-        assert!(layers.provider_layers.system.contains("VulcanCode"));
+        assert!(layers.provider_layers.system.trim().is_empty());
     }
 
     /// Builds one minimal execution preparation for prompt-layer tests.

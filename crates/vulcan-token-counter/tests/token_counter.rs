@@ -268,7 +268,7 @@ fn uses_exact_tkz_assets_for_supported_model_families() {
 /// 验证两个后端都能统计同一个文件内容，且不会改变路由语义。
 #[test]
 fn compares_backends_on_same_file_content() {
-    let text = include_str!("../src/lib.rs");
+    let text = include_str!("../src/counter.rs");
     let wordchipper = TokenCounter::new_with_backend(TokenizerBackend::Wordchipper)
         .expect("wordchipper resources should validate");
     let tokie = TokenCounter::new_with_backend(TokenizerBackend::Tokie)

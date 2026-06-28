@@ -1,0 +1,338 @@
+.diff-file-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+  overflow-anchor: none;
+}
+
+.diff-review-panel.has-floating-actions .diff-file-list {
+  padding-bottom: 56px;
+}
+
+.diff-file-list.virtualized {
+  display: block;
+}
+
+.diff-file-list-virtual-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 100%;
+  overflow-anchor: none;
+}
+
+.diff-file-list .diff-file-list-virtual-canvas {
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+.diff-file-list-virtual-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  min-width: 100%;
+  contain: style;
+  overflow-anchor: none;
+}
+
+.diff-file-list .diff-file-list-virtual-item {
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+.diff-snapshot-policy-note,
+.diff-render-policy-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 31px;
+  padding: 7px 12px;
+  border-block: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 58%, var(--background));
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.diff-snapshot-policy-note {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+.diff-render-policy-note span,
+.diff-snapshot-policy-note span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-empty-state.in-list {
+  min-height: 180px;
+  margin: auto;
+}
+
+.diff-file-card {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: var(--background);
+}
+
+.diff-file-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 7px 12px;
+  border-radius: 0;
+  text-align: left;
+}
+
+.diff-file-header:hover {
+  background: var(--muted);
+}
+
+.diff-file-list:not(.virtualized) .diff-file-card > .diff-file-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.diff-file-sticky-header-overlay {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: 0;
+  pointer-events: none;
+}
+
+.diff-file-sticky-header-overlay .diff-file-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  pointer-events: auto;
+  box-shadow: 0 1px 0 var(--border);
+  isolation: isolate;
+}
+
+.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay {
+  position: sticky;
+  height: 38px;
+  flex: 0 0 38px;
+  margin-bottom: -38px;
+  isolation: isolate;
+  z-index: 80;
+}
+
+.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: color-mix(in oklab, var(--muted) 72%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.22);
+  backdrop-filter: blur(16px) saturate(1.22);
+}
+
+.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay .diff-file-header {
+  position: relative;
+  top: auto;
+  z-index: 1;
+  background: transparent;
+}
+
+.diff-file-list.single-file-floating-header .diff-file-card {
+  padding-top: 38px;
+}
+
+.diff-file-list.single-file-floating-header .diff-file-body {
+  position: relative;
+  z-index: 1;
+}
+
+.diff-file-list.single-file-floating-header .diff-file-card > .diff-file-header {
+  display: none;
+}
+
+.diff-file-sticky-header-overlay .diff-file-header.glass {
+  background: transparent;
+  border-bottom: 0;
+  box-shadow: none;
+}
+
+.diff-file-list.single-file-floating-header .diff-file-sticky-header-overlay:hover::before {
+  background: color-mix(in oklab, var(--background) 86%, transparent);
+}
+
+.diff-file-paths {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.diff-file-paths strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.diff-file-paths strong,
+.diff-file-paths span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-paths strong {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.diff-file-paths span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.diff-file-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.diff-file-status-dot.added {
+  background: #0969da;
+}
+
+.diff-file-status-dot.deleted {
+  background: #cf222e;
+}
+
+.diff-file-large-icon {
+  flex: 0 0 auto;
+  color: #d29922;
+}
+
+.diff-file-search-placeholder {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 760px);
+  padding: 7px 9px;
+  border: 1px solid color-mix(in oklab, #d29922 42%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in oklab, #f2cc60 12%, var(--background));
+  text-align: left;
+}
+
+.diff-file-search-placeholder strong,
+.diff-file-search-placeholder code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-search-placeholder strong {
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.diff-summary-search-previews {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.diff-file-search-placeholder code {
+  color: var(--muted-foreground);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.diff-file-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  padding: 0;
+  border-radius: 0 0 7px 7px;
+}
+
+.diff-hunk {
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
+  overflow: visible;
+  border-top: 1px solid var(--border);
+}
+
+.diff-hunk:first-child {
+  border-top: 0;
+}
+
+.diff-hunk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 6px 12px;
+  min-height: 29px;
+  background: color-mix(in oklab, var(--muted) 65%, var(--background));
+  color: var(--muted-foreground);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 17px;
+  white-space: pre;
+}
+
+.diff-hunk-header-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-hunk-expand-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.diff-hunk-expand-button {
+  flex: 0 0 auto;
+  height: 20px;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--background) 78%, var(--muted));
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 6px;
+}
+
+.diff-hunk-expand-button:hover {
+  background: var(--background);
+  color: var(--foreground);
+}
+

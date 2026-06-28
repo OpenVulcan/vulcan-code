@@ -1,0 +1,184 @@
+use super::*;
+
+/// Describes one pending ask-tool request mirrored into the WebUI.
+/// 描述镜像到 WebUI 的单个待处理 ask 工具请求。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestionSnapshot {
+    /// Stable request identifier used by reply and reject commands.
+    /// 回复与拒绝命令使用的稳定请求标识。
+    pub id: String,
+    /// Controller session that owns the blocked ask tool call.
+    /// 拥有阻塞 ask 工具调用的控制器会话。
+    pub session_id: String,
+    /// Monotonic runtime sequence used to order concurrent asks.
+    /// 用于排序并发 ask 请求的运行时单调序号。
+    pub sequence: u64,
+    /// Ordered prompts shown in the modal.
+    /// 在弹窗中按顺序展示的问题提示。
+    pub questions: Vec<PendingQuestionPromptSummary>,
+}
+
+/// Describes one prompt inside a pending ask-tool request.
+/// 描述待处理 ask 工具请求中的单条问题提示。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestionPromptSummary {
+    /// Full question text shown to the user.
+    /// 展示给用户的完整问题文本。
+    pub question: String,
+    /// Short field header shown above the question.
+    /// 展示在问题上方的简短字段标题。
+    pub header: String,
+    /// Selectable choices offered by the prompt.
+    /// 该问题提供的可选答案。
+    #[serde(default)]
+    pub options: Vec<PendingQuestionOptionSummary>,
+    /// Whether multiple structured choices may be selected together.
+    /// 是否允许同时选择多个结构化选项。
+    pub multiple: bool,
+}
+
+/// Describes one selectable choice inside an ask-tool prompt.
+/// 描述 ask 工具问题中的单个可选答案。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestionOptionSummary {
+    /// Choice label returned to the model when selected.
+    /// 被选中时回传给模型的选项标签。
+    pub label: String,
+    /// Helper text explaining the choice.
+    /// 解释该选项的辅助说明。
+    pub description: String,
+}
+
+/// Describes the current model-authored todolist for one selected session.
+/// 描述当前选中会话的模型编写 todolist。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTodolistSummary {
+    /// Optional explanation attached to the latest todolist update.
+    /// 最近一次 todolist 更新附带的可选说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+    /// Ordered todolist items shown in the session tool panel.
+    /// 会话工具面板中展示的有序 todolist 条目。
+    #[serde(default)]
+    pub items: Vec<SessionTodolistItemSummary>,
+    /// Completed item count.
+    /// 已完成条目数量。
+    pub completed_count: usize,
+    /// Total item count.
+    /// 条目总数量。
+    pub total_count: usize,
+    /// Unix-millis update timestamp text.
+    /// Unix 毫秒格式的更新时间文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+/// Describes one todolist item for WebUI rendering.
+/// 描述供 WebUI 渲染的单个 todolist条目。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTodolistItemSummary {
+    /// Human-readable step text supplied by the model.
+    /// 模型提供的人类可读步骤文本。
+    pub step: String,
+    /// Stable status key: pending, in_progress, or completed.
+    /// 稳定状态键：pending、in_progress 或 completed。
+    pub status: String,
+}
+
+/// Describes the current session Plan mode state for WebUI rendering.
+/// 描述供 WebUI 渲染的当前会话计划模式状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanModeSummary {
+    /// Stable execution mode key such as `build` or `plan`.
+    /// 稳定执行模式键，例如 `build` 或 `plan`。
+    pub execution_mode: String,
+    /// Whether Plan mode steering has already been injected for this activation.
+    /// 当前计划模式激活期间是否已经注入过计划模式引导。
+    pub prompt_injected: bool,
+    /// Latest generated plan artifact, if one exists.
+    /// 最近生成的计划产物，如果存在。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<SessionPlanArtifactSummary>,
+}
+
+/// Describes one generated Plan mode artifact for WebUI rendering.
+/// 描述供 WebUI 渲染的单个计划模式产物。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanArtifactSummary {
+    /// Human-readable plan name supplied by the model.
+    /// 模型提供的人类可读计划名称。
+    pub name: String,
+    /// Absolute filesystem path of the generated Markdown plan file.
+    /// 生成的 Markdown 计划文件绝对路径。
+    pub path: String,
+    /// Full Markdown plan content captured at submit time.
+    /// 提交时捕获的完整 Markdown 计划内容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// Unix-millis text capturing when the artifact was written.
+    /// 捕获产物写入时间的 Unix 毫秒文本。
+    pub updated_at: String,
+}
+
+/// Describes the current long-running goal for one selected session.
+/// 描述当前选中会话的长生命周期目标。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionGoalSummary {
+    /// Stable session identifier that owns this goal.
+    /// 拥有该目标的稳定会话标识。
+    pub session_id: String,
+    /// Stable goal version identifier used for stale update protection.
+    /// 用于过期更新保护的稳定目标版本标识。
+    pub goal_id: String,
+    /// Human-readable goal objective.
+    /// 人类可读的目标内容。
+    pub objective: String,
+    /// Stable status key: active, paused, blocked, usage_limited, budget_limited, or complete.
+    /// 稳定状态键：active、paused、blocked、usage_limited、budget_limited 或 complete。
+    pub status: String,
+    /// Optional explicit token budget.
+    /// 可选的显式 token 预算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<i64>,
+    /// Accounted token usage.
+    /// 已记账 token 用量。
+    pub tokens_used: i64,
+    /// Live usage total displayed by the composer strip.
+    /// 输入区目标条展示的实时用量总数。
+    pub usage_tokens: i64,
+    /// Provider API calls observed for the current goal turn.
+    /// 当前目标轮次观测到的 Provider API 调用次数。
+    pub api_call_count: usize,
+    /// Tool calls observed for the current goal turn.
+    /// 当前目标轮次观测到的工具调用次数。
+    pub tool_call_count: usize,
+    /// Input tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的输入 Token 数。
+    pub input_tokens: i64,
+    /// Cache-hit input tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的缓存命中输入 Token 数。
+    pub cached_input_tokens: i64,
+    /// Output tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的输出 Token 数。
+    pub output_tokens: i64,
+    /// Total provider tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的 Provider 总 Token 数。
+    pub total_tokens: i64,
+    /// Accounted wall-clock usage in seconds.
+    /// 已记账墙钟用量秒数。
+    pub time_used_seconds: i64,
+    /// Creation timestamp in Unix epoch milliseconds.
+    /// Unix 纪元毫秒格式的创建时间。
+    pub created_at_ms: i64,
+    /// Last update timestamp in Unix epoch milliseconds.
+    /// Unix 纪元毫秒格式的最近更新时间。
+    pub updated_at_ms: i64,
+}

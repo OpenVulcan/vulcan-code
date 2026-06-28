@@ -1,0 +1,233 @@
+.markdown-message {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+
+.markdown-message > :first-child {
+  margin-top: 0;
+}
+
+.markdown-message > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-message p,
+.markdown-message ul,
+.markdown-message ol,
+.markdown-message blockquote,
+.markdown-message figure,
+.markdown-message pre,
+.markdown-message table {
+  margin: 0 0 11px;
+}
+
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3,
+.markdown-message h4 {
+  margin: 14px 0 8px;
+  color: var(--foreground);
+  letter-spacing: 0;
+}
+
+.markdown-message h1 {
+  font-size: 20px;
+}
+
+.markdown-message h2 {
+  font-size: 16px;
+}
+
+.markdown-message h3,
+.markdown-message h4 {
+  font-size: 14px;
+}
+
+.markdown-message a {
+  color: var(--primary);
+}
+
+.markdown-message img {
+  max-width: min(100%, 800px);
+  height: auto;
+}
+
+.markdown-image-button {
+  display: inline-block;
+  max-width: min(100%, 800px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 0;
+  vertical-align: top;
+  cursor: zoom-in;
+}
+
+.markdown-image-button img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-message blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  color: var(--muted-foreground);
+}
+
+.inline-code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.diff-detail {
+  max-width: 100%;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.markdown-code-block {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+  color: var(--foreground);
+}
+
+.markdown-message .markdown-code-block {
+  margin: 0 0 11px;
+}
+
+.markdown-code-header {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px 4px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.markdown-code-language {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.markdown-code-language > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.markdown-code-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.markdown-code-action {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.markdown-code-action:hover,
+.markdown-code-action:focus-visible {
+  background: color-mix(in oklch, var(--muted) 80%, transparent);
+  color: var(--foreground);
+  outline: none;
+}
+
+.markdown-code-scroll {
+  position: relative;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 5px 0 10px;
+}
+
+.markdown-code-scroll[data-wrap="true"] {
+  overflow-x: hidden;
+}
+
+.markdown-code-pre {
+  min-width: max-content;
+  margin: 0;
+  padding: 0 14px;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.markdown-message .markdown-code-pre {
+  margin: 0;
+}
+
+.markdown-code-scroll[data-wrap="true"] .markdown-code-pre {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.markdown-code-line {
+  display: block;
+  min-height: 1.55em;
+  white-space: pre;
+}
+
+.markdown-code-scroll[data-wrap="true"] .markdown-code-line {
+  white-space: pre-wrap;
+}
+
+.markdown-table-wrap {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.markdown-message table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.markdown-message th,
+.markdown-message td {
+  border: 1px solid var(--border);
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.markdown-message th {
+  background: var(--muted);
+  color: var(--foreground);
+}

@@ -1,0 +1,220 @@
+//! Visible user prompt transcript projection helpers.
+//! 可见用户提示词转录投影辅助逻辑。
+
+use serde_json::Value;
+use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_workbench_model::{
+    PendingSessionPromptSource, SessionId, SessionMessageKind, SessionMessageRecordKind,
+    SessionRuntimeStateEntry,
+};
+
+use crate::{
+    conversation_protocol::{
+        SessionConversationPayload, SessionConversationRecord, append_record,
+        append_user_text_message,
+    },
+    session_event_runtime::build_session_record_message_id,
+};
+
+use super::current_unix_millis_text;
+
+/// Rewrites the latest visible user prompt after a precheck transform edits it.
+/// 在 precheck transform 改写提示词后回写最近一条可见用户提示词。
+pub(super) fn patch_latest_prechecked_user_prompt_record(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+    patch_visible_user_prompt_record: bool,
+) {
+    if let Some(message) = runtime_state
+        .conversation_state
+        .messages
+        .iter_mut()
+        .rev()
+        .find(|message| matches!(message.payload, SessionConversationPayload::UserText { .. }))
+        && let SessionConversationPayload::UserText { text, .. } = &mut message.payload
+    {
+        *text = prompt.to_string();
+    }
+    if !patch_visible_user_prompt_record {
+        runtime_state.updated_at = current_unix_millis_text();
+        return;
+    }
+    if let Some(record) = runtime_state
+        .conversation_state
+        .records
+        .iter_mut()
+        .rev()
+        .find(|record| {
+            record.visible
+                && record.kind == SessionMessageKind::User
+                && record.record_kind == SessionMessageRecordKind::Transcript
+                && record.title == "用户指令"
+        })
+    {
+        record.body = build_shared_user_prompt_transcript_body(prompt, attachments);
+        record.metadata = build_shared_user_prompt_transcript_metadata(
+            prompt,
+            attachments,
+            PendingSessionPromptSource::UserFollowup,
+        );
+        if let Some(metadata) = record.metadata.as_mut()
+            && let Some(object) = metadata.as_object_mut()
+        {
+            object.insert(
+                String::from("canonical_text"),
+                Value::String(prompt.to_string()),
+            );
+            object.insert(
+                String::from("canonical_user_text"),
+                Value::String(prompt.to_string()),
+            );
+        }
+    }
+}
+
+/// Appends one user prompt as canonical context plus shared visible transcript record.
+/// 将一条用户提示词追加为规范上下文和共享可见转录记录。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the session runtime state being mutated.
+/// `runtime_state` 是将被修改的会话运行态。
+/// `session_id` owns the prompt record.
+/// `session_id` 拥有该提示词记录。
+/// `now` is the stable timestamp text used for ids.
+/// `now` 是用于构建标识的稳定时间戳文本。
+/// `prompt` is the canonical user-authored text.
+/// `prompt` 是用户编写的规范文本。
+/// `attachments` are the structured prompt attachments.
+/// `attachments` 是提示词携带的结构化附件。
+/// `source` is the prompt source that defines turn and edit semantics.
+/// `source` 是定义轮次与编辑语义的提示词来源。
+pub(super) fn append_shared_user_prompt_record_with_attachments(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    prompt: &str,
+    attachments: Vec<ConversationAttachment>,
+    source: PendingSessionPromptSource,
+) {
+    runtime_state.ui_state.unread = false;
+    runtime_state.last_safe_provider_request_count = None;
+    let message_id = format!("session-{session_id}-protocol-user-{now}");
+    append_user_text_message(
+        &mut runtime_state.conversation_state,
+        message_id,
+        prompt.to_string(),
+        attachments.clone(),
+    );
+    let record_id = build_session_record_message_id(
+        session_id,
+        now,
+        runtime_state.conversation_state.records.len(),
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: record_id,
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: build_shared_user_prompt_transcript_body(prompt, &attachments),
+            metadata: build_shared_user_prompt_transcript_metadata(prompt, &attachments, source),
+            created_at: now.to_string(),
+        },
+    );
+    runtime_state.updated_at = now.to_string();
+}
+
+/// Builds the shared visible transcript body for one user prompt.
+/// 为一条用户提示词构建共享的可见转录正文。
+///
+/// # Parameters
+/// 参数
+/// `prompt` is the canonical user-authored text.
+/// `prompt` 是用户编写的规范文本。
+/// `attachments` are the structured prompt attachments.
+/// `attachments` 是提示词携带的结构化附件。
+///
+/// # Returns
+/// 返回值
+/// A transcript body matching the workbench visible-prompt projection semantics.
+/// 返回与工作台可见提示词投影视图一致的转录正文。
+pub fn build_shared_user_prompt_transcript_body(
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+) -> String {
+    let visible_attachments = attachments
+        .iter()
+        .filter(|attachment| attachment.kind != ConversationAttachmentKind::Image)
+        .collect::<Vec<_>>();
+    let mut sections = Vec::new();
+    if !prompt.trim().is_empty() {
+        sections.push(prompt.trim().to_string());
+    }
+    if !visible_attachments.is_empty() {
+        sections.push(String::from("附件与上下文："));
+        sections.extend(visible_attachments.iter().map(|attachment| {
+            format!(
+                "- {} `{}`",
+                attachment.kind.display_label(),
+                attachment.file_name
+            )
+        }));
+    }
+    if sections.is_empty() && !attachments.is_empty() && visible_attachments.is_empty() {
+        String::new()
+    } else if sections.is_empty() {
+        String::from("空白消息")
+    } else {
+        sections.join("\n")
+    }
+}
+
+/// Builds the shared visible transcript metadata for one user prompt.
+/// 为一条用户提示词构建共享的可见转录元数据。
+///
+/// # Parameters
+/// 参数
+/// `prompt` is the canonical user-authored text.
+/// `prompt` 是用户编写的规范文本。
+/// `attachments` are the structured prompt attachments.
+/// `attachments` 是提示词携带的结构化附件。
+/// `source` is the prompt source that defines turn and edit semantics.
+/// `source` 是定义轮次与编辑语义的提示词来源。
+///
+/// # Returns
+/// 返回值
+/// Reload-safe metadata for recovering canonical text and visible attachment strips.
+/// 返回可在重载后恢复规范文本和可见附件条的元数据。
+pub fn build_shared_user_prompt_transcript_metadata(
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+    source: PendingSessionPromptSource,
+) -> Option<Value> {
+    let serialized_attachments = (!attachments.is_empty())
+        .then(|| serde_json::to_value(attachments))
+        .transpose()
+        .ok()
+        .flatten();
+    let mut metadata = serde_json::json!({
+        "canonical_text": prompt,
+        "canonical_user_text": prompt,
+        "source": source,
+        "starts_user_turn": source.starts_user_parent_turn(),
+        "turn_process": source.folds_into_active_turn_process(),
+        "collapsed_by_default": source.folds_into_active_turn_process(),
+        "editable": source.allows_user_prompt_edit(),
+    });
+    if let Some(serialized_attachments) = serialized_attachments
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(
+            String::from("transcript_attachments"),
+            serialized_attachments,
+        );
+    }
+    Some(metadata)
+}

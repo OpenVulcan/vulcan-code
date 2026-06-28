@@ -1,0 +1,80 @@
+// StartupStepStatus mirrors the Rust service API startup status enum.
+// StartupStepStatus 对齐 Rust service API 的启动状态枚举。
+export type StartupStepStatus = "pending" | "running" | "ready" | "warning" | "error";
+
+// MainAreaId describes selectable top-level WebUI areas.
+// MainAreaId 描述 WebUI 顶层可选择区域。
+export type MainAreaId = "chat" | "skills" | "memory" | "settings";
+
+// SettingsSubAreaId describes secondary settings pages exposed by the WebUI settings shell.
+// SettingsSubAreaId 描述 WebUI 设置壳暴露的设置二级页面。
+export type SettingsSubAreaId =
+  | "model-providers"
+  | "model-list"
+  | "ai-vendors"
+  | "ai-web-search"
+  | "ai-understand-image"
+  | "ai-understand-video"
+  | "ai-understand-audio"
+  | "ai-image-generation"
+  | "ai-video-generation"
+  | "ai-speech-synthesis"
+  | "ai-music-generation"
+  | "ai-music-cover"
+  | "mcp-servers"
+  | "runtime-diagnostics"
+  | "git-commit"
+  | "prompt-composer"
+  | "about-licenses"
+  | "archived-restore";
+
+// StartupStepSnapshot describes one startup step displayed by the startup panel.
+// StartupStepSnapshot 描述启动面板展示的单个启动步骤。
+export interface StartupStepSnapshot {
+  // Stable startup step identifier.
+  // 稳定启动步骤标识。
+  id: string;
+  // User-facing startup step label.
+  // 面向用户显示的启动步骤名称。
+  label: string;
+  // Current startup step status.
+  // 当前启动步骤状态。
+  status: StartupStepStatus;
+  // Optional startup detail message.
+  // 可选启动详情消息。
+  message?: string | null;
+}
+
+// StartupSnapshot describes the full startup status returned by the service.
+// StartupSnapshot 描述服务返回的完整启动状态。
+export interface StartupSnapshot {
+  // Overall readiness flag.
+  // 整体就绪标记。
+  ready: boolean;
+  // Current startup phase.
+  // 当前启动阶段。
+  phase: string;
+  // Ordered startup steps.
+  // 有序启动步骤。
+  steps: StartupStepSnapshot[];
+  // Recent startup log lines.
+  // 最近启动日志行。
+  recentLogs: string[];
+}
+
+// RuntimeModuleSnapshot describes one runtime module card.
+// RuntimeModuleSnapshot 描述单个运行时模块卡片。
+export interface RuntimeModuleSnapshot {
+  // Stable module identifier.
+  // 稳定模块标识。
+  id: string;
+  // User-facing module label.
+  // 面向用户显示的模块名称。
+  label: string;
+  // Current module status.
+  // 当前模块状态。
+  status: StartupStepStatus;
+  // Short module message.
+  // 简短模块消息。
+  message: string;
+}
