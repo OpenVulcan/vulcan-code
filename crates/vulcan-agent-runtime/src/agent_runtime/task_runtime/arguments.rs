@@ -1,10 +1,10 @@
 use super::*;
 
-/// Parses one raw JSON payload into strongly typed child-agent TaskSession arguments.
+/// Parses one raw JSON payload into strongly typed child-agent arguments.
 /// 将一份原始 JSON 载荷解析为强类型子代理 TaskSession 参数。
 pub(super) fn parse_task_tool_arguments(args: Value) -> Result<TaskToolInvocationArgs, String> {
     serde_json::from_value(args)
-        .map_err(|error| format!("Failed to parse child-agent TaskSession arguments: {error}"))
+        .map_err(|error| format!("Failed to parse child-agent arguments: {error}"))
 }
 
 /// Resolves the stable task identifier and resume flag for the current invocation.
@@ -16,7 +16,7 @@ pub(super) fn resolve_task_session_id(
 ) -> Result<ResolvedTaskSessionIdentifier, String> {
     let (root_session_id, direct_parent, current_depth) = {
         let sessions = task_runtime.sessions.read().map_err(|_| {
-            String::from("The task session registry is locked and cannot inspect existing tasks.")
+            String::from("The subagent task registry is locked and cannot inspect existing tasks.")
         })?;
         let current_record = sessions.get(&current_session_id);
         let root_session_id = current_record
@@ -41,7 +41,7 @@ pub(super) fn resolve_task_session_id(
             .read()
             .map_err(|_| {
                 String::from(
-                    "The task session registry is locked and cannot inspect existing tasks.",
+                    "The subagent task registry is locked and cannot inspect existing tasks.",
                 )
             })?
             .values()
@@ -96,7 +96,7 @@ pub(super) fn resolve_task_session_id(
     })
 }
 
-/// Resolves a fresh task-session identifier for spawn_agent without resuming completed work.
+/// Resolves a fresh subagent task identifier for spawn_agent without resuming completed work.
 /// 为 spawn_agent 解析全新的任务会话标识，避免复用已完成任务。
 pub(super) fn resolve_new_spawn_task_session_id(
     task_runtime: &Arc<TaskRuntime>,
@@ -105,7 +105,7 @@ pub(super) fn resolve_new_spawn_task_session_id(
 ) -> Result<ResolvedTaskSessionIdentifier, String> {
     let (root_session_id, direct_parent, current_depth) = {
         let sessions = task_runtime.sessions.read().map_err(|_| {
-            String::from("The task session registry is locked and cannot inspect existing tasks.")
+            String::from("The subagent task registry is locked and cannot inspect existing tasks.")
         })?;
         let current_record = sessions.get(&current_session_id);
         let root_session_id = current_record
@@ -212,7 +212,7 @@ pub(super) fn public_task_identifier_exists_for_parent(
         .sessions
         .read()
         .map_err(|_| {
-            String::from("The task session registry is locked and cannot inspect existing tasks.")
+            String::from("The subagent task registry is locked and cannot inspect existing tasks.")
         })?
         .values()
         .any(|record| {
@@ -247,18 +247,12 @@ pub(super) fn normalize_optional_task_label(value: Option<&str>) -> Option<Strin
         .map(str::to_string)
 }
 
-/// Builds the task invocation config shared with the TaskSession layer.
+/// Builds the task invocation config shared with the subagent runtime layer.
 /// 构建与 TaskSession 层共享的任务调用配置。
 pub(super) fn task_invocation_config_from_args(
     args: &TaskToolInvocationArgs,
 ) -> TaskInvocationConfig {
-    let profile_id = args
-        .subagent_profile_id
-        .as_deref()
-        .or(args.profile.as_deref());
-    let mut config = profile_id
-        .map(|profile_id| TaskInvocationConfig::with_profile(profile_id, args.prompt.clone()))
-        .unwrap_or_else(|| TaskInvocationConfig::main(args.prompt.clone()));
+    let mut config = TaskInvocationConfig::main(args.prompt.clone());
     config.inherit_parent_config = args.inherit_parent_config;
     config.system_prompt = normalize_optional_task_label(args.system_prompt.as_deref());
     config.system_prompt_append =
@@ -273,7 +267,7 @@ pub(super) fn task_invocation_config_from_args(
     config
 }
 
-/// Builds the provider/model override snapshot from child-agent TaskSession arguments.
+/// Builds the provider/model override snapshot from child-agent arguments.
 /// 从子代理 TaskSession 参数构建供应商与模型覆盖快照。
 pub(super) fn provider_model_snapshot_from_args(
     args: &TaskToolInvocationArgs,
@@ -530,9 +524,6 @@ pub(super) fn merge_task_invocation_config_for_resume(
     incoming: TaskInvocationConfig,
 ) -> TaskInvocationConfig {
     stored.prompt = incoming.prompt;
-    if incoming.subagent_profile_id.is_some() {
-        stored.subagent_profile_id = incoming.subagent_profile_id;
-    }
     if incoming.inherit_parent_config.is_some() {
         stored.inherit_parent_config = incoming.inherit_parent_config;
     }
@@ -600,8 +591,7 @@ pub(super) fn context_compaction_has_override(request: &ContextCompactionPolicyR
 /// Returns whether an incoming invocation explicitly changes controller-owned runtime shape.
 /// 返回传入调用是否显式变更控制器拥有的运行时形态。
 pub(super) fn task_invocation_changes_controller_config(config: &TaskInvocationConfig) -> bool {
-    config.subagent_profile_id.is_some()
-        || config.inherit_parent_config.is_some()
+    config.inherit_parent_config.is_some()
         || config.system_prompt.is_some()
         || config.system_prompt_append.is_some()
         || provider_model_has_override(&config.provider_model)

@@ -454,8 +454,7 @@ impl SessionRuntimeKernel {
         if source_generation != self.generation || self.stopped {
             return false;
         }
-        self.input_queue.enqueue_mailbox_input(input);
-        true
+        self.input_queue.enqueue_mailbox_input(input)
     }
 
     /// Starts a mailbox-triggered turn when idle and trigger input exists.

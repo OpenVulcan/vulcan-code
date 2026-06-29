@@ -34,7 +34,7 @@ export function blockTitle(kind: ConversationBlockKind, toolName?: string, t?: (
 // blockHasToolExecutionEvidence checks that a special block really belongs to a tool execution.
 // blockHasToolExecutionEvidence 检查特殊块确实属于一次工具执行。
 function blockHasToolExecutionEvidence(block: ConversationBlock): boolean {
-  if (block.toolEvidence || block.toolCallId || block.toolResultId || block.commandSessionId || block.taskSessionId) {
+  if (block.toolEvidence || block.toolCallId || block.toolResultId || block.commandSessionId || block.subagentTaskId) {
     return true;
   }
   const hostKind = metadataString(block.rawMetadata, [
@@ -42,7 +42,7 @@ function blockHasToolExecutionEvidence(block: ConversationBlock): boolean {
     "hostResult.kind",
     "kind",
   ]);
-  return Boolean(hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind));
+  return Boolean(hostKind && ["tool_error", "tool_result", "tool_call", "subagent_task", "command_session", "command_run", "change_set"].includes(hostKind));
 }
 
 // metadataString reads a dotted path string from unknown JSON metadata.

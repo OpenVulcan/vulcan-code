@@ -229,7 +229,7 @@ export function ChatArea(props: ChatAreaProps) {
   const retainedStreamingThinkingOverlayId = streamingThinkingOverlayBlock?.id ?? null;
   // hasRunningSubagents reflects the backend-routed subagent lane rather than local UI inference.
   // hasRunningSubagents 反映后端路由的子代理通道，而不是本地界面推断。
-  const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
+  const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning || task.runState === "running") ?? false;
   // suppressSubagentOnlyMainCue keeps delegated work in the footer instead of the main request cue.
   // suppressSubagentOnlyMainCue 将纯子代理工作保留在底部栏，不显示为主窗口请求提示。
   const suppressSubagentOnlyMainCue = hasRunningSubagents

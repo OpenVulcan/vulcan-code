@@ -1,51 +1,6 @@
 use super::*;
 
 impl TaskRuntime {
-    /// Collects child-agent records selected by one session-agent-style subagent tool request.
-    /// 根据一次 会话代理风格子代理工具请求收集匹配的子代理记录。
-    pub(super) fn child_agent_records_for_tool_request(
-        &self,
-        current_session_id: SessionId,
-        args: &Value,
-    ) -> Result<Vec<TaskSessionRecord>, String> {
-        let target = subagent_tool_target(args);
-        let sessions = self.sessions.read().map_err(|_| {
-            String::from("The task session registry is locked and cannot inspect child agents.")
-        })?;
-        let mut records = sessions
-            .values()
-            .filter(|record| task_record_belongs_to_direct_parent(record, current_session_id))
-            .filter(|record| {
-                target.as_deref().is_none_or(|target| {
-                    record.public_task_id == target
-                        || record.task_id.to_string() == target
-                        || record.display_title == target
-                        || record.description.as_deref() == Some(target)
-                        || record.subagent.as_deref() == Some(target)
-                })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-        Ok(records)
-    }
-
-    /// Returns currently active task-session ids from a selected record list.
-    /// 从已选择的记录列表中返回当前仍在运行的任务会话标识。
-    pub(super) fn active_task_ids_from_records(
-        &self,
-        records: &[TaskSessionRecord],
-    ) -> Result<Vec<SessionId>, String> {
-        let active_task_runs = self.active_task_runs.read().map_err(|_| {
-            String::from("The active task registry is locked and cannot inspect child agents.")
-        })?;
-        Ok(records
-            .iter()
-            .filter(|record| active_task_runs.contains_key(&record.task_id))
-            .map(|record| record.task_id)
-            .collect())
-    }
-
     /// Returns a cached tool result for an existing terminal task instead of starting the child again.
     /// 对已存在的终态任务返回缓存工具结果，而不是再次启动子代理。
     pub(super) fn cached_task_invocation_result_for_existing_run(
@@ -141,7 +96,49 @@ impl TaskRuntime {
             .into_iter()
             .map(|(stopped_task_id, _)| stopped_task_id)
             .collect::<Vec<_>>();
+        self.mark_stopped_tasks_in_registry(&stopped_task_ids)?;
         Ok(stopped_task_ids)
+    }
+
+    /// Marks stopped tasks in the in-memory record and Vulcan registry before background joins settle.
+    /// 在后台 Join 落定前，将已停止任务同步标记到内存记录与 Vulcan 注册表。
+    fn mark_stopped_tasks_in_registry(&self, task_ids: &[SessionId]) -> Result<(), String> {
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+        let updated_at = current_unix_millis_text();
+        let mut stopped_records = Vec::new();
+        {
+            let mut sessions = self.sessions.write().map_err(|_| {
+                String::from(
+                    "The task-session registry is locked and cannot mark stopped subagents.",
+                )
+            })?;
+            for task_id in task_ids {
+                let Some(record) = sessions.get_mut(task_id) else {
+                    continue;
+                };
+                record.last_status =
+                    status_name_for_task_session_status(TaskSessionStatus::Stopped).to_string();
+                record.updated_at = updated_at.clone();
+                if record.last_result_text.trim().is_empty()
+                    || record.last_result_text == RUNNING_TASK_RESULT_SUMMARY
+                {
+                    record.last_result_text = String::from(STOPPED_TASK_RESULT_SUMMARY);
+                }
+                stopped_records.push(record.clone());
+            }
+        }
+        for record in stopped_records {
+            let result_summary = (!record.last_result_text.trim().is_empty())
+                .then_some(record.last_result_text.as_str());
+            self.upsert_subagent_registry_entry(
+                &record,
+                TaskSessionStatus::Stopped,
+                result_summary,
+            )?;
+        }
+        Ok(())
     }
 
     /// Returns whether one child task still owns an in-flight abort handle, which the WebUI can treat as the source of truth for active-running state.

@@ -18,9 +18,9 @@ use super::{
     current_unix_millis_value, filter_legacy_goal_internal_user_messages,
     is_active_session_run_phase, owning_project_id_for_session, parse_session_id,
     runtime_state_has_queued_pending_prompt_work,
-    sanitize_runtime_state_legacy_goal_internal_messages, webui_subagent_task_has_live_run,
-    webui_trace_if_slow, workspace_snapshot_contains_active_project,
-    workspace_snapshot_contains_regular_session,
+    sanitize_runtime_state_legacy_goal_internal_messages,
+    webui_subagent_task_has_live_run_for_phase, webui_trace_if_slow,
+    workspace_snapshot_contains_active_project, workspace_snapshot_contains_regular_session,
 };
 
 mod context_marker;

@@ -177,8 +177,12 @@ pub(super) fn open_webui_subagent_panel_from_cached_state(
         .agent_runtime
         .as_ref()
         .map(|runtime| &runtime.task_runtime);
-    let is_live_running =
-        webui_subagent_task_has_live_run(task_runtime, has_live_listener, task_session_id);
+    let is_live_running = webui_subagent_task_has_live_run_in_workspace(
+        Some(workspace_snapshot),
+        task_runtime,
+        has_live_listener,
+        task_session_id,
+    );
     let normalized = normalize_subagent_task_panel_state(&task_state, is_live_running, None);
     let has_recoverable_detail =
         webui_subagent_panel_has_recoverable_detail(workspace_snapshot, &normalized);
@@ -243,8 +247,8 @@ pub(super) async fn service_close_subagent_panel(
     emit_subagent_display_route_workbench_snapshot(&app, &state, workspace_snapshot)
 }
 
-/// Stops one running subagent task through the shared task runtime.
-/// 通过共享任务运行时停止单个运行中的子代理任务。
+/// Stops one running subagent task through the direct service runtime path.
+/// 通过独立服务运行时路径停止单个运行中的子代理任务。
 pub(super) async fn service_stop_subagent_task(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -339,6 +343,11 @@ pub(super) async fn service_stop_subagent_task(
                 .map(|(direct_parent_session_id, task_id, _)| (*direct_parent_session_id, *task_id))
                 .collect::<Vec<_>>();
             mark_webui_subagent_tasks_stopped_in_state(&mut guard, &stopped_task_pairs);
+            enqueue_stopped_subagent_mailbox_notifications(
+                &mut guard,
+                &task_states_to_mark,
+                &stopped_task_id_set,
+            );
             for task_id in &stopped_task_id_set {
                 guard.detached_subagent_task_listeners.remove(task_id);
                 if guard
@@ -397,4 +406,39 @@ pub(super) async fn service_stop_subagent_task(
         });
     }
     Ok(workbench)
+}
+
+/// Enqueues stopped child-agent notifications into each owning parent mailbox once.
+/// 将已停止子代理通知一次性加入其所属父会话 mailbox。
+fn enqueue_stopped_subagent_mailbox_notifications(
+    guard: &mut ServiceBridgeState,
+    task_states_to_mark: &[(SessionId, SessionId, Option<SubagentTaskPanelState>)],
+    stopped_task_id_set: &BTreeSet<SessionId>,
+) {
+    let updated_at = current_unix_millis_text();
+    let mut notified_pairs = BTreeSet::new();
+    for (direct_parent_session_id, task_id, task_state) in task_states_to_mark {
+        if !stopped_task_id_set.contains(task_id)
+            || !notified_pairs.insert((*direct_parent_session_id, *task_id))
+        {
+            continue;
+        }
+        let metadata = build_stopped_task_session_metadata(
+            None,
+            task_state.as_ref(),
+            *task_id,
+            SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
+            &updated_at,
+        );
+        let accepted = enqueue_webui_subagent_mailbox_input(
+            guard,
+            *direct_parent_session_id,
+            *task_id,
+            &metadata,
+        );
+        webui_trace(
+            "stopped_subagent_mailbox_notification",
+            format!("parent={direct_parent_session_id} task={task_id} accepted={accepted}"),
+        );
+    }
 }

@@ -60,7 +60,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -116,6 +116,231 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
     );
 }
 
+/// Verifies a terminal TaskSession report replaces the provisional prompt row with canonical records.
+/// 验证 TaskSession 终态报告会用规范记录替换临时提示词行。
+#[test]
+fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let prompt = "Return exactly this JSON only.";
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    {
+        let workspace_snapshot = service_state
+            .workspace_snapshot
+            .as_mut()
+            .expect("test workspace snapshot should exist");
+        seed_webui_subagent_task_prompt_if_needed(workspace_snapshot, task_session_id, prompt);
+    }
+    let state = Arc::new(Mutex::new(service_state));
+    let report = ExecutionRunReport {
+        session_id: task_session_id,
+        preparation: None,
+        assistant_output: Some(String::from("{\"ok\":true}")),
+        thinking_output: None,
+        conversation_state: Some(SessionConversationState {
+            messages: Vec::new(),
+            records: vec![SessionConversationRecord {
+                id: String::from("canonical-user-prompt"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: prompt.to_string(),
+                metadata: None,
+                created_at: String::from("1"),
+            }],
+            continuation: Default::default(),
+        }),
+        provider_request_count: 1,
+        last_successful_provider_usage: None,
+        embedded_turn_usage_segments: Vec::new(),
+        mcp_discovery_rows: Vec::new(),
+        mcp_discovery_errors: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+        controller_events: Vec::new(),
+    };
+
+    let applied = apply_task_session_execution_report_to_memory(&state, report).unwrap();
+    let messages = applied
+        .workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("task session report should materialize canonical messages");
+    let prompt_messages = messages
+        .iter()
+        .filter(|message| message.kind == SessionMessageKind::User && message.body == prompt)
+        .collect::<Vec<_>>();
+
+    assert_eq!(prompt_messages.len(), 1);
+    assert_eq!(prompt_messages[0].id, "canonical-user-prompt");
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.id.contains("subagent-prompt"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.kind == SessionMessageKind::Assistant
+                && message.body.contains("{\"ok\":true}"))
+    );
+}
+
+/// Verifies a TaskSession checkpoint replaces provisional prompt rows with runtime records.
+/// 验证 TaskSession 检查点会用运行态记录替换临时提示词行。
+#[test]
+fn task_session_checkpoint_replaces_seeded_prompt_with_runtime_records() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let prompt = "Return exactly this JSON only.";
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot should exist");
+    seed_webui_subagent_task_prompt_if_needed(workspace_snapshot, task_session_id, prompt);
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(task_session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            conversation_state: SessionConversationState {
+                messages: Vec::new(),
+                records: vec![SessionConversationRecord {
+                    id: String::from("streaming-assistant-output"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::AssistantOutput,
+                    visible: true,
+                    title: String::from("输出"),
+                    body: String::from("{\"ok\":true}"),
+                    metadata: None,
+                    created_at: String::from("2"),
+                }],
+                continuation: Default::default(),
+            },
+            ..SessionRuntimeStateEntry::default()
+        });
+    let checkpoint_state = SessionConversationState {
+        messages: Vec::new(),
+        records: vec![SessionConversationRecord {
+            id: String::from("canonical-user-prompt"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: prompt.to_string(),
+            metadata: None,
+            created_at: String::from("1"),
+        }],
+        continuation: Default::default(),
+    };
+
+    apply_checkpoint_conversation_state(runtime_state, checkpoint_state, "3");
+    let runtime_state_snapshot = workspace_snapshot
+        .session_runtime_state
+        .get(&task_session_id)
+        .expect("runtime state should exist")
+        .clone();
+    replace_display_messages_with_runtime_state_records(
+        workspace_snapshot,
+        task_session_id,
+        &runtime_state_snapshot,
+    );
+
+    let messages = workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("checkpoint records should be visible");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].id, "canonical-user-prompt");
+    assert_eq!(messages[1].id, "streaming-assistant-output");
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.id.contains("subagent-prompt"))
+    );
+}
+
+/// Verifies subagent surface cache replacement never preserves stale child records.
+/// 验证子代理表面缓存替换不会保留陈旧的子记录。
+#[test]
+fn subagent_surface_conversation_state_replaces_seeded_prompt_without_preserving_stale_records() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let prompt = "Return exactly this JSON only.";
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot should exist");
+    seed_webui_subagent_task_prompt_if_needed(workspace_snapshot, task_session_id, prompt);
+    workspace_snapshot.session_runtime_state.insert(
+        task_session_id,
+        SessionRuntimeStateEntry {
+            conversation_state: SessionConversationState {
+                messages: Vec::new(),
+                records: vec![SessionConversationRecord {
+                    id: String::from("stale-assistant-output"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::AssistantOutput,
+                    visible: true,
+                    title: String::from("输出"),
+                    body: String::from("stale"),
+                    metadata: None,
+                    created_at: String::from("1"),
+                }],
+                continuation: Default::default(),
+            },
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    let canonical_state = SessionConversationState {
+        messages: Vec::new(),
+        records: vec![
+            SessionConversationRecord {
+                id: String::from("canonical-user-prompt"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: prompt.to_string(),
+                metadata: None,
+                created_at: String::from("2"),
+            },
+            SessionConversationRecord {
+                id: String::from("canonical-assistant-output"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("{\"ok\":true}"),
+                metadata: None,
+                created_at: String::from("3"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+
+    replace_webui_subagent_task_conversation_state(
+        workspace_snapshot,
+        task_session_id,
+        canonical_state,
+    );
+
+    let messages = workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("canonical child messages should be visible");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].id, "canonical-user-prompt");
+    assert_eq!(messages[1].id, "canonical-assistant-output");
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.id.contains("subagent-prompt") && message.body != "stale")
+    );
+}
+
 /// Verifies a live detached listener keeps the parent subagent navigation visible after the parent stream finishes.
 /// 验证父级流结束后，实时分离监听器仍会让父级子代理导航保持可见。
 #[test]
@@ -163,7 +388,7 @@ fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
         detached_subagent_task_listeners: BTreeSet::from([task_session_id]),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -283,7 +508,7 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
         ]),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -472,10 +697,10 @@ fn subagent_completion_queues_session_mailbox_without_wait_agent() {
     );
 }
 
-/// Verifies detached subagent completion does not enqueue mailbox input while wait_agent is active.
-/// 验证 wait_agent 活跃期间，分离子代理完成不会额外加入 mailbox 输入。
+/// Verifies detached subagent completion still enqueues mailbox input while wait_agent is active.
+/// 验证 wait_agent 活跃期间，分离子代理完成仍会加入 mailbox 输入。
 #[test]
-fn subagent_completion_skips_session_mailbox_during_wait_agent() {
+fn subagent_completion_queues_session_mailbox_during_wait_agent() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -492,28 +717,32 @@ fn subagent_completion_skips_session_mailbox_during_wait_agent() {
         true,
         false,
     )
-    .expect("skip mailbox input");
+    .expect("queue mailbox input");
 
-    assert!(!queued);
+    assert!(queued);
     let guard = state.lock().expect("state lock");
     let runtime_state = guard
         .workspace_snapshot
         .as_ref()
         .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id));
     assert!(runtime_state.is_none_or(|entry| !runtime_state_has_queued_pending_prompt_work(entry)));
+    let kernel = guard
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("parent session kernel should exist");
+    assert_eq!(kernel.input_queue().mailbox_len(), 1);
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
-/// Verifies child completion mailbox input stays suppressed after a completed wait_agent result.
-/// 验证 wait_agent 已完成收集后，子代理完成 mailbox 输入仍保持抑制。
+/// Verifies child completion mailbox input queues after wait_agent coordination ends.
+/// 验证 wait_agent 协调结束后，子代理完成 mailbox 输入仍会入队。
 #[test]
-fn subagent_completion_skips_session_mailbox_after_completed_wait_agent() {
+fn subagent_completion_queues_session_mailbox_after_completed_wait_agent() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
-    let mut service_state = test_service_state_with_parent_session(parent_session_id);
-    service_state
-        .parent_session_completed_wait_agent_selectors
-        .insert(parent_session_id, BTreeSet::new());
-    let state = Arc::new(Mutex::new(service_state));
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
     let event = test_delegate_finished_event(task_session_id, "image-c", "生成完成：c.jpg");
 
     let queued = enqueue_webui_session_mailbox_input_if_needed(
@@ -523,31 +752,32 @@ fn subagent_completion_skips_session_mailbox_after_completed_wait_agent() {
         true,
         false,
     )
-    .expect("skip mailbox input");
+    .expect("mailbox input should queue");
 
-    assert!(!queued);
+    assert!(queued);
     let guard = state.lock().expect("state lock");
     let runtime_state = guard
         .workspace_snapshot
         .as_ref()
         .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id));
     assert!(runtime_state.is_none_or(|entry| !runtime_state_has_queued_pending_prompt_work(entry)));
+    let kernel = guard
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("parent session kernel should exist");
+    assert_eq!(kernel.input_queue().mailbox_len(), 1);
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
-/// Verifies a completed wait_agent only suppresses matching child-agent completions.
-/// 验证已完成的 wait_agent 只抑制匹配的子代理完成事件。
+/// Verifies child completion mailbox input no longer depends on legacy wait-agent selectors.
+/// 验证子代理完成 mailbox 输入不再依赖旧 wait_agent 选择器。
 #[test]
-fn subagent_completion_after_completed_wait_agent_allows_unmatched_agent() {
+fn subagent_completion_after_completed_wait_agent_allows_any_agent() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
-    let mut service_state = test_service_state_with_parent_session(parent_session_id);
-    service_state
-        .parent_session_completed_wait_agent_selectors
-        .insert(
-            parent_session_id,
-            BTreeSet::from([String::from("agent-waited")]),
-        );
-    let state = Arc::new(Mutex::new(service_state));
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
     let event = test_delegate_finished_event(task_session_id, "agent-unmatched", "done");
 
     let queued = enqueue_webui_session_mailbox_input_if_needed(
@@ -567,4 +797,69 @@ fn subagent_completion_after_completed_wait_agent_allows_unmatched_agent() {
         .expect("kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
     assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+}
+
+/// Verifies child-agent usage segments are drained once before parent turn statistics aggregate them.
+/// 验证子代理用量分段会在父会话回合统计聚合前被一次性取走。
+#[test]
+fn pending_subagent_usage_segments_drain_once_and_merge_into_turn_stats() {
+    let parent_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let mut segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(100),
+            output_tokens: Some(25),
+            reasoning_tokens: Some(5),
+            total_tokens: Some(130),
+            cached_input_tokens: Some(40),
+            cache_creation_input_tokens: None,
+        }),
+    );
+    segment.trigger = Some(String::from("output-1-100"));
+    service_state
+        .pending_subagent_usage_segments
+        .insert(parent_session_id, vec![segment]);
+    let state = Arc::new(Mutex::new(service_state));
+
+    let first = take_pending_webui_subagent_usage_segments(&state, parent_session_id)
+        .expect("pending usage segments should drain");
+    let second = take_pending_webui_subagent_usage_segments(&state, parent_session_id)
+        .expect("pending usage segments should stay drained");
+
+    assert_eq!(first.len(), 1);
+    assert!(second.is_empty());
+
+    let conversation_state =
+        vulcan_agent_runtime::conversation_protocol::SessionConversationState {
+            messages: Vec::new(),
+            records: vec![
+                vulcan_agent_runtime::conversation_protocol::SessionConversationRecord {
+                    id: String::from("record-summary-1"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: true,
+                    title: String::new(),
+                    body: String::from("done"),
+                    metadata: None,
+                    created_at: String::from("1"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+    let stats = latest_session_turn_stats_from_state(&conversation_state, Some(0), first)
+        .expect("explicit subagent usage should produce turn stats");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 100);
+    assert_eq!(stats.output_tokens, 25);
+    assert_eq!(stats.reasoning_tokens, 5);
+    assert_eq!(stats.total_tokens, 130);
+    assert_eq!(stats.cached_input_tokens, Some(40));
+    assert_eq!(goal_token_delta_for_turn_stats(&stats), Some(90));
+    assert_eq!(
+        stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::SubagentTask
+    );
 }

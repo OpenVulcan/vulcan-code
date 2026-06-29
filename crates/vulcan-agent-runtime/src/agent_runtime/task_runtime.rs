@@ -23,26 +23,31 @@ use crate::agent_runtime::tool_runtime_bridge::{
 };
 use crate::conversation_protocol::SessionConversationState;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::model::SessionId;
+use crate::model::{SessionId, SessionTurnUsageSegment, SessionTurnUsageSegmentKind};
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
 use async_stream::stream;
-use futures_util::{StreamExt, stream::FuturesUnordered};
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use time::OffsetDateTime;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::{
+    mpsc::{UnboundedSender, unbounded_channel},
+    watch,
+};
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 use vulcan_context::{ContextCompactionPolicy, conversation_state_to_compaction_source_messages};
 use vulcan_context_compaction::{CompactionPlanInput, plan_context_compaction};
 use vulcan_core::types::{
-    ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
+    ControllerConfig as CoreControllerConfig, ConversationPayload as CoreConversationPayload,
+    ConversationSnapshot as CoreConversationSnapshot,
     ProviderPromptLayers as CoreProviderPromptLayers,
 };
 use vulcan_prompt_composer::{
@@ -61,11 +66,16 @@ use vulcan_session_core::{
     SessionSegmentSummary, SubagentKind, SubagentRegistry, SubagentRegistryEntry, SubagentStatus,
     ToolExposureSnapshot,
 };
+use vulcan_subagent_core::{
+    FOLLOWUP_TASK_TOOL, INTERRUPT_AGENT_TOOL, LIST_AGENTS_TOOL, SEND_MESSAGE_TOOL,
+    SPAWN_AGENT_TOOL, STOPPED_SUBAGENT_TASK_IDS_KEY, SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND,
+    WAIT_AGENT_TOOL, WaitAgentActivityResult,
+};
 use vulcan_task_session::{
     SegmentedTaskSessionStore, TaskInvocationConfig, TaskInvocationEvent, TaskInvocationEventKind,
     TaskSessionCompactionStore, TaskSessionConfigResolutionInput, TaskSessionConfigResolver,
     TaskSessionMetadata, TaskSessionResolvedConfig, TaskSessionStatus, TaskSessionStore,
-    apply_task_session_compaction_result, profile::SubagentProfile,
+    apply_task_session_compaction_result,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -74,7 +84,7 @@ use vulcan_tools_manager::{
 
 /// Default nested-task depth limit used to prevent unbounded recursive task spawning.
 /// 用于防止无限递归任务派生的默认嵌套任务深度上限。
-const DEFAULT_TASK_NESTING_LIMIT: usize = 8;
+const DEFAULT_TASK_NESTING_LIMIT: usize = 1;
 
 /// Fallback stop summary returned to the parent child-agent tool when the child run is manually interrupted before producing a complete answer.
 /// 当子运行在产出完整答案前被人工中断时，返回给父级子代理工具的兜底停止摘要。
@@ -88,6 +98,7 @@ const RUNNING_TASK_RESULT_SUMMARY: &str = "This is a running-status acknowledgem
 /// 注入到子任务提示词中的 Windows 文件系统路径指引，用于稳定工具调用。
 const WINDOWS_TASK_FILESYSTEM_PATH_GUIDANCE: &str = "[Filesystem Paths]\nWhen calling filesystem-oriented tools on Windows, prefer standard absolute Windows paths like C:\\repo\\path. Do not wrap tool arguments in Markdown code fences or extra quotes. When a JSON string needs escaping, keep the semantic path as a normal Windows path and escape backslashes only as required by the transport format.";
 
+mod agent_control;
 mod arguments;
 mod controller_config;
 mod invocation_methods;
@@ -102,6 +113,7 @@ mod runtime_state;
 mod status_events;
 mod tool_surface;
 
+use agent_control::*;
 use arguments::*;
 use controller_config::*;
 use invocation_results::*;
@@ -142,12 +154,9 @@ struct TaskToolInvocationArgs {
     /// Optional subagent label used for display and system-prompt augmentation.
     /// 用于展示和系统提示词增强的可选子代理标签。
     subagent: Option<String>,
-    /// Optional subagent profile identifier.
-    /// 可选的子代理配置标识符。
-    subagent_profile_id: Option<String>,
-    /// Short alias for the optional subagent profile identifier.
-    /// 可选子代理配置标识符的短别名。
-    profile: Option<String>,
+    /// Optional Vulcan context fork selector for a new subagent.
+    /// 新子代理使用的可选 Vulcan 上下文派生选择器。
+    fork_turns: Option<String>,
     /// Optional inheritance override for the subagent run.
     /// 子代理运行的可选继承覆盖。
     inherit_parent_config: Option<bool>,
@@ -334,6 +343,9 @@ pub struct TaskExecutionOutcome {
     /// Final execution status surfaced to both host persistence and the parent spawn-agent result.
     /// 同时暴露给宿主持久化与父级 spawn_agent 结果的最终执行状态。
     pub execution_status: TaskExecutionStatus,
+    /// Provider usage segments that should be aggregated into the owning parent turn.
+    /// 应聚合进所属父会话回合的 Provider 用量分段。
+    pub usage_segments: Vec<SessionTurnUsageSegment>,
 }
 
 /// Terminal child-task completion plus post-run maintenance hints.
@@ -427,6 +439,27 @@ struct DetachedTaskEventStreamState {
     closed: bool,
 }
 
+/// One queued inter-agent message waiting for a child-agent safe boundary.
+/// 等待子代理安全边界消费的一条代理间消息。
+#[derive(Debug, Clone)]
+struct QueuedInterAgentMessage {
+    /// Session that authored the message.
+    /// 发出该消息的会话标识。
+    author_session_id: SessionId,
+    /// Target child-agent task session.
+    /// 目标子代理任务会话标识。
+    target_task_id: SessionId,
+    /// Human-readable message content.
+    /// 人类可读消息正文。
+    content: String,
+    /// Whether this message should start a new child-agent turn when the target is idle.
+    /// 当目标空闲时该消息是否应启动新的子代理回合。
+    trigger_turn: bool,
+    /// Unix-millis enqueue timestamp.
+    /// 入队时的 Unix 毫秒时间戳。
+    created_at_ms: u64,
+}
+
 /// Guard that unregisters one backend when it goes out of scope.
 /// 作用域结束时自动注销某个后端的守卫对象。
 pub struct TaskBackendGuard {
@@ -481,6 +514,12 @@ pub(crate) struct TaskExecutionRuntimeContext {
     /// Parent execution request used as the template for child TaskSession requests.
     /// 用作子代理 TaskSession 请求模板的父级执行请求。
     pub(crate) request_template: ExecutionPreparationRequest,
+    /// Parent canonical snapshot available for context forking into child agents.
+    /// 可派生给子代理上下文的父级规范快照。
+    pub(crate) parent_snapshot: CoreConversationSnapshot,
+    /// Whether child agents should inherit the subagent orchestration tool family.
+    /// 子代理是否应继承子代理调度工具族。
+    pub(crate) allow_subagent_tools: bool,
 }
 
 impl TaskExecutionRuntimeContext {
@@ -497,7 +536,46 @@ impl TaskExecutionRuntimeContext {
             foundation,
             luaskills_runtime,
             request_template,
+            parent_snapshot: CoreConversationSnapshot::default(),
+            allow_subagent_tools: false,
         }
+    }
+
+    /// Returns this context with the parent canonical snapshot attached.
+    /// 返回附带父级规范快照的上下文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `parent_snapshot` is the snapshot captured from the bootstrapped parent controller.
+    /// `parent_snapshot` 是从已启动父控制器捕获的快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The updated runtime context.
+    /// 更新后的运行时上下文。
+    pub(crate) fn with_parent_snapshot(
+        mut self,
+        parent_snapshot: CoreConversationSnapshot,
+    ) -> Self {
+        self.parent_snapshot = parent_snapshot;
+        self
+    }
+
+    /// Returns this context with explicit child-agent subagent tool inheritance.
+    /// 返回带显式子代理调度工具继承设置的上下文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `allow_subagent_tools` controls whether child agents can see the subagent tool family.
+    /// `allow_subagent_tools` 控制子代理是否可以看到子代理工具族。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The updated runtime context.
+    /// 更新后的运行时上下文。
+    pub(crate) fn with_subagent_tools_allowed(mut self, allow_subagent_tools: bool) -> Self {
+        self.allow_subagent_tools = allow_subagent_tools;
+        self
     }
 }
 
@@ -557,18 +635,24 @@ pub struct TaskRuntime {
     /// session-boundary mailbox used for child-agent lifecycle association events.
     /// 用于子代理生命周期关联事件的 会话边界 mailbox。
     subagent_mailbox: InMemorySubagentMailbox,
+    /// Monotonic activity counter used to wake wait_agent on parent mailbox changes.
+    /// 用于在父级 mailbox 变化时唤醒 wait_agent 的单调递增活动计数器。
+    subagent_mailbox_activity_tx: watch::Sender<u64>,
+    /// Monotonic activity counter used to wake wait_agent on parent user steering.
+    /// 用于在父级用户插话时唤醒 wait_agent 的单调递增活动计数器。
+    parent_input_activity_tx: watch::Sender<u64>,
+    /// Parent sessions that have pending user steering activity for wait_agent.
+    /// 对 wait_agent 存在待处理用户插话活动的父会话集合。
+    parent_input_activity_sessions: RwLock<BTreeSet<SessionThreadId>>,
+    /// Per-child-agent inbox used by send_message and followup_task.
+    /// `send_message` 与 `followup_task` 使用的按子代理划分 inbox。
+    agent_inboxes: RwLock<HashMap<SessionId, VecDeque<QueuedInterAgentMessage>>>,
     /// Vulcan-native child-agent registry used as the future single source for subagent state.
     /// Vulcan 原生子代理注册表，用作未来子代理状态的单一事实源。
     subagent_registry: RwLock<SubagentRegistry>,
-    /// Queued parent-authored messages keyed by child task session id.
-    /// 按子任务会话标识暂存父级发送给子代理的消息。
-    queued_child_messages: RwLock<HashMap<SessionId, Vec<String>>>,
     /// Segmented task-session roots keyed by root main-session identifier.
     /// 按根主会话标识索引的分段子代理会话根目录。
     task_session_store_roots: RwLock<HashMap<SessionId, PathBuf>>,
-    /// Runtime-resolved subagent profiles keyed by profile identifier.
-    /// 按配置标识索引的运行时已解析子代理配置。
-    subagent_profiles: RwLock<HashMap<String, SubagentProfile>>,
     /// Maximum supported nested task depth.
     /// 支持的最大嵌套任务深度。
     max_depth: usize,

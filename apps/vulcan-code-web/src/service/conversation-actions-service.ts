@@ -418,8 +418,8 @@ export async function closeSubagentPanel(): Promise<WorkbenchSnapshot | null> {
   return serviceClient.request<WorkbenchSnapshot>("service_close_subagent_panel");
 }
 
-// stopSubagentTask asks the backend to stop one child task through the shared task runtime.
-// stopSubagentTask 请求后端通过共享任务运行时停止单个子任务。
+// stopSubagentTask asks the backend to stop one child task through the direct service runtime path.
+// stopSubagentTask 请求后端通过独立服务运行时路径停止单个子任务。
 export async function stopSubagentTask(parentConversationId: string, taskId: string): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;

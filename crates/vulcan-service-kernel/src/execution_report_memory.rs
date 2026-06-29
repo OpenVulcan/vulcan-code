@@ -4,9 +4,7 @@
 use vulcan_agent_runtime::{
     ExecutionPromptPurpose, ExecutionRunReport,
     agent_runtime::conversation_hooks::ConversationCompletionRequest,
-    conversation_protocol::{
-        SessionConversationState, merge_session_messages_with_conversation_state_records,
-    },
+    conversation_protocol::{SessionConversationState, conversation_state_to_session_messages},
 };
 use vulcan_core::types::ProviderUsageSnapshot;
 use vulcan_service_api::ServiceEventEmitter;
@@ -20,7 +18,8 @@ use super::{
     apply_terminal_execution_report_to_state, apply_vmm_writeback_effects_to_runtime_state,
     build_vmm_hook_config_snapshot, current_unix_millis_text, current_unix_millis_value,
     merge_runtime_state_records_into_display_messages, persist_workspace_session_update,
-    spawn_service_task, spawn_workspace_session_runtime_state_persist_task,
+    replace_display_messages_with_runtime_state_records, spawn_service_task,
+    spawn_workspace_session_runtime_state_persist_task,
     spawn_workspace_session_transcript_persist_task, sync_hydrated_session_dialogue_ready_marker,
     webui_trace, webui_trace_if_slow, webui_turn_completion_gate_from_state,
     with_workspace_mutation, with_workspace_mutation_preserving_subagent_navigation,
@@ -86,11 +85,19 @@ pub(super) fn apply_conversation_checkpoint(
                 runtime_state.last_safe_provider_request_count = Some(provider_request_count);
             }
             let runtime_state_snapshot = runtime_state.clone();
-            merge_runtime_state_records_into_display_messages(
-                workspace,
-                session_id,
-                &runtime_state_snapshot,
-            );
+            if is_main_session {
+                merge_runtime_state_records_into_display_messages(
+                    workspace,
+                    session_id,
+                    &runtime_state_snapshot,
+                );
+            } else {
+                replace_display_messages_with_runtime_state_records(
+                    workspace,
+                    session_id,
+                    &runtime_state_snapshot,
+                );
+            }
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         })?;
     if is_main_session {
@@ -212,17 +219,12 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
                 runtime_state.conversation_state.clone(),
             )
         };
-        workspace.session_messages.insert(
-            session_id,
-            merge_session_messages_with_conversation_state_records(
-                workspace
-                    .session_messages
-                    .get(&session_id)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
-                &conversation_state,
-            ),
-        );
+        let messages = conversation_state_to_session_messages(&conversation_state);
+        if messages.is_empty() {
+            workspace.session_messages.remove(&session_id);
+        } else {
+            workspace.session_messages.insert(session_id, messages);
+        }
         workspace.session_run_phases.insert(
             session_id,
             if is_success {

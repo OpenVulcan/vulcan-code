@@ -147,8 +147,8 @@ fn webui_stop_session_work_uses_kernel_active_state_without_stream_handle() {
     }));
 }
 
-/// Verifies persisted completed task mirrors repair stale running spawn-agent display cards.
-/// 验证持久化的已完成任务镜像会修复陈旧的运行中 spawn_agent 展示卡片。
+/// Verifies persisted completed task mirrors repair stale spawn-agent display metadata.
+/// 验证持久化的已完成任务镜像会修复陈旧的 spawn_agent 展示元数据。
 #[test]
 fn task_mirror_completed_status_repairs_stale_running_tool_card() {
     let task_id = SessionId::new_v4();
@@ -186,7 +186,7 @@ fn task_mirror_completed_status_repairs_stale_running_tool_card() {
                 .and_then(serde_json::Value::as_str),
             Some("completed")
         );
-        assert_eq!(message.title, "调用 spawn_agent 工具 已完成");
+        assert_eq!(message.title, "子代理 image-worker");
     }
 }
 

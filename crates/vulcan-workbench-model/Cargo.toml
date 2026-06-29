@@ -18,6 +18,7 @@ vulcan-context-injection.workspace = true
 vulcan-core.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-session-core.workspace = true
+vulcan-subagent-core.workspace = true
 vulcan-task-session.workspace = true
 vulcan-vmm.workspace = true
 

@@ -3,11 +3,10 @@
 
 use super::{
     ServiceBridgeState, conversation_state_to_session_messages,
-    display_session_messages_from_workspace, normalize_subagent_task_panel_state,
-    normalize_webui_subagent_task_state, select_subagent_navigation_panel_states,
-    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
-    subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
-    webui_subagent_task_has_live_run, webui_subagent_task_state_by_task_id,
+    display_session_messages_from_workspace, normalize_webui_subagent_task_state,
+    select_subagent_navigation_panel_states, subagent_navigation_surface_is_visible,
+    subagent_navigation_task_label, subagent_task_panel_is_openable,
+    subagent_task_panel_state_has_recoverable_conversation, webui_subagent_task_state_by_task_id,
 };
 use vulcan_service_api::{SubagentNavigationSnapshot, SubagentTaskSummary};
 use vulcan_workbench_model::{
@@ -259,12 +258,12 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
             entries
                 .values()
                 .map(|state| {
-                    let is_live_running = webui_subagent_task_has_live_run(
+                    normalize_webui_subagent_task_state(
+                        Some(workspace_snapshot),
+                        state,
                         task_runtime,
                         live_listener_task_ids.contains(&state.task_id),
-                        state.task_id,
-                    );
-                    normalize_subagent_task_panel_state(state, is_live_running, None)
+                    )
                 })
                 .collect::<Vec<_>>()
         })

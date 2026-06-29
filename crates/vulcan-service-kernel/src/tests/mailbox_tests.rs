@@ -162,10 +162,10 @@ fn webui_subagent_mailbox_accepts_sibling_during_mailbox_turn() {
     ));
 }
 
-/// Verifies wait_agent completion consumes matching mailbox input and suppresses auto-trigger.
-/// 验证 wait_agent 完成后会消费匹配的 mailbox 输入并抑制自动触发。
+/// Verifies wait_agent completion leaves matching mailbox input for parent delivery.
+/// 验证 wait_agent 完成后保留匹配 mailbox 输入供父会话投递。
 #[test]
-fn wait_agent_completion_consumes_matching_mailbox_input() {
+fn wait_agent_completion_leaves_matching_mailbox_input() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -176,7 +176,7 @@ fn wait_agent_completion_consumes_matching_mailbox_input() {
                 "child_thread_id": task_session_id.to_string(),
                 "payload": {
                     "task_name": "agent-review",
-                    "task_session_id": task_session_id.to_string(),
+                    "subagent_task_id": task_session_id.to_string(),
                     "result_text": "done"
                 }
             }
@@ -216,7 +216,7 @@ fn wait_agent_completion_consumes_matching_mailbox_input() {
                 "completed": true,
                 "agents": [{
                     "task_name": "agent-review",
-                    "task_session_id": task_session_id.to_string(),
+                    "subagent_task_id": task_session_id.to_string(),
                     "status": "completed"
                 }]
             }
@@ -231,20 +231,15 @@ fn wait_agent_completion_consumes_matching_mailbox_input() {
         .get(&parent_session_id)
         .expect("kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
-    assert_eq!(kernel.input_queue().consumed_input_count(), 1);
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert_eq!(kernel.input_queue().consumed_input_count(), 0);
     assert_eq!(kernel.wait_scope_count(), 0);
-    assert!(
-        guard
-            .parent_session_completed_wait_agent_selectors
-            .contains_key(&parent_session_id)
-    );
 }
 
-/// Verifies wait_agent completion consumes unclaimed mailbox input when host selectors are absent.
-/// 验证 wait_agent 完成但宿主选择器缺失时会消费未认领的 mailbox 输入。
+/// Verifies wait_agent completion leaves mailbox input when host result selectors are absent.
+/// 验证 wait_agent 完成且宿主结果无选择器时仍保留 mailbox 输入。
 #[test]
-fn wait_agent_completion_consumes_mailbox_input_without_selectors() {
+fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -255,7 +250,7 @@ fn wait_agent_completion_consumes_mailbox_input_without_selectors() {
                 "child_thread_id": task_session_id.to_string(),
                 "payload": {
                     "task_name": "agent-image",
-                    "task_session_id": task_session_id.to_string(),
+                    "subagent_task_id": task_session_id.to_string(),
                     "result_text": "done"
                 }
             }
@@ -302,25 +297,20 @@ fn wait_agent_completion_consumes_mailbox_input_without_selectors() {
         .get(&parent_session_id)
         .expect("kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
-    assert_eq!(kernel.input_queue().consumed_input_count(), 1);
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert_eq!(kernel.input_queue().consumed_input_count(), 0);
     assert_eq!(kernel.wait_scope_count(), 0);
 }
 
-/// Verifies a late delegate-finished mailbox input is skipped after wait_agent already completed.
-/// 验证 wait_agent 已完成后迟到的委派完成 mailbox 输入会被跳过。
+/// Verifies a late delegate-finished mailbox input is queued after wait_agent already completed.
+/// 验证 wait_agent 已完成后迟到的委派完成 mailbox 输入仍会入队。
 #[test]
-fn session_mailbox_skips_late_delegate_finished_after_completed_wait_agent() {
+fn session_mailbox_queues_late_delegate_finished_after_completed_wait_agent() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
-    let mut service_state = test_service_state_with_parent_session(parent_session_id);
-    service_state
-        .parent_session_completed_wait_agent_selectors
-        .insert(
-            parent_session_id,
-            BTreeSet::from([String::from("agent-review")]),
-        );
-    let state = Arc::new(Mutex::new(service_state));
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
     let event = test_delegate_finished_event(task_session_id, "agent-review", "done");
 
     let queued = enqueue_webui_session_mailbox_input_if_needed(
@@ -332,13 +322,13 @@ fn session_mailbox_skips_late_delegate_finished_after_completed_wait_agent() {
     )
     .expect("late mailbox input should be checked");
 
-    assert!(!queued);
+    assert!(queued);
     let guard = state.lock().expect("state lock");
     assert!(
         guard
             .session_runtime_kernels
             .get(&parent_session_id)
-            .is_none_or(|kernel| kernel.input_queue().mailbox_len() == 0)
+            .is_some_and(|kernel| kernel.input_queue().mailbox_len() == 1)
     );
 }
 
@@ -386,7 +376,7 @@ fn mailbox_intervention_prompt_consumes_unclaimed_mailbox_input() {
                 "child_thread_id": task_session_id.to_string(),
                 "payload": {
                     "task_name": "agent-image",
-                    "task_session_id": task_session_id.to_string(),
+                    "subagent_task_id": task_session_id.to_string(),
                     "result_text": "image done"
                 }
             }
@@ -430,7 +420,7 @@ fn mailbox_intervention_prompt_skips_active_wait_scope() {
                 "child_thread_id": task_session_id.to_string(),
                 "payload": {
                     "task_name": "agent-image",
-                    "task_session_id": task_session_id.to_string(),
+                    "subagent_task_id": task_session_id.to_string(),
                     "result_text": "image done"
                 }
             }
@@ -463,4 +453,44 @@ fn mailbox_intervention_prompt_skips_active_wait_scope() {
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
     assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
     assert_eq!(kernel.input_queue().consumed_input_count(), 0);
+}
+
+/// Verifies stopped subagent metadata enters the parent mailbox as a child-agent message.
+/// 验证已停止子代理元数据会作为子代理消息进入父会话 mailbox。
+#[test]
+fn stopped_subagent_metadata_enqueues_parent_mailbox_notification() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let metadata = build_stopped_task_session_metadata(
+        None,
+        None,
+        task_session_id,
+        SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
+        "1000",
+    );
+
+    assert!(enqueue_webui_subagent_mailbox_input(
+        &mut service_state,
+        parent_session_id,
+        task_session_id,
+        &metadata,
+    ));
+    let kernel = service_state
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("kernel should exist");
+    let mailbox_inputs = kernel.input_queue().get_mailbox_input();
+
+    assert_eq!(mailbox_inputs.len(), 1);
+    assert_eq!(mailbox_inputs[0].kind, TurnInputKind::SubagentMessage);
+    assert!(mailbox_inputs[0].trigger_turn);
+    assert_eq!(
+        mailbox_inputs[0].payload["mailbox_event"]["payload"]["execution_status"],
+        "stopped"
+    );
+    assert_eq!(
+        mailbox_inputs[0].payload["mailbox_event"]["payload"]["result"],
+        SUBAGENT_TASK_STOPPED_SUMMARY_TEXT
+    );
 }

@@ -151,7 +151,7 @@ pub(super) fn task_state_event_payload(
     );
     json!({
         "task_id": record.public_task_id,
-        "task_session_id": record.task_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): record.task_id.to_string(),
         "root_session_id": record.origin_session_id.to_string(),
         "direct_parent_session_id": invocation.current_session_id.to_string(),
         "parent_task_id": record.parent_task_id.map(|value| value.to_string()),
@@ -204,7 +204,6 @@ pub(super) fn build_subagent_mailbox_payload(
     outcome: Option<&TaskExecutionOutcome>,
 ) -> Value {
     let agent_kind = subagent_kind_for_invocation(&invocation.invocation_config);
-    let agent_profile = subagent_profile_for_invocation(invocation);
     json!({
         "child_thread_id": invocation.task_id.to_string(),
         "public_id": invocation.public_task_id,
@@ -213,7 +212,6 @@ pub(super) fn build_subagent_mailbox_payload(
         "parent_task_id": invocation.parent_task_id.map(|value| value.to_string()),
         "parent_turn_id": Value::Null,
         "agent_kind": agent_kind,
-        "agent_profile": agent_profile,
         "status": subagent_status_from_task_status(status),
         "task_status": status,
         "description": invocation.description,
@@ -233,11 +231,8 @@ pub(super) fn build_subagent_mailbox_payload(
 pub(super) fn subagent_kind_for_invocation(
     invocation: &TaskInvocationConfig,
 ) -> SubagentMailboxAgentKind {
-    if invocation.subagent_profile_id.is_some() {
-        SubagentMailboxAgentKind::AgentProfile
-    } else {
-        SubagentMailboxAgentKind::ParentClone
-    }
+    let _ = invocation;
+    SubagentMailboxAgentKind::ParentClone
 }
 
 /// Maps one task-session record into the Vulcan-native subagent kind.
@@ -253,11 +248,8 @@ pub(super) fn subagent_kind_for_invocation(
 /// The subagent kind stored in the native registry.
 /// 写入原生注册表的子代理类型。
 pub(super) fn subagent_kind_for_task_record(record: &TaskSessionRecord) -> SubagentKind {
-    if record.invocation_config.subagent_profile_id.is_some() {
-        SubagentKind::AgentMd
-    } else {
-        SubagentKind::Clone
-    }
+    let _ = record;
+    SubagentKind::Clone
 }
 
 /// Resolves a prompt-source label for one task-session record.
@@ -270,24 +262,11 @@ pub(super) fn subagent_kind_for_task_record(record: &TaskSessionRecord) -> Subag
 ///
 /// # Returns
 /// 返回值
-/// A profile id for agent.md children or `main_clone` for cloned children.
-/// 对 agent.md 子代理返回画像标识，对克隆子代理返回 `main_clone`。
+/// A stable source marker for core subagent tasks.
+/// 核心子代理任务使用的稳定来源标记。
 pub(super) fn subagent_prompt_source_for_task_record(record: &TaskSessionRecord) -> Option<String> {
-    record
-        .invocation_config
-        .subagent_profile_id
-        .clone()
-        .or_else(|| Some(String::from("main_clone")))
-}
-
-/// Resolves the optional subagent profile label for one TaskSession invocation.
-/// 解析单次 TaskSession 调用对应的可选 子代理画像标签。
-pub(super) fn subagent_profile_for_invocation(invocation: &TaskExecutionRequest) -> Option<String> {
-    invocation
-        .invocation_config
-        .subagent_profile_id
-        .clone()
-        .or_else(|| invocation.subagent.clone())
+    let _ = record;
+    Some(String::from("core"))
 }
 
 /// Maps a persisted TaskSession status into the subagent mailbox status contract.

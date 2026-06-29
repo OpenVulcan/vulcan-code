@@ -6,7 +6,7 @@ fn parses_task_session_payload_into_subagent_state() {
     let task_id = SessionId::new_v4();
     let payload = json!({
         "task_id": "task-public",
-        "task_session_id": task_id.to_string(),
+        "subagent_task_id": task_id.to_string(),
         "execution_status": "running",
         "description": "检查工程结构",
         "subagent": "explorer",
@@ -28,10 +28,10 @@ fn parses_task_session_payload_into_subagent_state() {
 #[test]
 fn extracts_task_session_fields_from_payload_or_arguments() {
     let payload_metadata = json!({
-        "kind": "task_session",
+        "kind": "subagent_task",
         "payload": {
             "task_id": "public-a",
-            "task_session_id": SessionId::new_v4().to_string(),
+            "subagent_task_id": SessionId::new_v4().to_string(),
             "execution_status": "completed",
             "prompt": "执行检查",
             "description": "检查",
@@ -44,7 +44,6 @@ fn extracts_task_session_fields_from_payload_or_arguments() {
             "task_name": "public-b",
             "message": "执行测试",
             "description": "测试",
-            "agent_type": "tester",
         },
     });
 
@@ -66,7 +65,7 @@ fn extracts_task_session_fields_from_payload_or_arguments() {
     );
     assert_eq!(
         task_session_subagent_from_tool_metadata(&argument_metadata),
-        Some("tester")
+        None
     );
 }
 
@@ -81,7 +80,6 @@ fn ignores_alias_only_task_session_arguments() {
             "name": "public-c",
             "prompt": "执行测试",
             "subagent": "tester",
-            "agent_profile": "profile",
         },
     });
 
@@ -112,10 +110,10 @@ fn extracts_task_session_fields_from_host_result_metadata() {
     let metadata = json!({
         "tool_name": "spawn_agent",
         "host_result": {
-            "kind": "task_session",
+            "kind": "subagent_task",
             "payload": {
                 "task_id": "public-host",
-                "task_session_id": task_id.to_string(),
+                "subagent_task_id": task_id.to_string(),
                 "execution_status": "running",
                 "prompt": "生成图片",
                 "description": "图片子代理",
@@ -147,7 +145,7 @@ fn finds_task_session_tool_message_id_across_messages_and_records() {
     let task_session_id = SessionId::new_v4();
     let payload = json!({
         "task_id": "public-task",
-        "task_session_id": task_session_id.to_string(),
+        "subagent_task_id": task_session_id.to_string(),
         "prompt": "执行审核",
     });
     let weak_message = SessionMessageEntry {
@@ -174,10 +172,10 @@ fn finds_task_session_tool_message_id_across_messages_and_records() {
         body: String::new(),
         metadata: Some(json!({
             "tool_name": "spawn_agent",
-            "kind": "task_session",
+            "kind": "subagent_task",
             "payload": {
                 "task_id": "public-task",
-                "task_session_id": task_session_id.to_string(),
+                "subagent_task_id": task_session_id.to_string(),
                 "execution_status": "completed"
             }
         })),
@@ -233,7 +231,7 @@ fn stopped_task_session_metadata_omits_embedded_conversation_state() {
 
     let metadata = build_stopped_task_session_metadata(None, None, task_id, "已停止", "1000");
 
-    assert_eq!(metadata["payload"]["task_session_id"], task_id.to_string());
+    assert_eq!(metadata["payload"]["subagent_task_id"], task_id.to_string());
     assert_eq!(metadata["payload"]["execution_status"], "stopped");
     assert!(
         metadata["payload"].get("conversation_state").is_none(),
@@ -247,19 +245,19 @@ fn stopped_task_session_metadata_omits_embedded_conversation_state() {
 fn merge_tool_display_metadata_preserves_advanced_task_session_payload() {
     let running_metadata = json!({
         "tool_name": "spawn_agent",
-        "kind": "task_session",
+        "kind": "subagent_task",
         "payload": {
             "task_id": "reviewer",
-            "task_session_id": "child-1",
+            "subagent_task_id": "child-1",
             "execution_status": "running"
         }
     });
     let completed_metadata = json!({
         "tool_name": "spawn_agent",
-        "kind": "task_session",
+        "kind": "subagent_task",
         "payload": {
             "task_id": "reviewer",
-            "task_session_id": "child-1",
+            "subagent_task_id": "child-1",
             "execution_status": "completed",
             "result": "done"
         }
@@ -297,20 +295,20 @@ fn merge_tool_display_metadata_ranks_host_result_task_session_payload() {
         "tool_name": "spawn_agent",
         "tool_display_state": "completed",
         "host_result": {
-            "kind": "task_session",
+            "kind": "subagent_task",
             "payload": {
                 "task_id": "reviewer",
-                "task_session_id": "child-1",
+                "subagent_task_id": "child-1",
                 "execution_status": "running"
             }
         }
     });
     let completed_metadata = json!({
         "tool_name": "spawn_agent",
-        "kind": "task_session",
+        "kind": "subagent_task",
         "payload": {
             "task_id": "reviewer",
-            "task_session_id": "child-1",
+            "subagent_task_id": "child-1",
             "execution_status": "completed",
             "result": "done"
         }
@@ -335,7 +333,7 @@ fn task_card_payload_ignores_embedded_conversation_state() {
     let task_id = SessionId::new_v4();
     let payload = json!({
         "task_id": "visible-task",
-        "task_session_id": task_id.to_string(),
+        "subagent_task_id": task_id.to_string(),
         "execution_status": "completed",
         "description": "旧任务",
         "subagent": "worker",
@@ -354,8 +352,8 @@ fn task_card_payload_ignores_embedded_conversation_state() {
     );
 }
 
-/// Verifies spawn-agent card payload parsing requires a canonical task_session_id.
-/// 验证 spawn_agent 工具卡片 payload 解析必须具备规范 task_session_id。
+/// Verifies spawn-agent card payload parsing requires a canonical subagent_task_id.
+/// 验证 spawn_agent 工具卡片 payload 解析必须具备规范 subagent_task_id。
 #[test]
 fn task_card_payload_requires_task_session_id() {
     let parent_session_id = SessionId::new_v4();

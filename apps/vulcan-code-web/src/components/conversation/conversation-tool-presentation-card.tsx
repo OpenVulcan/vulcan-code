@@ -229,18 +229,36 @@ function SubagentOrchestrationDetail(props: {
   t: (key: TranslationKey) => string;
 }) {
   const { presentation, t } = props;
+  if (presentation.operation === "wait") {
+    return (
+      <div className="subagent-orchestration-detail">
+        <div className="subagent-orchestration-meta">
+          <span>{t("conversation.subagent.detail.status")}</span>
+          <strong>
+            {presentation.timedOut
+              ? t("conversation.subagent.detail.waitTimedOut")
+              : t("conversation.subagent.detail.waitCompleted")}
+          </strong>
+        </div>
+      </div>
+    );
+  }
   if (presentation.operation === "collect") {
     return (
       <div className="subagent-orchestration-detail">
+        {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
+        {presentation.result ? (
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+        ) : null}
         {presentation.agents.length ? (
           <div className="subagent-orchestration-agent-list">
             {presentation.agents.map((agent) => (
               <SubagentOrchestrationAgentRow agent={agent} key={agent.id} t={t} />
             ))}
           </div>
-        ) : (
+        ) : !presentation.note && !presentation.result ? (
           <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.noAgents")}</div>
-        )}
+        ) : null}
       </div>
     );
   }
@@ -263,7 +281,10 @@ function SubagentOrchestrationDetail(props: {
       ) : null}
       {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
       {presentation.prompt ? (
-        <SubagentInlineTextLine label={t("conversation.subagent.detail.prompt")} text={presentation.prompt} />
+        <SubagentInlineTextLine
+          label={t(presentation.operation === "message" ? "conversation.subagent.detail.message" : "conversation.subagent.detail.prompt")}
+          text={presentation.prompt}
+        />
       ) : null}
       {presentation.effectivePrompt && presentation.effectivePrompt !== presentation.prompt ? (
         <SubagentInlineTextLine label={t("conversation.subagent.detail.effectivePrompt")} text={presentation.effectivePrompt} />
@@ -355,9 +376,10 @@ function subagentOperationLabel(
   // 翻译辅助函数。
   t: (key: TranslationKey) => string,
 ): string {
+  if (presentation.operation === "wait") return t("conversation.subagent.detail.wait");
+  if (presentation.operation === "message") return t("conversation.subagent.detail.message");
   if (presentation.operation === "collect") return t("conversation.subagent.detail.collection");
   if (presentation.operation === "control") return t("conversation.subagent.detail.control");
-  if (presentation.operation === "message" || presentation.operation === "followup") return t("conversation.subagent.detail.messageDispatch");
   return presentation.state === "running" ? t("conversation.subagent.calling") : t("conversation.subagent.call");
 }
 
@@ -371,8 +393,16 @@ function subagentSummaryText(
   // 翻译辅助函数。
   t: (key: TranslationKey) => string,
 ): string {
+  if (presentation.operation === "wait") {
+    return presentation.timedOut
+      ? t("conversation.subagent.detail.waitTimedOut")
+      : t("conversation.subagent.detail.waitCompleted");
+  }
   if (presentation.operation === "collect") {
     return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
+  }
+  if (presentation.operation === "message") {
+    return presentation.target ?? presentation.title;
   }
   if (presentation.operation === "control") {
     return presentation.target ?? `${presentation.stoppedCount}`;

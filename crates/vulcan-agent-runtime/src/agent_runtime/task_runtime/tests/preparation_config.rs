@@ -111,6 +111,185 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
     );
 }
 
+/// Verifies ordinary child-agent execution hides subagent orchestration tools by default.
+/// 验证普通子代理执行默认隐藏子代理调度工具。
+#[test]
+fn task_runtime_preparation_request_hides_subagent_tools_by_default() {
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(parent_session_id),
+    );
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config: TaskInvocationConfig::main("review this change"),
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
+    );
+
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+
+    for tool_id in [
+        SPAWN_AGENT_TOOL,
+        SEND_MESSAGE_TOOL,
+        FOLLOWUP_TASK_TOOL,
+        WAIT_AGENT_TOOL,
+        INTERRUPT_AGENT_TOOL,
+        LIST_AGENTS_TOOL,
+    ] {
+        assert!(
+            child_request
+                .tool_exposure_override
+                .disabled_tools
+                .iter()
+                .any(|disabled_tool| disabled_tool == tool_id),
+            "{tool_id} should be disabled for ordinary child agents"
+        );
+    }
+}
+
+/// Verifies clone-style contexts can explicitly retain the subagent tool family for future modes.
+/// 验证克隆风格上下文可为后续模式显式保留子代理工具族。
+#[test]
+fn task_runtime_preparation_request_can_preserve_subagent_tools_when_allowed() {
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(parent_session_id),
+    )
+    .with_subagent_tools_allowed(true);
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config: TaskInvocationConfig::main("review this change"),
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
+    );
+
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+
+    assert!(
+        !child_request
+            .tool_exposure_override
+            .disabled_tools
+            .iter()
+            .any(|disabled_tool| disabled_tool == SPAWN_AGENT_TOOL)
+    );
+}
+
+/// Verifies default spawn_agent fork keeps messages but clears provider continuation.
+/// 验证 spawn_agent 默认 fork 会保留消息但清空 Provider continuation。
+#[test]
+fn spawn_agent_default_fork_clears_parent_continuation() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let parent_snapshot = CoreConversationSnapshot {
+        messages: vec![vulcan_core::types::ConversationMessage {
+            id: String::from("u1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("parent"),
+                attachments: Vec::new(),
+            },
+        }],
+        records: Vec::new(),
+        continuation: vulcan_core::types::ProviderContinuation {
+            provider_id: Some(String::from("openai")),
+            model_id: Some(String::from("gpt-test")),
+            last_provider_message_id: Some(String::from("resp_1")),
+            updated_at: Some(String::from("1")),
+        },
+    };
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(parent_session_id),
+    )
+    .with_parent_snapshot(parent_snapshot);
+    let _guard = task_runtime.install_execution_context(parent_session_id, context);
+
+    let child_snapshot =
+        initial_spawn_snapshot_for_fork_turns(&task_runtime, parent_session_id, Some("all"))
+            .expect("default spawn_agent fork should use parent context");
+
+    assert_eq!(child_snapshot.messages.len(), 1);
+    assert!(child_snapshot.records.is_empty());
+    assert!(child_snapshot.continuation.provider_id.is_none());
+    assert!(
+        child_snapshot
+            .continuation
+            .last_provider_message_id
+            .is_none()
+    );
+}
+
+/// Verifies spawn_agent fork fails when the parent runtime context is missing.
+/// 验证缺失父级运行时上下文时 spawn_agent fork 会失败。
+#[test]
+fn spawn_agent_fork_requires_registered_parent_context() {
+    let task_runtime = TaskRuntime::new();
+    let error = initial_spawn_snapshot_for_fork_turns(&task_runtime, Uuid::new_v4(), Some("all"))
+        .expect_err("default spawn_agent fork should reject missing parent context");
+
+    assert!(error.contains("registered parent runtime context"));
+}
+
 /// Verifies child execution requests carry the composed TaskSession system prompt override.
 /// 验证子代理执行请求会携带已组合的 TaskSession 系统提示词覆盖。
 #[test]
@@ -267,7 +446,7 @@ fn build_task_controller_config_uses_invocation_system_prompt() {
     let base = build_test_controller_config("Base prompt");
     let description = Some(String::from("Review code"));
     let subagent = Some(String::from("reviewer"));
-    let mut invocation_config = TaskInvocationConfig::with_profile("agent-review", "Review code");
+    let mut invocation_config = TaskInvocationConfig::main("Review code");
     invocation_config.inherit_parent_config = Some(false);
     invocation_config.system_prompt = Some(String::from("You are a strict code reviewer."));
     invocation_config.system_prompt_append = Some(String::from("Focus only on correctness."));
@@ -292,12 +471,11 @@ fn build_task_controller_config_uses_invocation_system_prompt() {
     assert!(config.system_prompt.contains("Subagent identity: reviewer"));
 }
 
-/// Verifies flexible task arguments populate the shared TaskSession invocation config.
-/// 验证灵活 task 参数会填充共享 TaskSession 调用配置。
+/// Verifies flexible task arguments ignore legacy profile fields and keep supported overrides.
+/// 验证灵活 task 参数会忽略旧 profile 字段并保留受支持覆盖项。
 #[test]
-fn task_invocation_config_parses_profile_tool_skill_and_compaction_overrides() {
+fn task_invocation_config_ignores_profile_and_keeps_supported_overrides() {
     let mut args = test_task_args("review code", None);
-    args.subagent_profile_id = Some(String::from("agent-review"));
     args.provider_model = Some(json!({
         "provider": "deepseek",
         "model": "deepseek-v4",
@@ -328,7 +506,6 @@ fn task_invocation_config_parses_profile_tool_skill_and_compaction_overrides() {
 
     let config = task_invocation_config_from_args(&args);
 
-    assert_eq!(config.subagent_profile_id.as_deref(), Some("agent-review"));
     assert_eq!(
         config.provider_model.provider_id.as_deref(),
         Some("deepseek")
@@ -392,41 +569,6 @@ fn task_context_compaction_policy_follows_resolved_toggle() {
     );
 }
 
-/// Verifies runtime-registered profiles enter the shared TaskSession config resolver.
-/// 验证运行时注册的 profile 会进入共享 TaskSession 配置解析器。
-#[test]
-fn task_runtime_resolves_registered_subagent_profile() {
-    let runtime = TaskRuntime::new();
-    let base = build_test_controller_config("Base prompt");
-    let mut profile = SubagentProfile::new("agent-review", "Review Agent");
-    profile.base_system_prompt = Some(String::from("Profile reviewer prompt."));
-    profile.tool_exposure.allowed_tools = vec![String::from("shell_command")];
-    runtime
-        .configure_subagent_profiles(vec![profile])
-        .expect("profiles should configure");
-    let invocation = TaskInvocationConfig::with_profile("agent-review", "review code");
-
-    let resolved = runtime
-        .resolve_task_session_config_for_execution(&base, &invocation)
-        .expect("profile should resolve");
-
-    assert_eq!(
-        resolved.effective_config.subagent_profile_id.as_deref(),
-        Some("agent-review")
-    );
-    assert!(
-        resolved
-            .effective_config
-            .system_prompt_layers
-            .iter()
-            .any(|layer| layer.contains("Profile reviewer prompt."))
-    );
-    assert_eq!(
-        resolved.effective_config.tool_exposure.allowed_tools,
-        vec!["shell_command"]
-    );
-}
-
 /// Verifies shared-runtime task report conversion preserves the final assistant message id from the child transcript.
 /// 验证共享运行时任务报告转换会保留子代理转录中的最终助手消息标识。
 #[test]
@@ -473,7 +615,14 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         thinking_output: None,
         conversation_state: Some(core_snapshot_to_session_conversation_state(&snapshot)),
         provider_request_count: 1,
-        last_successful_provider_usage: None,
+        last_successful_provider_usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(120),
+            output_tokens: Some(30),
+            reasoning_tokens: Some(10),
+            total_tokens: Some(160),
+            cached_input_tokens: Some(40),
+            cache_creation_input_tokens: None,
+        }),
         embedded_turn_usage_segments: Vec::new(),
         mcp_discovery_rows: Vec::new(),
         mcp_discovery_errors: Vec::new(),
@@ -491,4 +640,14 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         Some("assistant-final")
     );
     assert_eq!(outcome.final_output_text, "done");
+    assert_eq!(outcome.usage_segments.len(), 1);
+    let segment = &outcome.usage_segments[0];
+    assert_eq!(segment.kind, SessionTurnUsageSegmentKind::SubagentTask);
+    assert_eq!(segment.trigger.as_deref(), Some("agent-review"));
+    assert_eq!(segment.provider_call_count, 1);
+    assert_eq!(segment.input_tokens, 120);
+    assert_eq!(segment.output_tokens, 30);
+    assert_eq!(segment.reasoning_tokens, 10);
+    assert_eq!(segment.total_tokens, 160);
+    assert_eq!(segment.cached_input_tokens, Some(40));
 }

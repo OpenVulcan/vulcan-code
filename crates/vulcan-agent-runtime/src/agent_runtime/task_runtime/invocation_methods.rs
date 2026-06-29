@@ -1,7 +1,7 @@
 use super::*;
 
 impl TaskRuntime {
-    /// Executes one spawn-agent-backed TaskSession invocation through the backend registered for the current controller session.
+    /// Executes one spawn-agent-backed subagent invocation through the backend registered for the current controller session.
     /// 通过为当前控制器会话注册的后端执行一次由 spawn_agent 承载的 TaskSession 调用。
     pub async fn invoke_task(
         self: &Arc<Self>,
@@ -54,7 +54,7 @@ impl TaskRuntime {
         Ok(build_task_invocation_result(&invocation, &outcome))
     }
 
-    /// Starts a new child-agent task session for one spawn_agent invocation.
+    /// Starts a new child-agent task for one spawn_agent invocation.
     /// 为一次 spawn_agent 调用启动新的子代理任务会话。
     pub async fn invoke_spawn_agent(
         self: &Arc<Self>,
@@ -91,10 +91,10 @@ impl TaskRuntime {
             self.store_task_outcome(current_session_id, &invocation, &outcome)?;
         }
 
-        Ok(build_task_invocation_result(&invocation, &outcome))
+        Ok(build_spawn_agent_invocation_result(&invocation, &outcome))
     }
 
-    /// Waits for one or more already spawned child agents without creating new task sessions.
+    /// Waits for one or more already spawned child agents without creating new subagent tasks.
     /// 等待一个或多个已启动的子代理，且不会创建新的任务会话。
     pub async fn invoke_wait_agent(
         &self,
@@ -104,49 +104,47 @@ impl TaskRuntime {
         // Tool-level tracing separates model wait latency from child-agent execution latency.
         // 工具级跟踪用于区分模型等待耗时和子代理自身执行耗时。
         let trace_started_at = current_unix_millis_u64();
-        let timeout_ms = subagent_tool_timeout_ms(&args).unwrap_or(300_000);
+        let timeout_ms = wait_agent_timeout_ms(&args)?.unwrap_or(WAIT_AGENT_DEFAULT_TIMEOUT_MS);
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let parent_thread_id = SessionNodeId::from(current_session_id);
+        let mut mailbox_activity_rx = self.subscribe_subagent_mailbox_activity();
+        let mut parent_input_activity_rx = self.subscribe_parent_input_activity();
         let mut waiting_logged = false;
         task_runtime_trace(
             "subagent_wait_agent_start",
             format!("parent={current_session_id} timeout_ms={timeout_ms}"),
         );
         loop {
-            let records = self.child_agent_records_for_tool_request(current_session_id, &args)?;
-            let active_task_ids = self.active_task_ids_from_records(&records)?;
-            if active_task_ids.is_empty() || tokio::time::Instant::now() >= deadline {
-                let registry_entries =
-                    self.subagent_registry_entries_for_tool_request(current_session_id, &args)?;
-                if !registry_entries.is_empty() {
-                    let result = build_subagent_registry_status_tool_result(
-                        "wait_agent",
-                        current_session_id,
-                        registry_entries,
-                        timeout_ms,
-                        active_task_ids.is_empty(),
-                    );
-                    task_runtime_trace(
-                        "subagent_wait_agent_return",
-                        format!(
-                            "parent={current_session_id} source=registry active_count={} elapsed_ms={}",
-                            active_task_ids.len(),
-                            current_unix_millis_u64().saturating_sub(trace_started_at)
-                        ),
-                    );
-                    return Ok(result);
-                }
-                let result = build_subagent_status_tool_result(
-                    "wait_agent",
-                    current_session_id,
-                    records,
-                    timeout_ms,
-                    active_task_ids.is_empty(),
+            if self.take_parent_input_activity_for_parent(parent_thread_id)? {
+                let result = build_wait_agent_steered_tool_result(current_session_id, timeout_ms);
+                task_runtime_trace(
+                    "subagent_wait_agent_steered",
+                    format!(
+                        "parent={current_session_id} source=queued_parent_input elapsed_ms={}",
+                        current_unix_millis_u64().saturating_sub(trace_started_at)
+                    ),
                 );
+                return Ok(result);
+            }
+            if self.has_subagent_events_for_parent(parent_thread_id)? {
+                let result =
+                    build_wait_agent_activity_tool_result(current_session_id, timeout_ms, false);
                 task_runtime_trace(
                     "subagent_wait_agent_return",
                     format!(
-                        "parent={current_session_id} source=records active_count={} elapsed_ms={}",
-                        active_task_ids.len(),
+                        "parent={current_session_id} source=queued_mailbox elapsed_ms={}",
+                        current_unix_millis_u64().saturating_sub(trace_started_at)
+                    ),
+                );
+                return Ok(result);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let result =
+                    build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                task_runtime_trace(
+                    "subagent_wait_agent_timeout",
+                    format!(
+                        "parent={current_session_id} elapsed_ms={}",
                         current_unix_millis_u64().saturating_sub(trace_started_at)
                     ),
                 );
@@ -157,24 +155,61 @@ impl TaskRuntime {
                 task_runtime_trace(
                     "subagent_wait_agent_waiting",
                     format!(
-                        "parent={current_session_id} active_count={} elapsed_ms={}",
-                        active_task_ids.len(),
+                        "parent={current_session_id} elapsed_ms={}",
                         current_unix_millis_u64().saturating_sub(trace_started_at)
                     ),
                 );
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let mut streams = active_task_ids
-                .iter()
-                .map(|task_id| Box::pin(self.subscribe_detached_task_events(*task_id)))
-                .collect::<Vec<_>>();
-            let mut event_futures = FuturesUnordered::new();
-            for stream in streams.iter_mut() {
-                event_futures.push(stream.next());
-            }
             tokio::select! {
-                _ = event_futures.next() => {}
-                _ = tokio::time::sleep(remaining) => {}
+                changed = mailbox_activity_rx.changed() => {
+                    if changed.is_err() {
+                        let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                        task_runtime_trace(
+                            "subagent_wait_agent_timeout",
+                            format!(
+                                "parent={current_session_id} source=mailbox_closed elapsed_ms={}",
+                                current_unix_millis_u64().saturating_sub(trace_started_at)
+                            ),
+                        );
+                        return Ok(result);
+                    }
+                }
+                changed = parent_input_activity_rx.changed() => {
+                    if changed.is_ok() && self.take_parent_input_activity_for_parent(parent_thread_id)? {
+                        let result = build_wait_agent_steered_tool_result(current_session_id, timeout_ms);
+                        task_runtime_trace(
+                            "subagent_wait_agent_steered",
+                            format!(
+                                "parent={current_session_id} elapsed_ms={}",
+                                current_unix_millis_u64().saturating_sub(trace_started_at)
+                            ),
+                        );
+                        return Ok(result);
+                    }
+                    if changed.is_err() {
+                        let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                        task_runtime_trace(
+                            "subagent_wait_agent_timeout",
+                            format!(
+                                "parent={current_session_id} source=parent_input_closed elapsed_ms={}",
+                                current_unix_millis_u64().saturating_sub(trace_started_at)
+                            ),
+                        );
+                        return Ok(result);
+                    }
+                }
+                _ = tokio::time::sleep(remaining) => {
+                    let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                    task_runtime_trace(
+                        "subagent_wait_agent_timeout",
+                        format!(
+                            "parent={current_session_id} elapsed_ms={}",
+                            current_unix_millis_u64().saturating_sub(trace_started_at)
+                        ),
+                    );
+                    return Ok(result);
+                }
             }
         }
     }
@@ -192,314 +227,164 @@ impl TaskRuntime {
             format!("parent={current_session_id}"),
         );
         let registry_entries =
-            self.subagent_registry_entries_for_tool_request(current_session_id, &args)?;
-        if !registry_entries.is_empty() {
-            let result = build_subagent_registry_status_tool_result(
-                "list_agents",
-                current_session_id,
-                registry_entries,
-                0,
-                true,
-            );
-            task_runtime_trace(
-                "subagent_list_agents_return",
-                format!(
-                    "parent={current_session_id} source=registry elapsed_ms={}",
-                    current_unix_millis_u64().saturating_sub(trace_started_at)
-                ),
-            );
-            return Ok(result);
-        }
-        let records = self.child_agent_records_for_tool_request(current_session_id, &args)?;
-        let result =
-            build_subagent_status_tool_result("list_agents", current_session_id, records, 0, true);
+            self.subagent_registry_entries_for_list_request(current_session_id, &args)?;
+        let result = build_subagent_registry_status_tool_result(
+            "list_agents",
+            current_session_id,
+            registry_entries,
+            0,
+            true,
+        );
         task_runtime_trace(
             "subagent_list_agents_return",
             format!(
-                "parent={current_session_id} source=records elapsed_ms={}",
+                "parent={current_session_id} source=registry elapsed_ms={}",
                 current_unix_millis_u64().saturating_sub(trace_started_at)
             ),
         );
         Ok(result)
     }
 
-    /// Queues a message for one existing child agent without starting new child work.
-    /// 为一个已存在的子代理暂存消息，且不启动新的子代理工作。
-    pub async fn invoke_send_message(
-        &self,
-        current_session_id: SessionId,
-        args: Value,
-    ) -> Result<VulcanToolInvocationResult, String> {
-        let trace_started_at = current_unix_millis_u64();
-        let message_args = parse_subagent_message_tool_arguments(args, "send_message")?;
-        task_runtime_trace(
-            "subagent_send_message_start",
-            format!(
-                "parent={current_session_id} target={} message_chars={}",
-                message_args.target,
-                message_args.message.chars().count()
-            ),
-        );
-        let target_task_ids = self
-            .child_task_ids_for_message_target(current_session_id, message_args.target.as_str())?;
-        self.queue_child_messages(&target_task_ids, message_args.message.as_str())?;
-        let result = build_subagent_message_tool_result(
-            "send_message",
-            current_session_id,
-            message_args.target.as_str(),
-            target_task_ids,
-            false,
-            true,
-            None,
-        );
-        task_runtime_trace(
-            "subagent_send_message_return",
-            format!(
-                "parent={current_session_id} target={} elapsed_ms={}",
-                message_args.target,
-                current_unix_millis_u64().saturating_sub(trace_started_at)
-            ),
-        );
-        Ok(result)
-    }
-
-    /// Sends a follow-up task to one existing child agent and triggers a child continuation when possible.
-    /// 向一个已存在子代理发送后续任务，并在可行时触发子代理继续执行。
-    pub async fn invoke_followup_task(
-        self: &Arc<Self>,
-        current_session_id: SessionId,
-        args: Value,
-    ) -> Result<VulcanToolInvocationResult, String> {
-        let trace_started_at = current_unix_millis_u64();
-        let message_args = parse_subagent_message_tool_arguments(args, "followup_task")?;
-        task_runtime_trace(
-            "subagent_followup_task_start",
-            format!(
-                "parent={current_session_id} target={} message_chars={}",
-                message_args.target,
-                message_args.message.chars().count()
-            ),
-        );
-        let selector_args = json!({ "task_name": message_args.target.clone() });
-        let target_records =
-            self.child_agent_records_for_tool_request(current_session_id, &selector_args)?;
-        let active_task_ids = self.active_task_ids_from_records(&target_records)?;
-        if !active_task_ids.is_empty() {
-            self.queue_child_messages(&active_task_ids, message_args.message.as_str())?;
-            let result = build_subagent_message_tool_result(
-                "followup_task",
-                current_session_id,
-                message_args.target.as_str(),
-                active_task_ids,
-                true,
-                true,
-                Some(String::from(
-                    "The selected child agent is still running; the follow-up was queued for the next child-agent continuation.",
-                )),
-            );
-            task_runtime_trace(
-                "subagent_followup_task_return",
-                format!(
-                    "parent={current_session_id} target={} queued_for_active=true elapsed_ms={}",
-                    message_args.target,
-                    current_unix_millis_u64().saturating_sub(trace_started_at)
-                ),
-            );
-            return Ok(result);
-        }
-        let target_task_ids =
-            self.child_task_ids_for_message_target(current_session_id, &message_args.target)?;
-        let queued_messages = self.drain_queued_child_messages(&target_task_ids)?;
-        let prompt = followup_prompt_from_messages(queued_messages, message_args.message);
-        let task_args = json!({
-            "prompt": prompt,
-            "task_id": message_args.target,
-            "description": format!("Follow up {}", message_args.target),
-        });
-        let result = self.invoke_task(current_session_id, task_args).await;
-        task_runtime_trace(
-            "subagent_followup_task_return",
-            format!(
-                "parent={current_session_id} target={} ok={} elapsed_ms={}",
-                message_args.target,
-                result.is_ok(),
-                current_unix_millis_u64().saturating_sub(trace_started_at)
-            ),
-        );
-        result
-    }
-
-    /// Resolves child task-session ids for one message target.
-    /// 为单个消息目标解析子任务会话标识列表。
-    fn child_task_ids_for_message_target(
-        &self,
-        current_session_id: SessionId,
-        target: &str,
-    ) -> Result<Vec<SessionId>, String> {
-        let selector_args = json!({ "task_name": target });
-        let records =
-            self.child_agent_records_for_tool_request(current_session_id, &selector_args)?;
-        let mut task_ids = records
-            .into_iter()
-            .map(|record| record.task_id)
-            .collect::<Vec<_>>();
-        if task_ids.is_empty() {
-            task_ids.extend(
-                self.subagent_registry_entries_for_tool_request(
-                    current_session_id,
-                    &selector_args,
-                )?
-                .into_iter()
-                .map(|entry| entry.session_id.as_uuid()),
-            );
-        }
-        if task_ids.is_empty() {
-            return Err(format!(
-                "The target child agent `{target}` does not exist under the current parent session."
-            ));
-        }
-        task_ids.sort();
-        task_ids.dedup();
-        Ok(task_ids)
-    }
-
-    /// Queues one message for every selected child task session.
-    /// 为每个选中的子任务会话暂存一条消息。
-    fn queue_child_messages(&self, task_ids: &[SessionId], message: &str) -> Result<(), String> {
-        let mut queued_messages = self.queued_child_messages.write().map_err(|_| {
-            String::from("The child-agent message queue is locked and cannot update.")
-        })?;
-        for task_id in task_ids {
-            queued_messages
-                .entry(*task_id)
-                .or_default()
-                .push(message.to_string());
-        }
-        Ok(())
-    }
-
-    /// Drains queued parent-authored messages for the selected child task sessions.
-    /// 取出选中子任务会话中暂存的父级消息。
-    fn drain_queued_child_messages(&self, task_ids: &[SessionId]) -> Result<Vec<String>, String> {
-        let mut queued_messages = self.queued_child_messages.write().map_err(|_| {
-            String::from("The child-agent message queue is locked and cannot read.")
-        })?;
-        let mut drained = Vec::new();
-        for task_id in task_ids {
-            if let Some(messages) = queued_messages.remove(task_id) {
-                drained.extend(messages);
-            }
-        }
-        Ok(drained)
-    }
-
-    /// Reads registry entries for one subagent tool request.
-    /// 读取一次子代理工具请求对应的注册表条目。
+    /// Reads registry entries for one list_agents request.
+    /// 读取一次 list_agents 请求对应的注册表条目。
     ///
     /// # Parameters
     /// 参数
     /// `current_session_id` is the direct parent session id.
     /// `current_session_id` 是直接父会话标识。
-    /// `args` carries the optional child-agent selector.
-    /// `args` 携带可选子代理选择器。
+    /// `args` carries the optional Vulcan path_prefix selector.
+    /// `args` 携带可选的 Vulcan path_prefix 选择器。
     ///
     /// # Returns
     /// 返回值
     /// Matching registry entries cloned from the native registry snapshot.
     /// 从原生注册表快照克隆出的匹配条目。
-    fn subagent_registry_entries_for_tool_request(
+    fn subagent_registry_entries_for_list_request(
         &self,
         current_session_id: SessionId,
         args: &Value,
     ) -> Result<Vec<SubagentRegistryEntry>, String> {
+        let path_prefix = list_agents_path_prefix(args)?;
         let registry = self.subagent_registry_snapshot()?;
-        let parent_session_id = SessionNodeId::from(current_session_id);
-        if let Some(target) = subagent_tool_target(args) {
-            let target = normalize_public_task_identifier(&target)?;
-            return Ok(registry
-                .get(&target)
-                .filter(|entry| entry.parent_session_id == parent_session_id)
-                .cloned()
-                .into_iter()
-                .collect());
-        }
-        Ok(registry
-            .list_for_parent(parent_session_id)
+        let root_session_id = self.root_session_id_for_subagent_tree(current_session_id)?;
+        let entries_by_session = registry
+            .list_all()
             .into_iter()
-            .cloned()
-            .collect())
+            .map(|entry| (entry.session_id, entry.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut entries = entries_by_session
+            .values()
+            .filter_map(|entry| {
+                let entry_path =
+                    subagent_entry_tree_path(entry, &entries_by_session, root_session_id)?;
+                let matches_prefix = path_prefix
+                    .as_deref()
+                    .is_none_or(|prefix| subagent_tree_path_matches_prefix(&entry_path, prefix));
+                matches_prefix.then_some((entry_path, entry.clone()))
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left_path, left_entry), (right_path, right_entry)| {
+            left_path
+                .cmp(right_path)
+                .then_with(|| left_entry.agent_id.cmp(&right_entry.agent_id))
+        });
+        Ok(entries.into_iter().map(|(_, entry)| entry).collect())
     }
 
-    /// Stops one running child agent selected by task name, public id, or task-session id.
-    /// 停止一个按任务名、公开标识或任务会话标识选中的运行中子代理。
-    pub async fn invoke_close_agent(
+    /// Resolves the root session id for one Vulcan subagent tree list request.
+    /// 为一次 Vulcan 子代理树列表请求解析根会话标识。
+    fn root_session_id_for_subagent_tree(
+        &self,
+        current_session_id: SessionId,
+    ) -> Result<SessionNodeId, String> {
+        Ok(self
+            .sessions
+            .read()
+            .map_err(|_| {
+                String::from(
+                    "The task-session registry is locked and cannot resolve the root session.",
+                )
+            })?
+            .get(&current_session_id)
+            .map(|record| SessionNodeId::from(record.origin_session_id))
+            .unwrap_or_else(|| SessionNodeId::from(current_session_id)))
+    }
+
+    /// Interrupts one known child agent selected by a Vulcan target.
+    /// 按 Vulcan target 中断一个已知子代理。
+    pub async fn invoke_interrupt_agent(
         &self,
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
+        let target = interrupt_agent_target(&args)?;
+        let normalized_target = normalize_public_task_identifier(&target)?;
+        if is_root_agent_target(&target) {
+            return Err(String::from("root is not a spawned agent."));
+        }
+        if self.current_session_matches_public_target(current_session_id, &normalized_target)? {
+            return Err(String::from(
+                "An agent cannot interrupt itself; return your result and let the parent interrupt you if needed.",
+            ));
+        }
         let trace_started_at = current_unix_millis_u64();
         task_runtime_trace(
-            "subagent_close_agent_start",
+            "subagent_interrupt_agent_start",
             format!("parent={current_session_id}"),
         );
-        let registry_entries =
-            self.subagent_registry_entries_for_tool_request(current_session_id, &args)?;
-        if !registry_entries.is_empty() {
-            let mut stopped_task_ids = Vec::new();
-            for entry in &registry_entries {
-                stopped_task_ids.extend(self.stop_task_tree(SessionId::from(entry.session_id))?);
-            }
-            let result = VulcanToolInvocationResult::from_model_output(json!({
-                "tool": "close_agent",
-                "parent_session_id": current_session_id.to_string(),
-                "matched_agents": registry_entries.iter().map(subagent_registry_entry_status_payload).collect::<Vec<_>>(),
-                "stopped_task_session_ids": stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "stopped_count": stopped_task_ids.len(),
-            })).with_host_result(VulcanToolHostResult {
-                kind: String::from("subagent_control"),
-                payload: json!({
-                    "tool": "close_agent",
-                    "parent_session_id": current_session_id.to_string(),
-                    "stopped_task_session_ids": stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                }),
-            });
-            task_runtime_trace(
-                "subagent_close_agent_return",
+        let parent_session_id = SessionNodeId::from(current_session_id);
+        let entry = self
+            .subagent_registry_snapshot()?
+            .get(&normalized_target)
+            .filter(|entry| entry.parent_session_id == parent_session_id)
+            .cloned()
+            .ok_or_else(|| {
                 format!(
-                    "parent={current_session_id} source=registry stopped_count={} elapsed_ms={}",
-                    stopped_task_ids.len(),
-                    current_unix_millis_u64().saturating_sub(trace_started_at)
-                ),
-            );
-            return Ok(result);
-        }
-        let records = self.child_agent_records_for_tool_request(current_session_id, &args)?;
-        let mut stopped_task_ids = Vec::new();
-        for record in &records {
-            stopped_task_ids.extend(self.stop_task_tree(record.task_id)?);
-        }
+                    "Unknown child agent `{normalized_target}` for parent session `{current_session_id}`."
+                )
+            })?;
+        let previous_status = entry.status;
+        let stopped_task_ids = self.stop_task_tree(SessionId::from(entry.session_id))?;
         let result = VulcanToolInvocationResult::from_model_output(json!({
-            "tool": "close_agent",
-            "parent_session_id": current_session_id.to_string(),
-            "matched_agents": records.iter().map(subagent_record_status_payload).collect::<Vec<_>>(),
-            "stopped_task_session_ids": stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            "stopped_count": stopped_task_ids.len(),
+            "tool": INTERRUPT_AGENT_TOOL,
+            "previous_status": previous_status,
         })).with_host_result(VulcanToolHostResult {
             kind: String::from("subagent_control"),
             payload: json!({
-                "tool": "close_agent",
+                "tool": INTERRUPT_AGENT_TOOL,
                 "parent_session_id": current_session_id.to_string(),
-                "stopped_task_session_ids": stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "matched_agents": [subagent_registry_entry_status_payload(&entry)],
+                (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "stopped_count": stopped_task_ids.len(),
             }),
         });
         task_runtime_trace(
-            "subagent_close_agent_return",
+            "subagent_interrupt_agent_return",
             format!(
-                "parent={current_session_id} source=records stopped_count={} elapsed_ms={}",
+                "parent={current_session_id} source=registry stopped_count={} elapsed_ms={}",
                 stopped_task_ids.len(),
                 current_unix_millis_u64().saturating_sub(trace_started_at)
             ),
         );
         Ok(result)
+    }
+
+    /// Returns whether the current session is itself the named child-agent target.
+    /// 返回当前会话自身是否就是指定的子代理目标。
+    fn current_session_matches_public_target(
+        &self,
+        current_session_id: SessionId,
+        normalized_target: &str,
+    ) -> Result<bool, String> {
+        Ok(self
+            .sessions
+            .read()
+            .map_err(|_| {
+                String::from(
+                    "The task-session registry is locked and cannot inspect the current agent.",
+                )
+            })?
+            .get(&current_session_id)
+            .is_some_and(|record| record.public_task_id == normalized_target))
     }
 }

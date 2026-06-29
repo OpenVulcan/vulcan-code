@@ -152,6 +152,11 @@ pub(crate) fn start_webui_session_kernel_turn(
 ) -> Result<(), String> {
     if kind == ActiveTurnKind::UserPrompt {
         clear_webui_session_wait_agent_coordination(state, session_id, "new_user_turn");
+        if let Some(agent_runtime) = state.agent_runtime.as_ref() {
+            agent_runtime
+                .task_runtime
+                .notify_parent_input_activity(SessionNodeId::from(session_id));
+        }
     }
     let kernel = session_runtime_kernel_mut(state, session_id);
     let turn = kernel
@@ -234,9 +239,19 @@ pub(crate) fn stop_webui_session_kernel_generation(
             ),
         );
         clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation");
+        if let Some(agent_runtime) = state.agent_runtime.as_ref() {
+            agent_runtime
+                .task_runtime
+                .notify_parent_input_activity(SessionNodeId::from(session_id));
+        }
         true
     } else {
         clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation_idle");
+        if let Some(agent_runtime) = state.agent_runtime.as_ref() {
+            agent_runtime
+                .task_runtime
+                .notify_parent_input_activity(SessionNodeId::from(session_id));
+        }
         false
     }
 }
@@ -251,20 +266,16 @@ pub(crate) fn clear_webui_session_wait_agent_coordination(
     let removed_waiting = state
         .parent_sessions_waiting_for_subagents
         .remove(&session_id);
-    let removed_completed = state
-        .parent_session_completed_wait_agent_selectors
-        .remove(&session_id)
-        .is_some();
     let removed_wait_scopes = state
         .session_runtime_kernels
         .get_mut(&session_id)
         .map(SessionRuntimeKernel::clear_wait_scopes)
         .unwrap_or(0);
-    if removed_waiting || removed_completed || removed_wait_scopes > 0 {
+    if removed_waiting || removed_wait_scopes > 0 {
         webui_trace(
             "wait_agent_coordination_cleared",
             format!(
-                "session={session_id} reason={reason} removed_waiting={removed_waiting} removed_completed={removed_completed} removed_wait_scopes={removed_wait_scopes}"
+                "session={session_id} reason={reason} removed_waiting={removed_waiting} removed_wait_scopes={removed_wait_scopes}"
             ),
         );
     }

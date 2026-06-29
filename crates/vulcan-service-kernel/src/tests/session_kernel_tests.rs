@@ -33,9 +33,6 @@ fn webui_session_kernel_user_turn_clears_wait_agent_coordination() {
     state
         .parent_sessions_waiting_for_subagents
         .insert(session_id);
-    state
-        .parent_session_completed_wait_agent_selectors
-        .insert(session_id, BTreeSet::from([String::from("agent-a")]));
     session_runtime_kernel_mut(&mut state, session_id)
         .register_wait_scope("wait-a", vec![String::from("agent-a")], 10)
         .expect("wait scope should register");
@@ -48,11 +45,6 @@ fn webui_session_kernel_user_turn_clears_wait_agent_coordination() {
             .parent_sessions_waiting_for_subagents
             .contains(&session_id)
     );
-    assert!(
-        !state
-            .parent_session_completed_wait_agent_selectors
-            .contains_key(&session_id)
-    );
     assert_eq!(
         state
             .session_runtime_kernels
@@ -60,41 +52,6 @@ fn webui_session_kernel_user_turn_clears_wait_agent_coordination() {
             .expect("kernel should exist")
             .wait_scope_count(),
         0
-    );
-}
-
-/// Verifies followup_task starts clear stale wait-agent completion selectors.
-/// 验证 followup_task 开始时会清理旧 wait_agent 完成选择器。
-#[test]
-fn followup_task_started_clears_completed_wait_agent_selectors() {
-    let session_id = SessionId::new_v4();
-    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
-        session_id,
-    )));
-    state
-        .lock()
-        .expect("state should lock")
-        .parent_session_completed_wait_agent_selectors
-        .insert(session_id, BTreeSet::from([String::from("agent-a")]));
-    let event = RuntimeEvent::new(
-        RuntimeEventKind::ToolStarted,
-        "followup_task started",
-        "followup_task",
-    )
-    .with_metadata(Some(json!({
-        "tool_name": "followup_task",
-        "tool_call_id": "call-followup",
-        "arguments": { "target": "agent-a", "message": "continue" }
-    })));
-
-    update_webui_wait_agent_runtime_state(&state, session_id, &event);
-
-    assert!(
-        !state
-            .lock()
-            .expect("state should lock")
-            .parent_session_completed_wait_agent_selectors
-            .contains_key(&session_id)
     );
 }
 

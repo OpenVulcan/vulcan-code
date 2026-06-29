@@ -16,7 +16,7 @@ import {
   normalizeToolDisplayState,
   structuredKindLooksLikeToolBlock,
   structuredMessageHasToolEvidence,
-  taskSessionIdFromToolMetadata,
+  subagentTaskIdFromToolMetadata,
   subagentToolDisplayName,
   toolMetadataContainsReturnPayload,
   turnStatsStatus,
@@ -140,7 +140,7 @@ function structuredMessageAttributes(
     "payload.command_session_id",
     "payload.commandSessionId",
   ]);
-  const taskSessionId = taskSessionIdFromToolMetadata(message.metadata);
+  const subagentTaskId = subagentTaskIdFromToolMetadata(message.metadata);
   const subagentName = subagentToolDisplayName(message.metadata, toolName);
   const planArtifact = planArtifactAttributesFromMetadata(message.metadata);
   if (planArtifact) {
@@ -149,7 +149,7 @@ function structuredMessageAttributes(
     attributes.plan_content = planArtifact.content;
     attributes.plan_updated_at = planArtifact.updatedAt;
   }
-  const taskSessionStatus = taskSessionId ? metadataString(message.metadata, [
+  const subagentTaskStatus = subagentTaskId ? metadataString(message.metadata, [
       "tool_display_state",
       "display_state",
       "host_result.payload.execution_status",
@@ -172,7 +172,7 @@ function structuredMessageAttributes(
     : explicitStatus
       ?? metadataToolFailureStatus(message.metadata)
       ?? turnStatsStatus(message.metadata);
-  const status = taskSessionStatus ?? fallbackStatus;
+  const status = subagentTaskStatus ?? fallbackStatus;
   const summary = metadataString(message.metadata, [
       "result.summary",
       "preview",
@@ -184,7 +184,7 @@ function structuredMessageAttributes(
   if (toolCallId) attributes.tool_call_id = toolCallId;
   if (toolResultId) attributes.tool_result_id = toolResultId;
   if (commandSessionId) attributes.command_session_id = commandSessionId;
-  if (taskSessionId) attributes.task_session_id = taskSessionId;
+  if (subagentTaskId) attributes.subagent_task_id = subagentTaskId;
   if (subagentName) attributes.subagent_name = subagentName;
   if (status) attributes.status = status;
   if (summary) attributes.summary = summary;
@@ -465,7 +465,7 @@ function conversationSpecialBlock(
     toolCallId: attributes.tool_call_id,
     toolResultId: attributes.tool_result_id,
     commandSessionId: attributes.command_session_id,
-    taskSessionId: attributes.task_session_id,
+    subagentTaskId: attributes.subagent_task_id,
     subagentName: attributes.subagent_name,
     rawMetadata,
     mediaAttachments: mediaAttachments.length > 0 ? mediaAttachments : undefined,

@@ -1,6 +1,18 @@
 use super::*;
 
-/// Builds the session-agent-style child-agent tool surface backed by the shared TaskSession runtime.
+/// Default wait_agent timeout in milliseconds for the Vulcan core subagent tool.
+/// Vulcan 核心子代理工具的 `wait_agent` 默认等待毫秒数。
+pub(super) const WAIT_AGENT_DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// Minimum wait_agent timeout in milliseconds used to guard against tight polling.
+/// 用于防止密集轮询的 `wait_agent` 最小等待毫秒数。
+pub(super) const WAIT_AGENT_MIN_TIMEOUT_MS: u64 = 10_000;
+
+/// Maximum wait_agent timeout in milliseconds for the Vulcan core subagent tool.
+/// Vulcan 核心子代理工具的 `wait_agent` 最大等待毫秒数。
+pub(super) const WAIT_AGENT_MAX_TIMEOUT_MS: u64 = 3_600_000;
+
+/// Builds the core child-agent tool surface backed by the shared subagent runtime.
 /// 构建由共享 TaskSession 运行时承载的 会话代理风格子代理工具面。
 pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<VulcanToolCandidate> {
     vec![
@@ -8,8 +20,8 @@ pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<Vul
         build_send_message_tool_candidate(Arc::clone(&task_runtime)),
         build_followup_task_tool_candidate(Arc::clone(&task_runtime)),
         build_wait_agent_tool_candidate(Arc::clone(&task_runtime)),
-        build_list_agents_tool_candidate(Arc::clone(&task_runtime)),
-        build_close_agent_tool_candidate(task_runtime),
+        build_interrupt_agent_tool_candidate(Arc::clone(&task_runtime)),
+        build_list_agents_tool_candidate(task_runtime),
     ]
 }
 
@@ -20,10 +32,10 @@ pub(super) fn build_spawn_agent_tool_candidate(
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: String::from("spawn_agent"),
-            name: String::from("spawn_agent"),
+            id: String::from(SPAWN_AGENT_TOOL),
+            name: String::from(SPAWN_AGENT_TOOL),
             description: String::from(
-                "Start a child agent asynchronously and return immediately with its task name. For parallel work, issue one spawn_agent call per child agent in the same tool-call batch, then use wait_agent once to collect their terminal statuses.",
+                "Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name \"task_3\" the agent will have canonical task name `/root/task1/task_3`. You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally. Ordinary Vulcan child agents do not receive subagent orchestration tools by default.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -36,7 +48,7 @@ pub(super) fn build_spawn_agent_tool_candidate(
             Box::pin(async move {
                 let trace_started_at = current_unix_millis_u64();
                 let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), "spawn_agent")?;
+                    parse_subagent_tool_session_id(session_id.as_deref(), SPAWN_AGENT_TOOL)?;
                 task_runtime_trace(
                     "subagent_spawn_agent_start",
                     format!(
@@ -63,57 +75,57 @@ pub(super) fn build_spawn_agent_tool_candidate(
 }
 
 /// Builds the model-visible child-agent queue-only message tool.
-/// 构建模型可见的子代理仅排队消息工具。
+/// 构建模型可见的子代理仅入队消息工具。
 pub(super) fn build_send_message_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: String::from("send_message"),
-            name: String::from("send_message"),
+            id: String::from(SEND_MESSAGE_TOOL),
+            name: String::from(SEND_MESSAGE_TOOL),
             description: String::from(
-                "Send a message to an existing child agent without starting new child work. The host queues the message for that child agent's next followup_task continuation.",
+                "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
         },
-        parameters_schema: subagent_message_args_schema(),
+        parameters_schema: inter_agent_message_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), "send_message")?;
+                    parse_subagent_tool_session_id(session_id.as_deref(), SEND_MESSAGE_TOOL)?;
                 task_runtime.invoke_send_message(session_id, args).await
             })
         }),
     }
 }
 
-/// Builds the model-visible child-agent follow-up task tool.
-/// 构建模型可见的子代理后续任务工具。
+/// Builds the model-visible child-agent follow-up message tool.
+/// 构建模型可见的子代理后续消息工具。
 pub(super) fn build_followup_task_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: String::from("followup_task"),
-            name: String::from("followup_task"),
+            id: String::from(FOLLOWUP_TASK_TOOL),
+            name: String::from(FOLLOWUP_TASK_TOOL),
             description: String::from(
-                "Send a follow-up task to an existing child agent and trigger a child-agent continuation when the child is idle.",
+                "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
         },
-        parameters_schema: subagent_message_args_schema(),
+        parameters_schema: inter_agent_message_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), "followup_task")?;
+                    parse_subagent_tool_session_id(session_id.as_deref(), FOLLOWUP_TASK_TOOL)?;
                 task_runtime.invoke_followup_task(session_id, args).await
             })
         }),
@@ -127,10 +139,10 @@ pub(super) fn build_wait_agent_tool_candidate(
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: String::from("wait_agent"),
-            name: String::from("wait_agent"),
+            id: String::from(WAIT_AGENT_TOOL),
+            name: String::from(WAIT_AGENT_TOOL),
             description: String::from(
-                "Wait for one child agent or all known child agents in the current parent session. Use this after spawning every required child agent; it returns status and terminal result text without starting new work.",
+                "Wait for a mailbox update from any live agent, including queued messages and final-status notifications. The wait also ends early when new user input is steered into the active turn. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, or a timeout summary if no activity arrives before the deadline.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -142,7 +154,7 @@ pub(super) fn build_wait_agent_tool_candidate(
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), "wait_agent")?;
+                    parse_subagent_tool_session_id(session_id.as_deref(), WAIT_AGENT_TOOL)?;
                 task_runtime.invoke_wait_agent(session_id, args).await
             })
         }),
@@ -156,10 +168,10 @@ pub(super) fn build_list_agents_tool_candidate(
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: String::from("list_agents"),
-            name: String::from("list_agents"),
+            id: String::from(LIST_AGENTS_TOOL),
+            name: String::from(LIST_AGENTS_TOOL),
             description: String::from(
-                "List known child agents for the current parent session and their latest runtime statuses. This tool never starts or resumes child work.",
+                "List live agents in the current Vulcan root subagent tree. Optionally filter by task-path prefix such as `/root/review`.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -171,37 +183,37 @@ pub(super) fn build_list_agents_tool_candidate(
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), "list_agents")?;
+                    parse_subagent_tool_session_id(session_id.as_deref(), LIST_AGENTS_TOOL)?;
                 task_runtime.invoke_list_agents(session_id, args).await
             })
         }),
     }
 }
 
-/// Builds the model-visible child-agent stop tool.
-/// 构建模型可见的子代理停止工具。
-pub(super) fn build_close_agent_tool_candidate(
+/// Builds the model-visible child-agent interrupt tool.
+/// 构建模型可见的子代理中断工具。
+pub(super) fn build_interrupt_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
-            id: String::from("close_agent"),
-            name: String::from("close_agent"),
+            id: String::from(INTERRUPT_AGENT_TOOL),
+            name: String::from(INTERRUPT_AGENT_TOOL),
             description: String::from(
-                "Stop one running child agent by task name or task session id. This is for cancellation only and never starts new work.",
+                "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
         },
-        parameters_schema: close_agent_args_schema(),
+        parameters_schema: interrupt_agent_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
                 let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), "close_agent")?;
-                task_runtime.invoke_close_agent(session_id, args).await
+                    parse_subagent_tool_session_id(session_id.as_deref(), INTERRUPT_AGENT_TOOL)?;
+                task_runtime.invoke_interrupt_agent(session_id, args).await
             })
         }),
     }
@@ -215,64 +227,47 @@ pub(super) fn spawn_agent_args_schema() -> Value {
         "properties": {
             "message": {
                 "type": "string",
-                "description": "Required child-agent instruction. Include the goal, boundaries, and expected return format."
-            },
-            "task_name": {
-                "type": "string",
-                "description": "Stable child-agent name used for later wait_agent/list_agents/close_agent calls."
+                "description": "Initial plain-text task for the new agent."
             },
             "agent_type": {
                 "type": "string",
-                "description": "Optional configured agent profile or role label. If omitted, the child agent clones the parent agent configuration."
+                "description": "Optional agent type or role hint for the new agent."
             },
-            "description": {
+            "fork_turns": {
                 "type": "string",
-                "description": "Optional short human-readable title for UI display."
+                "description": "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
             },
             "model": {
                 "type": "string",
-                "description": "Optional model override for this child agent."
-            },
-            "provider": {
-                "type": "string",
-                "description": "Optional provider override for this child agent."
+                "description": "Model override for the new agent. Omit unless an explicit override is needed."
             },
             "reasoning_effort": {
                 "type": "string",
-                "description": "Optional reasoning effort override for this child agent."
+                "description": "Reasoning effort override for the new agent. Omit to inherit the parent effort."
             },
-            "tools": {
-                "description": "Optional tool exposure override for this child agent.",
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "array", "items": { "type": "string" } },
-                    { "type": "object", "additionalProperties": true }
-                ]
-            },
-            "extra": {
-                "type": "object",
-                "additionalProperties": true,
-                "description": "Optional caller-owned JSON payload persisted with this child-agent invocation."
+            "task_name": {
+                "type": "string",
+                "description": "Task name for the new agent. Use lowercase letters, digits, and underscores."
             }
         },
-        "required": ["message"],
-        "additionalProperties": true
+        "required": ["task_name", "message"],
+        "additionalProperties": false
     })
 }
 
-/// Builds the JSON Schema advertised to the model for child-agent message tools.
-/// 为子代理消息工具构建对模型声明的 JSON Schema。
-pub(super) fn subagent_message_args_schema() -> Value {
+/// Builds the JSON Schema advertised to the model for inter-agent message tools.
+/// 为模型端代理间消息工具构建对外声明的 JSON Schema。
+pub(super) fn inter_agent_message_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
             "target": {
                 "type": "string",
-                "description": "Required child-agent name returned from spawn_agent."
+                "description": "Relative or canonical task name to message (from spawn_agent)."
             },
             "message": {
                 "type": "string",
-                "description": "Required message or follow-up task instruction to send to the child agent."
+                "description": "Message text to send to the target agent."
             }
         },
         "required": ["target", "message"],
@@ -286,18 +281,11 @@ pub(super) fn wait_agent_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "task_name": {
-                "type": "string",
-                "description": "Optional child-agent name returned from spawn_agent. Omit it to wait for every child agent under the current parent session."
-            },
-            "task_id": {
-                "type": "string",
-                "description": "Alias for task_name."
-            },
             "timeout_ms": {
                 "type": "integer",
-                "minimum": 0,
-                "description": "Maximum wait time in milliseconds. Omit for the default host wait window."
+                "minimum": WAIT_AGENT_MIN_TIMEOUT_MS,
+                "maximum": WAIT_AGENT_MAX_TIMEOUT_MS,
+                "description": "Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000."
             }
         },
         "additionalProperties": false
@@ -310,35 +298,52 @@ pub(super) fn list_agents_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "task_name": {
+            "path_prefix": {
                 "type": "string",
-                "description": "Optional child-agent selector. Omit it to list every child agent under the current parent session."
-            },
-            "task_id": {
-                "type": "string",
-                "description": "Alias for task_name."
+                "description": "Vulcan task-path prefix filter without a trailing slash. Omit to list all live agents in the root subagent tree."
             }
         },
         "additionalProperties": false
     })
 }
 
-/// Builds the JSON Schema advertised to the model for `close_agent`.
-/// 为模型端 `close_agent` 工具构建对外声明的 JSON Schema。
-pub(super) fn close_agent_args_schema() -> Value {
+/// Builds the JSON Schema advertised to the model for `interrupt_agent`.
+/// 为模型端 `interrupt_agent` 工具构建对外声明的 JSON Schema。
+pub(super) fn interrupt_agent_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "task_name": {
+            "target": {
                 "type": "string",
-                "description": "Child-agent name returned from spawn_agent."
-            },
-            "task_id": {
-                "type": "string",
-                "description": "Alias for task_name."
+                "description": "Agent id or canonical task name to interrupt (from spawn_agent)."
             }
         },
+        "required": ["target"],
         "additionalProperties": false
+    })
+}
+
+/// Reads the required interrupt target from an interrupt_agent request.
+/// 从 interrupt_agent 请求中读取必填中断目标。
+pub(super) fn interrupt_agent_target(args: &Value) -> Result<String, String> {
+    let Value::Object(map) = args else {
+        return Err(String::from(
+            "interrupt_agent arguments must be a JSON object.",
+        ));
+    };
+    let unsupported_keys = map
+        .keys()
+        .filter(|key| key.as_str() != "target")
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported_keys.is_empty() {
+        return Err(format!(
+            "interrupt_agent received unsupported keys: {}",
+            unsupported_keys.join(", ")
+        ));
+    }
+    string_field(map, &["target"]).ok_or_else(|| {
+        String::from("interrupt_agent requires target with the child-agent task name.")
     })
 }
 
@@ -358,8 +363,8 @@ pub(super) fn parse_subagent_tool_session_id(
     })
 }
 
-/// Converts session-agent-style `spawn_agent` arguments into the existing TaskSession invocation shape.
-/// 将 会话代理风格 `spawn_agent` 参数转换为既有 TaskSession 调用形态。
+/// Converts `spawn_agent` arguments into the internal subagent invocation shape.
+/// 将 `spawn_agent` 参数转换为内部子代理调用形态。
 pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value, String> {
     let Value::Object(map) = args else {
         return Err(String::from(
@@ -369,138 +374,185 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
     let prompt = string_field(&map, &["message"]).ok_or_else(|| {
         String::from("`spawn_agent` requires `message` with the child-agent instruction.")
     })?;
-    let task_id = string_field(&map, &["task_name"]);
+    let task_id = string_field(&map, &["task_name"]).ok_or_else(|| {
+        String::from("`spawn_agent` requires `task_name` with the child-agent task name.")
+    })?;
+    let unsupported_keys = map
+        .keys()
+        .filter(|key| {
+            !matches!(
+                key.as_str(),
+                "message"
+                    | "task_name"
+                    | "agent_type"
+                    | "fork_turns"
+                    | "model"
+                    | "reasoning_effort"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported_keys.is_empty() {
+        return Err(format!(
+            "`spawn_agent` only accepts message, task_name, agent_type, fork_turns, model, and reasoning_effort; unsupported keys: {}",
+            unsupported_keys.join(", ")
+        ));
+    }
     let agent_type = string_field(&map, &["agent_type"]);
-    let description = string_field(&map, &["description"])
-        .or_else(|| task_id.clone())
-        .or_else(|| build_task_prompt_preview(&prompt));
+    let model = string_field(&map, &["model"]);
+    let reasoning_effort = string_field(&map, &["reasoning_effort"]);
+    let fork_turns = string_field(&map, &["fork_turns"]);
+    let fork_turns = normalize_spawn_agent_fork_turns(fork_turns.as_deref())?;
     let mut task_args = serde_json::Map::new();
     task_args.insert(String::from("prompt"), Value::String(prompt));
-    if let Some(task_id) = task_id {
-        task_args.insert(String::from("task_id"), Value::String(task_id));
-    }
-    if let Some(description) = description {
-        task_args.insert(String::from("description"), Value::String(description));
-    }
+    task_args.insert(String::from("task_id"), Value::String(task_id.clone()));
+    task_args.insert(String::from("description"), Value::String(task_id));
     if let Some(agent_type) = agent_type {
         task_args.insert(String::from("subagent"), Value::String(agent_type));
     }
-    for key in [
-        "inherit_parent_config",
-        "system_prompt",
-        "system_prompt_append",
-        "provider",
-        "model",
-        "reasoning_effort",
-        "execution_mode",
-        "provider_model",
-        "tools",
-        "ai_capabilities",
-        "skills",
-        "prompt_skills",
-        "luaskills",
-        "mcp",
-        "context_compaction",
-        "runtime_policy",
-        "extra",
-    ] {
-        if let Some(value) = map.get(key) {
-            task_args.insert(key.to_string(), value.clone());
-        }
+    if let Some(model) = model {
+        task_args.insert(String::from("model"), Value::String(model));
     }
+    if let Some(reasoning_effort) = reasoning_effort {
+        task_args.insert(
+            String::from("reasoning_effort"),
+            Value::String(reasoning_effort),
+        );
+    }
+    task_args.insert(
+        String::from("fork_turns"),
+        Value::String(fork_turns.unwrap_or_else(|| String::from("all"))),
+    );
     Ok(Value::Object(task_args))
 }
 
-/// Parsed arguments shared by child-agent message tools.
-/// 子代理消息工具共享的已解析参数。
-pub(super) struct SubagentMessageToolArgs {
-    /// Target child-agent identifier.
-    /// 目标子代理标识。
-    pub(super) target: String,
-    /// Message sent from the parent agent.
-    /// 父代理发送的消息。
-    pub(super) message: String,
-}
-
-/// Parses the shared argument payload for child-agent message tools.
-/// 解析子代理消息工具共享的参数载荷。
-pub(super) fn parse_subagent_message_tool_arguments(
-    args: Value,
-    tool_name: &str,
-) -> Result<SubagentMessageToolArgs, String> {
-    let Value::Object(map) = args else {
-        return Err(format!("`{tool_name}` arguments must be a JSON object."));
+/// Normalizes the Vulcan fork_turns selector before it reaches execution.
+/// 在进入执行层之前规范化 Vulcan 的 fork_turns 选择器。
+pub(super) fn normalize_spawn_agent_fork_turns(
+    fork_turns: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(fork_turns) = fork_turns.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
     };
-    let target = string_field(&map, &["target"])
-        .ok_or_else(|| format!("`{tool_name}` requires `target`."))?;
-    let message = string_field(&map, &["message"])
-        .ok_or_else(|| format!("`{tool_name}` requires `message`."))?;
-    let target = normalize_public_task_identifier(&target)?;
-    if message.trim().is_empty() {
-        return Err(format!("`{tool_name}` message cannot be empty."));
+    if fork_turns.eq_ignore_ascii_case("none") {
+        return Ok(Some(String::from("none")));
     }
-    Ok(SubagentMessageToolArgs { target, message })
+    if fork_turns.eq_ignore_ascii_case("all") {
+        return Ok(Some(String::from("all")));
+    }
+    let turn_count = fork_turns.parse::<usize>().map_err(|_| {
+        String::from("fork_turns must be `none`, `all`, or a positive integer string")
+    })?;
+    if turn_count == 0 {
+        return Err(String::from(
+            "fork_turns must be `none`, `all`, or a positive integer string",
+        ));
+    }
+    Ok(Some(turn_count.to_string()))
 }
 
-/// Builds the prompt used by followup_task from queued send_message items and the latest message.
-/// 根据已排队的 send_message 条目和最新消息构建 followup_task 提示词。
-pub(super) fn followup_prompt_from_messages(
-    mut queued_messages: Vec<String>,
-    latest_message: String,
-) -> String {
-    queued_messages.push(latest_message);
-    if queued_messages.len() == 1 {
-        return queued_messages.remove(0);
-    }
-    let mut prompt = String::from("Parent agent follow-up messages, oldest first:\n");
-    for (index, message) in queued_messages.iter().enumerate() {
-        prompt.push_str(&format!("\n[{}]\n{}", index + 1, message.trim()));
-    }
-    prompt
-}
-
-/// Reads the optional child-agent selector from a session-agent-style subagent tool request.
-/// 从 会话代理风格子代理工具请求中读取可选子代理选择器。
-pub(super) fn subagent_tool_target(args: &Value) -> Option<String> {
-    let Value::Object(map) = args else {
-        return None;
+/// Parses list_agents arguments using the Vulcan path_prefix-only contract.
+/// 按 Vulcan 仅支持 path_prefix 的契约解析 list_agents 参数。
+pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, String> {
+    let Some(object) = args.as_object() else {
+        return Err(String::from("list_agents arguments must be a JSON object."));
     };
-    string_field(
-        map,
-        &[
-            "task_name",
-            "task_id",
-            "agent_id",
-            "child_thread_id",
-            "target",
-            "name",
-        ],
-    )
+    let unsupported_keys = object
+        .keys()
+        .filter(|key| key.as_str() != "path_prefix")
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported_keys.is_empty() {
+        return Err(format!(
+            "list_agents received unsupported keys: {}",
+            unsupported_keys.join(", ")
+        ));
+    }
+    Ok(string_field(object, &["path_prefix"]))
 }
 
-/// Reads the optional wait timeout from a session-agent-style subagent tool request.
-/// 从 会话代理风格子代理工具请求中读取可选等待超时。
+/// Builds the Vulcan tree path for one registry entry when it belongs to the selected root.
+/// 当注册表条目属于选定根会话时，构建它的 Vulcan 树路径。
+pub(super) fn subagent_entry_tree_path(
+    entry: &SubagentRegistryEntry,
+    entries_by_session: &BTreeMap<SessionNodeId, SubagentRegistryEntry>,
+    root_session_id: SessionNodeId,
+) -> Option<String> {
+    let mut names = vec![entry.agent_id.as_str()];
+    let mut parent_session_id = entry.parent_session_id;
+    let mut visited = BTreeSet::new();
+    loop {
+        if parent_session_id == root_session_id {
+            names.reverse();
+            return Some(format!("/root/{}", names.join("/")));
+        }
+        if !visited.insert(parent_session_id) {
+            return None;
+        }
+        let parent_entry = entries_by_session.get(&parent_session_id)?;
+        names.push(parent_entry.agent_id.as_str());
+        parent_session_id = parent_entry.parent_session_id;
+    }
+}
+
+/// Returns whether a Vulcan tree path matches one optional path prefix.
+/// 返回 Vulcan 树路径是否匹配一个可选路径前缀。
+pub(super) fn subagent_tree_path_matches_prefix(entry_path: &str, path_prefix: &str) -> bool {
+    let prefix = path_prefix.trim().trim_end_matches('/');
+    if prefix.is_empty() || prefix == "/root" {
+        return true;
+    }
+    let normalized_prefix = if prefix.starts_with("/root/") {
+        prefix.to_string()
+    } else {
+        format!("/root/{prefix}")
+    };
+    entry_path == normalized_prefix
+        || entry_path
+            .strip_prefix(normalized_prefix.as_str())
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Reads the optional wait timeout from a subagent tool request.
+/// 从子代理工具请求中读取可选等待超时。
 pub(super) fn subagent_tool_timeout_ms(args: &Value) -> Option<u64> {
     let Value::Object(map) = args else {
         return None;
     };
-    integer_field(map, &["timeout_ms", "timeout"])
+    integer_field(map, &["timeout_ms"])
 }
 
-/// Builds one compact JSON status payload for a child-agent record.
-/// 为一条子代理记录构建紧凑 JSON 状态载荷。
-pub(super) fn subagent_record_status_payload(record: &TaskSessionRecord) -> Value {
-    json!({
-        "task_name": record.public_task_id,
-        "task_session_id": record.task_id.to_string(),
-        "display_title": record.display_title,
-        "description": record.description,
-        "agent_type": record.subagent,
-        "status": record.last_status,
-        "depth": record.depth,
-        "result": record.last_result_text,
-        "updated_at": record.updated_at,
-    })
+/// Parses wait_agent arguments using the Vulcan timeout-only contract.
+/// 按 Vulcan 仅支持 timeout 的契约解析 wait_agent 参数。
+pub(super) fn wait_agent_timeout_ms(args: &Value) -> Result<Option<u64>, String> {
+    let Some(object) = args.as_object() else {
+        return Err(String::from("wait_agent arguments must be a JSON object."));
+    };
+    let unsupported_keys = object
+        .keys()
+        .filter(|key| key.as_str() != "timeout_ms")
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported_keys.is_empty() {
+        return Err(format!(
+            "wait_agent received unsupported keys: {}",
+            unsupported_keys.join(", ")
+        ));
+    }
+    let timeout_ms = subagent_tool_timeout_ms(args);
+    if let Some(timeout_ms) = timeout_ms {
+        if timeout_ms < WAIT_AGENT_MIN_TIMEOUT_MS {
+            return Err(format!(
+                "timeout_ms must be at least {WAIT_AGENT_MIN_TIMEOUT_MS}"
+            ));
+        }
+        if timeout_ms > WAIT_AGENT_MAX_TIMEOUT_MS {
+            return Err(format!(
+                "timeout_ms must be at most {WAIT_AGENT_MAX_TIMEOUT_MS}"
+            ));
+        }
+    }
+    Ok(timeout_ms)
 }
 
 /// Builds one compact JSON status payload for a native subagent registry entry.
@@ -518,10 +570,9 @@ pub(super) fn subagent_record_status_payload(record: &TaskSessionRecord) -> Valu
 pub(super) fn subagent_registry_entry_status_payload(entry: &SubagentRegistryEntry) -> Value {
     json!({
         "task_name": &entry.agent_id,
-        "task_session_id": entry.session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): entry.session_id.to_string(),
         "display_title": &entry.agent_id,
         "description": Value::Null,
-        "agent_type": entry.prompt_source.clone(),
         "agent_kind": entry.agent_kind,
         "prompt_source": entry.prompt_source.clone(),
         "status": entry.status,
@@ -530,34 +581,6 @@ pub(super) fn subagent_registry_entry_status_payload(entry: &SubagentRegistryEnt
         "updated_at": entry.updated_at_ms.to_string(),
         "segments": entry.segments.clone(),
     })
-}
-
-/// Builds a model-visible status result for session-agent-style subagent control tools.
-/// 为 会话代理风格子代理控制工具构建模型可见状态结果。
-pub(super) fn build_subagent_status_tool_result(
-    tool_name: &str,
-    current_session_id: SessionId,
-    records: Vec<TaskSessionRecord>,
-    timeout_ms: u64,
-    completed: bool,
-) -> VulcanToolInvocationResult {
-    let agents = records
-        .iter()
-        .map(subagent_record_status_payload)
-        .collect::<Vec<_>>();
-    let payload = json!({
-        "tool": tool_name,
-        "parent_session_id": current_session_id.to_string(),
-        "completed": completed,
-        "timeout_ms": timeout_ms,
-        "agents": agents,
-    });
-    VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
-        VulcanToolHostResult {
-            kind: String::from("subagent_status"),
-            payload,
-        },
-    )
 }
 
 /// Builds a model-visible status result from native subagent registry entries.
@@ -606,32 +629,77 @@ pub(super) fn build_subagent_registry_status_tool_result(
     )
 }
 
-/// Builds a model-visible result for child-agent message delivery tools.
-/// 为子代理消息投递工具构建模型可见结果。
-pub(super) fn build_subagent_message_tool_result(
-    tool_name: &str,
+/// Builds a model-visible activity result for `wait_agent`.
+/// 为 `wait_agent` 构建模型可见的活动唤醒结果。
+///
+/// # Parameters
+/// 参数
+/// `current_session_id` is the parent session id that invoked the wait.
+/// `current_session_id` 是发起等待的父会话标识。
+/// `timeout_ms` is the configured wait timeout represented for audit surfaces.
+/// `timeout_ms` 是面向审计表面的等待超时时间。
+/// `timed_out` indicates whether the wait ended by timeout.
+/// `timed_out` 表示等待是否因超时结束。
+///
+/// # Returns
+/// 返回值
+/// A tool result that deliberately omits child-agent output text.
+/// 一个刻意不包含子代理输出正文的工具结果。
+pub(super) fn build_wait_agent_activity_tool_result(
     current_session_id: SessionId,
-    target: &str,
-    target_task_ids: Vec<SessionId>,
-    trigger_turn: bool,
-    queued: bool,
-    note: Option<String>,
+    timeout_ms: u64,
+    timed_out: bool,
 ) -> VulcanToolInvocationResult {
+    let activity = if timed_out {
+        WaitAgentActivityResult::timed_out()
+    } else {
+        WaitAgentActivityResult::completed()
+    };
     let payload = json!({
-        "tool": tool_name,
+        "tool": WAIT_AGENT_TOOL,
         "parent_session_id": current_session_id.to_string(),
-        "target": target,
-        "target_task_session_ids": target_task_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "trigger_turn": trigger_turn,
-        "queued": queued,
-        "note": note,
+        "message": activity.message,
+        "timed_out": activity.timed_out,
+        "timeout_ms": timeout_ms,
     });
     VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
         VulcanToolHostResult {
-            kind: String::from("subagent_message"),
+            kind: String::from("subagent_wait"),
+            payload,
+        },
+    )
+}
+
+/// Builds a model-visible user-steer interruption result for `wait_agent`.
+/// 为 `wait_agent` 构建模型可见的用户插话中断结果。
+///
+/// # Parameters
+/// 参数
+/// `current_session_id` is the parent session id that invoked the wait.
+/// `current_session_id` 是发起等待的父会话标识。
+/// `timeout_ms` is the configured wait timeout represented for audit surfaces.
+/// `timeout_ms` 是面向审计表面的等待超时时间。
+///
+/// # Returns
+/// 返回值
+/// A wait result that tells the parent model to handle the newly steered input.
+/// 提醒父模型处理新插话输入的等待结果。
+pub(super) fn build_wait_agent_steered_tool_result(
+    current_session_id: SessionId,
+    timeout_ms: u64,
+) -> VulcanToolInvocationResult {
+    let activity = WaitAgentActivityResult::steered();
+    let payload = json!({
+        "tool": WAIT_AGENT_TOOL,
+        "parent_session_id": current_session_id.to_string(),
+        "message": activity.message,
+        "timed_out": activity.timed_out,
+        "timeout_ms": timeout_ms,
+        "interrupted": true,
+    });
+    VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+        VulcanToolHostResult {
+            kind: String::from("subagent_wait"),
             payload,
         },
     )

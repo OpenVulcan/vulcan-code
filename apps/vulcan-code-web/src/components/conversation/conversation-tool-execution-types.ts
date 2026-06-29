@@ -41,9 +41,9 @@ export interface ToolExecutionConversationBlock {
   // Optional command-session id for display fallback.
   // 用于展示兜底的可选命令会话标识。
   commandSessionId?: string;
-  // Optional stable subagent task-session id for display metadata.
-  // 用于展示元数据的可选稳定子代理任务会话标识。
-  taskSessionId?: string;
+  // Optional stable subagent task id for display metadata.
+  // 用于展示元数据的可选稳定子代理任务标识。
+  subagentTaskId?: string;
   // Optional visible child-agent name resolved from subagent tool metadata.
   // 从子代理工具元数据解析出的可选可见子代理名称。
   subagentName?: string;

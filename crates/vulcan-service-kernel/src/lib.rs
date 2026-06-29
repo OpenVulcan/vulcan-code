@@ -112,6 +112,7 @@ use vulcan_session_core::{
     ActiveTurnKind, SessionNodeId, SessionRuntimeKernel, TurnInput, TurnInputKind,
     TurnTerminalStatus,
 };
+use vulcan_subagent_core::{SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND};
 use vulcan_task_session::SegmentedTaskSessionStore;
 use vulcan_workbench_model::{
     PendingSessionPromptEntry, PendingSessionPromptSource, SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
@@ -416,7 +417,7 @@ pub fn create_service_bridge_state(
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),

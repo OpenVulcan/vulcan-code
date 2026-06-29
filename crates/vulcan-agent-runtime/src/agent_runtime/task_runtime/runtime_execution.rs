@@ -47,6 +47,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         0,
         None,
         "",
+        &[],
         current_unix_millis_text(),
     );
     let (delegate_started_event, projection_barrier) =
@@ -115,8 +116,15 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             .as_ref()
             .map(|context| context.config.clone())
             .unwrap_or_else(|| context.config.clone());
-        let mut child_event_stream =
-            Box::pin(drive_runtime_stream_provider_loop(config, launch, None));
+        let prompt_intervention = Some(build_child_agent_prompt_intervention(
+            Arc::clone(&background_task_runtime),
+            background_request.task_id,
+        ));
+        let mut child_event_stream = Box::pin(drive_runtime_stream_provider_loop(
+            config,
+            launch,
+            prompt_intervention,
+        ));
         while let Some(event) = child_event_stream.next().await {
             if let ExecutionStreamEvent::Finished(report) = &event {
                 terminal_report = Some(report.clone());

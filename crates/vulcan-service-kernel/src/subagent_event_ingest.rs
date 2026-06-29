@@ -27,6 +27,17 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
     else {
         return Ok(true);
     };
+    let usage_segments = if is_finished {
+        match subagent_usage_segments_from_runtime_metadata(metadata) {
+            Ok(usage_segments) => usage_segments,
+            Err(error) => {
+                eprintln!("[webui-service] subagent usage segment parse failed: {error}");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
     webui_trace(
         "subagent_runtime_event_ingest",
         format!(
@@ -51,6 +62,13 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
             guard
                 .detached_subagent_task_listeners
                 .remove(&normalized.task_id);
+            if !usage_segments.is_empty() {
+                guard
+                    .pending_subagent_usage_segments
+                    .entry(parent_session_id)
+                    .or_default()
+                    .extend(usage_segments);
+            }
         }
         guard
             .session_subagent_tasks
@@ -97,6 +115,36 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         );
     }
     Ok(true)
+}
+
+/// Drains pending child-agent usage segments for one parent session exactly once.
+/// 对单个父会话的一组待聚合子代理用量分段执行一次性取走。
+pub(crate) fn take_pending_webui_subagent_usage_segments(
+    state: &SharedServiceBridgeState,
+    parent_session_id: SessionId,
+) -> Result<Vec<SessionTurnUsageSegment>, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    Ok(guard
+        .pending_subagent_usage_segments
+        .remove(&parent_session_id)
+        .unwrap_or_default())
+}
+
+/// Parses parent-turn usage segments from one task-session delegate metadata payload.
+/// 从一份 task-session 委派元数据载荷解析父会话回合用量分段。
+fn subagent_usage_segments_from_runtime_metadata(
+    metadata: &Value,
+) -> Result<Vec<SessionTurnUsageSegment>, String> {
+    let Some(payload) = task_session_payload_from_tool_metadata(metadata) else {
+        return Ok(Vec::new());
+    };
+    let Some(usage_segments) = payload.get("usage_segments") else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value::<Vec<SessionTurnUsageSegment>>(usage_segments.clone())
+        .map_err(|error| format!("invalid task-session usage_segments payload: {error}"))
 }
 
 /// Seeds one child task transcript with its initial prompt when no child transcript exists yet.
@@ -213,11 +261,6 @@ pub(crate) fn merge_webui_task_session_tool_message_metadata(
         for record in &mut runtime_state.conversation_state.records {
             if record.id == message_id {
                 record.metadata = Some(updated_metadata.clone());
-                repair_task_session_display_title(
-                    &mut record.title,
-                    record.record_kind,
-                    execution_status,
-                );
                 runtime_state.updated_at = updated_at.clone();
                 updated = true;
                 break;
@@ -231,11 +274,6 @@ pub(crate) fn merge_webui_task_session_tool_message_metadata(
         for message in messages {
             if message.id == message_id {
                 message.metadata = Some(updated_metadata.clone());
-                repair_task_session_display_title(
-                    &mut message.title,
-                    message.record_kind,
-                    execution_status,
-                );
                 updated = true;
                 break;
             }

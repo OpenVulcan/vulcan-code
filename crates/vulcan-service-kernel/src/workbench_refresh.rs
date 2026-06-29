@@ -82,12 +82,14 @@ pub(crate) async fn refresh_workbench_snapshot(
             selected_session_id,
         )
         .await?;
+        let refreshed_session_run_phases = refreshed_snapshot.session_run_phases.clone();
         apply_persisted_task_mirror_statuses_to_workspace(
             &controller_runtime,
             &mut refreshed_snapshot,
             selected_session_id,
             |task_id| {
-                webui_subagent_task_has_live_run(
+                webui_subagent_task_has_live_run_for_phase(
+                    refreshed_session_run_phases.get(&task_id).copied(),
                     agent_runtime_for_status
                         .as_ref()
                         .map(|runtime| &runtime.task_runtime),

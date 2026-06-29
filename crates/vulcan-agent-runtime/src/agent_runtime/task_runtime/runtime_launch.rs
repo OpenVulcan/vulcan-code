@@ -1,5 +1,16 @@
 use super::*;
 
+/// Native subagent orchestration tools hidden from ordinary child agents by default.
+/// 普通子代理默认隐藏的原生子代理调度工具集合。
+const SUBAGENT_ORCHESTRATION_TOOL_IDS: [&str; 6] = [
+    SPAWN_AGENT_TOOL,
+    SEND_MESSAGE_TOOL,
+    FOLLOWUP_TASK_TOOL,
+    WAIT_AGENT_TOOL,
+    INTERRUPT_AGENT_TOOL,
+    LIST_AGENTS_TOOL,
+];
+
 /// Builds one task-session execution request and provider configuration from a shared parent runtime context.
 /// 从共享父级运行时上下文构建一份子代理会话执行请求与供应商配置。
 pub(super) fn build_task_runtime_preparation_request(
@@ -20,11 +31,7 @@ pub(super) fn build_task_runtime_preparation_request(
         task_session_id: SessionNodeId::from(invocation.task_id),
     };
     request.runtime_policy = resolved_config.runtime_policy;
-    request.execution_agent_id = resolved_config
-        .effective_config
-        .subagent_profile_id
-        .clone()
-        .or_else(|| context.request_template.execution_agent_id.clone());
+    request.execution_agent_id = context.request_template.execution_agent_id.clone();
     request.agent_system_prompt_override = invocation
         .controller_config
         .as_ref()
@@ -34,6 +41,9 @@ pub(super) fn build_task_runtime_preparation_request(
     request.prompt = invocation.prompt.clone();
     request.conversation_state = core_snapshot_to_session_conversation_state(&invocation.snapshot);
     request.tool_exposure_override = resolved_config.effective_config.tool_exposure.clone();
+    if !context.allow_subagent_tools {
+        disable_subagent_orchestration_tools(&mut request.tool_exposure_override);
+    }
     if let Some(execution_mode) = resolved_config
         .effective_config
         .provider_model
@@ -57,6 +67,25 @@ pub(super) fn build_task_runtime_preparation_request(
         &resolved_config.effective_config.prompt_skills,
     );
     (config, request)
+}
+
+/// Adds subagent orchestration tools to the request-scoped deny list without duplicating selectors.
+/// 将子代理调度工具加入请求级禁用列表，并避免重复选择器。
+///
+/// # Parameters
+/// 参数
+/// `tool_exposure` is the mutable request tool exposure snapshot.
+/// `tool_exposure` 是可变的请求工具可见性快照。
+fn disable_subagent_orchestration_tools(tool_exposure: &mut ToolExposureSnapshot) {
+    for tool_id in SUBAGENT_ORCHESTRATION_TOOL_IDS {
+        if !tool_exposure
+            .disabled_tools
+            .iter()
+            .any(|existing| existing == tool_id)
+        {
+            tool_exposure.disabled_tools.push(tool_id.to_string());
+        }
+    }
 }
 
 /// Applies one TaskSession provider/model snapshot to a mutable provider configuration clone.
@@ -169,7 +198,9 @@ pub(crate) async fn prepare_task_runtime_stream_launch(
         Arc::clone(&context.foundation),
         context.luaskills_runtime.clone(),
         request.clone(),
-    );
+    )
+    .with_parent_snapshot(bootstrap.core_snapshot.clone())
+    .with_subagent_tools_allowed(context.allow_subagent_tools);
     Ok(build_runtime_stream_launch_payload(
         &request,
         bootstrap,
@@ -233,6 +264,7 @@ pub(super) fn task_execution_outcome_from_report(
     if let Some(error) = report.error {
         return Err(error);
     }
+    let usage_segments = subagent_usage_segments_from_report(invocation, &report);
     let snapshot = report
         .conversation_state
         .as_ref()
@@ -261,5 +293,28 @@ pub(super) fn task_execution_outcome_from_report(
             .count(),
         final_output_text,
         execution_status: TaskExecutionStatus::Completed,
+        usage_segments,
     })
+}
+
+/// Builds the parent-turn usage segment represented by one terminal child-agent report.
+/// 根据一份终态子代理报告构建其所属父会话回合的用量分段。
+fn subagent_usage_segments_from_report(
+    invocation: &TaskExecutionRequest,
+    report: &ExecutionRunReport,
+) -> Vec<SessionTurnUsageSegment> {
+    let mut segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        report.provider_request_count,
+        report.last_successful_provider_usage.as_ref(),
+    );
+    segment.trigger = Some(invocation.public_task_id.clone());
+    if let Some(preparation) = report.preparation.as_ref() {
+        segment.provider_id = Some(preparation.model_blueprint.provider_id.clone());
+        segment.model_id = Some(preparation.model_blueprint.model_id.clone());
+    }
+    if segment.provider_call_count == 0 && segment.total_tokens == 0 {
+        return Vec::new();
+    }
+    vec![segment]
 }

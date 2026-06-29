@@ -244,7 +244,7 @@ export interface SubagentOrchestrationPresentation {
   detailRef?: ConversationDetailRef;
   // Normalized orchestration operation.
   // 规范化调度操作类型。
-  operation: "create" | "collect" | "message" | "followup" | "control";
+  operation: "create" | "message" | "wait" | "collect" | "control";
   // Compact title shown in the row.
   // 紧凑行中展示的标题。
   title: string;
@@ -269,10 +269,13 @@ export interface SubagentOrchestrationPresentation {
   // Optional note returned by the runtime.
   // 运行时返回的可选说明。
   note?: string | null;
+  // Whether a wait_agent call ended by timeout.
+  // wait_agent 调用是否因超时结束。
+  timedOut?: boolean | null;
   // Collected child-agent results.
   // 已收集的子代理结果。
   agents: SubagentOrchestrationAgent[];
-  // Stopped task session ids from control calls.
+  // Stopped subagent task ids from control calls.
   // 控制调用返回的已停止任务会话标识。
   stoppedTaskIds: string[];
   // Stopped task count reported by control calls.

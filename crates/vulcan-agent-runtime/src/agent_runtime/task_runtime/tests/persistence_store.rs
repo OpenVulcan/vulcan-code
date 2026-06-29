@@ -146,6 +146,7 @@ async fn invoke_task_returns_cached_completed_metadata_without_backend_restart()
                     final_assistant_message_id: Some(String::from("assistant-backend")),
                     final_output_text: String::from("backend result"),
                     execution_status: TaskExecutionStatus::Completed,
+                    usage_segments: Vec::new(),
                 })
             })
         }),
@@ -306,6 +307,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         final_assistant_message_id: Some(String::from("assistant-1")),
         final_output_text: String::from("review complete"),
         execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
     };
 
     task_runtime
@@ -444,6 +446,7 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
         final_assistant_message_id: None,
         final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
         execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
     };
 
     task_runtime

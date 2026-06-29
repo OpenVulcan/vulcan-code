@@ -32,6 +32,9 @@ pub enum SessionTurnUsageSegmentKind {
     /// Main assistant response generated for the user turn.
     /// 为用户轮次生成的主助手响应。
     AssistantResponse,
+    /// Detached subagent task usage embedded into the owning parent turn.
+    /// 嵌入所属父会话回合的分离子代理任务用量。
+    SubagentTask,
     /// Context-compaction request executed before or as the current turn.
     /// 当前轮次之前或内部执行的上下文压缩请求。
     ContextCompaction,

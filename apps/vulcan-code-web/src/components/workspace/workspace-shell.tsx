@@ -433,10 +433,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     && props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
     : null;
-  // visibleSessionSubagentTaskCount excludes stopped tasks from the session tool panel summary.
-  // visibleSessionSubagentTaskCount 从会话工具面板摘要中排除已停止任务。
+  // visibleSessionSubagentTaskCount includes only actively scheduled subagents in the session tool panel summary.
+  // visibleSessionSubagentTaskCount 在会话工具面板摘要中只统计正在调度的子代理。
   const visibleSessionSubagentTaskCount = React.useMemo(
-    () => (sessionSubagentNavigation?.tasks ?? []).filter((task) => task.runState !== "stopped").length,
+    () => (sessionSubagentNavigation?.tasks ?? []).filter((task) => task.isRunning || task.runState === "running").length,
     [sessionSubagentNavigation?.tasks],
   );
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.

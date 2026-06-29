@@ -136,12 +136,23 @@ impl TurnInputQueue {
 
     /// Enqueues one mailbox input according to the current delivery phase.
     /// 根据当前投递阶段加入一条 mailbox 输入。
-    pub fn enqueue_mailbox_input(&mut self, input: TurnInput) {
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the input was accepted; `false` when the input id already exists or was consumed.
+    /// 输入被接受时返回 `true`；输入标识已存在或已消费时返回 `false`。
+    pub fn enqueue_mailbox_input(&mut self, input: TurnInput) -> bool {
+        if self.has_input_id(input.input_id.as_str())
+            || self.consumed_input_ids.contains(input.input_id.as_str())
+        {
+            return false;
+        }
         if self.delivery_phase == MailboxDeliveryPhase::AcceptingCurrentTurn {
             self.current_turn_inputs.push_back(input);
         } else {
             self.session_mailbox_inputs.push_back(input);
         }
+        true
     }
 
     /// Allows queued mailbox items to join the current turn and moves existing mailbox items into it.
@@ -282,6 +293,15 @@ impl TurnInputQueue {
         self.consumed_input_ids.contains(input_id)
     }
 
+    /// Returns whether the input id is already queued for the current turn or session mailbox.
+    /// 返回输入标识是否已经排队于当前回合或会话 mailbox。
+    pub fn has_input_id(&self, input_id: &str) -> bool {
+        self.current_turn_inputs
+            .iter()
+            .chain(self.session_mailbox_inputs.iter())
+            .any(|input| input.input_id == input_id)
+    }
+
     /// Returns the number of current-turn input items.
     /// 返回当前回合输入项数量。
     pub fn current_turn_len(&self) -> usize {
@@ -335,7 +355,7 @@ mod tests {
         let node_id = SessionNodeId::new_v4();
         let mut queue = TurnInputQueue::new();
 
-        queue.enqueue_mailbox_input(subagent_input("agent-1", node_id, true));
+        assert!(queue.enqueue_mailbox_input(subagent_input("agent-1", node_id, true)));
 
         assert_eq!(queue.current_turn_len(), 0);
         assert_eq!(queue.mailbox_len(), 1);
@@ -393,6 +413,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["agent-late"]
         );
+    }
+
+    /// Verifies duplicate mailbox input identifiers are rejected before they can be delivered twice.
+    /// 验证重复 mailbox 输入标识会被拒绝，避免同一消息被投递两次。
+    #[test]
+    fn duplicate_mailbox_input_ids_are_rejected() {
+        let node_id = SessionNodeId::new_v4();
+        let mut queue = TurnInputQueue::new();
+
+        assert!(queue.enqueue_mailbox_input(subagent_input("agent-1", node_id, true)));
+        assert!(!queue.enqueue_mailbox_input(subagent_input("agent-1", node_id, true)));
+
+        assert_eq!(queue.mailbox_len(), 1);
+        assert!(queue.has_input_id("agent-1"));
     }
 
     /// Verifies consumed mailbox items do not trigger a new turn.

@@ -152,6 +152,48 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
         stopped_task_ids,
         BTreeSet::from([parent_task_id, child_task_id, grandchild_task_id])
     );
+    {
+        let sessions = task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should be readable");
+        for task_id in [parent_task_id, child_task_id, grandchild_task_id] {
+            let record = sessions
+                .get(&task_id)
+                .expect("stopped task record should still exist");
+            assert_eq!(record.last_status, "stopped");
+            assert_eq!(record.last_result_text, STOPPED_TASK_RESULT_SUMMARY);
+        }
+        assert_eq!(
+            sessions
+                .get(&sibling_task_id)
+                .expect("sibling task record should still exist")
+                .last_status,
+            "running"
+        );
+    }
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("subagent registry should be readable");
+    assert_eq!(
+        registry.get("parent").expect("parent should mirror").status,
+        SubagentStatus::Stopped
+    );
+    assert_eq!(
+        registry.get("child").expect("child should mirror").status,
+        SubagentStatus::Stopped
+    );
+    assert_eq!(
+        registry
+            .get("grandchild")
+            .expect("grandchild should mirror")
+            .status,
+        SubagentStatus::Stopped
+    );
+    assert!(
+        registry.get("sibling").is_none(),
+        "sibling should not be touched by the stopped subtree"
+    );
     assert!(
         parent_join
             .await
@@ -295,6 +337,7 @@ async fn invoke_task_returns_cached_completed_record_without_backend_restart() {
                     final_assistant_message_id: Some(String::from("assistant-backend")),
                     final_output_text: String::from("backend result"),
                     execution_status: TaskExecutionStatus::Completed,
+                    usage_segments: Vec::new(),
                 })
             })
         }),
@@ -338,7 +381,10 @@ async fn invoke_task_returns_cached_completed_record_without_backend_restart() {
     assert_eq!(result.model_output["result"], "cached image result");
     let host_result = result.host_result.expect("cached task host result");
     assert_eq!(host_result.payload["cached"], true);
-    assert_eq!(host_result.payload["task_session_id"], task_id.to_string());
+    assert_eq!(
+        host_result.payload[SUBAGENT_TASK_ID_KEY],
+        task_id.to_string()
+    );
 }
 
 /// Verifies spawn_agent creates a fresh run instead of returning a cached completed task with the same public label.
@@ -379,6 +425,7 @@ async fn invoke_spawn_agent_allocates_fresh_task_when_public_id_exists() {
                     final_assistant_message_id: Some(String::from("assistant-fresh")),
                     final_output_text: String::from("fresh image result"),
                     execution_status: TaskExecutionStatus::Completed,
+                    usage_segments: Vec::new(),
                 })
             })
         }),
@@ -429,8 +476,231 @@ async fn invoke_spawn_agent_allocates_fresh_task_when_public_id_exists() {
         .expect("backend should capture the fresh public task id");
     assert_eq!(new_public_task_id, "image-generator-2-2");
     assert_eq!(result.model_output["cached"], Value::Null);
-    assert_eq!(result.model_output["task_id"], "image-generator-2-2");
-    assert_eq!(result.model_output["result"], "fresh image result");
+    assert_eq!(result.model_output["task_name"], "image-generator-2-2");
+    assert_eq!(result.model_output["message"], "Subagent scheduled.");
+    assert!(result.model_output.get("result").is_none());
+}
+
+/// Verifies send_message queues while followup_task resumes the same idle child agent.
+/// 验证 send_message 只入队，而 followup_task 会续跑同一个空闲子代理。
+#[tokio::test]
+async fn inter_agent_message_queue_only_then_followup_resumes_idle_agent() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        public_task_id: String::from("worker-a"),
+        prompt: String::from("initial work"),
+        description: Some(String::from("Worker A")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("initial work"),
+        display_title: String::from("Worker A"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let completed_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-initial")),
+        final_output_text: String::from("initial result"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_task_outcome(parent_session_id, &invocation, &completed_outcome)
+        .expect("completed task should store");
+
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let captured_prompt = Arc::new(std::sync::Mutex::new(None::<String>));
+    let backend_calls_for_handler = Arc::clone(&backend_calls);
+    let captured_prompt_for_handler = Arc::clone(&captured_prompt);
+    let _guard = task_runtime.install_backend(
+        parent_session_id,
+        Arc::new(move |request: TaskExecutionRequest| {
+            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+            *captured_prompt_for_handler
+                .lock()
+                .expect("captured prompt lock") = Some(request.prompt.clone());
+            Box::pin(async move {
+                let controller_config = build_test_controller_config("Followup prompt");
+                Ok(TaskExecutionOutcome {
+                    task_id: request.task_id,
+                    controller_config: controller_config.clone(),
+                    resolved_config: test_resolved_config(
+                        &controller_config,
+                        &request.invocation_config,
+                    ),
+                    snapshot: CoreConversationSnapshot::default(),
+                    provider_turns_executed: 0,
+                    tool_calls_processed: 0,
+                    final_assistant_message_id: None,
+                    final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+                    execution_status: TaskExecutionStatus::Running,
+                    usage_segments: Vec::new(),
+                })
+            })
+        }),
+    );
+
+    let send_result = task_runtime
+        .invoke_send_message(
+            parent_session_id,
+            json!({
+                "target": "worker-a",
+                "message": "queue this context"
+            }),
+        )
+        .await
+        .expect("send_message should queue");
+    assert_eq!(send_result.model_output["ok"], true);
+    assert_eq!(send_result.model_output["target"], "worker-a");
+    assert_eq!(
+        send_result.model_output[SUBAGENT_TASK_ID_KEY],
+        task_id.to_string()
+    );
+    assert_eq!(send_result.model_output["queued"], true);
+    assert_eq!(send_result.model_output["trigger_turn"], false);
+    assert_eq!(send_result.model_output["status"], "completed");
+    assert_eq!(
+        send_result
+            .host_result
+            .as_ref()
+            .expect("send_message host result")
+            .payload["message"],
+        "queue this context"
+    );
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 0);
+
+    let followup_result = task_runtime
+        .invoke_followup_task(
+            parent_session_id,
+            json!({
+                "target": "worker-a",
+                "message": "now continue"
+            }),
+        )
+        .await
+        .expect("followup_task should resume idle task");
+    assert_eq!(followup_result.model_output["ok"], true);
+    assert_eq!(followup_result.model_output["target"], "worker-a");
+    assert_eq!(
+        followup_result.model_output[SUBAGENT_TASK_ID_KEY],
+        task_id.to_string()
+    );
+    assert_eq!(followup_result.model_output["queued"], true);
+    assert_eq!(followup_result.model_output["trigger_turn"], true);
+    assert_eq!(followup_result.model_output["status"], "completed");
+    assert_eq!(
+        followup_result
+            .host_result
+            .as_ref()
+            .expect("followup_task host result")
+            .payload["message"],
+        "now continue"
+    );
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+    let prompt = captured_prompt
+        .lock()
+        .expect("captured prompt lock")
+        .clone()
+        .expect("backend should capture prompt");
+    assert!(prompt.contains("queue this context"));
+    assert!(prompt.contains("now continue"));
+    assert!(prompt.contains("send_message"));
+    assert!(prompt.contains("followup_task"));
+    let resumed_registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read after followup");
+    let resumed_entry = resumed_registry
+        .get("worker-a")
+        .expect("worker entry should remain known");
+    assert_eq!(resumed_entry.status, SubagentStatus::Running);
+}
+
+/// Verifies child agents can send queue-only messages to root while followup_task rejects root.
+/// 验证子代理可以向 root 发送仅入队消息，而 followup_task 会拒绝 root。
+#[tokio::test]
+async fn send_message_to_root_enters_parent_mailbox_and_followup_rejects_root() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let child_session_id = Uuid::new_v4();
+    let record = build_task_session_record(
+        child_session_id,
+        String::from("worker-a"),
+        parent_session_id,
+        None,
+        1,
+        Some(String::from("Worker A")),
+        None,
+        TaskInvocationConfig::main("initial work"),
+        String::from("Worker A"),
+        None,
+        CoreConversationSnapshot::default(),
+        String::from("initial work"),
+        String::from("running"),
+    );
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(child_session_id, record);
+
+    let result = task_runtime
+        .invoke_send_message(
+            child_session_id,
+            json!({
+                "target": "root",
+                "message": "child progress"
+            }),
+        )
+        .await
+        .expect("send_message to root should succeed");
+    assert_eq!(result.model_output["ok"], true);
+    assert_eq!(result.model_output["target"], "root");
+    assert_eq!(
+        result.model_output["sender_session_id"],
+        child_session_id.to_string()
+    );
+    assert_eq!(
+        result.model_output["parent_session_id"],
+        parent_session_id.to_string()
+    );
+    assert_eq!(result.model_output["queued"], true);
+    assert_eq!(result.model_output["trigger_turn"], false);
+    assert_eq!(
+        result.host_result.as_ref().expect("host result").kind,
+        "subagent_message"
+    );
+
+    let events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(parent_session_id))
+        .expect("parent mailbox should drain");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, SubagentMailboxEventKind::Message);
+    assert_eq!(events[0].payload["result_text"], "child progress");
+
+    let error = task_runtime
+        .invoke_followup_task(
+            child_session_id,
+            json!({
+                "target": "root",
+                "message": "continue root"
+            }),
+        )
+        .await
+        .expect_err("followup_task should reject root");
+    assert!(error.contains("root"));
 }
 
 /// Verifies task invocation relays a terminal result when a custom backend chooses to return one.
@@ -478,6 +748,7 @@ async fn invoke_task_relays_backend_terminal_result_when_backend_waits() {
                     final_assistant_message_id: Some(String::from("assistant-backend")),
                     final_output_text: String::from("terminal backend result"),
                     execution_status: TaskExecutionStatus::Completed,
+                    usage_segments: Vec::new(),
                 })
             })
         }),

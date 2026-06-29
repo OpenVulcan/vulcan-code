@@ -32,6 +32,7 @@ pub(super) fn build_task_finished_parent_runtime_event(
         outcome.tool_calls_processed,
         outcome.final_assistant_message_id.as_deref(),
         outcome.final_output_text.as_str(),
+        outcome.usage_segments.as_slice(),
         current_unix_millis_text(),
     );
     build_task_delegate_runtime_event(
@@ -72,6 +73,7 @@ pub(super) fn build_task_failure_parent_runtime_event(
         0,
         None,
         error,
+        &[],
         current_unix_millis_text(),
     );
     build_task_delegate_runtime_event(
@@ -133,6 +135,7 @@ pub(super) fn build_running_task_execution_outcome(
         final_assistant_message_id: None,
         final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
         execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
     }
 }
 
@@ -154,6 +157,7 @@ pub(super) fn build_stopped_task_execution_outcome(
         final_assistant_message_id: None,
         final_output_text: String::from(STOPPED_TASK_RESULT_SUMMARY),
         execution_status: TaskExecutionStatus::Stopped,
+        usage_segments: Vec::new(),
     }
 }
 
@@ -194,6 +198,7 @@ pub(super) fn build_task_host_payload(
     tool_calls_processed: usize,
     final_assistant_message_id: Option<&str>,
     result_text: &str,
+    usage_segments: &[SessionTurnUsageSegment],
     updated_at: String,
 ) -> Value {
     let task_status = task_session_status_from_execution_status_text(execution_status);
@@ -230,7 +235,7 @@ pub(super) fn build_task_host_payload(
     }
     json!({
         "task_id": invocation.public_task_id.clone(),
-        "task_session_id": invocation.task_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): invocation.task_id.to_string(),
         "display_title": invocation.display_title.clone(),
         "status": task_invocation_status_text(invocation.is_resumed),
         "execution_status": execution_status,
@@ -244,6 +249,7 @@ pub(super) fn build_task_host_payload(
         "tool_calls_processed": tool_calls_processed,
         "final_assistant_message_id": final_assistant_message_id,
         "result": result_text,
+        "usage_segments": usage_segments,
         "updated_at": updated_at,
         "subagent_mailbox_event": subagent_mailbox_event,
     })
@@ -269,7 +275,7 @@ pub(super) fn build_task_delegate_runtime_event(
     };
 
     RuntimeEvent::new(kind, title, detail).with_metadata(Some(json!({
-        "kind": "task_session",
+        "kind": SUBAGENT_TASK_KIND,
         "payload": payload,
     })))
 }

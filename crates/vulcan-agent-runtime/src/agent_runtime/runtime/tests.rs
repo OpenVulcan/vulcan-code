@@ -1,23 +1,18 @@
 use super::{
-    build_task_runtime_subagent_profiles, filter_luaskills_entries_by_explicit_registration,
-    filter_luaskills_entries_by_host_dispatch, resolve_agent_native_tools,
-    runtime_agent_definition_to_subagent_profile,
+    filter_luaskills_entries_by_explicit_registration, filter_luaskills_entries_by_host_dispatch,
+    resolve_agent_native_tools,
 };
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
 };
-use crate::mcp::configured_mcp_runtime_access;
-use crate::provider_config::{
-    PersistedHostToolsConfiguration, PersistedLuaSkillsConfiguration, ProviderConfigurationFile,
-};
+use crate::provider_config::{PersistedHostToolsConfiguration, PersistedLuaSkillsConfiguration};
+use crate::tooling::NativeToolDescriptor;
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
-use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_vmm::VmmConfigLayer;
 
 /// Verifies that referencing one missing tool policy still exposes universal native tools without falling back to a full-open default.
 /// 验证当代理引用缺失的工具策略时仍会暴露通用原生工具，但不会静默退回到完全放开的默认行为。
@@ -120,169 +115,6 @@ fn explicit_native_tool_list_keeps_universal_goal_and_todolist_tools() {
         ]
     );
     assert!(warnings.is_empty());
-}
-
-/// Verifies runtime agent definitions become TaskSession profiles without TaskRuntime re-reading private configuration.
-/// 验证运行时代理定义会转换为 TaskSession profile，而不需要 TaskRuntime 重新读取私有配置。
-#[test]
-fn runtime_agent_definition_becomes_subagent_profile_snapshot() {
-    let definition = RuntimeAgentDefinition {
-        id: String::from("agent-review"),
-        name: String::from("Review Agent"),
-        kind: RuntimeAgentKind::Worker,
-        description: String::from("Review code changes"),
-        system_prompt: String::from("Review code carefully."),
-        skill_ids: vec![
-            String::from("regular.review"),
-            String::from("luaskills.bridge"),
-        ],
-        native_tools: Vec::new(),
-        mcp_tools: Vec::new(),
-        delegates: Vec::new(),
-        tool_policy: Some(String::from("review-tools")),
-        routes: Vec::new(),
-        fallback_delegate: None,
-        model: Some(String::from("deepseek/deepseek-chat")),
-        temperature: Some(0.3),
-        max_turns: Some(8),
-        runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest {
-            hooks_enabled: Some(true),
-            vmm_enabled: None,
-            memory_recall_enabled: Some(true),
-            memory_writeback_enabled: None,
-            database_projection_enabled: Some(true),
-        },
-    };
-    let mut runtime_config = test_runtime_config(vec![definition.clone()]);
-    runtime_config.tool_policies.insert(
-        String::from("review-tools"),
-        RuntimeToolPolicyDefinition {
-            id: String::from("review-tools"),
-            name: String::from("Review Tools"),
-            allow_all_native: false,
-            native_tools: vec![
-                String::from("shell_command"),
-                String::from("missing_tool"),
-                String::from("shell_command"),
-            ],
-            mcp_servers: Vec::new(),
-            mcp_tools: Vec::new(),
-        },
-    );
-    let available_native_tool_ids = BTreeSet::from([
-        String::from("shell_command"),
-        String::from("vulcan_file_list"),
-        String::from(TODOLIST_TOOL_ID),
-    ]);
-    let mcp_runtime_access = configured_mcp_runtime_access(&ProviderConfigurationFile::default());
-    let mut warnings = Vec::new();
-
-    let profile = runtime_agent_definition_to_subagent_profile(
-        &definition,
-        &runtime_config,
-        &available_native_tool_ids,
-        &mcp_runtime_access,
-        &mut warnings,
-    );
-
-    assert_eq!(profile.id, "agent-review");
-    assert_eq!(profile.name, "Review Agent");
-    assert_eq!(profile.description.as_deref(), Some("Review code changes"));
-    assert_eq!(
-        profile.base_system_prompt.as_deref(),
-        Some("Review code carefully.")
-    );
-    assert_eq!(
-        profile.provider_model.provider_id.as_deref(),
-        Some("deepseek")
-    );
-    assert_eq!(
-        profile.provider_model.model_id.as_deref(),
-        Some("deepseek-chat")
-    );
-    assert_eq!(
-        profile.prompt_skills.enabled,
-        vec![
-            String::from("regular.review"),
-            String::from("luaskills.bridge")
-        ]
-    );
-    assert_eq!(
-        profile.tool_exposure.allowed_tools,
-        vec![
-            String::from("shell_command"),
-            String::from(TODOLIST_TOOL_ID)
-        ]
-    );
-    let resolved_temperature = profile.extra["temperature"].as_f64().unwrap_or_default();
-    assert!((resolved_temperature - 0.3).abs() < 0.000001);
-    assert_eq!(profile.extra["max_turns"], json!(8));
-    assert_eq!(profile.runtime_policy.hooks_enabled, Some(true));
-    assert_eq!(profile.runtime_policy.memory_recall_enabled, Some(true));
-    assert_eq!(
-        profile.runtime_policy.database_projection_enabled,
-        Some(true)
-    );
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("missing_tool"));
-}
-
-/// Verifies the TaskRuntime profile synchronization entry consumes the shared native-tool catalog descriptors.
-/// 验证 TaskRuntime profile 同步入口会消费共享原生工具目录描述符。
-#[test]
-fn build_task_runtime_subagent_profiles_uses_native_catalog_descriptors() {
-    let definition = RuntimeAgentDefinition {
-        id: String::from("agent-artist"),
-        name: String::from("Artist Agent"),
-        kind: RuntimeAgentKind::Worker,
-        description: String::new(),
-        system_prompt: String::new(),
-        skill_ids: Vec::new(),
-        native_tools: vec![
-            String::from("image_generation"),
-            String::from("unregistered_tool"),
-        ],
-        mcp_tools: Vec::new(),
-        delegates: Vec::new(),
-        tool_policy: None,
-        routes: Vec::new(),
-        fallback_delegate: None,
-        model: Some(String::from("flux-dev")),
-        temperature: None,
-        max_turns: None,
-        runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
-    };
-    let runtime_config = test_runtime_config(vec![definition]);
-    let native_tools = NativeToolCatalog {
-        definitions: BTreeMap::new(),
-        descriptors: vec![
-            test_native_tool_descriptor("image_generation"),
-            test_native_tool_descriptor("music_generation"),
-        ],
-        vmm_global: VmmConfigLayer::default(),
-    };
-    let mcp_runtime_access = configured_mcp_runtime_access(&ProviderConfigurationFile::default());
-    let mut warnings = Vec::new();
-
-    let profiles = build_task_runtime_subagent_profiles(
-        &runtime_config,
-        &native_tools,
-        &mcp_runtime_access,
-        &mut warnings,
-    );
-
-    assert_eq!(profiles.len(), 1);
-    assert_eq!(profiles[0].id, "agent-artist");
-    assert_eq!(
-        profiles[0].tool_exposure.allowed_tools,
-        vec![String::from("image_generation")]
-    );
-    assert_eq!(
-        profiles[0].provider_model.model_id.as_deref(),
-        Some("flux-dev")
-    );
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("unregistered_tool"));
 }
 
 /// Verifies that only explicitly registered LuaSkills tools enter provider-visible schemas while implicit tools remain host-dispatchable later.

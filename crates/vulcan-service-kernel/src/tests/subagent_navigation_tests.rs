@@ -35,7 +35,7 @@ fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_r
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -137,7 +137,7 @@ fn historical_subagent_cache_without_visible_round_does_not_build_navigation() {
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -178,6 +178,132 @@ fn historical_subagent_cache_without_visible_round_does_not_build_navigation() {
     assert!(
         subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot).is_none()
     );
+}
+
+/// Verifies a terminal child session phase wins over stale detached-listener state.
+/// 验证子会话终态阶段优先于陈旧的分离监听器状态。
+#[test]
+fn terminal_child_phase_removes_stale_running_subagent_from_navigation() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut guard = ServiceBridgeState {
+        shell_host: test_service_shell_host(),
+        startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
+        workbench: fallback_workbench_snapshot(&[]),
+        workbench_generation: 0,
+        workspace_snapshot: None,
+        hydrated_conversation_windows: BTreeMap::new(),
+        agent_runtime: None,
+        service_runtime: None,
+        webui_service_discovery: None,
+        controller_runtime: None,
+        luaskills_runtime: None,
+        cached_luaskills_catalog: None,
+        token_budget_runtime: None,
+        mcp_runtime: None,
+        cached_mcp_catalog: None,
+        live_context_budgets: BTreeMap::new(),
+        session_goal_summaries: BTreeMap::new(),
+        budget_limit_reported_goal_ids: BTreeSet::new(),
+        subagent_surface_detail_cache: BTreeMap::new(),
+        session_subagent_tasks: BTreeMap::from([(
+            parent_session_id,
+            BTreeMap::from([(
+                task_session_id,
+                SubagentTaskPanelState {
+                    task_id: task_session_id,
+                    public_task_id: String::from("agent-alpha"),
+                    parent_session_id,
+                    subagent_label: String::from("Alpha"),
+                    description: Some(String::from("sequential counter 1-5")),
+                    run_state: SubagentTaskRunState::Running,
+                    result_text: String::new(),
+                    conversation_state: None,
+                },
+            )]),
+        )]),
+        session_subagent_navigation_rounds: BTreeSet::from([parent_session_id]),
+        active_subagent_panel: None,
+        detached_subagent_task_listeners: BTreeSet::from([task_session_id]),
+        subagent_parent_turn_bindings: BTreeMap::new(),
+        parent_sessions_waiting_for_subagents: BTreeSet::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
+        active_stream_tasks: BTreeMap::new(),
+        session_runtime_kernels: BTreeMap::new(),
+        session_persist_versions: BTreeMap::new(),
+        session_transcript_persist_versions: BTreeMap::new(),
+        session_addon_persist_versions: BTreeMap::new(),
+    };
+    let workspace_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            parent_session_id,
+            Some(String::from("project-a")),
+            "父会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::from([
+            (parent_session_id, SessionRunPhase::Ready),
+            (task_session_id, SessionRunPhase::Ready),
+        ]),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: parent_session_id,
+        hydrated_session_ids: BTreeSet::from([task_session_id]),
+    };
+
+    assert!(
+        running_webui_subagent_task_states_for_tree_from_cache(
+            &mut guard,
+            &workspace_snapshot,
+            parent_session_id,
+        )
+        .is_empty()
+    );
+    assert!(subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot).is_none());
+}
+
+/// Verifies workspace phases only suppress listener-derived running state.
+/// 验证工作区阶段只压制由监听器残留推导出的运行态。
+#[test]
+fn workspace_phase_live_run_helper_filters_only_stale_listener_state() {
+    let task_session_id = SessionId::new_v4();
+
+    assert!(webui_subagent_task_has_live_run_for_phase(
+        Some(SessionRunPhase::Requesting),
+        None,
+        true,
+        task_session_id,
+    ));
+    assert!(!webui_subagent_task_has_live_run_for_phase(
+        Some(SessionRunPhase::Ready),
+        None,
+        true,
+        task_session_id,
+    ));
+    assert!(webui_subagent_task_has_live_run_for_phase(
+        None,
+        None,
+        true,
+        task_session_id,
+    ));
+    assert!(!webui_subagent_task_has_live_run_for_phase(
+        None,
+        None,
+        false,
+        task_session_id,
+    ));
 }
 
 /// Verifies a same-parent inactive subagent panel falls back to the parent surface.
@@ -230,7 +356,7 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -322,7 +448,7 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),

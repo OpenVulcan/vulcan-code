@@ -135,25 +135,16 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
         return;
     };
     match (tool_name, event.kind) {
-        ("spawn_agent" | "followup_task", RuntimeEventKind::ToolStarted) => {
-            guard
-                .parent_session_completed_wait_agent_selectors
-                .remove(&session_id);
-        }
         ("wait_agent", RuntimeEventKind::ToolStarted) => {
             guard
                 .parent_sessions_waiting_for_subagents
                 .insert(session_id);
-            guard
-                .parent_session_completed_wait_agent_selectors
-                .remove(&session_id);
             let scope_id = wait_agent_scope_id(event);
-            let target_agent_ids = wait_agent_target_agent_ids_from_event(event);
             let kernel = session_runtime_kernel_mut(&mut guard, session_id);
             if !kernel.has_wait_scopes()
                 && let Err(error) = kernel.register_wait_scope(
                     scope_id,
-                    target_agent_ids,
+                    Vec::<String>::new(),
                     current_unix_millis_u64(),
                 )
             {
@@ -167,23 +158,6 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
             guard
                 .parent_sessions_waiting_for_subagents
                 .remove(&session_id);
-            if wait_agent_runtime_event_completed(event) {
-                let consumed =
-                    consume_wait_agent_mailbox_inputs_from_event(&mut guard, session_id, event);
-                webui_trace(
-                    "wait_agent_mailbox_inputs_consumed",
-                    format!("session={session_id} consumed={consumed}"),
-                );
-                let completed_selectors = wait_agent_completed_agent_selectors(event);
-                let selector_count = completed_selectors.len();
-                guard
-                    .parent_session_completed_wait_agent_selectors
-                    .insert(session_id, completed_selectors);
-                webui_trace(
-                    "wait_agent_completed_selectors_recorded",
-                    format!("session={session_id} selectors={selector_count}"),
-                );
-            }
             if let Some(kernel) = guard.session_runtime_kernels.get_mut(&session_id) {
                 let scope_id = wait_agent_scope_id(event);
                 let _ = kernel.clear_wait_scope(&scope_id);
@@ -204,205 +178,6 @@ pub(crate) fn wait_agent_scope_id(event: &RuntimeEvent) -> String {
         .filter(|value| !value.trim().is_empty())
         .map(|tool_call_id| format!("wait-agent-{tool_call_id}"))
         .unwrap_or_else(|| String::from("wait-agent-current"))
-}
-
-/// Extracts requested child-agent selectors from wait_agent tool-start metadata.
-/// 从 wait_agent 工具开始事件元数据中提取请求的子代理选择器。
-pub(crate) fn wait_agent_target_agent_ids_from_event(event: &RuntimeEvent) -> Vec<String> {
-    let Some(arguments) = event
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("arguments"))
-        .and_then(Value::as_object)
-    else {
-        return Vec::new();
-    };
-    [
-        "task_name",
-        "task_id",
-        "agent_id",
-        "child_thread_id",
-        "name",
-    ]
-    .iter()
-    .filter_map(|key| arguments.get(*key).and_then(Value::as_str))
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(ToString::to_string)
-    .collect()
-}
-
-/// Marks matching parent mailbox inputs as consumed by a completed wait_agent result.
-/// 将已完成 wait_agent 结果匹配到的父级 mailbox 输入标记为已消费。
-pub(crate) fn consume_wait_agent_mailbox_inputs_from_event(
-    state: &mut ServiceBridgeState,
-    session_id: SessionId,
-    event: &RuntimeEvent,
-) -> usize {
-    let selectors = wait_agent_completed_agent_selectors(event);
-    let scope_id = wait_agent_scope_id(event);
-    let Some(kernel) = state.session_runtime_kernels.get_mut(&session_id) else {
-        return 0;
-    };
-    if !kernel.has_wait_scopes() {
-        let _ = kernel.register_wait_scope(
-            scope_id.clone(),
-            Vec::<String>::new(),
-            current_unix_millis_u64(),
-        );
-    }
-    let input_ids = kernel
-        .input_queue()
-        .get_unconsumed_mailbox_input()
-        .into_iter()
-        .filter(|input| {
-            input.kind == TurnInputKind::SubagentMessage
-                && (selectors.is_empty() || mailbox_input_matches_any_selector(input, &selectors))
-        })
-        .map(|input| input.input_id)
-        .collect::<Vec<_>>();
-    let mut consumed = 0usize;
-    for input_id in input_ids {
-        if kernel.consume_mailbox_input_for_wait_scope(&scope_id, &input_id) {
-            consumed = consumed.saturating_add(1);
-        }
-    }
-    consumed
-}
-
-/// Extracts completed child-agent selectors from a wait_agent tool-finished metadata payload.
-/// 从 wait_agent 工具完成元数据中提取已完成子代理选择器。
-pub(crate) fn wait_agent_completed_agent_selectors(event: &RuntimeEvent) -> BTreeSet<String> {
-    event
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("host_result"))
-        .and_then(|host_result| host_result.get("payload"))
-        .and_then(|payload| payload.get("agents"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|agent| {
-            [
-                agent.get("task_name").and_then(Value::as_str),
-                agent.get("task_session_id").and_then(Value::as_str),
-                agent.get("agent_id").and_then(Value::as_str),
-                agent.get("child_thread_id").and_then(Value::as_str),
-                agent.get("name").and_then(Value::as_str),
-            ]
-        })
-        .flatten()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
-/// Returns whether one mailbox input belongs to any wait_agent-completed selector.
-/// 返回一条 mailbox 输入是否属于任一 wait_agent 已完成选择器。
-pub(crate) fn mailbox_input_matches_any_selector(
-    input: &TurnInput,
-    selectors: &BTreeSet<String>,
-) -> bool {
-    mailbox_input_selector_values(input)
-        .iter()
-        .any(|value| selectors.contains(value))
-}
-
-/// Collects stable selector values carried by one subagent mailbox input.
-/// 收集单条子代理 mailbox 输入携带的稳定选择器值。
-pub(crate) fn mailbox_input_selector_values(input: &TurnInput) -> BTreeSet<String> {
-    let mut values = BTreeSet::new();
-    push_json_string_value(&mut values, input.payload.get("task_id"));
-    push_json_string_value(&mut values, input.payload.get("parent_session_id"));
-    if let Some(mailbox_event) = input.payload.get("mailbox_event") {
-        push_json_string_value(&mut values, mailbox_event.get("child_thread_id"));
-        push_json_string_value(&mut values, mailbox_event.get("parent_thread_id"));
-        if let Some(payload) = mailbox_event.get("payload") {
-            for key in [
-                "task_name",
-                "task_id",
-                "task_session_id",
-                "public_id",
-                "child_thread_id",
-                "agent_id",
-                "name",
-            ] {
-                push_json_string_value(&mut values, payload.get(key));
-            }
-        }
-    }
-    values
-}
-
-/// Collects selector values from one delegate-finished event before it is enqueued into the mailbox.
-/// 在委派完成事件进入 mailbox 前收集其选择器值。
-pub(crate) fn delegate_finished_mailbox_selector_values(
-    parent_session_id: SessionId,
-    task_id: SessionId,
-    public_task_id: &str,
-    metadata: &Value,
-) -> BTreeSet<String> {
-    let mut values = BTreeSet::new();
-    values.insert(parent_session_id.to_string());
-    values.insert(task_id.to_string());
-    if !public_task_id.trim().is_empty() {
-        values.insert(public_task_id.trim().to_string());
-    }
-    if let Some(payload) = metadata.get("payload") {
-        for key in [
-            "task_name",
-            "task_id",
-            "task_session_id",
-            "public_id",
-            "child_thread_id",
-            "agent_id",
-            "name",
-        ] {
-            push_json_string_value(&mut values, payload.get(key));
-        }
-        if let Some(mailbox_event) = payload.get("subagent_mailbox_event") {
-            push_json_string_value(&mut values, mailbox_event.get("child_thread_id"));
-            push_json_string_value(&mut values, mailbox_event.get("parent_thread_id"));
-            if let Some(mailbox_payload) = mailbox_event.get("payload") {
-                for key in [
-                    "task_name",
-                    "task_id",
-                    "task_session_id",
-                    "public_id",
-                    "child_thread_id",
-                    "agent_id",
-                    "name",
-                ] {
-                    push_json_string_value(&mut values, mailbox_payload.get(key));
-                }
-            }
-        }
-    }
-    values
-}
-
-/// Inserts a non-empty JSON string into a selector set.
-/// 将非空 JSON 字符串插入选择器集合。
-pub(crate) fn push_json_string_value(values: &mut BTreeSet<String>, value: Option<&Value>) {
-    if let Some(value) = value.and_then(Value::as_str).map(str::trim)
-        && !value.is_empty()
-    {
-        values.insert(value.to_string());
-    }
-}
-
-/// Returns whether one wait_agent tool-finished event collected all selected child agents.
-/// 返回一次 wait_agent 工具完成事件是否已经收集了所有选中的子代理。
-pub(crate) fn wait_agent_runtime_event_completed(event: &RuntimeEvent) -> bool {
-    event
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("host_result"))
-        .and_then(|host_result| host_result.get("payload"))
-        .and_then(|payload| payload.get("completed"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
 }
 
 /// Extracts the canonical tool name carried by one runtime event metadata payload.

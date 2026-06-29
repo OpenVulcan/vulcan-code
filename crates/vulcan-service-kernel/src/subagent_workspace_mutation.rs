@@ -313,14 +313,59 @@ where
 /// Normalizes one subagent task state against the shared task runtime without disk fallback scans.
 /// 根据共享任务运行时归一化单条子代理任务状态，且不执行磁盘回退扫描。
 pub(crate) fn normalize_webui_subagent_task_state(
-    _workspace_snapshot: Option<&WorkspaceSnapshot>,
+    workspace_snapshot: Option<&WorkspaceSnapshot>,
     state: &SubagentTaskPanelState,
     task_runtime: Option<&Arc<TaskRuntime>>,
     has_live_listener: bool,
 ) -> SubagentTaskPanelState {
-    let is_live_running =
-        webui_subagent_task_has_live_run(task_runtime, has_live_listener, state.task_id);
+    let is_live_running = webui_subagent_task_has_live_run_in_workspace(
+        workspace_snapshot,
+        task_runtime,
+        has_live_listener,
+        state.task_id,
+    );
     normalize_subagent_task_panel_state(state, is_live_running, None)
+}
+
+/// Returns whether one child task still has a live run after honoring terminal workspace phases.
+/// 在优先遵守工作区终态阶段后，返回单个子任务是否仍有实时运行。
+pub(crate) fn webui_subagent_task_has_live_run_in_workspace(
+    workspace_snapshot: Option<&WorkspaceSnapshot>,
+    task_runtime: Option<&Arc<TaskRuntime>>,
+    has_live_listener: bool,
+    task_id: SessionId,
+) -> bool {
+    webui_subagent_task_has_live_run_for_phase(
+        webui_subagent_task_workspace_phase(workspace_snapshot, task_id),
+        task_runtime,
+        has_live_listener,
+        task_id,
+    )
+}
+
+/// Returns whether one child task still has a live run after applying one known workspace phase.
+/// 在应用单个已知工作区阶段后，返回单个子任务是否仍有实时运行。
+pub(crate) fn webui_subagent_task_has_live_run_for_phase(
+    workspace_phase: Option<SessionRunPhase>,
+    task_runtime: Option<&Arc<TaskRuntime>>,
+    has_live_listener: bool,
+    task_id: SessionId,
+) -> bool {
+    let has_runtime_run =
+        task_runtime.is_some_and(|runtime| runtime.is_task_running(task_id).unwrap_or(false));
+    if has_runtime_run {
+        return true;
+    }
+    has_live_listener && workspace_phase.is_none_or(is_active_session_run_phase)
+}
+
+/// Returns the workspace phase recorded for one child task when present.
+/// 返回工作区中为某个子任务记录的阶段。
+fn webui_subagent_task_workspace_phase(
+    workspace_snapshot: Option<&WorkspaceSnapshot>,
+    task_id: SessionId,
+) -> Option<SessionRunPhase> {
+    workspace_snapshot.and_then(|workspace| workspace.session_run_phases.get(&task_id).copied())
 }
 
 /// Returns whether one child task still has a live WebUI listener or shared runtime abort handle.

@@ -104,7 +104,7 @@ pub(crate) fn apply_task_mirror_statuses_to_parent_messages<F>(
         );
         let payload = json!({
             "task_id": task_mirror.task_session_id.to_string(),
-            "task_session_id": task_mirror.task_session_id.to_string(),
+            (SUBAGENT_TASK_ID_KEY): task_mirror.task_session_id.to_string(),
             "execution_status": execution_status,
             "line_count": task_mirror.line_count,
             "updated_at": task_mirror.updated_at,
@@ -124,7 +124,7 @@ pub(crate) fn apply_task_mirror_statuses_to_parent_messages<F>(
         let metadata_update = task_session_display_metadata_update(
             json!({
                 "tool_name": "spawn_agent",
-                "kind": "task_session",
+                "kind": SUBAGENT_TASK_KIND,
                 "payload": payload,
             }),
             execution_status.as_str(),
@@ -140,11 +140,6 @@ pub(crate) fn apply_task_mirror_statuses_to_parent_messages<F>(
                         continue;
                     };
                     message.metadata = Some(updated_metadata);
-                    repair_task_session_display_title(
-                        &mut message.title,
-                        message.record_kind,
-                        execution_status.as_str(),
-                    );
                 }
             }
             if let Some(runtime_state) = runtime_state.as_deref_mut() {
@@ -158,11 +153,6 @@ pub(crate) fn apply_task_mirror_statuses_to_parent_messages<F>(
                             continue;
                         };
                         record.metadata = Some(updated_metadata);
-                        repair_task_session_display_title(
-                            &mut record.title,
-                            record.record_kind,
-                            execution_status.as_str(),
-                        );
                     }
                 }
             }
@@ -214,7 +204,8 @@ pub(crate) fn repair_task_mirror_statuses_for_surface_messages_locked(
         None,
         task_mirrors.as_slice(),
         |task_id| {
-            webui_subagent_task_has_live_run(
+            webui_subagent_task_has_live_run_in_workspace(
+                Some(workspace_snapshot),
                 guard
                     .agent_runtime
                     .as_ref()
@@ -377,7 +368,7 @@ pub(crate) fn task_session_display_metadata_update(
     let Some(object) = metadata_update.as_object_mut() else {
         return json!({
             "tool_name": "spawn_agent",
-            "kind": "task_session",
+            "kind": SUBAGENT_TASK_KIND,
             "display_state": execution_status,
             "tool_display_state": execution_status,
         });
@@ -408,25 +399,6 @@ pub(crate) fn task_session_display_metadata_update(
         );
     }
     metadata_update
-}
-
-/// Repairs stale localized task-session titles without changing unrelated titles.
-/// 修复陈旧的本地化 task-session 标题，同时不改动无关标题。
-pub(crate) fn repair_task_session_display_title(
-    title: &mut String,
-    record_kind: SessionMessageRecordKind,
-    execution_status: &str,
-) {
-    if !task_session_record_kind_can_display_status(record_kind) || !title.contains("spawn_agent") {
-        return;
-    }
-    let status_label = match execution_status {
-        "failed" => "失败",
-        "stopped" => "已停止",
-        "completed" => "已完成",
-        _ => "进行中",
-    };
-    *title = format!("调用 spawn_agent 工具 {status_label}");
 }
 
 /// Merges task-mirror display metadata while allowing live running state to override stale terminal payloads.
@@ -541,7 +513,7 @@ pub(crate) fn mark_webui_subagent_task_stopped_in_workspace(
     append_webui_subagent_stop_notice_if_needed(workspace_snapshot, task_id);
     let payload = json!({
         "task_id": task_id.to_string(),
-        "task_session_id": task_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
     });
     let Some(message_id) = find_webui_task_session_tool_message_id_for_payload(
         workspace_snapshot,
@@ -655,14 +627,10 @@ pub(crate) fn replace_webui_subagent_task_conversation_state(
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
-    let preserved_records = runtime_state.conversation_state.records.clone();
     runtime_state.conversation_state = conversation_state;
-    if !preserved_records.is_empty() {
-        runtime_state.conversation_state.records = preserved_records;
-    }
     runtime_state.updated_at = now;
     let runtime_state_snapshot = runtime_state.clone();
-    merge_runtime_state_records_into_display_messages(
+    replace_display_messages_with_runtime_state_records(
         workspace_snapshot,
         task_id,
         &runtime_state_snapshot,

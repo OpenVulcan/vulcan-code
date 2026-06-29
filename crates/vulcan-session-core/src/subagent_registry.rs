@@ -379,6 +379,17 @@ impl SubagentRegistry {
             .collect()
     }
 
+    /// Lists every child-agent entry in this registry.
+    /// 列出该注册表中的所有子代理条目。
+    ///
+    /// # Returns
+    /// 返回值
+    /// All registry entries without parent filtering.
+    /// 不按父级过滤的全部注册表条目。
+    pub fn list_all(&self) -> Vec<&SubagentRegistryEntry> {
+        self.entries.values().collect()
+    }
+
     /// Counts running child agents for one parent session.
     /// 统计单个父会话下仍在运行的子代理数量。
     ///

@@ -271,8 +271,8 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
     }
 }
 
-/// Enqueues one completed subagent result into the parent kernel mailbox when no wait_agent owns it.
-/// 当没有 wait_agent 接管时，将单个已完成子代理结果加入父级内核 mailbox。
+/// Enqueues one completed subagent result into the parent kernel mailbox for provider delivery.
+/// 将单个已完成子代理结果加入父级内核 mailbox，供后续 Provider 输入投递。
 pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
@@ -296,47 +296,6 @@ pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if guard
-        .parent_sessions_waiting_for_subagents
-        .contains(&parent_session_id)
-    {
-        webui_trace(
-            "session_mailbox_skip_wait_agent",
-            format!(
-                "parent={parent_session_id} task={} public_task_id={}",
-                panel_state.task_id, panel_state.public_task_id
-            ),
-        );
-        return Ok(false);
-    }
-    if let Some(completed_selectors) = guard
-        .parent_session_completed_wait_agent_selectors
-        .get(&parent_session_id)
-    {
-        let candidate_selectors = delegate_finished_mailbox_selector_values(
-            parent_session_id,
-            panel_state.task_id,
-            &panel_state.public_task_id,
-            metadata,
-        );
-        if completed_selectors.is_empty()
-            || candidate_selectors
-                .iter()
-                .any(|selector| completed_selectors.contains(selector))
-        {
-            webui_trace(
-                "session_mailbox_skip_completed_wait_agent",
-                format!(
-                    "parent={parent_session_id} task={} public_task_id={} wait_selectors={} candidate_selectors={}",
-                    panel_state.task_id,
-                    panel_state.public_task_id,
-                    completed_selectors.len(),
-                    candidate_selectors.len()
-                ),
-            );
-            return Ok(false);
-        }
-    }
     let mailbox_accepted = enqueue_webui_subagent_mailbox_input(
         &mut guard,
         parent_session_id,

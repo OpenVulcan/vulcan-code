@@ -22,6 +22,10 @@ use vulcan_context::{
 use vulcan_session_core::{
     ParentSessionRef, SessionContextDocument, SessionNodeId, SessionNodeStore,
 };
+use vulcan_subagent_core::{
+    LEGACY_TASK_SESSION_ID_KEY, SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND,
+    is_readable_subagent_task_kind,
+};
 use vulcan_task_session::{
     SegmentedTaskSessionStore, TaskSessionMetadata, TaskSessionStatus, TaskSessionStore,
 };

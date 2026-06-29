@@ -10,7 +10,7 @@ pub(super) fn build_task_invocation_result(
     let execution_status = outcome.execution_status.as_str();
     let model_output = json!({
         "task_id": invocation.public_task_id.clone(),
-        "task_session_id": outcome.task_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): outcome.task_id.to_string(),
         "display_title": invocation.display_title.clone(),
         "status": task_status,
         "execution_status": execution_status,
@@ -31,11 +31,44 @@ pub(super) fn build_task_invocation_result(
         outcome.tool_calls_processed,
         outcome.final_assistant_message_id.as_deref(),
         outcome.final_output_text.as_str(),
+        outcome.usage_segments.as_slice(),
         current_unix_millis_text(),
     );
     VulcanToolInvocationResult::from_model_output(model_output).with_host_result(
         VulcanToolHostResult {
-            kind: String::from("task_session"),
+            kind: String::from(SUBAGENT_TASK_KIND),
+            payload,
+        },
+    )
+}
+
+/// Builds one model-visible spawn_agent scheduling acknowledgement from the execution outcome.
+/// 根据执行结果构建一条模型可见的 spawn_agent 调度确认。
+pub(super) fn build_spawn_agent_invocation_result(
+    invocation: &TaskExecutionRequest,
+    outcome: &TaskExecutionOutcome,
+) -> VulcanToolInvocationResult {
+    let execution_status = outcome.execution_status.as_str();
+    let model_output = json!({
+        "task_name": invocation.public_task_id.clone(),
+        (SUBAGENT_TASK_ID_KEY): outcome.task_id.to_string(),
+        "display_title": invocation.display_title.clone(),
+        "execution_status": execution_status,
+        "message": "Subagent scheduled.",
+    });
+    let payload = build_task_host_payload(
+        invocation,
+        execution_status,
+        outcome.provider_turns_executed,
+        outcome.tool_calls_processed,
+        outcome.final_assistant_message_id.as_deref(),
+        "",
+        outcome.usage_segments.as_slice(),
+        current_unix_millis_text(),
+    );
+    VulcanToolInvocationResult::from_model_output(model_output).with_host_result(
+        VulcanToolHostResult {
+            kind: String::from(SUBAGENT_TASK_KIND),
             payload,
         },
     )
@@ -108,7 +141,7 @@ pub(super) fn build_cached_task_invocation_result_from_metadata(
         depth: usize::from(metadata.depth),
         prompt: incoming_prompt.to_string(),
         description: metadata.description.clone(),
-        subagent: metadata.subagent_profile_id.clone(),
+        subagent: metadata.description.clone(),
         result_text,
         updated_at: metadata.updated_at.to_string(),
     })
@@ -185,7 +218,7 @@ fn build_cached_task_invocation_result(
 ) -> VulcanToolInvocationResult {
     let model_output = json!({
         "task_id": input.public_task_id.clone(),
-        "task_session_id": input.task_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): input.task_id.to_string(),
         "display_title": input.display_title.clone(),
         "status": "resumed",
         "execution_status": input.execution_status.clone(),
@@ -202,7 +235,7 @@ fn build_cached_task_invocation_result(
     });
     let payload = json!({
         "task_id": input.public_task_id,
-        "task_session_id": input.task_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): input.task_id.to_string(),
         "display_title": input.display_title,
         "status": "resumed",
         "execution_status": input.execution_status,
@@ -221,7 +254,7 @@ fn build_cached_task_invocation_result(
     });
     VulcanToolInvocationResult::from_model_output(model_output).with_host_result(
         VulcanToolHostResult {
-            kind: String::from("task_session"),
+            kind: String::from(SUBAGENT_TASK_KIND),
             payload,
         },
     )

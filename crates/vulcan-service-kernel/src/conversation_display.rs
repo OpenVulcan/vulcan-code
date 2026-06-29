@@ -59,6 +59,32 @@ pub(crate) fn merge_runtime_state_records_into_display_messages(
         .insert(session_id, merged_messages);
 }
 
+/// Replaces the display transcript with the canonical records owned by one runtime dialogue state.
+/// 使用单个运行态对话状态拥有的规范记录替换显示层转录。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the workspace snapshot whose display layer will be rewritten.
+/// `workspace_snapshot` 是显示层将被重写的工作区快照。
+/// `session_id` selects the session that owns both the runtime records and display rows.
+/// `session_id` 选择同时拥有运行态记录与显示行的会话。
+/// `runtime_state` is the runtime state providing the authoritative display records.
+/// `runtime_state` 是提供权威显示记录的运行态。
+pub(crate) fn replace_display_messages_with_runtime_state_records(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) {
+    let messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
+    if messages.is_empty() {
+        workspace_snapshot.session_messages.remove(&session_id);
+    } else {
+        workspace_snapshot
+            .session_messages
+            .insert(session_id, messages);
+    }
+}
+
 /// Removes legacy persisted Goal internal prompts that were incorrectly stored as user messages.
 /// 移除历史上被错误持久化成用户消息的 Goal 内部提示词。
 pub(crate) fn filter_legacy_goal_internal_user_messages(

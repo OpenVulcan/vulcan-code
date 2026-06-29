@@ -35,6 +35,7 @@ vulcan-service-host.workspace = true
 vulcan-service-runtime.workspace = true
 vulcan-session-boundary.workspace = true
 vulcan-session-core.workspace = true
+vulcan-subagent-core.workspace = true
 vulcan-task-session.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true

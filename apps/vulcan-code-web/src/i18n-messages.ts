@@ -663,6 +663,10 @@ export type TranslationKey =
   | "conversation.subagent.detail.prompt"
   | "conversation.subagent.detail.effectivePrompt"
   | "conversation.subagent.detail.empty"
+  | "conversation.subagent.detail.message"
+  | "conversation.subagent.detail.wait"
+  | "conversation.subagent.detail.waitCompleted"
+  | "conversation.subagent.detail.waitTimedOut"
   | "conversation.subagent.detail.collection"
   | "conversation.subagent.detail.count"
   | "conversation.subagent.detail.completed"
@@ -673,7 +677,6 @@ export type TranslationKey =
   | "conversation.subagent.detail.unknown"
   | "conversation.subagent.detail.result"
   | "conversation.subagent.detail.noResult"
-  | "conversation.subagent.detail.messageDispatch"
   | "conversation.subagent.detail.target"
   | "conversation.subagent.detail.queued"
   | "conversation.subagent.detail.triggerTurn"
@@ -1755,6 +1758,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.prompt": "提示词",
     "conversation.subagent.detail.effectivePrompt": "执行提示词",
     "conversation.subagent.detail.empty": "无内容。",
+    "conversation.subagent.detail.message": "子代理消息",
+    "conversation.subagent.detail.wait": "等待子代理消息",
+    "conversation.subagent.detail.waitCompleted": "已收到子代理消息",
+    "conversation.subagent.detail.waitTimedOut": "等待超时",
     "conversation.subagent.detail.collection": "子代理收集结果",
     "conversation.subagent.detail.count": "数量",
     "conversation.subagent.detail.completed": "是否完成",
@@ -1765,7 +1772,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.unknown": "未知",
     "conversation.subagent.detail.result": "返回内容",
     "conversation.subagent.detail.noResult": "没有返回内容。",
-    "conversation.subagent.detail.messageDispatch": "子代理消息调度",
     "conversation.subagent.detail.target": "目标",
     "conversation.subagent.detail.queued": "是否排队",
     "conversation.subagent.detail.triggerTurn": "是否触发继续执行",
@@ -2844,6 +2850,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.prompt": "Prompt",
     "conversation.subagent.detail.effectivePrompt": "Effective prompt",
     "conversation.subagent.detail.empty": "No content.",
+    "conversation.subagent.detail.message": "Subagent message",
+    "conversation.subagent.detail.wait": "Waiting for subagent message",
+    "conversation.subagent.detail.waitCompleted": "Subagent message received",
+    "conversation.subagent.detail.waitTimedOut": "Wait timed out",
     "conversation.subagent.detail.collection": "Subagent collection",
     "conversation.subagent.detail.count": "Count",
     "conversation.subagent.detail.completed": "Completed",
@@ -2854,7 +2864,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.unknown": "Unknown",
     "conversation.subagent.detail.result": "Result",
     "conversation.subagent.detail.noResult": "No result content.",
-    "conversation.subagent.detail.messageDispatch": "Subagent message dispatch",
     "conversation.subagent.detail.target": "Target",
     "conversation.subagent.detail.queued": "Queued",
     "conversation.subagent.detail.triggerTurn": "Trigger turn",

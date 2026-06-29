@@ -7,6 +7,10 @@ import {
   subagentToolDisplayName,
 } from "./conversation-tool-metadata";
 
+// SUBAGENT_HOST_KINDS lists canonical and legacy host kinds for built-in subagent rows.
+// SUBAGENT_HOST_KINDS 列出内置子代理行的规范与历史宿主类型。
+const SUBAGENT_HOST_KINDS = new Set(["subagent_task"]);
+
 // buildToolExecutionDetailBody builds the expensive modal body only when the user opens details.
 // buildToolExecutionDetailBody 仅在用户打开详情时构建成本较高的弹窗正文。
 export function buildToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
@@ -71,19 +75,61 @@ export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], s
 function buildSubagentToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string | null {
   const toolName = toolExecutionName(blocks);
   const hostKind = firstMetadataString(blocks, ["host_result.kind", "hostResult.kind", "kind"]);
-  if (!isSubagentToolName(toolName) && hostKind !== "task_session" && hostKind !== "subagent_status" && hostKind !== "subagent_message" && hostKind !== "subagent_control") {
+  if (!isSubagentToolName(toolName) && !SUBAGENT_HOST_KINDS.has(hostKind ?? "") && hostKind !== "subagent_status" && hostKind !== "subagent_wait" && hostKind !== "subagent_control" && hostKind !== "subagent_message") {
     return null;
-  }
-  if (toolName === "wait_agent" || toolName === "list_agents" || hostKind === "subagent_status") {
-    return buildSubagentCollectionDetailBody(blocks, t);
   }
   if (toolName === "send_message" || toolName === "followup_task" || hostKind === "subagent_message") {
     return buildSubagentMessageDetailBody(blocks, t);
   }
-  if (toolName === "close_agent" || hostKind === "subagent_control") {
+  if (toolName === "wait_agent" || hostKind === "subagent_wait") {
+    return buildSubagentWaitDetailBody(blocks, t);
+  }
+  if (toolName === "list_agents" || hostKind === "subagent_status") {
+    return buildSubagentCollectionDetailBody(blocks, t);
+  }
+  if (toolName === "interrupt_agent" || hostKind === "subagent_control") {
     return buildSubagentControlDetailBody(blocks, t);
   }
   return buildSubagentSpawnDetailBody(blocks, t);
+}
+
+// buildSubagentMessageDetailBody renders send_message/followup_task as a compact inline record.
+// buildSubagentMessageDetailBody 将 send_message/followup_task 渲染为紧凑内联记录。
+//
+// Parameters:
+// blocks is the merged tool execution row.
+// t is the optional translation helper.
+// 参数：
+// blocks 是合并后的工具执行行。
+// t 是可选翻译辅助函数。
+//
+// Returns:
+// A Markdown detail body without raw JSON.
+// 返回值：
+// 不包含原始 JSON 的 Markdown 详情正文。
+function buildSubagentMessageDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
+  const payload = firstPayloadObject(blocks);
+  const target = firstMetadataString(blocks, [
+    "arguments.target",
+    "host_result.payload.target",
+    "hostResult.payload.target",
+    "payload.target",
+  ]);
+  const message = firstMetadataString(blocks, [
+    "arguments.message",
+    "host_result.payload.message",
+    "hostResult.payload.message",
+    "payload.message",
+  ]) ?? "";
+  const triggerTurn = booleanMetadata(payload?.trigger_turn ?? payload?.triggerTurn);
+  return [
+    `## ${text(t, "conversation.subagent.detail.message", "Subagent message")}`,
+    target ? detailLine(text(t, "conversation.subagent.detail.target", "Target"), target) : null,
+    triggerTurn !== null ? detailLine(text(t, "conversation.subagent.detail.triggerTurn", "Trigger turn"), booleanText(triggerTurn, t)) : null,
+    message
+      ? detailLine(text(t, "conversation.subagent.detail.message", "Subagent message"), message)
+      : detailLine(text(t, "conversation.subagent.detail.message", "Subagent message"), text(t, "conversation.subagent.detail.empty", "No content.")),
+  ].filter(Boolean).join("\n\n");
 }
 
 // buildSubagentSpawnDetailBody renders only the one-time task input for subagent creation records.
@@ -107,18 +153,41 @@ function buildSubagentSpawnDetailBody(blocks: ToolExecutionConversationBlock[], 
     `## ${text(t, "conversation.subagent.detail.createdTask", "Created subagent task")}`,
     detailLine(text(t, "conversation.subagent.detail.name", "Name"), name),
     description ? detailLine(text(t, "conversation.subagent.detail.description", "Description"), description) : null,
-    `### ${text(t, "conversation.subagent.detail.prompt", "Prompt")}`,
-    prompt ? fencedText(prompt) : text(t, "conversation.subagent.detail.empty", "No content."),
+    prompt
+      ? detailLine(text(t, "conversation.subagent.detail.prompt", "Prompt"), prompt)
+      : detailLine(text(t, "conversation.subagent.detail.prompt", "Prompt"), text(t, "conversation.subagent.detail.empty", "No content.")),
   ].filter(Boolean).join("\n\n");
 }
 
-// buildSubagentCollectionDetailBody renders wait/list results as a readable agent-result list.
-// buildSubagentCollectionDetailBody 将等待或列出结果渲染为可读的代理结果列表。
+// buildSubagentWaitDetailBody renders wait_agent results as a mailbox wait summary.
+// buildSubagentWaitDetailBody 将 wait_agent 结果渲染为 mailbox 等待摘要。
+function buildSubagentWaitDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
+  const payload = firstPayloadObject(blocks);
+  const timeoutMs = numberMetadata(payload?.timeout_ms ?? payload?.timeoutMs);
+  const timedOut = booleanMetadata(payload?.timed_out ?? payload?.timedOut);
+  return [
+    `## ${text(t, "conversation.subagent.detail.wait", "Waiting for subagent message")}`,
+    detailLine(
+      text(t, "conversation.subagent.detail.status", "Status"),
+      timedOut
+        ? text(t, "conversation.subagent.detail.waitTimedOut", "Wait timed out")
+        : text(t, "conversation.subagent.detail.waitCompleted", "Subagent message received"),
+    ),
+    timeoutMs !== null && timeoutMs > 0
+      ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), `${timeoutMs} ms`)
+      : null,
+  ].filter(Boolean).join("\n\n");
+}
+
+// buildSubagentCollectionDetailBody renders list results as a readable agent-result list.
+// buildSubagentCollectionDetailBody 将列出结果渲染为可读的代理结果列表。
 function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
   const payload = firstPayloadObject(blocks);
   const agents = arrayMetadata(payload, "agents").map(objectMetadata).filter((agent): agent is Record<string, unknown> => Boolean(agent));
   const completed = booleanMetadata(payload?.completed);
   const timeoutMs = numberMetadata(payload?.timeout_ms ?? payload?.timeoutMs);
+  const message = stringMetadata(payload?.message);
+  const result = stringMetadata(payload?.result);
   const header = [
     `## ${text(t, "conversation.subagent.detail.collection", "Subagent collection")}`,
     detailLine(text(t, "conversation.subagent.detail.count", "Count"), String(agents.length)),
@@ -126,10 +195,15 @@ function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBloc
     timeoutMs !== null && timeoutMs > 0 ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), `${timeoutMs} ms`) : null,
   ].filter(Boolean);
   if (!agents.length) {
-    return [...header, text(t, "conversation.subagent.detail.noAgents", "No subagent result was returned.")].join("\n\n");
+    return [
+      ...header,
+      message ? detailLine(text(t, "conversation.subagent.detail.note", "Note"), message) : null,
+      result ? `### ${text(t, "conversation.subagent.detail.result", "Result")}\n\n${fencedText(result)}` : null,
+      !message && !result ? text(t, "conversation.subagent.detail.noAgents", "No subagent result was returned.") : null,
+    ].filter(Boolean).join("\n\n");
   }
   const agentSections = agents.map((agent, index) => {
-    const name = stringMetadata(agent.display_title ?? agent.displayTitle ?? agent.task_name ?? agent.taskName ?? agent.agent_type ?? agent.agentType)
+    const name = stringMetadata(agent.display_title ?? agent.displayTitle ?? agent.task_name ?? agent.taskName)
       ?? `${text(t, "conversation.subagent.detail.agent", "Agent")} ${index + 1}`;
     const status = stringMetadata(agent.status) ?? text(t, "conversation.subagent.detail.unknown", "Unknown");
     const result = stringMetadata(agent.result) ?? stringMetadata(agent.error) ?? "";
@@ -145,47 +219,14 @@ function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBloc
   return [...header, ...agentSections].join("\n\n");
 }
 
-// buildSubagentMessageDetailBody renders queue and follow-up dispatch records without raw JSON.
-// buildSubagentMessageDetailBody 以非 JSON 形式渲染排队与跟进调度记录。
-function buildSubagentMessageDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
-  const payload = firstPayloadObject(blocks);
-  const target = firstMetadataString(blocks, ["arguments.target", "host_result.payload.target", "hostResult.payload.target", "payload.target"])
-    ?? text(t, "conversation.subagent.detail.unknown", "Unknown");
-  const message = firstMetadataString(blocks, ["arguments.message"]) ?? "";
-  const executionPrompt = firstMetadataString(blocks, [
-    "host_result.payload.prompt",
-    "hostResult.payload.prompt",
-    "payload.prompt",
-  ]);
-  const result = firstMetadataString(blocks, [
-    "host_result.payload.result",
-    "hostResult.payload.result",
-    "payload.result",
-  ]);
-  const queued = booleanMetadata(payload?.queued);
-  const triggerTurn = booleanMetadata(payload?.trigger_turn ?? payload?.triggerTurn);
-  const note = stringMetadata(payload?.note);
-  const targetIds = arrayMetadata(payload, "target_task_session_ids").map(stringMetadata).filter((value): value is string => Boolean(value));
-  return [
-    `## ${text(t, "conversation.subagent.detail.messageDispatch", "Subagent message dispatch")}`,
-    detailLine(text(t, "conversation.subagent.detail.target", "Target"), target),
-    queued !== null ? detailLine(text(t, "conversation.subagent.detail.queued", "Queued"), booleanText(queued, t)) : null,
-    triggerTurn !== null ? detailLine(text(t, "conversation.subagent.detail.triggerTurn", "Trigger turn"), booleanText(triggerTurn, t)) : null,
-    targetIds.length ? detailLine(text(t, "conversation.subagent.detail.targetSessions", "Target sessions"), targetIds.join(", ")) : null,
-    note ? detailLine(text(t, "conversation.subagent.detail.note", "Note"), note) : null,
-    `### ${text(t, "conversation.subagent.detail.prompt", "Prompt")}`,
-    message ? fencedText(message) : text(t, "conversation.subagent.detail.empty", "No content."),
-    executionPrompt && executionPrompt !== message ? `### ${text(t, "conversation.subagent.detail.effectivePrompt", "Effective prompt")}\n\n${fencedText(executionPrompt)}` : null,
-    result ? `### ${text(t, "conversation.subagent.detail.result", "Result")}\n\n${fencedText(result)}` : null,
-  ].filter(Boolean).join("\n\n");
-}
-
 // buildSubagentControlDetailBody renders close-agent results as a compact operation summary.
 // buildSubagentControlDetailBody 将关闭子代理结果渲染为紧凑操作摘要。
 function buildSubagentControlDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
   const payload = firstPayloadObject(blocks);
   const target = firstMetadataString(blocks, ["arguments.task_name", "arguments.task_id", "arguments.target"]);
-  const stoppedIds = arrayMetadata(payload, "stopped_task_session_ids").map(stringMetadata).filter((value): value is string => Boolean(value));
+  const stoppedIds = [
+    ...arrayMetadata(payload, "stopped_subagent_task_ids"),
+  ].map(stringMetadata).filter((value): value is string => Boolean(value));
   const stoppedCount = numberMetadata(payload?.stopped_count ?? payload?.stoppedCount) ?? stoppedIds.length;
   return [
     `## ${text(t, "conversation.subagent.detail.control", "Subagent control")}`,
@@ -226,7 +267,7 @@ export function toolExecutionSubagentLabel(blocks: ToolExecutionConversationBloc
   if (name) {
     return name;
   }
-  return blocks.some((block) => isSubagentToolName(block.toolName) || Boolean(block.taskSessionId))
+  return blocks.some((block) => isSubagentToolName(block.toolName) || Boolean(block.subagentTaskId))
     ? (t ? t("conversation.subagent.schedule") : "Subagent schedule")
     : null;
 }
@@ -246,7 +287,7 @@ export function toolExecutionIdentifier(blocks: ToolExecutionConversationBlock[]
     const identifier = block.toolCallId
       ?? block.toolResultId
       ?? block.commandSessionId
-      ?? block.taskSessionId;
+      ?? block.subagentTaskId;
     if (identifier) {
       return shortenToolExecutionIdentifier(identifier);
     }
@@ -313,10 +354,10 @@ export function toolExecutionErrorPreview(blocks: ToolExecutionConversationBlock
   return preview ? compactToolExecutionErrorPreview(preview) : null;
 }
 
-// preferredTaskSessionDisplayBlock keeps routed task-session rows anchored to the newest terminal metadata.
-// preferredTaskSessionDisplayBlock 让已路由 task-session 行优先使用最新终态元数据作为展示锚点。
-export function preferredTaskSessionDisplayBlock(blocks: ToolExecutionConversationBlock[]): ToolExecutionConversationBlock | null {
-  const taskBlocks = blocks.filter((block) => block.taskSessionId);
+// preferredSubagentTaskDisplayBlock keeps routed subagent-task rows anchored to the newest terminal metadata.
+// preferredSubagentTaskDisplayBlock 让已路由子代理任务行优先使用最新终态元数据作为展示锚点。
+export function preferredSubagentTaskDisplayBlock(blocks: ToolExecutionConversationBlock[]): ToolExecutionConversationBlock | null {
+  const taskBlocks = blocks.filter((block) => block.subagentTaskId);
   if (!taskBlocks.length) {
     return null;
   }
@@ -329,9 +370,9 @@ export function preferredTaskSessionDisplayBlock(blocks: ToolExecutionConversati
 // toolExecutionDisplayState resolves the stable compact display state for one tool execution row.
 // toolExecutionDisplayState 解析单条工具执行行使用的稳定紧凑显示状态。
 export function toolExecutionDisplayState(blocks: ToolExecutionConversationBlock[], sessionRunning: boolean): "failed" | "completed" | "running" | "stopped" {
-  const taskSessionState = taskSessionExecutionDisplayState(blocks);
-  if (taskSessionState) {
-    return taskSessionState;
+  const subagentTaskState = subagentTaskExecutionDisplayState(blocks);
+  if (subagentTaskState) {
+    return subagentTaskState;
   }
   const explicitStates = blocks
     .map((block) => normalizeToolDisplayState(block.status))
@@ -409,10 +450,10 @@ function compactToolExecutionErrorPreview(source: string): string | null {
   return compactTextPreview(line).slice(0, 96);
 }
 
-// taskSessionExecutionDisplayState resolves the visible state for routed task-session rows from explicit task metadata.
-// taskSessionExecutionDisplayState 从显式 task 元数据解析已路由 task-session 行的可见状态。
-function taskSessionExecutionDisplayState(blocks: ToolExecutionConversationBlock[]): "failed" | "completed" | "running" | "stopped" | null {
-  const taskBlocks = blocks.filter((block) => block.taskSessionId);
+// subagentTaskExecutionDisplayState resolves the visible state for routed subagent-task rows from explicit task metadata.
+// subagentTaskExecutionDisplayState 从显式任务元数据解析已路由子代理任务行的可见状态。
+function subagentTaskExecutionDisplayState(blocks: ToolExecutionConversationBlock[]): "failed" | "completed" | "running" | "stopped" | null {
+  const taskBlocks = blocks.filter((block) => block.subagentTaskId);
   if (!taskBlocks.length) {
     return null;
   }

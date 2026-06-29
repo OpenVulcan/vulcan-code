@@ -3,7 +3,10 @@ use super::*;
 /// Returns the structured task-session payload attached to one direct or host-result tool metadata object when the result belongs to the host-managed subagent surface.
 /// 当结果属于宿主管理的子代理工具面时，返回直接元数据或 host-result 元数据中附带的结构化 task-session 载荷。
 pub fn task_session_payload_from_tool_metadata(metadata: &Value) -> Option<&Value> {
-    if metadata.get("kind").and_then(Value::as_str) == Some("task_session")
+    if metadata
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(is_readable_subagent_task_kind)
         && let Some(payload) = metadata
             .get("payload")
             .filter(|payload| payload.is_object())
@@ -14,7 +17,10 @@ pub fn task_session_payload_from_tool_metadata(metadata: &Value) -> Option<&Valu
         .get("host_result")
         .and_then(Value::as_object)
         .and_then(|host_result| {
-            (host_result.get("kind").and_then(Value::as_str) == Some("task_session"))
+            host_result
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(is_readable_subagent_task_kind)
                 .then(|| host_result.get("payload"))
                 .flatten()
         })
@@ -45,7 +51,8 @@ pub fn task_session_display_title_from_payload(payload: &Value) -> Option<&str> 
 /// 返回 task 会话载荷中保存的内部子会话标识。
 pub fn task_session_internal_id_from_payload(payload: &Value) -> Option<SessionId> {
     payload
-        .get("task_session_id")
+        .get(SUBAGENT_TASK_ID_KEY)
+        .or_else(|| payload.get(LEGACY_TASK_SESSION_ID_KEY))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -118,19 +125,13 @@ pub fn task_session_description_from_tool_metadata(metadata: &Value) -> Option<&
         })
 }
 
-/// Returns one trimmed task-session subagent label from structured task-session payloads or the declared `spawn_agent.agent_type` argument.
-/// 从结构化 task-session 载荷或已声明的 `spawn_agent.agent_type` 参数中返回裁剪后的子代理标签。
+/// Returns one trimmed task-session subagent label from structured task-session payloads.
+/// 从结构化 task-session 载荷中返回裁剪后的子代理标签。
 pub fn task_session_subagent_from_tool_metadata(metadata: &Value) -> Option<&str> {
     task_session_payload_from_tool_metadata(metadata)
         .and_then(|payload| payload.get("subagent"))
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("agent_type"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        })
 }
 
 /// Returns one stable human-readable task title extracted from persisted payload metadata when present.
@@ -252,7 +253,7 @@ pub fn merge_tool_display_metadata(
             if let Some(preferred_payload) = preferred_task_session_payload {
                 tool_call_object.insert(
                     String::from("kind"),
-                    Value::String(String::from("task_session")),
+                    Value::String(String::from(SUBAGENT_TASK_KIND)),
                 );
                 tool_call_object.insert(String::from("payload"), preferred_payload);
             }
@@ -278,7 +279,10 @@ fn task_session_payload_from_metadata_object(
                 .get("host_result")
                 .and_then(Value::as_object)
                 .and_then(|host_result| {
-                    (host_result.get("kind").and_then(Value::as_str) == Some("task_session"))
+                    host_result
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_readable_subagent_task_kind)
                         .then(|| host_result.get("payload"))
                         .flatten()
                 })
@@ -419,7 +423,10 @@ fn collect_best_task_session_record_match<'a>(
 /// 返回单个元数据对象是否表示可与 task-session 载荷匹配的 spawn_agent 工具卡片。
 fn task_session_metadata_can_match_tool_card(metadata: &Value) -> bool {
     metadata.get("tool_name").and_then(Value::as_str) == Some("spawn_agent")
-        || metadata.get("kind").and_then(Value::as_str) == Some("task_session")
+        || metadata
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(is_readable_subagent_task_kind)
 }
 
 /// Applies one candidate score to the current best task-card match.
@@ -492,10 +499,10 @@ pub fn build_stopped_task_session_metadata(
         .unwrap_or_else(|| task_id.to_string());
     let metadata = json!({
         "tool_name": "spawn_agent",
-        "kind": "task_session",
+        "kind": SUBAGENT_TASK_KIND,
         "payload": {
             "task_id": public_task_id,
-            "task_session_id": task_id.to_string(),
+            (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
             "execution_status": "stopped",
             "prompt": prompt,
             "description": description,
@@ -507,11 +514,11 @@ pub fn build_stopped_task_session_metadata(
     attach_tool_display_state_to_metadata(Some(metadata), "stopped").unwrap_or_else(|| {
         json!({
             "tool_name": "spawn_agent",
-            "kind": "task_session",
+            "kind": SUBAGENT_TASK_KIND,
             "tool_display_state": "stopped",
             "payload": {
                 "task_id": task_id.to_string(),
-                "task_session_id": task_id.to_string(),
+                (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
                 "execution_status": "stopped",
                 "result": stop_summary,
                 "updated_at": updated_at,

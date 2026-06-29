@@ -500,7 +500,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         eprintln!("[webui-service] apply checkpoint failed: {error}");
                     }
                 }
-                ExecutionStreamEvent::Finished(report) => {
+                ExecutionStreamEvent::Finished(mut report) => {
                     reached_finished_event = true;
                     let finished_session_id = report.session_id;
                     webui_trace(
@@ -522,6 +522,21 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         eprintln!(
                             "[webui-service] provider response checkpoint write failed: {error}"
                         );
+                    }
+                    match take_pending_webui_subagent_usage_segments(
+                        &task_state,
+                        finished_session_id,
+                    ) {
+                        Ok(mut usage_segments) => {
+                            report
+                                .embedded_turn_usage_segments
+                                .append(&mut usage_segments);
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] pending subagent usage merge failed: {error}"
+                            );
+                        }
                     }
                     let goal_elapsed_seconds = current_unix_millis_value()
                         .saturating_sub(stream_task_started_at)

@@ -5935,6 +5935,7 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-session-boundary",
  "vulcan-session-core",
+ "vulcan-subagent-core",
  "vulcan-task-session",
  "vulcan-token-counter",
  "vulcan-tools-luaskills-call",
@@ -6153,6 +6154,7 @@ dependencies = [
  "vulcan-service-runtime",
  "vulcan-session-boundary",
  "vulcan-session-core",
+ "vulcan-subagent-core",
  "vulcan-task-session",
  "vulcan-vmm",
  "vulcan-workbench-model",
@@ -6193,6 +6195,13 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "vulcan-subagent-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -6268,6 +6277,7 @@ dependencies = [
  "vulcan-core",
  "vulcan-provider-config",
  "vulcan-session-core",
+ "vulcan-subagent-core",
  "vulcan-task-session",
  "vulcan-vmm",
 ]

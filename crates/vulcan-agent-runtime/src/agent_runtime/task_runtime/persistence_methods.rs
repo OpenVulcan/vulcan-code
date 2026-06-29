@@ -31,13 +31,6 @@ impl TaskRuntime {
     ) -> Result<(), String> {
         debug_assert_eq!(outcome.execution_status, TaskExecutionStatus::Running);
         let record = self.upsert_task_outcome_record(current_session_id, invocation, outcome)?;
-        self.publish_subagent_mailbox_event(
-            invocation,
-            TaskSessionStatus::Running,
-            None,
-            None,
-            Some(outcome),
-        );
         if let Err(error) = self.persist_task_record_state(
             &record,
             invocation,
@@ -129,7 +122,7 @@ impl TaskRuntime {
     /// 返回值
     /// `Ok(())` when the registry entry is updated.
     /// 注册表条目更新成功时返回 `Ok(())`。
-    fn upsert_subagent_registry_entry(
+    pub(super) fn upsert_subagent_registry_entry(
         &self,
         record: &TaskSessionRecord,
         status: TaskSessionStatus,
@@ -253,6 +246,8 @@ impl TaskRuntime {
                 "[task-runtime] failed to publish subagent mailbox event for task {}: {error}",
                 invocation.task_id
             );
+        } else {
+            self.notify_subagent_mailbox_activity();
         }
     }
 
@@ -361,7 +356,7 @@ impl TaskRuntime {
         };
         metadata.display_title = record.display_title.clone();
         metadata.description = record.description.clone();
-        metadata.subagent_profile_id = resolved_config.effective_config.subagent_profile_id.clone();
+        metadata.subagent_profile_id = None;
         metadata.inherit_parent_config = resolved_config.effective_config.inherit_parent_config;
         metadata.status = status;
         metadata.runtime_policy = resolved_config.runtime_policy;
@@ -545,12 +540,11 @@ impl TaskRuntime {
         let parent_config = Some(core_controller_config_to_effective_config(
             parent_controller_config,
         ));
-        let profile = self.subagent_profile_for_invocation(invocation_config)?;
         Ok(TaskSessionConfigResolver::resolve(
             TaskSessionConfigResolutionInput {
                 global_default_config: SessionEffectiveConfig::default(),
                 parent_config,
-                profile,
+                profile: None,
                 invocation: invocation_config.clone(),
             },
         ))
@@ -564,39 +558,11 @@ impl TaskRuntime {
         controller_config: Option<&CoreControllerConfig>,
     ) -> TaskSessionResolvedConfig {
         let parent_config = controller_config.map(core_controller_config_to_effective_config);
-        let profile = self
-            .subagent_profile_for_invocation(&record.invocation_config)
-            .ok()
-            .flatten();
         TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
             global_default_config: SessionEffectiveConfig::default(),
             parent_config,
-            profile,
+            profile: None,
             invocation: record.invocation_config.clone(),
-        })
-    }
-
-    /// Loads the requested subagent profile from the runtime snapshot.
-    /// 从运行时快照加载请求的子代理配置。
-    fn subagent_profile_for_invocation(
-        &self,
-        invocation_config: &TaskInvocationConfig,
-    ) -> Result<Option<SubagentProfile>, String> {
-        let Some(profile_id) = invocation_config
-            .subagent_profile_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(None);
-        };
-        let profiles = self.subagent_profiles.read().map_err(|_| {
-            String::from("The subagent profile registry is locked and cannot read.")
-        })?;
-        profiles.get(profile_id).cloned().map(Some).ok_or_else(|| {
-            format!(
-                "Subagent profile `{profile_id}` was requested but is not available in the runtime profile catalog."
-            )
         })
     }
 }

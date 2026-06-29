@@ -233,9 +233,9 @@ pub struct ServiceBridgeState {
     /// Parent sessions currently blocked inside a model-requested wait_agent call.
     /// 当前正阻塞在模型请求的 wait_agent 调用中的父会话集合。
     pub(crate) parent_sessions_waiting_for_subagents: BTreeSet<SessionId>,
-    /// Child-agent selectors already collected by the latest wait_agent result per parent session.
-    /// 每个父会话最近一次 wait_agent 结果已经收集的子代理选择器。
-    pub(crate) parent_session_completed_wait_agent_selectors: BTreeMap<SessionId, BTreeSet<String>>,
+    /// Pending child-agent usage segments waiting to be embedded into each parent turn report.
+    /// 等待嵌入各父会话回合报告的子代理用量分段。
+    pub(crate) pending_subagent_usage_segments: BTreeMap<SessionId, Vec<SessionTurnUsageSegment>>,
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
     pub(crate) active_stream_tasks: BTreeMap<SessionId, ServiceTaskHandle<()>>,

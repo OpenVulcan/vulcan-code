@@ -82,7 +82,7 @@ pub fn subagent_task_panel_state_from_task_session(
     let subagent_label = task_session_tool_display_label(
         Some(metadata.display_title.as_str()),
         metadata.description.as_deref(),
-        metadata.effective_config.subagent_profile_id.as_deref(),
+        None,
         Some(metadata.public_task_id.as_str()),
         None,
     );

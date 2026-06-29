@@ -104,6 +104,10 @@ pub trait SubagentMailbox: Send + Sync {
         &self,
         parent_thread_id: SessionThreadId,
     ) -> Result<Vec<SubagentMailboxEvent>, String>;
+
+    /// Returns whether one parent thread has queued mailbox events.
+    /// 返回单个父线程是否存在排队的 mailbox 事件。
+    fn has_events_for_parent(&self, parent_thread_id: SessionThreadId) -> Result<bool, String>;
 }
 
 /// In-memory mailbox used by tests and by adapters before a concrete runtime mailbox is mounted.
@@ -147,6 +151,18 @@ impl SubagentMailbox for InMemorySubagentMailbox {
         }
         *guard = retained;
         Ok(taken)
+    }
+
+    /// Checks for queued events without consuming them.
+    /// 在不消费事件的情况下检查是否存在排队事件。
+    fn has_events_for_parent(&self, parent_thread_id: SessionThreadId) -> Result<bool, String> {
+        let guard = self
+            .events
+            .lock()
+            .map_err(|error| format!("failed to lock subagent mailbox: {error}"))?;
+        Ok(guard
+            .iter()
+            .any(|event| event.parent_thread_id == parent_thread_id))
     }
 }
 

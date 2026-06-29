@@ -23,14 +23,11 @@ use crate::tooling::native::{
 };
 use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
-use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use vulcan_luaskills_prompt::{
     LuaSkillPromptEntry, render_luaskill_argument_summary, render_luaskill_schema_markdown,
 };
-use vulcan_session_core::{PromptSkillSnapshot, ProviderModelSnapshot, ToolExposureSnapshot};
-use vulcan_task_session::SubagentProfile;
 
 /// High-level runtime summary exposed to UI placeholder surfaces.
 /// 暴露给 UI 占位面板的高层运行时摘要。
@@ -217,16 +214,6 @@ impl RuntimeFoundation {
                 },
                 None => (Vec::new(), Vec::new(), Vec::new()),
             };
-        let subagent_profiles = build_task_runtime_subagent_profiles(
-            &runtime_config,
-            &native_tools,
-            &mcp_runtime_access,
-            &mut warnings,
-        );
-        if let Err(error) = task_runtime.configure_subagent_profiles(subagent_profiles) {
-            warnings.push(format!("同步子代理 profile 到 TaskRuntime 失败：{error}"));
-        }
-
         Self {
             config: runtime_config,
             native_tools,
@@ -539,151 +526,6 @@ impl RuntimeFoundation {
     pub fn mcp_overview(&self) -> McpRuntimeOverview {
         self.mcp_runtime_access.overview()
     }
-}
-
-/// Builds TaskRuntime subagent profiles from the already-resolved runtime foundation configuration.
-/// 从已解析的运行时基础架构配置构建 TaskRuntime 子代理配置快照。
-fn build_task_runtime_subagent_profiles(
-    runtime_config: &AgentRuntimeConfig,
-    native_tools: &NativeToolCatalog,
-    mcp_runtime_access: &McpRuntimeAccess,
-    warnings: &mut Vec<String>,
-) -> Vec<SubagentProfile> {
-    let available_native_tool_ids = native_tools
-        .descriptors
-        .iter()
-        .map(|descriptor| descriptor.id.clone())
-        .collect::<BTreeSet<_>>();
-    runtime_config
-        .agents
-        .iter()
-        .map(|definition| {
-            runtime_agent_definition_to_subagent_profile(
-                definition,
-                runtime_config,
-                &available_native_tool_ids,
-                mcp_runtime_access,
-                warnings,
-            )
-        })
-        .collect()
-}
-
-/// Converts one runtime agent definition into the TaskSession resolver's profile model.
-/// 将单个运行时代理定义转换为 TaskSession 解析器使用的配置模型。
-fn runtime_agent_definition_to_subagent_profile(
-    definition: &RuntimeAgentDefinition,
-    runtime_config: &AgentRuntimeConfig,
-    available_native_tool_ids: &BTreeSet<String>,
-    mcp_runtime_access: &McpRuntimeAccess,
-    warnings: &mut Vec<String>,
-) -> SubagentProfile {
-    let mut profile = SubagentProfile::new(definition.id.clone(), definition.name.clone());
-    if !definition.description.trim().is_empty() {
-        profile.description = Some(definition.description.clone());
-    }
-    if !definition.system_prompt.trim().is_empty() {
-        profile.base_system_prompt = Some(definition.system_prompt.clone());
-    }
-    profile.provider_model = provider_model_snapshot_from_runtime_agent(definition);
-    profile.tool_exposure = tool_exposure_snapshot_from_runtime_agent(
-        definition,
-        runtime_config,
-        available_native_tool_ids,
-        mcp_runtime_access,
-        warnings,
-    );
-    profile.prompt_skills = PromptSkillSnapshot {
-        enabled: definition.skill_ids.clone(),
-        disabled: Vec::new(),
-    };
-    profile.runtime_policy = definition.runtime_policy;
-    profile.extra = runtime_agent_extra_payload(definition);
-    profile
-}
-
-/// Builds a provider/model snapshot from one runtime agent definition.
-/// 从单个运行时代理定义构建供应商与模型快照。
-fn provider_model_snapshot_from_runtime_agent(
-    definition: &RuntimeAgentDefinition,
-) -> ProviderModelSnapshot {
-    let mut snapshot = ProviderModelSnapshot::default();
-    let Some(model) = definition
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return snapshot;
-    };
-    if let Some((provider_id, model_id)) = model.split_once('/') {
-        snapshot.provider_id = Some(provider_id.trim().to_string());
-        snapshot.model_id = Some(model_id.trim().to_string());
-    } else {
-        snapshot.model_id = Some(model.to_string());
-    }
-    snapshot
-}
-
-/// Builds a tool exposure snapshot from one runtime agent's resolved tool policy.
-/// 根据单个运行时代理已解析工具策略构建工具可见性快照。
-fn tool_exposure_snapshot_from_runtime_agent(
-    definition: &RuntimeAgentDefinition,
-    runtime_config: &AgentRuntimeConfig,
-    available_native_tool_ids: &BTreeSet<String>,
-    mcp_runtime_access: &McpRuntimeAccess,
-    warnings: &mut Vec<String>,
-) -> ToolExposureSnapshot {
-    let policy = definition
-        .tool_policy
-        .as_ref()
-        .and_then(|policy_id| runtime_config.tool_policies.get(policy_id));
-    let mut allowed_tools = resolve_agent_native_tools(
-        definition,
-        &runtime_config.tool_policies,
-        available_native_tool_ids,
-        warnings,
-    );
-    let mcp_allowlist = resolve_agent_mcp_tool_allowlist(definition, policy);
-    allowed_tools.extend(
-        mcp_runtime_access
-            .available_tool_bindings_filtered(&mcp_allowlist)
-            .into_iter()
-            .map(|binding| binding.id().to_string()),
-    );
-    dedupe_string_list(&mut allowed_tools);
-    ToolExposureSnapshot {
-        allowed_tools,
-        disabled_tools: Vec::new(),
-        allowed_ai_capabilities: Vec::new(),
-        disabled_ai_capabilities: Vec::new(),
-        luaskills_overrides: Value::Null,
-        mcp_server_overrides: Value::Null,
-    }
-}
-
-/// Builds an extra payload containing runtime scalar overrides declared by an agent.
-/// 构建包含代理声明的运行时标量覆盖的额外载荷。
-fn runtime_agent_extra_payload(definition: &RuntimeAgentDefinition) -> Value {
-    let mut payload = serde_json::Map::new();
-    if let Some(temperature) = definition.temperature {
-        payload.insert(String::from("temperature"), json!(temperature));
-    }
-    if let Some(max_turns) = definition.max_turns {
-        payload.insert(String::from("max_turns"), json!(max_turns));
-    }
-    if payload.is_empty() {
-        Value::Null
-    } else {
-        Value::Object(payload)
-    }
-}
-
-/// Deduplicates one string list while preserving the original order.
-/// 在保留原始顺序的同时为字符串列表去重。
-fn dedupe_string_list(values: &mut Vec<String>) {
-    let mut seen = BTreeSet::new();
-    values.retain(|value| seen.insert(value.clone()));
 }
 
 /// Resolves the native tool whitelist for one agent definition.

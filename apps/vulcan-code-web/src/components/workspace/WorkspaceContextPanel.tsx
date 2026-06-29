@@ -82,91 +82,6 @@ const LazyWorkspaceFilesPanelHost = React.lazy(async () => {
   return { default: module.WorkspaceFilesPanelHost };
 });
 
-// SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS lists records that may trail a completed child turn.
-// SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS 列出可能位于已完成子代理回合尾部的记录类型。
-const SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS = new Set(["turnstats", "turnterminated"]);
-
-// normalizeSubagentPanelRecordKind normalizes persisted record kinds for exact semantic checks.
-// normalizeSubagentPanelRecordKind 规范化持久记录类型，供精确语义判断使用。
-function normalizeSubagentPanelRecordKind(recordKind?: string | null): string {
-  return recordKind?.trim().toLowerCase().replace(/[-_]/g, "") ?? "";
-}
-
-// normalizeSubagentPanelPromptBody normalizes visible prompt text for duplicate echo comparison.
-// normalizeSubagentPanelPromptBody 规范化可见提示词文本，用于重复回显比较。
-function normalizeSubagentPanelPromptBody(body: string): string {
-  return body.trim().replace(/\s+/g, " ");
-}
-
-// subagentPanelMessageHasAssistantOutput reports whether a row is visible child-agent output.
-// subagentPanelMessageHasAssistantOutput 判断单条记录是否为可见子代理输出。
-function subagentPanelMessageHasAssistantOutput(message: ConversationMessage): boolean {
-  return message.role === "assistant" && message.body.trim().length > 0;
-}
-
-// subagentPanelMessageIsTrailingTerminal reports whether a row can follow the final visible child output.
-// subagentPanelMessageIsTrailingTerminal 判断单条记录是否可以跟随最终可见子代理输出。
-function subagentPanelMessageIsTrailingTerminal(message: ConversationMessage): boolean {
-  return SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS.has(normalizeSubagentPanelRecordKind(message.recordKind));
-}
-
-// subagentPanelMessageIsUserTranscript reports whether a row is a user transcript bubble.
-// subagentPanelMessageIsUserTranscript 判断单条记录是否为用户转录气泡。
-function subagentPanelMessageIsUserTranscript(message: ConversationMessage): boolean {
-  return message.role === "user" && normalizeSubagentPanelRecordKind(message.recordKind) === "transcript";
-}
-
-// dedupeSubagentPanelTrailingPromptEcho hides a duplicated child-task prompt echoed after output.
-// dedupeSubagentPanelTrailingPromptEcho 隐藏子任务输出后被再次回显的重复提示词。
-function dedupeSubagentPanelTrailingPromptEcho(messages: ConversationMessage[]): ConversationMessage[] {
-  if (messages.length < 4) {
-    return messages;
-  }
-  // candidateIndex points at the last non-terminal row before completion metadata.
-  // candidateIndex 指向完成元数据之前的最后一条非终态记录。
-  let candidateIndex = messages.length - 1;
-  while (candidateIndex >= 0 && subagentPanelMessageIsTrailingTerminal(messages[candidateIndex])) {
-    candidateIndex -= 1;
-  }
-  const candidate = messages[candidateIndex];
-  if (!candidate || !subagentPanelMessageIsUserTranscript(candidate)) {
-    return messages;
-  }
-  const candidateBody = normalizeSubagentPanelPromptBody(candidate.body);
-  if (!candidateBody) {
-    return messages;
-  }
-  // priorIndex locates the original prompt row with the same visible task text.
-  // priorIndex 定位可见任务文本相同的原始提示词记录。
-  const priorIndex = messages.findIndex((message, index) => (
-    index < candidateIndex
-    && subagentPanelMessageIsUserTranscript(message)
-    && normalizeSubagentPanelPromptBody(message.body) === candidateBody
-  ));
-  if (priorIndex < 0) {
-    return messages;
-  }
-  // hasCompletedOutputBetween proves the duplicate sits after a produced child answer.
-  // hasCompletedOutputBetween 证明重复项位于已产生的子代理答案之后。
-  const hasCompletedOutputBetween = messages
-    .slice(priorIndex + 1, candidateIndex)
-    .some(subagentPanelMessageHasAssistantOutput);
-  if (!hasCompletedOutputBetween) {
-    return messages;
-  }
-  // hasOnlyTerminalRowsAfterCandidate keeps real follow-up turns visible until they produce their own output.
-  // hasOnlyTerminalRowsAfterCandidate 确保真实后续提问在产生自身输出前仍保持可见。
-  // trailingRows stores completion-only records after the duplicated prompt candidate.
-  // trailingRows 保存重复提示词候选项之后的完成类记录。
-  const trailingRows = messages.slice(candidateIndex + 1);
-  const hasOnlyTerminalRowsAfterCandidate = trailingRows.length > 0
-    && trailingRows.every(subagentPanelMessageIsTrailingTerminal);
-  if (!hasOnlyTerminalRowsAfterCandidate) {
-    return messages;
-  }
-  return messages.filter((_, index) => index !== candidateIndex);
-}
-
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
 export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent";
@@ -860,12 +775,9 @@ function WorkspaceSubagentPanel(args: {
     () => taskId ? args.props.workbench.messages.filter((message) => message.conversationId === taskId) : [],
     [args.props.workbench.messages, taskId],
   );
-  // displayMessages stores the side-panel-only transcript after child prompt echo cleanup.
-  // displayMessages 保存经过子提示词回显清理后的侧栏专用转录。
-  const displayMessages = React.useMemo(() => dedupeSubagentPanelTrailingPromptEcho(messages), [messages]);
   // renderItems stores parsed transcript rows for the side-panel child conversation.
   // renderItems 保存侧栏子会话解析后的转录行。
-  const renderItems = React.useMemo(() => projectConversationRenderItems(displayMessages, t), [displayMessages, t]);
+  const renderItems = React.useMemo(() => projectConversationRenderItems(messages, t), [messages, t]);
   // subagentConversation stores the minimal conversation summary consumed by ConversationWorkspace.
   // subagentConversation 保存 ConversationWorkspace 消费的最小会话摘要。
   const subagentConversation = React.useMemo<ConversationSummary | undefined>(() => {
@@ -932,7 +844,7 @@ function WorkspaceSubagentPanel(args: {
         initialExpandedState={null}
         initialScrollDistanceFromBottom={0}
         initialVirtualizerState={null}
-        messages={displayMessages}
+        messages={messages}
         parentConversationId={taskId}
         renderItems={renderItems}
         resolveComposerAttachmentMedia={composerAttachmentMedia}

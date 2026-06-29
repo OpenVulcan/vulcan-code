@@ -139,12 +139,14 @@ pub(crate) fn apply_hydration_to_selected_workspace_snapshot(
     }
     ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
+    let hydrated_session_run_phases = workspace_snapshot.session_run_phases.clone();
     apply_persisted_task_mirror_statuses_to_workspace(
         controller_runtime,
         workspace_snapshot,
         session_id,
         |task_id| {
-            webui_subagent_task_has_live_run(
+            webui_subagent_task_has_live_run_for_phase(
+                hydrated_session_run_phases.get(&task_id).copied(),
                 task_runtime,
                 live_listener_task_ids.contains(&task_id),
                 task_id,

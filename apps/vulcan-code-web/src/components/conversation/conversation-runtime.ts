@@ -137,5 +137,5 @@ function blockLooksLikeSubagentTool(block: ConversationBlock): boolean {
     || toolName === "followup_task"
     || toolName === "wait_agent"
     || toolName === "list_agents"
-    || toolName === "close_agent";
+    || toolName === "interrupt_agent";
 }

@@ -142,8 +142,6 @@ fn restores_completed_panel_state_from_segmented_task_session_store() {
     let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
-    let mut effective_config = vulcan_session_core::SessionEffectiveConfig::default();
-    effective_config.subagent_profile_id = Some(String::from("image-agent"));
     let mut metadata = TaskSessionMetadata::new(
         root_session_id,
         task_session_id,
@@ -151,7 +149,7 @@ fn restores_completed_panel_state_from_segmented_task_session_store() {
         "image-worker-a",
         "生成图片 A",
         vulcan_session_core::SessionRequestedConfig::default(),
-        effective_config,
+        vulcan_session_core::SessionEffectiveConfig::default(),
         1,
         10,
     );

@@ -35,7 +35,7 @@ export function resolveSubagentOrchestrationPresentation(
 ): SubagentOrchestrationPresentation | null {
   const toolName = fixedToolName(blocks);
   const hostKind = fixedHostKind(blocks);
-  const operation = subagentOperation(toolName, hostKind, blocks.some((block) => Boolean(block.taskSessionId)));
+  const operation = subagentOperation(toolName, hostKind, blocks.some((block) => Boolean(block.subagentTaskId)));
   if (!operation) {
     return null;
   }
@@ -48,7 +48,7 @@ export function resolveSubagentOrchestrationPresentation(
     effectivePrompt: stringValue(payload?.prompt),
     id: subagentPresentationId(blocks, operation, title),
     kind: "subagent_orchestration",
-    note: stringValue(payload?.note),
+    note: stringValue(payload?.note) ?? (operation === "wait" ? null : operation === "collect" ? stringValue(payload?.message) : null),
     operation,
     prompt: subagentPrompt(operation, args, payload),
     queued: booleanValue(payload?.queued),
@@ -57,6 +57,7 @@ export function resolveSubagentOrchestrationPresentation(
     stoppedCount: operation === "control" ? stoppedTaskCount(payload) : 0,
     stoppedTaskIds: operation === "control" ? stoppedTaskIds(payload) : [],
     target: subagentTarget(args, payload),
+    timedOut: operation === "wait" ? booleanValue(payload?.timed_out ?? payload?.timedOut) : null,
     title,
     triggerTurn: booleanValue(payload?.trigger_turn ?? payload?.triggerTurn),
   };
@@ -103,6 +104,9 @@ function mergeSubagentPayload(
     stoppedCount: presentation.operation === "control" ? stoppedTaskCount(payload) : presentation.stoppedCount,
     stoppedTaskIds: presentation.operation === "control" ? stoppedTaskIds(payload) : presentation.stoppedTaskIds,
     target: presentation.target ?? stringValue(payload.target),
+    timedOut: presentation.operation === "wait"
+      ? booleanValue(payload.timed_out ?? payload.timedOut) ?? presentation.timedOut
+      : presentation.timedOut,
     triggerTurn: booleanValue(payload.trigger_turn ?? payload.triggerTurn) ?? presentation.triggerTurn,
   };
 }
@@ -136,25 +140,23 @@ function subagentPayloadMatchesOperation(
   // 候选载荷对象。
   payload: Record<string, unknown>,
 ): boolean {
+  if (operation === "wait") {
+    return "message" in payload || "timed_out" in payload || "timedOut" in payload;
+  }
   if (operation === "collect") {
     return Array.isArray(payload.agents);
   }
   if (operation === "control") {
     return "stopped_count" in payload
       || "stoppedCount" in payload
-      || "stopped_task_session_ids" in payload
-      || "stoppedTaskSessionIds" in payload;
+      || "stopped_subagent_task_ids" in payload
+      || "stoppedSubagentTaskIds" in payload;
   }
-  if (operation === "message" || operation === "followup") {
-    return "target" in payload
-      || "target_task_session_ids" in payload
-      || "targetTaskSessionIds" in payload
-      || "queued" in payload
-      || "trigger_turn" in payload
-      || "triggerTurn" in payload;
+  if (operation === "message") {
+    return "message" in payload || "target" in payload || "trigger_turn" in payload || "triggerTurn" in payload;
   }
-  return "task_session_id" in payload
-    || "taskSessionId" in payload
+  return "subagent_task_id" in payload
+    || "subagentTaskId" in payload
     || "display_title" in payload
     || "displayTitle" in payload
     || "prompt" in payload;
@@ -169,17 +171,17 @@ function subagentOperation(
   // Host result kind from metadata.
   // 元数据中的宿主结果类型。
   hostKind: string | null,
-  // Whether the normalized transcript row carries a child task-session id.
-  // 规范化转录行是否携带子任务会话标识。
-  hasTaskSessionId: boolean,
+  // Whether the normalized transcript row carries a child subagent task id.
+  // 规范化转录行是否携带子代理任务标识。
+  hasSubagentTaskId: boolean,
 ): SubagentOrchestrationPresentation["operation"] | null {
   const normalized = toolName ? normalizeToolName(toolName) : null;
   if (normalized === "spawn_agent") return "create";
-  if (normalized === "wait_agent" || normalized === "list_agents" || hostKind === "subagent_status") return "collect";
-  if (normalized === "send_message" || hostKind === "subagent_message") return "message";
-  if (normalized === "followup_task") return "followup";
-  if (normalized === "close_agent" || hostKind === "subagent_control") return "control";
-  if (hostKind === "task_session" || hasTaskSessionId) return "create";
+  if (normalized === "send_message" || normalized === "followup_task" || hostKind === "subagent_message") return "message";
+  if (normalized === "wait_agent" || hostKind === "subagent_wait") return "wait";
+  if (normalized === "list_agents" || hostKind === "subagent_status") return "collect";
+  if (normalized === "interrupt_agent" || hostKind === "subagent_control") return "control";
+  if (hostKind === "subagent_task" || hasSubagentTaskId) return "create";
   return null;
 }
 
@@ -267,8 +269,14 @@ function subagentPresentationTitle(
   // 原始工具名。
   toolName: string | null,
 ): string {
+  if (operation === "wait") {
+    return toolName ?? "wait_agent";
+  }
   if (operation === "collect") {
     return stringValue(payload?.tool) ?? toolName ?? "subagent";
+  }
+  if (operation === "message") {
+    return subagentTarget(args, payload) ?? toolName ?? "subagent";
   }
   return subagentTarget(args, payload)
     ?? stringValue(payload?.display_title ?? payload?.displayTitle)
@@ -293,7 +301,7 @@ function subagentPrompt(
   if (operation === "create") {
     return textValue(args?.message) ?? textValue(args?.prompt) ?? textValue(payload?.prompt);
   }
-  if (operation === "message" || operation === "followup") {
+  if (operation === "message") {
     return textValue(args?.message) ?? textValue(payload?.message);
   }
   return null;
@@ -331,10 +339,9 @@ function subagentAgents(
     const agent = objectValue(rawAgent);
     const name = stringValue(agent?.display_title ?? agent?.displayTitle)
       ?? stringValue(agent?.task_name ?? agent?.taskName)
-      ?? stringValue(agent?.agent_type ?? agent?.agentType)
       ?? `agent-${index + 1}`;
     return {
-      id: stringValue(agent?.task_session_id ?? agent?.taskSessionId)
+      id: stringValue(agent?.subagent_task_id ?? agent?.subagentTaskId)
         ?? `${index}:${compactHash(JSON.stringify(rawAgent))}`,
       name,
       result: stringValue(agent?.result) ?? fallbackResultFromBlocks(blocks),
@@ -366,7 +373,7 @@ function stoppedTaskIds(
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
 ): string[] {
-  return arrayValue(payload?.stopped_task_session_ids ?? payload?.stoppedTaskSessionIds)
+  return arrayValue(payload?.stopped_subagent_task_ids ?? payload?.stoppedSubagentTaskIds)
     .map(stringValue)
     .filter((value): value is string => Boolean(value));
 }

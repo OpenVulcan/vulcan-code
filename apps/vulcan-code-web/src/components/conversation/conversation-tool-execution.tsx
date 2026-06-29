@@ -17,7 +17,7 @@ import {
 } from "./conversation-tool-execution-media";
 import {
   buildToolExecutionDetailBody,
-  preferredTaskSessionDisplayBlock,
+  preferredSubagentTaskDisplayBlock,
   toolDisplayStateLabel,
   toolExecutionDetailRef,
   toolExecutionDisplayState,
@@ -92,7 +92,7 @@ export function ToolExecutionBlock(props: {
   const callBlock = props.blocks.find((block) => block.kind === "tool-call");
   const resultBlock = props.blocks.find((block) => block.kind === "tool-result");
   const commandBlock = props.blocks.find((block) => block.kind === "command");
-  const primaryBlock = preferredTaskSessionDisplayBlock(props.blocks) ?? resultBlock ?? commandBlock ?? callBlock ?? props.blocks[0];
+  const primaryBlock = preferredSubagentTaskDisplayBlock(props.blocks) ?? resultBlock ?? commandBlock ?? callBlock ?? props.blocks[0];
   if (!primaryBlock) {
     return null;
   }
@@ -102,7 +102,7 @@ export function ToolExecutionBlock(props: {
   const subagentLabel = toolExecutionSubagentLabel(props.blocks, t);
   const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
-  const taskSessionId = props.blocks.find((block) => block.taskSessionId)?.taskSessionId ?? null;
+  const subagentTaskId = props.blocks.find((block) => block.subagentTaskId)?.subagentTaskId ?? null;
   const identifier = toolExecutionIdentifier(props.blocks);
   const errorPreview = toolExecutionErrorPreview(props.blocks);
   const detailRefFields = toolExecutionDetailRef(props.blocks);
@@ -168,7 +168,7 @@ export function ToolExecutionBlock(props: {
       toolName,
       displayState,
       primaryKind: primaryBlock.kind,
-      taskSessionId,
+      subagentTaskId,
       blockKinds: props.blocks.map((block) => block.kind),
     });
     props.onOpenDetail({
@@ -186,7 +186,7 @@ export function ToolExecutionBlock(props: {
     props.onTrace?.("tool.open", {
       toolName,
       displayState,
-      taskSessionId,
+      subagentTaskId,
       parentConversationId: props.parentConversationId,
       blockKinds: props.blocks.map((block) => block.kind),
     });

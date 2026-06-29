@@ -86,7 +86,7 @@ pub(super) fn test_service_state_with_parent_session(
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        parent_session_completed_wait_agent_selectors: BTreeMap::new(),
+        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -108,10 +108,10 @@ pub(super) fn test_delegate_finished_event(
         "子代理任务完成。",
     )
     .with_metadata(Some(serde_json::json!({
-        "kind": "task_session",
+        "kind": SUBAGENT_TASK_KIND,
         "payload": {
             "task_id": public_task_id,
-            "task_session_id": task_session_id.to_string(),
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
             "execution_status": "completed",
             "description": "生成图片",
             "subagent": "image-worker",
@@ -129,7 +129,7 @@ pub(super) fn test_spawn_agent_tool_message(
 ) -> SessionMessageEntry {
     let mut message = SessionMessageEntry::new(
         SessionMessageKind::Assistant,
-        "调用 spawn_agent 工具 进行中",
+        "子代理 image-worker",
         "spawn_agent returned",
     )
     .with_runtime_metadata(format!("tool-{task_id}"), String::from("1780000000000"));
@@ -139,10 +139,10 @@ pub(super) fn test_spawn_agent_tool_message(
         "display_state": execution_status,
         "tool_display_state": execution_status,
         "host_result": {
-            "kind": "task_session",
+            "kind": SUBAGENT_TASK_KIND,
             "payload": {
                 "task_id": "image-worker",
-                "task_session_id": task_id.to_string(),
+                (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
                 "execution_status": execution_status
             }
         }

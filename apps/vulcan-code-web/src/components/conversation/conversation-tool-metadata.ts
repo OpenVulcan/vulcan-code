@@ -8,21 +8,39 @@ import {
 import type { ConversationBlockKind } from "@/components/conversation/conversation-model";
 import type { TranslationKey } from "@/i18n";
 
-// taskSessionIdFromToolMetadata extracts the stable child task-session id from host task metadata.
-// taskSessionIdFromToolMetadata 从宿主 task 元数据中提取稳定的子任务会话标识。
-export function taskSessionIdFromToolMetadata(metadata: unknown): string | null {
+// SUBAGENT_HOST_KINDS lists canonical host kinds that describe a child subagent task.
+// SUBAGENT_HOST_KINDS 列出描述子代理任务的规范宿主类型。
+const SUBAGENT_HOST_KINDS = new Set(["subagent_task"]);
+
+// SUBAGENT_TOOL_HOST_KINDS lists host kinds that should render as tool evidence.
+// SUBAGENT_TOOL_HOST_KINDS 列出应渲染为工具证据的宿主类型。
+const TOOL_EVIDENCE_HOST_KINDS = new Set([
+  "tool_error",
+  "tool_result",
+  "tool_call",
+  "subagent_task",
+  "command_session",
+  "command_run",
+  "change_set",
+]);
+
+// subagentTaskIdFromToolMetadata extracts the stable child subagent task id from host task metadata.
+// subagentTaskIdFromToolMetadata 从宿主任务元数据中提取稳定的子代理任务标识。
+export function subagentTaskIdFromToolMetadata(metadata: unknown): string | null {
   const hostKind = metadataString(metadata, ["host_result.kind", "hostResult.kind", "kind"]);
-  if (hostKind === "task_session") {
+  if (hostKind && SUBAGENT_HOST_KINDS.has(hostKind)) {
     return metadataString(metadata, [
-      "host_result.payload.task_session_id",
-      "hostResult.payload.taskSessionId",
-      "payload.task_session_id",
-      "payload.taskSessionId",
-      "task_session_id",
+      "host_result.payload.subagent_task_id",
+      "hostResult.payload.subagentTaskId",
+      "payload.subagent_task_id",
+      "payload.subagentTaskId",
+      "subagent_task_id",
+      "subagentTaskId",
     ]);
   }
   return metadataString(metadata, [
-    "task_session_id",
+    "subagent_task_id",
+    "subagentTaskId",
   ]);
 }
 
@@ -97,7 +115,7 @@ export function isSubagentToolName(toolName?: string | null): boolean {
     || normalized === "followup_task"
     || normalized === "wait_agent"
     || normalized === "list_agents"
-    || normalized === "close_agent";
+    || normalized === "interrupt_agent";
 }
 
 // subagentToolDisplayName extracts the visible child-agent name from tool metadata.
@@ -108,8 +126,8 @@ export function subagentToolDisplayName(metadata: unknown, toolName?: string | n
     "host_result.tool_name",
     "hostResult.toolName",
   ]);
-  const taskSessionId = taskSessionIdFromToolMetadata(metadata);
-  if (!isSubagentToolName(metadataToolName) && !taskSessionId) {
+  const subagentTaskId = subagentTaskIdFromToolMetadata(metadata);
+  if (!isSubagentToolName(metadataToolName) && !subagentTaskId) {
     return null;
   }
   return metadataString(metadata, [
@@ -136,7 +154,6 @@ export function subagentToolDisplayName(metadata: unknown, toolName?: string | n
     "host_result.payload.subagent",
     "hostResult.payload.subagent",
     "payload.subagent",
-    "arguments.agent_type",
     "host_result.payload.task_id",
     "hostResult.payload.taskId",
     "payload.task_id",
@@ -234,7 +251,7 @@ export function structuredKindLooksLikeToolBlock(kind: ConversationBlockKind): b
 // structuredMessageHasToolEvidence prevents assistant prose from being misrendered as a failed tool row.
 // structuredMessageHasToolEvidence 防止助手正文被误渲染为失败工具行。
 export function structuredMessageHasToolEvidence(message: ConversationMessage, attributes: Record<string, string>): boolean {
-  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.task_session_id) {
+  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.subagent_task_id) {
     return true;
   }
   const hostKind = metadataString(message.metadata, [
@@ -242,7 +259,7 @@ export function structuredMessageHasToolEvidence(message: ConversationMessage, a
     "hostResult.kind",
     "kind",
   ]);
-  if (hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind)) {
+  if (hostKind && TOOL_EVIDENCE_HOST_KINDS.has(hostKind)) {
     return true;
   }
   return false;
@@ -258,7 +275,7 @@ export function conversationBlockHasToolEvidence(
   if (!structuredKindLooksLikeToolBlock(kind)) {
     return false;
   }
-  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.task_session_id) {
+  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.subagent_task_id) {
     return true;
   }
   const hostKind = metadataString(rawMetadata, [
@@ -266,7 +283,7 @@ export function conversationBlockHasToolEvidence(
     "hostResult.kind",
     "kind",
   ]);
-  if (hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind)) {
+  if (hostKind && TOOL_EVIDENCE_HOST_KINDS.has(hostKind)) {
     return true;
   }
   return false;

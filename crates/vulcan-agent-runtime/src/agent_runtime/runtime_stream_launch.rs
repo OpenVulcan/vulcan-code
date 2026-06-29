@@ -60,12 +60,7 @@ async fn build_runtime_stream_launch_from_prepared_input(
         tool_snapshot,
     } = prepared_launch_input;
     let foundation = Arc::new(foundation);
-    let task_execution_context = Some(TaskExecutionRuntimeContext::new(
-        config,
-        Arc::clone(&foundation),
-        luaskills_runtime.clone(),
-        request.clone(),
-    ));
+    let task_execution_context_luaskills_runtime = luaskills_runtime.clone();
     let preparation_for_failure = preparation.clone();
     let bootstrap = match bootstrap_runtime_stream(
         &foundation,
@@ -92,6 +87,15 @@ async fn build_runtime_stream_launch_from_prepared_input(
             ));
         }
     };
+    let task_execution_context = Some(
+        TaskExecutionRuntimeContext::new(
+            config,
+            Arc::clone(&foundation),
+            task_execution_context_luaskills_runtime,
+            request.clone(),
+        )
+        .with_parent_snapshot(bootstrap.core_snapshot.clone()),
+    );
 
     Ok(build_runtime_stream_launch_payload(
         &request,

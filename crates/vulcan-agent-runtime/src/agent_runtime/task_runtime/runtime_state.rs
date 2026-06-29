@@ -4,6 +4,8 @@ impl TaskRuntime {
     /// Builds one empty task runtime with the default recursion guardrail.
     /// 构建一份带默认递归防护的空任务运行时。
     pub fn new() -> Self {
+        let (subagent_mailbox_activity_tx, _) = watch::channel(0_u64);
+        let (parent_input_activity_tx, _) = watch::channel(0_u64);
         Self {
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
@@ -11,30 +13,14 @@ impl TaskRuntime {
             active_task_runs: RwLock::new(HashMap::new()),
             detached_task_event_streams: RwLock::new(HashMap::new()),
             subagent_mailbox: InMemorySubagentMailbox::default(),
+            subagent_mailbox_activity_tx,
+            parent_input_activity_tx,
+            parent_input_activity_sessions: RwLock::new(BTreeSet::new()),
+            agent_inboxes: RwLock::new(HashMap::new()),
             subagent_registry: RwLock::new(SubagentRegistry::new()),
-            queued_child_messages: RwLock::new(HashMap::new()),
             task_session_store_roots: RwLock::new(HashMap::new()),
-            subagent_profiles: RwLock::new(HashMap::new()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
         }
-    }
-
-    /// Replaces the runtime-visible subagent profile snapshot with the latest foundation-resolved profiles.
-    /// 使用最新基础架构解析结果替换运行时可见的子代理配置快照。
-    pub fn configure_subagent_profiles(
-        &self,
-        profiles: Vec<SubagentProfile>,
-    ) -> Result<(), String> {
-        let mut profile_map = self.subagent_profiles.write().map_err(|_| {
-            String::from("The subagent profile registry is locked and cannot update.")
-        })?;
-        profile_map.clear();
-        profile_map.extend(
-            profiles
-                .into_iter()
-                .map(|profile| (profile.id.clone(), profile)),
-        );
-        Ok(())
     }
 
     /// Returns the maximum supported nested task depth.
@@ -51,6 +37,57 @@ impl TaskRuntime {
     ) -> Result<Vec<SubagentMailboxEvent>, String> {
         self.subagent_mailbox
             .take_events_for_parent(parent_thread_id)
+    }
+
+    /// Returns whether one parent thread has queued subagent mailbox events.
+    /// 返回单个父线程是否存在排队的子代理 mailbox 事件。
+    pub fn has_subagent_events_for_parent(
+        &self,
+        parent_thread_id: SessionThreadId,
+    ) -> Result<bool, String> {
+        self.subagent_mailbox
+            .has_events_for_parent(parent_thread_id)
+    }
+
+    /// Subscribes to subagent mailbox activity notifications.
+    /// 订阅子代理 mailbox 活动通知。
+    pub(super) fn subscribe_subagent_mailbox_activity(&self) -> watch::Receiver<u64> {
+        self.subagent_mailbox_activity_tx.subscribe()
+    }
+
+    /// Notifies waiters that the subagent mailbox changed.
+    /// 通知等待方子代理 mailbox 已变化。
+    pub(super) fn notify_subagent_mailbox_activity(&self) {
+        let next_version = self.subagent_mailbox_activity_tx.borrow().saturating_add(1);
+        let _ = self.subagent_mailbox_activity_tx.send(next_version);
+    }
+
+    /// Subscribes to parent input activity notifications.
+    /// 订阅父级输入活动通知。
+    pub(super) fn subscribe_parent_input_activity(&self) -> watch::Receiver<u64> {
+        self.parent_input_activity_tx.subscribe()
+    }
+
+    /// Takes pending parent input activity for one parent thread.
+    /// 取出指定父线程下待处理的父级输入活动。
+    pub(super) fn take_parent_input_activity_for_parent(
+        &self,
+        parent_thread_id: SessionThreadId,
+    ) -> Result<bool, String> {
+        self.parent_input_activity_sessions
+            .write()
+            .map_err(|_| String::from("The parent-input activity registry is locked."))
+            .map(|mut sessions| sessions.remove(&parent_thread_id))
+    }
+
+    /// Notifies waiters that new parent-side input or steering arrived.
+    /// 通知等待方父级已有新的输入或插话到达。
+    pub fn notify_parent_input_activity(&self, parent_thread_id: SessionThreadId) {
+        if let Ok(mut sessions) = self.parent_input_activity_sessions.write() {
+            sessions.insert(parent_thread_id);
+        }
+        let next_version = self.parent_input_activity_tx.borrow().saturating_add(1);
+        let _ = self.parent_input_activity_tx.send(next_version);
     }
 
     /// Returns a clone of the Vulcan-native subagent registry.
