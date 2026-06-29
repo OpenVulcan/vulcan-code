@@ -326,6 +326,14 @@
   transition: opacity 0.12s ease, transform 0.12s ease;
 }
 
+.rtk-gain-point.edge-start .rtk-gain-tooltip {
+  transform: translateX(0) translateY(4px);
+}
+
+.rtk-gain-point.edge-end .rtk-gain-tooltip {
+  transform: translateX(-100%) translateY(4px);
+}
+
 .rtk-gain-tooltip span,
 .rtk-gain-tooltip strong {
   white-space: nowrap;
@@ -340,6 +348,16 @@
 .rtk-gain-point:focus-visible .rtk-gain-tooltip {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+.rtk-gain-point.edge-start:hover .rtk-gain-tooltip,
+.rtk-gain-point.edge-start:focus-visible .rtk-gain-tooltip {
+  transform: translateX(0) translateY(0);
+}
+
+.rtk-gain-point.edge-end:hover .rtk-gain-tooltip,
+.rtk-gain-point.edge-end:focus-visible .rtk-gain-tooltip {
+  transform: translateX(-100%) translateY(0);
 }
 
 .rtk-gain-chart-footer {

@@ -793,23 +793,29 @@ function RtkGainLineChart(props: {
           <path className="rtk-gain-area" d={areaPath} />
           <path className="rtk-gain-line" d={linePath} />
         </svg>
-        {coordinates.map((point) => (
-          <button
-            aria-label={`${point.label}: ${formatCompactNumber(point.savedTokens, props.locale)} ${props.savedLabel}, ${point.commands} ${props.commandsLabel}, ${formatPercent(point.savingsPct)} ${props.savingsLabel}`}
-            className="rtk-gain-point"
-            key={`${point.label}-${point.savedTokens}-${point.commands}`}
-            style={{ left: `${point.x}%`, top: `${point.y}%` }}
-            type="button"
-          >
-            <span className="rtk-gain-point-dot" />
-            <span className="rtk-gain-tooltip">
-              <strong>{point.label}</strong>
-              <span>{formatCompactNumber(point.savedTokens, props.locale)} {props.savedLabel}</span>
-              <span>{point.commands} {props.commandsLabel}</span>
-              <span>{formatPercent(point.savingsPct)} {props.savingsLabel}</span>
-            </span>
-          </button>
-        ))}
+        {coordinates.map((point) => {
+          // Keeps edge-point tooltips inside the chart surface.
+          // 保持边缘点位的提示浮层不越出图表区域。
+          const tooltipEdgeClass = point.x <= 16 ? " edge-start" : point.x >= 84 ? " edge-end" : ""
+
+          return (
+            <button
+              aria-label={`${point.label}: ${formatCompactNumber(point.savedTokens, props.locale)} ${props.savedLabel}, ${point.commands} ${props.commandsLabel}, ${formatPercent(point.savingsPct)} ${props.savingsLabel}`}
+              className={`rtk-gain-point${tooltipEdgeClass}`}
+              key={`${point.label}-${point.savedTokens}-${point.commands}`}
+              style={{ left: `${point.x}%`, top: `${point.y}%` }}
+              type="button"
+            >
+              <span className="rtk-gain-point-dot" />
+              <span className="rtk-gain-tooltip">
+                <strong>{point.label}</strong>
+                <span>{formatCompactNumber(point.savedTokens, props.locale)} {props.savedLabel}</span>
+                <span>{point.commands} {props.commandsLabel}</span>
+                <span>{formatPercent(point.savingsPct)} {props.savingsLabel}</span>
+              </span>
+            </button>
+          )
+        })}
       </div>
       <div className="rtk-gain-chart-footer">
         <span>{coordinates[0].label}</span>
