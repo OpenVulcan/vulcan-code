@@ -23,7 +23,6 @@ import type {
 } from "@/types";
 import { toast } from "sonner";
 import {
-  Bot,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -266,8 +265,8 @@ export function GlobalActions(props: {
   );
 }
 
-// StatusbarRuntimeActivities renders centered tool/subagent activities in the footer.
-// StatusbarRuntimeActivities 在底部栏居中渲染工具与子代理活动。
+// StatusbarRuntimeActivities renders centered tool activities in the footer.
+// StatusbarRuntimeActivities 在底部栏居中渲染工具活动。
 export function StatusbarRuntimeActivities(props: {
   // Activity badges currently visible for the selected conversation.
   // 当前选中会话可见的活动徽标。
@@ -276,12 +275,9 @@ export function StatusbarRuntimeActivities(props: {
   return (
     <div className="statusbar-runtime-activities" aria-live="polite">
       {props.activities.map((activity) => {
-        // Icon selects the visual mark that matches each runtime activity kind.
-        // Icon 根据运行活动类型选择对应的视觉标识。
-        const Icon = activity.kind === "subagent" ? Bot : Wrench;
         return (
           <span className={cn("statusbar-runtime-activity", activity.kind)} key={activity.kind}>
-            <Icon size={13} />
+            <Wrench size={13} />
             <ShinyText text={activity.text} speed={1.65} />
           </span>
         );

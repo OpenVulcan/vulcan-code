@@ -441,33 +441,41 @@ pub(crate) fn store_and_emit_workbench_snapshot(
     )
 }
 
-/// Stores and emits one rebuilt workbench snapshot while preserving current subagent navigation.
-/// 存储并发出一份重建后的工作台快照，同时保留当前子代理导航。
-pub(crate) fn store_and_emit_workbench_snapshot_preserving_subagent_navigation(
-    app: &ServiceEventEmitter,
+/// Stores the canonical workspace snapshot without rebuilding or emitting a full workbench snapshot.
+/// 存储规范工作区快照，但不重建或发送全量工作台快照。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained workspace and hydrated conversation window caches.
+/// `state` 持有保留工作区与已水合会话窗口缓存。
+/// `workspace_snapshot` is the canonical workspace snapshot to make visible to later service steps.
+/// `workspace_snapshot` 是需要对后续服务步骤可见的规范工作区快照。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the snapshot is committed, or a lock diagnostic when service state cannot be acquired.
+/// 快照提交后返回 `Ok(())`，若无法取得服务状态锁则返回诊断信息。
+pub(crate) fn store_workspace_snapshot_without_workbench_rebuild(
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    luaskills_catalog: &TauriLuaSkillsCatalog,
-    token_budget_runtime: &TauriTokenBudgetRuntime,
-    mcp_catalog: &TauriMcpRuntimeCatalog,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
     workspace_snapshot: WorkspaceSnapshot,
-    logs: &[String],
-) -> Result<WorkbenchSnapshot, String> {
-    store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
-        app,
-        &state,
-        controller_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        provider_configuration,
-        ai_tool_configuration,
-        workspace_snapshot,
-        logs,
-        SubagentNavigationRefreshMode::Preserve,
-    )
+) -> Result<(), String> {
+    let trace_started_at = current_unix_millis_value();
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    retain_hydrated_conversation_windows_for_workspace(
+        &mut guard.hydrated_conversation_windows,
+        &workspace_snapshot,
+    );
+    guard.workspace_snapshot = Some(workspace_snapshot);
+    webui_submit_trace(
+        "store_workspace_snapshot_committed",
+        format!(
+            "elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(trace_started_at)
+        ),
+    );
+    Ok(())
 }
 
 /// Stores and emits one rebuilt workbench snapshot with an explicit subagent navigation refresh mode.
@@ -510,6 +518,13 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
                 current_unix_millis_value().saturating_sub(trace_lock_wait_started_at)
             ),
         );
+        webui_submit_trace(
+            "store_workbench_lock_wait",
+            format!(
+                "mode={subagent_navigation_mode:?} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(trace_lock_wait_started_at)
+            ),
+        );
         let trace_surface_started_at = current_unix_millis_value();
         let live_context_budgets = guard.live_context_budgets.clone();
         let (surface_messages, subagent_navigation) = match subagent_navigation_mode {
@@ -535,6 +550,15 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
             }
         };
         webui_trace(
+            "store_workbench_surface_ready",
+            format!(
+                "mode={subagent_navigation_mode:?} messages={} has_subagent_navigation={} elapsed_ms={}",
+                surface_messages.len(),
+                subagent_navigation.is_some(),
+                current_unix_millis_value().saturating_sub(trace_surface_started_at)
+            ),
+        );
+        webui_submit_trace(
             "store_workbench_surface_ready",
             format!(
                 "mode={subagent_navigation_mode:?} messages={} has_subagent_navigation={} elapsed_ms={}",
@@ -587,6 +611,15 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
             current_unix_millis_value().saturating_sub(trace_workbench_started_at)
         ),
     );
+    webui_submit_trace(
+        "store_workbench_built",
+        format!(
+            "mode={subagent_navigation_mode:?} conversations={} messages={} elapsed_ms={}",
+            workbench.conversations.len(),
+            workbench.messages.len(),
+            current_unix_millis_value().saturating_sub(trace_workbench_started_at)
+        ),
+    );
     let trace_commit_started_at = current_unix_millis_value();
     {
         let mut guard = state
@@ -603,9 +636,35 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
             current_unix_millis_value().saturating_sub(trace_commit_started_at)
         ),
     );
+    webui_submit_trace(
+        "store_workbench_committed",
+        format!(
+            "mode={subagent_navigation_mode:?} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(trace_commit_started_at)
+        ),
+    );
+    // Records the emitted workbench payload size only for the focused submit trace.
+    // 仅为专项提交链路日志记录即将发送的工作台载荷大小。
+    if webui_submit_trace_enabled() {
+        let payload_bytes = serde_json::to_vec(&ServiceEvent::Workbench(Box::new(workbench.clone())))
+            .map(|bytes| bytes.len())
+            .unwrap_or(0);
+        webui_submit_trace(
+            "store_workbench_payload_ready",
+            format!("mode={subagent_navigation_mode:?} payload_bytes={payload_bytes}"),
+        );
+    }
     let trace_emit_started_at = current_unix_millis_value();
     emit_workbench_event(&app, &workbench);
     webui_trace(
+        "store_workbench_emitted",
+        format!(
+            "mode={subagent_navigation_mode:?} elapsed_ms={} total_elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(trace_emit_started_at),
+            current_unix_millis_value().saturating_sub(trace_started_at)
+        ),
+    );
+    webui_submit_trace(
         "store_workbench_emitted",
         format!(
             "mode={subagent_navigation_mode:?} elapsed_ms={} total_elapsed_ms={}",

@@ -229,6 +229,18 @@ pub(crate) fn webui_trace_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Returns whether focused WebUI submit-chain diagnostic traces are enabled.
+/// 返回 WebUI 提交链路专项诊断日志是否已启用。
+pub(crate) fn webui_submit_trace_enabled() -> bool {
+    std::env::var("VULCAN_WEBUI_SUBMIT_TRACE")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
 /// Emits one WebUI execution-chain diagnostic trace line when tracing is enabled.
 /// 当诊断开关启用时输出一条 WebUI 执行链诊断日志。
 pub(crate) fn webui_trace(stage: &str, detail: impl AsRef<str>) {
@@ -237,6 +249,21 @@ pub(crate) fn webui_trace(stage: &str, detail: impl AsRef<str>) {
     }
     eprintln!(
         "[webui-service][webui-trace] timestamp={} unix_ms={} stage={} {}",
+        current_webui_trace_timestamp(),
+        current_unix_millis_text(),
+        stage,
+        detail.as_ref()
+    );
+}
+
+/// Emits one focused submit-chain diagnostic trace line when focused or global tracing is enabled.
+/// 当专项或全局诊断开关启用时输出一条提交链路诊断日志。
+pub(crate) fn webui_submit_trace(stage: &str, detail: impl AsRef<str>) {
+    if !webui_submit_trace_enabled() && !webui_trace_enabled() {
+        return;
+    }
+    eprintln!(
+        "[webui-service][submit-trace] timestamp={} unix_ms={} stage={} {}",
         current_webui_trace_timestamp(),
         current_unix_millis_text(),
         stage,

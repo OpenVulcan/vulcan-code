@@ -90,6 +90,11 @@ pub(super) fn patch_latest_prechecked_user_prompt_record(
 /// `attachments` 是提示词携带的结构化附件。
 /// `source` is the prompt source that defines turn and edit semantics.
 /// `source` 是定义轮次与编辑语义的提示词来源。
+///
+/// # Returns
+/// 返回值
+/// The visible transcript record id generated for the prompt.
+/// 返回为该提示词生成的可见转录记录标识。
 pub(super) fn append_shared_user_prompt_record_with_attachments(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
@@ -97,7 +102,7 @@ pub(super) fn append_shared_user_prompt_record_with_attachments(
     prompt: &str,
     attachments: Vec<ConversationAttachment>,
     source: PendingSessionPromptSource,
-) {
+) -> String {
     runtime_state.ui_state.unread = false;
     runtime_state.last_safe_provider_request_count = None;
     let message_id = format!("session-{session_id}-protocol-user-{now}");
@@ -115,7 +120,7 @@ pub(super) fn append_shared_user_prompt_record_with_attachments(
     append_record(
         &mut runtime_state.conversation_state,
         SessionConversationRecord {
-            id: record_id,
+            id: record_id.clone(),
             kind: SessionMessageKind::User,
             record_kind: SessionMessageRecordKind::Transcript,
             visible: true,
@@ -126,6 +131,7 @@ pub(super) fn append_shared_user_prompt_record_with_attachments(
         },
     );
     runtime_state.updated_at = now.to_string();
+    record_id
 }
 
 /// Builds the shared visible transcript body for one user prompt.

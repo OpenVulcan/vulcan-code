@@ -118,6 +118,9 @@ pub struct SharedPromptTurnStart {
     /// session-boundary boundary events produced when this prompt turn is accepted.
     /// 当前提示词回合被接受时生成的 会话边界边界事件。
     pub boundary_events: Vec<SessionBoundaryEvent>,
+    /// Visible user transcript record generated for this turn, when one was appended.
+    /// 本回合追加可见用户转录记录时生成的记录标识。
+    pub visible_user_prompt_record_id: Option<String>,
 }
 
 impl fmt::Debug for SharedPromptTurnStart {
@@ -145,6 +148,10 @@ impl fmt::Debug for SharedPromptTurnStart {
                 &self.ai_capability_target_order_overrides,
             )
             .field("boundary_events", &self.boundary_events.len())
+            .field(
+                "visible_user_prompt_record_id",
+                &self.visible_user_prompt_record_id,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -428,15 +435,16 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
         input.append_canonical_user_message && input.source.persists_canonical_user_message();
     let append_visible_user_prompt_record = input.append_visible_user_prompt_record
         && input.source.appends_visible_user_prompt_record();
+    let mut visible_user_prompt_record_id = None;
     if append_canonical_user_message && append_visible_user_prompt_record {
-        append_shared_user_prompt_record_with_attachments(
+        visible_user_prompt_record_id = Some(append_shared_user_prompt_record_with_attachments(
             runtime_state,
             input.session_id,
             &now,
             &sanitized_prompt,
             input.attachments.clone(),
             input.source,
-        );
+        ));
     } else if append_canonical_user_message {
         append_user_text_message(
             &mut runtime_state.conversation_state,
@@ -499,6 +507,7 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
         disabled_ai_capability_target_selectors: input.disabled_ai_capability_target_selectors,
         ai_capability_target_order_overrides: input.ai_capability_target_order_overrides,
         boundary_events,
+        visible_user_prompt_record_id,
     })
 }
 

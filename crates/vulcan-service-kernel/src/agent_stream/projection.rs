@@ -125,6 +125,90 @@ pub(crate) fn append_stream_delta_record(
     Ok(())
 }
 
+/// Emits one already-materialized visible session message through the lightweight workbench delta channel.
+/// 通过轻量工作台增量通道发送一条已经物化的可见会话消息。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the delta event to connected WebUI clients.
+/// `app` 将增量事件发送给已连接的 WebUI 客户端。
+/// `state` owns the retained workbench projection that must stay aligned with emitted deltas.
+/// `state` 持有需要与增量事件保持一致的保留工作台投影。
+/// `session_id` selects the conversation that owns the message.
+/// `session_id` 选择拥有该消息的会话。
+/// `message` is the already-projected session transcript entry to expose immediately.
+/// `message` 是需要立即展示的已投影会话转录项。
+/// `run_phase` is the current session run phase after the message was accepted.
+/// `run_phase` 是消息被接受后的当前会话运行阶段。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the delta was emitted or skipped because the target surface is not visible.
+/// 当增量已发送，或因目标界面不可见而跳过时返回 `Ok(())`。
+pub(crate) fn emit_materialized_session_message_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    message: &SessionMessageEntry,
+    run_phase: SessionRunPhase,
+) -> Result<(), String> {
+    if !message.is_visible_to_user() {
+        return Ok(());
+    }
+    let conversation_id = session_id.to_string();
+    let projected_message = conversation_message_from_session_entry(&conversation_id, message);
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if !workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
+            return Ok(());
+        }
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        if let Some(existing) = guard
+            .workbench
+            .messages
+            .iter_mut()
+            .find(|candidate| candidate.id == projected_message.id)
+        {
+            *existing = projected_message.clone();
+        } else {
+            guard.workbench.messages.push(projected_message.clone());
+        }
+        for conversation in &mut guard.workbench.conversations {
+            if conversation.id == conversation_id {
+                conversation.run_phase = run_phase.to_string();
+                conversation.status = SessionState::Running.label().to_string();
+                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_at = message.created_at.clone();
+                break;
+            }
+        }
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::AppendMessageBody(AppendMessageBodyDelta {
+                conversation_id,
+                message_id: projected_message.id.clone(),
+                body_delta: String::new(),
+                current_body: Some(projected_message.body.clone()),
+                initial_message: Some(projected_message),
+                run_phase: Some(run_phase.to_string()),
+            }),
+        }
+    };
+    webui_submit_trace(
+        "submit_prompt_user_message_delta_emitted",
+        format!("session={session_id} message_id={}", message.id),
+    );
+    emit_service_event_with_trace(
+        app,
+        "workbench_user_message_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
 /// Returns whether the retained workbench currently displays one conversation surface.
 /// 返回保留工作台当前是否正在展示指定会话界面。
 pub(crate) fn workbench_surface_matches_conversation(

@@ -1,5 +1,5 @@
 import type { useI18n } from "@/i18n";
-import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
+import type { ConversationSummary } from "@/types";
 import { isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
 import { toolExecutionDisplayState } from "@/components/conversation/conversation-tool-execution";
 import type {
@@ -60,12 +60,11 @@ export function conversationIsRunning(conversation: ConversationSummary | undefi
   return conversation.status.trim().toLowerCase() === "running";
 }
 
-// buildStatusbarRuntimeActivities derives footer-only tool and subagent activities for the selected session.
-// buildStatusbarRuntimeActivities 为当前选中会话推导仅显示在底部栏的工具与子代理活动。
+// buildStatusbarRuntimeActivities derives footer-only normal-tool activities for the selected session.
+// buildStatusbarRuntimeActivities 为当前选中会话推导仅显示在底部栏的普通工具活动。
 export function buildStatusbarRuntimeActivities(
   conversation: ConversationSummary | undefined,
   projectedItems: ConversationRenderItem[],
-  subagentNavigation: WorkbenchSnapshot["subagentNavigation"] | null | undefined,
   t: ReturnType<typeof useI18n>["t"],
 ): StatusbarRuntimeActivity[] {
   if (!conversation) {
@@ -77,8 +76,7 @@ export function buildStatusbarRuntimeActivities(
     const toolBlocks = item.blocks.filter(isMergeableToolBlock);
     return toolBlocks.length > 0 && toolExecutionDisplayState(toolBlocks, conversationRunning) === "running";
   });
-  const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
-  if (!conversationRunning && !hasRunningSubagents && activeToolItems.length === 0) {
+  if (!conversationRunning && activeToolItems.length === 0) {
     return [];
   }
   const lastMeaningfulBlock = [...projectedItems]
@@ -90,11 +88,8 @@ export function buildStatusbarRuntimeActivities(
   const phaseLooksLikeToolRunning = normalized === "toolrunning";
   const phaseLooksLikeSubagentTool = Boolean(lastMeaningfulBlock && blockLooksLikeSubagentTool(lastMeaningfulBlock));
   const activities: StatusbarRuntimeActivity[] = [];
-  if (hasActiveNormalTool || (phaseLooksLikeToolRunning && !hasRunningSubagents && !hasActiveSubagentTool && !phaseLooksLikeSubagentTool)) {
+  if (hasActiveNormalTool || (phaseLooksLikeToolRunning && !hasActiveSubagentTool && !phaseLooksLikeSubagentTool)) {
     activities.push({ kind: "tool", text: t("runtime.toolActivity") });
-  }
-  if (hasRunningSubagents || hasActiveSubagentTool || (phaseLooksLikeToolRunning && phaseLooksLikeSubagentTool)) {
-    activities.push({ kind: "subagent", text: t("runtime.subagentRunning") });
   }
   return activities;
 }

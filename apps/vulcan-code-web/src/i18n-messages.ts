@@ -938,7 +938,6 @@ export type TranslationKey =
   | "runtime.thinking"
   | "runtime.toolRunning"
   | "runtime.toolActivity"
-  | "runtime.subagentRunning"
   | "runtime.thinkingOverlayHint"
   | "settings.general"
   | "settings.systemSettings"
@@ -2033,7 +2032,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.thinking": "✨ 正在思考",
     "runtime.toolRunning": "✨ 正在调用工具",
     "runtime.toolActivity": "工具调用中",
-    "runtime.subagentRunning": "子代理工作中",
     "runtime.thinkingOverlayHint": "模型正在流式输出思考过程",
     "settings.general": "通用设置",
     "settings.systemSettings": "系统设置",
@@ -3125,7 +3123,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.thinking": "✨ Thinking",
     "runtime.toolRunning": "✨ Running tools",
     "runtime.toolActivity": "Running tools",
-    "runtime.subagentRunning": "Subagents working",
     "runtime.thinkingOverlayHint": "The model is streaming its thinking process",
     "settings.general": "General",
     "settings.systemSettings": "System settings",

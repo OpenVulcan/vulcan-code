@@ -40,6 +40,59 @@ pub(crate) fn apply_webui_prompt_begin_outer_steps(
     session_id: SessionId,
     session_title: &str,
 ) {
+    apply_webui_prompt_begin_outer_state_steps(controller_runtime, workspace_snapshot, session_id);
+    persist_webui_context_current_document(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        session_title,
+    );
+}
+
+/// Applies prompt begin state steps and defers current context persistence to a background task.
+/// 应用提示词开始状态步骤，并将当前上下文持久化延后到后台任务。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` provides workspace persistence paths and audit storage.
+/// `controller_runtime` 提供工作区持久化路径与审计存储。
+/// `workspace_snapshot` is the mutable WebUI workspace snapshot.
+/// `workspace_snapshot` 是可变 WebUI 工作区快照。
+/// `session_id` selects the prompt session.
+/// `session_id` 选择提示词会话。
+/// `session_title` labels diagnostics.
+/// `session_title` 标记诊断信息。
+pub(crate) fn apply_webui_prompt_begin_outer_steps_deferred_context_persist(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    session_title: &str,
+) {
+    apply_webui_prompt_begin_outer_state_steps(controller_runtime, workspace_snapshot, session_id);
+    spawn_webui_context_current_document_persist_task(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        session_title,
+    );
+}
+
+/// Applies prompt begin state mutations that must complete before the provider request starts.
+/// 应用 Provider 请求启动前必须完成的提示词开始状态变更。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` provides audit storage for removed legacy context injections.
+/// `controller_runtime` 提供移除旧上下文注入时使用的审计存储。
+/// `workspace_snapshot` is the mutable WebUI workspace snapshot.
+/// `workspace_snapshot` 是可变 WebUI 工作区快照。
+/// `session_id` selects the prompt session.
+/// `session_id` 选择提示词会话。
+fn apply_webui_prompt_begin_outer_state_steps(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) {
     if let Some(runtime_state) = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
@@ -68,12 +121,50 @@ pub(crate) fn apply_webui_prompt_begin_outer_steps(
             }
         }
     }
-    persist_webui_context_current_document(
-        controller_runtime,
-        workspace_snapshot,
-        session_id,
-        session_title,
-    );
+}
+
+/// Spawns one background task that persists the current segmented context document.
+/// 启动一个后台任务来持久化当前分段上下文文档。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` provides the data root used by segmented session storage.
+/// `controller_runtime` 提供分段会话存储使用的数据根目录。
+/// `workspace_snapshot` contains the current runtime state.
+/// `workspace_snapshot` 包含当前运行态。
+/// `session_id` selects the prompt session.
+/// `session_id` 选择提示词会话。
+/// `session_title` labels diagnostics.
+/// `session_title` 标记诊断信息。
+fn spawn_webui_context_current_document_persist_task(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    session_title: &str,
+) {
+    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+        return;
+    };
+    let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
+        return;
+    };
+    let data_root = controller_runtime.data_root.clone();
+    let runtime_state = runtime_state.clone();
+    let session_title = session_title.to_string();
+    spawn_service_task(async move {
+        if let Err(error) =
+            vulcan_workspace_store::workspace_store::persist_segmented_session_context_current_document(
+                &data_root,
+                &project_id,
+                session_id,
+                &runtime_state,
+            )
+        {
+            eprintln!(
+                "[webui-service] current context persist failed for `{session_title}`: {error}"
+            );
+        }
+    });
 }
 
 /// Persists the service-equivalent current context document for a WebUI session when possible.

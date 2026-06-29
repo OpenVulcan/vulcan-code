@@ -458,18 +458,15 @@ export function WorkbenchLayout(props: {
     () => projectConversationRenderItems(selectedConversationMessages, i18n.t),
     [i18n.t, selectedConversationMessages],
   );
-  // statusbarRuntimeActivities stores bottom-bar tool and subagent runtime badges for the selected parent conversation.
-  // statusbarRuntimeActivities 保存当前选中父会话的底部工具与子代理运行徽标。
+  // statusbarRuntimeActivities stores bottom-bar normal-tool runtime badges for the selected conversation.
+  // statusbarRuntimeActivities 保存当前选中会话的底部普通工具运行徽标。
   const statusbarRuntimeActivities = React.useMemo(
     () => buildStatusbarRuntimeActivities(
       selectedConversation,
       selectedConversationRenderItems,
-      workbenchState.subagentNavigation?.parentConversationId === selectedConversationId
-        ? workbenchState.subagentNavigation
-        : null,
       i18n.t,
     ),
-    [i18n.t, selectedConversation, selectedConversationId, selectedConversationRenderItems, workbenchState.subagentNavigation],
+    [i18n.t, selectedConversation, selectedConversationRenderItems],
   );
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。

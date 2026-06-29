@@ -10,7 +10,14 @@ pub(super) async fn dispatch_service_rpc(
     params: Option<Value>,
 ) -> Result<Value, String> {
     let params = params.unwrap_or_else(|| json!({}));
-    match method.as_str() {
+    // Measures one service RPC from dispatch entry to serialized result handoff.
+    // 衡量单个 service RPC 从分发入口到序列化结果交接的耗时。
+    let rpc_started_at = current_unix_millis_value();
+    let traces_submit_rpc = method == "service_submit_conversation_prompt";
+    if traces_submit_rpc {
+        webui_submit_trace("rpc_received", format!("method={method}"));
+    }
+    let rpc_result = match method.as_str() {
         "startup.snapshot" | "service_startup_snapshot" => {
             rpc_json_result(service_startup_snapshot(state))
         }
@@ -570,5 +577,16 @@ pub(super) async fn dispatch_service_rpc(
             rpc_required_param(&params, "url")?,
         )),
         _ => Err(format!("unknown service RPC method: {method}")),
+    };
+    if traces_submit_rpc {
+        webui_submit_trace(
+            "rpc_returning",
+            format!(
+                "method={method} ok={} elapsed_ms={}",
+                rpc_result.is_ok(),
+                current_unix_millis_value().saturating_sub(rpc_started_at)
+            ),
+        );
     }
+    rpc_result
 }

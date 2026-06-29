@@ -13,11 +13,12 @@ use vulcan_workbench_model::{
 
 use super::{
     SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
-    apply_webui_prompt_begin_outer_steps, build_vmm_hook_config_snapshot,
-    capture_preserved_workspace_run_state, composer_attachment_summary_to_core,
-    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
-    current_workbench_snapshot_from_state, current_workspace_snapshot_from_shared_state,
-    effective_workbench_disabled_ai_capability_kinds, enqueue_webui_pending_prompt_from_submission,
+    apply_webui_prompt_begin_outer_steps_deferred_context_persist,
+    build_vmm_hook_config_snapshot, capture_preserved_workspace_run_state,
+    composer_attachment_summary_to_core, conversation_messages_from_session,
+    current_unix_millis_text, current_unix_millis_value, current_workbench_snapshot_from_state,
+    current_workspace_snapshot_from_shared_state, effective_workbench_disabled_ai_capability_kinds,
+    enqueue_webui_pending_prompt_from_submission, emit_materialized_session_message_delta,
     ensure_session_ai_tool_configuration, ensure_session_can_enter_plan_mode,
     ensure_webui_session_runtime_state, hydrate_retained_submission_session_if_needed,
     load_workspace_for_submission, mark_webui_prompt_snapshot_preparing,
@@ -29,10 +30,10 @@ use super::{
     session_has_blocking_system_prompt_work, snapshot_webui_context_before_user_prompt,
     spawn_service_task, spawn_workspace_session_persist_task, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, store_and_emit_workbench_snapshot,
-    store_and_emit_workbench_snapshot_preserving_subagent_navigation,
+    store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, webui_session_allows_user_prompt_editing,
     webui_session_has_active_run, webui_session_kernel_has_active_turn,
-    webui_shared_prompt_precheck_plan, webui_trace, webui_trace_if_slow,
+    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
     workbench_with_live_pending_question, workspace_path_for_session,
     workspace_user_prompt_message_allows_destructive_edit,
 };
@@ -88,8 +89,11 @@ pub(super) async fn service_submit_conversation_prompt(
     disabled_ai_capability_target_selectors: Option<Vec<String>>,
     ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
 ) -> Result<WorkbenchSnapshot, String> {
+    // Measures the whole submit RPC body from service entry to final response.
+    // 衡量提交 RPC 主体从服务入口到最终返回的整体耗时。
+    let submit_total_started_at = current_unix_millis_value();
     let prompt = prompt.trim().to_string();
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_received",
         format!(
             "conversation_id={} project_id={} prompt_chars={} attachments={}",
@@ -119,7 +123,7 @@ pub(super) async fn service_submit_conversation_prompt(
         mcp_catalog,
         logs,
     ) = runtime_parts_from_state(&state)?;
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_runtime_parts_ready",
         format!(
             "conversation_id={} elapsed_ms={}",
@@ -205,7 +209,7 @@ pub(super) async fn service_submit_conversation_prompt(
         )
         .await?;
     }
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_workspace_ready",
         format!(
             "conversation_id={} retained_dialogue_context_available={retained_dialogue_context_available} source={workspace_source} elapsed_ms={}",
@@ -238,11 +242,11 @@ pub(super) async fn service_submit_conversation_prompt(
             format!("session={session_id}"),
         );
         let has_running_subagents = false;
-        webui_trace(
+        webui_submit_trace(
             "submit_prompt_subagent_running_check_skipped",
             format!("session={session_id} reason=independent_subagent_lane"),
         );
-        webui_trace(
+        webui_submit_trace(
             "submit_prompt_blocking_check",
             format!(
                 "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_active_session_run={has_active_session_run} has_running_subagents={has_running_subagents} elapsed_ms={}",
@@ -261,7 +265,7 @@ pub(super) async fn service_submit_conversation_prompt(
             has_active_session_run,
             has_precheck_progress,
         ) {
-            webui_trace(
+            webui_submit_trace(
                 "submit_prompt_queued",
                 format!(
                     "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_running_subagents={has_running_subagents}"
@@ -313,6 +317,13 @@ pub(super) async fn service_submit_conversation_prompt(
                     Some(String::from("queued_submit")),
                 );
             });
+            webui_submit_trace(
+                "submit_prompt_queued_returning",
+                format!(
+                    "session={session_id} elapsed_ms_since_received={}",
+                    current_unix_millis_value().saturating_sub(submit_total_started_at)
+                ),
+            );
             return Ok(workbench);
         }
     }
@@ -327,7 +338,7 @@ pub(super) async fn service_submit_conversation_prompt(
             &prompt
         },
     )?;
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_materialize_ready",
         format!(
             "session={session_id} title_chars={} workspace_path_chars={} elapsed_ms={}",
@@ -354,7 +365,7 @@ pub(super) async fn service_submit_conversation_prompt(
             guard.active_subagent_panel = None;
         }
     }
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_starting_run",
         format!(
             "session={session_id} title_chars={}",
@@ -389,7 +400,7 @@ pub(super) async fn service_submit_conversation_prompt(
         runtime_state.active_work_mode = Some(String::from("plan"));
         runtime_state.updated_at = updated_at;
     }
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_runtime_options_ready",
         format!(
             "session={session_id} elapsed_ms={}",
@@ -403,7 +414,7 @@ pub(super) async fn service_submit_conversation_prompt(
         session_id,
         PendingSessionPromptSource::UserFollowup,
     )?;
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_context_snapshot_ready",
         format!(
             "session={session_id} elapsed_ms={}",
@@ -441,13 +452,44 @@ pub(super) async fn service_submit_conversation_prompt(
             },
         )
     }?;
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_turn_begin_ready",
         format!(
             "session={session_id} elapsed_ms={}",
             current_unix_millis_value().saturating_sub(turn_begin_started_at)
         ),
     );
+    if let Some(message_id) = precheck_start.visible_user_prompt_record_id.as_deref()
+        && let Some(message) = workspace_snapshot
+            .session_messages
+            .get(&session_id)
+            .and_then(|messages| messages.iter().find(|message| message.id == message_id))
+    {
+        let delta_started_at = current_unix_millis_value();
+        emit_materialized_session_message_delta(
+            &app,
+            &state,
+            session_id,
+            message,
+            SessionRunPhase::MemoryRecall,
+        )?;
+        webui_submit_trace(
+            "submit_prompt_user_message_delta_ready",
+            format!(
+                "session={session_id} message_id={message_id} elapsed_ms={} elapsed_ms_since_received={}",
+                current_unix_millis_value().saturating_sub(delta_started_at),
+                current_unix_millis_value().saturating_sub(submit_total_started_at)
+            ),
+        );
+        tokio::task::yield_now().await;
+        webui_submit_trace(
+            "submit_prompt_user_message_delta_yielded",
+            format!(
+                "session={session_id} message_id={message_id} elapsed_ms_since_received={}",
+                current_unix_millis_value().saturating_sub(submit_total_started_at)
+            ),
+        );
+    }
     {
         let kernel_turn_started_at = current_unix_millis_value();
         let mut guard = state
@@ -458,7 +500,7 @@ pub(super) async fn service_submit_conversation_prompt(
             session_id,
             precheck_start.precheck_request.turn_id(),
         )?;
-        webui_trace(
+        webui_submit_trace(
             "submit_prompt_kernel_turn_started",
             format!(
                 "session={session_id} elapsed_ms={}",
@@ -467,34 +509,34 @@ pub(super) async fn service_submit_conversation_prompt(
         );
     }
     mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
-    let begin_emit_started_at = current_unix_millis_value();
-    let _ = store_and_emit_workbench_snapshot_preserving_subagent_navigation(
-        &app,
+    let begin_commit_started_at = current_unix_millis_value();
+    store_workspace_snapshot_without_workbench_rebuild(
         &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
         workspace_snapshot.clone(),
-        &logs,
     )?;
-    webui_trace(
-        "submit_prompt_begin_workbench_emitted",
+    webui_submit_trace(
+        "submit_prompt_begin_workspace_committed",
         format!(
-            "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(begin_emit_started_at)
+            "session={session_id} elapsed_ms={} elapsed_ms_since_received={}",
+            current_unix_millis_value().saturating_sub(begin_commit_started_at),
+            current_unix_millis_value().saturating_sub(submit_total_started_at)
+        ),
+    );
+    webui_submit_trace(
+        "submit_prompt_visible_user_message_emitted",
+        format!(
+            "session={session_id} elapsed_ms_since_received={}",
+            current_unix_millis_value().saturating_sub(submit_total_started_at)
         ),
     );
     let outer_steps_started_at = current_unix_millis_value();
-    apply_webui_prompt_begin_outer_steps(
+    apply_webui_prompt_begin_outer_steps_deferred_context_persist(
         &controller_runtime,
         &mut workspace_snapshot,
         session_id,
         &session_title,
     );
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_outer_steps_ready",
         format!(
             "session={session_id} elapsed_ms={}",
@@ -508,7 +550,7 @@ pub(super) async fn service_submit_conversation_prompt(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
         ));
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_hook_snapshot_ready",
         format!(
             "session={session_id} elapsed_ms={}",
@@ -522,7 +564,7 @@ pub(super) async fn service_submit_conversation_prompt(
         session_id,
         &workspace_path,
     )?;
-    webui_trace(
+    webui_submit_trace(
         "submit_prompt_precheck_plan_ready",
         format!(
             "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
@@ -532,24 +574,16 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(precheck_plan_started_at)
         ),
     );
-    let store_emit_started_at = current_unix_millis_value();
-    let mut workbench = store_and_emit_workbench_snapshot_preserving_subagent_navigation(
-        &app,
+    let precheck_workspace_commit_started_at = current_unix_millis_value();
+    store_workspace_snapshot_without_workbench_rebuild(
         &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
         workspace_snapshot,
-        &logs,
     )?;
-    webui_trace(
-        "submit_prompt_workbench_emitted",
+    webui_submit_trace(
+        "submit_prompt_precheck_workspace_committed",
         format!(
             "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(store_emit_started_at)
+            current_unix_millis_value().saturating_sub(precheck_workspace_commit_started_at)
         ),
     );
     let state_for_persist = state.clone();
@@ -573,21 +607,27 @@ pub(super) async fn service_submit_conversation_prompt(
     });
     let service_state = state.clone();
     let precheck_dispatch_started_at = current_unix_millis_value();
-    if start_webui_precheck_or_continue(
+    let precheck_started = start_webui_precheck_or_continue(
         &app,
         &service_state,
         &controller_runtime,
         &agent_runtime,
         precheck_start,
         precheck_plan,
-    )? {
-        workbench = current_workbench_snapshot_from_state(&state)?;
-    }
-    webui_trace(
+    )?;
+    let workbench = current_workbench_snapshot_from_state(&state)?;
+    webui_submit_trace(
         "submit_prompt_precheck_dispatch_returned",
         format!(
-            "session={session_id} elapsed_ms={}",
+            "session={session_id} started={precheck_started} elapsed_ms={}",
             current_unix_millis_value().saturating_sub(precheck_dispatch_started_at)
+        ),
+    );
+    webui_submit_trace(
+        "submit_prompt_returning",
+        format!(
+            "session={session_id} elapsed_ms_since_received={}",
+            current_unix_millis_value().saturating_sub(submit_total_started_at)
         ),
     );
     Ok(workbench)

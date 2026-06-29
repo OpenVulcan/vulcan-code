@@ -110,7 +110,7 @@ export interface RuntimeCue {
 export interface StatusbarRuntimeActivity {
   // Stable activity family used to pick the footer icon.
   // 用于选择底部栏图标的稳定活动类型。
-  kind: "tool" | "subagent";
+  kind: "tool";
   // Localized status text.
   // 本地化状态文本。
   text: string;
