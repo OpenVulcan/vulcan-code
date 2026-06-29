@@ -25,6 +25,7 @@ import {
   toolExecutionIdentifier,
   toolExecutionMediaAttachments,
   toolExecutionName,
+  toolExecutionSubagentLabel,
   toolExecutionSummary,
 } from "./conversation-tool-execution-model";
 import type {
@@ -77,9 +78,6 @@ export function ToolExecutionBlock(props: {
   // Records one tool presentation expansion state change.
   // 记录一次工具展示展开状态变化。
   onToolPresentationExpandedChange: (presentationId: string, expanded: boolean) => void;
-  // Subagent panel opener.
-  // 子代理面板打开器。
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   // Loads one hidden tool-detail record.
   // 加载单条隐藏工具详情记录。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -101,6 +99,7 @@ export function ToolExecutionBlock(props: {
 
   const summary = toolExecutionSummary(props.blocks, props.sessionRunning, t);
   const toolName = toolExecutionName(props.blocks);
+  const subagentLabel = toolExecutionSubagentLabel(props.blocks, t);
   const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
   const taskSessionId = props.blocks.find((block) => block.taskSessionId)?.taskSessionId ?? null;
@@ -141,7 +140,9 @@ export function ToolExecutionBlock(props: {
   );
   const displayedMediaAttachments = mergeGeneratedMediaAttachments(mediaAttachments, hydratedMediaAttachments);
   const metadata = [
-    ...(toolName ? [[t("conversation.metadata.tool"), toolName] as [string, string]] : []),
+    ...(subagentLabel
+      ? [[displayState === "running" ? t("conversation.subagent.calling") : t("conversation.subagent.call"), subagentLabel] as [string, string]]
+      : toolName ? [[t("conversation.metadata.tool"), toolName] as [string, string]] : []),
     ...(identifier ? [[t("conversation.metadata.identifier"), identifier] as [string, string]] : []),
     ...(errorPreview ? [[t("conversation.metadata.error"), errorPreview] as [string, string]] : []),
     [t("conversation.metadata.status"), toolDisplayStateLabel(displayState, t)] as [string, string],
@@ -179,8 +180,8 @@ export function ToolExecutionBlock(props: {
       mediaAttachments: displayedMediaAttachments,
     });
   };
-  // openDetail prefers the routed subagent panel when this tool row represents a child task.
-  // openDetail 在工具行代表子任务时优先打开已路由子代理面板。
+  // openDetail always opens inline tool details; subagent side panels are only opened from the floating session tool panel.
+  // openDetail 始终打开内联工具详情；子代理右侧面板只允许从浮动会话工具面板打开。
   const openDetail = () => {
     props.onTrace?.("tool.open", {
       toolName,
@@ -189,20 +190,6 @@ export function ToolExecutionBlock(props: {
       parentConversationId: props.parentConversationId,
       blockKinds: props.blocks.map((block) => block.kind),
     });
-    if (props.parentConversationId && taskSessionId) {
-      void props.onOpenSubagentPanel(props.parentConversationId, taskSessionId).then((opened) => {
-        props.onTrace?.("tool.open_subagent_result", {
-          toolName,
-          taskSessionId,
-          opened,
-          parentConversationId: props.parentConversationId,
-        });
-        if (!opened) {
-          openFallbackDetail();
-        }
-      });
-      return;
-    }
     openFallbackDetail();
   };
 

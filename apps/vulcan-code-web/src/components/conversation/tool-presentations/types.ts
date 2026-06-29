@@ -221,6 +221,76 @@ export interface AskQuestionPresentationItem {
   answered: boolean;
 }
 
+// SubagentOrchestrationPresentation describes one inline subagent orchestration display.
+// SubagentOrchestrationPresentation 描述一条内联子代理调度展示。
+export interface SubagentOrchestrationPresentation {
+  // Discriminator for subagent orchestration cards.
+  // 子代理调度卡片的判别字段。
+  kind: "subagent_orchestration";
+  // Stable id used for expansion state across virtualized remounts.
+  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  id: string;
+  // Current compact display state.
+  // 当前紧凑展示状态。
+  state: ToolPresentationDisplayState;
+  // Hidden detail reference used to hydrate full collected results.
+  // 用于补全完整收集结果的隐藏详情引用。
+  detailRef?: ConversationDetailRef;
+  // Normalized orchestration operation.
+  // 规范化调度操作类型。
+  operation: "create" | "collect" | "message" | "followup" | "control";
+  // Compact title shown in the row.
+  // 紧凑行中展示的标题。
+  title: string;
+  // Optional direct target task name.
+  // 可选的直接目标任务名。
+  target?: string | null;
+  // Original prompt or message text for this one call.
+  // 本次调用的原始提示词或消息文本。
+  prompt?: string | null;
+  // Effective prompt used by a resumed/follow-up task.
+  // 续跑或跟进任务实际执行的提示词。
+  effectivePrompt?: string | null;
+  // Final result text for this one call when available.
+  // 本次调用可用时的最终返回文本。
+  result?: string | null;
+  // Optional queue flag for message/follow-up tools.
+  // 消息或跟进工具的可选排队标记。
+  queued?: boolean | null;
+  // Optional trigger-turn flag for follow-up tools.
+  // 跟进工具的可选触发继续执行标记。
+  triggerTurn?: boolean | null;
+  // Optional note returned by the runtime.
+  // 运行时返回的可选说明。
+  note?: string | null;
+  // Collected child-agent results.
+  // 已收集的子代理结果。
+  agents: SubagentOrchestrationAgent[];
+  // Stopped task session ids from control calls.
+  // 控制调用返回的已停止任务会话标识。
+  stoppedTaskIds: string[];
+  // Stopped task count reported by control calls.
+  // 控制调用返回的已停止任务数量。
+  stoppedCount: number;
+}
+
+// SubagentOrchestrationAgent describes one collected child-agent row.
+// SubagentOrchestrationAgent 描述一条已收集子代理行。
+export interface SubagentOrchestrationAgent {
+  // Stable row id.
+  // 稳定行标识。
+  id: string;
+  // Human-visible agent name.
+  // 面向人的代理名称。
+  name: string;
+  // Runtime status text.
+  // 运行时状态文本。
+  status: string;
+  // Optional result summary.
+  // 可选结果摘要。
+  result?: string | null;
+}
+
 // ToolPresentation is the union of all recognized custom tool displays.
 // ToolPresentation 是所有已识别自定义工具展示的联合类型。
-export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | AskQuestionPresentation;
+export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | AskQuestionPresentation | SubagentOrchestrationPresentation;

@@ -41,9 +41,12 @@ export interface ToolExecutionConversationBlock {
   // Optional command-session id for display fallback.
   // 用于展示兜底的可选命令会话标识。
   commandSessionId?: string;
-  // Optional routed subagent task-session id.
-  // 可选的已路由子代理任务会话标识。
+  // Optional stable subagent task-session id for display metadata.
+  // 用于展示元数据的可选稳定子代理任务会话标识。
   taskSessionId?: string;
+  // Optional visible child-agent name resolved from subagent tool metadata.
+  // 从子代理工具元数据解析出的可选可见子代理名称。
+  subagentName?: string;
   // Raw metadata retained from the service transcript record.
   // 从服务转录记录保留的原始元数据。
   rawMetadata?: unknown;

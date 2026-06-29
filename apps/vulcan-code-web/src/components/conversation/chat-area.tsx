@@ -124,7 +124,7 @@ export function ChatArea(props: ChatAreaProps) {
     }
     props.onSelectConversation(conversationId);
   }, [props.onSelectConversation, props.workbench.archivedConversations, props.workbench.conversations, t]);
-  const activeSurfaceConversationId = subagentNavigation?.activeConversationId ?? props.selectedConversationId;
+  const activeSurfaceConversationId = props.selectedConversationId;
   // renderedSurfaceConversationIdRef tracks the surface currently represented by the shared scroll element.
   // renderedSurfaceConversationIdRef 跟踪当前共享滚动元素代表的界面。
   const renderedSurfaceConversationIdRef = React.useRef<string | null>(activeSurfaceConversationId ?? null);
@@ -164,23 +164,14 @@ export function ChatArea(props: ChatAreaProps) {
   // scrollRestoreGuardRef prevents transient restore measurements from overwriting tail-pinned memory.
   // scrollRestoreGuardRef 防止恢复过程中的临时测量覆盖贴底记忆。
   const scrollRestoreGuardRef = React.useRef<{ surfaceId: string; wasAtBottom: boolean } | null>(null);
-  const activeSubagentTask = subagentNavigation?.tasks?.find((task) => task.isActive) ?? null;
-  const surfaceConversation = activeSubagentTask
-    ? {
-      id: activeSubagentTask.taskId,
-      title: activeSubagentTask.label,
-      status: activeSubagentTask.isRunning ? "running" : activeSubagentTask.runState,
-      runPhase: activeSubagentTask.isRunning ? "requesting" : activeSubagentTask.runState,
-      projectId: selectedConversation?.projectId ?? null,
-    }
-    : selectedConversation;
+  const surfaceConversation = selectedConversation;
   const messages = React.useMemo(
     () => props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId),
     [activeSurfaceConversationId, props.workbench.messages],
   );
   // renderItems stores parsed transcript rows for this active surface.
   // renderItems 保存当前活动界面的已解析转录行。
-  const renderItems = React.useMemo(() => projectConversationRenderItems(messages), [messages]);
+  const renderItems = React.useMemo(() => projectConversationRenderItems(messages, t), [messages, t]);
   const activeConversationHydration = props.conversationHydration?.sessionId === activeSurfaceConversationId
     ? props.conversationHydration
     : null;
@@ -199,7 +190,7 @@ export function ChatArea(props: ChatAreaProps) {
   const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? t("conversation.unlinkedProject");
   const isEmptyConversation = Boolean(
     props.selectedDraftConversation
-      || (!activeSubagentTask && selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
+      || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
   );
   // emptyPromptVisible keeps the empty prompt mounted long enough to fade out after first submit.
   // emptyPromptVisible 让空会话提示在首次提交后保留足够时间完成淡出。
@@ -242,8 +233,7 @@ export function ChatArea(props: ChatAreaProps) {
   // suppressSubagentOnlyMainCue keeps delegated work in the footer instead of the main request cue.
   // suppressSubagentOnlyMainCue 将纯子代理工作保留在底部栏，不显示为主窗口请求提示。
   const suppressSubagentOnlyMainCue = hasRunningSubagents
-    && (Boolean(activeSubagentTask?.isRunning)
-      || normalizedSessionRunPhase(surfaceConversation?.runPhase) === "toolrunning");
+    && normalizedSessionRunPhase(surfaceConversation?.runPhase) === "toolrunning";
   const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
     ? null
     : conversationRuntimeCue(surfaceConversation, renderItems, t);
@@ -251,7 +241,7 @@ export function ChatArea(props: ChatAreaProps) {
   // pendingPlanArtifact tracks the current submit_plan artifact that still requires a user decision.
   // pendingPlanArtifact 跟踪当前仍需要用户决策的 submit_plan 计划产物。
   const pendingPlanArtifact = React.useMemo(() => {
-    const artifact = !activeSubagentTask && !isEmptyConversation
+    const artifact = !isEmptyConversation
       ? props.workbench.sessionPlanMode?.artifact ?? null
       : null;
     if (!artifact) {
@@ -267,7 +257,7 @@ export function ChatArea(props: ChatAreaProps) {
       content,
       updatedAt: artifact.updatedAt,
     };
-  }, [activeSubagentTask, isEmptyConversation, props.workbench.sessionPlanMode?.artifact]);
+  }, [isEmptyConversation, props.workbench.sessionPlanMode?.artifact]);
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
   const conversationStreamSignature = React.useMemo(
@@ -278,9 +268,6 @@ export function ChatArea(props: ChatAreaProps) {
     const liveSurfaceIds = new Set(props.workbench.conversations.map((conversation) => conversation.id));
     const navigation = props.workbench.subagentNavigation;
     if (navigation) {
-      if (navigation.activeConversationId) {
-        liveSurfaceIds.add(navigation.activeConversationId);
-      }
       for (const task of navigation.tasks ?? []) {
         liveSurfaceIds.add(task.taskId);
       }
@@ -972,7 +959,7 @@ export function ChatArea(props: ChatAreaProps) {
         hasMoreHistory={props.conversationHasMoreHistory}
         historyLoading={props.conversationHistoryLoading}
         onLoadMoreHistory={props.onLoadConversationHistory}
-        parentConversationId={activeSurfaceConversationId ?? null}
+        parentConversationId={props.selectedConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
         commandSessions={props.workbench.commandSessions ?? []}
         pendingPlanArtifact={pendingPlanArtifact}

@@ -17,25 +17,14 @@ export {
   workbenchDeltaConversationId,
 } from "@/state/workbench-message-merge";
 
-// SubagentRoutePreference describes the WebUI-only visible route selected by the user.
-// SubagentRoutePreference 描述用户选择的仅 WebUI 可见子代理路由。
-export interface SubagentRoutePreference {
-  // Parent conversation that owns the displayed subagent navigation.
-  // 拥有所显示子代理导航的父会话。
-  parentConversationId: string;
-  // Child task id to display, or null when the parent conversation is displayed.
-  // 要显示的子任务标识；为 null 时显示父会话。
-  taskId: string | null;
-}
-
-// InflightSubagentOpenRequest tracks one backend route command that duplicate clicks can share.
-// InflightSubagentOpenRequest 跟踪一条可被重复点击复用的后端路由命令。
+// InflightSubagentOpenRequest tracks one backend transcript-load command that duplicate clicks can share.
+// InflightSubagentOpenRequest 跟踪一条可被重复点击复用的后端转录加载命令。
 export interface InflightSubagentOpenRequest {
   // Stable parent/task route key for request coalescing.
-  // 用于请求合并的稳定父级/任务路由键。
+  // 用于请求合并的稳定父级/任务键。
   key: string;
-  // Backend command promise for the route change.
-  // 路由变更对应的后端命令 Promise。
+  // Backend command promise for the transcript load.
+  // 转录加载对应的后端命令 Promise。
   promise: Promise<WorkbenchSnapshot | null>;
 }
 
@@ -179,16 +168,19 @@ export function mergeConversationMessagesWithSubagentSurfaceMessageCache(
   messages: ConversationMessage[],
   cache: SubagentSurfaceMessageCache,
 ): WorkbenchSnapshot {
-  if (workbench.subagentNavigation?.tasks?.some((task) => task.taskId === conversationId)) {
+  if (workbench.subagentNavigation?.tasks?.some((task) => task.taskId === conversationId) || cache.has(conversationId)) {
     cache.set(conversationId, messages);
   }
   return injectCachedSubagentSurfaceMessages(mergeConversationMessages(workbench, conversationId, messages), cache);
 }
 
-// rememberSubagentSurfaceMessages records message windows belonging to the current subagent task list.
-// rememberSubagentSurfaceMessages 记录属于当前子代理任务列表的消息窗口。
+// rememberSubagentSurfaceMessages records message windows for current tasks and already opened cached child tabs.
+// rememberSubagentSurfaceMessages 记录当前任务与已打开缓存子页签的消息窗口。
 function rememberSubagentSurfaceMessages(cache: SubagentSurfaceMessageCache, workbench: WorkbenchSnapshot): void {
-  const taskIds = new Set(workbench.subagentNavigation?.tasks?.map((task) => task.taskId) ?? []);
+  const taskIds = new Set([
+    ...(workbench.subagentNavigation?.tasks?.map((task) => task.taskId) ?? []),
+    ...cache.keys(),
+  ]);
   if (taskIds.size === 0) {
     return;
   }
@@ -206,17 +198,13 @@ function rememberSubagentSurfaceMessages(cache: SubagentSurfaceMessageCache, wor
   }
 }
 
-// injectCachedSubagentSurfaceMessages reattaches every cached child message window for the visible parent task list.
-// injectCachedSubagentSurfaceMessages 为当前可见父任务列表重新挂回所有已缓存的子代理消息窗口。
+// injectCachedSubagentSurfaceMessages reattaches every cached child message window independent of the active floating list.
+// injectCachedSubagentSurfaceMessages 重新挂回所有已缓存子代理消息窗口，不依赖当前浮动列表。
 export function injectCachedSubagentSurfaceMessages(
   workbench: WorkbenchSnapshot,
   cache: SubagentSurfaceMessageCache,
 ): WorkbenchSnapshot {
-  const taskIdsWithCache = new Set(
-    (workbench.subagentNavigation?.tasks ?? [])
-      .map((task) => task.taskId)
-      .filter((taskId) => cache.has(taskId)),
-  );
+  const taskIdsWithCache = new Set(cache.keys());
   if (taskIdsWithCache.size === 0) {
     return workbench;
   }
@@ -234,8 +222,8 @@ function hasCachedSubagentSurfaceMessages(cache: SubagentSurfaceMessageCache, ta
   return (cache.get(taskId)?.length ?? 0) > 0;
 }
 
-// canOpenCachedSubagentSurface verifies that cached messages and the current navigation can both satisfy a local route switch.
-// canOpenCachedSubagentSurface 校验缓存消息与当前导航是否都足以完成本地路由切换。
+// canOpenCachedSubagentSurface verifies that cached messages and current navigation can satisfy a side-panel transcript open.
+// canOpenCachedSubagentSurface 校验缓存消息与当前导航是否足以完成侧栏转录打开。
 export function canOpenCachedSubagentSurface(
   workbench: WorkbenchSnapshot,
   cache: SubagentSurfaceMessageCache,
@@ -243,69 +231,7 @@ export function canOpenCachedSubagentSurface(
   taskId: string,
 ): boolean {
   return hasCachedSubagentSurfaceMessages(cache, taskId)
-    && workbench.subagentNavigation?.parentConversationId === parentConversationId
-    && Boolean(workbench.subagentNavigation.tasks?.some((task) => task.taskId === taskId));
-}
-
-// applySubagentRoutePreference keeps late backend snapshots from overriding the user's latest WebUI route choice.
-// applySubagentRoutePreference 防止迟到的后端快照覆盖用户最后选择的 WebUI 路由。
-export function applySubagentRoutePreference(workbench: WorkbenchSnapshot, preference: SubagentRoutePreference | null): WorkbenchSnapshot {
-  if (!preference || workbench.subagentNavigation?.parentConversationId !== preference.parentConversationId) {
-    return workbench;
-  }
-  if (!preference.taskId) {
-    return closeSubagentSurfaceForConversation(workbench, preference.parentConversationId);
-  }
-  return openSubagentSurfaceForConversation(workbench, preference.parentConversationId, preference.taskId);
-}
-
-// openSubagentSurfaceForConversation switches a known child task into view without changing backend execution state.
-// openSubagentSurfaceForConversation 在不改变后端执行状态的情况下将已知子任务切入视图。
-export function openSubagentSurfaceForConversation(
-  workbench: WorkbenchSnapshot,
-  parentConversationId: string,
-  taskId: string,
-): WorkbenchSnapshot {
-  const navigation = workbench.subagentNavigation;
-  if (!navigation || navigation.parentConversationId !== parentConversationId) {
-    return workbench;
-  }
-  if (!navigation.tasks?.some((task) => task.taskId === taskId)) {
-    return workbench;
-  }
-  return {
-    ...workbench,
-    subagentNavigation: {
-      ...navigation,
-      activeConversationId: taskId,
-      activeTaskId: taskId,
-      tasks: navigation.tasks.map((task) => ({ ...task, isActive: task.taskId === taskId })),
-    },
-  };
-}
-
-// closeSubagentSurfaceForConversation returns the visible route to the selected parent conversation while preserving its task list.
-// closeSubagentSurfaceForConversation 将可见路由返回到选中的父会话，同时保留该父会话的子任务列表。
-export function closeSubagentSurfaceForConversation(workbench: WorkbenchSnapshot, conversationId: string): WorkbenchSnapshot {
-  const navigation = workbench.subagentNavigation;
-  if (!navigation) {
-    return workbench;
-  }
-  if (navigation.parentConversationId !== conversationId) {
-    return {
-      ...workbench,
-      subagentNavigation: null,
-    };
-  }
-  return {
-    ...workbench,
-    subagentNavigation: {
-      ...navigation,
-      activeConversationId: conversationId,
-      activeTaskId: null,
-      tasks: navigation.tasks?.map((task) => ({ ...task, isActive: false })),
-    },
-  };
+    && workbench.subagentNavigation?.parentConversationId === parentConversationId;
 }
 
 // mergeConversationSummaries preserves only optimistic local read state while trusting backend lifecycle state.

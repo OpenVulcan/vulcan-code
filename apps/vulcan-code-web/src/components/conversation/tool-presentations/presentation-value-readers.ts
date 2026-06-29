@@ -25,7 +25,7 @@ export function fixedToolName(blocks: ToolExecutionConversationBlock[]): string 
 // fixedHostKind 读取运行时 metadata 桥保留的顶层宿主结果类型。
 export function fixedHostKind(blocks: ToolExecutionConversationBlock[]): string | null {
   return blocks
-    .map((block) => metadataString(block.rawMetadata, ["kind", "host_result.kind"]))
+    .map((block) => metadataString(block.rawMetadata, ["kind", "host_result.kind", "hostResult.kind"]))
     .find(Boolean)
     ?? null;
 }
@@ -34,7 +34,7 @@ export function fixedHostKind(blocks: ToolExecutionConversationBlock[]): string 
 // fixedHostPayload 从 WebUI metadata 桥读取稳定的宿主结果载荷。
 export function fixedHostPayload(blocks: ToolExecutionConversationBlock[]): Record<string, unknown> | null {
   return blocks
-    .map((block) => objectValue(metadataValue(block.rawMetadata, ["host_result.payload", "payload"])))
+    .map((block) => objectValue(metadataValue(block.rawMetadata, ["host_result.payload", "hostResult.payload", "payload"])))
     .find(Boolean)
     ?? null;
 }

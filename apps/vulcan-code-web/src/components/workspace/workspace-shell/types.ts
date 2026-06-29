@@ -201,11 +201,11 @@ export interface WorkspaceShellProps {
   // Stops the selected conversation run.
   // 停止当前选中会话运行。
   onStopConversationRun: () => Promise<boolean>;
-  // Opens a routed subagent transcript panel.
-  // 打开已路由的子代理转录面板。
+  // Opens a subagent transcript in the right context panel.
+  // 在右侧上下文面板中打开子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
-  // Closes the routed subagent transcript panel.
-  // 关闭已路由的子代理转录面板。
+  // Closes the legacy backend subagent panel state when a caller still requests it.
+  // 在仍有调用方请求时关闭旧后端子代理面板状态。
   onCloseSubagentPanel: () => Promise<void>;
   // Stops one subagent task.
   // 停止一个子代理任务。

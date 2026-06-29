@@ -14,6 +14,10 @@ import {
   hydrateCommandExecutionPresentation,
   resolveCommandExecutionPresentation,
 } from "./tool-presentations/command-execution-presentation";
+import {
+  hydrateSubagentOrchestrationPresentation,
+  resolveSubagentOrchestrationPresentation,
+} from "./tool-presentations/subagent-orchestration-presentation";
 import type {
   ToolPresentation,
   ToolPresentationDisplayState,
@@ -28,6 +32,8 @@ export type {
   FileChangeFilePresentation,
   FileChangeOperation,
   FileChangePresentation,
+  SubagentOrchestrationAgent,
+  SubagentOrchestrationPresentation,
   ToolPresentation,
   ToolPresentationDisplayState,
   ToolPresentationResolveOptions,
@@ -36,6 +42,7 @@ export {
   askQuestionStatusLabel,
   commandPresentationStatusLabel,
   fileChangeStatusLabel,
+  hydrateSubagentOrchestrationPresentation,
   hydrateAskQuestionPresentation,
   hydrateCommandExecutionPresentation,
 };
@@ -48,7 +55,8 @@ export function resolveToolPresentation(
   detailRef?: ConversationDetailRef,
   options: ToolPresentationResolveOptions = {},
 ): ToolPresentation | null {
-  return resolveAskQuestionPresentation(blocks, displayState, detailRef)
+  return resolveSubagentOrchestrationPresentation(blocks, displayState, detailRef)
+    ?? resolveAskQuestionPresentation(blocks, displayState, detailRef)
     ?? resolveFileChangePresentation(blocks, displayState, options)
     ?? resolveCommandExecutionPresentation(blocks, displayState, detailRef, options);
 }

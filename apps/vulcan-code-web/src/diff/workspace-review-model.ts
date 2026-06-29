@@ -56,14 +56,10 @@ export interface WorkspaceReviewConversationDiffSource {
   source: DiffPanelSnapshot["source"];
 }
 
-// activeWorkbenchSurfaceId returns the currently visible parent or subagent conversation id.
-// activeWorkbenchSurfaceId 返回当前可见的父会话或子代理会话标识。
+// activeWorkbenchSurfaceId returns the selected parent conversation id used by workspace tools.
+// activeWorkbenchSurfaceId 返回工作区工具使用的当前选中父会话标识。
 export function activeWorkbenchSurfaceId(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): string | null {
-  const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
-  if (workbench.subagentNavigation?.parentConversationId === parentConversationId) {
-    return workbench.subagentNavigation.activeConversationId ?? parentConversationId;
-  }
-  return parentConversationId;
+  return selectedConversationId ?? workbench.selectedConversationId ?? null;
 }
 
 // selectedConversationProjectId returns the explicit project id for the currently visible conversation or draft.

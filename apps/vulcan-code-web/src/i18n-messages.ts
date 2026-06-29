@@ -172,7 +172,9 @@ export type TranslationKey =
   | "conversation.metadata.returned"
   | "conversation.stats.providerCalls"
   | "conversation.stats.toolCalls"
+  | "conversation.stats.totalTokens"
   | "conversation.stats.cachedTokens"
+  | "conversation.stats.outputSpeed"
   | "conversation.subagent.stopTask"
   | "conversation.process.header"
   | "conversation.process.stoppedAfter"
@@ -648,14 +650,44 @@ export type TranslationKey =
   | "conversation.userPrompt.collapse"
   | "conversation.userPrompt.copy"
   | "conversation.userPrompt.edit"
-  | "conversation.subagent.return"
-  | "conversation.subagent.runningCount"
   | "conversation.subagent.schedule"
-  | "conversation.subagent.switch"
+  | "conversation.subagent.call"
+  | "conversation.subagent.calling"
   | "conversation.subagent.state.running"
   | "conversation.subagent.state.stopped"
   | "conversation.subagent.state.failed"
   | "conversation.subagent.state.completed"
+  | "conversation.subagent.detail.createdTask"
+  | "conversation.subagent.detail.name"
+  | "conversation.subagent.detail.description"
+  | "conversation.subagent.detail.prompt"
+  | "conversation.subagent.detail.effectivePrompt"
+  | "conversation.subagent.detail.empty"
+  | "conversation.subagent.detail.collection"
+  | "conversation.subagent.detail.count"
+  | "conversation.subagent.detail.completed"
+  | "conversation.subagent.detail.timeout"
+  | "conversation.subagent.detail.noAgents"
+  | "conversation.subagent.detail.agent"
+  | "conversation.subagent.detail.status"
+  | "conversation.subagent.detail.unknown"
+  | "conversation.subagent.detail.result"
+  | "conversation.subagent.detail.noResult"
+  | "conversation.subagent.detail.messageDispatch"
+  | "conversation.subagent.detail.target"
+  | "conversation.subagent.detail.queued"
+  | "conversation.subagent.detail.triggerTurn"
+  | "conversation.subagent.detail.targetSessions"
+  | "conversation.subagent.detail.note"
+  | "conversation.subagent.detail.control"
+  | "conversation.subagent.detail.stoppedCount"
+  | "conversation.subagent.detail.stoppedSessions"
+  | "conversation.subagent.detail.yes"
+  | "conversation.subagent.detail.no"
+  | "conversation.subagent.stopConfirmTitle"
+  | "conversation.subagent.stopConfirmDescription"
+  | "conversation.subagent.stopConfirm"
+  | "conversation.subagent.stopping"
   | "conversation.diff.loadingPanel"
   | "conversation.diff.parsingWorker"
   | "conversation.diff.parseFailed"
@@ -1232,7 +1264,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.metadata.returned": "已返回",
     "conversation.stats.providerCalls": "{count} 次调用",
     "conversation.stats.toolCalls": "{count} 个工具",
+    "conversation.stats.totalTokens": "{count} tokens",
     "conversation.stats.cachedTokens": "缓存命中 {count}",
+    "conversation.stats.outputSpeed": "{speed}/s",
     "conversation.subagent.stopTask": "停止子代理 {task}",
     "conversation.process.header": "处理过程",
     "conversation.process.stoppedAfter": "你在 {duration} 后停止了",
@@ -1708,14 +1742,44 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.userPrompt.collapse": "收起",
     "conversation.userPrompt.copy": "复制用户提示词",
     "conversation.userPrompt.edit": "编辑用户提示词",
-    "conversation.subagent.return": "返回主会话",
-    "conversation.subagent.runningCount": "{count} 个子代理正在运行",
     "conversation.subagent.schedule": "子代理调度",
-    "conversation.subagent.switch": "子代理调度切换",
+    "conversation.subagent.call": "调用子代理",
+    "conversation.subagent.calling": "正在调用子代理",
     "conversation.subagent.state.running": "运行中",
     "conversation.subagent.state.stopped": "已停止",
     "conversation.subagent.state.failed": "失败",
     "conversation.subagent.state.completed": "已完成",
+    "conversation.subagent.detail.createdTask": "已创建子代理任务",
+    "conversation.subagent.detail.name": "名称",
+    "conversation.subagent.detail.description": "描述",
+    "conversation.subagent.detail.prompt": "提示词",
+    "conversation.subagent.detail.effectivePrompt": "执行提示词",
+    "conversation.subagent.detail.empty": "无内容。",
+    "conversation.subagent.detail.collection": "子代理收集结果",
+    "conversation.subagent.detail.count": "数量",
+    "conversation.subagent.detail.completed": "是否完成",
+    "conversation.subagent.detail.timeout": "超时时间",
+    "conversation.subagent.detail.noAgents": "没有返回子代理结果。",
+    "conversation.subagent.detail.agent": "子代理",
+    "conversation.subagent.detail.status": "状态",
+    "conversation.subagent.detail.unknown": "未知",
+    "conversation.subagent.detail.result": "返回内容",
+    "conversation.subagent.detail.noResult": "没有返回内容。",
+    "conversation.subagent.detail.messageDispatch": "子代理消息调度",
+    "conversation.subagent.detail.target": "目标",
+    "conversation.subagent.detail.queued": "是否排队",
+    "conversation.subagent.detail.triggerTurn": "是否触发继续执行",
+    "conversation.subagent.detail.targetSessions": "目标会话",
+    "conversation.subagent.detail.note": "说明",
+    "conversation.subagent.detail.control": "子代理控制",
+    "conversation.subagent.detail.stoppedCount": "已停止数量",
+    "conversation.subagent.detail.stoppedSessions": "已停止会话",
+    "conversation.subagent.detail.yes": "是",
+    "conversation.subagent.detail.no": "否",
+    "conversation.subagent.stopConfirmTitle": "确认终止子代理？",
+    "conversation.subagent.stopConfirmDescription": "将单独终止「{task}」的当前工作，不会停止主会话或其他子代理。",
+    "conversation.subagent.stopConfirm": "确认终止",
+    "conversation.subagent.stopping": "正在终止",
     "conversation.diff.loadingPanel": "正在加载 Git Diff 审核面板。",
     "conversation.diff.parsingWorker": "正在通过 Worker 解析 diff 内容。",
     "conversation.diff.parseFailed": "Diff 解析失败：{error}",
@@ -2289,7 +2353,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.metadata.returned": "Returned",
     "conversation.stats.providerCalls": "{count} calls",
     "conversation.stats.toolCalls": "{count} tools",
+    "conversation.stats.totalTokens": "{count} tokens",
     "conversation.stats.cachedTokens": "Cache hit {count}",
+    "conversation.stats.outputSpeed": "{speed}/s",
     "conversation.subagent.stopTask": "Stop subagent {task}",
     "conversation.process.header": "Process",
     "conversation.process.stoppedAfter": "You stopped after {duration}",
@@ -2765,14 +2831,44 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.userPrompt.collapse": "Collapse",
     "conversation.userPrompt.copy": "Copy user prompt",
     "conversation.userPrompt.edit": "Edit user prompt",
-    "conversation.subagent.return": "Return to main conversation",
-    "conversation.subagent.runningCount": "{count} subagents running",
     "conversation.subagent.schedule": "Subagent schedule",
-    "conversation.subagent.switch": "Switch subagent schedule",
+    "conversation.subagent.call": "Subagent call",
+    "conversation.subagent.calling": "Calling subagent",
     "conversation.subagent.state.running": "Running",
     "conversation.subagent.state.stopped": "Stopped",
     "conversation.subagent.state.failed": "Failed",
     "conversation.subagent.state.completed": "Completed",
+    "conversation.subagent.detail.createdTask": "Created subagent task",
+    "conversation.subagent.detail.name": "Name",
+    "conversation.subagent.detail.description": "Description",
+    "conversation.subagent.detail.prompt": "Prompt",
+    "conversation.subagent.detail.effectivePrompt": "Effective prompt",
+    "conversation.subagent.detail.empty": "No content.",
+    "conversation.subagent.detail.collection": "Subagent collection",
+    "conversation.subagent.detail.count": "Count",
+    "conversation.subagent.detail.completed": "Completed",
+    "conversation.subagent.detail.timeout": "Timeout",
+    "conversation.subagent.detail.noAgents": "No subagent result was returned.",
+    "conversation.subagent.detail.agent": "Agent",
+    "conversation.subagent.detail.status": "Status",
+    "conversation.subagent.detail.unknown": "Unknown",
+    "conversation.subagent.detail.result": "Result",
+    "conversation.subagent.detail.noResult": "No result content.",
+    "conversation.subagent.detail.messageDispatch": "Subagent message dispatch",
+    "conversation.subagent.detail.target": "Target",
+    "conversation.subagent.detail.queued": "Queued",
+    "conversation.subagent.detail.triggerTurn": "Trigger turn",
+    "conversation.subagent.detail.targetSessions": "Target sessions",
+    "conversation.subagent.detail.note": "Note",
+    "conversation.subagent.detail.control": "Subagent control",
+    "conversation.subagent.detail.stoppedCount": "Stopped count",
+    "conversation.subagent.detail.stoppedSessions": "Stopped sessions",
+    "conversation.subagent.detail.yes": "Yes",
+    "conversation.subagent.detail.no": "No",
+    "conversation.subagent.stopConfirmTitle": "Stop this subagent?",
+    "conversation.subagent.stopConfirmDescription": "This will stop only \"{task}\" and will not stop the main conversation or other subagents.",
+    "conversation.subagent.stopConfirm": "Stop subagent",
+    "conversation.subagent.stopping": "Stopping",
     "conversation.diff.loadingPanel": "Loading the Git Diff review panel.",
     "conversation.diff.parsingWorker": "Parsing diff content in a Worker.",
     "conversation.diff.parseFailed": "Diff parse failed: {error}",

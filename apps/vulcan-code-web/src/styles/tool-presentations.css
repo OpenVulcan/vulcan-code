@@ -277,6 +277,127 @@
   pointer-events: none;
 }
 
+.tool-presentation-card.subagent-orchestration {
+  gap: 6px;
+}
+
+.subagent-orchestration-summary {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+
+.subagent-orchestration-icon {
+  color: var(--muted-foreground);
+}
+
+.subagent-orchestration-detail {
+  max-width: min(100%, 760px);
+  display: grid;
+  gap: 10px;
+  margin-left: 8px;
+  padding: 10px 0 2px 18px;
+  border-left: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+}
+
+.subagent-orchestration-meta {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.subagent-orchestration-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-orchestration-note {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.subagent-orchestration-inline-text {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.subagent-orchestration-inline-text code {
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.subagent-orchestration-block,
+.subagent-orchestration-agent {
+  display: grid;
+  gap: 6px;
+}
+
+.subagent-orchestration-block-label,
+.subagent-orchestration-agent-heading {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.subagent-orchestration-agent-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.subagent-orchestration-agent-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-orchestration-agent-heading span {
+  flex: 0 0 auto;
+}
+
+.subagent-orchestration-text {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.subagent-orchestration-empty {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.subagent-orchestration-agent-list {
+  display: grid;
+  gap: 12px;
+}
+
 .file-change-summary {
   grid-template-columns: auto auto minmax(0, 1fr) auto;
 }

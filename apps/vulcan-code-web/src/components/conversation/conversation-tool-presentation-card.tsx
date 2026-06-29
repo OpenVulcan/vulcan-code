@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  Bot,
   ChevronDown,
   ChevronRight,
   MessageCircleQuestionMark,
@@ -23,12 +24,15 @@ import {
 import {
   hydrateAskQuestionPresentation,
   hydrateCommandExecutionPresentation,
+  hydrateSubagentOrchestrationPresentation,
   type AskQuestionPresentation,
   type AskQuestionPresentationItem,
   type CommandExecutionPresentation,
   type FileChangeFilePresentation,
   type FileChangeOperation,
   type FileChangePresentation,
+  type SubagentOrchestrationAgent,
+  type SubagentOrchestrationPresentation,
   type ToolPresentation,
   type ToolPresentationDisplayState,
 } from "@/components/conversation/conversation-tool-presentations";
@@ -84,6 +88,16 @@ export function ToolPresentationCard(props: {
       />
     );
   }
+  if (props.presentation.kind === "subagent_orchestration") {
+    return (
+      <SubagentOrchestrationPresentationCard
+        expanded={props.expanded}
+        presentation={props.presentation}
+        onExpandedChange={props.onExpandedChange}
+        onLoadToolDetail={props.onLoadToolDetail}
+      />
+    );
+  }
   return null;
 }
 
@@ -94,6 +108,288 @@ const commandPresentationDetailCache = new Map<string, CommandExecutionPresentat
 // askQuestionPresentationDetailCache avoids refetching completed ask answers after virtualized remounts.
 // askQuestionPresentationDetailCache 避免虚拟滚动重挂后重复请求已完成 ask 答案。
 const askQuestionPresentationDetailCache = new Map<string, AskQuestionPresentation>();
+
+// subagentOrchestrationPresentationDetailCache avoids refetching hidden subagent collection results.
+// subagentOrchestrationPresentationDetailCache 避免重复请求隐藏子代理收集结果。
+const subagentOrchestrationPresentationDetailCache = new Map<string, SubagentOrchestrationPresentation>();
+
+// SubagentOrchestrationPresentationCard renders a compact inline subagent dispatch record.
+// SubagentOrchestrationPresentationCard 渲染紧凑的内联子代理调度记录。
+function SubagentOrchestrationPresentationCard(props: {
+  // Subagent orchestration presentation model.
+  // 子代理调度展示模型。
+  presentation: SubagentOrchestrationPresentation;
+  // Whether this row is expanded.
+  // 当前行是否展开。
+  expanded: boolean;
+  // Updates the surface-level expansion state.
+  // 更新界面级展开状态。
+  onExpandedChange: (presentationId: string, expanded: boolean) => void;
+  // Loads one hidden tool-detail record for full subagent results.
+  // 加载单条隐藏工具详情记录用于完整子代理结果。
+  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+}) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
+  const {
+    expanded,
+    onExpandedChange,
+    onLoadToolDetail,
+    presentation,
+  } = props;
+  const detailCacheKey = subagentOrchestrationPresentationDetailCacheKey(presentation);
+  const [hydratedPresentation, setHydratedPresentation] = React.useState<SubagentOrchestrationPresentation>(
+    () => detailCacheKey ? subagentOrchestrationPresentationDetailCache.get(detailCacheKey) ?? presentation : presentation,
+  );
+  React.useEffect(() => {
+    const cached = detailCacheKey ? subagentOrchestrationPresentationDetailCache.get(detailCacheKey) : undefined;
+    setHydratedPresentation(cached ?? presentation);
+  }, [detailCacheKey, presentation]);
+  React.useEffect(() => {
+    if (!expanded || !presentation.detailRef || !detailCacheKey || subagentOrchestrationPresentationDetailCache.has(detailCacheKey)) {
+      return;
+    }
+    let cancelled = false;
+    void onLoadToolDetail(presentation.detailRef)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const nextPresentation = hydrateSubagentOrchestrationPresentation(presentation, payload);
+        subagentOrchestrationPresentationDetailCache.set(detailCacheKey, nextPresentation);
+        setHydratedPresentation(nextPresentation);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          subagentOrchestrationPresentationDetailCache.set(detailCacheKey, presentation);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailCacheKey, expanded, onLoadToolDetail, presentation]);
+  const handleToggle = React.useCallback(() => {
+    dispatchConversationManualViewportInteraction();
+    onExpandedChange(presentation.id, !expanded);
+  }, [expanded, onExpandedChange, presentation.id]);
+  return (
+    <div className={cn("tool-presentation-card subagent-orchestration", expanded && "expanded")}>
+      <button
+        aria-expanded={expanded}
+        className="tool-presentation-summary subagent-orchestration-summary"
+        onClick={handleToggle}
+        title={hydratedPresentation.title}
+        type="button"
+      >
+        <Bot className="subagent-orchestration-icon" size={15} />
+        <span className="tool-presentation-state">{subagentOperationLabel(hydratedPresentation, t)}</span>
+        <span className="tool-presentation-command">{subagentSummaryText(hydratedPresentation, t)}</span>
+        {expanded ? (
+          <ChevronDown className="tool-presentation-toggle" size={15} />
+        ) : (
+          <ChevronRight className="tool-presentation-toggle" size={15} />
+        )}
+      </button>
+      <ConversationMeasuredCollapse collapseId={`subagent:${presentation.id}`} expanded={expanded}>
+        <SubagentOrchestrationDetail presentation={hydratedPresentation} t={t} />
+      </ConversationMeasuredCollapse>
+    </div>
+  );
+}
+
+// subagentOrchestrationPresentationDetailCacheKey returns a stable cache key for hidden subagent details.
+// subagentOrchestrationPresentationDetailCacheKey 返回隐藏子代理详情的稳定缓存键。
+function subagentOrchestrationPresentationDetailCacheKey(
+  // Subagent presentation model.
+  // 子代理展示模型。
+  presentation: SubagentOrchestrationPresentation,
+): string | null {
+  const detailRef = presentation.detailRef;
+  if (!detailRef) {
+    return null;
+  }
+  return [
+    detailRef.sessionId,
+    detailRef.recordId ?? "",
+    detailRef.toolCallId ?? "",
+    detailRef.seq ?? "",
+    detailRef.messageIndex ?? "",
+  ].join(":");
+}
+
+// SubagentOrchestrationDetail renders the expanded inline body without generic JSON sections.
+// SubagentOrchestrationDetail 渲染不包含通用 JSON 区块的内联展开主体。
+function SubagentOrchestrationDetail(props: {
+  // Presentation to render.
+  // 需要渲染的展示模型。
+  presentation: SubagentOrchestrationPresentation;
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string;
+}) {
+  const { presentation, t } = props;
+  if (presentation.operation === "collect") {
+    return (
+      <div className="subagent-orchestration-detail">
+        {presentation.agents.length ? (
+          <div className="subagent-orchestration-agent-list">
+            {presentation.agents.map((agent) => (
+              <SubagentOrchestrationAgentRow agent={agent} key={agent.id} t={t} />
+            ))}
+          </div>
+        ) : (
+          <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.noAgents")}</div>
+        )}
+      </div>
+    );
+  }
+  // resultText removes model-facing dispatch acknowledgements from create rows.
+  // resultText 从创建行中移除面向模型的调度确认内容。
+  const resultText = presentation.operation === "create" ? null : presentation.result ?? null;
+  // showResult controls whether model-facing dispatch acknowledgements are visible.
+  // showResult 控制是否展示面向模型的调度确认内容。
+  const showResult = Boolean(resultText);
+  // hasVisibleBody records whether the expanded area has user-facing content.
+  // hasVisibleBody 记录展开区是否存在面向用户的内容。
+  const hasVisibleBody = Boolean(presentation.prompt || presentation.effectivePrompt || showResult || presentation.operation === "control");
+  return (
+    <div className="subagent-orchestration-detail">
+      {presentation.queued !== null && presentation.queued !== undefined ? (
+        <div className="subagent-orchestration-meta">
+          <span>{t("conversation.subagent.detail.queued")}</span>
+          <strong>{presentation.queued ? t("conversation.subagent.detail.yes") : t("conversation.subagent.detail.no")}</strong>
+        </div>
+      ) : null}
+      {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
+      {presentation.prompt ? (
+        <SubagentInlineTextLine label={t("conversation.subagent.detail.prompt")} text={presentation.prompt} />
+      ) : null}
+      {presentation.effectivePrompt && presentation.effectivePrompt !== presentation.prompt ? (
+        <SubagentInlineTextLine label={t("conversation.subagent.detail.effectivePrompt")} text={presentation.effectivePrompt} />
+      ) : null}
+      {resultText ? (
+        <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={resultText} />
+      ) : null}
+      {presentation.operation === "control" ? (
+        <div className="subagent-orchestration-meta">
+          <span>{t("conversation.subagent.detail.stoppedCount")}</span>
+          <strong>{presentation.stoppedCount}</strong>
+        </div>
+      ) : null}
+      {!hasVisibleBody ? (
+        <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.empty")}</div>
+      ) : null}
+    </div>
+  );
+}
+
+// SubagentOrchestrationAgentRow renders one collected child-agent result.
+// SubagentOrchestrationAgentRow 渲染单条已收集子代理结果。
+function SubagentOrchestrationAgentRow(props: {
+  // Agent row model.
+  // 代理行模型。
+  agent: SubagentOrchestrationAgent;
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string;
+}) {
+  return (
+    <div className="subagent-orchestration-agent">
+      <div className="subagent-orchestration-agent-heading">
+        <strong>{props.agent.name}</strong>
+        <span>{props.agent.status}</span>
+      </div>
+      {props.agent.result ? (
+        <pre className="subagent-orchestration-text">{compactSubagentText(props.agent.result)}</pre>
+      ) : (
+        <div className="subagent-orchestration-empty">{props.t("conversation.subagent.detail.noResult")}</div>
+      )}
+    </div>
+  );
+}
+
+// SubagentInlineTextLine renders one unframed prompt-style line.
+// SubagentInlineTextLine 渲染一条无边框的提示词样式文本。
+function SubagentInlineTextLine(props: {
+  // Line label.
+  // 文本行标签。
+  label: string;
+  // Raw text.
+  // 原始文本。
+  text: string;
+}) {
+  return (
+    <div className="subagent-orchestration-inline-text">
+      <span>{props.label}：</span>
+      <code>{compactSubagentText(props.text)}</code>
+    </div>
+  );
+}
+
+// SubagentTextBlock renders one compact prompt or result text block.
+// SubagentTextBlock 渲染一段紧凑提示词或结果文本。
+function SubagentTextBlock(props: {
+  // Block label.
+  // 文本块标签。
+  label: string;
+  // Raw text.
+  // 原始文本。
+  text: string;
+}) {
+  return (
+    <div className="subagent-orchestration-block">
+      <div className="subagent-orchestration-block-label">{props.label}</div>
+      <pre className="subagent-orchestration-text">{compactSubagentText(props.text)}</pre>
+    </div>
+  );
+}
+
+// subagentOperationLabel returns the compact operation label.
+// subagentOperationLabel 返回紧凑操作文案。
+function subagentOperationLabel(
+  // Presentation model.
+  // 展示模型。
+  presentation: SubagentOrchestrationPresentation,
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string {
+  if (presentation.operation === "collect") return t("conversation.subagent.detail.collection");
+  if (presentation.operation === "control") return t("conversation.subagent.detail.control");
+  if (presentation.operation === "message" || presentation.operation === "followup") return t("conversation.subagent.detail.messageDispatch");
+  return presentation.state === "running" ? t("conversation.subagent.calling") : t("conversation.subagent.call");
+}
+
+// subagentSummaryText returns a terse row summary.
+// subagentSummaryText 返回简短行摘要。
+function subagentSummaryText(
+  // Presentation model.
+  // 展示模型。
+  presentation: SubagentOrchestrationPresentation,
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string {
+  if (presentation.operation === "collect") {
+    return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
+  }
+  if (presentation.operation === "control") {
+    return presentation.target ?? `${presentation.stoppedCount}`;
+  }
+  return presentation.title;
+}
+
+// compactSubagentText limits inline subagent text to keep transcript rows light.
+// compactSubagentText 限制内联子代理文本长度，让会话行保持轻量。
+function compactSubagentText(
+  // Source text.
+  // 源文本。
+  source: string,
+): string {
+  const normalized = source.trim();
+  return normalized.length > 1600 ? `${normalized.slice(0, 1600)}\n...` : normalized;
+}
 
 // FILE_CHANGE_OPERATION_LABEL_KEYS maps file-change operations and phases to checked translation keys.
 // FILE_CHANGE_OPERATION_LABEL_KEYS 将文件变更操作与阶段映射到受类型检查的翻译键。

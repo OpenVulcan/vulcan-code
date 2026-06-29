@@ -10,6 +10,7 @@ import type {
 } from "@/components/conversation/conversation-model";
 
 import { parseConversationBlocks } from "@/components/conversation/conversation-transcript-parser";
+import type { TranslationKey } from "@/i18n";
 
 export { generatedMediaAttachmentsFromToolDetailPayload } from "@/components/conversation/conversation-generated-media";
 export { parseConversationBlocks } from "@/components/conversation/conversation-transcript-parser";
@@ -17,7 +18,14 @@ export { metadataString } from "@/components/conversation/conversation-metadata"
 
 // projectConversationRenderItems merges related low-level transcript rows for display.
 // projectConversationRenderItems 合并相关底层转录行以生成最终展示项。
-export function projectConversationRenderItems(messages: ConversationMessage[]): ConversationRenderItem[] {
+export function projectConversationRenderItems(
+  // Messages to project into render items.
+  // 需要投影为渲染项的消息集合。
+  messages: ConversationMessage[],
+  // Optional translator used for localized metadata summaries.
+  // 用于本地化元数据摘要的可选翻译函数。
+  t?: (key: TranslationKey) => string,
+): ConversationRenderItem[] {
   const items: ConversationRenderItem[] = [];
   const toolMergeState = createToolMergeProjectionState();
   const compactionItems = new Map<string, ConversationRenderItem>();
@@ -78,7 +86,7 @@ export function projectConversationRenderItems(messages: ConversationMessage[]):
       return;
     }
 
-    const blocks = parseConversationBlocks(projectionMessage);
+    const blocks = parseConversationBlocks(projectionMessage, t);
     for (const block of blocks) {
       if (isContextCompactionBlock(block)) {
         const sectionId = block.compactionSectionId ?? block.id;

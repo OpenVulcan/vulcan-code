@@ -17,10 +17,12 @@ import {
   structuredKindLooksLikeToolBlock,
   structuredMessageHasToolEvidence,
   taskSessionIdFromToolMetadata,
+  subagentToolDisplayName,
   toolMetadataContainsReturnPayload,
   turnStatsStatus,
   turnStatsSummary,
 } from "@/components/conversation/conversation-tool-metadata";
+import type { TranslationKey } from "@/i18n";
 
 // directiveKinds maps Vulcan directive names to WebUI conversation block kinds.
 // directiveKinds 将 Vulcan 指令名称映射为 WebUI 会话块类型。
@@ -35,14 +37,21 @@ const directiveKinds: Record<string, ConversationBlockKind> = {
 
 // parseConversationBlocks converts legacy transcript text into renderable WebUI blocks.
 // parseConversationBlocks 将旧转录文本转换为可渲染的 WebUI 块。
-export function parseConversationBlocks(message: ConversationMessage): ConversationBlock[] {
+export function parseConversationBlocks(
+  // Source transcript message.
+  // 源转录消息。
+  message: ConversationMessage,
+  // Optional translator used for localized metadata summaries.
+  // 用于本地化元数据摘要的可选翻译函数。
+  t?: (key: TranslationKey) => string,
+): ConversationBlock[] {
   if (message.role === "user") {
     return [conversationMarkdownBlock(message.id, 0, message.body)];
   }
 
   const structuredKind = structuredMessageBlockKind(message);
   if (structuredKind) {
-    const attributes = structuredMessageAttributes(message);
+    const attributes = structuredMessageAttributes(message, t);
     if (structuredKindLooksLikeToolBlock(structuredKind) && !structuredMessageHasToolEvidence(message, attributes)) {
       return [conversationMarkdownBlock(message.id, 0, message.body)];
     }
@@ -98,7 +107,14 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
 
 // structuredMessageAttributes extracts render metadata from the service payload.
 // structuredMessageAttributes 从服务载荷中提取渲染元数据。
-function structuredMessageAttributes(message: ConversationMessage): Record<string, string> {
+function structuredMessageAttributes(
+  // Source transcript message.
+  // 源转录消息。
+  message: ConversationMessage,
+  // Optional translator used for localized turn statistics.
+  // 用于本地化轮次统计的可选翻译函数。
+  t?: (key: TranslationKey) => string,
+): Record<string, string> {
   const attributes: Record<string, string> = {};
   const toolName = metadataString(message.metadata, [
     "tool_name",
@@ -125,6 +141,7 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     "payload.commandSessionId",
   ]);
   const taskSessionId = taskSessionIdFromToolMetadata(message.metadata);
+  const subagentName = subagentToolDisplayName(message.metadata, toolName);
   const planArtifact = planArtifactAttributesFromMetadata(message.metadata);
   if (planArtifact) {
     attributes.plan_name = planArtifact.name;
@@ -160,7 +177,7 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
       "result.summary",
       "preview",
       "summary",
-    ]) ?? turnStatsSummary(message.metadata);
+    ]) ?? turnStatsSummary(message.metadata, t);
   if (message.title) attributes.title = message.title;
   if (message.recordKind) attributes.record_kind = message.recordKind;
   if (toolName) attributes.tool_name = toolName;
@@ -168,6 +185,7 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
   if (toolResultId) attributes.tool_result_id = toolResultId;
   if (commandSessionId) attributes.command_session_id = commandSessionId;
   if (taskSessionId) attributes.task_session_id = taskSessionId;
+  if (subagentName) attributes.subagent_name = subagentName;
   if (status) attributes.status = status;
   if (summary) attributes.summary = summary;
   return attributes;
@@ -448,6 +466,7 @@ function conversationSpecialBlock(
     toolResultId: attributes.tool_result_id,
     commandSessionId: attributes.command_session_id,
     taskSessionId: attributes.task_session_id,
+    subagentName: attributes.subagent_name,
     rawMetadata,
     mediaAttachments: mediaAttachments.length > 0 ? mediaAttachments : undefined,
     compactionSectionId: compactionSectionId ?? undefined,

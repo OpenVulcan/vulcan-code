@@ -1,5 +1,4 @@
 import React from "react";
-import { SubagentNavigationMenu } from "@/components/conversation/conversation-chrome";
 import {
   WorkspaceContextPanel,
   type WorkspaceContextTabItem,
@@ -122,14 +121,14 @@ export function WorkspaceResizableBody(props: {
   // Records a manual left sidebar toggle.
   // 记录一次手动左侧栏切换。
   onToggleLeftPanel: () => void;
-  // Opens one backend-routed subagent surface.
-  // 打开单个由后端路由的子代理界面。
+  // Opens one subagent transcript in the right context panel.
+  // 在右侧上下文面板中打开单个子代理转录。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
-  // Closes the backend-routed subagent surface.
-  // 关闭由后端路由的子代理界面。
+  // Closes the legacy backend subagent panel state when a caller still requests it.
+  // 在仍有调用方请求时关闭旧后端子代理面板状态。
   onCloseSubagentPanel: () => Promise<void>;
-  // Stops one backend-routed subagent task.
-  // 停止单个由后端路由的子代理任务。
+  // Stops one backend subagent task.
+  // 停止单个后端子代理任务。
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   // Force-stops one live command session.
   // 强制停止单条实时命令会话。
@@ -185,6 +184,9 @@ export function WorkspaceResizableBody(props: {
   // Loads one workspace file preview for the right context panel.
   // 为右侧上下文面板加载单个工作区文件预览。
   loadWorkspaceFilePreview: WorkspaceContextPanelProps["loadWorkspaceFilePreview"];
+  // Loads one hidden tool detail record for the right context panel.
+  // 为右侧上下文面板加载单条隐藏工具详情记录。
+  onLoadToolDetail: WorkspaceContextPanelProps["onLoadToolDetail"];
   // Emits WebUI click traces from nested console controls.
   // 从嵌套控制台控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
@@ -333,13 +335,8 @@ export function WorkspaceResizableBody(props: {
         chromeActions={props.chromeActions}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-        subagentNavigation={props.workbench.subagentNavigation}
         title={props.headerTitle}
         onToggleLeftPanel={props.onToggleLeftPanel}
-        onOpenSubagentPanel={props.onOpenSubagentPanel}
-        onCloseSubagentPanel={props.onCloseSubagentPanel}
-        onStopSubagentTask={props.onStopSubagentTask}
-        onTrace={props.onTrace}
       />
       <div className="workspace-resizable-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
         <div className="workspace-main-panel">
@@ -380,8 +377,11 @@ export function WorkspaceResizableBody(props: {
               onCopyText={props.onCopyText}
               onFileTabTitleChange={props.onFileContextTabTitleChange}
               onOpenContextTab={props.onOpenContextTab}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
               onStopCommandSession={props.onStopCommandSession}
+              onStopSubagentTask={props.onStopSubagentTask}
               onRunVmmAction={props.onRunVmmAction}
+              onLoadToolDetail={props.onLoadToolDetail}
               parseConversationBlocks={props.parseConversationBlocks}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}
               loadWorkspaceFileDirectory={props.loadWorkspaceFileDirectory}
@@ -437,24 +437,9 @@ function ConsoleHeader(props: {
   // Current draft conversation selection.
   // 当前草稿会话选择。
   draftConversation: DraftConversationSelection | null;
-  // Current subagent navigation snapshot.
-  // 当前子代理导航快照。
-  subagentNavigation?: WorkbenchSnapshot["subagentNavigation"];
   // Records a manual left sidebar toggle.
   // 记录一次手动左侧栏切换。
   onToggleLeftPanel: () => void;
-  // Opens one backend-routed subagent surface.
-  // 打开单个由后端路由的子代理界面。
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
-  // Closes the backend-routed subagent surface.
-  // 关闭由后端路由的子代理界面。
-  onCloseSubagentPanel: () => Promise<void>;
-  // Stops one backend-routed subagent task.
-  // 停止单个由后端路由的子代理任务。
-  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
-  // Emits WebUI click traces from subagent controls.
-  // 从子代理控件发出 WebUI 点击追踪。
-  onTrace: (action: string, detail?: Record<string, unknown>) => void;
 }) {
   // t translates stable console title fallbacks.
   // t 翻译稳定的控制台标题回退文案。
@@ -476,15 +461,6 @@ function ConsoleHeader(props: {
           <h1>{headerTitle}</h1>
           {props.detail ? <small>{props.detail}</small> : null}
         </div>
-        {!props.title ? (
-          <SubagentNavigationMenu
-            navigation={props.subagentNavigation}
-            onCloseSubagentPanel={props.onCloseSubagentPanel}
-            onOpenSubagentPanel={props.onOpenSubagentPanel}
-            onStopSubagentTask={props.onStopSubagentTask}
-            onTrace={props.onTrace}
-          />
-        ) : null}
         <span
           aria-hidden="true"
           className="console-header-drag-fill"

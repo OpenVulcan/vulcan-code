@@ -1,5 +1,7 @@
 import React from "react";
 import {
+  Bot,
+  Boxes,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -32,9 +34,9 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary } from "@/types";
+import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary, WorkbenchSnapshot } from "@/types";
 
 // Conversation session tool morph animation duration in milliseconds.
 // 会话工具形态切换动画的毫秒时长。
@@ -101,6 +103,10 @@ export type ConversationSessionCommitBusyState = {
   label: string;
 } | null;
 
+// ConversationSessionSubagentTask describes one backend-projected subagent task row.
+// ConversationSessionSubagentTask 描述一条后端投影出的子代理任务行。
+type ConversationSessionSubagentTask = NonNullable<NonNullable<WorkbenchSnapshot["subagentNavigation"]>["tasks"]>[number];
+
 // ConversationSessionTodolistPanel renders the session todolist inside the main conversation surface.
 // ConversationSessionTodolistPanel 在主会话界面内渲染当前会话的 todolist。
 export function ConversationSessionTodolistPanel(props: {
@@ -119,6 +125,9 @@ export function ConversationSessionTodolistPanel(props: {
   // Current terminal sessions owned by the selected conversation.
   // 当前选中会话拥有的终端会话集合。
   terminalSessions: CommandSessionSummary[];
+  // Backend-projected subagent navigation for the selected parent conversation.
+  // 当前父会话对应的后端投影子代理导航信息。
+  subagentNavigation: WorkbenchSnapshot["subagentNavigation"] | null;
   // Whether the todolist panel is currently expanded.
   // todolist 面板当前是否展开。
   expanded: boolean;
@@ -134,6 +143,9 @@ export function ConversationSessionTodolistPanel(props: {
   // Force-stops one live terminal session.
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
+  // Opens one subagent transcript inside the right context panel.
+  // 在右侧上下文面板中打开单个子代理转录。
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -151,6 +163,21 @@ export function ConversationSessionTodolistPanel(props: {
     [props.terminalSessions],
   );
   const hasTerminalSessions = terminalSessions.length > 0;
+  // subagentTasks keeps only actively scheduled child agents in the floating panel.
+  // subagentTasks 在浮动面板中只保留正在调度的子代理。
+  const subagentTasks = React.useMemo(
+    () => (props.subagentNavigation?.tasks ?? []).filter((task) => task.isRunning || task.runState === "running"),
+    [props.subagentNavigation?.tasks],
+  );
+  const hasSubagentTasks = subagentTasks.length > 0;
+  // collapsedRowCount controls compact panel height for multi-source summaries.
+  // collapsedRowCount 控制多来源摘要下的紧凑面板高度。
+  const collapsedRowCount = [
+    props.reviewSummary,
+    props.todolist,
+    hasTerminalSessions,
+    hasSubagentTasks,
+  ].filter(Boolean).length;
   // renderExpanded follows the requested target state while transitionPhase keeps a short animation marker.
   // renderExpanded 跟随请求的目标状态，transitionPhase 则短暂保留动画标记。
   const [renderExpanded, setRenderExpanded] = React.useState(props.expanded);
@@ -200,7 +227,7 @@ export function ConversationSessionTodolistPanel(props: {
     ? `conversation-session-tool-transitioning is-${transitionPhase}`
     : null;
 
-  if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions) {
+  if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions && !hasSubagentTasks) {
     return null;
   }
 
@@ -210,7 +237,7 @@ export function ConversationSessionTodolistPanel(props: {
         aria-label={t("sessionTools.expand")}
         className={cn(
           "workspace-tool-panel-menu-collapsed conversation-session-todolist-collapsed conversation-session-tool-collapsed conversation-session-tool-surface",
-          (hasReviewSummary || hasTerminalSessions) && hasTodolist && "has-progress",
+          collapsedRowCount > 1 && "has-multiple-rows",
           transitionClassName,
         )}
         onClick={() => requestExpandedChange(true)}
@@ -236,6 +263,13 @@ export function ConversationSessionTodolistPanel(props: {
             <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(terminalSessions[0].state))} size={15} />
             <span>{t("sessionTools.terminal")}</span>
             <strong>{terminalSessions.length}</strong>
+          </span>
+        ) : null}
+        {hasSubagentTasks ? (
+          <span className="conversation-session-tool-collapsed-row">
+            <Bot size={15} />
+            <span>{t("conversation.subagent.schedule")}</span>
+            <strong>{subagentTasks.length}</strong>
           </span>
         ) : null}
         <Maximize2 className="conversation-session-tool-expand-hint" size={12} />
@@ -274,6 +308,15 @@ export function ConversationSessionTodolistPanel(props: {
         <ConversationSessionProgressSection
           todolist={props.todolist}
           onCollapse={props.reviewSummary || hasTerminalSessions ? undefined : () => requestExpandedChange(false)}
+        />
+      ) : null}
+      {props.subagentNavigation && hasSubagentTasks ? (
+        <ConversationSessionSubagentSection
+          parentConversationId={props.subagentNavigation.parentConversationId}
+          showCollapse={!props.reviewSummary && !hasTerminalSessions && !hasTodolist}
+          tasks={subagentTasks}
+          onCollapse={() => requestExpandedChange(false)}
+          onOpenSubagentPanel={props.onOpenSubagentPanel}
         />
       ) : null}
     </aside>
@@ -830,6 +873,130 @@ function commitPanelTargetAllowsActionNavigation(target: EventTarget | null): bo
   }
   const tagName = target.tagName.toLowerCase();
   return tagName !== "select" && !target.isContentEditable;
+}
+
+// ConversationSessionSubagentSection renders subagent dispatch rows in the session tool panel.
+// ConversationSessionSubagentSection 在会话工具面板中渲染子代理调度行。
+function ConversationSessionSubagentSection(props: {
+  // Parent conversation that owns these subagent tasks.
+  // 当前子代理任务所属的父会话。
+  parentConversationId: string;
+  // Visible active task rows.
+  // 可见的活跃任务行。
+  tasks: ConversationSessionSubagentTask[];
+  // Whether this section owns the panel collapse action.
+  // 当前区域是否承载面板折叠动作。
+  showCollapse: boolean;
+  // Collapses the expanded session tool panel.
+  // 折叠当前展开的会话工具面板。
+  onCollapse: () => void;
+  // Opens one subagent transcript inside the right context panel.
+  // 在右侧上下文面板中打开单个子代理转录。
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+}) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
+  return (
+    <section className="conversation-session-tool-section conversation-session-subagent-section">
+      <div className={cn("conversation-session-tool-section-title", props.showCollapse && "with-action")}>
+        <span className="conversation-session-tool-section-title-main">
+          <Bot size={13} />
+          <span>{t("conversation.subagent.schedule")}</span>
+          <strong>{props.tasks.length}</strong>
+        </span>
+        {props.showCollapse ? (
+          <button
+            aria-label={t("sessionTools.collapse")}
+            className="workspace-tool-panel-menu-icon-button"
+            onClick={props.onCollapse}
+            title={t("sessionTools.collapse")}
+            type="button"
+          >
+            <Minimize2 size={13} />
+          </button>
+        ) : null}
+      </div>
+      <div className="workspace-tool-panel-menu-list conversation-session-subagent-list">
+        {props.tasks.map((task) => (
+          <button
+            className={cn("workspace-tool-panel-menu-row conversation-session-subagent-row", task.isRunning && "running")}
+            key={task.taskId}
+            onClick={() => void props.onOpenSubagentPanel(props.parentConversationId, task.taskId)}
+            style={conversationSessionSubagentAccentStyle(task)}
+            title={task.description ?? task.label}
+            type="button"
+          >
+            <Boxes size={15} />
+            <span className="conversation-session-subagent-label">{task.label}</span>
+            <span className={cn("conversation-session-subagent-state", task.runState)}>
+              {conversationSessionSubagentRunStateLabel(task.runState, t)}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// conversationSessionSubagentAccentStyle returns a stable colorful accent for active subagent rows.
+// conversationSessionSubagentAccentStyle 为活跃子代理行返回稳定的彩色强调样式。
+function conversationSessionSubagentAccentStyle(
+  // Task row used to derive active-state color.
+  // 用于推导活跃状态颜色的任务行。
+  task: ConversationSessionSubagentTask,
+): React.CSSProperties | undefined {
+  if (!task.isRunning) {
+    return undefined;
+  }
+  return {
+    "--conversation-session-subagent-accent": conversationSessionSubagentAccentColor(task.taskId),
+  } as React.CSSProperties;
+}
+
+// conversationSessionSubagentAccentColor maps a task id to one stable lively color.
+// conversationSessionSubagentAccentColor 将任务标识映射为一个稳定的活跃颜色。
+function conversationSessionSubagentAccentColor(
+  // Stable task id from the backend projection.
+  // 后端投影中的稳定任务标识。
+  taskId: string,
+): string {
+  const palette = [
+    "hsl(199 89% 48%)",
+    "hsl(262 83% 58%)",
+    "hsl(330 81% 55%)",
+    "hsl(18 88% 54%)",
+    "hsl(142 66% 39%)",
+    "hsl(45 93% 47%)",
+  ];
+  let hash = 0;
+  for (const char of taskId) {
+    hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
+  }
+  return palette[hash % palette.length] ?? palette[0];
+}
+
+// conversationSessionSubagentRunStateLabel maps backend run-state keys onto compact localized labels.
+// conversationSessionSubagentRunStateLabel 将后端运行状态键映射为紧凑本地化标签。
+function conversationSessionSubagentRunStateLabel(
+  // Backend run-state key.
+  // 后端运行状态键。
+  runState: ConversationSessionSubagentTask["runState"],
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string {
+  switch (runState) {
+    case "running":
+      return t("conversation.subagent.state.running");
+    case "stopped":
+      return t("conversation.subagent.state.stopped");
+    case "failed":
+      return t("conversation.subagent.state.failed");
+    case "completed":
+    default:
+      return t("conversation.subagent.state.completed");
+  }
 }
 
 // PlusIcon renders the compact plus mark used by the branch target menu.

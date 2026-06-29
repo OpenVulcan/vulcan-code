@@ -150,15 +150,12 @@ import {
 } from "@/service/workbench-snapshot-service";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
-  applySubagentRoutePreference,
   applyWorkbenchDeltaWithSubagentSurfaceMessageCache,
-  closeSubagentSurfaceForConversation,
   coalesceWorkbenchDeltaEnvelopes,
   markConversationLocallyRead,
   mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache,
   workbenchWithSubagentSurfaceMessageCache,
   type InflightSubagentOpenRequest,
-  type SubagentRoutePreference,
   type SubagentSurfaceMessageCache,
 } from "@/state/workbench-state";
 import {
@@ -270,12 +267,9 @@ export function WorkbenchLayout(props: {
   // selectedConversationIdRef lets async submit completions avoid stealing focus after the user switches sessions.
   // selectedConversationIdRef 让异步提交完成时避免在用户已切换会话后抢回焦点。
   const selectedConversationIdRef = React.useRef<string | null>(selectedConversationId);
-  // subagentNavigationRequestSeqRef rejects stale async subagent route responses after a newer click.
-  // subagentNavigationRequestSeqRef 在发生更新点击后丢弃过期的异步子代理路由响应。
+  // subagentNavigationRequestSeqRef tracks stale async subagent loading responses after a newer click.
+  // subagentNavigationRequestSeqRef 跟踪发生更新点击后的过期异步子代理加载响应。
   const subagentNavigationRequestSeqRef = React.useRef(0);
-  // subagentRoutePreferenceRef stores the last user-selected subagent display route for WebUI-only routing.
-  // subagentRoutePreferenceRef 保存用户最后选择的子代理显示路由，仅用于 WebUI 显示路由。
-  const subagentRoutePreferenceRef = React.useRef<SubagentRoutePreference | null>(null);
   // inflightSubagentOpenRequestRef coalesces duplicate backend open commands for the same route.
   // inflightSubagentOpenRequestRef 合并同一路由的重复后端打开命令。
   const inflightSubagentOpenRequestRef = React.useRef<InflightSubagentOpenRequest | null>(null);
@@ -285,8 +279,8 @@ export function WorkbenchLayout(props: {
   // draftConversationIdRef keeps the latest draft id without retriggering workbench snapshot hydration.
   // draftConversationIdRef 保存最新草稿标识，避免重新触发工作台快照水合。
   const draftConversationIdRef = React.useRef<string | null>(null);
-  // subagentSurfaceMessageCacheRef retains every loaded child transcript surface for instant route switching.
-  // subagentSurfaceMessageCacheRef 保留每个已载入的子代理转录界面，用于即时路由切换。
+  // subagentSurfaceMessageCacheRef retains every loaded child transcript for instant side-panel reuse.
+  // subagentSurfaceMessageCacheRef 保留每个已载入的子代理转录，用于侧栏即时复用。
   const subagentSurfaceMessageCacheRef = React.useRef<SubagentSurfaceMessageCache>(new Map());
   // workbenchState stores local message hydration updates.
   // workbenchState 保存本地会话正文水合更新。
@@ -461,8 +455,8 @@ export function WorkbenchLayout(props: {
   // selectedConversationRenderItems stores parsed rows for sidebar/runtime summaries.
   // selectedConversationRenderItems 保存侧栏与运行状态摘要复用的解析行。
   const selectedConversationRenderItems = React.useMemo(
-    () => projectConversationRenderItems(selectedConversationMessages),
-    [selectedConversationMessages],
+    () => projectConversationRenderItems(selectedConversationMessages, i18n.t),
+    [i18n.t, selectedConversationMessages],
   );
   // statusbarRuntimeActivities stores bottom-bar tool and subagent runtime badges for the selected parent conversation.
   // statusbarRuntimeActivities 保存当前选中父会话的底部工具与子代理运行徽标。
@@ -581,7 +575,6 @@ export function WorkbenchLayout(props: {
     selectedConversationIdRef,
     workbenchStateRef,
     subagentNavigationRequestSeqRef,
-    subagentRoutePreferenceRef,
     inflightSubagentOpenRequestRef,
     subagentSurfaceMessageCacheRef,
   });
@@ -653,12 +646,8 @@ export function WorkbenchLayout(props: {
   const handleSelectConversation = React.useCallback((conversationId: string) => {
     handleOpenWorkspaceChat();
     subagentNavigationRequestSeqRef.current += 1;
-    subagentRoutePreferenceRef.current = { parentConversationId: conversationId, taskId: null };
     setSelectedConversationId(conversationId);
-    setWorkbenchState((current) => closeSubagentSurfaceForConversation(
-      markConversationLocallyRead(current, conversationId),
-      conversationId,
-    ));
+    setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
     void selectConversation(conversationId)
       .then((snapshot) => {
         if (snapshot) {
@@ -791,14 +780,13 @@ export function WorkbenchLayout(props: {
   }, [draftConversation?.id]);
 
   React.useEffect(() => {
-    setWorkbenchState((current) => applySubagentRoutePreference(
+    setWorkbenchState((current) => (
       mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
         current,
         props.workbench,
         subagentSurfaceMessageCacheRef.current,
         { preserveExpandedProjectIds: expandedProjectIdsLocallyEditedRef.current },
-      ),
-      subagentRoutePreferenceRef.current,
+      )
     ));
     const nextSelected = props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null;
     setSelectedConversationId((current) => {
@@ -816,7 +804,7 @@ export function WorkbenchLayout(props: {
     if (!props.workbenchDelta) {
       return;
     }
-    setWorkbenchState((current) => applySubagentRoutePreference(
+    setWorkbenchState((current) => (
       props.workbenchDelta!.envelopes.reduce(
         (nextWorkbench, envelope) => applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
           nextWorkbench,
@@ -824,8 +812,7 @@ export function WorkbenchLayout(props: {
           subagentSurfaceMessageCacheRef.current,
         ),
         current,
-      ),
-      subagentRoutePreferenceRef.current,
+      )
     ));
   }, [props.workbenchDelta]);
 

@@ -6,15 +6,18 @@ import {
   numericMetadata,
 } from "@/components/conversation/conversation-metadata";
 import type { ConversationBlockKind } from "@/components/conversation/conversation-model";
+import type { TranslationKey } from "@/i18n";
 
-// taskSessionIdFromToolMetadata extracts the routed child task-session id from host task metadata.
-// taskSessionIdFromToolMetadata 从宿主 task 元数据中提取路由用的子任务会话标识。
+// taskSessionIdFromToolMetadata extracts the stable child task-session id from host task metadata.
+// taskSessionIdFromToolMetadata 从宿主 task 元数据中提取稳定的子任务会话标识。
 export function taskSessionIdFromToolMetadata(metadata: unknown): string | null {
   const hostKind = metadataString(metadata, ["host_result.kind", "hostResult.kind", "kind"]);
   if (hostKind === "task_session") {
     return metadataString(metadata, [
       "host_result.payload.task_session_id",
       "hostResult.payload.taskSessionId",
+      "payload.task_session_id",
+      "payload.taskSessionId",
       "task_session_id",
     ]);
   }
@@ -43,28 +46,142 @@ export function turnStatsStatus(metadata: unknown): string | null {
 
 // turnStatsSummary builds the compact summary line used by WebUI tool metadata.
 // turnStatsSummary 构建 WebUI 工具元数据使用的紧凑摘要行。
-export function turnStatsSummary(metadata: unknown): string | null {
+export function turnStatsSummary(
+  // Metadata object that may carry turn statistics.
+  // 可能携带轮次统计的元数据对象。
+  metadata: unknown,
+  // Optional translator used by React surfaces that must follow language switching.
+  // React 界面用于跟随语言切换的可选翻译函数。
+  t?: (key: TranslationKey) => string,
+): string | null {
   const stats = turnStatsObject(metadata);
   if (!stats) {
     return null;
   }
+  const translate = t ?? defaultTurnStatsTranslation;
   const parts = [
-    `${numberMetadata(stats.provider_call_count ?? stats.providerCallCount)} calls`,
-    `${numberMetadata(stats.tool_call_count ?? stats.toolCallCount)} tools`,
+    formatTurnStatsTranslation(translate, "conversation.stats.providerCalls", {
+      count: String(numberMetadata(stats.provider_call_count ?? stats.providerCallCount)),
+    }),
+    formatTurnStatsTranslation(translate, "conversation.stats.toolCalls", {
+      count: String(numberMetadata(stats.tool_call_count ?? stats.toolCallCount)),
+    }),
   ];
   const totalTokens = numberMetadata(stats.total_tokens ?? stats.totalTokens);
   if (totalTokens > 0) {
-    parts.push(`${totalTokens} tokens`);
+    parts.push(formatTurnStatsTranslation(translate, "conversation.stats.totalTokens", {
+      count: String(totalTokens),
+    }));
   }
   const cachedTokens = numberMetadata(stats.cached_input_tokens ?? stats.cachedInputTokens);
   if (cachedTokens > 0) {
-    parts.push(`cache hit ${cachedTokens}`);
+    parts.push(formatTurnStatsTranslation(translate, "conversation.stats.cachedTokens", {
+      count: String(cachedTokens),
+    }));
   }
   const speed = numericMetadata(stats.output_tokens_per_second ?? stats.outputTokensPerSecond);
   if (speed && Number.isFinite(speed) && speed > 0) {
-    parts.push(`${speed.toFixed(1)}/s`);
+    parts.push(formatTurnStatsTranslation(translate, "conversation.stats.outputSpeed", {
+      speed: speed.toFixed(1),
+    }));
   }
   return parts.join(" · ");
+}
+
+// isSubagentToolName returns whether one tool name belongs to the built-in subagent tool family.
+// isSubagentToolName 判断单个工具名是否属于内置子代理工具族。
+export function isSubagentToolName(toolName?: string | null): boolean {
+  const normalized = toolName?.trim().toLowerCase();
+  return normalized === "spawn_agent"
+    || normalized === "send_message"
+    || normalized === "followup_task"
+    || normalized === "wait_agent"
+    || normalized === "list_agents"
+    || normalized === "close_agent";
+}
+
+// subagentToolDisplayName extracts the visible child-agent name from tool metadata.
+// subagentToolDisplayName 从工具元数据中提取可见的子代理名称。
+export function subagentToolDisplayName(metadata: unknown, toolName?: string | null): string | null {
+  const metadataToolName = toolName ?? metadataString(metadata, [
+    "tool_name",
+    "host_result.tool_name",
+    "hostResult.toolName",
+  ]);
+  const taskSessionId = taskSessionIdFromToolMetadata(metadata);
+  if (!isSubagentToolName(metadataToolName) && !taskSessionId) {
+    return null;
+  }
+  return metadataString(metadata, [
+    "host_result.payload.display_title",
+    "hostResult.payload.displayTitle",
+    "payload.display_title",
+    "payload.displayTitle",
+    "display_title",
+    "displayTitle",
+    "arguments.task_name",
+    "arguments.task_id",
+    "arguments.agent_id",
+    "arguments.child_thread_id",
+    "arguments.target",
+    "arguments.name",
+    "host_result.payload.task_name",
+    "hostResult.payload.taskName",
+    "payload.task_name",
+    "payload.taskName",
+    "host_result.payload.description",
+    "hostResult.payload.description",
+    "payload.description",
+    "description",
+    "host_result.payload.subagent",
+    "hostResult.payload.subagent",
+    "payload.subagent",
+    "arguments.agent_type",
+    "host_result.payload.task_id",
+    "hostResult.payload.taskId",
+    "payload.task_id",
+    "payload.taskId",
+    "task_id",
+    "taskId",
+  ]);
+}
+
+// defaultTurnStatsTranslation keeps non-React callers on the historical English fallback.
+// defaultTurnStatsTranslation 让非 React 调用方保持历史英文回退。
+function defaultTurnStatsTranslation(key: TranslationKey): string {
+  switch (key) {
+    case "conversation.stats.providerCalls":
+      return "{count} calls";
+    case "conversation.stats.toolCalls":
+      return "{count} tools";
+    case "conversation.stats.totalTokens":
+      return "{count} tokens";
+    case "conversation.stats.cachedTokens":
+      return "Cache hit {count}";
+    case "conversation.stats.outputSpeed":
+      return "{speed}/s";
+    default:
+      return key;
+  }
+}
+
+// formatTurnStatsTranslation replaces simple named placeholders in compact stats labels.
+// formatTurnStatsTranslation 替换紧凑统计标签中的简单具名占位符。
+function formatTurnStatsTranslation(
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+  // Translation key to format.
+  // 需要格式化的翻译键。
+  key: TranslationKey,
+  // Placeholder values.
+  // 占位符取值。
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }
 
 // extractToolResultIdFromText recovers host result ids from legacy Markdown or compact plain text.

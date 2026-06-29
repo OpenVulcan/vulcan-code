@@ -122,7 +122,6 @@ export function ConversationBlocksView(props: {
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
         onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-        onOpenSubagentPanel={props.onOpenSubagentPanel}
         onLoadToolDetail={props.onLoadToolDetail}
         onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
         onTrace={props.onTrace}
@@ -278,7 +277,6 @@ function SpecialConversationBlock(props: {
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
         onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-        onOpenSubagentPanel={props.onOpenSubagentPanel}
         onLoadToolDetail={props.onLoadToolDetail}
         onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
         onTrace={props.onTrace}

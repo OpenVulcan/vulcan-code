@@ -18,6 +18,8 @@
 .context-dynamic-tabbar {
   flex: 0 0 auto;
   min-width: 0;
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -279,6 +281,86 @@
 
 .context-tab-content.memory-tab-content {
   padding: 6px 8px 8px;
+}
+
+.context-tab-content.subagent-tab-content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.workspace-subagent-panel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  background: var(--background);
+  overflow: hidden;
+}
+
+.workspace-subagent-panel .conversation-panel {
+  position: relative;
+  inset: auto;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  padding: 14px 12px 72px;
+  overflow: hidden;
+  overflow-y: auto;
+  scroll-padding-bottom: 72px;
+}
+
+.workspace-subagent-panel .conversation-scroll-content {
+  width: 100%;
+  min-height: 100%;
+  padding-bottom: 72px;
+  transform: none;
+}
+
+.workspace-subagent-footer {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.workspace-subagent-stop-button {
+  max-width: min(100%, 320px);
+  border-color: color-mix(in oklab, var(--border) 82%, transparent);
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  box-shadow: 0 12px 32px color-mix(in oklab, var(--foreground) 16%, transparent);
+  color: #111111;
+  pointer-events: auto;
+}
+
+.workspace-subagent-stop-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-subagent-stop-dialog {
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.workspace-subagent-empty {
+  min-width: 0;
+  min-height: 220px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  text-align: center;
 }
 
 .context-empty-state {

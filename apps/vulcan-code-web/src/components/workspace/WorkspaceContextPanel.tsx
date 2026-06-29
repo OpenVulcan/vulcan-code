@@ -1,13 +1,40 @@
 import React from "react";
 import {
+  Bot,
   Brain,
   ChevronsDown,
   Folder,
   GitPullRequest,
   Plus,
   Search,
+  Square,
   X,
 } from "lucide-react";
+import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
+import {
+  generatedMediaAttachmentsFromToolDetailPayload,
+  projectConversationRenderItems,
+} from "@/components/conversation/conversation-transcript";
+import type {
+  ConversationSurfaceExpandedState,
+} from "@/components/conversation/conversation-layout-restore";
+import type {
+  ConversationTimelineVirtualRestoreState,
+} from "@/components/conversation/conversation-virtualization";
+import type {
+  ConversationDetailRef,
+  ToolDetailPayload,
+} from "@/components/conversation/conversation-detail";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +58,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
   ConversationMessage,
+  ConversationSummary,
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
   WorkbenchSnapshot,
@@ -54,9 +82,94 @@ const LazyWorkspaceFilesPanelHost = React.lazy(async () => {
   return { default: module.WorkspaceFilesPanelHost };
 });
 
+// SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS lists records that may trail a completed child turn.
+// SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS 列出可能位于已完成子代理回合尾部的记录类型。
+const SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS = new Set(["turnstats", "turnterminated"]);
+
+// normalizeSubagentPanelRecordKind normalizes persisted record kinds for exact semantic checks.
+// normalizeSubagentPanelRecordKind 规范化持久记录类型，供精确语义判断使用。
+function normalizeSubagentPanelRecordKind(recordKind?: string | null): string {
+  return recordKind?.trim().toLowerCase().replace(/[-_]/g, "") ?? "";
+}
+
+// normalizeSubagentPanelPromptBody normalizes visible prompt text for duplicate echo comparison.
+// normalizeSubagentPanelPromptBody 规范化可见提示词文本，用于重复回显比较。
+function normalizeSubagentPanelPromptBody(body: string): string {
+  return body.trim().replace(/\s+/g, " ");
+}
+
+// subagentPanelMessageHasAssistantOutput reports whether a row is visible child-agent output.
+// subagentPanelMessageHasAssistantOutput 判断单条记录是否为可见子代理输出。
+function subagentPanelMessageHasAssistantOutput(message: ConversationMessage): boolean {
+  return message.role === "assistant" && message.body.trim().length > 0;
+}
+
+// subagentPanelMessageIsTrailingTerminal reports whether a row can follow the final visible child output.
+// subagentPanelMessageIsTrailingTerminal 判断单条记录是否可以跟随最终可见子代理输出。
+function subagentPanelMessageIsTrailingTerminal(message: ConversationMessage): boolean {
+  return SUBAGENT_TRAILING_TERMINAL_RECORD_KINDS.has(normalizeSubagentPanelRecordKind(message.recordKind));
+}
+
+// subagentPanelMessageIsUserTranscript reports whether a row is a user transcript bubble.
+// subagentPanelMessageIsUserTranscript 判断单条记录是否为用户转录气泡。
+function subagentPanelMessageIsUserTranscript(message: ConversationMessage): boolean {
+  return message.role === "user" && normalizeSubagentPanelRecordKind(message.recordKind) === "transcript";
+}
+
+// dedupeSubagentPanelTrailingPromptEcho hides a duplicated child-task prompt echoed after output.
+// dedupeSubagentPanelTrailingPromptEcho 隐藏子任务输出后被再次回显的重复提示词。
+function dedupeSubagentPanelTrailingPromptEcho(messages: ConversationMessage[]): ConversationMessage[] {
+  if (messages.length < 4) {
+    return messages;
+  }
+  // candidateIndex points at the last non-terminal row before completion metadata.
+  // candidateIndex 指向完成元数据之前的最后一条非终态记录。
+  let candidateIndex = messages.length - 1;
+  while (candidateIndex >= 0 && subagentPanelMessageIsTrailingTerminal(messages[candidateIndex])) {
+    candidateIndex -= 1;
+  }
+  const candidate = messages[candidateIndex];
+  if (!candidate || !subagentPanelMessageIsUserTranscript(candidate)) {
+    return messages;
+  }
+  const candidateBody = normalizeSubagentPanelPromptBody(candidate.body);
+  if (!candidateBody) {
+    return messages;
+  }
+  // priorIndex locates the original prompt row with the same visible task text.
+  // priorIndex 定位可见任务文本相同的原始提示词记录。
+  const priorIndex = messages.findIndex((message, index) => (
+    index < candidateIndex
+    && subagentPanelMessageIsUserTranscript(message)
+    && normalizeSubagentPanelPromptBody(message.body) === candidateBody
+  ));
+  if (priorIndex < 0) {
+    return messages;
+  }
+  // hasCompletedOutputBetween proves the duplicate sits after a produced child answer.
+  // hasCompletedOutputBetween 证明重复项位于已产生的子代理答案之后。
+  const hasCompletedOutputBetween = messages
+    .slice(priorIndex + 1, candidateIndex)
+    .some(subagentPanelMessageHasAssistantOutput);
+  if (!hasCompletedOutputBetween) {
+    return messages;
+  }
+  // hasOnlyTerminalRowsAfterCandidate keeps real follow-up turns visible until they produce their own output.
+  // hasOnlyTerminalRowsAfterCandidate 确保真实后续提问在产生自身输出前仍保持可见。
+  // trailingRows stores completion-only records after the duplicated prompt candidate.
+  // trailingRows 保存重复提示词候选项之后的完成类记录。
+  const trailingRows = messages.slice(candidateIndex + 1);
+  const hasOnlyTerminalRowsAfterCandidate = trailingRows.length > 0
+    && trailingRows.every(subagentPanelMessageIsTrailingTerminal);
+  if (!hasOnlyTerminalRowsAfterCandidate) {
+    return messages;
+  }
+  return messages.filter((_, index) => index !== candidateIndex);
+}
+
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
-export type WorkspaceContextPanelTab = "review" | "memory" | "files";
+export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent";
 
 // WorkspaceContextTabKind identifies one dynamic right context tab type.
 // WorkspaceContextTabKind 标识一个动态右侧上下文页签类型。
@@ -77,6 +190,12 @@ export interface WorkspaceContextTabItem {
   // Optional selected file name for file tabs.
   // 文件页签可选的已选中文件名。
   selectedFileName?: string | null;
+  // Optional subagent child task conversation id for subagent tabs.
+  // 子代理页签可选的子任务会话标识。
+  subagentTaskId?: string | null;
+  // Optional parent conversation id that owns the subagent task.
+  // 拥有子代理任务的可选父会话标识。
+  subagentParentConversationId?: string | null;
   // Creation timestamp used for stable ordering diagnostics.
   // 用于稳定排序诊断的创建时间戳。
   createdAt: number;
@@ -172,6 +291,15 @@ export interface WorkspaceContextPanelProps {
   // Parses one conversation message into render blocks.
   // 将单条会话消息解析为渲染块。
   parseConversationBlocks: (message: ConversationMessage) => WorkspaceConversationBlock[];
+  // Opens one subagent transcript in the right context panel.
+  // 在右侧上下文面板中打开单个子代理转录。
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+  // Stops one running subagent task.
+  // 停止单个正在运行的子代理任务。
+  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
+  // Loads one hidden tool detail record for transcript rows.
+  // 为转录行加载单条隐藏工具详情记录。
+  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
   // Loads one live workspace Git diff snapshot.
   // 加载一次实时工作区 Git diff 快照。
   loadWorkspaceDiffSnapshot: (
@@ -657,6 +785,16 @@ function WorkspaceContextTabContent(args: {
       </div>
     );
   }
+  if (args.activeTab.kind === "subagent") {
+    return (
+      <div className="context-tab-content subagent-tab-content">
+        <WorkspaceSubagentPanel
+          tab={args.activeTab}
+          props={args.props}
+        />
+      </div>
+    );
+  }
   return (
     <div className="context-tab-content files-tab-content">
       <React.Suspense fallback={<WorkspaceFilesPanelLoading />}>
@@ -677,9 +815,200 @@ function WorkspaceContextTabContent(args: {
   );
 }
 
+// WorkspaceSubagentPanel renders a read-only subagent transcript inside the right context rail.
+// WorkspaceSubagentPanel 在右侧上下文栏中渲染只读子代理转录。
+function WorkspaceSubagentPanel(args: {
+  // Active subagent tab descriptor.
+  // 当前活动的子代理页签描述。
+  tab: WorkspaceContextTabItem;
+  // Parent context panel props.
+  // 父级上下文面板属性。
+  props: WorkspaceContextPanelProps;
+}) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
+  // stopConfirmOpen stores the destructive stop confirmation dialog state.
+  // stopConfirmOpen 保存危险停止确认弹窗状态。
+  const [stopConfirmOpen, setStopConfirmOpen] = React.useState(false);
+  // stopSubmitting stores whether the stop request is currently in flight.
+  // stopSubmitting 保存停止请求是否正在提交。
+  const [stopSubmitting, setStopSubmitting] = React.useState(false);
+  // scrollRef owns the read-only transcript viewport inside this tab.
+  // scrollRef 持有该页签内只读转录视口。
+  const scrollRef = React.useRef<HTMLElement | null>(null);
+  // hiddenThinkingBlockIds leaves subagent thinking rows in the inline transcript.
+  // hiddenThinkingBlockIds 让子代理思考行保留在内联转录中。
+  const hiddenThinkingBlockIds = React.useMemo(() => new Set<string>(), []);
+  // parentConversationId stores the task owner required by the stop API.
+  // parentConversationId 保存停止接口所需的任务所属父会话。
+  const parentConversationId = args.tab.subagentParentConversationId ?? null;
+  // taskId stores the subagent child conversation id represented by this tab.
+  // taskId 保存该页签代表的子代理子会话标识。
+  const taskId = args.tab.subagentTaskId ?? null;
+  // navigation stores the matching backend subagent projection for this parent conversation.
+  // navigation 保存该父会话匹配的后端子代理投影。
+  const navigation = parentConversationId && args.props.workbench.subagentNavigation?.parentConversationId === parentConversationId
+    ? args.props.workbench.subagentNavigation
+    : null;
+  // task stores the current backend task row when it is still present in the snapshot.
+  // task 保存快照中仍存在时的当前后端任务行。
+  const task = taskId ? navigation?.tasks?.find((candidate) => candidate.taskId === taskId) ?? null : null;
+  // messages stores the read-only transcript rows for the child task conversation.
+  // messages 保存子任务会话的只读转录行。
+  const messages = React.useMemo(
+    () => taskId ? args.props.workbench.messages.filter((message) => message.conversationId === taskId) : [],
+    [args.props.workbench.messages, taskId],
+  );
+  // displayMessages stores the side-panel-only transcript after child prompt echo cleanup.
+  // displayMessages 保存经过子提示词回显清理后的侧栏专用转录。
+  const displayMessages = React.useMemo(() => dedupeSubagentPanelTrailingPromptEcho(messages), [messages]);
+  // renderItems stores parsed transcript rows for the side-panel child conversation.
+  // renderItems 保存侧栏子会话解析后的转录行。
+  const renderItems = React.useMemo(() => projectConversationRenderItems(displayMessages, t), [displayMessages, t]);
+  // subagentConversation stores the minimal conversation summary consumed by ConversationWorkspace.
+  // subagentConversation 保存 ConversationWorkspace 消费的最小会话摘要。
+  const subagentConversation = React.useMemo<ConversationSummary | undefined>(() => {
+    if (!taskId) {
+      return undefined;
+    }
+    return {
+      id: taskId,
+      projectId: selectedContextProjectId(args.props),
+      runPhase: task?.isRunning ? "requesting" : task?.runState,
+      status: task?.isRunning ? "running" : task?.runState ?? "completed",
+      title: task?.label ?? (args.tab.title || workspaceContextTabDefaultTitle("subagent", t)),
+    };
+  }, [args.props, args.tab.title, task, taskId, t]);
+  // workspacePath stores the parent project path used for Markdown media resolution.
+  // workspacePath 保存用于 Markdown 媒体解析的父项目路径。
+  const workspacePath = subagentWorkspacePath(args.props.workbench, parentConversationId);
+  // taskRunning records whether the backend still allows stopping this task.
+  // taskRunning 记录后端是否仍允许停止该任务。
+  const taskRunning = Boolean(task?.isRunning && parentConversationId && taskId);
+  // handleStopConfirmed executes the single-task stop after confirmation.
+  // handleStopConfirmed 在确认后执行单任务停止。
+  const handleStopConfirmed = React.useCallback(async () => {
+    if (!parentConversationId || !taskId || stopSubmitting) {
+      return;
+    }
+    setStopSubmitting(true);
+    try {
+      await args.props.onStopSubagentTask(parentConversationId, taskId);
+      setStopConfirmOpen(false);
+    } finally {
+      setStopSubmitting(false);
+    }
+  }, [args.props, parentConversationId, stopSubmitting, taskId]);
+  // handleNoopScrollStateChange satisfies the read-only transcript contract without persisting layout state.
+  // handleNoopScrollStateChange 满足只读转录契约，但不持久化布局状态。
+  const handleNoopScrollStateChange = React.useCallback(() => undefined, []);
+  // handleNoopUserScrollStart satisfies the read-only transcript contract without tail-follow side effects.
+  // handleNoopUserScrollStart 满足只读转录契约，但不产生尾随副作用。
+  const handleNoopUserScrollStart = React.useCallback(() => undefined, []);
+  // handleNoopVirtualizerStateChange avoids sharing main-chat virtualization memory with side tabs.
+  // handleNoopVirtualizerStateChange 避免侧栏页签共享主会话虚拟列表记忆。
+  const handleNoopVirtualizerStateChange = React.useCallback((_surfaceId: string, _state: ConversationTimelineVirtualRestoreState | null) => undefined, []);
+  // handleNoopExpandedStateChange avoids sharing main-chat expansion memory with side tabs.
+  // handleNoopExpandedStateChange 避免侧栏页签共享主会话展开记忆。
+  const handleNoopExpandedStateChange = React.useCallback((_surfaceId: string, _state: ConversationSurfaceExpandedState) => undefined, []);
+  // handleLoadMoreHistory keeps the side transcript display-only until backend exposes child pagination here.
+  // handleLoadMoreHistory 在此处暴露子会话分页前保持侧栏转录仅展示。
+  const handleLoadMoreHistory = React.useCallback(async () => false, []);
+
+  if (!parentConversationId || !taskId) {
+    return <WorkspaceSubagentEmptyState title={workspaceContextTabDefaultTitle("subagent", t)} />;
+  }
+
+  return (
+    <div className="workspace-subagent-panel">
+      <ConversationWorkspace
+        commandSessions={args.props.workbench.commandSessions ?? []}
+        conversation={subagentConversation}
+        error={null}
+        hasMoreHistory={false}
+        hiddenThinkingBlockIds={hiddenThinkingBlockIds}
+        historyLoading={false}
+        initialExpandedState={null}
+        initialScrollDistanceFromBottom={0}
+        initialVirtualizerState={null}
+        messages={displayMessages}
+        parentConversationId={taskId}
+        renderItems={renderItems}
+        resolveComposerAttachmentMedia={composerAttachmentMedia}
+        resolveMediaSourceUrl={args.props.resolveMediaSourceUrl}
+        scrollRef={scrollRef}
+        sessionRunning={Boolean(task?.isRunning)}
+        suppressEmptyPlaceholder={false}
+        suppressInitialDistanceRestore={false}
+        workspacePath={workspacePath}
+        onCopyText={args.props.onCopyText}
+        onExpandedStateChange={handleNoopExpandedStateChange}
+        onExtractGeneratedMediaAttachments={generatedMediaAttachmentsFromToolDetailPayload}
+        onLoadMoreHistory={handleLoadMoreHistory}
+        onLoadToolDetail={args.props.onLoadToolDetail}
+        onOpenSubagentPanel={args.props.onOpenSubagentPanel}
+        onScrollStateChange={handleNoopScrollStateChange}
+        onUserScrollStart={handleNoopUserScrollStart}
+        onVirtualizerStateChange={handleNoopVirtualizerStateChange}
+      />
+      {taskRunning ? (
+        <div className="workspace-subagent-footer">
+          <Button
+            className="workspace-subagent-stop-button"
+            onClick={() => setStopConfirmOpen(true)}
+            type="button"
+            variant="outline"
+          >
+            <Square fill="currentColor" size={12} strokeWidth={0} />
+            <span>{t("conversation.subagent.stopTask").replace("{task}", task?.label ?? args.tab.title)}</span>
+          </Button>
+        </div>
+      ) : null}
+      <Dialog open={stopConfirmOpen} onOpenChange={(open) => !stopSubmitting && setStopConfirmOpen(open)}>
+        <DialogContent className="workspace-subagent-stop-dialog" showCloseButton={!stopSubmitting}>
+          <DialogHeader>
+            <DialogTitle>{t("conversation.subagent.stopConfirmTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("conversation.subagent.stopConfirmDescription").replace("{task}", task?.label ?? args.tab.title)}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button disabled={stopSubmitting} onClick={() => setStopConfirmOpen(false)} type="button" variant="outline">
+              {t("conversation.action.cancel")}
+            </Button>
+            <Button disabled={stopSubmitting} onClick={() => void handleStopConfirmed()} type="button" variant="destructive">
+              <Square fill="currentColor" size={12} strokeWidth={0} />
+              <span>{stopSubmitting ? t("conversation.subagent.stopping") : t("conversation.subagent.stopConfirm")}</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// WorkspaceSubagentEmptyState renders a compact fallback for incomplete subagent tab descriptors.
+// WorkspaceSubagentEmptyState 为不完整的子代理页签描述渲染紧凑回退状态。
+function WorkspaceSubagentEmptyState(props: {
+  // Visible fallback title.
+  // 可见回退标题。
+  title: string;
+}) {
+  return (
+    <div className="workspace-subagent-empty">
+      <Bot size={22} />
+      <span>{props.title}</span>
+    </div>
+  );
+}
+
 // workspaceContextTabIcon returns the icon used for one tab kind.
 // workspaceContextTabIcon 返回单个页签类型使用的图标。
 function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): React.ReactNode {
+  if (kind === "subagent") {
+    return <Bot size={size} />;
+  }
   if (kind === "files") {
     return <Folder size={size} />;
   }
@@ -692,6 +1021,9 @@ function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): R
 // workspaceContextTabDefaultTitle returns the initial title for one tab kind.
 // workspaceContextTabDefaultTitle 返回单个页签类型的初始标题。
 export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind, t?: (key: TranslationKey) => string): string {
+  if (kind === "subagent") {
+    return t ? t("conversation.subagent.schedule") : "Subagent";
+  }
   if (kind === "files") {
     return t ? t("workspaceFilePreview.openFile") : "Open file";
   }
@@ -704,8 +1036,8 @@ export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind, t
 // workspaceContextTabDisplayTitle returns the locale-aware visible title for one opened tab.
 // workspaceContextTabDisplayTitle 返回单个已打开页签按当前语言显示的标题。
 function workspaceContextTabDisplayTitle(tab: WorkspaceContextTabItem, t: (key: TranslationKey) => string): string {
-  if (tab.kind === "files") {
-    return tab.title || workspaceContextTabDefaultTitle("files", t);
+  if (tab.kind === "files" || tab.kind === "subagent") {
+    return tab.title || workspaceContextTabDefaultTitle(tab.kind, t);
   }
   return workspaceContextTabDefaultTitle(tab.kind, t);
 }
@@ -720,6 +1052,19 @@ function selectedContextProjectId(props: WorkspaceContextPanelProps): string | n
     (conversation) => conversation.id === props.selectedConversationId,
   );
   return selectedConversation?.projectId ?? null;
+}
+
+// subagentWorkspacePath resolves the parent conversation project path for side-panel transcript media.
+// subagentWorkspacePath 为侧栏转录媒体解析父会话所属项目路径。
+function subagentWorkspacePath(workbench: WorkbenchSnapshot, parentConversationId: string | null): string | null {
+  if (!parentConversationId) {
+    return null;
+  }
+  const parentConversation = workbench.conversations.find((conversation) => conversation.id === parentConversationId);
+  if (!parentConversation?.projectId) {
+    return null;
+  }
+  return workbench.projects.find((project) => project.id === parentConversation.projectId)?.path ?? null;
 }
 
 // WorkspaceReviewPanelLoading renders while the review panel chunk is loading.

@@ -6,7 +6,6 @@ import {
 } from "@/components/workspace/WorkspaceContextPanel";
 import type { TranslationKey } from "@/i18n";
 import {
-  activeWorkbenchSurfaceId,
   selectedConversationWorkspacePath,
 } from "@/diff/workspace-review-model";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
@@ -54,13 +53,68 @@ export function workspaceContextTabCacheKey(
   // 当前草稿会话选择。
   selectedDraftConversation: DraftConversationSelection | null,
 ): string {
-  // surfaceId mirrors the context-panel cache scope used by review and file hosts.
-  // surfaceId 对齐审查与文件宿主使用的上下文面板缓存范围。
-  const surfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
+  // surfaceId keeps right-panel memory scoped to the selected parent conversation.
+  // surfaceId 将右侧面板记忆范围限定在当前选中的父会话。
+  const surfaceId = selectedConversationId ?? workbench.selectedConversationId ?? null;
   // workspacePath adds project-root separation for conversations that share ids across sources.
   // workspacePath 为跨来源共享标识的会话补充项目根目录隔离。
   const workspacePath = selectedConversationWorkspacePath(workbench, selectedConversationId, selectedDraftConversation);
   return `${surfaceId ?? selectedDraftConversation?.id ?? "none"}:${workspacePath ?? selectedDraftConversation?.projectId ?? "none"}`;
+}
+
+// openWorkspaceSubagentContextTab opens or focuses one subagent transcript tab.
+// openWorkspaceSubagentContextTab 打开或聚焦单个子代理转录页签。
+export function openWorkspaceSubagentContextTab(
+  // Current tab state.
+  // 当前页签状态。
+  state: WorkspaceContextTabState,
+  // Parent conversation that owns the subagent task.
+  // 拥有子代理任务的父会话。
+  parentConversationId: string,
+  // Child task conversation id represented by the tab.
+  // 页签代表的子任务会话标识。
+  taskId: string,
+  // Visible tab title resolved from the backend task row.
+  // 从后端任务行解析出的可见页签标题。
+  title: string,
+  // Translation helper for default tab titles.
+  // 默认页签标题的翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): WorkspaceContextTabState {
+  // current stores a normalized base state before modification.
+  // current 保存修改前规整后的基础状态。
+  const current = normalizeWorkspaceContextTabState(state);
+  // subagentTabId stores a stable singleton id per parent-task pair.
+  // subagentTabId 为每个父会话与任务组合保存稳定单例页签标识。
+  const subagentTabId = workspaceSubagentTabId(parentConversationId, taskId);
+  // existing stores a previously opened tab for the same subagent task.
+  // existing 保存同一子代理任务此前打开过的页签。
+  const existing = current.tabs.find((tab) => tab.id === subagentTabId);
+  if (existing) {
+    return {
+      activeTabId: existing.id,
+      tabs: current.tabs.map((tab) => (
+        tab.id === existing.id
+          ? { ...tab, title: title.trim() || tab.title || workspaceContextTabDefaultTitle("subagent", t) }
+          : tab
+      )),
+    };
+  }
+  // nextTab stores the newly created subagent context tab.
+  // nextTab 保存新创建的子代理上下文页签。
+  const nextTab: WorkspaceContextTabItem = {
+    createdAt: Date.now(),
+    id: subagentTabId,
+    kind: "subagent",
+    selectedFileName: null,
+    subagentParentConversationId: parentConversationId,
+    subagentTaskId: taskId,
+    title: title.trim() || workspaceContextTabDefaultTitle("subagent", t),
+  };
+  return {
+    activeTabId: nextTab.id,
+    tabs: [...current.tabs, nextTab],
+  };
 }
 
 // normalizeWorkspaceContextTabState removes stale active ids from a tab state.
@@ -214,6 +268,12 @@ function createWorkspaceContextTab(
     selectedFileName: null,
     title: workspaceContextTabDefaultTitle(kind, t),
   };
+}
+
+// workspaceSubagentTabId builds the stable right-panel tab id for one subagent task.
+// workspaceSubagentTabId 为单个子代理任务构建稳定右侧页签标识。
+function workspaceSubagentTabId(parentConversationId: string, taskId: string): string {
+  return `subagent-${encodeURIComponent(parentConversationId)}-${encodeURIComponent(taskId)}`;
 }
 
 // trimWorkspaceContextTabStateCache removes old conversation tab workspaces.

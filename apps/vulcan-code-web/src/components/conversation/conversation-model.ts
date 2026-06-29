@@ -62,9 +62,12 @@ export interface ConversationBlock {
   // Optional command-session identifier for command-like tool rows.
   // 命令类工具行使用的可选命令会话标识。
   commandSessionId?: string;
-  // Optional child task-session identifier for routed subagent review.
-  // 用于路由子代理复看的可选子任务会话标识。
+  // Optional stable child task-session identifier for display metadata.
+  // 用于展示元数据的可选稳定子任务会话标识。
   taskSessionId?: string;
+  // Optional visible child-agent name resolved from subagent tool metadata.
+  // 从子代理工具元数据解析出的可选可见子代理名称。
+  subagentName?: string;
   // Optional raw metadata used for generated media and future plugin-specific renderers.
   // 可选原始元数据，用于生成媒体与未来插件专属渲染器。
   rawMetadata?: unknown;

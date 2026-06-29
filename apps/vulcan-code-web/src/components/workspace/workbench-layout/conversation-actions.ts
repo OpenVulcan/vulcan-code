@@ -27,14 +27,10 @@ import {
 } from "@/service/settings-actions-service";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
-  applySubagentRoutePreference,
   canOpenCachedSubagentSurface,
-  closeSubagentSurfaceForConversation,
   injectCachedSubagentSurfaceMessages,
-  openSubagentSurfaceForConversation,
   reorderPendingPromptSummaries,
   type InflightSubagentOpenRequest,
-  type SubagentRoutePreference,
   type SubagentSurfaceMessageCache,
 } from "@/state/workbench-state";
 import type {
@@ -85,9 +81,6 @@ interface WorkbenchConversationActionsOptions {
   // Monotonic subagent route request sequence.
   // 单调递增的子代理路由请求序号。
   subagentNavigationRequestSeqRef: React.MutableRefObject<number>;
-  // Last user-selected subagent route preference.
-  // 用户最后选择的子代理路由偏好。
-  subagentRoutePreferenceRef: React.MutableRefObject<SubagentRoutePreference | null>;
   // In-flight backend open request for subagent surfaces.
   // 正在进行的子代理界面后端打开请求。
   inflightSubagentOpenRequestRef: React.MutableRefObject<InflightSubagentOpenRequest | null>;
@@ -111,7 +104,6 @@ export function useWorkbenchConversationActions(options: WorkbenchConversationAc
     selectedConversationIdRef,
     workbenchStateRef,
     subagentNavigationRequestSeqRef,
-    subagentRoutePreferenceRef,
     inflightSubagentOpenRequestRef,
     subagentSurfaceMessageCacheRef,
   } = options;
@@ -212,8 +204,8 @@ const handleCompactSelectedConversationContext = React.useCallback(async (): Pro
   }
 }, [translate]);
 
-// handleOpenSubagentPanel asks the backend to display one child task surface and reports whether it succeeded.
-// handleOpenSubagentPanel 请求后端显示单个子任务界面，并返回是否打开成功。
+// handleOpenSubagentPanel loads one child transcript without replacing the parent conversation surface.
+// handleOpenSubagentPanel 加载单个子任务转录，但不替换父会话主界面。
 const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
   const routeKey = `${parentConversationId}:${taskId}`;
   const existingRequest = inflightSubagentOpenRequestRef.current;
@@ -223,34 +215,19 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
     parentConversationId,
     taskId,
   )) {
-    subagentRoutePreferenceRef.current = { parentConversationId, taskId };
     webuiClickTrace("subagent.open.local_cache", { parentConversationId, taskId, routeKey });
-    setWorkbenchState((current) => openSubagentSurfaceForConversation(
-      injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
-      parentConversationId,
-      taskId,
-    ));
+    setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
     return true;
   }
   if (existingRequest?.key === routeKey) {
-    subagentRoutePreferenceRef.current = { parentConversationId, taskId };
     webuiClickTrace("subagent.open.coalesced", { parentConversationId, taskId, routeKey });
-    setWorkbenchState((current) => openSubagentSurfaceForConversation(
-      injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
-      parentConversationId,
-      taskId,
-    ));
+    setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
     return true;
   }
   const requestSeq = subagentNavigationRequestSeqRef.current + 1;
   subagentNavigationRequestSeqRef.current = requestSeq;
-  subagentRoutePreferenceRef.current = { parentConversationId, taskId };
   webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq, routeKey });
-  setWorkbenchState((current) => openSubagentSurfaceForConversation(
-    injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
-    parentConversationId,
-    taskId,
-  ));
+  setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
   const requestPromise = openSubagentPanel(parentConversationId, taskId);
   inflightSubagentOpenRequestRef.current = { key: routeKey, promise: requestPromise };
   try {
@@ -266,12 +243,8 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
           requestSeq,
           latestRequestSeq: subagentNavigationRequestSeqRef.current,
         });
-        return true;
       }
-      setWorkbenchState((current) => applySubagentRoutePreference(
-        mergeWorkbenchWithLocalCaches(current, snapshot),
-        subagentRoutePreferenceRef.current,
-      ));
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     }
     webuiClickTrace("subagent.open.result", {
       parentConversationId,
@@ -296,17 +269,13 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
   }
 }, []);
 
-// handleCloseSubagentPanel asks the backend to return to the parent conversation surface.
-// handleCloseSubagentPanel 请求后端返回父会话界面。
+// handleCloseSubagentPanel keeps a legacy service edge for callers that still request backend panel closure.
+// handleCloseSubagentPanel 保留旧调用方请求后端关闭面板的服务边界。
 const handleCloseSubagentPanel = React.useCallback(async (): Promise<void> => {
   const parentConversationId = selectedConversationIdRef.current;
   inflightSubagentOpenRequestRef.current = null;
   const requestSeq = subagentNavigationRequestSeqRef.current + 1;
   subagentNavigationRequestSeqRef.current = requestSeq;
-  if (parentConversationId) {
-    subagentRoutePreferenceRef.current = { parentConversationId, taskId: null };
-    setWorkbenchState((current) => closeSubagentSurfaceForConversation(current, parentConversationId));
-  }
   webuiClickTrace("subagent.close.invoke", { parentConversationId, requestSeq });
   try {
     const snapshot = await closeSubagentPanel();
@@ -319,10 +288,7 @@ const handleCloseSubagentPanel = React.useCallback(async (): Promise<void> => {
         });
         return;
       }
-      setWorkbenchState((current) => applySubagentRoutePreference(
-        mergeWorkbenchWithLocalCaches(current, snapshot),
-        subagentRoutePreferenceRef.current,
-      ));
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     }
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));

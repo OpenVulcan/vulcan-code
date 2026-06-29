@@ -298,7 +298,7 @@
     background-color 120ms ease;
 }
 
-.conversation-session-tool-collapsed.has-progress.workspace-tool-panel-menu-collapsed {
+.conversation-session-tool-collapsed.has-multiple-rows.workspace-tool-panel-menu-collapsed {
   display: grid;
   grid-template-columns: max-content 0;
   row-gap: 2px;

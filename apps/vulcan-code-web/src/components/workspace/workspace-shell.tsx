@@ -59,6 +59,7 @@ import {
   emptyWorkspaceContextTabState,
   normalizeWorkspaceContextTabState,
   openWorkspaceContextTab,
+  openWorkspaceSubagentContextTab,
   renameWorkspaceFileContextTab,
   trimWorkspaceContextTabStateCache,
   workspaceContextTabStateCache,
@@ -84,6 +85,31 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
     </SidebarProvider>
   );
 }
+
+type WorkspaceShellSubagentNavigation = NonNullable<WorkspaceShellProps["workbench"]["subagentNavigation"]>;
+type WorkspaceShellSubagentTask = NonNullable<WorkspaceShellSubagentNavigation["tasks"]>[number];
+
+// resolveWorkspaceSubagentTask maps a tool-row selector to the backend UUID task used by the side panel.
+// resolveWorkspaceSubagentTask 将工具行选择器映射为右侧面板使用的后端 UUID 任务。
+function resolveWorkspaceSubagentTask(
+  // Current subagent navigation snapshot for the selected parent session.
+  // 当前选中父会话的子代理导航快照。
+  navigation: WorkspaceShellSubagentNavigation | null,
+  // Selector supplied by a floating panel row or transcript tool row.
+  // 浮动面板行或转录工具行提供的选择器。
+  selector: string,
+): WorkspaceShellSubagentTask | null {
+  const normalizedSelector = selector.trim();
+  if (!navigation || !normalizedSelector) {
+    return null;
+  }
+  return navigation.tasks?.find((task) => (
+    task.taskId === normalizedSelector
+    || task.publicTaskId === normalizedSelector
+    || task.label === normalizedSelector
+  )) ?? null;
+}
+
 // WorkspaceShellContent renders the workspace shell after sidebar context is available.
 // WorkspaceShellContent 在侧栏上下文可用后渲染工作台外壳。
 function WorkspaceShellContent(props: WorkspaceShellProps) {
@@ -278,6 +304,19 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: renameWorkspaceFileContextTab(current.state, tabId, title, t),
     }));
   }, [t]);
+  // openRightContextPanel opens the context rail and chooses floating mode from the current shell width.
+  // openRightContextPanel 打开上下文栏，并根据当前外壳宽度选择浮动模式。
+  const openRightContextPanel = React.useCallback(() => {
+    notifyConversationLayoutWillChange();
+    const width = shellRef.current?.getBoundingClientRect().width ?? 0;
+    const expandedLeftWidth = 288;
+    const collapsedLeftWidth = 46;
+    const preferredRightWidth = 480;
+    const handleWidth = 9;
+    const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+    setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
+    setRightPanelOpen(true);
+  }, [notifyConversationLayoutWillChange, sidebar.open]);
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -294,15 +333,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       setRightPanelOpen(false);
       return;
     }
-    const width = shellRef.current?.getBoundingClientRect().width ?? 0;
-    const expandedLeftWidth = 288;
-    const collapsedLeftWidth = 46;
-    const preferredRightWidth = 480;
-    const handleWidth = 9;
-    const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
-    setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
-    setRightPanelOpen(true);
-  }, [notifyConversationLayoutWillChange, rightPanelOpen, sidebar.open]);
+    openRightContextPanel();
+  }, [notifyConversationLayoutWillChange, openRightContextPanel, rightPanelOpen]);
 
   // handleOpenReviewChanges opens the right panel and focuses the live uncommitted review source.
   // handleOpenReviewChanges 打开右侧面板并聚焦实时未提交审核来源。
@@ -310,18 +342,40 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     if (!hasSelectedChatConversation) {
       return;
     }
-    notifyConversationLayoutWillChange();
     openContextTab("review");
     setReviewFocusRequest((current) => current + 1);
-    const width = shellRef.current?.getBoundingClientRect().width ?? 0;
-    const expandedLeftWidth = 288;
-    const collapsedLeftWidth = 46;
-    const preferredRightWidth = 480;
-    const handleWidth = 9;
-    const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
-    setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
-    setRightPanelOpen(true);
-  }, [hasSelectedChatConversation, notifyConversationLayoutWillChange, openContextTab, sidebar.open]);
+    openRightContextPanel();
+  }, [hasSelectedChatConversation, openContextTab, openRightContextPanel]);
+
+  // handleOpenSubagentPanel opens a read-only subagent transcript tab in the right context panel.
+  // handleOpenSubagentPanel 在右侧上下文面板中打开只读子代理转录页签。
+  const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
+    // navigation stores the current backend task projection when it belongs to the requested parent.
+    // navigation 保存请求父会话对应的当前后端任务投影。
+    const navigation = props.workbench.subagentNavigation?.parentConversationId === parentConversationId
+      ? props.workbench.subagentNavigation
+      : null;
+    // task stores the visible task row used for the tab title when available.
+    // task 保存可用时用于页签标题的可见任务行。
+    const task = resolveWorkspaceSubagentTask(navigation, taskId);
+    const resolvedTaskId = task?.taskId ?? taskId;
+    const opened = await props.onOpenSubagentPanel(parentConversationId, resolvedTaskId);
+    if (!opened) {
+      return false;
+    }
+    setContextTabStateEntry((current) => ({
+      ...current,
+      state: openWorkspaceSubagentContextTab(
+        current.state,
+        parentConversationId,
+        resolvedTaskId,
+        task?.label ?? resolvedTaskId,
+        t,
+      ),
+    }));
+    openRightContextPanel();
+    return true;
+  }, [openRightContextPanel, props.onOpenSubagentPanel, props.workbench.subagentNavigation, t]);
 
   // handleSessionToolExpandedChange preserves the transcript viewport before Git panel shape changes.
   // handleSessionToolExpandedChange 在 Git 面板形态变化前保留转录视口。
@@ -373,10 +427,22 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionGitCommitActionVisible keeps shared commit triggers visible for Git repositories or running Git work.
   // sessionGitCommitActionVisible 在 Git 仓库或正在执行 Git 工作时保持共享提交入口可见。
   const sessionGitCommitActionVisible = sessionGitRepositoryAvailable || Boolean(gitCommitBusyState);
+  // sessionSubagentNavigation keeps subagent tool rows scoped to the selected parent conversation.
+  // sessionSubagentNavigation 将子代理工具行限定在当前选中的父会话范围内。
+  const sessionSubagentNavigation = hasSelectedChatConversation
+    && props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
+    ? props.workbench.subagentNavigation
+    : null;
+  // visibleSessionSubagentTaskCount excludes stopped tasks from the session tool panel summary.
+  // visibleSessionSubagentTaskCount 从会话工具面板摘要中排除已停止任务。
+  const visibleSessionSubagentTaskCount = React.useMemo(
+    () => (sessionSubagentNavigation?.tasks ?? []).filter((task) => task.runState !== "stopped").length,
+    [sessionSubagentNavigation?.tasks],
+  );
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
   // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
   const sessionToolPanelVisible = hasSelectedChatConversation && (
-    sessionGitCommitActionVisible || visibleSessionTerminalSessions.length > 0
+    sessionGitCommitActionVisible || visibleSessionTerminalSessions.length > 0 || visibleSessionSubagentTaskCount > 0
   );
 
   // refreshProjectGitSummary reloads the shared Git summary for one project path.
@@ -755,7 +821,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
         onSetSessionPlanMode={props.onSetSessionPlanMode}
         onStopConversationRun={props.onStopConversationRun}
-        onOpenSubagentPanel={props.onOpenSubagentPanel}
+        onOpenSubagentPanel={handleOpenSubagentPanel}
         onCloseSubagentPanel={props.onCloseSubagentPanel}
         onStopSubagentTask={props.onStopSubagentTask}
         onEditPendingPrompt={props.onEditPendingPrompt}
@@ -778,6 +844,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           props.workbench.sessionGoal ? `goal-${props.workbench.sessionGoal.status}` : "no-goal",
           sessionReviewSummary && sessionReviewSummary.changedFiles > 0 ? "review-summary" : "no-review-summary",
           visibleSessionTerminalSessions.length > 0 ? `terminal-${visibleSessionTerminalSessions.length}` : "no-terminal",
+          visibleSessionSubagentTaskCount > 0 ? `subagent-${visibleSessionSubagentTaskCount}` : "no-subagent",
           sessionToolPanelVisible && sessionToolExpanded ? "review-expanded" : "review-collapsed",
           effectiveRightPanelOpen ? "context-open" : "context-closed",
           rightPanelFloating ? "context-floating" : "context-docked",
@@ -801,11 +868,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           commitDialogOpen={gitCommitDialogOpen}
           expanded={sessionToolExpanded}
           reviewSummary={sessionReviewSummary}
+          subagentNavigation={sessionSubagentNavigation}
           terminalSessions={sessionTerminalSessions}
           todolist={null}
           onCommitDialogOpenChange={setGitCommitDialogOpen}
           onExpandedChange={handleSessionToolExpandedChange}
           onOpenReviewChanges={handleOpenReviewChanges}
+          onOpenSubagentPanel={handleOpenSubagentPanel}
           onStopCommandSession={props.onStopCommandSession}
         />
       ) : null,
@@ -862,7 +931,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onCloseContextTab={closeContextTab}
           onFileContextTabTitleChange={updateFileContextTabTitle}
           onOpenContextTab={openContextTab}
-          onOpenSubagentPanel={props.onOpenSubagentPanel}
+          onOpenSubagentPanel={handleOpenSubagentPanel}
           onCloseSubagentPanel={props.onCloseSubagentPanel}
           onStopSubagentTask={props.onStopSubagentTask}
           onStopCommandSession={props.onStopCommandSession}
@@ -879,6 +948,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onWorkspaceDiffSnapshotLoaded={recordWorkspaceDiffSnapshotForProject}
           onWorkspaceGitStateChanged={refreshProjectGitSummary}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
+          onLoadToolDetail={props.onLoadToolDetail}
           onTrace={props.onTrace}
           gitCommitActionBusy={Boolean(gitCommitBusyState)}
           gitCommitActionDisabled={!sessionGitCommitActionAvailable}
