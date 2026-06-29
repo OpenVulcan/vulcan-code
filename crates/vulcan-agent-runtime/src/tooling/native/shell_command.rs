@@ -179,6 +179,12 @@ pub(crate) struct RtkRoutingDecision {
 }
 
 impl RtkRoutingDecision {
+    /// Returns the stable display status for this RTK decision.
+    /// 返回该 RTK 决策的稳定展示状态。
+    fn status(&self) -> &'static str {
+        if self.applied { "applied" } else { "bypassed" }
+    }
+
     /// Builds an applied RTK routing decision.
     /// 构建已应用的 RTK 路由决策。
     fn applied(
@@ -910,6 +916,7 @@ pub(crate) fn build_shell_command_host_payload(
 
     if let Some(decision) = rtk_decision {
         payload["rtk"] = json!({
+            "status": decision.status(),
             "applied": decision.applied,
             "original_command": decision.original_command,
             "rewritten_command": decision.rewritten_command,

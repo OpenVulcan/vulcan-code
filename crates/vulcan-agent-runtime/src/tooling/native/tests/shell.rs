@@ -454,6 +454,7 @@ async fn shell_command_tool_records_disabled_rtk_bypass() {
         host_result.payload["rtk"]["bypass_reason"],
         json!("disabled_by_invocation")
     );
+    assert_eq!(host_result.payload["rtk"]["status"], json!("bypassed"));
 }
 
 /// The shell-session tool should support a full start-read-write-read-stop round trip and keep the command-session identifier stable across actions.

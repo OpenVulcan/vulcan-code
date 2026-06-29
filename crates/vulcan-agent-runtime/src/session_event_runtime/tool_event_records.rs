@@ -362,7 +362,7 @@ pub(super) fn raw_visible_host_result(
 /// Returns whether one host-result kind is small and structured enough for visible transcript metadata.
 /// 判断一个宿主结果类型是否足够紧凑且结构化，可安全保留在可见转录元数据里。
 pub(super) fn raw_host_result_kind_is_visible(kind: Option<&str>) -> bool {
-    matches!(kind, Some("change_set" | "ask"))
+    matches!(kind, Some("change_set" | "ask" | "command_run"))
 }
 
 /// Attaches one compact tool result to an existing visible tool-call record.

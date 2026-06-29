@@ -94,7 +94,7 @@ pub(super) fn tool_result_display_payload(
     model_output: &str,
 ) -> serde_json::Value {
     if tool_name == Some("shell_command") {
-        return shell_command_display_payload(display_state, model_output);
+        return shell_command_display_payload(display_state, metadata, model_output);
     }
     if tool_name == Some("vulcan_file_list") {
         return vulcan_file_list_display_payload(display_state, metadata, model_output);
@@ -303,6 +303,7 @@ pub(super) fn compact_display_summary(source: &str) -> String {
 /// 将 shell_command 模型输出解析为命令、状态和输出流字段用于展示。
 pub(super) fn shell_command_display_payload(
     display_state: &str,
+    metadata: Option<&serde_json::Value>,
     model_output: &str,
 ) -> serde_json::Value {
     let mut object = serde_json::Map::new();
@@ -375,5 +376,44 @@ pub(super) fn shell_command_display_payload(
             serde_json::Value::String(stderr.join("\n").trim().to_string()),
         );
     }
+    merge_shell_command_rtk_display_fields(&mut object, metadata);
     serde_json::Value::Object(object)
+}
+
+/// Merges structured RTK routing status from the command_run host payload into the shell display.
+/// 将 command_run 宿主载荷中的结构化 RTK 路由状态合并进 shell 展示。
+pub(super) fn merge_shell_command_rtk_display_fields(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    metadata: Option<&serde_json::Value>,
+) {
+    let Some(payload) =
+        metadata.and_then(|metadata| host_result_payload_by_kind(metadata, "command_run"))
+    else {
+        return;
+    };
+    let Some(rtk) = payload.get("rtk").filter(|value| value.is_object()) else {
+        return;
+    };
+    object.insert(String::from("rtk"), rtk.clone());
+    if rtk.get("status").and_then(serde_json::Value::as_str) != Some("applied") {
+        return;
+    }
+    if let Some(original_command) = rtk
+        .get("original_command")
+        .and_then(serde_json::Value::as_str)
+    {
+        object.insert(
+            String::from("command"),
+            serde_json::Value::String(original_command.to_string()),
+        );
+    }
+    if let Some(rewritten_command) = rtk
+        .get("rewritten_command")
+        .and_then(serde_json::Value::as_str)
+    {
+        object.insert(
+            String::from("effective_command"),
+            serde_json::Value::String(rewritten_command.to_string()),
+        );
+    }
 }

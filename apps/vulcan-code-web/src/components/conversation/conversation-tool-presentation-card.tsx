@@ -494,6 +494,7 @@ function CommandExecutionPresentationCard(props: {
     : commandPresentationStatusLabel(hydratedPresentation.state, t);
   const sessionMetaLabel = commandSessionMetaLabel(hydratedPresentation, t);
   const detailHeading = commandDetailHeading(hydratedPresentation, t);
+  const detailCommandText = commandDetailText(hydratedPresentation);
   const handleToggle = React.useCallback(() => {
     dispatchConversationManualViewportInteraction();
     onExpandedChange(presentation.id, !expanded);
@@ -505,11 +506,14 @@ function CommandExecutionPresentationCard(props: {
         aria-expanded={expanded}
         className="tool-presentation-summary"
         onClick={handleToggle}
-        title={presentation.command}
+        title={hydratedPresentation.rtkRouted ? `${hydratedPresentation.command}\nRTK: ${detailCommandText}` : hydratedPresentation.command}
         type="button"
       >
         <TerminalSquare className={cn("terminal-session-icon", terminalState && terminalStateClass(terminalState))} size={15} />
         <span className="tool-presentation-state">{statusLabel}</span>
+        <span className={cn("tool-presentation-route-badge", !hydratedPresentation.rtkRouted && "empty")}>
+          {hydratedPresentation.rtkRouted ? "RTK" : ""}
+        </span>
         <span className="tool-presentation-command">{hydratedPresentation.command}</span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -519,7 +523,7 @@ function CommandExecutionPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`command-detail:${presentation.id}`} expanded={expanded}>
         <div className="tool-presentation-detail">
-          <pre className="tool-presentation-command-line"><span>{detailHeading}</span> {commandDetailText(hydratedPresentation)}</pre>
+          <pre className="tool-presentation-command-line"><span>{detailHeading}</span> {detailCommandText}</pre>
           {hydratedPresentation.cwd || hydratedPresentation.shellLabel ? (
             <div className="tool-presentation-terminal-meta">
               {hydratedPresentation.shellLabel ? <span>{hydratedPresentation.shellLabel}</span> : null}
@@ -600,7 +604,7 @@ function commandDetailText(presentation: CommandExecutionPresentation): string {
   if (presentation.commandSessionAction === "write" || presentation.commandSessionAction === "send") {
     return presentation.commandSessionInput?.trim() || presentation.command;
   }
-  return presentation.command;
+  return presentation.effectiveCommand?.trim() || presentation.command;
 }
 
 // commandSessionMetaLabel builds the footer text without making old actions look failed.

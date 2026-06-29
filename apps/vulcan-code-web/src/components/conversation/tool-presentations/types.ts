@@ -34,6 +34,12 @@ export interface CommandExecutionPresentation {
   // Command text shown in both collapsed and expanded states.
   // 折叠与展开状态都会展示的命令文本。
   command: string;
+  // Effective command text actually executed after host-side rewrites.
+  // 宿主侧改写后实际执行的有效命令文本。
+  effectiveCommand?: string | null;
+  // Whether the command was routed through RTK.
+  // 命令是否已通过 RTK 路由。
+  rtkRouted?: boolean;
   // Optional live command-session id for session-backed terminal rows.
   // 会话型终端行使用的可选实时命令会话标识。
   commandSessionId?: string | null;

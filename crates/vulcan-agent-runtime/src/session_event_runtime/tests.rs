@@ -453,6 +453,201 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
     );
 }
 
+/// Verifies command_run host metadata stays visible so shell cards can mark RTK routing before expansion.
+/// 验证 command_run 宿主元数据保留在可见行中，使 shell 卡片展开前即可标记 RTK 路由。
+#[test]
+fn tool_result_projection_preserves_command_run_rtk_host_result() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · call-shell · shell_command",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-shell",
+        "tool_name": "shell_command",
+        "arguments": {
+            "command": "git status"
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3150",
+        &started,
+    ));
+    let finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-shell",
+        "## Result ID\n\n`tool-result-call-shell`\n\n## Tool Result\n\nCommand: rtk git status\nRTK: applied (git)\nOriginal command: git status\n\n[stdout]\nmain",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-shell",
+        "tool_result_id": "tool-result-call-shell",
+        "tool_name": "shell_command",
+        "display_state": "completed",
+        "host_result": {
+            "kind": "command_run",
+            "payload": {
+                "command": "rtk git status",
+                "status": "completed",
+                "rtk": {
+                    "status": "applied",
+                    "applied": true,
+                    "original_command": "git status",
+                    "rewritten_command": "rtk git status",
+                    "routes": ["git"]
+                }
+            }
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3151",
+        &finished,
+    ));
+
+    let tool_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+        .expect("shell tool call record should remain visible");
+    let metadata = tool_record.metadata.as_ref().expect("shell metadata");
+    assert_eq!(
+        metadata
+            .get("host_result")
+            .and_then(|host_result| host_result.get("kind"))
+            .and_then(serde_json::Value::as_str),
+        Some("command_run")
+    );
+    assert_eq!(
+        metadata
+            .get("host_result")
+            .and_then(|host_result| host_result.get("payload"))
+            .and_then(|payload| payload.get("rtk"))
+            .and_then(|rtk| rtk.get("status"))
+            .and_then(serde_json::Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        metadata
+            .get("host_result")
+            .and_then(|host_result| host_result.get("payload"))
+            .and_then(|payload| payload.get("rtk"))
+            .and_then(|rtk| rtk.get("rewritten_command"))
+            .and_then(serde_json::Value::as_str),
+        Some("rtk git status")
+    );
+    let detail_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolDetailOutput)
+        .expect("shell detail record should be hidden");
+    let display = detail_record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("display"))
+        .expect("shell detail display");
+    assert_eq!(
+        display
+            .get("rtk")
+            .and_then(|rtk| rtk.get("status"))
+            .and_then(serde_json::Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        display
+            .get("effective_command")
+            .and_then(serde_json::Value::as_str),
+        Some("rtk git status")
+    );
+}
+
+/// Verifies RTK display projection requires the explicit structured status marker.
+/// 验证 RTK 展示投影必须依赖显式结构化状态标记。
+#[test]
+fn tool_result_projection_requires_rtk_status_marker() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · call-shell-no-status · shell_command",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-shell-no-status",
+        "tool_name": "shell_command",
+        "arguments": {
+            "command": "git status"
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3160",
+        &started,
+    ));
+    let finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-shell-no-status",
+        "## Result ID\n\n`tool-result-call-shell-no-status`\n\n## Tool Result\n\nCommand: rtk git status\nRTK: applied (git)\nOriginal command: git status\n\n[stdout]\nmain",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-shell-no-status",
+        "tool_result_id": "tool-result-call-shell-no-status",
+        "tool_name": "shell_command",
+        "display_state": "completed",
+        "host_result": {
+            "kind": "command_run",
+            "payload": {
+                "command": "rtk git status",
+                "status": "completed",
+                "rtk": {
+                    "applied": true,
+                    "original_command": "git status",
+                    "rewritten_command": "rtk git status",
+                    "routes": ["git"]
+                }
+            }
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3161",
+        &finished,
+    ));
+
+    let detail_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolDetailOutput)
+        .expect("shell detail record should be hidden");
+    let display = detail_record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("display"))
+        .expect("shell detail display");
+    assert!(
+        display
+            .get("effective_command")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    );
+    assert!(
+        display
+            .get("rtk")
+            .and_then(|rtk| rtk.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    );
+}
+
 /// Verifies ask answers are persisted as structured display data instead of requiring Markdown parsing.
 /// 验证 ask 答案会以结构化展示数据持久化，而不需要从 Markdown 文本反解析。
 #[test]

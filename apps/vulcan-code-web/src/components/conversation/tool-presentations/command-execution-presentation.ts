@@ -369,9 +369,11 @@ export function resolveCommandExecutionPresentation(
   return {
     command,
     detailRef,
+    effectiveCommand: display?.effectiveCommand ?? null,
     exitCode: display?.exitCode ?? null,
     id: commandPresentationId(blocks, command),
     kind: "command_execution",
+    rtkRouted: display?.rtkRouted ?? false,
     state: displayState,
     stderr: display?.stderr ?? "",
     stdout: display?.stdout ?? "",
@@ -381,6 +383,13 @@ export function resolveCommandExecutionPresentation(
 // firstShellCommandDisplay returns the first structured shell_command display found on visible blocks.
 // firstShellCommandDisplay 返回可见块上找到的首个结构化 shell_command 展示。
 function firstShellCommandDisplay(blocks: ToolExecutionConversationBlock[]): ShellCommandDisplay | null {
+  const payload = fixedHostPayload(blocks);
+  if (payload) {
+    const display = shellCommandDisplayFromPayload(payload);
+    if (display) {
+      return display;
+    }
+  }
   for (const block of blocks) {
     const display = shellCommandDisplayFromMetadata(block.rawMetadata) ?? parseShellCommandDisplayFromText(block.body);
     if (display) {
@@ -440,10 +449,14 @@ function mergeCommandExecutionDisplay(
   presentation: CommandExecutionPresentation,
   display: ShellCommandDisplay,
 ): CommandExecutionPresentation {
+  const rtkRouted = display.rtkRouted || presentation.rtkRouted;
+  const effectiveCommand = display.effectiveCommand ?? presentation.effectiveCommand;
   return {
     ...presentation,
     command: display.command || presentation.command,
+    effectiveCommand,
     exitCode: display.exitCode ?? presentation.exitCode,
+    rtkRouted,
     stderr: display.stderr || presentation.stderr,
     stdout: display.stdout || presentation.stdout,
   };
@@ -490,6 +503,12 @@ interface ShellCommandDisplay {
   // Raw command line.
   // 原始命令行。
   command: string;
+  // Effective command line after host routing.
+  // 宿主路由后的有效命令行。
+  effectiveCommand: string | null;
+  // Whether this display was routed through RTK.
+  // 此展示是否经过 RTK 路由。
+  rtkRouted: boolean;
   // Parsed stdout text.
   // 解析出的 stdout 文本。
   stdout: string;
@@ -501,21 +520,72 @@ interface ShellCommandDisplay {
   exitCode: number | null;
 }
 
+// shellCommandDisplayFromPayload reads shell command display data from host_result.payload.
+// shellCommandDisplayFromPayload 从 host_result.payload 读取 shell 命令展示数据。
+function shellCommandDisplayFromPayload(payload: Record<string, unknown>): ShellCommandDisplay | null {
+  const rtk = rtkRoutingInfoFromPayload(payload);
+  const command = rtk?.originalCommand ?? stringValue(payload.command) ?? "";
+  const effectiveCommand = rtk?.rewrittenCommand ?? null;
+  const exitCode = numberValue(payload.exit_code ?? payload.exitCode);
+  if (!command && exitCode === null) {
+    return null;
+  }
+  return { command, effectiveCommand, exitCode, rtkRouted: Boolean(rtk), stderr: "", stdout: "" };
+}
+
 // shellCommandDisplayFromMetadata reads a structured shell_command display from metadata.
 // shellCommandDisplayFromMetadata 从 metadata 中读取结构化 shell_command 展示。
 function shellCommandDisplayFromMetadata(metadata: unknown): ShellCommandDisplay | null {
   const display = objectValue(metadataValue(metadata, ["display"]));
-  if (!display || stringValue(display.kind) !== "shell_command") {
+  const payload = objectValue(metadataValue(metadata, ["host_result.payload", "hostResult.payload", "payload"]));
+  const rtk = rtkRoutingInfoFromPayload(payload) ?? rtkRoutingInfoFromDisplay(display);
+  if ((!display || stringValue(display.kind) !== "shell_command") && !rtk) {
     return null;
   }
-  const command = stringValue(display.command) ?? "";
-  const stdout = stringValue(display.stdout) ?? "";
-  const stderr = stringValue(display.stderr) ?? "";
-  const exitCode = numberValue(display.exit_code ?? display.exitCode);
+  const command = rtk?.originalCommand ?? stringValue(display?.command) ?? "";
+  const effectiveCommand = rtk?.rewrittenCommand ?? stringValue(display?.effective_command ?? display?.effectiveCommand);
+  const stdout = stringValue(display?.stdout) ?? "";
+  const stderr = stringValue(display?.stderr) ?? "";
+  const exitCode = numberValue(display?.exit_code ?? display?.exitCode);
   if (!command && !stdout && !stderr && exitCode === null) {
     return null;
   }
-  return { command, exitCode, stderr, stdout };
+  return { command, effectiveCommand, exitCode, rtkRouted: Boolean(rtk), stderr, stdout };
+}
+
+// RtkRoutingDisplayInfo stores original and rewritten commands for routed displays.
+// RtkRoutingDisplayInfo 存储路由展示使用的原始命令和改写命令。
+interface RtkRoutingDisplayInfo {
+  // Original command requested by the AI.
+  // AI 请求的原始命令。
+  originalCommand: string;
+  // Effective RTK command executed by the host.
+  // 宿主实际执行的 RTK 有效命令。
+  rewrittenCommand: string;
+}
+
+// rtkRoutingInfoFromPayload returns applied RTK command information from one host payload.
+// rtkRoutingInfoFromPayload 从单个宿主载荷中返回已应用的 RTK 命令信息。
+function rtkRoutingInfoFromPayload(payload: Record<string, unknown> | null): RtkRoutingDisplayInfo | null {
+  return rtkRoutingInfoFromRtkValue(objectValue(payload?.rtk));
+}
+
+// rtkRoutingInfoFromDisplay returns applied RTK state from one shell display payload.
+// rtkRoutingInfoFromDisplay 从 shell 展示载荷中返回已应用的 RTK 状态。
+function rtkRoutingInfoFromDisplay(display: Record<string, unknown> | null): RtkRoutingDisplayInfo | null {
+  return rtkRoutingInfoFromRtkValue(objectValue(display?.rtk));
+}
+
+// rtkRoutingInfoFromRtkValue returns applied RTK command information from one structured RTK value.
+// rtkRoutingInfoFromRtkValue 从单个结构化 RTK 值中返回已应用的命令信息。
+function rtkRoutingInfoFromRtkValue(rtk: Record<string, unknown> | null): RtkRoutingDisplayInfo | null {
+  const status = stringValue(rtk?.status);
+  if (!rtk || status !== "applied") {
+    return null;
+  }
+  const originalCommand = stringValue(rtk.original_command ?? rtk.originalCommand);
+  const rewrittenCommand = stringValue(rtk.rewritten_command ?? rtk.rewrittenCommand);
+  return originalCommand && rewrittenCommand ? { originalCommand, rewrittenCommand } : null;
 }
 
 // shellCommandArgumentFromMetadata reads shell_command from the fixed ToolStarted arguments field.
@@ -534,7 +604,14 @@ function parseShellCommandDisplayFromText(source: string): ShellCommandDisplay |
   if (!command && !stdout && !stderr && exitCode === null) {
     return null;
   }
-  return { command, exitCode, stderr, stdout };
+  return {
+    command,
+    effectiveCommand: null,
+    exitCode,
+    rtkRouted: false,
+    stderr,
+    stdout,
+  };
 }
 
 // commandFromText extracts a command header from rendered shell_command text.
