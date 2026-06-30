@@ -410,6 +410,12 @@ export function ConversationRenderItemView(props: {
     props.expandedUserPromptIds.has(userPromptKey),
   );
   const userPromptExpanded = props.expandedUserPromptIds.has(userPromptKey) || measuredUserPromptExpanded;
+  // userPromptCollapseExpanded keeps every user prompt on the measured-collapse path while only long prompts fold.
+  // userPromptCollapseExpanded 让所有用户提示词都经过稳定测量折叠路径，仅长提示词实际收起。
+  const userPromptCollapseExpanded = !userPromptOverflowing || userPromptExpanded;
+  // userPromptMeasuredCollapsedHeight avoids hiding short prompts while preserving the long-prompt preview height.
+  // userPromptMeasuredCollapsedHeight 避免隐藏短提示词，同时保留长提示词的预览高度。
+  const userPromptMeasuredCollapsedHeight = userPromptOverflowing ? userPromptCollapsedHeight : 0;
   const userTimestampMs = conversationMessageUnixMillis(props.item.userMessage);
   const userTimestamp = formatShortConversationTimestamp(props.item.userMessage);
   const handleCopyUserPrompt = React.useCallback(async () => {
@@ -471,23 +477,16 @@ export function ConversationRenderItemView(props: {
           />
         ) : null}
         <div className="user-bubble">
-          {userBody && userPromptOverflowing ? (
+          {userBody ? (
             <ConversationMeasuredCollapse
               collapseId={`user-prompt-body:${userPromptKey}`}
-              collapsedHeight={userPromptCollapsedHeight}
-              expanded={userPromptExpanded}
+              collapsedHeight={userPromptMeasuredCollapsedHeight}
+              expanded={userPromptCollapseExpanded}
             >
               <p className="user-prompt-text" ref={userPromptTextRef}>
                 {userBody}
               </p>
             </ConversationMeasuredCollapse>
-          ) : userBody ? (
-            <p
-              className="user-prompt-text"
-              ref={userPromptTextRef}
-            >
-              {userBody}
-            </p>
           ) : null}
           {userPromptOverflowing ? (
             <button
