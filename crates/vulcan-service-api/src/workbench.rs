@@ -5,6 +5,10 @@ use super::*;
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchSnapshot {
+    /// Monotonic workbench revision shared by full snapshots and delta events.
+    /// 全量快照与增量事件共享的工作台单调版本号。
+    #[serde(default)]
+    pub revision: u64,
     /// Active application version.
     /// 当前应用版本。
     pub app_version: String,
@@ -122,10 +126,18 @@ pub struct WorkbenchSnapshot {
     /// 当前选中会话保留的可见待发送提示词。
     #[serde(default)]
     pub pending_prompts: Vec<PendingPromptSummary>,
+    /// Pending prompt queues retained for every conversation that has one.
+    /// 为每个存在待发送队列的会话保留的待发送提示词队列。
+    #[serde(default)]
+    pub pending_prompts_by_conversation: Vec<PendingPromptsChangedDelta>,
     /// Oldest pending ask-tool question waiting for user input.
     /// 当前等待用户输入的最早 ask 工具问题。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_question: Option<PendingQuestionSnapshot>,
+    /// Pending ask-tool questions grouped by their owning conversation.
+    /// 按所属会话保留的 ask 工具待回答问题。
+    #[serde(default)]
+    pub pending_questions: Vec<PendingQuestionSnapshot>,
     /// Current session todolist shown in the conversation tool panel.
     /// 当前会话工具面板展示的会话 todolist。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +150,10 @@ pub struct WorkbenchSnapshot {
     /// 当前会话输入区控制项展示的计划模式状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_plan_mode: Option<SessionPlanModeSummary>,
+    /// Session addon projections retained for every conversation that has addon state.
+    /// 为每个存在附属状态的会话保留的会话附属投影。
+    #[serde(default)]
+    pub session_addons_by_conversation: Vec<SessionAddonsChangedDelta>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,

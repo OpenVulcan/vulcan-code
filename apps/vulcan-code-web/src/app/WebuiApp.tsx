@@ -13,7 +13,6 @@ import { I18nProvider, normalizeLocaleCode } from "@/i18n";
 import { translations, type LocaleCode, type TranslationKey } from "@/i18n-messages";
 import type {
   StartupSnapshot,
-  SessionAddonChangedEvent,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
@@ -37,6 +36,10 @@ import { toast } from "sonner";
 // STREAMING_DELTA_FLUSH_MS batches hot transcript deltas so React and GC are not driven at display-frame cadence.
 // STREAMING_DELTA_FLUSH_MS 将高频转录增量批处理，避免 React 与 GC 被显示帧率牵引。
 const STREAMING_DELTA_FLUSH_MS = 80;
+
+// WORKBENCH_DELTA_GAP_RECOVERY_MS waits briefly for out-of-order delta gaps before falling back to a full snapshot.
+// WORKBENCH_DELTA_GAP_RECOVERY_MS 在增量乱序缺口处短暂等待，超时后回退到完整快照。
+const WORKBENCH_DELTA_GAP_RECOVERY_MS = 400;
 
 // BootResult stores the startup snapshot that allowed the real workbench to mount.
 // BootResult 保存允许真实工作台挂载的启动快照。
@@ -163,11 +166,20 @@ function WorkbenchApp(props: {
   // workbenchDelta 保存最近一次局部工作台更新信号。
   const [workbenchDelta, setWorkbenchDelta] = React.useState<WorkbenchDeltaSignal | null>(null);
   // workbenchDeltaBufferRef batches hot-path deltas until the next scheduled flush.
-  // workbenchDeltaBufferRef 将热路径增量批处理到下一次计划刷新。
+  // workbenchDeltaBufferRef 将已连续可应用的热路径增量批处理到下一次计划刷新。
   const workbenchDeltaBufferRef = React.useRef<WorkbenchDeltaEnvelope[]>([]);
+  // workbenchDeltaPendingRef stores received deltas that cannot be applied until missing earlier generations arrive.
+  // workbenchDeltaPendingRef 保存已收到但仍需等待更早 generation 到达的增量。
+  const workbenchDeltaPendingRef = React.useRef<Map<number, WorkbenchDeltaEnvelope>>(new Map());
   // workbenchDeltaTimerRef stores the scheduled delta flush timer id.
   // workbenchDeltaTimerRef 保存已调度的增量刷新定时器标识。
   const workbenchDeltaTimerRef = React.useRef<number | null>(null);
+  // workbenchDeltaGapTimerRef stores the snapshot-recovery timer for a detected generation gap.
+  // workbenchDeltaGapTimerRef 保存检测到 generation 缺口后的快照恢复定时器。
+  const workbenchDeltaGapTimerRef = React.useRef<number | null>(null);
+  // workbenchDeltaRecoveringRef prevents concurrent full-snapshot recoveries for the same delta gap.
+  // workbenchDeltaRecoveringRef 防止同一增量缺口触发并发完整快照恢复。
+  const workbenchDeltaRecoveringRef = React.useRef(false);
   // error stores the latest loading error.
   // error 保存最近一次加载错误。
   const [error, setError] = React.useState<string | null>(null);
@@ -180,6 +192,9 @@ function WorkbenchApp(props: {
   // workbenchSnapshotSeqRef rejects stale full-snapshot updates across every snapshot source.
   // workbenchSnapshotSeqRef 在所有快照来源之间拒绝过期的全量快照更新。
   const workbenchSnapshotSeqRef = React.useRef(0);
+  // workbenchRevisionRef records the newest backend workbench revision accepted by the client.
+  // workbenchRevisionRef 记录客户端已经接受的最新后端工作台版本。
+  const workbenchRevisionRef = React.useRef(0);
   // appLocaleRef keeps provider-outside app toasts aligned with the latest service locale.
   // appLocaleRef 让 Provider 外部的应用提示对齐最近一次服务语言。
   const appLocaleRef = React.useRef<LocaleCode>(webuiAppLocale(props.initialStartup.uiLocale));
@@ -253,6 +268,152 @@ function WorkbenchApp(props: {
       return true;
     }
 
+    // flushReadyDeltas publishes the already-contiguous delta queue to React.
+    // flushReadyDeltas 将已经连续的增量队列发布给 React。
+    function flushReadyDeltas() {
+      const envelopes = coalesceWorkbenchDeltaEnvelopes(workbenchDeltaBufferRef.current);
+      workbenchDeltaBufferRef.current = [];
+      workbenchDeltaTimerRef.current = null;
+      if (envelopes.length > 0) {
+        setWorkbenchDelta((current) => ({
+          seq: (current?.seq ?? 0) + 1,
+          envelopes,
+        }));
+      }
+    }
+
+    // scheduleReadyDeltaFlush batches contiguous deltas without delaying gap detection.
+    // scheduleReadyDeltaFlush 批处理连续增量，但不延迟缺口检测。
+    function scheduleReadyDeltaFlush() {
+      if (workbenchDeltaTimerRef.current !== null) {
+        return;
+      }
+      workbenchDeltaTimerRef.current = window.setTimeout(flushReadyDeltas, STREAMING_DELTA_FLUSH_MS);
+    }
+
+    // clearDeltaGapTimer cancels a pending gap-recovery timer once the missing delta arrives or a snapshot covers it.
+    // clearDeltaGapTimer 在缺失增量到达或快照覆盖缺口后取消待执行的缺口恢复定时器。
+    function clearDeltaGapTimer() {
+      if (workbenchDeltaGapTimerRef.current !== null) {
+        window.clearTimeout(workbenchDeltaGapTimerRef.current);
+        workbenchDeltaGapTimerRef.current = null;
+      }
+    }
+
+    // discardBufferedDeltasThroughRevision removes queued deltas already covered by a newer full snapshot.
+    // discardBufferedDeltasThroughRevision 移除已经被更新全量快照覆盖的待应用增量。
+    function discardBufferedDeltasThroughRevision(revision: number) {
+      workbenchDeltaBufferRef.current = workbenchDeltaBufferRef.current.filter((envelope) => (
+        envelope.generation > revision
+      ));
+      for (const generation of Array.from(workbenchDeltaPendingRef.current.keys())) {
+        if (generation <= revision) {
+          workbenchDeltaPendingRef.current.delete(generation);
+        }
+      }
+    }
+
+    // hasDeltaGap returns true when received deltas are waiting behind a missing generation.
+    // hasDeltaGap 在已收到增量仍被缺失 generation 阻塞时返回 true。
+    function hasDeltaGap(): boolean {
+      if (workbenchDeltaPendingRef.current.size === 0) {
+        return false;
+      }
+      return !workbenchDeltaPendingRef.current.has(workbenchRevisionRef.current + 1);
+    }
+
+    // drainContiguousDeltas moves generation-contiguous deltas into the React flush queue.
+    // drainContiguousDeltas 将 generation 连续的增量移动到 React 刷新队列。
+    function drainContiguousDeltas() {
+      let drained = false;
+      let nextGeneration = workbenchRevisionRef.current + 1;
+      while (workbenchDeltaPendingRef.current.has(nextGeneration)) {
+        const envelope = workbenchDeltaPendingRef.current.get(nextGeneration);
+        workbenchDeltaPendingRef.current.delete(nextGeneration);
+        if (envelope) {
+          workbenchDeltaBufferRef.current.push(envelope);
+          workbenchRevisionRef.current = nextGeneration;
+          drained = true;
+        }
+        nextGeneration = workbenchRevisionRef.current + 1;
+      }
+      if (drained) {
+        scheduleReadyDeltaFlush();
+      }
+      if (!hasDeltaGap()) {
+        clearDeltaGapTimer();
+      }
+    }
+
+    // recoverDeltaGap reloads the authoritative snapshot after a generation gap outlives the short reorder window.
+    // recoverDeltaGap 在 generation 缺口超过短暂乱序等待窗口后重新加载权威快照。
+    async function recoverDeltaGap() {
+      if (cancelled || workbenchDeltaRecoveringRef.current) {
+        return;
+      }
+      workbenchDeltaGapTimerRef.current = null;
+      if (!hasDeltaGap()) {
+        drainContiguousDeltas();
+        return;
+      }
+      workbenchDeltaRecoveringRef.current = true;
+      let shouldRetryRecovery = false;
+      try {
+        const recoveredWorkbench = await loadWorkbenchSnapshot();
+        if (cancelled) {
+          return;
+        }
+        const revision = recoveredWorkbench.revision ?? 0;
+        if (revision > workbenchRevisionRef.current || workbenchRevisionRef.current === 0) {
+          discardBufferedDeltasThroughRevision(revision);
+          workbenchRevisionRef.current = Math.max(workbenchRevisionRef.current, revision);
+          workbenchSnapshotSeqRef.current += 1;
+          setWorkbench(recoveredWorkbench);
+          drainContiguousDeltas();
+        } else if (hasDeltaGap()) {
+          shouldRetryRecovery = true;
+        }
+      } catch (nextError) {
+        if (!cancelled) {
+          console.warn("Failed to recover workbench delta gap.", nextError);
+          shouldRetryRecovery = true;
+        }
+      } finally {
+        workbenchDeltaRecoveringRef.current = false;
+      }
+      if (shouldRetryRecovery && !cancelled) {
+        scheduleDeltaGapRecovery();
+      }
+    }
+
+    // scheduleDeltaGapRecovery waits for late deltas before using a full snapshot to bridge the gap.
+    // scheduleDeltaGapRecovery 在使用完整快照弥补缺口前等待迟到增量。
+    function scheduleDeltaGapRecovery() {
+      if (!hasDeltaGap() || workbenchDeltaGapTimerRef.current !== null || workbenchDeltaRecoveringRef.current) {
+        return;
+      }
+      workbenchDeltaGapTimerRef.current = window.setTimeout(() => {
+        void recoverDeltaGap();
+      }, WORKBENCH_DELTA_GAP_RECOVERY_MS);
+    }
+
+    // enqueueWorkbenchDelta buffers one delta until every earlier generation has been applied.
+    // enqueueWorkbenchDelta 缓冲单条增量，直到所有更早 generation 都已应用。
+    function enqueueWorkbenchDelta(payload: WorkbenchDeltaEnvelope) {
+      if (payload.generation <= workbenchRevisionRef.current) {
+        console.debug("Ignored stale workbench delta.", {
+          revision: payload.generation,
+          currentRevision: workbenchRevisionRef.current,
+        });
+        return;
+      }
+      if (!workbenchDeltaPendingRef.current.has(payload.generation)) {
+        workbenchDeltaPendingRef.current.set(payload.generation, payload);
+      }
+      drainContiguousDeltas();
+      scheduleDeltaGapRecovery();
+    }
+
     // bootstrap loads the first workbench snapshot after the isolated boot gate has accepted startup readiness.
     // bootstrap 在隔离启动门确认启动就绪后加载第一份工作台快照。
     async function bootstrap() {
@@ -262,6 +423,7 @@ function WorkbenchApp(props: {
           retryDelayMs = 500;
           setError(null);
           workbenchSnapshotSeqRef.current += 1;
+          workbenchRevisionRef.current = Math.max(workbenchRevisionRef.current, nextWorkbench.revision ?? 0);
           setWorkbench(nextWorkbench);
         }
         if (hasServiceRuntime()) {
@@ -273,46 +435,27 @@ function WorkbenchApp(props: {
             }),
             serviceClient.subscribe<WorkbenchSnapshot>("workbench", (payload) => {
               if (!cancelled) {
+                const revision = payload.revision ?? 0;
+                if (revision <= workbenchRevisionRef.current && workbenchRevisionRef.current !== 0) {
+                  console.debug("Ignored stale workbench snapshot.", {
+                    revision,
+                    currentRevision: workbenchRevisionRef.current,
+                  });
+                  return;
+                }
+                discardBufferedDeltasThroughRevision(revision);
+                clearDeltaGapTimer();
+                workbenchRevisionRef.current = revision;
                 workbenchSnapshotSeqRef.current += 1;
                 setWorkbench(payload);
+                drainContiguousDeltas();
               }
             }),
             serviceClient.subscribe<WorkbenchDeltaEnvelope>("workbench.delta", (payload) => {
               if (cancelled) {
                 return;
               }
-              workbenchDeltaBufferRef.current.push(payload);
-              if (workbenchDeltaTimerRef.current === null) {
-                workbenchDeltaTimerRef.current = window.setTimeout(() => {
-                  const envelopes = coalesceWorkbenchDeltaEnvelopes(workbenchDeltaBufferRef.current);
-                  workbenchDeltaBufferRef.current = [];
-                  workbenchDeltaTimerRef.current = null;
-                  if (envelopes.length > 0) {
-                    setWorkbenchDelta((current) => ({
-                      seq: (current?.seq ?? 0) + 1,
-                      envelopes,
-                    }));
-                  }
-                }, STREAMING_DELTA_FLUSH_MS);
-              }
-            }),
-            serviceClient.subscribe<SessionAddonChangedEvent>("session.addon.changed", () => {
-              if (cancelled) {
-                return;
-              }
-              const refreshSeq = workbenchSnapshotSeqRef.current + 1;
-              workbenchSnapshotSeqRef.current = refreshSeq;
-              void loadWorkbenchSnapshot()
-                .then((snapshot) => {
-                  if (!cancelled && workbenchSnapshotSeqRef.current === refreshSeq) {
-                    setWorkbench(snapshot);
-                  }
-                })
-                .catch((nextError) => {
-                  if (!cancelled) {
-                    console.warn("Failed to refresh workbench after session addon change.", nextError);
-                  }
-                });
+              enqueueWorkbenchDelta(payload);
             }),
           ]);
           if (cancelled) {
@@ -341,6 +484,9 @@ function WorkbenchApp(props: {
         window.clearTimeout(workbenchDeltaTimerRef.current);
         workbenchDeltaTimerRef.current = null;
       }
+      clearDeltaGapTimer();
+      workbenchDeltaBufferRef.current = [];
+      workbenchDeltaPendingRef.current.clear();
       if (retryTimer !== null) {
         window.clearTimeout(retryTimer);
         retryTimer = null;

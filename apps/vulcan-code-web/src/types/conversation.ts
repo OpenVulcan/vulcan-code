@@ -1,4 +1,15 @@
-import type { ComposerAttachmentSummary } from "./composer-skills";
+import type {
+  ComposerAttachmentSummary,
+  PendingPromptSummary,
+} from "./composer-skills";
+import type {
+  PendingQuestionSnapshot,
+  SessionGoalSummary,
+  SessionPlanModeSummary,
+  SessionTodolistSummary,
+  SubagentNavigationSnapshot,
+} from "./planning-questions";
+import type { CommandSessionSummary, ContextUsageSnapshot } from "./runtime-context";
 
 export interface ConversationSummary {
   // Stable conversation identifier.
@@ -22,12 +33,35 @@ export interface ConversationSummary {
   // Whether the conversation has unread activity.
   // 会话是否存在未读活动。
   unread?: boolean;
+  // Highest-priority action marker that belongs to this conversation.
+  // 属于该会话的最高优先级待处理动作标记。
+  attention?: ConversationAttentionSummary | null;
   // Optional owning project identifier.
   // 可选所属项目标识。
   projectId?: string | null;
   // Display-only fork source marker.
   // 纯展示用分叉来源标记。
   forkSource?: ConversationForkSourceSummary | null;
+}
+
+// ConversationAttentionSummary describes one conversation-level action marker.
+// ConversationAttentionSummary 描述单个会话级动作标记。
+export interface ConversationAttentionSummary {
+  // Stable marker kind such as ask, plan_confirm, or unread.
+  // 稳定标记类型，例如 ask、plan_confirm 或 unread。
+  kind: "ask" | "plan_confirm" | "tool_confirm" | "subagent_attention" | "unread" | string;
+  // Numeric priority used by clients when multiple markers exist.
+  // 多个标记同时存在时客户端使用的数字优先级。
+  priority: number;
+  // Optional request or artifact identifier that owns this marker.
+  // 拥有该标记的可选请求或产物标识。
+  requestId?: string | null;
+  // Optional human-readable label for tooltips and assistive text.
+  // 用于提示与辅助文本的可选人类可读标签。
+  label?: string | null;
+  // Unix-millisecond timestamp text for ordering diagnostics.
+  // 用于排序诊断的 Unix 毫秒时间戳文本。
+  updatedAt?: string | null;
 }
 
 // ConversationForkSourceSummary describes where a forked conversation was derived from.
@@ -108,10 +142,193 @@ export interface AppendMessageBodyDelta {
   runPhase?: string | null;
 }
 
+// UpdateConversationRunPhaseDelta updates a conversation phase without transcript rows.
+// UpdateConversationRunPhaseDelta 在不携带转录行的情况下更新会话阶段。
+export interface UpdateConversationRunPhaseDelta {
+  // Stable conversation identifier receiving the phase update.
+  // 接收阶段更新的稳定会话标识。
+  conversationId: string;
+  // Current backend run phase for the conversation.
+  // 会话当前的后端运行阶段。
+  runPhase: string;
+  // Optional backend status label paired with the phase.
+  // 与阶段配套的可选后端状态标签。
+  status?: string | null;
+  // Optional relative update label for the conversation row.
+  // 会话行使用的可选相对更新时间标签。
+  lastUpdatedLabel?: string | null;
+}
+
+// PendingPromptsChangedDelta replaces the visible pending prompt queue for one conversation.
+// PendingPromptsChangedDelta 替换单个会话可见的待发送提示词队列。
+export interface PendingPromptsChangedDelta {
+  // Stable conversation identifier receiving the queue projection.
+  // 接收队列投影的稳定会话标识。
+  conversationId: string;
+  // Current visible pending prompt summaries for the conversation.
+  // 当前会话可见的待发送提示词摘要。
+  pendingPrompts: PendingPromptSummary[];
+}
+
+// ConversationSummaryChangedDelta upserts one sidebar conversation summary.
+// ConversationSummaryChangedDelta 写入单个侧栏会话摘要。
+export interface ConversationSummaryChangedDelta {
+  // Current conversation summary projected for the sidebar.
+  // 当前投影到侧栏的会话摘要。
+  conversation: ConversationSummary;
+  // Selected conversation id after applying this summary update.
+  // 应用该摘要更新后的选中会话标识。
+  selectedConversationId?: string | null;
+}
+
+// PendingQuestionChangedDelta replaces the active ask-tool pending question.
+// PendingQuestionChangedDelta 替换当前 ask 工具待回答问题。
+export interface PendingQuestionChangedDelta {
+  // Stable conversation identifier receiving the ask projection.
+  // 接收 ask 投影的稳定会话标识。
+  conversationId?: string | null;
+  // Current pending question, or null when no ask question is waiting.
+  // 当前待回答问题；没有等待中的 ask 问题时为空。
+  pendingQuestion?: PendingQuestionSnapshot | null;
+  // All pending ask-tool questions grouped by their own session ids.
+  // 按各自会话标识保留的全部 ask 工具待回答问题。
+  pendingQuestions?: PendingQuestionSnapshot[];
+}
+
+// CommandSessionsChangedDelta replaces the workbench command-session summaries.
+// CommandSessionsChangedDelta 替换工作台命令会话摘要。
+export interface CommandSessionsChangedDelta {
+  // Current command-session summaries projected from the live runtime.
+  // 从实时运行时投影出的当前命令会话摘要。
+  commandSessions: CommandSessionSummary[];
+}
+
+// SubagentNavigationChangedDelta replaces the floating/side-panel subagent navigation state.
+// SubagentNavigationChangedDelta 替换浮动面板与右侧页签使用的子代理导航状态。
+export interface SubagentNavigationChangedDelta {
+  // Parent conversation identifier receiving this navigation projection.
+  // 接收该导航投影的父会话标识。
+  parentConversationId?: string | null;
+  // Current subagent navigation, or null when no subagent panel should be shown.
+  // 当前子代理导航；不应展示子代理面板时为空。
+  subagentNavigation?: SubagentNavigationSnapshot | null;
+}
+
+// SubagentPanelRouteResponse carries the focused route state after a subagent panel action.
+// SubagentPanelRouteResponse 携带子代理面板动作后的聚焦路由状态。
+export interface SubagentPanelRouteResponse {
+  // Conversation id that owns the returned message window.
+  // 拥有返回消息窗口的会话标识。
+  activeConversationId?: string | null;
+  // Current subagent navigation, or null when no subagent panel is active.
+  // 当前子代理导航；没有活动子代理面板时为空。
+  subagentNavigation?: SubagentNavigationSnapshot | null;
+  // Messages for the active surface only.
+  // 仅当前活动界面的消息列表。
+  messages: ConversationMessage[];
+  // Latest workbench revision after applying the route update.
+  // 应用路由更新后的最新工作台版本。
+  revision: number;
+}
+
+// ContextUsageChangedDelta replaces the composer context-usage projection.
+// ContextUsageChangedDelta 替换输入区上下文用量投影。
+export interface ContextUsageChangedDelta {
+  // Current context usage, or null when no active usage is available.
+  // 当前上下文用量；没有活动用量时为空。
+  contextUsage?: ContextUsageSnapshot | null;
+}
+
+// ConversationMessagesChangedDelta replaces one focused conversation message window.
+// ConversationMessagesChangedDelta 替换单个聚焦会话的消息窗口。
+export interface ConversationMessagesChangedDelta {
+  // Stable conversation identifier receiving the message window.
+  // 接收消息窗口的稳定会话标识。
+  conversationId: string;
+  // Current visible messages for the conversation.
+  // 当前会话的可见消息列表。
+  messages: ConversationMessage[];
+}
+
+// ConversationMessagesPatchedDelta patches visible message nodes without replacing the whole window.
+// ConversationMessagesPatchedDelta 在不替换整个窗口的情况下修补可见消息节点。
+export interface ConversationMessagesPatchedDelta {
+  // Stable conversation identifier receiving the message patch.
+  // 接收消息补丁的稳定会话标识。
+  conversationId: string;
+  // Full message nodes to insert or replace by id.
+  // 需要按标识插入或替换的完整消息节点。
+  upsertMessages: ConversationMessage[];
+  // Message ids that should be removed from the visible window.
+  // 需要从可见窗口移除的消息标识。
+  removeMessageIds: string[];
+  // Optional authoritative order for visible nodes in this conversation.
+  // 当前会话可见节点的可选权威顺序。
+  messageOrder?: string[] | null;
+}
+
+// SessionAddonsChangedDelta replaces goal, todolist, and Plan mode projections.
+// SessionAddonsChangedDelta 替换目标、待办和计划模式投影。
+export interface SessionAddonsChangedDelta {
+  // Stable conversation identifier receiving the addon projection.
+  // 接收附属状态投影的稳定会话标识。
+  conversationId: string;
+  // Current session goal, or null when no goal is active.
+  // 当前会话目标；没有活动目标时为空。
+  sessionGoal?: SessionGoalSummary | null;
+  // Current session todolist, or null when no todolist is visible.
+  // 当前会话待办；没有可见待办时为空。
+  sessionTodolist?: SessionTodolistSummary | null;
+  // Current Plan mode state, or null when Plan mode is inactive and no artifact exists.
+  // 当前计划模式状态；计划模式未启用且无产物时为空。
+  sessionPlanMode?: SessionPlanModeSummary | null;
+}
+
+// SessionAddonsChangedResponse carries addon state returned by direct RPC calls.
+// SessionAddonsChangedResponse 携带直接 RPC 返回的附属状态。
+export interface SessionAddonsChangedResponse extends SessionAddonsChangedDelta {
+  // Latest workbench revision after applying this addon update.
+  // 应用该附属状态更新后的最新工作台版本。
+  revision: number;
+}
+
+// SubmitConversationPromptAck acknowledges that a composer prompt was accepted by the service.
+// SubmitConversationPromptAck 确认输入区提示词已被服务接收。
+export interface SubmitConversationPromptAck {
+  // Stable conversation identifier that owns the accepted prompt.
+  // 拥有已接收提示词的稳定会话标识。
+  conversationId: string;
+  // Visible user-message record id when one was materialized immediately.
+  // 立即物化可见用户消息时对应的记录标识。
+  acceptedMessageId?: string | null;
+  // Runtime turn identifier used by the started kernel turn when available.
+  // 已启动内核轮次可用时对应的运行轮次标识。
+  turnId?: string | null;
+  // Current run phase after accepting the prompt.
+  // 接收提示词后的当前运行阶段。
+  runPhase: string;
+  // Whether the prompt was queued behind existing work.
+  // 该提示词是否已排队等待既有工作结束。
+  queued: boolean;
+  // Latest accepted workbench revision after the submit-side update.
+  // 提交侧更新后的最新已接收工作台版本。
+  revision: number;
+}
+
 // WorkbenchDelta describes one partial workbench update emitted on hot paths.
 // WorkbenchDelta 描述热路径上发出的单条局部工作台更新。
 export type WorkbenchDelta =
-  | { kind: "appendMessageBody"; payload: AppendMessageBodyDelta };
+  | { kind: "appendMessageBody"; payload: AppendMessageBodyDelta }
+  | { kind: "updateConversationRunPhase"; payload: UpdateConversationRunPhaseDelta }
+  | { kind: "pendingPromptsChanged"; payload: PendingPromptsChangedDelta }
+  | { kind: "conversationSummaryChanged"; payload: ConversationSummaryChangedDelta }
+  | { kind: "pendingQuestionChanged"; payload: PendingQuestionChangedDelta }
+  | { kind: "commandSessionsChanged"; payload: CommandSessionsChangedDelta }
+  | { kind: "subagentNavigationChanged"; payload: SubagentNavigationChangedDelta }
+  | { kind: "contextUsageChanged"; payload: ContextUsageChangedDelta }
+  | { kind: "conversationMessagesChanged"; payload: ConversationMessagesChangedDelta }
+  | { kind: "conversationMessagesPatched"; payload: ConversationMessagesPatchedDelta }
+  | { kind: "sessionAddonsChanged"; payload: SessionAddonsChangedDelta };
 
 // WorkbenchDeltaEnvelope carries one ordered partial workbench update.
 // WorkbenchDeltaEnvelope 携带一条有序的局部工作台更新。

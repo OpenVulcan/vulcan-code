@@ -2,6 +2,7 @@
 //! workbench session panels 辅助逻辑。
 
 use super::*;
+use vulcan_service_api::ConversationAttentionSummary;
 
 /// Projects session todolist state into the WebUI snapshot.
 /// 将会话 todolist 状态投影到 WebUI 快照。
@@ -124,39 +125,121 @@ pub(crate) fn session_todolist_item_status_key(status: SessionTodolistItemStatus
     }
 }
 
-/// Projects the oldest pending ask-tool request from the shared runtime for WebUI display.
-/// 从共享运行时投影最早的待处理 ask 工具请求供 WebUI 展示。
-pub(crate) fn pending_question_snapshot_from_agent_runtime(
+/// Projects every pending ask-tool request from the shared runtime for per-session display.
+/// 从共享运行时投影所有待处理 ask 工具请求，供按会话展示。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` is the optional shared runtime bridge that owns the question runtime.
+/// `agent_runtime` 是可选的共享运行时桥，持有提问运行时。
+///
+/// # Returns
+/// 返回值
+/// Ordered pending ask summaries sorted by their runtime sequence.
+/// 按运行时序号排序的待处理 ask 摘要。
+pub(crate) fn pending_question_snapshots_from_agent_runtime(
     agent_runtime: Option<&AgentRuntimeBridge>,
-) -> Option<PendingQuestionSnapshot> {
-    let question_runtime = agent_runtime.map(|runtime| runtime.question_runtime.as_ref())?;
-    let mut pending = question_runtime.list_pending().ok()?;
-    let request = pending.drain(..).next()?;
-    Some(PendingQuestionSnapshot {
-        id: request.id,
-        session_id: request.session_id.to_string(),
-        sequence: request.sequence,
-        questions: request
-            .questions
-            .into_iter()
-            .map(|question| {
-                let multiple = question.allows_multiple();
-                PendingQuestionPromptSummary {
-                    question: question.question,
-                    header: question.header,
-                    options: question
-                        .options
-                        .into_iter()
-                        .map(|option| PendingQuestionOptionSummary {
-                            label: option.label,
-                            description: option.description,
-                        })
-                        .collect(),
-                    multiple,
-                }
-            })
-            .collect(),
-    })
+) -> Vec<PendingQuestionSnapshot> {
+    let Some(question_runtime) = agent_runtime.map(|runtime| runtime.question_runtime.as_ref())
+    else {
+        return Vec::new();
+    };
+    let mut snapshots = question_runtime
+        .list_pending()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|request| PendingQuestionSnapshot {
+            id: request.id,
+            session_id: request.session_id.to_string(),
+            sequence: request.sequence,
+            questions: request
+                .questions
+                .into_iter()
+                .map(|question| {
+                    let multiple = question.allows_multiple();
+                    PendingQuestionPromptSummary {
+                        question: question.question,
+                        header: question.header,
+                        options: question
+                            .options
+                            .into_iter()
+                            .map(|option| PendingQuestionOptionSummary {
+                                label: option.label,
+                                description: option.description,
+                            })
+                            .collect(),
+                        multiple,
+                    }
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by_key(|snapshot| snapshot.sequence);
+    snapshots
+}
+
+/// Builds the highest-priority sidebar attention marker for one conversation.
+/// 为单个会话构建最高优先级侧栏注意力标记。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is the conversation session id.
+/// `session_id` 是会话标识。
+/// `pending_questions` contains all current ask requests.
+/// `pending_questions` 包含当前所有 ask 请求。
+/// `session_plan_mode` is the optional Plan mode projection for this session.
+/// `session_plan_mode` 是该会话的可选计划模式投影。
+/// `unread` indicates whether the session has unread completed activity.
+/// `unread` 表示该会话是否存在未读完成活动。
+/// `updated_at` is the session update timestamp used for diagnostics.
+/// `updated_at` 是用于诊断的会话更新时间戳。
+///
+/// # Returns
+/// 返回值
+/// The marker clients should show in the sidebar, if any.
+/// 客户端应在侧栏展示的标记；没有标记时为空。
+pub(crate) fn conversation_attention_summary_for_session(
+    session_id: SessionId,
+    pending_questions: &[PendingQuestionSnapshot],
+    session_plan_mode: Option<&SessionPlanModeSummary>,
+    unread: bool,
+    updated_at: Option<String>,
+) -> Option<ConversationAttentionSummary> {
+    if let Some(question) = pending_questions
+        .iter()
+        .find(|question| question.session_id == session_id.to_string())
+    {
+        return Some(ConversationAttentionSummary {
+            kind: String::from("ask"),
+            priority: 90,
+            request_id: Some(question.id.clone()),
+            label: Some(String::from("Ask question waiting")),
+            updated_at,
+        });
+    }
+    if session_plan_mode
+        .is_some_and(|summary| summary.execution_mode.eq_ignore_ascii_case("plan"))
+    {
+        return Some(ConversationAttentionSummary {
+            kind: String::from("plan_confirm"),
+            priority: 80,
+            request_id: session_plan_mode
+                .and_then(|summary| summary.artifact.as_ref())
+                .map(|artifact| artifact.path.clone()),
+            label: Some(String::from("Plan mode waiting")),
+            updated_at,
+        });
+    }
+    if unread {
+        return Some(ConversationAttentionSummary {
+            kind: String::from("unread"),
+            priority: 10,
+            request_id: None,
+            label: Some(String::from("Unread activity")),
+            updated_at,
+        });
+    }
+    None
 }
 
 /// Builds the selected-session context injection side-panel snapshot.

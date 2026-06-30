@@ -831,11 +831,15 @@ function WorkspaceSubagentPanel(args: {
   if (!parentConversationId || !taskId) {
     return <WorkspaceSubagentEmptyState title={workspaceContextTabDefaultTitle("subagent", t)} />;
   }
+  // commandSessions limits side-panel terminal state to the displayed child task.
+  // commandSessions 将侧栏终端状态限定在当前展示的子任务内。
+  const commandSessions = (args.props.workbench.commandSessions ?? [])
+    .filter((session) => session.ownerSessionId === taskId);
 
   return (
     <div className="workspace-subagent-panel">
       <ConversationWorkspace
-        commandSessions={args.props.workbench.commandSessions ?? []}
+        commandSessions={commandSessions}
         conversation={subagentConversation}
         error={null}
         hasMoreHistory={false}

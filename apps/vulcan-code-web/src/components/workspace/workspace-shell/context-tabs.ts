@@ -55,7 +55,7 @@ export function workspaceContextTabCacheKey(
 ): string {
   // surfaceId keeps right-panel memory scoped to the selected parent conversation.
   // surfaceId 将右侧面板记忆范围限定在当前选中的父会话。
-  const surfaceId = selectedConversationId ?? workbench.selectedConversationId ?? null;
+  const surfaceId = selectedConversationId ?? null;
   // workspacePath adds project-root separation for conversations that share ids across sources.
   // workspacePath 为跨来源共享标识的会话补充项目根目录隔离。
   const workspacePath = selectedConversationWorkspacePath(workbench, selectedConversationId, selectedDraftConversation);

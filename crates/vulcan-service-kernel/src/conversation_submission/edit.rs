@@ -17,13 +17,13 @@ use super::*;
 ///
 /// # Returns
 /// 返回值
-/// Returns the refreshed workbench snapshot after the edited prompt is resubmitted.
-/// 返回编辑后的提示词重新提交后的刷新工作台快照。
+/// Returns a lightweight acknowledgement after the edited prompt is resubmitted.
+/// 返回编辑后的提示词重新提交后的轻量确认信息。
 pub(crate) async fn service_submit_user_prompt_edit(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: UserPromptEditSubmitRequest,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubmitConversationPromptAck, String> {
     if request.stop_running {
         return Err(String::from("ERR_USER_PROMPT_EDIT_SESSION_BUSY"));
     }
@@ -65,10 +65,18 @@ pub(crate) async fn service_submit_user_prompt_edit(
         &request.message_id,
     )
     .await?;
-    {
+    let message_patch_event = {
         let mut guard = state
             .lock()
             .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
+        let conversation_id = session_id.to_string();
+        let before_conversation_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
         let workspace = guard
             .workspace_snapshot
             .as_mut()
@@ -93,13 +101,38 @@ pub(crate) async fn service_submit_user_prompt_edit(
             session.last_updated_label = String::new();
             session.updated_at = current_unix_millis_text();
         }
-        guard.workbench.messages = conversation_messages_from_session(
-            &session_id.to_string(),
+        let retained_conversation_messages = conversation_messages_from_session(
+            &conversation_id,
             rollback.retained_messages.as_slice(),
             false,
         );
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let message_patch = build_conversation_messages_patched_delta(
+            &conversation_id,
+            before_conversation_messages.as_slice(),
+            retained_conversation_messages.as_slice(),
+        );
+        replace_conversation_messages_in_workbench_window(
+            &mut guard.workbench.messages,
+            &conversation_id,
+            retained_conversation_messages,
+        );
         guard.workbench = workbench_with_live_pending_question(&guard);
+        message_patch.map(|message_patch| {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+            }
+        })
+    };
+    if let Some(event) = message_patch_event {
+        emit_service_event_with_trace(
+            &app,
+            "workbench_user_prompt_edit_messages_patch_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
     }
     service_submit_conversation_prompt(
         app,

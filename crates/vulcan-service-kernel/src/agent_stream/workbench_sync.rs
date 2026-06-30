@@ -3,179 +3,12 @@
 
 use super::*;
 
-/// Rebuilds and emits the retained workbench snapshot after a service-side queue mutation.
-/// 在 service 侧队列变更后重建并发出保留的工作台快照。
-pub(crate) fn store_current_workbench_snapshot(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    agent_runtime: &AgentRuntimeBridge,
-    workspace_snapshot: WorkspaceSnapshot,
-) -> Result<WorkbenchSnapshot, String> {
-    // Measures this retained-workbench rebuild entry used by precheck and mailbox turns.
-    // 衡量 precheck 与 mailbox 回合共用的保留工作台重建入口。
-    let trace_started_at = current_unix_millis_value();
-    // Measures runtime catalog extraction before surface projection.
-    // 衡量界面投影前运行时目录提取耗时。
-    let catalog_started_at = current_unix_millis_value();
-    let (luaskills_catalog, token_budget_runtime, mcp_catalog, logs) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
-        let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; token budget runtime is not ready")
-        })?;
-        let mcp_catalog = cached_mcp_catalog_from_state(&guard);
-        (
-            luaskills_catalog,
-            token_budget_runtime,
-            mcp_catalog,
-            guard.startup.recent_logs.clone(),
-        )
-    };
-    webui_trace_if_slow(
-        "store_current_workbench_catalog_slow",
-        catalog_started_at,
-        format!("selected_session={}", workspace_snapshot.selected_session),
-    );
-    // Measures active surface and subagent navigation projection.
-    // 衡量活动界面与子代理导航投影耗时。
-    let surface_started_at = current_unix_millis_value();
-    let (
-        live_context_budgets,
-        surface_messages,
-        subagent_navigation,
-        session_goal_summaries,
-        hydrated_window_summaries,
-    ) = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        retain_hydrated_conversation_windows_for_workspace(
-            &mut guard.hydrated_conversation_windows,
-            &workspace_snapshot,
-        );
-        (
-            guard.live_context_budgets.clone(),
-            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
-            subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
-            guard.session_goal_summaries.clone(),
-            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
-        )
-    };
-    webui_trace_if_slow(
-        "store_current_workbench_surface_slow",
-        surface_started_at,
-        format!(
-            "selected_session={} surface_messages={} has_subagent_navigation={}",
-            workspace_snapshot.selected_session,
-            surface_messages.len(),
-            subagent_navigation.is_some()
-        ),
-    );
-    // Measures final DTO construction after runtime projection inputs are ready.
-    // 衡量运行时投影输入就绪后的最终 DTO 构建耗时。
-    let workbench_started_at = current_unix_millis_value();
-    let workbench = workbench_from_runtime(
-        controller_runtime,
-        Some(agent_runtime.command_session_runtime.as_ref()),
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        &workspace_snapshot,
-        surface_messages.as_slice(),
-        subagent_navigation,
-        pending_question_snapshot_from_agent_runtime(Some(agent_runtime)),
-        &logs,
-        &live_context_budgets,
-        &session_goal_summaries,
-        &hydrated_window_summaries,
-    );
-    webui_trace_if_slow(
-        "store_current_workbench_build_slow",
-        workbench_started_at,
-        format!("selected_session={}", workspace_snapshot.selected_session),
-    );
-    // Measures retained state commit for rebuilt workbench snapshots.
-    // 衡量重建工作台快照写回保留状态的耗时。
-    let commit_started_at = current_unix_millis_value();
-    {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        guard.workspace_snapshot = Some(workspace_snapshot);
-        guard.workbench = workbench.clone();
-    }
-    webui_trace_if_slow(
-        "store_current_workbench_commit_slow",
-        commit_started_at,
-        format!(
-            "selected_conversation={}",
-            workbench
-                .selected_conversation_id
-                .as_deref()
-                .unwrap_or("<none>")
-        ),
-    );
-    // Measures frontend event emission cost for rebuilt workbench snapshots.
-    // 衡量重建工作台快照前端事件发出的耗时。
-    let emit_started_at = current_unix_millis_value();
-    emit_workbench_event(app, &workbench);
-    webui_trace_if_slow(
-        "store_current_workbench_emit_slow",
-        emit_started_at,
-        format!(
-            "selected_conversation={}",
-            workbench
-                .selected_conversation_id
-                .as_deref()
-                .unwrap_or("<none>")
-        ),
-    );
-    webui_trace_if_slow(
-        "store_current_workbench_total_slow",
-        trace_started_at,
-        format!(
-            "selected_conversation={}",
-            workbench
-                .selected_conversation_id
-                .as_deref()
-                .unwrap_or("<none>")
-        ),
-    );
-    Ok(workbench)
-}
-
-/// Emits a display-only workbench snapshot after a subagent route change.
-/// 在子代理显示路由变更后发出仅显示用途的工作台快照。
-pub(crate) fn emit_subagent_display_route_workbench_snapshot(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    workspace_snapshot: WorkspaceSnapshot,
-) -> Result<WorkbenchSnapshot, String> {
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workbench =
-            build_subagent_display_route_workbench_snapshot_locked(&mut guard, &workspace_snapshot);
-        guard.workspace_snapshot = Some(workspace_snapshot);
-        workbench
-    };
-    emit_workbench_event(app, &workbench);
-    Ok(workbench)
-}
-
-/// Builds one display-only workbench snapshot for a subagent route without cloning the full workspace snapshot.
-/// 构建一份子代理路由专用的显示快照，避免克隆完整工作区快照。
-pub(crate) fn build_subagent_display_route_workbench_snapshot_locked(
+/// Builds the focused route response needed by subagent panel RPC calls.
+/// 构建子代理面板 RPC 所需的聚焦路由响应。
+pub(crate) fn build_subagent_panel_route_response_locked(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
-) -> WorkbenchSnapshot {
+) -> SubagentPanelRouteResponse {
     let subagent_navigation =
         subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot);
     let active_session_id =
@@ -191,7 +24,6 @@ pub(crate) fn build_subagent_display_route_workbench_snapshot_locked(
         active_session_id,
         surface_messages.as_mut_slice(),
     );
-    let mut workbench = guard.workbench.clone();
     let active_conversation_id = subagent_navigation
         .as_ref()
         .map(|navigation| navigation.active_conversation_id.clone())
@@ -199,16 +31,23 @@ pub(crate) fn build_subagent_display_route_workbench_snapshot_locked(
             (workspace_snapshot.selected_session != SessionId::nil())
                 .then(|| workspace_snapshot.selected_session.to_string())
         });
-    workbench.messages = active_conversation_id
+    let messages = active_conversation_id
         .as_deref()
         .map(|conversation_id| {
             conversation_messages_from_session(conversation_id, surface_messages.as_slice(), false)
         })
         .unwrap_or_default();
-    workbench.subagent_navigation = subagent_navigation;
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-    guard.workbench = workbench.clone();
-    workbench
+    let revision = guard.workbench_generation;
+    guard.workbench.revision = revision;
+    guard.workbench.messages = messages.clone();
+    guard.workbench.subagent_navigation = subagent_navigation.clone();
+    SubagentPanelRouteResponse {
+        active_conversation_id,
+        subagent_navigation,
+        messages,
+        revision,
+    }
 }
 
 /// Applies execution preparation identity fields to the target session runtime state.
@@ -219,49 +58,156 @@ pub(crate) fn apply_execution_preparation(
     controller_runtime: &ControllerRuntimeHandle,
     preparation: &ExecutionPreparation,
 ) -> Result<(), String> {
-    if let Some(context_budget) = preparation.context_budget.clone() {
-        state
+    let apply_started_at = current_unix_millis_value();
+    let conversation_id = preparation.session_id.to_string();
+    let (events, boundary_project_id) = {
+        let mut guard = state
             .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?
-            .live_context_budgets
-            .insert(preparation.session_id, context_budget);
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some(context_budget) = preparation.context_budget.clone() {
+            guard
+                .live_context_budgets
+                .insert(preparation.session_id, context_budget);
+        }
+        let live_context_budgets = guard.live_context_budgets.clone();
+        let provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone())
+            .unwrap_or_default();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
+        let (boundary_project_id, context_usage) = {
+            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(preparation.session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: current_unix_millis_text(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            runtime_state.active_agent_id = Some(preparation.agent_id.clone());
+            runtime_state.active_provider_id =
+                Some(preparation.model_blueprint.provider_id.clone());
+            runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
+            runtime_state.active_openrouter_endpoint_route = preparation
+                .model_blueprint
+                .openrouter_endpoint_route
+                .clone();
+            runtime_state.active_reasoning_effort =
+                Some(preparation.model_blueprint.reasoning.requested_effort);
+            runtime_state.active_temperature = preparation.temperature;
+            runtime_state.live_context_budget_fingerprint = preparation
+                .context_budget
+                .as_ref()
+                .map(|budget| budget.fingerprint.clone());
+            runtime_state.live_context_assembly_fingerprint = preparation
+                .context_baseline
+                .as_ref()
+                .map(|baseline| baseline.fingerprint.clone());
+            runtime_state.updated_at = current_unix_millis_text();
+            let boundary_project_id =
+                owning_project_id_for_session(workspace, preparation.session_id);
+            workspace
+                .session_run_phases
+                .insert(preparation.session_id, SessionRunPhase::Preparing);
+            let context_usage = context_usage_snapshot_from_runtime_state(
+                preparation.session_id,
+                workspace.session_runtime_state.get(&preparation.session_id),
+                &live_context_budgets,
+                &provider_configuration,
+                &ai_tool_configuration,
+            );
+            (boundary_project_id, context_usage)
+        };
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let phase_generation = guard.workbench_generation;
+        guard.workbench.revision = phase_generation;
+        for conversation in &mut guard.workbench.conversations {
+            if conversation.id == conversation_id {
+                conversation.run_phase = SessionRunPhase::Preparing.to_string();
+                conversation.status = SessionState::Running.label().to_string();
+                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_at = current_unix_millis_text();
+                break;
+            }
+        }
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let context_generation = guard.workbench_generation;
+        guard.workbench.revision = context_generation;
+        guard.workbench.context_usage = context_usage.clone();
+        (
+            vec![
+                WorkbenchDeltaEnvelope {
+                    generation: phase_generation,
+                    delta: WorkbenchDelta::UpdateConversationRunPhase(
+                        UpdateConversationRunPhaseDelta {
+                            conversation_id,
+                            run_phase: SessionRunPhase::Preparing.to_string(),
+                            status: Some(SessionState::Running.label().to_string()),
+                            last_updated_label: Some(String::from("now")),
+                        },
+                    ),
+                },
+                WorkbenchDeltaEnvelope {
+                    generation: context_generation,
+                    delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
+                        context_usage,
+                    }),
+                },
+            ],
+            boundary_project_id,
+        )
+    };
+    webui_after_precheck_trace(
+        "after_precheck_25a_preparation_state_committed",
+        format!(
+            "session={} elapsed_ms={}",
+            preparation.session_id,
+            current_unix_millis_value().saturating_sub(apply_started_at)
+        ),
+    );
+    for event in events {
+        emit_service_event_with_trace(
+            app,
+            "workbench_preparation_delta_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
     }
-    let mut boundary_project_id: Option<String> = None;
-    with_workspace_mutation(app, state, |workspace| {
-        let runtime_state = workspace
-            .session_runtime_state
-            .entry(preparation.session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: current_unix_millis_text(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        runtime_state.active_agent_id = Some(preparation.agent_id.clone());
-        runtime_state.active_provider_id = Some(preparation.model_blueprint.provider_id.clone());
-        runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
-        runtime_state.active_openrouter_endpoint_route = preparation
-            .model_blueprint
-            .openrouter_endpoint_route
-            .clone();
-        runtime_state.active_reasoning_effort =
-            Some(preparation.model_blueprint.reasoning.requested_effort);
-        runtime_state.active_temperature = preparation.temperature;
-        runtime_state.live_context_budget_fingerprint = preparation
-            .context_budget
-            .as_ref()
-            .map(|budget| budget.fingerprint.clone());
-        runtime_state.live_context_assembly_fingerprint = preparation
-            .context_baseline
-            .as_ref()
-            .map(|baseline| baseline.fingerprint.clone());
-        runtime_state.updated_at = current_unix_millis_text();
-        boundary_project_id = owning_project_id_for_session(workspace, preparation.session_id);
-        workspace
-            .session_run_phases
-            .insert(preparation.session_id, SessionRunPhase::Preparing);
-    })
-    .map(|_| ())?;
+    webui_after_precheck_trace(
+        "after_precheck_25b_preparation_delta_emitted",
+        format!(
+            "session={} elapsed_ms_since_apply={}",
+            preparation.session_id,
+            current_unix_millis_value().saturating_sub(apply_started_at)
+        ),
+    );
     if let Some(project_id) = boundary_project_id {
+        let lifecycle_started_at = current_unix_millis_value();
         begin_session_external_turn_lifecycle(controller_runtime, &project_id, preparation)?;
+        webui_after_precheck_trace(
+            "after_precheck_25c_lifecycle_begin_finished",
+            format!(
+                "session={} elapsed_ms={} elapsed_ms_since_apply={}",
+                preparation.session_id,
+                current_unix_millis_value().saturating_sub(lifecycle_started_at),
+                current_unix_millis_value().saturating_sub(apply_started_at)
+            ),
+        );
+    } else {
+        webui_after_precheck_trace(
+            "after_precheck_25c_lifecycle_begin_skipped",
+            format!(
+                "session={} elapsed_ms_since_apply={}",
+                preparation.session_id,
+                current_unix_millis_value().saturating_sub(apply_started_at)
+            ),
+        );
     }
     Ok(())
 }
@@ -343,10 +289,47 @@ pub(crate) fn apply_session_phase(
     session_id: SessionId,
     phase: SessionRunPhase,
 ) -> Result<(), String> {
-    with_workspace_mutation(app, state, |workspace| {
+    let conversation_id = session_id.to_string();
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
         workspace.session_run_phases.insert(session_id, phase);
-    })
-    .map(|_| ())
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        let status =
+            is_active_session_run_phase(phase).then(|| SessionState::Running.label().to_string());
+        for conversation in &mut guard.workbench.conversations {
+            if conversation.id == conversation_id {
+                conversation.run_phase = phase.to_string();
+                if let Some(status) = status.as_ref() {
+                    conversation.status = status.clone();
+                }
+                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_at = current_unix_millis_text();
+                break;
+            }
+        }
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
+                conversation_id,
+                run_phase: phase.to_string(),
+                status,
+                last_updated_label: Some(String::from("now")),
+            }),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_phase_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
 }
 
 /// Marks the in-flight prompt snapshot as preparing before slower outer steps run.

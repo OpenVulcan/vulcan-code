@@ -52,6 +52,10 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     auto_compaction_already_attempted: bool,
 ) {
     let session_id = request.session_id;
+    webui_after_precheck_trace(
+        "after_precheck_19_stream_task_scheduled",
+        format!("session={session_id}"),
+    );
     webui_trace("stream_task_spawn", format!("session={session_id}"));
     let expected_kernel_generation = state
         .lock()
@@ -60,15 +64,27 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     let task_state = state.clone();
     let handle = spawn_service_task(async move {
         let stream_task_started_at = current_unix_millis_value();
+        webui_after_precheck_trace(
+            "after_precheck_20_stream_task_entered",
+            format!("session={session_id}"),
+        );
         webui_trace("stream_task_entered", format!("session={session_id}"));
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut reached_finished_event = false;
+        let intervention_started_at = current_unix_millis_value();
         let prompt_ai_tool_configuration = request.ai_tool_configuration.clone();
         let prompt_intervention = build_webui_prompt_intervention(
             app.clone(),
             task_state.clone(),
             agent_runtime.provider_configuration.clone(),
             prompt_ai_tool_configuration,
+        );
+        webui_after_precheck_trace(
+            "after_precheck_21_intervention_ready",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(intervention_started_at)
+            ),
         );
         let provider_stream_create_started_at = current_unix_millis_value();
         webui_trace(
@@ -95,10 +111,24 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 current_unix_millis_value().saturating_sub(provider_stream_create_started_at)
             ),
         );
+        webui_after_precheck_trace(
+            "after_precheck_22_stream_created",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(provider_stream_create_started_at)
+            ),
+        );
         webui_trace(
             "stream_task_poll_start",
             format!(
                 "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(stream_task_started_at)
+            ),
+        );
+        webui_after_precheck_trace(
+            "after_precheck_23_poll_start",
+            format!(
+                "session={session_id} elapsed_ms_since_task={}",
                 current_unix_millis_value().saturating_sub(stream_task_started_at)
             ),
         );
@@ -169,6 +199,13 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::RequestReady { session_id } => {
+                    webui_after_precheck_trace(
+                        "after_precheck_30_request_ready",
+                        format!(
+                            "session={session_id} elapsed_ms_since_task={}",
+                            current_unix_millis_value().saturating_sub(stream_task_started_at)
+                        ),
+                    );
                     webui_trace(
                         "stream_provider_request_ready",
                         format!(
@@ -186,6 +223,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::WireRequestReady { session_id } => {
+                    webui_after_precheck_trace(
+                        "after_precheck_31_wire_request_ready",
+                        format!(
+                            "session={session_id} elapsed_ms_since_request={} elapsed_ms_since_task={}",
+                            current_provider_request_started_at
+                                .map(|started_at| current_unix_millis_value()
+                                    .saturating_sub(started_at)
+                                    .to_string())
+                                .unwrap_or_else(|| String::from("<unknown>")),
+                            current_unix_millis_value().saturating_sub(stream_task_started_at)
+                        ),
+                    );
                     webui_trace(
                         "stream_wire_request_ready",
                         format!(
@@ -211,6 +260,13 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     current_provider_request_started_at = Some(current_unix_millis_value());
                     first_event_after_request_logged = false;
                     first_visible_delta_logged = false;
+                    webui_after_precheck_trace(
+                        "after_precheck_32_request_started",
+                        format!(
+                            "session={session_id} elapsed_ms_since_task={}",
+                            current_unix_millis_value().saturating_sub(stream_task_started_at)
+                        ),
+                    );
                     webui_trace("stream_request_started", format!("session={session_id}"));
                     if let Err(error) = apply_session_phase(
                         &app,
@@ -224,6 +280,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
                     if !first_event_after_request_logged {
                         first_event_after_request_logged = true;
+                        webui_after_precheck_trace(
+                            "after_precheck_33_first_event_after_request",
+                            format!(
+                                "session={session_id} event=thinking_delta elapsed_ms_since_request={} elapsed_ms_since_task={}",
+                                current_provider_request_started_at
+                                    .map(|started_at| current_unix_millis_value()
+                                        .saturating_sub(started_at)
+                                        .to_string())
+                                    .unwrap_or_else(|| String::from("<unknown>")),
+                                current_unix_millis_value().saturating_sub(stream_task_started_at)
+                            ),
+                        );
                         webui_trace(
                             "stream_first_event_after_request",
                             format!(
@@ -239,6 +307,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                     if !first_visible_delta_logged {
                         first_visible_delta_logged = true;
+                        webui_after_precheck_trace(
+                            "after_precheck_34_first_visible_delta",
+                            format!(
+                                "session={session_id} kind=thinking elapsed_ms_since_request={} chars={}",
+                                current_provider_request_started_at
+                                    .map(|started_at| current_unix_millis_value()
+                                        .saturating_sub(started_at)
+                                        .to_string())
+                                    .unwrap_or_else(|| String::from("<unknown>")),
+                                delta.chars().count()
+                            ),
+                        );
                         webui_trace(
                             "stream_first_visible_delta",
                             format!(
@@ -283,6 +363,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 ExecutionStreamEvent::OutputDelta { session_id, delta } => {
                     if !first_event_after_request_logged {
                         first_event_after_request_logged = true;
+                        webui_after_precheck_trace(
+                            "after_precheck_33_first_event_after_request",
+                            format!(
+                                "session={session_id} event=output_delta elapsed_ms_since_request={} elapsed_ms_since_task={}",
+                                current_provider_request_started_at
+                                    .map(|started_at| current_unix_millis_value()
+                                        .saturating_sub(started_at)
+                                        .to_string())
+                                    .unwrap_or_else(|| String::from("<unknown>")),
+                                current_unix_millis_value().saturating_sub(stream_task_started_at)
+                            ),
+                        );
                         webui_trace(
                             "stream_first_event_after_request",
                             format!(
@@ -298,6 +390,18 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                     if !first_visible_delta_logged {
                         first_visible_delta_logged = true;
+                        webui_after_precheck_trace(
+                            "after_precheck_34_first_visible_delta",
+                            format!(
+                                "session={session_id} kind=output elapsed_ms_since_request={} chars={}",
+                                current_provider_request_started_at
+                                    .map(|started_at| current_unix_millis_value()
+                                        .saturating_sub(started_at)
+                                        .to_string())
+                                    .unwrap_or_else(|| String::from("<unknown>")),
+                                delta.chars().count()
+                            ),
+                        );
                         webui_trace(
                             "stream_first_visible_delta",
                             format!(
@@ -329,6 +433,19 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         && !first_event_after_request_logged
                     {
                         first_event_after_request_logged = true;
+                        webui_after_precheck_trace(
+                            "after_precheck_33_first_event_after_request",
+                            format!(
+                                "session={session_id} event=runtime.{:?} elapsed_ms_since_request={} elapsed_ms_since_task={}",
+                                event.kind,
+                                current_provider_request_started_at
+                                    .map(|started_at| current_unix_millis_value()
+                                        .saturating_sub(started_at)
+                                        .to_string())
+                                    .unwrap_or_else(|| String::from("<unknown>")),
+                                current_unix_millis_value().saturating_sub(stream_task_started_at)
+                            ),
+                        );
                         webui_trace(
                             "stream_first_event_after_request",
                             format!(

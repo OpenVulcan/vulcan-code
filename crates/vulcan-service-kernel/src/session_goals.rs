@@ -59,20 +59,14 @@ pub(super) struct SessionGoalStatusUpdateRequest {
 
 /// Session Plan mode update request sent by the WebUI composer controls.
 
-/// 停止单条实时命令会话并重建 WebUI 工作台快照。
+/// Saves one session goal and emits an addon-state delta.
+/// 保存单个会话目标并发出附属状态增量。
 pub(super) async fn service_save_session_goal(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: SessionGoalSaveRequest,
-) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+) -> Result<SessionAddonsChangedResponse, String> {
+    let controller_runtime = controller_runtime_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     validate_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
@@ -134,18 +128,7 @@ pub(super) async fn service_save_session_goal(
     {
         eprintln!("[webui-service] enqueue goal objective update guidance failed: {error}");
     }
-    refresh_session_goal_summary_and_emit(
-        app,
-        state,
-        &controller_runtime,
-        &agent_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &logs,
-        session_id,
-        Some(goal),
-    )
+    refresh_session_goal_summary_and_emit(&app, &state, session_id, Some(goal))
 }
 
 /// Returns the lifecycle status to keep after a user edits an existing goal.
@@ -178,14 +161,14 @@ pub(super) async fn service_resume_session_goal(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: SessionGoalResumeRequest,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SessionAddonsChangedResponse, String> {
     let (
         controller_runtime,
         agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
+        _luaskills_catalog,
+        _token_budget_runtime,
+        _mcp_catalog,
+        _logs,
     ) = runtime_parts_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     validate_session_goal_objective(&request.objective)?;
@@ -232,18 +215,7 @@ pub(super) async fn service_resume_session_goal(
     {
         eprintln!("[webui-service] enqueue resumed goal objective update guidance failed: {error}");
     }
-    let snapshot = refresh_session_goal_summary_and_emit(
-        app.clone(),
-        state.clone(),
-        &controller_runtime,
-        &agent_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &logs,
-        session_id,
-        Some(goal),
-    )?;
+    let response = refresh_session_goal_summary_and_emit(&app, &state, session_id, Some(goal))?;
     if let Err(error) = maybe_start_session_goal_continuation_if_idle(
         &app,
         &state,
@@ -255,7 +227,7 @@ pub(super) async fn service_resume_session_goal(
     {
         eprintln!("[webui-service] resumed goal continuation failed: {error}");
     }
-    Ok(snapshot)
+    Ok(response)
 }
 
 /// Clears the selected session goal through the user-facing WebUI API.
@@ -263,8 +235,8 @@ pub(super) async fn service_resume_session_goal(
 ///
 /// # Parameters
 /// 参数
-/// `app` emits the refreshed workbench snapshot.
-/// `app` 发出刷新后的工作台快照。
+/// `app` emits the addon delta when the target session is visible.
+/// `app` 在目标会话可见时发出附属状态增量。
 /// `state` owns the retained service bridge state.
 /// `state` 持有保留的服务桥接状态。
 /// `request` carries the target conversation id.
@@ -272,21 +244,14 @@ pub(super) async fn service_resume_session_goal(
 ///
 /// # Returns
 /// 返回值
-/// The refreshed workbench snapshot after the goal is removed.
-/// 目标移除后的刷新工作台快照。
+/// The applied addon projection after the goal is removed.
+/// 目标移除后的附属状态投影。
 pub(super) async fn service_clear_session_goal(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: SessionGoalClearRequest,
-) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+) -> Result<SessionAddonsChangedResponse, String> {
+    let controller_runtime = controller_runtime_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     ensure_regular_session_exists(&state, session_id, "清理目标")?;
     let removed_goal = VulcanGoalStore::new(controller_runtime.clone())
@@ -296,18 +261,7 @@ pub(super) async fn service_clear_session_goal(
     if let Some(removed_goal) = removed_goal.as_ref() {
         clear_budget_limit_reported_goal_id(&state, &removed_goal.goal_id)?;
     }
-    refresh_session_goal_summary_and_emit(
-        app,
-        state,
-        &controller_runtime,
-        &agent_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &logs,
-        session_id,
-        None,
-    )
+    refresh_session_goal_summary_and_emit(&app, &state, session_id, None)
 }
 
 /// Updates the selected session goal status through the user-facing WebUI API.
@@ -315,8 +269,8 @@ pub(super) async fn service_clear_session_goal(
 ///
 /// # Parameters
 /// 参数
-/// `app` emits the refreshed workbench snapshot.
-/// `app` 发出刷新后的工作台快照。
+/// `app` emits the addon delta when the target session is visible.
+/// `app` 在目标会话可见时发出附属状态增量。
 /// `state` owns the retained service bridge state.
 /// `state` 持有保留的服务桥接状态。
 /// `request` carries the target conversation id and next status.
@@ -324,21 +278,14 @@ pub(super) async fn service_clear_session_goal(
 ///
 /// # Returns
 /// 返回值
-/// The refreshed workbench snapshot after the goal status changes.
-/// 目标状态变更后的刷新工作台快照。
+/// The applied addon projection after the goal status changes.
+/// 目标状态变更后的附属状态投影。
 pub(super) async fn service_update_session_goal_status(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: SessionGoalStatusUpdateRequest,
-) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+) -> Result<SessionAddonsChangedResponse, String> {
+    let controller_runtime = controller_runtime_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     ensure_regular_session_exists(&state, session_id, "更新目标状态")?;
     let status = parse_session_goal_status(&request.status)?;
@@ -355,16 +302,5 @@ pub(super) async fn service_update_session_goal_status(
         .await
         .map_err(|error| format!("更新目标状态失败：{error}"))?
         .ok_or_else(|| String::from("当前会话还没有可更新的目标。"))?;
-    refresh_session_goal_summary_and_emit(
-        app,
-        state,
-        &controller_runtime,
-        &agent_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &logs,
-        session_id,
-        Some(goal),
-    )
+    refresh_session_goal_summary_and_emit(&app, &state, session_id, Some(goal))
 }

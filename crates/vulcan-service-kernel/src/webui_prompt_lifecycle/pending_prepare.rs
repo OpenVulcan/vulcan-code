@@ -258,13 +258,16 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             panel_entry_id,
         );
     }
-    store_current_workbench_snapshot(
+    commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,
-        controller_runtime,
-        &entry_agent_runtime,
         workspace_snapshot,
+        session_id,
+        SessionRunPhase::Preparing,
     )?;
+    if panel_entry_id.is_some() {
+        emit_pending_prompts_changed_delta(app, state, session_id)?;
+    }
     if entry.source.runs_user_prompt_precheck() {
         let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();

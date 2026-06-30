@@ -81,23 +81,26 @@ use vulcan_provider_config::config::{
 };
 use vulcan_service_api::{
     AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary,
-    AppendMessageBodyDelta, CommandSessionSummary, ComposerAttachmentSummary,
-    ContextInjectionCardSummary, ContextInjectionItemSummary, ContextInjectionSnapshot,
-    ContextUsageSnapshot, ConversationForkSourceSummary, ConversationMessage, ConversationSummary,
-    FeatureAreaSummary, HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary,
-    LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary,
-    MessageRole, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
+    AppendMessageBodyDelta, CommandSessionSummary, CommandSessionsChangedDelta,
+    ComposerAttachmentSummary, ContextInjectionCardSummary, ContextInjectionItemSummary,
+    ContextInjectionSnapshot, ContextUsageChangedDelta, ContextUsageSnapshot,
+    ConversationForkSourceSummary, ConversationMessage, ConversationSummary, FeatureAreaSummary,
+    HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary, LuaSkillSummary,
+    LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary, MessageRole,
+    PendingQuestionChangedDelta, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
     PendingQuestionSnapshot, PluginSummary, ProjectSummary, ProviderFieldSummary,
     ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
     ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter,
-    SessionAddonChangedEvent, SessionGoalSummary, SessionPlanArtifactSummary,
-    SessionPlanModeSummary, SessionTodolistItemSummary, SessionTodolistSummary,
-    SettingSectionSummary, StartupSnapshot, StartupStepStatus, SubagentNavigationSnapshot,
-    ToolCallSummary, UserPromptEditDraftSummary, VmmMemorySnapshot,
-    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
-    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
-    WorkbenchSnapshot, webui_service_discovery_snapshot_with_status,
-    webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
+    SessionAddonChangedEvent, SessionAddonsChangedDelta, SessionAddonsChangedResponse,
+    SessionGoalSummary, SessionPlanArtifactSummary, SessionPlanModeSummary,
+    SessionTodolistItemSummary, SessionTodolistSummary, SettingSectionSummary, StartupSnapshot,
+    StartupStepStatus, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
+    SubagentPanelRouteResponse, ToolCallSummary, UpdateConversationRunPhaseDelta,
+    UserPromptEditDraftSummary, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
+    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
+    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
+    webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
     SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
@@ -262,10 +265,10 @@ use pending_prompt_services::{
     service_edit_pending_prompt, service_remove_pending_prompt, service_reorder_pending_prompts,
 };
 use pending_prompts::{
-    clear_internal_pending_prompt_queue_for_stop, enqueue_webui_pending_prompt_from_submission,
-    pending_prompt_summaries_from_runtime_state, provider_configuration_for_model_reference,
-    runtime_state_has_queued_pending_prompt_work, session_has_blocking_system_prompt_work,
-    take_webui_internal_guidance_prompts,
+    clear_internal_pending_prompt_queue_for_stop, emit_pending_prompts_changed_delta,
+    enqueue_webui_pending_prompt_from_submission, pending_prompt_summaries_from_runtime_state,
+    provider_configuration_for_model_reference, runtime_state_has_queued_pending_prompt_work,
+    session_has_blocking_system_prompt_work, take_webui_internal_guidance_prompts,
 };
 pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;

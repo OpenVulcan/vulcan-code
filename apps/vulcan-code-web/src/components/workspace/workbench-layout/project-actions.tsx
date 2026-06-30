@@ -33,6 +33,10 @@ import { applyPreviewProjectAction, applyPreviewProjectIcon, applyPreviewProject
 import { useI18n, type TranslationKey } from "@/i18n";
 import { toast } from "sonner";
 
+// WorkbenchProjectActionSnapshotSource separates backend snapshots from local optimistic previews.
+// WorkbenchProjectActionSnapshotSource 区分后端快照与本地乐观预览。
+type WorkbenchProjectActionSnapshotSource = "service" | "local";
+
 // WorkbenchProjectActionsOptions groups state and service bridges used by project-side workbench actions.
 // WorkbenchProjectActionsOptions 归组项目侧工作台动作使用的状态与服务桥接。
 interface WorkbenchProjectActionsOptions {
@@ -45,6 +49,12 @@ interface WorkbenchProjectActionsOptions {
   // Merges a service snapshot with local subagent and hydration caches.
   // 将服务快照与本地子代理及水合缓存合并。
   mergeWorkbenchWithLocalCaches: (current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => WorkbenchSnapshot;
+  // Reserves one service snapshot revision before applying side effects outside workbench state.
+  // 在应用工作台状态之外的副作用前预占一个服务快照版本。
+  acceptServiceWorkbenchSnapshot: (snapshot: WorkbenchSnapshot) => boolean;
+  // Applies a local optimistic preview without enforcing service revision monotonicity.
+  // 应用本地乐观预览，不执行服务版本单调门禁。
+  applyLocalPreviewWithLocalCaches: (current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => WorkbenchSnapshot;
   // Clears or creates the active draft conversation.
   // 清理或创建当前草稿会话。
   setDraftConversation: React.Dispatch<React.SetStateAction<DraftConversationSelection | null>>;
@@ -93,6 +103,8 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     workbenchState,
     setWorkbenchState,
     mergeWorkbenchWithLocalCaches,
+    acceptServiceWorkbenchSnapshot,
+    applyLocalPreviewWithLocalCaches,
     setDraftConversation,
     setSelectedConversationId,
     setRenameTarget,
@@ -108,11 +120,18 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   } = options;
   // applyProjectActionSnapshot merges a project-menu operation result into the local workbench.
   // applyProjectActionSnapshot 将项目菜单操作结果合并进本地工作台。
-  const applyProjectActionSnapshot = React.useCallback((snapshot: WorkbenchSnapshot | null) => {
+  const applyProjectActionSnapshot = React.useCallback((
+    snapshot: WorkbenchSnapshot | null,
+    source: WorkbenchProjectActionSnapshotSource = "service",
+  ) => {
     if (!snapshot) {
       return;
     }
-    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    if (source === "service" && !acceptServiceWorkbenchSnapshot(snapshot)) {
+      return;
+    }
+    const applySnapshot = source === "local" ? applyLocalPreviewWithLocalCaches : mergeWorkbenchWithLocalCaches;
+    setWorkbenchState((current) => applySnapshot(current, snapshot));
     setDraftConversation(null);
     setSelectedConversationId((current) => {
       if (current && snapshot.conversations.some((conversation) => conversation.id === current)) {
@@ -120,7 +139,14 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       }
       return snapshot.selectedConversationId ?? snapshot.conversations[0]?.id ?? null;
     });
-  }, []);
+  }, [
+    acceptServiceWorkbenchSnapshot,
+    applyLocalPreviewWithLocalCaches,
+    mergeWorkbenchWithLocalCaches,
+    setDraftConversation,
+    setSelectedConversationId,
+    setWorkbenchState,
+  ]);
 
   // handleProjectMenuAction executes immediate project-tree context menu commands.
   // handleProjectMenuAction 执行可立即处理的项目树右键菜单命令。
@@ -158,7 +184,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       }
 
       const preview = applyPreviewProjectAction(workbenchState, project.id, action);
-      applyProjectActionSnapshot(preview.snapshot);
+      applyProjectActionSnapshot(preview.snapshot, "local");
       await toggleProjectPinned(project.id);
       toast.success(formatProjectActionTranslation(
         t,
@@ -166,7 +192,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
         { project: project.name },
       ));
     } catch (nextError) {
-      applyProjectActionSnapshot(workbenchState);
+      applyProjectActionSnapshot(workbenchState, "local");
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
   }, [applyProjectActionSnapshot, t, workbenchState]);
@@ -241,12 +267,12 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   const handleProjectIconConfirm = React.useCallback(async (project: ProjectSummary, icon: ProjectIconSelection) => {
     const normalizedIcon = normalizeProjectIconSelection(icon);
     try {
-      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot);
+      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot, "local");
       await setProjectIcon(project.id, normalizedIcon);
       setProjectIconTarget(null);
       toast.success(formatProjectActionTranslation(t, "projectActions.iconUpdated", { project: project.name }));
     } catch (error) {
-      applyProjectActionSnapshot(workbenchState);
+      applyProjectActionSnapshot(workbenchState, "local");
       toast.error(error instanceof Error ? error.message : String(error));
     }
   }, [applyProjectActionSnapshot, t, workbenchState]);
@@ -255,12 +281,12 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   // handleProjectIconReset 清除选择的项目图标覆盖。
   const handleProjectIconReset = React.useCallback(async (project: ProjectSummary) => {
     try {
-      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot);
+      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot, "local");
       await resetProjectIcon(project.id);
       setProjectIconTarget(null);
       toast.success(formatProjectActionTranslation(t, "projectActions.iconReset", { project: project.name }));
     } catch (error) {
-      applyProjectActionSnapshot(workbenchState);
+      applyProjectActionSnapshot(workbenchState, "local");
       toast.error(error instanceof Error ? error.message : String(error));
     }
   }, [applyProjectActionSnapshot, t, workbenchState]);

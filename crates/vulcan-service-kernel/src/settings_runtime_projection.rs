@@ -176,6 +176,7 @@ pub(crate) fn refresh_settings_projection_locked(
         })
         .unwrap_or_else(|| ai_tool_configuration.clone());
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     guard.workbench.ui_locale = provider_configuration.ui_locale.clone();
     guard.workbench.providers = providers(provider_configuration);
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
@@ -323,6 +324,7 @@ pub(crate) fn refresh_workbench_runtime_controls_locked(
         )
     });
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     guard.workbench.providers = providers(provider_configuration);
     guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
     guard.workbench.composer_attachment_capabilities =
@@ -430,6 +432,7 @@ pub(crate) fn refresh_agent_skills_local_state(
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     guard.workbench.agent_skills = summary.clone();
     Ok(summary)
 }
@@ -449,6 +452,7 @@ pub(crate) fn refresh_luaskills_local_state(
         .unwrap_or_default();
     let catalog = cached_luaskills_catalog_from_state(&guard);
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
     guard.workbench.plugins = plugins_from_luaskills(&catalog);
     Ok(guard.workbench.clone())

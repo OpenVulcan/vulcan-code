@@ -14,16 +14,19 @@ use vulcan_workspace_store::{
 };
 
 use super::{
-    AgentRuntimeBridge, SharedServiceBridgeState, apply_checkpoint_conversation_state,
-    apply_terminal_execution_report_to_state, apply_vmm_writeback_effects_to_runtime_state,
-    build_vmm_hook_config_snapshot, current_unix_millis_text, current_unix_millis_value,
-    merge_runtime_state_records_into_display_messages, persist_workspace_session_update,
+    AgentRuntimeBridge, ContextUsageChangedDelta, ServiceEvent, SharedServiceBridgeState,
+    UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
+    apply_checkpoint_conversation_state, apply_terminal_execution_report_to_state,
+    apply_vmm_writeback_effects_to_runtime_state, build_conversation_messages_patched_delta,
+    build_vmm_hook_config_snapshot, context_usage_snapshot_from_runtime_state,
+    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
+    emit_service_event_with_trace, merge_runtime_state_records_into_display_messages,
+    persist_workspace_session_update, replace_conversation_messages_in_workbench_window,
     replace_display_messages_with_runtime_state_records, spawn_service_task,
     spawn_workspace_session_runtime_state_persist_task,
     spawn_workspace_session_transcript_persist_task, sync_hydrated_session_dialogue_ready_marker,
     webui_trace, webui_trace_if_slow, webui_turn_completion_gate_from_state,
-    with_workspace_mutation, with_workspace_mutation_preserving_subagent_navigation,
-    workspace_snapshot_contains_regular_session,
+    workbench_surface_matches_conversation, workspace_snapshot_contains_regular_session,
 };
 
 /// Applies one streamed conversation checkpoint to retained workspace memory.
@@ -51,7 +54,7 @@ use super::{
 /// Returns `Ok(())` after memory mutation and any required persistence tasks are scheduled.
 /// 在完成内存变更并调度必要持久化任务后返回 `Ok(())`。
 pub(super) fn apply_conversation_checkpoint(
-    app: &ServiceEventEmitter,
+    _app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
@@ -59,13 +62,18 @@ pub(super) fn apply_conversation_checkpoint(
     last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     provider_request_count: usize,
 ) -> Result<(), String> {
-    let mut is_main_session = false;
-    let workspace_snapshot =
-        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+    let (is_main_session, workspace_snapshot) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        {
             let now = current_unix_millis_text();
             // Only main-session checkpoints may persist through workspace-store; TaskSession checkpoints stay in memory here.
             // 只有主会话 checkpoint 可以通过 workspace-store 持久化；TaskSession checkpoint 在这里仅更新内存显示态。
-            is_main_session = workspace
+            let is_main_session = workspace
                 .sessions
                 .iter()
                 .any(|candidate| candidate.id == session_id);
@@ -99,7 +107,9 @@ pub(super) fn apply_conversation_checkpoint(
                 );
             }
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-        })?;
+            (is_main_session, workspace.clone())
+        }
+    };
     if is_main_session {
         spawn_workspace_session_transcript_persist_task(
             state.clone(),
@@ -310,8 +320,14 @@ pub(super) fn apply_execution_report_to_memory(
     // Measures in-memory workspace mutation for the terminal execution report.
     // 衡量终态执行报告写入内存工作区的耗时。
     let workspace_apply_started_at = current_unix_millis_value();
-    let workspace_snapshot =
-        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+    let (workspace_snapshot, terminal_run_phase, terminal_status_label) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        {
             let now = current_unix_millis_text();
             // Main-session membership decides whether completion hooks and VMM side effects may run.
             // 主会话成员关系决定完成 hook 与 VMM 副作用是否允许执行。
@@ -419,12 +435,31 @@ pub(super) fn apply_execution_report_to_memory(
                         workspace,
                     ));
             }
-        })?;
+            let terminal_run_phase = if apply_result.is_success {
+                SessionRunPhase::Ready
+            } else {
+                SessionRunPhase::Failed
+            };
+            let terminal_status_label = if apply_result.is_success {
+                SessionState::Completed.label().to_string()
+            } else {
+                SessionState::Blocked.label().to_string()
+            };
+            (workspace.clone(), terminal_run_phase, terminal_status_label)
+        }
+    };
     webui_trace_if_slow(
         "execution_report_workspace_apply_slow",
         workspace_apply_started_at,
         format!("session={session_id}"),
     );
+    emit_terminal_execution_report_workbench_deltas(
+        app,
+        state,
+        session_id,
+        terminal_run_phase,
+        terminal_status_label.as_str(),
+    )?;
     webui_trace(
         "execution_report_applied",
         format!(
@@ -453,6 +488,144 @@ pub(super) fn apply_execution_report_to_memory(
     })
 }
 
+/// Emits terminal-report deltas without rebuilding the full workbench snapshot.
+/// 在不重建完整工作台快照的情况下发出终态报告增量。
+///
+/// # Parameters
+/// 参数
+/// `app` emits delta events to connected WebUI clients.
+/// `app` 将增量事件发给已连接的 WebUI 客户端。
+/// `state` owns the retained workbench and workspace projections.
+/// `state` 持有保留的工作台与工作区投影。
+/// `session_id` identifies the terminal session.
+/// `session_id` 标识进入终态的会话。
+/// `run_phase` is the terminal run phase to expose.
+/// `run_phase` 是需要展示的终态运行阶段。
+/// `status_label` is the sidebar status label paired with the terminal phase.
+/// `status_label` 是与终态阶段配套的侧栏状态标签。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after all required deltas have been emitted.
+/// 在发出所有必要增量后返回 `Ok(())`。
+fn emit_terminal_execution_report_workbench_deltas(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    run_phase: SessionRunPhase,
+    status_label: &str,
+) -> Result<(), String> {
+    let conversation_id = session_id.to_string();
+    let events = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let surface_matches =
+            workbench_surface_matches_conversation(&guard.workbench, &conversation_id);
+        let before_visible_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let messages = if surface_matches {
+            workspace
+                .session_messages
+                .get(&session_id)
+                .map(|entries| conversation_messages_from_session(&conversation_id, entries, false))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone())
+            .unwrap_or_default();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
+        let context_usage = if surface_matches {
+            context_usage_snapshot_from_runtime_state(
+                session_id,
+                workspace.session_runtime_state.get(&session_id),
+                &guard.live_context_budgets,
+                &provider_configuration,
+                &ai_tool_configuration,
+            )
+        } else {
+            None
+        };
+        let mut events = Vec::new();
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let phase_generation = guard.workbench_generation;
+        guard.workbench.revision = phase_generation;
+        for conversation in &mut guard.workbench.conversations {
+            if conversation.id == conversation_id {
+                conversation.run_phase = run_phase.to_string();
+                conversation.status = status_label.to_string();
+                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_at = current_unix_millis_text();
+                break;
+            }
+        }
+        events.push(WorkbenchDeltaEnvelope {
+            generation: phase_generation,
+            delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
+                conversation_id: conversation_id.clone(),
+                run_phase: run_phase.to_string(),
+                status: Some(status_label.to_string()),
+                last_updated_label: Some(String::from("now")),
+            }),
+        });
+        if surface_matches {
+            if let Some(message_patch) = build_conversation_messages_patched_delta(
+                &conversation_id,
+                before_visible_messages.as_slice(),
+                messages.as_slice(),
+            ) {
+                guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+                let message_generation = guard.workbench_generation;
+                guard.workbench.revision = message_generation;
+                replace_conversation_messages_in_workbench_window(
+                    &mut guard.workbench.messages,
+                    &conversation_id,
+                    messages,
+                );
+                events.push(WorkbenchDeltaEnvelope {
+                    generation: message_generation,
+                    delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+                });
+            }
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let context_generation = guard.workbench_generation;
+            guard.workbench.revision = context_generation;
+            guard.workbench.context_usage = context_usage.clone();
+            events.push(WorkbenchDeltaEnvelope {
+                generation: context_generation,
+                delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
+                    context_usage,
+                }),
+            });
+        }
+        events
+    };
+    for event in events {
+        emit_service_event_with_trace(
+            app,
+            "workbench_terminal_report_delta_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
+    }
+    Ok(())
+}
+
 /// Spawns the completed-turn hook without blocking queued prompt dispatch.
 /// 启动完成回合 hook，避免阻塞排队提示词分发。
 ///
@@ -469,7 +642,7 @@ pub(super) fn apply_execution_report_to_memory(
 /// `completion_request` is the prepared completed-turn hook dispatch request.
 /// `completion_request` 是已准备的完成回合 hook 调度请求。
 pub(super) fn spawn_conversation_completion_hook_task(
-    app: ServiceEventEmitter,
+    _app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
@@ -487,7 +660,23 @@ pub(super) fn spawn_conversation_completion_hook_task(
         if outcome.vmm_writeback_effects.is_empty() {
             return;
         }
-        let workspace_snapshot = match with_workspace_mutation(&app, &state, |workspace| {
+        let workspace_snapshot = {
+            let mut guard = match state.lock() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    eprintln!("failed to lock service state: {error}");
+                    return;
+                }
+            };
+            let workspace = match guard.workspace_snapshot.as_mut() {
+                Some(workspace) => workspace,
+                None => {
+                    eprintln!(
+                        "[webui-service] apply completed-turn hook effects failed: workspace snapshot is not ready"
+                    );
+                    return;
+                }
+            };
             let now = current_unix_millis_text();
             if let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) {
                 apply_vmm_writeback_effects_to_runtime_state(
@@ -503,12 +692,7 @@ pub(super) fn spawn_conversation_completion_hook_task(
                     &agent_runtime.provider_configuration,
                     workspace,
                 ));
-        }) {
-            Ok(workspace_snapshot) => workspace_snapshot,
-            Err(error) => {
-                eprintln!("[webui-service] apply completed-turn hook effects failed: {error}");
-                return;
-            }
+            workspace.clone()
         };
         if let Err(error) = persist_workspace_session_update(
             Some(&state),

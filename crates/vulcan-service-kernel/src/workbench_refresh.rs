@@ -2,6 +2,7 @@
 //! workbench refresh 辅助逻辑。
 
 use super::*;
+use vulcan_service_api::PendingPromptsChangedDelta;
 
 /// Refreshes the WebUI workbench after a focused workspace metadata update.
 /// 在一次聚焦的工作区元数据更新后刷新 WebUI 工作台。
@@ -130,7 +131,7 @@ pub(crate) async fn refresh_workbench_snapshot(
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
-    let workbench = workbench_from_runtime(
+    let mut workbench = workbench_from_runtime(
         &controller_runtime,
         agent_runtime_for_status
             .as_ref()
@@ -143,7 +144,7 @@ pub(crate) async fn refresh_workbench_snapshot(
         &refreshed_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
-        pending_question_snapshot_from_agent_runtime(agent_runtime_for_status.as_ref()),
+        pending_question_snapshots_from_agent_runtime(agent_runtime_for_status.as_ref()),
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
@@ -154,6 +155,7 @@ pub(crate) async fn refresh_workbench_snapshot(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
@@ -241,6 +243,18 @@ pub(crate) fn webui_submit_trace_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Returns whether focused after-precheck diagnostic traces are enabled.
+/// 返回 precheck 后专项诊断日志是否已启用。
+pub(crate) fn webui_after_precheck_trace_enabled() -> bool {
+    std::env::var("VULCAN_WEBUI_AFTER_PRECHECK_TRACE")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
 /// Emits one WebUI execution-chain diagnostic trace line when tracing is enabled.
 /// 当诊断开关启用时输出一条 WebUI 执行链诊断日志。
 pub(crate) fn webui_trace(stage: &str, detail: impl AsRef<str>) {
@@ -249,6 +263,21 @@ pub(crate) fn webui_trace(stage: &str, detail: impl AsRef<str>) {
     }
     eprintln!(
         "[webui-service][webui-trace] timestamp={} unix_ms={} stage={} {}",
+        current_webui_trace_timestamp(),
+        current_unix_millis_text(),
+        stage,
+        detail.as_ref()
+    );
+}
+
+/// Emits one focused after-precheck diagnostic trace line.
+/// 输出一条 precheck 后专项诊断日志。
+pub(crate) fn webui_after_precheck_trace(stage: &str, detail: impl AsRef<str>) {
+    if !webui_after_precheck_trace_enabled() {
+        return;
+    }
+    eprintln!(
+        "[webui-service][after-precheck-trace] timestamp={} unix_ms={} stage={} {}",
         current_webui_trace_timestamp(),
         current_unix_millis_text(),
         stage,
@@ -426,7 +455,7 @@ pub(crate) fn workbench_from_runtime(
     workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     surface_messages: &[SessionMessageEntry],
     subagent_navigation: Option<SubagentNavigationSnapshot>,
-    pending_question: Option<PendingQuestionSnapshot>,
+    pending_questions: Vec<PendingQuestionSnapshot>,
     logs: &[String],
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
     session_goal_summaries: &BTreeMap<SessionId, SessionGoalSummary>,
@@ -437,6 +466,14 @@ pub(crate) fn workbench_from_runtime(
     } else {
         Some(workspace.selected_session.to_string())
     };
+    let pending_question = selected_conversation_id
+        .as_ref()
+        .and_then(|conversation_id| {
+            pending_questions
+                .iter()
+                .find(|question| question.session_id == *conversation_id)
+                .cloned()
+        });
     let active_conversation_id = subagent_navigation
         .as_ref()
         .map(|navigation| navigation.active_conversation_id.as_str())
@@ -470,7 +507,41 @@ pub(crate) fn workbench_from_runtime(
         .chain(workspace.archived_task_projects.iter())
         .map(|project| project.id.as_str())
         .collect::<BTreeSet<_>>();
+    let pending_prompts_by_conversation = workspace
+        .session_runtime_state
+        .iter()
+        .filter_map(|(session_id, runtime_state)| {
+            let pending_prompts = pending_prompt_summaries_from_runtime_state(runtime_state);
+            if pending_prompts.is_empty() {
+                return None;
+            }
+            Some(PendingPromptsChangedDelta {
+                conversation_id: session_id.to_string(),
+                pending_prompts,
+            })
+        })
+        .collect::<Vec<_>>();
+    let session_addons_by_conversation = workspace
+        .sessions
+        .iter()
+        .filter_map(|session| {
+            let runtime_state = workspace.session_runtime_state.get(&session.id);
+            let session_goal = session_goal_summaries.get(&session.id).cloned();
+            let session_todolist = session_todolist_summary_from_runtime_state(runtime_state);
+            let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
+            if session_goal.is_none() && session_todolist.is_none() && session_plan_mode.is_none() {
+                return None;
+            }
+            Some(SessionAddonsChangedDelta {
+                conversation_id: session.id.to_string(),
+                session_goal,
+                session_todolist,
+                session_plan_mode,
+            })
+        })
+        .collect::<Vec<_>>();
     WorkbenchSnapshot {
+        revision: 0,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         ui_locale: provider_configuration.ui_locale.clone(),
         modules: runtime_modules(
@@ -505,6 +576,13 @@ pub(crate) fn workbench_from_runtime(
                 let effective_run_phase = run_phase;
                 let is_running = session.status == SessionState::Running
                     || is_active_session_run_phase(run_phase);
+                let unread = workspace
+                    .session_runtime_state
+                    .get(&session.id)
+                    .is_some_and(|runtime_state| runtime_state.ui_state.unread);
+                let session_plan_mode = session_plan_mode_summary_from_runtime_state(
+                    workspace.session_runtime_state.get(&session.id),
+                );
                 ConversationSummary {
                     id: session.id.to_string(),
                     title: session.title.clone(),
@@ -517,10 +595,14 @@ pub(crate) fn workbench_from_runtime(
                     run_phase: effective_run_phase.to_string(),
                     last_updated_label: session.last_updated_label.clone(),
                     last_updated_at: session.updated_at.clone(),
-                    unread: workspace
-                        .session_runtime_state
-                        .get(&session.id)
-                        .is_some_and(|runtime_state| runtime_state.ui_state.unread),
+                    unread,
+                    attention: conversation_attention_summary_for_session(
+                        session.id,
+                        &pending_questions,
+                        session_plan_mode.as_ref(),
+                        unread,
+                        Some(session.updated_at.clone()),
+                    ),
                     project_id: session.project_id.clone(),
                     fork_source: conversation_fork_source_summary_from_session(session),
                 }
@@ -556,6 +638,7 @@ pub(crate) fn workbench_from_runtime(
                 last_updated_label: session.last_updated_label.clone(),
                 last_updated_at: session.updated_at.clone(),
                 unread: false,
+                attention: None,
                 project_id: session.project_id.clone(),
                 fork_source: conversation_fork_source_summary_from_session(session),
             })
@@ -595,12 +678,15 @@ pub(crate) fn workbench_from_runtime(
         pending_prompts: selected_runtime_state
             .map(pending_prompt_summaries_from_runtime_state)
             .unwrap_or_default(),
+        pending_prompts_by_conversation,
         pending_question,
+        pending_questions,
         session_todolist: session_todolist_summary_from_runtime_state(selected_runtime_state),
         session_goal: session_goal_summaries
             .get(&workspace.selected_session)
             .cloned(),
         session_plan_mode: session_plan_mode_summary_from_runtime_state(selected_runtime_state),
+        session_addons_by_conversation,
         memories: memories(workspace),
         vmm_memory: vmm_memory_snapshot(workspace, provider_configuration, selected_runtime_state),
         command_sessions: command_sessions(controller, command_session_runtime),

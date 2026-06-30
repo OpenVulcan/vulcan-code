@@ -410,6 +410,8 @@ export type TranslationKey =
   | "projectRow.noConversations"
   | "conversationRow.running"
   | "conversationRow.unread"
+  | "conversationRow.askAttention"
+  | "conversationRow.planAttention"
   | "conversationRow.confirmArchive"
   | "projectFolderPicker.title"
   | "projectFolderPicker.pathAria"
@@ -1504,6 +1506,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectRow.noConversations": "暂无对话",
     "conversationRow.running": "会话正在运行",
     "conversationRow.unread": "未读",
+    "conversationRow.askAttention": "有待回答问题",
+    "conversationRow.planAttention": "有计划确认",
     "conversationRow.confirmArchive": "确认归档对话",
     "projectFolderPicker.title": "选择项目目录",
     "projectFolderPicker.pathAria": "目录路径",
@@ -2595,6 +2599,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "projectRow.noConversations": "No conversations",
     "conversationRow.running": "Conversation is running",
     "conversationRow.unread": "Unread",
+    "conversationRow.askAttention": "Question waiting for reply",
+    "conversationRow.planAttention": "Plan confirmation waiting",
     "conversationRow.confirmArchive": "Confirm archive conversation",
     "projectFolderPicker.title": "Choose project directory",
     "projectFolderPicker.pathAria": "Directory path",

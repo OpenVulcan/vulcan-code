@@ -63,6 +63,7 @@ pub(super) fn rename_conversation_in_retained_state(
         conversation.last_updated_label = String::from("刚刚");
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     Ok(guard.workbench.clone())
 }
 
@@ -206,6 +207,7 @@ pub(super) fn archive_conversation_in_retained_state(
             .map(|conversation| conversation.id.clone());
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     Ok(guard.workbench.clone())
 }
 
@@ -222,6 +224,7 @@ pub(super) fn archived_conversation_summary_from_session(
         last_updated_label: session.last_updated_label.clone(),
         last_updated_at: session.updated_at.clone(),
         unread: false,
+        attention: None,
         project_id: session.project_id.clone(),
         fork_source: conversation_fork_source_summary_from_session(session),
     }
@@ -267,6 +270,7 @@ pub(crate) async fn service_mark_conversation_read(
             conversation.unread = false;
         }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
         (
             controller_runtime,
             runtime_state_update,
@@ -303,7 +307,7 @@ pub(crate) async fn service_select_conversation(
         mut provider_configuration,
         ai_tool_configuration,
         live_context_budgets,
-        pending_question,
+        pending_questions,
         mut workspace_snapshot,
     ) = {
         let guard = state
@@ -332,8 +336,8 @@ pub(crate) async fn service_select_conversation(
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
         let live_context_budgets = guard.live_context_budgets.clone();
-        let pending_question =
-            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+        let pending_questions =
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
         (
             controller_runtime,
             luaskills_catalog,
@@ -343,7 +347,7 @@ pub(crate) async fn service_select_conversation(
             provider_configuration,
             ai_tool_configuration,
             live_context_budgets,
-            pending_question,
+            pending_questions,
             workspace_snapshot,
         )
     };
@@ -397,7 +401,7 @@ pub(crate) async fn service_select_conversation(
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
-    let workbench = workbench_from_runtime(
+    let mut workbench = workbench_from_runtime(
         &controller_runtime,
         command_session_runtime.as_deref(),
         &luaskills_catalog,
@@ -408,7 +412,7 @@ pub(crate) async fn service_select_conversation(
         &workspace_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
-        pending_question,
+        pending_questions,
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
@@ -419,6 +423,7 @@ pub(crate) async fn service_select_conversation(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        workbench.revision = guard.workbench_generation;
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.workbench = workbench.clone();
     }

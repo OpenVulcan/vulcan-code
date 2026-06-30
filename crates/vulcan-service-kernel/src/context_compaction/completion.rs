@@ -68,8 +68,15 @@ pub(crate) fn finish_webui_context_compaction_execution(
     let mut injection_merge_timestamp = String::new();
     let mut ttl_prune_report = InjectionPruneReport::default();
     let mut draft_error: Option<String> = None;
-    let workspace =
-        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+    let workspace = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        {
             let now = current_unix_millis_text();
             let runtime_state = workspace
                 .session_runtime_state
@@ -78,7 +85,7 @@ pub(crate) fn finish_webui_context_compaction_execution(
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
-            let draft = match build_webui_context_compaction_draft(
+            match build_webui_context_compaction_draft(
                 runtime_state,
                 session_id,
                 section_id,
@@ -88,68 +95,71 @@ pub(crate) fn finish_webui_context_compaction_execution(
                 &summary_body,
                 &execution,
             ) {
-                Ok(draft) => draft,
+                Ok(draft) => {
+                    if !draft.baseline.matches(runtime_state) {
+                        draft_error = Some(String::from(
+                            "上下文压缩候选状态基线失配，已保留当前会话状态并取消提交。",
+                        ));
+                    } else {
+                        injection_merge_event = draft.injection_merge_event.clone();
+                        injection_merge_timestamp = draft.injection_merge_timestamp.clone();
+                        ttl_prune_report = draft.ttl_prune_report;
+                        let terminal_record_id = draft.terminal_record_id.clone();
+                        let checkpoint = draft.checkpoint;
+                        *runtime_state = draft.runtime_state;
+                        if trigger != AUTO_CONTEXT_COMPACTION_TRIGGER {
+                            let usage_segment = context_compaction_usage_segment_from_execution(
+                                trigger, &execution,
+                            );
+                            let _ = append_webui_session_turn_stats_to_state(
+                                runtime_state,
+                                session_id,
+                                &terminal_record_id,
+                                SessionTurnStatsStatus::Completed,
+                                None,
+                                SessionTurnStatsKind::ContextCompaction,
+                                vec![usage_segment],
+                            );
+                        }
+                        workspace
+                            .session_compactions
+                            .entry(session_id)
+                            .or_default()
+                            .push(checkpoint);
+                        let runtime_state_snapshot = runtime_state.clone();
+                        merge_runtime_state_records_into_display_messages(
+                            workspace,
+                            session_id,
+                            &runtime_state_snapshot,
+                        );
+                        workspace
+                            .session_run_phases
+                            .insert(session_id, previous_phase);
+                        if let Some(session) = workspace
+                            .sessions
+                            .iter_mut()
+                            .find(|session| session.id == session_id)
+                        {
+                            session.status = SessionState::Completed;
+                            session.last_updated_label = String::from("刚刚");
+                            session.updated_at = current_unix_millis_text();
+                        }
+                        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
+                        agent_runtime.vmm_hook_runtime.replace_snapshot(
+                            build_vmm_hook_config_snapshot(
+                                &agent_runtime.provider_configuration,
+                                workspace,
+                            ),
+                        );
+                    }
+                }
                 Err(error) => {
                     draft_error = Some(error);
-                    return;
                 }
-            };
-            if !draft.baseline.matches(runtime_state) {
-                draft_error = Some(String::from(
-                    "上下文压缩候选状态基线失配，已保留当前会话状态并取消提交。",
-                ));
-                return;
             }
-            injection_merge_event = draft.injection_merge_event.clone();
-            injection_merge_timestamp = draft.injection_merge_timestamp.clone();
-            ttl_prune_report = draft.ttl_prune_report;
-            let terminal_record_id = draft.terminal_record_id.clone();
-            let checkpoint = draft.checkpoint;
-            *runtime_state = draft.runtime_state;
-            if trigger != AUTO_CONTEXT_COMPACTION_TRIGGER {
-                let usage_segment =
-                    context_compaction_usage_segment_from_execution(trigger, &execution);
-                let _ = append_webui_session_turn_stats_to_state(
-                    runtime_state,
-                    session_id,
-                    &terminal_record_id,
-                    SessionTurnStatsStatus::Completed,
-                    None,
-                    SessionTurnStatsKind::ContextCompaction,
-                    vec![usage_segment],
-                );
-            }
-            workspace
-                .session_compactions
-                .entry(session_id)
-                .or_default()
-                .push(checkpoint);
-            let runtime_state_snapshot = runtime_state.clone();
-            merge_runtime_state_records_into_display_messages(
-                workspace,
-                session_id,
-                &runtime_state_snapshot,
-            );
-            workspace
-                .session_run_phases
-                .insert(session_id, previous_phase);
-            if let Some(session) = workspace
-                .sessions
-                .iter_mut()
-                .find(|session| session.id == session_id)
-            {
-                session.status = SessionState::Completed;
-                session.last_updated_label = String::from("刚刚");
-                session.updated_at = current_unix_millis_text();
-            }
-            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-            agent_runtime
-                .vmm_hook_runtime
-                .replace_snapshot(build_vmm_hook_config_snapshot(
-                    &agent_runtime.provider_configuration,
-                    workspace,
-                ));
-        })?;
+        }
+        workspace.clone()
+    };
     if let Some(error) = draft_error {
         return fail_webui_context_compaction_execution(
             app,
@@ -162,6 +172,8 @@ pub(crate) fn finish_webui_context_compaction_execution(
             &error,
         );
     }
+    emit_context_compaction_message_window_delta(app, state, session_id)?;
+    apply_session_phase(app, state, session_id, previous_phase)?;
     if ttl_prune_report.removed_item_count > 0 || ttl_prune_report.removed_group_count > 0 {
         webui_trace(
             "context_compaction_pruned_expired_injections",
@@ -210,7 +222,14 @@ pub(crate) fn fail_webui_context_compaction_execution(
     trigger: &str,
     error: &str,
 ) -> Result<WorkspaceSnapshot, String> {
-    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+    let workspace = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         apply_webui_context_compaction_failure_to_workspace(
             workspace,
             session_id,
@@ -220,7 +239,11 @@ pub(crate) fn fail_webui_context_compaction_execution(
             trigger,
             error,
         );
-    })
+        workspace.clone()
+    };
+    emit_context_compaction_message_window_delta(app, state, session_id)?;
+    apply_session_phase(app, state, session_id, previous_phase)?;
+    Ok(workspace)
 }
 
 /// Applies failed context-compaction state inside one retained workspace snapshot.

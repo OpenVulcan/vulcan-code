@@ -95,7 +95,14 @@ pub(crate) fn append_webui_context_compaction_output_delta(
     if delta.is_empty() {
         return Ok(());
     }
-    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         let now = current_unix_millis_text();
         let runtime_state = workspace
             .session_runtime_state
@@ -136,8 +143,8 @@ pub(crate) fn append_webui_context_compaction_output_delta(
             .session_run_phases
             .insert(session_id, SessionRunPhase::Requesting);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-    })
-    .map(|_| ())
+    }
+    emit_context_compaction_message_window_delta(app, state, session_id)
 }
 
 /// Appends one visible progress line to the running context-compaction status section.
@@ -156,7 +163,14 @@ pub(crate) fn append_webui_context_compaction_progress(
         return Ok(());
     }
     let line = progress_stage.to_string();
-    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         let now = current_unix_millis_text();
         let runtime_state = workspace
             .session_runtime_state
@@ -243,8 +257,8 @@ pub(crate) fn append_webui_context_compaction_progress(
             .session_run_phases
             .insert(session_id, SessionRunPhase::Requesting);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-    })
-    .map(|_| ())
+    }
+    emit_context_compaction_message_window_delta(app, state, session_id)
 }
 
 /// Maximum user-message characters embedded into the automatic compaction continuation note.

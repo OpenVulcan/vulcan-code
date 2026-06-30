@@ -72,6 +72,7 @@ pub(crate) fn update_project_pinned_local_state(
     }
     if found {
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
         Ok(())
     } else {
         Err(format!("没有找到要切换置顶状态的项目：{project_id}"))
@@ -108,6 +109,7 @@ pub(crate) fn update_project_icon_local_state(
     }
     if found {
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
         Ok(())
     } else {
         Err(format!("没有找到要设置图标的项目：{project_id}"))

@@ -3,12 +3,13 @@
 
 use super::*;
 
-/// 插入单条可见待发送提示词，并在会话可运行时立即启动分发。
+/// Inserts one visible pending prompt and starts dispatch when the selected session can run.
+/// 插入单条可见待发送提示词，并在当前会话可运行时启动分发。
 ///
 /// # Parameters
 /// 参数
-/// `app` emits the queue and dispatch workbench snapshots.
-/// `app` 发出队列与分发工作台快照。
+/// `app` emits pending-prompt and dispatch deltas.
+/// `app` 发出待发送队列与分发增量。
 /// `state` owns retained service state and runtime handles.
 /// `state` 持有保留的服务状态与运行时句柄。
 /// `entry_id` selects the visible queue row to insert.
@@ -16,21 +17,14 @@ use super::*;
 ///
 /// # Returns
 /// 返回值
-/// The latest workbench snapshot after queue insertion and optional dispatch.
-/// 返回队列插入及可选分发后的最新工作台快照。
+/// `true` when the prompt was accepted for insertion.
+/// 当提示词已被接受插入时返回 `true`。
 pub(crate) async fn service_insert_pending_prompt(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     entry_id: String,
-) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+) -> Result<bool, String> {
+    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
     let mut workspace_snapshot =
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
@@ -48,18 +42,8 @@ pub(crate) async fn service_insert_pending_prompt(
         &mut workspace_snapshot,
         selected_session_id,
     );
-    let mut workbench = store_and_emit_workbench_snapshot(
-        &app,
-        &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        workspace_snapshot,
-        &logs,
-    )?;
+    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
+    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
         String::from("service is still starting; workspace snapshot is not ready")
     })?;
@@ -93,10 +77,8 @@ pub(crate) async fn service_insert_pending_prompt(
         )
         .await?
     };
-    if started_mailbox_turn || started_next_prompt {
-        workbench = current_workbench_snapshot_from_state(&state)?;
-    }
-    Ok(workbench)
+    let _dispatch_started = started_mailbox_turn || started_next_prompt;
+    Ok(true)
 }
 
 /// Starts one mailbox-triggered parent model turn directly from kernel mailbox input.
@@ -257,12 +239,12 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
         ));
-    store_current_workbench_snapshot(
+    commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,
-        controller_runtime,
-        agent_runtime,
         workspace_snapshot,
+        session_id,
+        SessionRunPhase::Preparing,
     )?;
     let precheck_plan = SharedPromptPrecheckPlan {
         has_precheck_hooks: false,

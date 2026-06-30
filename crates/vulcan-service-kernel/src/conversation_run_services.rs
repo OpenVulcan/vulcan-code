@@ -103,7 +103,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
             ActiveTurnKind::ContextCompaction,
         )?;
     }
-    let workbench = store_and_emit_workbench_snapshot(
+    let workbench = store_and_emit_full_workbench_snapshot_for_cold_refresh(
         &app,
         &state,
         &controller_runtime,
@@ -166,9 +166,13 @@ pub(crate) async fn service_stop_conversation_run(
     if let Some(active_task) = active_task {
         active_task.abort();
     }
-    let mut workspace_snapshot = with_workspace_mutation(&app, &state, |workspace| {
-        mark_webui_session_stop_requested_in_workspace(workspace, selected_session_id);
-    })?;
+    let mut workspace_snapshot = with_workspace_mutation_and_full_workbench_rebuild_for_cold_path(
+        &app,
+        &state,
+        |workspace| {
+            mark_webui_session_stop_requested_in_workspace(workspace, selected_session_id);
+        },
+    )?;
     let running_subagent_task_states = {
         let mut guard = state
             .lock()
@@ -227,7 +231,7 @@ pub(crate) async fn service_stop_conversation_run(
     {
         cache_session_goal_summary(&state, selected_session_id, Some(goal))?;
     }
-    let workbench = store_and_emit_workbench_snapshot(
+    let workbench = store_and_emit_full_workbench_snapshot_for_cold_refresh(
         &app,
         &state,
         &controller_runtime,
@@ -282,7 +286,7 @@ pub(crate) async fn service_set_session_plan_mode(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: SessionPlanModeUpdateRequest,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SessionAddonsChangedResponse, String> {
     let session_id = request
         .conversation_id
         .as_deref()
@@ -347,7 +351,13 @@ pub(crate) async fn service_set_session_plan_mode(
         addon_state,
     )
     .await?;
-    with_workspace_mutation_preserving_subagent_navigation(&app, &state, |workspace| {
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
         let runtime_state = workspace
             .session_runtime_state
             .entry(session_id)
@@ -357,7 +367,7 @@ pub(crate) async fn service_set_session_plan_mode(
             });
         work_mode.apply_to_runtime_state(runtime_state);
         runtime_state.updated_at = updated_at.clone();
-    })?;
+    }
     emit_session_addon_changed_event(
         &app,
         session_id,
@@ -365,7 +375,7 @@ pub(crate) async fn service_set_session_plan_mode(
         persisted_addon_state.revision,
         latest_session_addon_updated_at(&persisted_addon_state),
     );
-    current_workbench_snapshot_from_state(&state)
+    emit_session_addons_changed_delta(&app, &state, session_id)
 }
 
 /// Builds one context-window-scoped model notice for session AI capability changes.

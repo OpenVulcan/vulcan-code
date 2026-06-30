@@ -97,6 +97,10 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
     let session_id = start.session_id;
     let continue_started_at = current_unix_millis_value();
+    webui_after_precheck_trace(
+        "after_precheck_01_continue_enter",
+        format!("session={session_id} source={:?}", start.source),
+    );
     webui_trace(
         "precheck_continue_entered",
         format!("session={session_id} source={:?}", start.source),
@@ -111,6 +115,13 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
     webui_trace(
         "precheck_continue_snapshot_loaded",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(snapshot_lock_started_at)
+        ),
+    );
+    webui_after_precheck_trace(
+        "after_precheck_02_snapshot_loaded",
         format!(
             "session={session_id} elapsed_ms={}",
             current_unix_millis_value().saturating_sub(snapshot_lock_started_at)
@@ -134,6 +145,14 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         session_id,
         Some(start.precheck_request.turn_id()),
     );
+    webui_after_precheck_trace(
+        "after_precheck_03_runtime_state_ready",
+        format!(
+            "session={session_id} elapsed_ms_since_continue={}",
+            current_unix_millis_value().saturating_sub(continue_started_at)
+        ),
+    );
+    let tool_configuration_started_at = current_unix_millis_value();
     let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
         &workspace_snapshot,
         session_id,
@@ -145,12 +164,28 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         &start.disabled_ai_capability_target_selectors,
         &start.ai_capability_target_order_overrides,
     );
+    webui_after_precheck_trace(
+        "after_precheck_04_tool_config_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(tool_configuration_started_at)
+        ),
+    );
+    let project_configuration_started_at = current_unix_millis_value();
     let project_configuration = load_project_configuration(&start.workspace_path);
+    webui_after_precheck_trace(
+        "after_precheck_05_project_config_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(project_configuration_started_at)
+        ),
+    );
     let runtime_reasoning_effort = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
         .and_then(|runtime_state| runtime_state.active_reasoning_effort);
     let session_title_for_context = start.session_title.clone();
+    let visible_user_prompt_record_id = start.visible_user_prompt_record_id.clone();
     let prompt_turn_id = start.precheck_request.turn_id().to_string();
     let shared_continue_started_at = current_unix_millis_value();
     let continuation = continue_shared_prompt_turn_after_precheck(
@@ -174,6 +209,13 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             current_unix_millis_value().saturating_sub(shared_continue_started_at)
         ),
     );
+    webui_after_precheck_trace(
+        "after_precheck_06_shared_continue_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(shared_continue_started_at)
+        ),
+    );
     let vmm_snapshot_started_at = current_unix_millis_value();
     agent_runtime
         .vmm_hook_runtime
@@ -188,6 +230,13 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             current_unix_millis_value().saturating_sub(vmm_snapshot_started_at)
         ),
     );
+    webui_after_precheck_trace(
+        "after_precheck_07_hook_snapshot_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(vmm_snapshot_started_at)
+        ),
+    );
     if let Some(detail) = continuation.precheck_failure_detail.as_deref() {
         eprintln!("[webui-service] precheck hook failed but request will continue: {detail}");
         if let Err(error) = push_webui_service_diagnostic(
@@ -197,11 +246,55 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             eprintln!("[webui-service] record precheck warning failed: {error}");
         }
     }
+    if let Some(message_id) = visible_user_prompt_record_id.as_deref()
+        && let Some(message) = workspace_snapshot
+            .session_messages
+            .get(&session_id)
+            .and_then(|messages| messages.iter().find(|message| message.id == message_id))
+    {
+        let message_delta_started_at = current_unix_millis_value();
+        emit_materialized_session_message_delta(
+            app,
+            state,
+            session_id,
+            message,
+            SessionRunPhase::Preparing,
+        )?;
+        webui_after_precheck_trace(
+            "after_precheck_08_prompt_delta_emitted",
+            format!(
+                "session={session_id} message_id={message_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(message_delta_started_at)
+            ),
+        );
+    } else {
+        webui_after_precheck_trace(
+            "after_precheck_08_prompt_delta_skipped",
+            format!("session={session_id}"),
+        );
+    }
     let mut request = continuation.request;
     request.controller_runtime = Some(controller_runtime.clone());
+    let goal_context_started_at = current_unix_millis_value();
     request.session_goal_context = session_goal_context_for_prompt_from_state(state, session_id)?;
+    webui_after_precheck_trace(
+        "after_precheck_09_goal_context_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(goal_context_started_at)
+        ),
+    );
+    let plan_context_started_at = current_unix_millis_value();
     request.session_plan_context =
         session_plan_context_for_prompt_from_state(app, state, controller_runtime, session_id)?;
+    webui_after_precheck_trace(
+        "after_precheck_10_plan_context_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(plan_context_started_at)
+        ),
+    );
+    let task_session_root_started_at = current_unix_millis_value();
     request.task_session_store_root = owning_project_id_for_session(
         &workspace_snapshot,
         session_id,
@@ -215,6 +308,15 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         .ok()
         .flatten()
     });
+    webui_after_precheck_trace(
+        "after_precheck_11_task_session_root_ready",
+        format!(
+            "session={session_id} found={} elapsed_ms={}",
+            request.task_session_store_root.is_some(),
+            current_unix_millis_value().saturating_sub(task_session_root_started_at)
+        ),
+    );
+    let runtime_updates_started_at = current_unix_millis_value();
     request.runtime_system_updates =
         match vulcan_workspace_store::workspace_store::load_session_runtime_system_updates(
             &controller_runtime.data_root,
@@ -229,40 +331,78 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
                 Vec::new()
             }
         };
-    if let Some(injection) = request.context_injection.as_ref()
-        && let Err(error) =
-            vulcan_workspace_store::workspace_store::record_session_runtime_injection_applied(
-                &controller_runtime.data_root,
-                session_id,
-                Some(prompt_turn_id),
-                Some(injection.fingerprint.clone()),
-                &injection.persistent_blocks,
-                injection
-                    .has_transient()
-                    .then_some(injection.transient_prefix.as_str()),
-                None,
-                &current_unix_millis_text(),
-            )
-    {
-        webui_trace(
-            "runtime_injection_audit_failed",
-            format!("session={session_id} error={error}"),
+    webui_after_precheck_trace(
+        "after_precheck_12_runtime_updates_ready",
+        format!(
+            "session={session_id} count={} elapsed_ms={}",
+            request.runtime_system_updates.len(),
+            current_unix_millis_value().saturating_sub(runtime_updates_started_at)
+        ),
+    );
+    if let Some(injection) = request.context_injection.as_ref() {
+        let data_root = controller_runtime.data_root.clone();
+        let prompt_turn_id_for_audit = prompt_turn_id.clone();
+        let fingerprint = injection.fingerprint.clone();
+        let persistent_blocks = injection.persistent_blocks.clone();
+        let transient_prefix = injection
+            .has_transient()
+            .then(|| injection.transient_prefix.clone());
+        spawn_service_task(async move {
+            if let Err(error) =
+                vulcan_workspace_store::workspace_store::record_session_runtime_injection_applied(
+                    &data_root,
+                    session_id,
+                    Some(prompt_turn_id_for_audit),
+                    Some(fingerprint),
+                    &persistent_blocks,
+                    transient_prefix.as_deref(),
+                    None,
+                    &current_unix_millis_text(),
+                )
+            {
+                webui_trace(
+                    "runtime_injection_audit_failed",
+                    format!("session={session_id} error={error}"),
+                );
+            }
+        });
+        webui_after_precheck_trace(
+            "after_precheck_13_injection_audit_spawned",
+            format!("session={session_id}"),
+        );
+    } else {
+        webui_after_precheck_trace(
+            "after_precheck_13_injection_audit_skipped",
+            format!("session={session_id}"),
         );
     }
     if runs_user_prompt_precheck {
-        let context_persist_started_at = current_unix_millis_value();
-        persist_webui_context_current_document(
-            controller_runtime,
-            &workspace_snapshot,
-            session_id,
-            &session_title_for_context,
+        let controller_runtime_for_context = controller_runtime.clone();
+        let workspace_snapshot_for_context = workspace_snapshot.clone();
+        spawn_service_task(async move {
+            let context_persist_started_at = current_unix_millis_value();
+            persist_webui_context_current_document(
+                &controller_runtime_for_context,
+                &workspace_snapshot_for_context,
+                session_id,
+                &session_title_for_context,
+            );
+            webui_trace(
+                "precheck_continue_context_document_persisted",
+                format!(
+                    "session={session_id} elapsed_ms={}",
+                    current_unix_millis_value().saturating_sub(context_persist_started_at)
+                ),
+            );
+        });
+        webui_after_precheck_trace(
+            "after_precheck_14_context_persist_spawned",
+            format!("session={session_id}"),
         );
-        webui_trace(
-            "precheck_continue_context_document_persisted",
-            format!(
-                "session={session_id} elapsed_ms={}",
-                current_unix_millis_value().saturating_sub(context_persist_started_at)
-            ),
+    } else {
+        webui_after_precheck_trace(
+            "after_precheck_14_context_persist_skipped",
+            format!("session={session_id}"),
         );
     }
     let now = current_unix_millis_text();
@@ -284,19 +424,26 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         session.focus = String::from("正在请求");
         session.last_updated_label = String::from("刚刚");
     }
-    let store_started_at = current_unix_millis_value();
-    store_current_workbench_snapshot(
+    let phase_commit_started_at = current_unix_millis_value();
+    commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,
-        controller_runtime,
-        agent_runtime,
         workspace_snapshot,
+        session_id,
+        SessionRunPhase::Preparing,
     )?;
     webui_trace(
-        "precheck_continue_workbench_stored",
+        "precheck_continue_phase_committed",
         format!(
             "session={session_id} elapsed_ms={}",
-            current_unix_millis_value().saturating_sub(store_started_at)
+            current_unix_millis_value().saturating_sub(phase_commit_started_at)
+        ),
+    );
+    webui_after_precheck_trace(
+        "after_precheck_15_phase_delta_committed",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(phase_commit_started_at)
         ),
     );
     if runs_user_prompt_precheck {
@@ -319,11 +466,27 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
                 Some(String::from("precheck_continue")),
             );
         });
+        webui_after_precheck_trace(
+            "after_precheck_16_snapshot_persist_spawned",
+            format!("session={session_id}"),
+        );
+    } else {
+        webui_after_precheck_trace(
+            "after_precheck_16_snapshot_persist_skipped",
+            format!("session={session_id}"),
+        );
     }
     webui_trace(
         "precheck_continue_finished",
         format!(
             "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(continue_started_at)
+        ),
+    );
+    webui_after_precheck_trace(
+        "after_precheck_17_continue_finished",
+        format!(
+            "session={session_id} elapsed_ms_since_continue={}",
             current_unix_millis_value().saturating_sub(continue_started_at)
         ),
     );
@@ -358,6 +521,13 @@ pub(crate) fn spawn_webui_precheck_continue_task(
         let precheck_started_at = current_unix_millis_value();
         webui_trace("precheck_task_run_start", format!("session={session_id}"));
         let precheck_outcome = start.precheck_request.clone().run().await;
+        webui_after_precheck_trace(
+            "after_precheck_00_outcome_ready",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(precheck_started_at)
+            ),
+        );
         webui_trace(
             "precheck_task_run_finished",
             format!(
@@ -375,6 +545,13 @@ pub(crate) fn spawn_webui_precheck_continue_task(
             precheck_outcome,
         ) {
             Ok(Some(request)) => {
+                webui_after_precheck_trace(
+                    "after_precheck_18_stream_spawn_call",
+                    format!(
+                        "session={session_id} elapsed_ms_since_continue_call={}",
+                        current_unix_millis_value().saturating_sub(continue_started_at)
+                    ),
+                );
                 webui_trace(
                     "precheck_task_continue_finished",
                     format!(
@@ -399,7 +576,6 @@ pub(crate) fn spawn_webui_precheck_continue_task(
                     &app,
                     &state,
                     &controller_runtime,
-                    &agent_runtime,
                     session_id,
                     &error,
                 ) {
@@ -464,6 +640,13 @@ pub(crate) fn start_webui_precheck_or_continue(
             start,
             precheck_outcome,
         )? {
+            webui_after_precheck_trace(
+                "after_precheck_18_stream_spawn_call",
+                format!(
+                    "session={session_id} elapsed_ms_since_skip_continue={}",
+                    current_unix_millis_value().saturating_sub(skipped_continue_started_at)
+                ),
+            );
             spawn_agent_stream_task(
                 app.clone(),
                 state.clone(),
@@ -531,7 +714,6 @@ pub(crate) fn mark_webui_precheck_continuation_failed(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
-    agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     error: &str,
 ) -> Result<(), String> {
@@ -574,12 +756,12 @@ pub(crate) fn mark_webui_precheck_continuation_failed(
         session.focus = String::from("Precheck 结果无法应用，已停止本轮请求。");
         session.last_updated_label = String::from("刚刚");
     }
-    store_current_workbench_snapshot(
+    commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,
-        controller_runtime,
-        agent_runtime,
         workspace_snapshot,
+        session_id,
+        SessionRunPhase::Stopped,
     )?;
     let state_for_persist = state.clone();
     let controller_runtime_for_persist = controller_runtime.clone();

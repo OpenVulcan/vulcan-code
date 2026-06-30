@@ -88,23 +88,78 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         ),
     );
 
-    with_workspace_mutation(app, state, |workspace| {
-        attach_webui_task_session_metadata_to_parent_tool_message(
-            workspace,
-            parent_session_id,
-            metadata,
-        );
-        if let Some(prompt) = prompt.as_deref() {
-            seed_webui_subagent_task_prompt_if_needed(workspace, normalized_state.task_id, prompt);
-        }
-        if let Some(conversation_state) = normalized_state.conversation_state.clone() {
-            replace_webui_subagent_task_conversation_state(
+    let message_window_event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let conversation_id = normalized_state.task_id.to_string();
+        let before_visible_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let projected_messages = {
+            let workspace = guard
+                .workspace_snapshot
+                .as_mut()
+                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            attach_webui_task_session_metadata_to_parent_tool_message(
                 workspace,
-                normalized_state.task_id,
-                conversation_state,
+                parent_session_id,
+                metadata,
             );
+            if let Some(prompt) = prompt.as_deref() {
+                seed_webui_subagent_task_prompt_if_needed(
+                    workspace,
+                    normalized_state.task_id,
+                    prompt,
+                );
+            }
+            if let Some(conversation_state) = normalized_state.conversation_state.clone() {
+                replace_webui_subagent_task_conversation_state(
+                    workspace,
+                    normalized_state.task_id,
+                    conversation_state,
+                );
+            }
+            let messages = workspace
+                .session_messages
+                .get(&normalized_state.task_id)
+                .cloned()
+                .unwrap_or_default();
+            conversation_messages_from_session(&conversation_id, messages.as_slice(), false)
+        };
+        if let Some(message_patch) = build_conversation_messages_patched_delta(
+            &conversation_id,
+            before_visible_messages.as_slice(),
+            projected_messages.as_slice(),
+        ) {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            replace_conversation_messages_in_workbench_window(
+                &mut guard.workbench.messages,
+                &conversation_id,
+                projected_messages,
+            );
+            Some(WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+            })
+        } else {
+            None
         }
-    })?;
+    };
+    if let Some(event) = message_window_event {
+        emit_service_event_with_trace(
+            app,
+            "subagent_messages_patch_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
+    }
+    emit_webui_subagent_navigation_changed_delta(app, state)?;
     if is_finished {
         webui_trace(
             "subagent_runtime_event_projection_finished",

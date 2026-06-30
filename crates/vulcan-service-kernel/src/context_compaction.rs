@@ -35,7 +35,9 @@ use vulcan_context_compaction::{
     CompactionPlanInput, plan_context_compaction,
 };
 use vulcan_context_injection::InjectionPruneReport;
-use vulcan_service_api::ServiceEventEmitter;
+use vulcan_service_api::{
+    ServiceEvent, ServiceEventEmitter, WorkbenchDelta, WorkbenchDeltaEnvelope,
+};
 use vulcan_session_core::TurnTerminalStatus;
 #[cfg(test)]
 use vulcan_workbench_model::SessionSummary;
@@ -52,19 +54,20 @@ use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, acknowledge_runtime_event_projection_barrier,
     active_reasoning_selection_effort, append_runtime_event_projection, append_stream_delta_record,
     append_webui_session_message_entry_to_state, append_webui_session_turn_stats_to_state,
-    apply_observed_usage_to_context_budget, apply_session_phase, build_vmm_hook_config_snapshot,
-    collapse_streaming_thinking, current_unix_millis_text,
-    current_workspace_snapshot_from_shared_state, finish_webui_session_kernel_turn,
-    historical_context_budget_snapshot_from_runtime_state,
+    apply_observed_usage_to_context_budget, apply_session_phase,
+    build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
+    collapse_streaming_thinking, conversation_messages_from_session, current_unix_millis_text,
+    current_workspace_snapshot_from_shared_state, emit_service_event_with_trace,
+    finish_webui_session_kernel_turn, historical_context_budget_snapshot_from_runtime_state,
     merge_runtime_state_records_into_display_messages, next_webui_session_persist_version,
     normalized_workspace_path_text_from_path, owning_project_id_for_session,
     persistent_injection_fingerprint, persistent_injection_source_node_ids,
-    record_webui_runtime_injection_merged, session_ai_tool_configuration_or_default,
-    spawn_service_task, spawn_workspace_session_persist_task,
-    sync_hydrated_session_dialogue_ready_marker, webui_session_persist_version_is_current,
-    webui_trace, webui_workspace_persist_lock,
-    with_workspace_mutation_preserving_subagent_navigation, workspace_path_for_session,
-    workspace_root, workspace_snapshot_contains_regular_session,
+    record_webui_runtime_injection_merged, replace_conversation_messages_in_workbench_window,
+    session_ai_tool_configuration_or_default, spawn_service_task,
+    spawn_workspace_session_persist_task, sync_hydrated_session_dialogue_ready_marker,
+    webui_session_persist_version_is_current, webui_trace, webui_workspace_persist_lock,
+    workbench_surface_matches_conversation, workspace_path_for_session, workspace_root,
+    workspace_snapshot_contains_regular_session,
 };
 
 /// Metadata trigger label for user-requested manual context compaction.
@@ -98,6 +101,68 @@ pub(super) use draft::*;
 pub(super) use messages::*;
 pub(super) use persist_display::*;
 pub(super) use streaming::*;
+
+/// Emits a focused message-window delta for one context-compaction session.
+/// 为单个上下文压缩会话发出聚焦消息窗口增量。
+fn emit_context_compaction_message_window_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let conversation_id = session_id.to_string();
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let before_visible_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        let messages = workspace
+            .session_messages
+            .get(&session_id)
+            .map(|entries| conversation_messages_from_session(&conversation_id, entries, false))
+            .unwrap_or_default();
+        if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
+            build_conversation_messages_patched_delta(
+                &conversation_id,
+                before_visible_messages.as_slice(),
+                messages.as_slice(),
+            )
+            .map(|message_patch| {
+                guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+                let generation = guard.workbench_generation;
+                guard.workbench.revision = generation;
+                replace_conversation_messages_in_workbench_window(
+                    &mut guard.workbench.messages,
+                    &conversation_id,
+                    messages,
+                );
+                WorkbenchDeltaEnvelope {
+                    generation,
+                    delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+                }
+            })
+        } else {
+            None
+        }
+    };
+    if let Some(event) = event {
+        emit_service_event_with_trace(
+            app,
+            "context_compaction_messages_patch_emit",
+            ServiceEvent::WorkbenchDelta(Box::new(event)),
+        );
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests;

@@ -5,7 +5,6 @@ import type { ThinkingDisplayMode } from "@/components/conversation/thinking-dis
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import {
   compactSelectedConversationContext,
-  closeSubagentPanel,
   forkConversation,
   getUserPromptEditDraft,
   insertPendingPrompt,
@@ -28,6 +27,7 @@ import {
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
   canOpenCachedSubagentSurface,
+  applySubagentPanelRouteResponse,
   injectCachedSubagentSurfaceMessages,
   reorderPendingPromptSummaries,
   type InflightSubagentOpenRequest,
@@ -125,7 +125,7 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     ? null
     : selectedConversation?.id ?? null;
   try {
-    const snapshot = await submitConversationPrompt(
+    const ack = await submitConversationPrompt(
       activeProjectId,
       activeConversationId,
       submission.prompt,
@@ -137,13 +137,12 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       submission.disabledAiCapabilityTargetSelectors,
       submission.aiCapabilityTargetOrderOverrides,
     );
-    if (!snapshot) {
+    if (!ack) {
       toast.info(translate("conversationActions.previewCannotSend"));
       return false;
     }
-    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     setDraftConversation(null);
-    const nextConversationId = snapshot.selectedConversationId ?? activeConversationId;
+    const nextConversationId = ack.conversationId || activeConversationId;
     if (nextConversationId) {
       if (selectedConversationIdRef.current === submittedSelectionId) {
         setSelectedConversationId(nextConversationId);
@@ -154,17 +153,14 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, [selectedConversation, selectedConversationId, selectedDraftConversation, translate]);
+}, [selectedConversation, selectedConversationId, selectedDraftConversation, setDraftConversation, setSelectedConversationId, translate]);
 
 // handleInsertPendingPrompt routes one queued prompt through the shared backend queue router.
 // handleInsertPendingPrompt 通过共享后端队列路由引导单条排队提示词。
 const handleInsertPendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
   webuiClickTrace("pending_prompt.insert.invoke", { entryId });
   try {
-    const snapshot = await insertPendingPrompt(entryId);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    }
+    await insertPendingPrompt(entryId);
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
   }
@@ -231,11 +227,11 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
   const requestPromise = openSubagentPanel(parentConversationId, taskId);
   inflightSubagentOpenRequestRef.current = { key: routeKey, promise: requestPromise };
   try {
-    const snapshot = await requestPromise;
+    const response = await requestPromise;
     if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
       inflightSubagentOpenRequestRef.current = null;
     }
-    if (snapshot) {
+    if (response) {
       if (subagentNavigationRequestSeqRef.current !== requestSeq) {
         webuiClickTrace("subagent.open.stale_result", {
           parentConversationId,
@@ -243,18 +239,23 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
           requestSeq,
           latestRequestSeq: subagentNavigationRequestSeqRef.current,
         });
+        return false;
       }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      setWorkbenchState((current) => applySubagentPanelRouteResponse(
+        current,
+        response,
+        subagentSurfaceMessageCacheRef.current,
+      ));
     }
     webuiClickTrace("subagent.open.result", {
       parentConversationId,
       taskId,
       requestSeq,
-      opened: Boolean(snapshot),
-      activeConversationId: snapshot?.subagentNavigation?.activeConversationId ?? null,
-      activeTaskId: snapshot?.subagentNavigation?.activeTaskId ?? null,
+      opened: Boolean(response),
+      activeConversationId: response?.activeConversationId ?? null,
+      activeTaskId: response?.subagentNavigation?.activeTaskId ?? null,
     });
-    return Boolean(snapshot);
+    return Boolean(response);
   } catch (nextError) {
     if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
       inflightSubagentOpenRequestRef.current = null;
@@ -269,40 +270,18 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
   }
 }, []);
 
-// handleCloseSubagentPanel keeps a legacy service edge for callers that still request backend panel closure.
-// handleCloseSubagentPanel 保留旧调用方请求后端关闭面板的服务边界。
-const handleCloseSubagentPanel = React.useCallback(async (): Promise<void> => {
-  const parentConversationId = selectedConversationIdRef.current;
-  inflightSubagentOpenRequestRef.current = null;
-  const requestSeq = subagentNavigationRequestSeqRef.current + 1;
-  subagentNavigationRequestSeqRef.current = requestSeq;
-  webuiClickTrace("subagent.close.invoke", { parentConversationId, requestSeq });
-  try {
-    const snapshot = await closeSubagentPanel();
-    if (snapshot) {
-      if (subagentNavigationRequestSeqRef.current !== requestSeq) {
-        webuiClickTrace("subagent.close.stale_result", {
-          parentConversationId,
-          requestSeq,
-          latestRequestSeq: subagentNavigationRequestSeqRef.current,
-        });
-        return;
-      }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    }
-  } catch (nextError) {
-    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-  }
-}, []);
-
 // handleStopSubagentTask asks the backend to stop one running child task.
 // handleStopSubagentTask 请求后端停止单个运行中的子任务。
 const handleStopSubagentTask = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
   webuiClickTrace("subagent.stop.invoke", { parentConversationId, taskId });
   try {
-    const snapshot = await stopSubagentTask(parentConversationId, taskId);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    const response = await stopSubagentTask(parentConversationId, taskId);
+    if (response) {
+      setWorkbenchState((current) => applySubagentPanelRouteResponse(
+        current,
+        response,
+        subagentSurfaceMessageCacheRef.current,
+      ));
     }
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
@@ -313,10 +292,7 @@ const handleStopSubagentTask = React.useCallback(async (parentConversationId: st
 // handleRemovePendingPrompt 通过共享服务队列移除单条排队提示词。
 const handleRemovePendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
   try {
-    const snapshot = await removePendingPrompt(entryId);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    }
+    await removePendingPrompt(entryId);
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
   }
@@ -329,12 +305,18 @@ const handleReorderPendingPrompts = React.useCallback(async (
   draggedEntryId: string,
   targetEntryId: string | null,
 ): Promise<void> => {
-  setWorkbenchState((current) => ({ ...current, pendingPrompts: reorderPendingPromptSummaries(current.pendingPrompts ?? [], entryIds) }));
-  try {
-    const snapshot = await reorderPendingPrompts(selectedConversationIdRef.current, draggedEntryId, targetEntryId);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+  const conversationId = selectedConversationIdRef.current;
+  setWorkbenchState((current) => {
+    const pendingPrompts = reorderPendingPromptSummaries(current.pendingPrompts ?? [], entryIds);
+    const pendingPromptsByConversation = (current.pendingPromptsByConversation ?? [])
+      .filter((entry) => entry.conversationId !== conversationId);
+    if (conversationId && pendingPrompts.length > 0) {
+      pendingPromptsByConversation.push({ conversationId, pendingPrompts });
     }
+    return { ...current, pendingPrompts, pendingPromptsByConversation };
+  });
+  try {
+    await reorderPendingPrompts(conversationId, draggedEntryId, targetEntryId);
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     const snapshot = await loadWorkbenchSnapshot();
@@ -366,10 +348,7 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
 const handleStopCommandSession = React.useCallback(async (commandSessionId: string, ownerSessionId?: string | null): Promise<void> => {
   webuiClickTrace("command_session.stop.invoke", { commandSessionId });
   try {
-    const snapshot = await stopCommandSession(commandSessionId, ownerSessionId ?? null);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-    }
+    await stopCommandSession(commandSessionId, ownerSessionId ?? null);
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
   }
@@ -423,8 +402,8 @@ const handleGetUserPromptEditDraft = React.useCallback(async (
   }
 }, [translate]);
 
-// handleSubmitUserPromptEdit submits one edit and merges the replay snapshot.
-// handleSubmitUserPromptEdit 提交单次编辑并合并重放后的快照。
+// handleSubmitUserPromptEdit submits one edit and lets backend deltas update the replayed turn.
+// handleSubmitUserPromptEdit 提交单次编辑，并由后端增量更新重放后的回合。
 const handleSubmitUserPromptEdit = React.useCallback(async (request: {
   conversationId: string;
   messageId: string;
@@ -432,16 +411,16 @@ const handleSubmitUserPromptEdit = React.useCallback(async (request: {
   attachments: ComposerAttachmentSummary[];
 }): Promise<boolean> => {
   try {
-    const snapshot = await submitUserPromptEdit(request);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    const ack = await submitUserPromptEdit(request);
+    if (ack && selectedConversationIdRef.current === request.conversationId) {
+      setSelectedConversationId(ack.conversationId);
     }
     return true;
   } catch (nextError) {
     toast.error(translate("conversation.action.editPromptFailed"));
     return false;
   }
-}, [translate]);
+}, [selectedConversationIdRef, setSelectedConversationId, translate]);
 
 // handleForkConversation creates a persisted copy of the current conversation and opens it.
 // handleForkConversation 创建当前会话的持久化副本并打开。
@@ -502,7 +481,6 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleStopConversationRun,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
-    handleCloseSubagentPanel,
     handleStopSubagentTask,
     handleRemovePendingPrompt,
     handleReorderPendingPrompts,

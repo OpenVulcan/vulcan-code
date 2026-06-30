@@ -7,7 +7,8 @@ use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPrep
 use crate::agent_runtime::execution_preparation::PreparedToolSnapshot;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap_core::{
-    RuntimeBootstrapCore, build_runtime_bootstrap_core, seed_runtime_request_snapshot,
+    RuntimeBootstrapCore, after_precheck_trace, after_precheck_unix_millis,
+    build_runtime_bootstrap_core, seed_runtime_request_snapshot,
 };
 use crate::agent_runtime::runtime_stream_bootstrap_resources::{
     RuntimeBootstrapResources, resolve_runtime_bootstrap_resources,
@@ -83,6 +84,8 @@ pub(crate) async fn bootstrap_runtime_stream(
     mut preparation: ExecutionPreparation,
     tool_snapshot: PreparedToolSnapshot,
 ) -> Result<RuntimeStreamBootstrap, String> {
+    let bootstrap_started_at = after_precheck_unix_millis();
+    let resources_started_at = after_precheck_unix_millis();
     let RuntimeBootstrapResources {
         active_agent,
         task_runtime,
@@ -99,6 +102,17 @@ pub(crate) async fn bootstrap_runtime_stream(
         &preparation,
         tool_snapshot,
     );
+    after_precheck_trace(
+        "after_precheck_27_bootstrap_resources_ready",
+        format!(
+            "session={} tools={} mcp_discovery_events={} elapsed_ms={}",
+            preparation.session_id,
+            resolved_tool_definitions.len(),
+            discovery_events.len(),
+            after_precheck_unix_millis().saturating_sub(resources_started_at)
+        ),
+    );
+    let core_started_at = after_precheck_unix_millis();
     let RuntimeBootstrapCore {
         system_preamble,
         prompt_layers,
@@ -107,8 +121,19 @@ pub(crate) async fn bootstrap_runtime_stream(
         core_controller,
         lowering_repair_events,
     } = build_runtime_bootstrap_core(&preparation, request, active_agent.as_ref())?;
+    after_precheck_trace(
+        "after_precheck_28_bootstrap_core_ready",
+        format!(
+            "session={} history={} lowering_repairs={} elapsed_ms={}",
+            preparation.session_id,
+            request_history.len(),
+            lowering_repair_events.len(),
+            after_precheck_unix_millis().saturating_sub(core_started_at)
+        ),
+    );
     let token_budget_runtime = foundation.token_budget_runtime();
     let prompt_purpose = preparation.prompt_purpose;
+    let snapshot_seed_started_at = after_precheck_unix_millis();
     seed_runtime_request_snapshot(
         &mut preparation,
         request,
@@ -123,6 +148,15 @@ pub(crate) async fn bootstrap_runtime_stream(
         &mut warnings,
     )
     .await;
+    after_precheck_trace(
+        "after_precheck_29_request_snapshot_seeded",
+        format!(
+            "session={} elapsed_ms={} elapsed_ms_since_bootstrap={}",
+            preparation.session_id,
+            after_precheck_unix_millis().saturating_sub(snapshot_seed_started_at),
+            after_precheck_unix_millis().saturating_sub(bootstrap_started_at)
+        ),
+    );
 
     Ok(RuntimeStreamBootstrap {
         preparation,

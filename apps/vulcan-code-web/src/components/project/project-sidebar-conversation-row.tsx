@@ -1,6 +1,8 @@
 import React from "react";
 import {
   Archive,
+  CircleHelp,
+  ClipboardList,
   LoaderCircle,
   MessageSquareText,
   Pin,
@@ -121,6 +123,14 @@ function ConversationRowLeading(props: {
 }) {
   const { t } = useI18n();
   const isRunning = props.conversation.status.toLowerCase() === "running";
+  const attentionKind = props.conversation.attention?.kind ?? null;
+  const attentionLabel = attentionKind === "ask"
+    ? t("conversationRow.askAttention")
+    : attentionKind === "plan_confirm"
+      ? t("conversationRow.planAttention")
+      : attentionKind
+        ? props.conversation.attention?.label ?? t("conversationRow.unread")
+        : null;
   if (props.archiveConfirming) {
     return <span className="conversation-tree-leading" />;
   }
@@ -130,6 +140,14 @@ function ConversationRowLeading(props: {
         {isRunning ? (
           <span className="conversation-tree-status-mark" aria-label={t("conversationRow.running")}>
             <LoaderCircle aria-label={t("conversationRow.running")} className="conversation-tree-running-spinner spin" size={14} />
+          </span>
+        ) : attentionKind === "ask" ? (
+          <span className="conversation-tree-status-mark" title={attentionLabel ?? undefined}>
+            <CircleHelp aria-label={attentionLabel ?? t("conversationRow.askAttention")} className="conversation-tree-attention-icon ask" size={14} />
+          </span>
+        ) : attentionKind === "plan_confirm" ? (
+          <span className="conversation-tree-status-mark" title={attentionLabel ?? undefined}>
+            <ClipboardList aria-label={attentionLabel ?? t("conversationRow.planAttention")} className="conversation-tree-attention-icon plan" size={14} />
           </span>
         ) : props.conversation.unread && !props.isSelected ? (
           <span className="conversation-tree-status-mark">

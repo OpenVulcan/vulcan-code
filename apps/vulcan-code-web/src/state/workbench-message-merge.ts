@@ -4,7 +4,9 @@ import {
 } from "@/components/conversation/conversation-runtime";
 import { metadataString } from "@/components/conversation/conversation-transcript";
 import type {
+  AppendMessageBodyDelta,
   ConversationMessage,
+  ConversationMessagesPatchedDelta,
   ConversationSummary,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
@@ -16,6 +18,28 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
   switch (envelope.delta.kind) {
     case "appendMessageBody":
       return envelope.delta.payload.conversationId;
+    case "updateConversationRunPhase":
+      return envelope.delta.payload.conversationId;
+    case "pendingPromptsChanged":
+      return envelope.delta.payload.conversationId;
+    case "conversationSummaryChanged":
+      return envelope.delta.payload.conversation.id;
+    case "pendingQuestionChanged":
+      return null;
+    case "commandSessionsChanged":
+      return null;
+    case "subagentNavigationChanged":
+      return envelope.delta.payload.parentConversationId
+        ?? envelope.delta.payload.subagentNavigation?.parentConversationId
+        ?? null;
+    case "contextUsageChanged":
+      return null;
+    case "conversationMessagesChanged":
+      return envelope.delta.payload.conversationId;
+    case "conversationMessagesPatched":
+      return envelope.delta.payload.conversationId;
+    case "sessionAddonsChanged":
+      return envelope.delta.payload.conversationId;
   }
 }
 
@@ -25,7 +49,12 @@ export function coalesceWorkbenchDeltaEnvelopes(envelopes: WorkbenchDeltaEnvelop
   const coalesced: WorkbenchDeltaEnvelope[] = [];
   for (const envelope of envelopes) {
     const previous = coalesced.at(-1);
-    if (previous && canCoalesceAppendMessageBodyDelta(previous, envelope)) {
+    if (
+      previous
+      && previous.delta.kind === "appendMessageBody"
+      && envelope.delta.kind === "appendMessageBody"
+      && canCoalesceAppendMessageBodyDelta(previous, envelope)
+    ) {
       const previousPayload = previous.delta.payload;
       const nextPayload = envelope.delta.payload;
       previous.generation = Math.max(previous.generation, envelope.generation);
@@ -81,7 +110,7 @@ function cloneWorkbenchDeltaEnvelope(envelope: WorkbenchDeltaEnvelope): Workbenc
 // applyAppendMessageBodyDelta 将流式文本追加到本地工作台的单个消息窗口。
 export function applyAppendMessageBodyDelta(
   workbench: WorkbenchSnapshot,
-  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+  delta: AppendMessageBodyDelta,
 ): WorkbenchSnapshot {
   const messages = appendMessageBodyDeltaToMessages(workbench.messages, delta);
   const runPhase = delta.runPhase ?? undefined;
@@ -105,11 +134,101 @@ export function applyAppendMessageBodyDelta(
   };
 }
 
+// applyConversationMessagesPatchedDelta applies node-level transcript updates without rebuilding unrelated messages.
+// applyConversationMessagesPatchedDelta 应用节点级转录更新，避免重建无关消息。
+export function applyConversationMessagesPatchedDelta(
+  workbench: WorkbenchSnapshot,
+  delta: ConversationMessagesPatchedDelta,
+): WorkbenchSnapshot {
+  return {
+    ...workbench,
+    messages: patchConversationMessages(workbench.messages, delta),
+  };
+}
+
+// patchConversationMessages removes, upserts, and optionally reorders one conversation's visible nodes.
+// patchConversationMessages 对单个会话的可见节点执行删除、写入和可选重排。
+export function patchConversationMessages(
+  messages: ConversationMessage[],
+  delta: ConversationMessagesPatchedDelta,
+): ConversationMessage[] {
+  const patchedTargetMessages = buildPatchedConversationMessages(messages, delta);
+  const firstTargetIndex = messages.findIndex((message) => message.conversationId === delta.conversationId);
+  if (firstTargetIndex < 0) {
+    return [...messages, ...patchedTargetMessages];
+  }
+
+  const nextMessages: ConversationMessage[] = [];
+  let insertedTarget = false;
+  for (const message of messages) {
+    if (message.conversationId !== delta.conversationId) {
+      nextMessages.push(message);
+      continue;
+    }
+    if (!insertedTarget) {
+      nextMessages.push(...patchedTargetMessages);
+      insertedTarget = true;
+    }
+  }
+  return nextMessages;
+}
+
+// buildPatchedConversationMessages builds the next visible message list for one conversation.
+// buildPatchedConversationMessages 构建单个会话下一版可见消息列表。
+function buildPatchedConversationMessages(
+  messages: ConversationMessage[],
+  delta: ConversationMessagesPatchedDelta,
+): ConversationMessage[] {
+  const removeMessageIds = new Set(delta.removeMessageIds);
+  const upsertMessagesById = new Map(delta.upsertMessages.map((message) => [message.id, message]));
+  const targetMessages: ConversationMessage[] = [];
+
+  for (const message of messages) {
+    if (message.conversationId !== delta.conversationId || removeMessageIds.has(message.id)) {
+      continue;
+    }
+    const upsertMessage = upsertMessagesById.get(message.id);
+    if (upsertMessage) {
+      targetMessages.push(upsertMessage);
+      upsertMessagesById.delete(message.id);
+      continue;
+    }
+    targetMessages.push(message);
+  }
+
+  targetMessages.push(...upsertMessagesById.values());
+  return applyConversationMessageOrder(targetMessages, delta.messageOrder ?? null);
+}
+
+// applyConversationMessageOrder treats backend order as the authoritative visible target window.
+// applyConversationMessageOrder 将后端顺序视为目标可见窗口的权威结果。
+function applyConversationMessageOrder(
+  messages: ConversationMessage[],
+  messageOrder: string[] | null,
+): ConversationMessage[] {
+  if (!messageOrder) {
+    return messages;
+  }
+
+  const messagesById = new Map(messages.map((message) => [message.id, message]));
+  const orderedMessages: ConversationMessage[] = [];
+  const usedMessageIds = new Set<string>();
+  for (const messageId of messageOrder) {
+    const message = messagesById.get(messageId);
+    if (!message || usedMessageIds.has(messageId)) {
+      continue;
+    }
+    orderedMessages.push(message);
+    usedMessageIds.add(messageId);
+  }
+  return orderedMessages;
+}
+
 // appendMessageBodyDeltaToMessages updates one message array without cloning unrelated message objects.
 // appendMessageBodyDeltaToMessages 更新单个消息数组，并避免克隆无关消息对象。
 function appendMessageBodyDeltaToMessages(
   messages: ConversationMessage[],
-  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+  delta: AppendMessageBodyDelta,
 ): ConversationMessage[] {
   let found = false;
   const nextMessages = messages.map((message) => {
@@ -135,7 +254,7 @@ function appendMessageBodyDeltaToMessages(
 // mergeAppendMessageBodyDelta 将流式追加应用到已有行或更完整的初始快照上。
 function mergeAppendMessageBodyDelta(
   message: ConversationMessage,
-  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+  delta: AppendMessageBodyDelta,
 ): ConversationMessage {
   if (typeof delta.currentBody === "string") {
     return {
@@ -166,7 +285,7 @@ function appendInitialMessageBodyDelta(message: ConversationMessage, bodyDelta: 
 // findAppendMessageBodyReplacementIndex 查找已经代表同一条流式助手输出的实时行。
 function findAppendMessageBodyReplacementIndex(
   messages: ConversationMessage[],
-  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+  delta: AppendMessageBodyDelta,
   candidate: ConversationMessage,
 ): number {
   if (!isAssistantOutputMessage(candidate)) {
@@ -190,7 +309,7 @@ function findAppendMessageBodyReplacementIndex(
 // findStableAppendMessageBodyReplacementIndex 优先使用持久流标识，而不是正文启发式。
 function findStableAppendMessageBodyReplacementIndex(
   messages: ConversationMessage[],
-  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+  delta: AppendMessageBodyDelta,
   candidate: ConversationMessage,
   lastUserIndex: number,
 ): number {
@@ -255,7 +374,7 @@ function appendStreamingTextDelta(current: string, incoming: string): string {
 
 // updateSubagentNavigationRunPhase mirrors delta progress into the active child-task badge.
 // updateSubagentNavigationRunPhase 将增量进度同步到活动子任务徽标。
-function updateSubagentNavigationRunPhase(
+export function updateSubagentNavigationRunPhase(
   navigation: WorkbenchSnapshot["subagentNavigation"],
   conversationId: string,
   runPhase?: string,
@@ -263,15 +382,29 @@ function updateSubagentNavigationRunPhase(
   if (!navigation?.tasks?.some((task) => task.taskId === conversationId)) {
     return navigation;
   }
-  const running = Boolean(runPhase && !["idle", "ready", "failed", "stopped"].includes(normalizedSessionRunPhase(runPhase) ?? ""));
+  const normalized = normalizedSessionRunPhase(runPhase);
+  if (!normalized) {
+    return navigation;
+  }
+  const running = !["completed", "failed", "idle", "ready", "stopped"].includes(normalized);
+  const runState = running ? "running" : terminalSubagentRunStateFromPhase(normalized);
   return {
     ...navigation,
     tasks: navigation.tasks.map((task) => (
       task.taskId === conversationId
-        ? { ...task, isRunning: running || task.isRunning, runState: running ? "running" : task.runState }
+        ? { ...task, isRunning: running, runState }
         : task
     )),
   };
+}
+
+// terminalSubagentRunStateFromPhase maps a known terminal run phase to the visible subagent state key.
+// terminalSubagentRunStateFromPhase 将已知终态运行阶段映射为可见子代理状态键。
+function terminalSubagentRunStateFromPhase(phase: string): string {
+  if (phase === "failed" || phase === "stopped") {
+    return phase;
+  }
+  return "completed";
 }
 
 // groupMessagesByConversation groups a flat message window by owning conversation.

@@ -10,7 +10,7 @@ pub(crate) fn service_reply_pending_question(
     state: SharedServiceBridgeState,
     request_id: String,
     answers: Vec<Vec<String>>,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<bool, String> {
     let agent_runtime = {
         let guard = state
             .lock()
@@ -28,7 +28,8 @@ pub(crate) fn service_reply_pending_question(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    store_and_emit_pending_question_workbench_snapshot(&app, &state)
+    emit_pending_question_changed_delta(&app, &state)?;
+    Ok(true)
 }
 
 /// Rejects the visible ask-tool request after explicit user confirmation.
@@ -37,7 +38,7 @@ pub(crate) fn service_reject_pending_question(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request_id: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<bool, String> {
     let agent_runtime = {
         let guard = state
             .lock()
@@ -55,7 +56,8 @@ pub(crate) fn service_reject_pending_question(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    store_and_emit_pending_question_workbench_snapshot(&app, &state)
+    emit_pending_question_changed_delta(&app, &state)?;
+    Ok(true)
 }
 
 /// Loads one backend-validated draft for a user prompt edit dialog.
@@ -185,28 +187,81 @@ pub(crate) async fn service_fork_conversation(
     .map(|hydrated| hydrated.workbench)
 }
 
-/// Rebuilds only the ask-modal projection on the retained workbench snapshot and emits it.
-/// 仅重建保留工作台快照上的 ask 弹窗投影并发送事件。
-pub(crate) fn store_and_emit_pending_question_workbench_snapshot(
+/// Emits only the ask-modal pending question projection as a workbench delta.
+/// 仅以工作台增量发送 ask 弹窗待回答问题投影。
+pub(crate) fn emit_pending_question_changed_delta(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
-    let workbench = {
+) -> Result<(), String> {
+    let event = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let pending_question =
-            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+        let pending_questions =
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
+        let pending_question = pending_questions.first().cloned();
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        guard.workbench.pending_question = pending_question;
-        guard.workbench.clone()
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        guard.workbench.pending_question = pending_question.clone();
+        guard.workbench.pending_questions = pending_questions.clone();
+        let attention_updates = guard
+            .workbench
+            .conversations
+            .iter()
+            .filter_map(|conversation| {
+                let session_id = conversation.id.parse::<SessionId>().ok()?;
+                let session_plan_mode = guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                    .and_then(|runtime_state| {
+                        session_plan_mode_summary_from_runtime_state(Some(runtime_state))
+                    });
+                let updated_at = if conversation.last_updated_at.is_empty() {
+                    None
+                } else {
+                    Some(conversation.last_updated_at.clone())
+                };
+                Some((
+                    conversation.id.clone(),
+                    conversation_attention_summary_for_session(
+                        session_id,
+                        &guard.workbench.pending_questions,
+                        session_plan_mode.as_ref(),
+                        conversation.unread,
+                        updated_at,
+                    ),
+                ))
+            })
+            .collect::<Vec<_>>();
+        for (conversation_id, attention) in attention_updates {
+            if let Some(conversation) = guard
+                .workbench
+                .conversations
+                .iter_mut()
+                .find(|candidate| candidate.id == conversation_id)
+            {
+                conversation.attention = attention;
+            }
+        }
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::PendingQuestionChanged(PendingQuestionChangedDelta {
+                conversation_id: pending_question
+                    .as_ref()
+                    .map(|question| question.session_id.clone()),
+                pending_question,
+                pending_questions,
+            }),
+        }
     };
     emit_service_event_with_trace(
         app,
-        "pending_question_workbench_emit",
-        ServiceEvent::Workbench(Box::new(workbench.clone())),
+        "pending_question_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
-    Ok(workbench)
+    Ok(())
 }
 
 /// Installs the WebUI projection callback used by the ask-question runtime.
@@ -219,7 +274,7 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
     let app = app.clone();
     let state = Arc::clone(state);
     let callback: PendingQuestionChangeCallback = Arc::new(move || {
-        if let Err(error) = store_and_emit_pending_question_workbench_snapshot(&app, &state) {
+        if let Err(error) = emit_pending_question_changed_delta(&app, &state) {
             webui_trace(
                 "pending_question_projection_failed",
                 format!("error={error}"),
@@ -240,7 +295,17 @@ pub(crate) fn workbench_with_live_pending_question(
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
         append_hydrated_workspace_messages(&mut workbench.messages, workspace_snapshot);
     }
-    workbench.pending_question =
-        pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+    workbench.pending_questions =
+        pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
+    workbench.pending_question = workbench
+        .selected_conversation_id
+        .as_ref()
+        .and_then(|conversation_id| {
+            workbench
+                .pending_questions
+                .iter()
+                .find(|question| question.session_id == *conversation_id)
+                .cloned()
+        });
     workbench
 }

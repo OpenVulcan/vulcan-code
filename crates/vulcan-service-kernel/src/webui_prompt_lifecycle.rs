@@ -17,7 +17,7 @@ use vulcan_agent_runtime::{
         continue_shared_prompt_turn_after_precheck, shared_prompt_precheck_plan,
     },
 };
-use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
+use vulcan_service_api::ServiceEventEmitter;
 use vulcan_session_core::ActiveTurnKind;
 use vulcan_workbench_model::{
     PendingPromptDispatchBlockReason, PendingSessionPromptSource, SessionId, SessionRunPhase,
@@ -30,9 +30,9 @@ use vulcan_workspace_store::{
 
 use super::pending_prompts::{
     agent_runtime_for_pending_prompt, clear_stale_webui_session_mailbox_pending_prompts,
-    insert_webui_pending_prompt_into_internal_queue, pending_prompt_queue_status,
-    remove_dispatched_pending_prompt_panel_entry, take_next_webui_pending_prompt,
-    webui_pending_prompt_dispatch_context,
+    emit_pending_prompts_changed_delta, insert_webui_pending_prompt_into_internal_queue,
+    pending_prompt_queue_status, remove_dispatched_pending_prompt_panel_entry,
+    take_next_webui_pending_prompt, webui_pending_prompt_dispatch_context,
 };
 use super::session_hydration::{
     capture_preserved_workspace_run_state, load_workspace_for_submission,
@@ -41,9 +41,10 @@ use super::session_hydration::{
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_kernel_session_ids,
     active_reasoning_selection_effort, apply_webui_prompt_begin_outer_steps,
-    build_vmm_hook_config_snapshot, current_unix_millis_text, current_unix_millis_value,
-    current_workbench_snapshot_from_state, current_workspace_snapshot_from_shared_state,
-    current_workspace_snapshot_from_state, ensure_webui_session_runtime_state,
+    build_vmm_hook_config_snapshot, commit_workspace_snapshot_and_emit_session_phase_delta,
+    current_unix_millis_text, current_unix_millis_value,
+    current_workspace_snapshot_from_shared_state, current_workspace_snapshot_from_state,
+    emit_materialized_session_message_delta, ensure_webui_session_runtime_state,
     load_project_configuration, merge_runtime_state_records_into_display_messages,
     owning_project_id_for_session, persist_webui_context_current_document,
     push_webui_service_diagnostic, runtime_parts_from_state, selected_session_id_from_state,
@@ -52,10 +53,11 @@ use super::{
     snapshot_webui_context_before_user_prompt, spawn_agent_stream_task, spawn_service_task,
     spawn_workspace_session_persist_task, spawn_workspace_session_runtime_state_persist_task,
     start_webui_session_kernel_turn, stop_webui_session_kernel_generation,
-    store_and_emit_workbench_snapshot, store_current_workbench_snapshot,
-    sync_hydrated_session_dialogue_ready_marker, webui_session_has_active_run,
-    webui_session_kernel_has_active_turn, webui_session_mailbox_input_from_kernel, webui_trace,
-    webui_trace_if_slow, workspace_path_for_session,
+    store_workspace_snapshot_without_workbench_rebuild,
+    sync_hydrated_session_dialogue_ready_marker, webui_after_precheck_trace,
+    webui_session_has_active_run, webui_session_kernel_has_active_turn,
+    webui_session_mailbox_input_from_kernel, webui_trace, webui_trace_if_slow,
+    workspace_path_for_session,
 };
 
 /// Inserts one visible pending prompt and starts dispatch immediately when the session can run.

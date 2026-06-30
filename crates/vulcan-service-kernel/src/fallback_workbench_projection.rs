@@ -8,6 +8,7 @@ use super::*;
 pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
     let workspace_root = workspace_root();
     WorkbenchSnapshot {
+        revision: 0,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         ui_locale: ProviderConfigurationFile::default().ui_locale,
         modules: vec![
@@ -97,10 +98,13 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         ),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),
+        pending_prompts_by_conversation: Vec::new(),
         pending_question: None,
+        pending_questions: Vec::new(),
         session_todolist: None,
         session_goal: None,
         session_plan_mode: None,
+        session_addons_by_conversation: Vec::new(),
         memories: Vec::new(),
         vmm_memory: VmmMemorySnapshot::default(),
         command_sessions: Vec::new(),

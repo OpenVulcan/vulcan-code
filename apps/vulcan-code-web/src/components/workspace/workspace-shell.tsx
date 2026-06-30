@@ -822,7 +822,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSetSessionPlanMode={props.onSetSessionPlanMode}
         onStopConversationRun={props.onStopConversationRun}
         onOpenSubagentPanel={handleOpenSubagentPanel}
-        onCloseSubagentPanel={props.onCloseSubagentPanel}
         onStopSubagentTask={props.onStopSubagentTask}
         onEditPendingPrompt={props.onEditPendingPrompt}
         onInsertPendingPrompt={props.onInsertPendingPrompt}
@@ -932,7 +931,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onFileContextTabTitleChange={updateFileContextTabTitle}
           onOpenContextTab={openContextTab}
           onOpenSubagentPanel={handleOpenSubagentPanel}
-          onCloseSubagentPanel={props.onCloseSubagentPanel}
           onStopSubagentTask={props.onStopSubagentTask}
           onStopCommandSession={props.onStopCommandSession}
           onCopyRawDiff={(rawDiff) => void props.onCopyText(rawDiff)}

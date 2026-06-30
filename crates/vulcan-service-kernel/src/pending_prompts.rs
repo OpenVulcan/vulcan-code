@@ -9,7 +9,10 @@ use vulcan_agent_runtime::{
     workbench_ai_capability_router::effective_workbench_disabled_ai_capability_kinds,
 };
 use vulcan_core::types::ConversationAttachment;
-use vulcan_service_api::{PendingPromptSummary, ServiceEventEmitter};
+use vulcan_service_api::{
+    PendingPromptSummary, PendingPromptsChangedDelta, ServiceEvent, ServiceEventEmitter,
+    WorkbenchDelta, WorkbenchDeltaEnvelope,
+};
 use vulcan_workbench_model::{
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchContext,
     PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
@@ -25,9 +28,9 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_reasoning_selection_effort,
-    composer_attachment_summary_from_core, current_unix_millis_text, parse_reasoning_effort,
-    session_ai_tool_configuration_or_default, session_has_pending_plan_artifact,
-    with_workspace_mutation,
+    composer_attachment_summary_from_core, current_unix_millis_text, emit_service_event_with_trace,
+    parse_reasoning_effort, session_ai_tool_configuration_or_default,
+    session_has_pending_plan_artifact,
 };
 
 /// Snapshot of pending prompt queue lengths used by service lifecycle diagnostics.
@@ -361,6 +364,64 @@ pub(super) fn pending_prompt_summaries_from_runtime_state(
         .collect()
 }
 
+/// Emits the current visible pending prompt queue for one session through a workbench delta.
+/// 通过工作台增量发送单个会话当前可见的待发送提示词队列。
+pub(super) fn emit_pending_prompts_changed_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<u64, String> {
+    let conversation_id = session_id.to_string();
+    let (event, revision) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let pending_prompts = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace_snapshot| {
+                workspace_snapshot.session_runtime_state.get(&session_id)
+            })
+            .map(pending_prompt_summaries_from_runtime_state)
+            .unwrap_or_default();
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let revision = guard.workbench_generation;
+        guard.workbench.revision = revision;
+        if guard.workbench.selected_conversation_id.as_deref() == Some(conversation_id.as_str()) {
+            guard.workbench.pending_prompts = pending_prompts.clone();
+        }
+        guard
+            .workbench
+            .pending_prompts_by_conversation
+            .retain(|entry| entry.conversation_id != conversation_id);
+        if !pending_prompts.is_empty() {
+            guard
+                .workbench
+                .pending_prompts_by_conversation
+                .push(PendingPromptsChangedDelta {
+                    conversation_id: conversation_id.clone(),
+                    pending_prompts: pending_prompts.clone(),
+                });
+        }
+        (
+            WorkbenchDeltaEnvelope {
+                generation: revision,
+                delta: WorkbenchDelta::PendingPromptsChanged(PendingPromptsChangedDelta {
+                    conversation_id,
+                    pending_prompts,
+                }),
+            },
+            revision,
+        )
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_pending_prompts_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(revision)
+}
+
 /// Clears internal pending prompt work and restores visible panel rows.
 /// 清理内部待发送提示词工作并恢复可见面板行。
 pub(super) fn clear_internal_pending_prompt_queue_for_stop(
@@ -372,13 +433,20 @@ pub(super) fn clear_internal_pending_prompt_queue_for_stop(
 /// Takes guided pending prompt entries from the internal queue at a provider boundary.
 /// 在 Provider 边界从内部队列取出已引导的待发送提示词条目。
 pub(super) fn take_webui_internal_guidance_prompts(
-    app: &ServiceEventEmitter,
+    _app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
     session_id: SessionId,
 ) -> Result<Vec<PendingSessionPromptEntry>, String> {
     let mut guided_entries = Vec::new();
-    with_workspace_mutation(app, state, |workspace| {
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         let dispatch_context = webui_pending_prompt_dispatch_context(
             workspace,
             provider_configuration,
@@ -386,17 +454,17 @@ pub(super) fn take_webui_internal_guidance_prompts(
             false,
         );
         let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
-            return;
+            return Ok(guided_entries);
         };
         guided_entries = take_runtime_intervention_guided_pending_prompt_entries(
             &mut runtime_state.ui_state,
             dispatch_context,
         );
         if guided_entries.is_empty() {
-            return;
+            return Ok(guided_entries);
         }
         runtime_state.updated_at = current_unix_millis_text();
-    })?;
+    }
     Ok(guided_entries)
 }
 
@@ -509,14 +577,21 @@ pub(super) fn insert_webui_pending_prompt_into_internal_queue(
 /// Clears stale session-mailbox entries from the old WebUI pending-prompt queue.
 /// 从旧 WebUI 待发送队列中清理过时的会话 mailbox 条目。
 pub(super) fn clear_stale_webui_session_mailbox_pending_prompts(
-    app: &ServiceEventEmitter,
+    _app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<usize, String> {
     let mut removed = 0usize;
-    with_workspace_mutation(app, state, |workspace| {
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
-            return;
+            return Ok(removed);
         };
         removed = remove_internal_pending_prompt_entries_by_source(
             &mut runtime_state.ui_state,
@@ -525,7 +600,7 @@ pub(super) fn clear_stale_webui_session_mailbox_pending_prompts(
         if removed > 0 {
             runtime_state.updated_at = current_unix_millis_text();
         }
-    })?;
+    }
     Ok(removed)
 }
 

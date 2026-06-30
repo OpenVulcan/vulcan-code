@@ -414,7 +414,7 @@ pub(crate) fn prompt_to_session_title(prompt: &str) -> String {
 
 /// Stores and emits one rebuilt workbench snapshot after a workspace mutation.
 /// 在工作区发生变更后存储并发出一份重建后的工作台快照。
-pub(crate) fn store_and_emit_workbench_snapshot(
+pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -426,7 +426,7 @@ pub(crate) fn store_and_emit_workbench_snapshot(
     workspace_snapshot: WorkspaceSnapshot,
     logs: &[String],
 ) -> Result<WorkbenchSnapshot, String> {
-    store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
+    store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subagent_navigation_mode(
         app,
         &state,
         controller_runtime,
@@ -480,7 +480,7 @@ pub(crate) fn store_workspace_snapshot_without_workbench_rebuild(
 
 /// Stores and emits one rebuilt workbench snapshot with an explicit subagent navigation refresh mode.
 /// 使用显式子代理导航刷新模式存储并发出一份重建后的工作台快照。
-pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
+pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subagent_navigation_mode(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -499,7 +499,7 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         live_context_budgets,
         surface_messages,
         subagent_navigation,
-        pending_question,
+        pending_questions,
         session_goal_summaries,
         command_session_runtime,
         hydrated_window_summaries,
@@ -567,8 +567,8 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
                 current_unix_millis_value().saturating_sub(trace_surface_started_at)
             ),
         );
-        let pending_question =
-            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+        let pending_questions =
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
         let session_goal_summaries = guard.session_goal_summaries.clone();
         let command_session_runtime = guard
             .agent_runtime
@@ -578,14 +578,14 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
             live_context_budgets,
             surface_messages,
             subagent_navigation,
-            pending_question,
+            pending_questions,
             session_goal_summaries,
             command_session_runtime,
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
-    let workbench = workbench_from_runtime(
+    let mut workbench = workbench_from_runtime(
         controller_runtime,
         command_session_runtime.as_deref(),
         luaskills_catalog,
@@ -596,7 +596,7 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         &workspace_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
-        pending_question,
+        pending_questions,
         logs,
         &live_context_budgets,
         &session_goal_summaries,
@@ -626,6 +626,7 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        workbench.revision = guard.workbench_generation;
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.workbench = workbench.clone();
     }
@@ -646,9 +647,10 @@ pub(crate) fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
     // Records the emitted workbench payload size only for the focused submit trace.
     // 仅为专项提交链路日志记录即将发送的工作台载荷大小。
     if webui_submit_trace_enabled() {
-        let payload_bytes = serde_json::to_vec(&ServiceEvent::Workbench(Box::new(workbench.clone())))
-            .map(|bytes| bytes.len())
-            .unwrap_or(0);
+        let payload_bytes =
+            serde_json::to_vec(&ServiceEvent::Workbench(Box::new(workbench.clone())))
+                .map(|bytes| bytes.len())
+                .unwrap_or(0);
         webui_submit_trace(
             "store_workbench_payload_ready",
             format!("mode={subagent_navigation_mode:?} payload_bytes={payload_bytes}"),

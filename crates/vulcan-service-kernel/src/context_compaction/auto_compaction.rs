@@ -41,15 +41,20 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
                 .get(&session_id)
                 .and_then(|runtime_state| runtime_state.context_start_message_id.clone())
         });
-    let mut previous_phase = SessionRunPhase::Preparing;
-    let mut status_message_id = String::new();
-    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
-        previous_phase = workspace
+    let (previous_phase, status_message_id) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        let previous_phase = workspace
             .session_run_phases
             .get(&session_id)
             .copied()
             .unwrap_or(SessionRunPhase::Preparing);
-        status_message_id = append_webui_context_compaction_status_message_to_workspace(
+        let status_message_id = append_webui_context_compaction_status_message_to_workspace(
             workspace,
             session_id,
             &budget_note,
@@ -67,7 +72,10 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
             session.last_updated_label = String::from("刚刚");
             session.updated_at = current_unix_millis_text();
         }
-    })?;
+        (previous_phase, status_message_id)
+    };
+    emit_context_compaction_message_window_delta(app, state, session_id)?;
+    apply_session_phase(app, state, session_id, SessionRunPhase::Preparing)?;
 
     if webui_auto_context_compaction_failure_count(state, session_id)
         >= MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES

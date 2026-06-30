@@ -14,11 +14,15 @@ pub(crate) fn session_plan_context_for_prompt_from_state(
     let mut context: Option<String> = None;
     let mut next_plan_mode: Option<SessionPlanModeState> = None;
     let mut next_execution_mode = String::from("build");
-    let workspace_snapshot =
-        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
-            let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
-                return;
-            };
+    let workspace_snapshot = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        if let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) {
             let is_plan = runtime_state
                 .active_work_mode
                 .as_deref()
@@ -31,23 +35,24 @@ pub(crate) fn session_plan_context_for_prompt_from_state(
                     next_execution_mode = String::from("build");
                     context = Some(render_plan_mode_exit_developer_context());
                 }
-                return;
+            } else {
+                next_execution_mode = String::from("plan");
+                context = Some(render_plan_mode_developer_context());
+                if runtime_state.plan_mode.pending_execution_notice {
+                    runtime_state.plan_mode.pending_execution_notice = false;
+                    runtime_state.updated_at = updated_at.clone();
+                    next_plan_mode = Some(runtime_state.plan_mode.clone());
+                }
+                if !runtime_state.plan_mode.prompt_injected {
+                    runtime_state.plan_mode.prompt_injected = true;
+                    runtime_state.updated_at = updated_at.clone();
+                    next_plan_mode = Some(runtime_state.plan_mode.clone());
+                    next_execution_mode = String::from("plan");
+                }
             }
-            next_execution_mode = String::from("plan");
-            context = Some(render_plan_mode_developer_context());
-            if runtime_state.plan_mode.pending_execution_notice {
-                runtime_state.plan_mode.pending_execution_notice = false;
-                runtime_state.updated_at = updated_at.clone();
-                next_plan_mode = Some(runtime_state.plan_mode.clone());
-            }
-            if runtime_state.plan_mode.prompt_injected {
-                return;
-            }
-            runtime_state.plan_mode.prompt_injected = true;
-            runtime_state.updated_at = updated_at.clone();
-            next_plan_mode = Some(runtime_state.plan_mode.clone());
-            next_execution_mode = String::from("plan");
-        })?;
+        }
+        workspace.clone()
+    };
     let Some(plan_mode) = next_plan_mode else {
         return Ok(context);
     };
@@ -207,27 +212,15 @@ pub(crate) fn render_plan_mode_exit_developer_context() -> String {
     )
 }
 
-/// Updates the retained goal cache and emits a refreshed workbench snapshot.
-/// 更新保留的目标缓存并发出刷新后的工作台快照。
+/// Updates the retained goal cache and emits a lightweight addon delta.
+/// 更新保留的目标缓存并发出轻量附属状态增量。
 ///
 /// # Parameters
 /// 参数
-/// `app` emits the refreshed workbench snapshot.
-/// `app` 发出刷新后的工作台快照。
+/// `app` emits the addon delta when the target session is visible.
+/// `app` 在目标会话可见时发出附属状态增量。
 /// `state` owns retained service state.
 /// `state` 持有保留的服务状态。
-/// `controller_runtime` provides workspace persistence.
-/// `controller_runtime` 提供工作区持久化能力。
-/// `agent_runtime` provides projection configuration.
-/// `agent_runtime` 提供投影配置。
-/// `luaskills_catalog` is the retained LuaSkills projection cache.
-/// `luaskills_catalog` 是保留的 LuaSkills 投影缓存。
-/// `token_budget_runtime` is the retained token-budget projection runtime.
-/// `token_budget_runtime` 是保留的 Token 预算投影运行时。
-/// `mcp_catalog` is the retained MCP projection cache.
-/// `mcp_catalog` 是保留的 MCP 投影缓存。
-/// `logs` is the startup log slice included in snapshots.
-/// `logs` 是快照包含的启动日志片段。
 /// `session_id` selects the goal cache row.
 /// `session_id` 选择目标缓存行。
 /// `goal` is the optional latest goal.
@@ -235,21 +228,15 @@ pub(crate) fn render_plan_mode_exit_developer_context() -> String {
 ///
 /// # Returns
 /// 返回值
-/// The refreshed workbench snapshot.
-/// 刷新后的工作台快照。
+/// The applied addon projection.
+/// 已应用的附属状态投影。
 pub(crate) fn refresh_session_goal_summary_and_emit(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    agent_runtime: &AgentRuntimeBridge,
-    luaskills_catalog: &TauriLuaSkillsCatalog,
-    token_budget_runtime: &TauriTokenBudgetRuntime,
-    mcp_catalog: &TauriMcpRuntimeCatalog,
-    logs: &[String],
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
     session_id: SessionId,
     goal: Option<ThreadGoal>,
-) -> Result<WorkbenchSnapshot, String> {
-    let workspace_snapshot = {
+) -> Result<SessionAddonsChangedResponse, String> {
+    {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -261,26 +248,113 @@ pub(crate) fn refresh_session_goal_summary_and_emit(
                 guard.session_goal_summaries.remove(&session_id);
             }
         }
+    }
+    emit_session_addons_changed_delta(app, state, session_id)
+}
+
+/// Emits the selected-session addon projection through a lightweight workbench delta.
+/// 通过轻量工作台增量发出当前会话附属状态投影。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the delta event when the target session is visible.
+/// `app` 在目标会话可见时发出增量事件。
+/// `state` owns the retained workspace and workbench projections.
+/// `state` 持有保留的工作区与工作台投影。
+/// `session_id` selects the addon state owner.
+/// `session_id` 选择附属状态所属会话。
+///
+/// # Returns
+/// 返回值
+/// The applied addon projection, including the latest workbench revision.
+/// 返回已应用的附属状态投影及最新工作台版本。
+pub(crate) fn emit_session_addons_changed_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<SessionAddonsChangedResponse, String> {
+    let conversation_id = session_id.to_string();
+    let (event, response) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let runtime_state = workspace.session_runtime_state.get(&session_id);
+        let session_goal = guard.session_goal_summaries.get(&session_id).cloned();
+        let session_todolist = session_todolist_summary_from_runtime_state(runtime_state);
+        let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
+            guard.workbench.session_goal = session_goal.clone();
+            guard.workbench.session_todolist = session_todolist.clone();
+            guard.workbench.session_plan_mode = session_plan_mode.clone();
+        }
+        let pending_questions =
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
         guard
-            .workspace_snapshot
-            .as_ref()
-            .ok_or_else(|| {
-                String::from("service is still starting; workspace snapshot is not ready")
-            })?
-            .clone()
+            .workbench
+            .session_addons_by_conversation
+            .retain(|entry| entry.conversation_id != conversation_id);
+        if session_goal.is_some() || session_todolist.is_some() || session_plan_mode.is_some() {
+            guard
+                .workbench
+                .session_addons_by_conversation
+                .push(SessionAddonsChangedDelta {
+                    conversation_id: conversation_id.clone(),
+                    session_goal: session_goal.clone(),
+                    session_todolist: session_todolist.clone(),
+                    session_plan_mode: session_plan_mode.clone(),
+                });
+        }
+        if let Some(conversation) = guard
+            .workbench
+            .conversations
+            .iter_mut()
+            .find(|candidate| candidate.id == conversation_id)
+        {
+            let updated_at = if conversation.last_updated_at.is_empty() {
+                None
+            } else {
+                Some(conversation.last_updated_at.clone())
+            };
+            conversation.attention = conversation_attention_summary_for_session(
+                session_id,
+                &pending_questions,
+                session_plan_mode.as_ref(),
+                conversation.unread,
+                updated_at,
+            );
+        }
+        let delta = SessionAddonsChangedDelta {
+            conversation_id: conversation_id.clone(),
+            session_goal: session_goal.clone(),
+            session_todolist: session_todolist.clone(),
+            session_plan_mode: session_plan_mode.clone(),
+        };
+        (
+            WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::SessionAddonsChanged(delta),
+            },
+            SessionAddonsChangedResponse {
+                conversation_id,
+                session_goal,
+                session_todolist,
+                session_plan_mode,
+                revision: generation,
+            },
+        )
     };
-    store_and_emit_workbench_snapshot(
-        &app,
-        &state,
-        controller_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        workspace_snapshot,
-        logs,
-    )
+    emit_service_event_with_trace(
+        app,
+        "workbench_session_addons_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(response)
 }
 
 /// Builds session todolist state from one completed `todolist` tool event.

@@ -64,6 +64,7 @@ const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
 // BrowserFallbackWorkbench is used when the WebUI runs outside Tauri during frontend development.
 // BrowserFallbackWorkbench 用于 WebUI 在 Tauri 外部进行前端开发时展示。
 const browserFallbackWorkbench: WorkbenchSnapshot = {
+  revision: 0,
   appVersion: "0.1.0",
   modules: [
     { id: "core", label: "Core Service", status: "warning", message: "Browser preview mode" },

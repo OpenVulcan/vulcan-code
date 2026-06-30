@@ -56,6 +56,16 @@ pub(crate) async fn handle_prepared_stream_event(
     stream_task_started_at: i128,
     auto_compaction_already_attempted: bool,
 ) -> PreparedStreamEventAction {
+    webui_after_precheck_trace(
+        "after_precheck_24_prepared_event",
+        format!(
+            "session={} provider={} model={} elapsed_ms_since_task={}",
+            preparation.session_id,
+            preparation.model_blueprint.provider_id,
+            preparation.model_blueprint.model_id,
+            current_unix_millis_value().saturating_sub(stream_task_started_at)
+        ),
+    );
     webui_trace(
         "stream_prepared",
         format!(
@@ -71,6 +81,14 @@ pub(crate) async fn handle_prepared_stream_event(
     {
         eprintln!("[webui-service] apply preparation failed: {error}");
     }
+    webui_after_precheck_trace(
+        "after_precheck_25_preparation_applied",
+        format!(
+            "session={session_id} elapsed_ms_since_task={}",
+            current_unix_millis_value().saturating_sub(stream_task_started_at)
+        ),
+    );
+    let auto_compaction_started_at = current_unix_millis_value();
     let auto_compaction_result = if auto_compaction_already_attempted {
         Ok(None)
     } else {
@@ -84,6 +102,14 @@ pub(crate) async fn handle_prepared_stream_event(
         )
         .await
     };
+    webui_after_precheck_trace(
+        "after_precheck_26_auto_compaction_checked",
+        format!(
+            "session={session_id} already_attempted={} elapsed_ms={}",
+            auto_compaction_already_attempted,
+            current_unix_millis_value().saturating_sub(auto_compaction_started_at)
+        ),
+    );
     match auto_compaction_result {
         Ok(Some(updated_request)) => {
             webui_trace(

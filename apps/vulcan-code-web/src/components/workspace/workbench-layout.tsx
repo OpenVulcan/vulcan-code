@@ -77,6 +77,7 @@ import type {
   SettingsSubAreaId,
   StartupSnapshot,
   VmmConfigDraftSummary,
+  WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
 import {
@@ -154,6 +155,7 @@ import {
   coalesceWorkbenchDeltaEnvelopes,
   markConversationLocallyRead,
   mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache,
+  shouldAcceptWorkbenchRevision,
   workbenchWithSubagentSurfaceMessageCache,
   type InflightSubagentOpenRequest,
   type SubagentSurfaceMessageCache,
@@ -287,10 +289,14 @@ export function WorkbenchLayout(props: {
   const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(
     () => workbenchWithSubagentSurfaceMessageCache(props.workbench, subagentSurfaceMessageCacheRef.current),
   );
+  // acceptedWorkbenchRevisionRef tracks the highest service revision accepted by any state entrypoint.
+  // acceptedWorkbenchRevisionRef 跟踪任意状态入口已接受的最高服务版本。
+  const acceptedWorkbenchRevisionRef = React.useRef(workbenchState.revision ?? 0);
   // workbenchStateRef exposes the latest workbench state to route-click callbacks without stale closures.
   // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
   workbenchStateRef.current = workbenchState;
+  acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, workbenchState.revision ?? 0);
   // expandedProjectIdsLocallyEditedRef records whether the user has touched project expansion in this session.
   // expandedProjectIdsLocallyEditedRef 记录本轮会话中用户是否已经手动修改过项目展开状态。
   const expandedProjectIdsLocallyEditedRef = React.useRef(false);
@@ -300,8 +306,29 @@ export function WorkbenchLayout(props: {
   // mergeWorkbenchWithLocalCaches centralizes service snapshot merges that must preserve loaded child surfaces.
   // mergeWorkbenchWithLocalCaches 集中处理必须保留已载入子代理界面的服务快照合并。
   const mergeWorkbenchWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => (
-    mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(current, incoming, subagentSurfaceMessageCacheRef.current)
+    (() => {
+      const merged = mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(current, incoming, subagentSurfaceMessageCacheRef.current);
+      if (merged !== current) {
+        acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, merged.revision ?? 0);
+      }
+      return merged;
+    })()
   ), []);
+  // acceptServiceWorkbenchSnapshot reserves one service snapshot revision before applying related local state.
+  // acceptServiceWorkbenchSnapshot 在应用关联本地状态前预占一个服务快照版本。
+  const acceptServiceWorkbenchSnapshot = React.useCallback((snapshot: WorkbenchSnapshot): boolean => {
+    const incomingRevision = snapshot.revision ?? 0;
+    if (!shouldAcceptWorkbenchRevision(acceptedWorkbenchRevisionRef.current, incomingRevision)) {
+      return false;
+    }
+    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, incomingRevision);
+    return true;
+  }, []);
+  // applyLocalPreviewWithLocalCaches applies optimistic snapshots without service revision gating.
+  // applyLocalPreviewWithLocalCaches 应用乐观快照，不经过服务版本门禁。
+  const applyLocalPreviewWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => {
+    return workbenchWithSubagentSurfaceMessageCache(incoming, subagentSurfaceMessageCacheRef.current);
+  }, []);
   // handleWebuiLocaleChange applies the locale immediately and persists it through the service.
   // handleWebuiLocaleChange 立即应用语言，并通过服务持久化。
   const handleWebuiLocaleChange = React.useCallback((locale: LocaleCode) => {
@@ -512,6 +539,8 @@ export function WorkbenchLayout(props: {
     workbenchState,
     setWorkbenchState,
     mergeWorkbenchWithLocalCaches,
+    acceptServiceWorkbenchSnapshot,
+    applyLocalPreviewWithLocalCaches,
     setDraftConversation,
     setSelectedConversationId,
     setRenameTarget,
@@ -547,7 +576,6 @@ export function WorkbenchLayout(props: {
     handleStopConversationRun,
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
-    handleCloseSubagentPanel,
     handleStopSubagentTask,
     handleRemovePendingPrompt,
     handleReorderPendingPrompts,
@@ -603,7 +631,7 @@ export function WorkbenchLayout(props: {
         if (snapshot) {
           applyProjectActionSnapshot(snapshot);
         } else {
-          applyProjectActionSnapshot(applyPreviewConversationAction(workbenchState, conversation.id, action).snapshot);
+          applyProjectActionSnapshot(applyPreviewConversationAction(workbenchState, conversation.id, action).snapshot, "local");
         }
         toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archived", { conversation: conversation.title }));
         return;
@@ -681,9 +709,9 @@ export function WorkbenchLayout(props: {
       if (snapshot) {
         applyProjectActionSnapshot(snapshot);
       } else if (target.kind === "project") {
-        applyProjectActionSnapshot(applyPreviewProjectRename(workbenchState, target.id, effectiveProjectName).snapshot);
+        applyProjectActionSnapshot(applyPreviewProjectRename(workbenchState, target.id, effectiveProjectName).snapshot, "local");
       } else {
-        applyProjectActionSnapshot(applyPreviewConversationRename(workbenchState, target.id, normalizedName).snapshot);
+        applyProjectActionSnapshot(applyPreviewConversationRename(workbenchState, target.id, normalizedName).snapshot, "local");
       }
       setRenameTarget(null);
       toast.success(target.kind === "project"
@@ -708,7 +736,7 @@ export function WorkbenchLayout(props: {
       if (snapshot) {
         applyProjectActionSnapshot(snapshot);
       } else {
-        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, archiveProjectTarget.id, "archive-conversations").snapshot);
+        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, archiveProjectTarget.id, "archive-conversations").snapshot, "local");
       }
       toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedCount", {
         count: String(projectConversationCount(workbenchState, archiveProjectTarget.id)),
@@ -733,7 +761,7 @@ export function WorkbenchLayout(props: {
       if (snapshot) {
         applyProjectActionSnapshot(snapshot);
       } else {
-        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, removeProjectTarget.id, "remove-project").snapshot);
+        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, removeProjectTarget.id, "remove-project").snapshot, "local");
       }
       toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedAndRemovedProject", { project: removeProjectTarget.name }));
       setRemoveProjectTarget(null);
@@ -748,35 +776,32 @@ export function WorkbenchLayout(props: {
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
   const handlePendingQuestionSubmit = React.useCallback(async (requestId: string, answers: string[][]) => {
     try {
-      const snapshot = await replyPendingQuestion(requestId, answers);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
+      await replyPendingQuestion(requestId, answers);
       toast.success(i18n.t("workbenchAsk.submitted"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [i18n.t, mergeWorkbenchWithLocalCaches]);
+  }, [i18n.t]);
 
   // handlePendingQuestionReject cancels a blocked ask tool call after a second confirmation.
   // handlePendingQuestionReject 在二次确认后取消被阻塞的 ask 工具调用。
   const handlePendingQuestionReject = React.useCallback(async (requestId: string) => {
     try {
-      const snapshot = await rejectPendingQuestion(requestId);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
+      await rejectPendingQuestion(requestId);
       toast.info(i18n.t("workbenchAsk.cancelled"));
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [i18n.t, mergeWorkbenchWithLocalCaches]);
+  }, [i18n.t]);
 
   React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
   }, [draftConversation?.id]);
 
   React.useEffect(() => {
+    if (!acceptServiceWorkbenchSnapshot(props.workbench)) {
+      return;
+    }
     setWorkbenchState((current) => (
       mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
         current,
@@ -795,14 +820,27 @@ export function WorkbenchLayout(props: {
       }
       return nextSelected;
     });
-  }, [props.workbench]);
+  }, [acceptServiceWorkbenchSnapshot, props.workbench]);
 
   React.useEffect(() => {
     if (!props.workbenchDelta) {
       return;
     }
+    const acceptedEnvelopes: WorkbenchDeltaEnvelope[] = [];
+    let nextAcceptedRevision = acceptedWorkbenchRevisionRef.current;
+    for (const envelope of props.workbenchDelta.envelopes) {
+      if (!shouldAcceptWorkbenchRevision(nextAcceptedRevision, envelope.generation)) {
+        continue;
+      }
+      acceptedEnvelopes.push(envelope);
+      nextAcceptedRevision = envelope.generation;
+    }
+    if (acceptedEnvelopes.length === 0) {
+      return;
+    }
+    acceptedWorkbenchRevisionRef.current = nextAcceptedRevision;
     setWorkbenchState((current) => (
-      props.workbenchDelta!.envelopes.reduce(
+      acceptedEnvelopes.reduce(
         (nextWorkbench, envelope) => applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
           nextWorkbench,
           envelope,
@@ -891,7 +929,6 @@ export function WorkbenchLayout(props: {
             onSetSessionPlanMode={handleSetSessionPlanMode}
             onStopConversationRun={handleStopConversationRun}
             onOpenSubagentPanel={handleOpenSubagentPanel}
-            onCloseSubagentPanel={handleCloseSubagentPanel}
             onStopSubagentTask={handleStopSubagentTask}
             onStopCommandSession={handleStopCommandSession}
             onEditPendingPrompt={handleEditPendingPrompt}

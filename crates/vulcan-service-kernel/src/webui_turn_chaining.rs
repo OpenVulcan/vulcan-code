@@ -8,7 +8,7 @@ use vulcan_agent_runtime::workbench_prompt_turn::{
 };
 use vulcan_service_api::ServiceEventEmitter;
 use vulcan_session_core::ActiveTurnKind;
-use vulcan_workbench_model::{PendingSessionPromptSource, SessionId};
+use vulcan_workbench_model::{PendingSessionPromptSource, SessionId, SessionRunPhase};
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
     workspace_store::{ThreadGoalStatus, VulcanGoalStore},
@@ -25,12 +25,12 @@ use super::webui_prompt_lifecycle::{
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_kernel_session_ids,
     active_reasoning_selection_effort, apply_webui_prompt_begin_outer_steps,
-    build_vmm_hook_config_snapshot, cache_session_goal_summary, current_unix_millis_value,
+    build_vmm_hook_config_snapshot, cache_session_goal_summary,
+    commit_workspace_snapshot_and_emit_session_phase_delta, current_unix_millis_value,
     ensure_webui_session_runtime_state, runtime_state_has_queued_pending_prompt_work,
     session_has_pending_plan_artifact, start_webui_session_kernel_turn,
-    store_current_workbench_snapshot, webui_session_has_active_run,
-    webui_session_kernel_has_active_turn, webui_trace, webui_trace_if_slow,
-    workspace_path_for_session,
+    webui_session_has_active_run, webui_session_kernel_has_active_turn, webui_trace,
+    webui_trace_if_slow, workspace_path_for_session,
 };
 
 /// Starts the next WebUI chained turn after one stream finishes.
@@ -303,12 +303,12 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
         ));
-    store_current_workbench_snapshot(
+    commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,
-        controller_runtime,
-        agent_runtime,
         workspace_snapshot,
+        session_id,
+        SessionRunPhase::Preparing,
     )?;
     let precheck_plan = SharedPromptPrecheckPlan {
         has_precheck_hooks: false,

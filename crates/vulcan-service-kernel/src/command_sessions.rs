@@ -8,7 +8,7 @@ pub(super) async fn service_stop_command_session(
     state: SharedServiceBridgeState,
     command_session_id: String,
     owner_session_id: Option<String>,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<Vec<CommandSessionSummary>, String> {
     let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let command_session_id = command_session_id
         .parse::<SessionId>()
@@ -33,17 +33,7 @@ pub(super) async fn service_stop_command_session(
         .command_session_runtime
         .stop_session(owner_session_id, command_session_id, Some(1500))
         .await?;
-    let workspace_snapshot =
-        current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-    store_current_workbench_snapshot(
-        &app,
-        &state,
-        &controller_runtime,
-        &agent_runtime,
-        workspace_snapshot,
-    )
+    emit_command_sessions_changed_delta(&app, &state, &controller_runtime, &agent_runtime)
 }
 
 /// Reads one live command-session snapshot without rebuilding the full WebUI workbench.
@@ -136,13 +126,13 @@ pub(super) fn resolve_service_command_session_ids(
     Ok((command_session_id, owner_session_id))
 }
 
-/// Sends structured input to one live command session and rebuilds the WebUI snapshot.
-/// 向单条实时命令会话发送结构化输入并重建 WebUI 快照。
+/// Sends structured input to one live command session and emits a command-session delta.
+/// 向单条实时命令会话发送结构化输入并发送命令会话增量。
 pub(super) async fn service_send_command_session_input(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: CommandSessionInputRequest,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<Vec<CommandSessionSummary>, String> {
     let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let (command_session_id, owner_session_id) = resolve_service_command_session_ids(
         &agent_runtime,
@@ -153,26 +143,16 @@ pub(super) async fn service_send_command_session_input(
         .command_session_runtime
         .write_session_input_events(owner_session_id, command_session_id, request.inputs)
         .await?;
-    let workspace_snapshot =
-        current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-    store_current_workbench_snapshot(
-        &app,
-        &state,
-        &controller_runtime,
-        &agent_runtime,
-        workspace_snapshot,
-    )
+    emit_command_sessions_changed_delta(&app, &state, &controller_runtime, &agent_runtime)
 }
 
-/// Resizes one live command session and rebuilds the WebUI snapshot.
-/// 调整单条实时命令会话大小并重建 WebUI 快照。
+/// Resizes one live command session and emits a command-session delta.
+/// 调整单条实时命令会话大小并发送命令会话增量。
 pub(super) async fn service_resize_command_session(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: CommandSessionResizeRequest,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<Vec<CommandSessionSummary>, String> {
     let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
     let (command_session_id, owner_session_id) = resolve_service_command_session_ids(
         &agent_runtime,
@@ -188,15 +168,40 @@ pub(super) async fn service_resize_command_session(
             request.cols,
         )
         .await?;
-    let workspace_snapshot =
-        current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-    store_current_workbench_snapshot(
-        &app,
-        &state,
-        &controller_runtime,
-        &agent_runtime,
-        workspace_snapshot,
-    )
+    emit_command_sessions_changed_delta(&app, &state, &controller_runtime, &agent_runtime)
+}
+
+/// Emits the current command-session summaries without rebuilding the full workbench snapshot.
+/// 不重建完整工作台快照，发送当前命令会话摘要。
+fn emit_command_sessions_changed_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+) -> Result<Vec<CommandSessionSummary>, String> {
+    let command_sessions = command_sessions(
+        controller_runtime,
+        Some(agent_runtime.command_session_runtime.as_ref()),
+    );
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        guard.workbench.command_sessions = command_sessions.clone();
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::CommandSessionsChanged(CommandSessionsChangedDelta {
+                command_sessions: command_sessions.clone(),
+            }),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_command_sessions_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(command_sessions)
 }

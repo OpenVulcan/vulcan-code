@@ -19,7 +19,7 @@ use super::{
     apply_hydration_to_selected_workspace_snapshot, cached_luaskills_catalog_from_state,
     cached_mcp_catalog_from_state, capture_preserved_workspace_run_state,
     conversation_messages_from_session, emit_workbench_event,
-    load_selected_session_display_hydration, pending_question_snapshot_from_agent_runtime,
+    load_selected_session_display_hydration, pending_question_snapshots_from_agent_runtime,
     preserve_active_session_run_state, subagent_navigation_snapshot_from_state,
     sync_selected_session_goal_summary_from_store, workbench_from_runtime,
     workspace_surface_allows_user_prompt_editing,
@@ -161,6 +161,7 @@ pub(super) async fn service_session_messages(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        completed_workbench.revision = guard.workbench_generation;
         guard.workbench = completed_workbench.clone();
     }
     emit_workbench_event(&app, &completed_workbench);
@@ -241,6 +242,7 @@ fn retained_hydrated_session_messages_response(
     guard.workbench.conversation_hydration = Some(progress.clone());
     guard.workbench.subagent_navigation = None;
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     let workbench = guard.workbench.clone();
     drop(guard);
     emit_workbench_event(app, &workbench);
@@ -315,6 +317,7 @@ pub(super) async fn service_session_history_page(
             );
         }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
         guard.workbench.clone()
     };
     emit_workbench_event(&app, &workbench);
@@ -521,7 +524,7 @@ pub(super) async fn load_hydrated_session_workbench(
         )
     };
     let hydrated_window_summaries = hydrated_conversation_window_summaries(&hydrated_windows);
-    let workbench = workbench_from_runtime(
+    let mut workbench = workbench_from_runtime(
         &controller_runtime,
         agent_runtime_for_status
             .as_ref()
@@ -534,7 +537,7 @@ pub(super) async fn load_hydrated_session_workbench(
         &refreshed_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
-        pending_question_snapshot_from_agent_runtime(agent_runtime_for_status.as_ref()),
+        pending_question_snapshots_from_agent_runtime(agent_runtime_for_status.as_ref()),
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
@@ -544,7 +547,10 @@ pub(super) async fn load_hydrated_session_workbench(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        workbench.revision = guard.workbench_generation;
         guard.hydrated_conversation_windows = hydrated_windows;
+        guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
     Ok(HydratedSessionWorkbench {
@@ -584,6 +590,8 @@ fn emit_conversation_hydration_progress(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.workbench.conversation_hydration = Some(progress);
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
         guard.workbench.clone()
     };
     emit_workbench_event(app, &workbench);

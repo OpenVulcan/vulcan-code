@@ -130,22 +130,26 @@ pub(super) async fn service_save_session_ai_capability_configuration(
     .await?;
     invalidate_runtime_prompt_tool_visibility_cache();
     let workspace_snapshot =
-        with_workspace_mutation_preserving_subagent_navigation(&app, &state, |workspace| {
-            let runtime_state = workspace
-                .session_runtime_state
-                .entry(session_id)
-                .or_insert_with(|| SessionRuntimeStateEntry {
-                    updated_at: updated_at.clone(),
-                    ..SessionRuntimeStateEntry::default()
-                });
-            runtime_state.ai_tool_configuration = Some(next_configuration.clone());
-            if let Some(injection) = capability_update_injection.clone() {
-                runtime_state
-                    .context_injection_state
-                    .apply_insert(injection, &updated_at);
-            }
-            runtime_state.updated_at = updated_at.clone();
-        })?;
+        with_workspace_mutation_and_preserved_navigation_full_rebuild_for_cold_path(
+            &app,
+            &state,
+            |workspace| {
+                let runtime_state = workspace
+                    .session_runtime_state
+                    .entry(session_id)
+                    .or_insert_with(|| SessionRuntimeStateEntry {
+                        updated_at: updated_at.clone(),
+                        ..SessionRuntimeStateEntry::default()
+                    });
+                runtime_state.ai_tool_configuration = Some(next_configuration.clone());
+                if let Some(injection) = capability_update_injection.clone() {
+                    runtime_state
+                        .context_injection_state
+                        .apply_insert(injection, &updated_at);
+                }
+                runtime_state.updated_at = updated_at.clone();
+            },
+        )?;
     emit_session_addon_changed_event(
         &app,
         session_id,

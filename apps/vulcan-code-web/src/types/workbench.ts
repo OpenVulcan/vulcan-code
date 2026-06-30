@@ -13,6 +13,8 @@ import type {
 import type {
   ConversationMessage,
   ConversationSummary,
+  PendingPromptsChangedDelta,
+  SessionAddonsChangedDelta,
 } from "./conversation";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type {
@@ -47,6 +49,9 @@ import type {
 import type { RuntimeModuleSnapshot } from "./startup";
 
 export interface WorkbenchSnapshot {
+  // Monotonic workbench revision shared by full snapshots and delta events.
+  // 全量快照与增量事件共享的工作台单调版本号。
+  revision?: number;
   // Application version.
   // 应用版本。
   appVersion: string;
@@ -86,6 +91,9 @@ export interface WorkbenchSnapshot {
   // Backend-routed subagent navigation state for the selected parent conversation.
   // 当前选中父会话的后端路由子代理导航状态。
   subagentNavigation?: SubagentNavigationSnapshot | null;
+  // Subagent navigation snapshots retained by their parent conversation ids.
+  // 按父会话标识保留的子代理导航快照。
+  subagentNavigationByConversation?: SubagentNavigationSnapshot[];
   // Tool call summaries.
   // 工具调用摘要。
   toolCalls: ToolCallSummary[];
@@ -140,9 +148,15 @@ export interface WorkbenchSnapshot {
   // Visible pending prompts retained for the selected conversation.
   // 当前选中会话保留的可见待发送提示词。
   pendingPrompts?: PendingPromptSummary[];
+  // Pending prompt queues retained for every conversation that has one.
+  // 为每个存在待发送队列的会话保留的待发送提示词队列。
+  pendingPromptsByConversation?: PendingPromptsChangedDelta[];
   // Oldest pending ask-tool request waiting for a user reply.
   // 当前等待用户回复的最早 ask 工具请求。
   pendingQuestion?: PendingQuestionSnapshot | null;
+  // Pending ask-tool questions grouped by their owning conversation.
+  // 按所属会话保留的 ask 工具待回答问题。
+  pendingQuestions?: PendingQuestionSnapshot[];
   // Current session todolist shown in the conversation tool panel.
   // 当前会话工具面板展示的会话 todolist。
   sessionTodolist?: SessionTodolistSummary | null;
@@ -152,6 +166,9 @@ export interface WorkbenchSnapshot {
   // Current session Plan mode state shown in the composer controls.
   // 当前会话输入区控制项展示的计划模式状态。
   sessionPlanMode?: SessionPlanModeSummary | null;
+  // Session addon projections retained for every conversation that has addon state.
+  // 为每个存在附属状态的会话保留的会话附属投影。
+  sessionAddonsByConversation?: SessionAddonsChangedDelta[];
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

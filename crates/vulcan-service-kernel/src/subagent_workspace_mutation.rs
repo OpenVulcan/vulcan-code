@@ -46,6 +46,44 @@ pub(crate) fn refresh_webui_subagent_navigation_round_visibility(
     Ok(())
 }
 
+/// Reprojects subagent navigation and emits a focused navigation delta.
+/// 重新投影子代理导航并发出聚焦的导航增量。
+pub(crate) fn emit_webui_subagent_navigation_changed_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+) -> Result<Option<SubagentNavigationSnapshot>, String> {
+    let (generation, subagent_navigation) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace_snapshot = guard
+            .workspace_snapshot
+            .clone()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        let subagent_navigation =
+            subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot);
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        guard.workbench.subagent_navigation = subagent_navigation.clone();
+        (generation, subagent_navigation)
+    };
+    emit_service_event_with_trace(
+        app,
+        "subagent_navigation_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::SubagentNavigationChanged(SubagentNavigationChangedDelta {
+                parent_conversation_id: subagent_navigation
+                    .as_ref()
+                    .map(|navigation| navigation.parent_conversation_id.clone()),
+                subagent_navigation: subagent_navigation.clone(),
+            }),
+        })),
+    );
+    Ok(subagent_navigation)
+}
+
 /// Applies one safe canonical conversation checkpoint and persists it off the stream path.
 /// 应用一份安全规范会话检查点，并在流式关键路径外持久化。
 /// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
@@ -63,7 +101,7 @@ pub(crate) enum SubagentNavigationRefreshMode {
 
 /// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
 /// 修改保留的工作区快照并发出重建后的工作台快照。
-pub(crate) fn with_workspace_mutation<F>(
+pub(crate) fn with_workspace_mutation_and_full_workbench_rebuild_for_cold_path<F>(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     mutate: F,
@@ -71,7 +109,7 @@ pub(crate) fn with_workspace_mutation<F>(
 where
     F: FnOnce(&mut WorkspaceSnapshot),
 {
-    with_workspace_mutation_with_subagent_navigation_mode(
+    with_workspace_mutation_and_full_workbench_rebuild_for_cold_path_with_subagent_navigation_mode(
         app,
         state,
         SubagentNavigationRefreshMode::Rebuild,
@@ -81,7 +119,7 @@ where
 
 /// Mutates the retained workspace snapshot without rebuilding subagent task navigation.
 /// 修改保留的工作区快照但不重建子代理任务导航。
-pub(crate) fn with_workspace_mutation_preserving_subagent_navigation<F>(
+pub(crate) fn with_workspace_mutation_and_preserved_navigation_full_rebuild_for_cold_path<F>(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     mutate: F,
@@ -89,7 +127,7 @@ pub(crate) fn with_workspace_mutation_preserving_subagent_navigation<F>(
 where
     F: FnOnce(&mut WorkspaceSnapshot),
 {
-    with_workspace_mutation_with_subagent_navigation_mode(
+    with_workspace_mutation_and_full_workbench_rebuild_for_cold_path_with_subagent_navigation_mode(
         app,
         state,
         SubagentNavigationRefreshMode::Preserve,
@@ -99,7 +137,9 @@ where
 
 /// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot using the requested navigation mode.
 /// 按指定导航模式修改保留的工作区快照并发出重建后的工作台快照。
-pub(crate) fn with_workspace_mutation_with_subagent_navigation_mode<F>(
+pub(crate) fn with_workspace_mutation_and_full_workbench_rebuild_for_cold_path_with_subagent_navigation_mode<
+    F,
+>(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     subagent_navigation_refresh_mode: SubagentNavigationRefreshMode,
@@ -120,7 +160,7 @@ where
         ai_tool_configuration,
         surface_messages,
         subagent_navigation,
-        pending_question,
+        pending_questions,
         logs,
         live_context_budgets,
         session_goal_summaries,
@@ -159,8 +199,8 @@ where
             .as_ref()
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
-        let pending_question =
-            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+        let pending_questions =
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
         let command_session_runtime = guard
             .agent_runtime
             .as_ref()
@@ -233,7 +273,7 @@ where
             ai_tool_configuration,
             surface_messages,
             subagent_navigation,
-            pending_question,
+            pending_questions,
             logs,
             live_context_budgets,
             session_goal_summaries,
@@ -242,7 +282,7 @@ where
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
-    let workbench = workbench_from_runtime(
+    let mut workbench = workbench_from_runtime(
         &controller_runtime,
         command_session_runtime.as_deref(),
         &luaskills_catalog,
@@ -253,7 +293,7 @@ where
         &workspace_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
-        pending_question,
+        pending_questions,
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
@@ -271,6 +311,7 @@ where
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let is_current_generation = guard.workbench_generation == rebuild_generation;
         if is_current_generation {
+            workbench.revision = rebuild_generation;
             guard.workbench = workbench.clone();
         }
         webui_trace_if_slow(

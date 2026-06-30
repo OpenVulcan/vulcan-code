@@ -1,7 +1,7 @@
 //! WebUI pending prompt queue RPC service handlers.
 //! WebUI 待发送提示词队列 RPC 服务处理器。
 
-use vulcan_service_api::{PendingPromptSummary, ServiceEventEmitter, WorkbenchSnapshot};
+use vulcan_service_api::{PendingPromptSummary, ServiceEventEmitter};
 use vulcan_workbench_model::{
     PendingPromptPanelDropTarget, apply_pending_prompt_panel_drop_target,
     remove_pending_prompt_panel_entry,
@@ -10,8 +10,9 @@ use vulcan_workbench_model::{
 use super::pending_prompts::pending_prompt_summary_from_panel_entry;
 use super::{
     SharedServiceBridgeState, current_unix_millis_text, current_workspace_snapshot_from_state,
-    parse_session_id, runtime_parts_from_state, selected_session_id_from_state,
-    spawn_workspace_session_persist_task, store_and_emit_workbench_snapshot,
+    emit_pending_prompts_changed_delta, parse_session_id, runtime_parts_from_state,
+    selected_session_id_from_state, spawn_workspace_session_persist_task,
+    store_workspace_snapshot_without_workbench_rebuild,
 };
 
 /// Restores one visible pending prompt into the WebUI composer and removes it from the queue.
@@ -35,14 +36,7 @@ pub(super) async fn service_edit_pending_prompt(
     state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<PendingPromptSummary, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+    let (controller_runtime, _, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
     let mut workspace_snapshot =
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
@@ -62,18 +56,8 @@ pub(super) async fn service_edit_pending_prompt(
         runtime_state.updated_at = current_unix_millis_text();
         pending_prompt_summary_from_panel_entry(&entry)
     };
-    store_and_emit_workbench_snapshot(
-        &app,
-        &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        workspace_snapshot,
-        &logs,
-    )?;
+    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
+    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
         String::from("service is still starting; workspace snapshot is not ready")
     })?;
@@ -107,15 +91,8 @@ pub(super) async fn service_remove_pending_prompt(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     entry_id: String,
-) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+) -> Result<bool, String> {
+    let (controller_runtime, _, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
     let mut workspace_snapshot =
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
@@ -134,18 +111,8 @@ pub(super) async fn service_remove_pending_prompt(
     } else {
         false
     };
-    let workbench = store_and_emit_workbench_snapshot(
-        &app,
-        &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        workspace_snapshot,
-        &logs,
-    )?;
+    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
+    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     if removed {
         let snapshot_for_persist =
             current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
@@ -159,7 +126,7 @@ pub(super) async fn service_remove_pending_prompt(
             Some(String::from("pending_remove")),
         );
     }
-    Ok(workbench)
+    Ok(removed)
 }
 
 /// Reorders the visible pending prompt queue for the selected conversation.
@@ -188,15 +155,8 @@ pub(super) async fn service_reorder_pending_prompts(
     conversation_id: Option<String>,
     dragged_entry_id: String,
     target_entry_id: Option<String>,
-) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        agent_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = runtime_parts_from_state(&state)?;
+) -> Result<bool, String> {
+    let (controller_runtime, _, _, _, _, _) = runtime_parts_from_state(&state)?;
     let selected_session_id = conversation_id
         .as_deref()
         .and_then(parse_session_id)
@@ -228,18 +188,8 @@ pub(super) async fn service_reorder_pending_prompts(
     } else {
         false
     };
-    let workbench = store_and_emit_workbench_snapshot(
-        &app,
-        &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        workspace_snapshot,
-        &logs,
-    )?;
+    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
+    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     if did_reorder {
         let snapshot_for_persist =
             current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
@@ -253,5 +203,5 @@ pub(super) async fn service_reorder_pending_prompts(
             Some(String::from("pending_reorder")),
         );
     }
-    Ok(workbench)
+    Ok(did_reorder)
 }

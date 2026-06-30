@@ -11,6 +11,7 @@ import {
   setSessionPlanMode,
   updateSessionGoalStatus,
 } from "@/service/conversation-actions-service";
+import { applySessionAddonsChangedResponse } from "@/state/workbench-state";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import { useI18n } from "@/i18n";
 import { toast } from "sonner";
@@ -92,19 +93,19 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       return false;
     }
     try {
-      const snapshot = await saveSessionGoal(activeConversationId, objective, tokenBudget);
-      if (!snapshot) {
+      const response = await saveSessionGoal(activeConversationId, objective, tokenBudget);
+      if (!response) {
         toast.info(t("sessionActions.previewCannotSaveGoal"));
         return false;
       }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
       toast.success(t("sessionActions.goalSaved"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
+  }, [selectedConversation, selectedDraftConversation, t]);
 
   // handleResumeSessionGoal resumes a stopped goal as a fresh budget stage.
   // handleResumeSessionGoal 将已停止目标恢复为新的预算阶段。
@@ -115,19 +116,19 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       return false;
     }
     try {
-      const snapshot = await resumeSessionGoal(activeConversationId, objective, tokenBudget);
-      if (!snapshot) {
+      const response = await resumeSessionGoal(activeConversationId, objective, tokenBudget);
+      if (!response) {
         toast.info(t("sessionActions.previewCannotResumeGoal"));
         return false;
       }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
       toast.success(t("sessionActions.goalResumed"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
+  }, [selectedConversation, selectedDraftConversation, t]);
 
   // handleClearSessionGoal removes the current explicit session goal.
   // handleClearSessionGoal 移除当前显式会话目标。
@@ -138,19 +139,19 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       return false;
     }
     try {
-      const snapshot = await clearSessionGoal(activeConversationId);
-      if (!snapshot) {
+      const response = await clearSessionGoal(activeConversationId);
+      if (!response) {
         toast.info(t("sessionActions.previewCannotClearGoal"));
         return false;
       }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
       toast.success(t("sessionActions.goalCleared"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
+  }, [selectedConversation, selectedDraftConversation, t]);
 
   // handleUpdateSessionGoalStatus updates the current goal lifecycle state.
   // handleUpdateSessionGoalStatus 更新当前目标生命周期状态。
@@ -161,18 +162,18 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       return false;
     }
     try {
-      const snapshot = await updateSessionGoalStatus(activeConversationId, status);
-      if (!snapshot) {
+      const response = await updateSessionGoalStatus(activeConversationId, status);
+      if (!response) {
         toast.info(t("sessionActions.previewCannotUpdateGoal"));
         return false;
       }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
+  }, [selectedConversation, selectedDraftConversation, t]);
 
   // handleSetSessionPlanMode persists the current conversation Plan-mode toggle.
   // handleSetSessionPlanMode 持久化当前会话的计划模式开关。
@@ -183,19 +184,19 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       return false;
     }
     try {
-      const snapshot = await setSessionPlanMode(activeConversationId, enabled);
-      if (!snapshot) {
+      const response = await setSessionPlanMode(activeConversationId, enabled);
+      if (!response) {
         toast.info(t("sessionActions.previewCannotTogglePlanMode"));
         return false;
       }
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
       toast.success(enabled ? t("sessionActions.planModeEnabled") : t("sessionActions.planModeDisabled"));
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, t]);
+  }, [selectedConversation, selectedDraftConversation, t]);
 
   // handleEditPendingPrompt restores one queued prompt back into the active composer.
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。

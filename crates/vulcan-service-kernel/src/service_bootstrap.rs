@@ -32,7 +32,7 @@ use super::{
     emit_service_event_with_trace, fallback_workbench_snapshot,
     hydrate_selected_session_runtime_if_needed, install_webui_question_runtime_event_bridge,
     mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
-    normalized_workspace_path_text_from_path, pending_question_snapshot_from_agent_runtime,
+    normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
     token_budget_status, workbench_from_runtime, workspace_root,
 };
 
@@ -504,7 +504,7 @@ fn run_service_bootstrap(
         ),
         &logs,
     );
-    let workbench = workbench_from_runtime(
+    let mut workbench = workbench_from_runtime(
         &controller_runtime,
         Some(agent_runtime.command_session_runtime.as_ref()),
         &luaskills_catalog,
@@ -515,7 +515,7 @@ fn run_service_bootstrap(
         &workspace_snapshot,
         &[],
         None,
-        pending_question_snapshot_from_agent_runtime(Some(&agent_runtime)),
+        pending_question_snapshots_from_agent_runtime(Some(&agent_runtime)),
         &logs,
         &BTreeMap::new(),
         &BTreeMap::new(),
@@ -525,6 +525,7 @@ fn run_service_bootstrap(
     if let Ok(mut guard) = state.lock() {
         guard.startup = startup.clone();
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);

@@ -169,6 +169,14 @@ export function ChatArea(props: ChatAreaProps) {
     () => props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId),
     [activeSurfaceConversationId, props.workbench.messages],
   );
+  // visibleCommandSessions limits transcript tool cards to this conversation surface's runtime resources.
+  // visibleCommandSessions 将转录工具卡片限定到当前会话界面的运行时资源。
+  const visibleCommandSessions = React.useMemo(
+    () => activeSurfaceConversationId
+      ? (props.workbench.commandSessions ?? []).filter((session) => session.ownerSessionId === activeSurfaceConversationId)
+      : [],
+    [activeSurfaceConversationId, props.workbench.commandSessions],
+  );
   // renderItems stores parsed transcript rows for this active surface.
   // renderItems 保存当前活动界面的已解析转录行。
   const renderItems = React.useMemo(() => projectConversationRenderItems(messages, t), [messages, t]);
@@ -961,7 +969,7 @@ export function ChatArea(props: ChatAreaProps) {
         onLoadMoreHistory={props.onLoadConversationHistory}
         parentConversationId={props.selectedConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
-        commandSessions={props.workbench.commandSessions ?? []}
+        commandSessions={visibleCommandSessions}
         pendingPlanArtifact={pendingPlanArtifact}
         onPlanArtifactExecute={handlePlanArtifactExecute}
         onPlanArtifactSuggest={handlePlanArtifactSuggest}

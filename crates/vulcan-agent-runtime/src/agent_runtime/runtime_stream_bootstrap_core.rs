@@ -31,6 +31,58 @@ use vulcan_core::types::{
 };
 use vulcan_tools_manager::ResolvedToolDefinition;
 
+/// Returns whether focused after-precheck diagnostic traces are enabled.
+/// 返回 precheck 后专项诊断日志是否已启用。
+pub(crate) fn after_precheck_trace_enabled() -> bool {
+    std::env::var("VULCAN_WEBUI_AFTER_PRECHECK_TRACE")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+/// Returns the current Unix timestamp in milliseconds.
+/// 返回当前 Unix 毫秒时间戳。
+pub(crate) fn after_precheck_unix_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+/// Returns the current RFC3339 timestamp used by WebUI trace lines.
+/// 返回 WebUI 诊断日志使用的当前 RFC3339 时间戳。
+fn after_precheck_trace_timestamp() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.millisecond()
+    )
+}
+
+/// Emits one focused after-precheck diagnostic trace line from agent-runtime.
+/// 从 agent-runtime 输出一条 precheck 后专项诊断日志。
+pub(crate) fn after_precheck_trace(stage: &str, detail: impl AsRef<str>) {
+    if !after_precheck_trace_enabled() {
+        return;
+    }
+    eprintln!(
+        "[webui-service][after-precheck-trace] timestamp={} unix_ms={} stage={} {}",
+        after_precheck_trace_timestamp(),
+        after_precheck_unix_millis(),
+        stage,
+        detail.as_ref()
+    );
+}
+
 /// Core provider-facing runtime bootstrap state derived from canonical conversation inputs.
 /// 从规范会话输入推导得到的面向 Provider 的运行时 bootstrap 核心状态。
 pub(crate) struct RuntimeBootstrapCore {
@@ -135,6 +187,8 @@ pub(crate) async fn seed_runtime_request_snapshot(
     runtime_max_turns: Option<usize>,
     warnings: &mut Vec<String>,
 ) {
+    let seed_started_at = after_precheck_unix_millis();
+    let snapshot_started_at = after_precheck_unix_millis();
     match build_core_provider_request_snapshot(
         preparation,
         &request.conversation_state,
@@ -147,6 +201,15 @@ pub(crate) async fn seed_runtime_request_snapshot(
     .await
     {
         Ok(request_snapshot) => {
+            after_precheck_trace(
+                "after_precheck_29a_core_request_snapshot_ready",
+                format!(
+                    "session={} elapsed_ms={}",
+                    preparation.session_id,
+                    after_precheck_unix_millis().saturating_sub(snapshot_started_at)
+                ),
+            );
+            let budget_started_at = after_precheck_unix_millis();
             let observed_usage =
                 latest_provider_usage_from_conversation_state(&request.conversation_state);
             preparation.context_budget = Some(
@@ -161,6 +224,15 @@ pub(crate) async fn seed_runtime_request_snapshot(
                     token_estimator,
                 ),
             );
+            after_precheck_trace(
+                "after_precheck_29b_context_budget_ready",
+                format!(
+                    "session={} elapsed_ms={}",
+                    preparation.session_id,
+                    after_precheck_unix_millis().saturating_sub(budget_started_at)
+                ),
+            );
+            let assembly_started_at = after_precheck_unix_millis();
             let context_assembly = build_provider_request_context_assembly(&request_snapshot);
             preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
             preparation.context_assembly = Some(context_assembly);
@@ -168,16 +240,57 @@ pub(crate) async fn seed_runtime_request_snapshot(
                 preparation,
                 &request_snapshot,
             ));
+            after_precheck_trace(
+                "after_precheck_29c_context_assembly_ready",
+                format!(
+                    "session={} elapsed_ms={}",
+                    preparation.session_id,
+                    after_precheck_unix_millis().saturating_sub(assembly_started_at)
+                ),
+            );
+            let preview_started_at = after_precheck_unix_millis();
             preparation.provider_request_preview_markdown =
                 build_provider_request_preview_markdown(preparation, &request_snapshot);
+            after_precheck_trace(
+                "after_precheck_29d_preview_ready",
+                format!(
+                    "session={} chars={} elapsed_ms={}",
+                    preparation.session_id,
+                    preparation
+                        .provider_request_preview_markdown
+                        .chars()
+                        .count(),
+                    after_precheck_unix_millis().saturating_sub(preview_started_at)
+                ),
+            );
+            let json_started_at = after_precheck_unix_millis();
             preparation.provider_request_snapshot_json =
                 serde_json::to_value(&request_snapshot).ok();
+            after_precheck_trace(
+                "after_precheck_29e_snapshot_json_ready",
+                format!(
+                    "session={} success={} elapsed_ms={} elapsed_ms_since_seed={}",
+                    preparation.session_id,
+                    preparation.provider_request_snapshot_json.is_some(),
+                    after_precheck_unix_millis().saturating_sub(json_started_at),
+                    after_precheck_unix_millis().saturating_sub(seed_started_at)
+                ),
+            );
         }
         Err(error) => {
             preparation.provider_request_preview_markdown =
                 format!("# 最后一次真实 API 请求快照\n\n请求快照构建失败：{}", error);
             preparation.provider_request_snapshot_json = None;
             warnings.push(format!("请求快照构建失败：{error}"));
+            after_precheck_trace(
+                "after_precheck_29x_request_snapshot_failed",
+                format!(
+                    "session={} elapsed_ms_since_seed={} error={}",
+                    preparation.session_id,
+                    after_precheck_unix_millis().saturating_sub(seed_started_at),
+                    error
+                ),
+            );
         }
     }
 }

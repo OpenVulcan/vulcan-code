@@ -98,6 +98,7 @@ pub(crate) fn update_service_failure(
         workbench.ui_locale = guard.startup.ui_locale.clone();
         guard.startup = startup.clone();
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
     }
     mark_webui_service_discovery_failed(state);

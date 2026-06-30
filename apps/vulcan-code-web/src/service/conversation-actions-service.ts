@@ -3,6 +3,9 @@ import type {
   CommandSessionSummary,
   ComposerAttachmentSummary,
   PendingPromptSummary,
+  SessionAddonsChangedResponse,
+  SubagentPanelRouteResponse,
+  SubmitConversationPromptAck,
   UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
@@ -25,11 +28,11 @@ export async function submitConversationPrompt(
   disabledAiCapabilityKinds: AiCapabilityKind[],
   disabledAiCapabilityTargetSelectors: string[],
   aiCapabilityTargetOrderOverrides: Record<string, string[]>,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_submit_conversation_prompt", {
+  return serviceClient.request<SubmitConversationPromptAck>("service_submit_conversation_prompt", {
     projectId,
     conversationId,
     prompt,
@@ -77,15 +80,15 @@ export async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
 
 // stopCommandSession force-stops one live backend command session.
 // stopCommandSession 强制停止单条实时后端命令会话。
-export async function stopCommandSession(commandSessionId: string, ownerSessionId?: string | null): Promise<WorkbenchSnapshot | null> {
+export async function stopCommandSession(commandSessionId: string, ownerSessionId?: string | null): Promise<CommandSessionSummary[]> {
   if (!hasServiceRuntime()) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.commandSessions = snapshot.commandSessions.map((session) => session.id === commandSessionId
         ? { ...session, ownerSessionId: ownerSessionId ?? session.ownerSessionId ?? null, status: "stopped", preview: "Browser preview marked this session as stopped." }
         : session);
-    });
+    }).commandSessions;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_stop_command_session", {
+  return serviceClient.request<CommandSessionSummary[]>("service_stop_command_session", {
     commandSessionId,
     ownerSessionId: ownerSessionId ?? null,
   });
@@ -120,11 +123,11 @@ export async function sendCommandSessionInput(
   commandSessionId: string,
   ownerSessionId: string | null | undefined,
   inputs: TerminalInputEvent[],
-): Promise<WorkbenchSnapshot | null> {
+): Promise<CommandSessionSummary[]> {
   if (!hasServiceRuntime()) {
-    return null;
+    return [];
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_send_command_session_input", {
+  return serviceClient.request<CommandSessionSummary[]>("service_send_command_session_input", {
     request: {
       commandSessionId,
       ownerSessionId: ownerSessionId ?? null,
@@ -231,11 +234,11 @@ export async function resizeCommandSession(
   ownerSessionId: string | null | undefined,
   rows: number,
   cols: number,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<CommandSessionSummary[]> {
   if (!hasServiceRuntime()) {
-    return null;
+    return [];
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_resize_command_session", {
+  return serviceClient.request<CommandSessionSummary[]>("service_resize_command_session", {
     request: {
       commandSessionId,
       ownerSessionId: ownerSessionId ?? null,
@@ -268,11 +271,11 @@ export async function submitUserPromptEdit(request: {
   prompt: string;
   attachments: ComposerAttachmentSummary[];
   stopRunning?: boolean;
-}): Promise<WorkbenchSnapshot | null> {
+}): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_submit_user_prompt_edit", { request });
+  return serviceClient.request<SubmitConversationPromptAck>("service_submit_user_prompt_edit", { request });
 }
 
 // forkConversation copies one persisted conversation into a new session and opens it.
@@ -294,11 +297,11 @@ export async function saveSessionGoal(
   conversationId: string | null,
   objective: string,
   tokenBudget?: number | null,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<SessionAddonsChangedResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_session_goal", {
+  return serviceClient.request<SessionAddonsChangedResponse>("service_save_session_goal", {
     request: {
       conversationId,
       objective,
@@ -313,11 +316,11 @@ export async function resumeSessionGoal(
   conversationId: string | null,
   objective: string,
   tokenBudget?: number | null,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<SessionAddonsChangedResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_resume_session_goal", {
+  return serviceClient.request<SessionAddonsChangedResponse>("service_resume_session_goal", {
     request: {
       conversationId,
       objective,
@@ -328,11 +331,11 @@ export async function resumeSessionGoal(
 
 // clearSessionGoal removes the persisted goal for the current conversation.
 // clearSessionGoal 移除当前会话的持久化目标。
-export async function clearSessionGoal(conversationId: string | null): Promise<WorkbenchSnapshot | null> {
+export async function clearSessionGoal(conversationId: string | null): Promise<SessionAddonsChangedResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_clear_session_goal", {
+  return serviceClient.request<SessionAddonsChangedResponse>("service_clear_session_goal", {
     request: {
       conversationId,
     },
@@ -344,11 +347,11 @@ export async function clearSessionGoal(conversationId: string | null): Promise<W
 export async function updateSessionGoalStatus(
   conversationId: string | null,
   status: string,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<SessionAddonsChangedResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_update_session_goal_status", {
+  return serviceClient.request<SessionAddonsChangedResponse>("service_update_session_goal_status", {
     request: {
       conversationId,
       status,
@@ -361,11 +364,11 @@ export async function updateSessionGoalStatus(
 export async function setSessionPlanMode(
   conversationId: string | null,
   enabled: boolean,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<SessionAddonsChangedResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_set_session_plan_mode", {
+  return serviceClient.request<SessionAddonsChangedResponse>("service_set_session_plan_mode", {
     request: {
       conversationId,
       enabled,
@@ -384,47 +387,38 @@ export async function compactSelectedConversationContext(): Promise<WorkbenchSna
 
 // replyPendingQuestion submits ask-tool answers to the blocked backend runtime.
 // replyPendingQuestion 将 ask 工具答案提交给正在阻塞的后端运行时。
-export async function replyPendingQuestion(requestId: string, answers: string[][]): Promise<WorkbenchSnapshot | null> {
+export async function replyPendingQuestion(requestId: string, answers: string[][]): Promise<boolean> {
   if (!hasServiceRuntime()) {
-    return null;
+    return false;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_reply_pending_question", { requestId, answers });
+  return serviceClient.request<boolean>("service_reply_pending_question", { requestId, answers });
 }
 
 // rejectPendingQuestion cancels one pending ask-tool request after explicit confirmation.
 // rejectPendingQuestion 在明确确认后取消一个待处理 ask 工具请求。
-export async function rejectPendingQuestion(requestId: string): Promise<WorkbenchSnapshot | null> {
+export async function rejectPendingQuestion(requestId: string): Promise<boolean> {
   if (!hasServiceRuntime()) {
-    return null;
+    return false;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_reject_pending_question", { requestId });
+  return serviceClient.request<boolean>("service_reject_pending_question", { requestId });
 }
 
-// openSubagentPanel asks the backend to switch the active transcript surface to a child task.
-// openSubagentPanel 请求后端把活动转录界面切换到子任务。
-export async function openSubagentPanel(parentConversationId: string, taskId: string): Promise<WorkbenchSnapshot | null> {
+// openSubagentPanel asks the backend for one child-task transcript route response.
+// openSubagentPanel 请求后端返回单个子任务转录路由响应。
+export async function openSubagentPanel(parentConversationId: string, taskId: string): Promise<SubagentPanelRouteResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_open_subagent_panel", { parentConversationId, taskId });
-}
-
-// closeSubagentPanel asks the backend to return the active transcript surface to the parent conversation.
-// closeSubagentPanel 请求后端将活动转录界面返回父会话。
-export async function closeSubagentPanel(): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_close_subagent_panel");
+  return serviceClient.request<SubagentPanelRouteResponse>("service_open_subagent_panel", { parentConversationId, taskId });
 }
 
 // stopSubagentTask asks the backend to stop one child task through the direct service runtime path.
 // stopSubagentTask 请求后端通过独立服务运行时路径停止单个子任务。
-export async function stopSubagentTask(parentConversationId: string, taskId: string): Promise<WorkbenchSnapshot | null> {
+export async function stopSubagentTask(parentConversationId: string, taskId: string): Promise<SubagentPanelRouteResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_stop_subagent_task", { parentConversationId, taskId });
+  return serviceClient.request<SubagentPanelRouteResponse>("service_stop_subagent_task", { parentConversationId, taskId });
 }
 
 // editPendingPrompt restores one queued prompt from the selected conversation queue.
@@ -438,20 +432,20 @@ export async function editPendingPrompt(entryId: string): Promise<PendingPromptS
 
 // insertPendingPrompt routes one visible queue item through the shared pending-prompt router.
 // insertPendingPrompt 通过共享待发送提示词路由器插入单条可见队列项。
-export async function insertPendingPrompt(entryId: string): Promise<WorkbenchSnapshot | null> {
+export async function insertPendingPrompt(entryId: string): Promise<boolean> {
   if (!hasServiceRuntime()) {
-    return null;
+    return false;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_insert_pending_prompt", { entryId });
+  return serviceClient.request<boolean>("service_insert_pending_prompt", { entryId });
 }
 
 // removePendingPrompt removes one queued prompt from the selected conversation queue.
 // removePendingPrompt 从当前选中会话队列移除单条排队提示词。
-export async function removePendingPrompt(entryId: string): Promise<WorkbenchSnapshot | null> {
+export async function removePendingPrompt(entryId: string): Promise<boolean> {
   if (!hasServiceRuntime()) {
-    return null;
+    return false;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_remove_pending_prompt", { entryId });
+  return serviceClient.request<boolean>("service_remove_pending_prompt", { entryId });
 }
 
 // reorderPendingPrompts persists one service-compatible pending prompt drop target.
@@ -460,11 +454,11 @@ export async function reorderPendingPrompts(
   conversationId: string | null,
   draggedEntryId: string,
   targetEntryId: string | null,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<boolean> {
   if (!hasServiceRuntime()) {
-    return null;
+    return false;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_reorder_pending_prompts", { conversationId, draggedEntryId, targetEntryId });
+  return serviceClient.request<boolean>("service_reorder_pending_prompts", { conversationId, draggedEntryId, targetEntryId });
 }
 
 // stageComposerAttachmentBytes stages one browser/drop/paste provided file through the service.

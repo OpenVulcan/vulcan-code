@@ -59,7 +59,8 @@ export interface WorkspaceReviewConversationDiffSource {
 // activeWorkbenchSurfaceId returns the selected parent conversation id used by workspace tools.
 // activeWorkbenchSurfaceId 返回工作区工具使用的当前选中父会话标识。
 export function activeWorkbenchSurfaceId(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): string | null {
-  return selectedConversationId ?? workbench.selectedConversationId ?? null;
+  void workbench;
+  return selectedConversationId ?? null;
 }
 
 // selectedConversationProjectId returns the explicit project id for the currently visible conversation or draft.
@@ -73,7 +74,7 @@ export function selectedConversationProjectId(
     return draftConversation.projectId;
   }
   const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
-  const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
+  const parentConversationId = selectedConversationId ?? null;
   const conversation = activeSurfaceId
     ? workbench.conversations.find((item) => item.id === activeSurfaceId)
       ?? workbench.conversations.find((item) => item.id === parentConversationId)
@@ -95,7 +96,7 @@ export function selectedConversationWorkspacePath(
     return workbench.projects.find((project) => project.id === draftConversation.projectId)?.path ?? null;
   }
   const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
-  const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
+  const parentConversationId = selectedConversationId ?? null;
   if (!activeSurfaceId) {
     return null;
   }

@@ -266,6 +266,7 @@ pub(crate) async fn service_set_expanded_task_projects(
         .map(|project| project.id.clone())
         .collect::<Vec<_>>();
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     Ok(guard.workbench.clone())
 }
 
@@ -391,6 +392,7 @@ pub(super) fn remove_empty_project_from_retained_state(
         .expanded_project_ids
         .retain(|candidate| candidate != project_id);
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     Ok(guard.workbench.clone())
 }
 
@@ -515,5 +517,6 @@ pub(super) fn archive_project_sessions_in_retained_state(
             .map(|conversation| conversation.id.clone());
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
     Ok(guard.workbench.clone())
 }

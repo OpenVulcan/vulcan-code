@@ -496,6 +496,15 @@
   color: oklch(0.62 0.18 245);
 }
 
+.conversation-tree-attention-icon {
+  color: oklch(0.62 0.2 255);
+  stroke-width: 2.2;
+}
+
+.conversation-tree-attention-icon.plan {
+  color: oklch(0.58 0.18 255);
+}
+
 .conversation-tree-unread-dot {
   display: inline-block;
   width: 7px;
