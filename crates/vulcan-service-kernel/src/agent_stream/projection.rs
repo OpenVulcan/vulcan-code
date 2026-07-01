@@ -404,7 +404,26 @@ pub(crate) fn build_conversation_messages_patched_delta(
         upsert_messages,
         remove_message_ids,
         message_order,
+        run_phase: None,
     })
+}
+
+/// Builds a runtime-event message patch with the matching UI phase applied atomically.
+/// 构建运行时事件消息补丁，并将匹配的界面阶段原子写入同一补丁。
+fn build_runtime_event_conversation_messages_patched_delta(
+    conversation_id: &str,
+    before_messages: &[ConversationMessage],
+    after_messages: &[ConversationMessage],
+    event: &RuntimeEvent,
+) -> Option<ConversationMessagesPatchedDelta> {
+    let mut message_patch = build_conversation_messages_patched_delta(
+        conversation_id,
+        before_messages,
+        after_messages,
+    )?;
+    message_patch.run_phase =
+        runtime_event_projection_run_phase(event).map(|phase| phase.to_string());
+    Some(message_patch)
 }
 
 /// Replaces one conversation's visible message block while preserving unrelated message positions.
@@ -575,10 +594,11 @@ pub(crate) fn append_runtime_event_projection(
         let surface_matches =
             workbench_surface_matches_conversation(&guard.workbench, &conversation_id);
         let message_window_delta = if surface_matches && transcript_changed {
-            let message_patch = build_conversation_messages_patched_delta(
+            let message_patch = build_runtime_event_conversation_messages_patched_delta(
                 &conversation_id,
                 before_visible_messages.as_slice(),
                 projected_messages.as_slice(),
+                event,
             );
             if let Some(message_patch) = message_patch {
                 guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
@@ -667,6 +687,16 @@ pub(crate) fn append_runtime_event_projection(
         );
     }
     Ok(())
+}
+
+/// Returns the UI run phase that must advance together with one runtime-event message patch.
+/// 返回必须与单条运行时事件消息补丁一起推进的界面运行阶段。
+fn runtime_event_projection_run_phase(event: &RuntimeEvent) -> Option<SessionRunPhase> {
+    match event.kind {
+        RuntimeEventKind::ToolStarted => Some(SessionRunPhase::ToolRunning),
+        RuntimeEventKind::ToolFinished => Some(SessionRunPhase::Requesting),
+        _ => None,
+    }
 }
 
 /// Caches the latest provider usage into the live context-budget snapshot.
@@ -801,6 +831,51 @@ mod tests {
                 .and_then(|detail_ref| detail_ref.get("message_index"))
                 .and_then(serde_json::Value::as_u64),
             Some(1)
+        );
+    }
+
+    /// Verifies a tool-start message patch carries the phase that closes the thinking overlay.
+    /// 验证工具开始消息补丁携带用于关闭思考浮层的运行阶段。
+    #[test]
+    fn runtime_tool_started_message_patch_carries_tool_running_phase() {
+        let conversation_id = SessionId::new_v4().to_string();
+        let started = RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "工具调用 · call-read · vulcan_file_read",
+            "## Tool Call",
+        );
+        let tool_message = ConversationMessage {
+            id: String::from("tool-call-call-read"),
+            conversation_id: conversation_id.clone(),
+            created_at: String::from("1000"),
+            role: MessageRole::Assistant,
+            title: Some(String::from("工具调用 · vulcan_file_read")),
+            record_kind: Some(String::from("tool-call-output")),
+            body: String::new(),
+            metadata: Some(json!({
+                "tool_call_id": "call-read",
+                "tool_name": "vulcan_file_read",
+            })),
+            attachments: Vec::new(),
+            editable_user_prompt: false,
+        };
+
+        let patch = build_runtime_event_conversation_messages_patched_delta(
+            &conversation_id,
+            &[],
+            &[tool_message],
+            &started,
+        )
+        .expect("tool start should insert a visible tool-call message");
+
+        assert_eq!(
+            patch.run_phase,
+            Some(SessionRunPhase::ToolRunning.to_string())
+        );
+        assert_eq!(patch.upsert_messages.len(), 1);
+        assert_eq!(
+            patch.upsert_messages[0].record_kind.as_deref(),
+            Some("tool-call-output")
         );
     }
 }

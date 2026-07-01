@@ -140,8 +140,25 @@ export function applyConversationMessagesPatchedDelta(
   workbench: WorkbenchSnapshot,
   delta: ConversationMessagesPatchedDelta,
 ): WorkbenchSnapshot {
+  const runPhase = delta.runPhase ?? undefined;
   return {
     ...workbench,
+    conversations: runPhase
+      ? workbench.conversations.map((conversation) => {
+        if (conversation.id !== delta.conversationId) {
+          return conversation;
+        }
+        return {
+          ...conversation,
+          runPhase,
+          status: !["idle", "ready", "failed", "stopped"].includes(normalizedSessionRunPhase(runPhase) ?? "")
+            ? "Running"
+            : conversation.status,
+          lastUpdatedLabel: "now",
+        };
+      })
+      : workbench.conversations,
+    subagentNavigation: updateSubagentNavigationRunPhase(workbench.subagentNavigation, delta.conversationId, runPhase),
     messages: patchConversationMessages(workbench.messages, delta),
   };
 }

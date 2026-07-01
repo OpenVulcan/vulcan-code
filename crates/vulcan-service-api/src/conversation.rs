@@ -373,6 +373,10 @@ pub struct ConversationMessagesPatchedDelta {
     /// 当前会话可见节点的可选权威顺序。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_order: Option<Vec<String>>,
+    /// Optional run phase that should be applied atomically with this message patch.
+    /// 需要与本次消息补丁原子应用的可选运行阶段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_phase: Option<String>,
 }
 
 /// Replaces selected-session addon panels without rebuilding the full workbench.

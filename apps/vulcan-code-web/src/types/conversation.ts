@@ -265,6 +265,9 @@ export interface ConversationMessagesPatchedDelta {
   // Optional authoritative order for visible nodes in this conversation.
   // 当前会话可见节点的可选权威顺序。
   messageOrder?: string[] | null;
+  // Optional run phase that should be applied atomically with this message patch.
+  // 需要与本次消息补丁原子应用的可选运行阶段。
+  runPhase?: string | null;
 }
 
 // SessionAddonsChangedDelta replaces goal, todolist, and Plan mode projections.
