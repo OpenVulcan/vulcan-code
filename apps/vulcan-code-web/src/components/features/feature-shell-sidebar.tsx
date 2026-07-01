@@ -67,6 +67,12 @@ function FeatureSidebar(props: {
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。
   onSelectArea: (area: MainAreaId) => void
+  // Whether the sidebar brand content should be a native window drag region.
+  // 侧栏品牌内容是否作为原生窗口拖动区域。
+  titlebarDragRegion?: boolean
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void
   // Workbench snapshot used for sidebar counters.
   // 侧栏计数使用的工作台快照。
   workbench: WorkbenchSnapshot
@@ -82,6 +88,8 @@ function FeatureSidebar(props: {
           activeArea={props.activeArea}
           currentLabel={headerLabel}
           onSelectArea={props.onSelectArea}
+          titlebarDragRegion={props.titlebarDragRegion}
+          onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         />
       </SidebarHeader>
       <SidebarContent>

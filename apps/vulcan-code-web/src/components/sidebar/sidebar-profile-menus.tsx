@@ -34,6 +34,12 @@ export function SidebarBrandMenu(props: {
   // Selects one top-level area from header shortcuts.
   // 从头部快捷入口选择一个顶层区域。
   onSelectArea: (area: MainAreaId) => void;
+  // Whether the brand content should behave as a native window drag region.
+  // 品牌内容是否应作为原生窗口拖动区域。
+  titlebarDragRegion?: boolean;
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -42,16 +48,23 @@ export function SidebarBrandMenu(props: {
     <SidebarMenu>
       <SidebarMenuItem>
         <div className="sidebar-profile-button sidebar-brand-button sidebar-brand-static" aria-label="Vulcan Code">
-          <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
-          <span className="vcn-sidebar-label sidebar-profile-label">
-            <strong>Vulcan Code</strong>
-            <small>{props.currentLabel}</small>
-          </span>
+          <div
+            className="sidebar-brand-drag-region"
+            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+            onDoubleClick={props.onTitlebarDoubleClick}
+          >
+            <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
+            <span className="vcn-sidebar-label sidebar-profile-label">
+              <strong>Vulcan Code</strong>
+              <small>{props.currentLabel}</small>
+            </span>
+          </div>
           {props.activeArea !== "settings" ? (
             <button
               aria-label={t("global.openSettings")}
               className="sidebar-brand-settings-button"
               onClick={() => props.onSelectArea("settings")}
+              onDoubleClick={(event) => event.stopPropagation()}
               title={t("area.settings")}
               type="button"
             >

@@ -210,6 +210,20 @@
   user-select: none;
 }
 
+.sidebar-brand-drag-region {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: stretch;
+  cursor: default;
+}
+
+.sidebar-brand-drag-region[data-tauri-drag-region] > * {
+  pointer-events: none;
+}
+
 .sidebar-brand-button .sidebar-brand-mark,
 .sidebar-user-avatar {
   flex: 0 0 auto;
@@ -335,6 +349,12 @@
 .vcn-sidebar[data-collapsible="icon"] .sidebar-user-avatar {
   width: 30px;
   height: 30px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-drag-region {
+  flex: 0 0 auto;
+  min-width: 30px;
+  justify-content: center;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .sidebar-profile-chevron {

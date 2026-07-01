@@ -898,6 +898,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onOpenSkills={props.onOpenSkills}
         onOpenMemory={props.onOpenMemory}
         onSelectArea={props.onSelectArea}
+        titlebarDragRegion={props.titlebarDragRegion}
+        onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         memoryActive={props.mainView === "memory"}
         skillsActive={props.mainView === "skills"}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}

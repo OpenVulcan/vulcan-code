@@ -261,6 +261,8 @@ function FeatureShell(props: {
         onSelectSkillSubArea={setActiveSkillSubArea}
         onSelectSettingsSubArea={props.onSelectSettingsSubArea}
         onSelectArea={props.onSelectArea}
+        titlebarDragRegion={props.titlebarDragRegion}
+        onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         workbench={props.workbench}
       />
       <SidebarInset>
