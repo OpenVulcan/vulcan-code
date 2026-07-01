@@ -6,9 +6,11 @@ import {
   type WorkspaceContextPanelProps,
 } from "@/components/workspace/WorkspaceContextPanel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
+import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
+import type { ConversationMenuAction } from "@/components/project/project-sidebar-types";
 import type {
   ConversationSummary,
   StartupSnapshot,
@@ -73,6 +75,9 @@ export function WorkspaceResizableBody(props: {
   // Current selected conversation summary.
   // 当前选中会话摘要。
   selectedConversation?: ConversationSummary;
+  // Whether the selected conversation is pinned.
+  // 当前选中会话是否已置顶。
+  isSelectedConversationPinned?: boolean;
   // Current selected conversation id.
   // 当前选中会话标识。
   selectedConversationId: string | null;
@@ -103,6 +108,9 @@ export function WorkspaceResizableBody(props: {
   // Handles title bar double-click maximize or restore behavior.
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
+  // Handles one conversation-level title menu action.
+  // 处理单个会话级标题菜单动作。
+  onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   // Toggles the right context panel.
   // 切换右侧上下文面板。
   onToggleRightPanel: () => void;
@@ -332,7 +340,9 @@ export function WorkspaceResizableBody(props: {
         chromeActions={props.chromeActions}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+        isConversationPinned={props.isSelectedConversationPinned}
         title={props.headerTitle}
+        onConversationMenuAction={props.onConversationMenuAction}
         onToggleLeftPanel={props.onToggleLeftPanel}
       />
       <div className="workspace-resizable-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
@@ -410,6 +420,9 @@ function ConsoleHeader(props: {
   // Current selected conversation summary.
   // 当前选中会话摘要。
   conversation?: ConversationSummary;
+  // Whether the selected conversation is pinned.
+  // 当前选中会话是否已置顶。
+  isConversationPinned?: boolean;
   // Optional override title used by embedded workspace views.
   // 内嵌工作台视图使用的可选覆盖标题。
   title?: string;
@@ -434,6 +447,9 @@ function ConsoleHeader(props: {
   // Current draft conversation selection.
   // 当前草稿会话选择。
   draftConversation: DraftConversationSelection | null;
+  // Handles one conversation-level title menu action.
+  // 处理单个会话级标题菜单动作。
+  onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   // Records a manual left sidebar toggle.
   // 记录一次手动左侧栏切换。
   onToggleLeftPanel: () => void;
@@ -452,11 +468,21 @@ function ConsoleHeader(props: {
         <span className="console-header-separator" aria-hidden="true" />
         <div
           className="workspace-custom-header-title"
-          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-          onDoubleClick={props.onTitlebarDoubleClick}
         >
-          <h1>{headerTitle}</h1>
-          {props.detail ? <small>{props.detail}</small> : null}
+          <div
+            className="workspace-header-title-text"
+            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+            onDoubleClick={props.onTitlebarDoubleClick}
+          >
+            <h1>{headerTitle}</h1>
+            {props.detail ? <small>{props.detail}</small> : null}
+          </div>
+          <WorkspaceTitleMenu
+            conversation={props.conversation}
+            isPinned={props.isConversationPinned}
+            title={headerTitle}
+            onConversationMenuAction={props.onConversationMenuAction}
+          />
         </div>
         <span
           aria-hidden="true"

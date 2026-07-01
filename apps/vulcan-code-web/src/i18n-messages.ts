@@ -65,12 +65,14 @@ export type TranslationKey =
   | "conversationMenu.archive"
   | "conversationMenu.markUnread"
   | "conversationMenu.openDirectory"
+  | "conversationMenu.copyTitle"
   | "conversationMenu.copyWorkspace"
   | "conversationMenu.copySessionId"
   | "conversationMenu.copyDeepLink"
   | "conversationMenu.forkLocal"
   | "conversationMenu.forkWorktree"
   | "conversationMenu.openNewWindow"
+  | "conversationMenu.moreTitleActions"
   | "diffAction.moreStaging"
   | "diffAction.unstageAll"
   | "diffAction.unstageFile"
@@ -613,6 +615,7 @@ export type TranslationKey =
   | "workbenchConversation.archived"
   | "workbenchConversation.noProject"
   | "workbenchConversation.copiedWorkspace"
+  | "workbenchConversation.copiedTitle"
   | "workbenchConversation.copiedSessionId"
   | "workbenchConversation.nameEmpty"
   | "workbenchConversation.projectRenamed"
@@ -1176,12 +1179,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationMenu.archive": "归档对话",
     "conversationMenu.markUnread": "标记为未读",
     "conversationMenu.openDirectory": "在资源管理器中打开",
+    "conversationMenu.copyTitle": "复制标题",
     "conversationMenu.copyWorkspace": "复制工作目录",
     "conversationMenu.copySessionId": "复制会话 ID",
     "conversationMenu.copyDeepLink": "复制深度链接",
     "conversationMenu.forkLocal": "派生到本地",
     "conversationMenu.forkWorktree": "派生到新工作树",
     "conversationMenu.openNewWindow": "在新窗口中打开",
+    "conversationMenu.moreTitleActions": "更多标题操作",
     "diffAction.moreStaging": "更多暂存操作",
     "diffAction.unstageAll": "取消全部暂存",
     "diffAction.unstageFile": "取消当前文件暂存",
@@ -1724,6 +1729,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workbenchConversation.archived": "已归档对话：{conversation}",
     "workbenchConversation.noProject": "没有找到这个对话所属的项目。",
     "workbenchConversation.copiedWorkspace": "已复制工作目录。",
+    "workbenchConversation.copiedTitle": "已复制标题。",
     "workbenchConversation.copiedSessionId": "已复制会话 ID。",
     "workbenchConversation.nameEmpty": "名称不能为空。",
     "workbenchConversation.projectRenamed": "已重命名项目：{project}",
@@ -2284,12 +2290,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversationMenu.archive": "Archive conversation",
     "conversationMenu.markUnread": "Mark as unread",
     "conversationMenu.openDirectory": "Open in file explorer",
+    "conversationMenu.copyTitle": "Copy title",
     "conversationMenu.copyWorkspace": "Copy workspace path",
     "conversationMenu.copySessionId": "Copy session ID",
     "conversationMenu.copyDeepLink": "Copy deep link",
     "conversationMenu.forkLocal": "Fork locally",
     "conversationMenu.forkWorktree": "Fork to new worktree",
     "conversationMenu.openNewWindow": "Open in new window",
+    "conversationMenu.moreTitleActions": "More title actions",
     "diffAction.moreStaging": "More staging actions",
     "diffAction.unstageAll": "Unstage all",
     "diffAction.unstageFile": "Unstage current file",
@@ -2832,6 +2840,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workbenchConversation.archived": "Archived conversation: {conversation}",
     "workbenchConversation.noProject": "Could not find the project for this conversation.",
     "workbenchConversation.copiedWorkspace": "Copied workspace directory.",
+    "workbenchConversation.copiedTitle": "Copied title.",
     "workbenchConversation.copiedSessionId": "Copied session ID.",
     "workbenchConversation.nameEmpty": "Name cannot be empty.",
     "workbenchConversation.projectRenamed": "Renamed project: {project}",

@@ -916,11 +916,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           workbench={props.workbench}
           selectedDraftConversation={props.selectedDraftConversation}
           selectedConversation={props.selectedConversation}
+          isSelectedConversationPinned={props.selectedConversation ? props.pinnedConversationIds.has(props.selectedConversation.id) : false}
           selectedConversationId={props.selectedConversationId}
           headerActions={pageDescriptor.headerActions}
           chromeActions={props.chromeActions}
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+          onConversationMenuAction={props.onConversationMenuAction}
           headerDetail={pageDescriptor.detail}
           headerTitle={pageDescriptor.title}
           headerRightActions={pageDescriptor.headerRightActions}

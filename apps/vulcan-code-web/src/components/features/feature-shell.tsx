@@ -6,6 +6,7 @@ import {
 
 import { FeatureContent as FeatureShellContent } from "@/components/features/feature-shell-content"
 import { FeatureSidebar, areaIconMap, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
+import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
 import {
   activeSettingsHeaderSummary,
   localizedLiteral,
@@ -299,6 +300,9 @@ function FeatureHeader(props: {
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void
 }) {
   const { t } = useI18n()
+  // headerTitle stores the visible feature page title for display and copying.
+  // headerTitle 保存可见功能页标题，用于展示与复制。
+  const headerTitle = props.descriptor.title ?? t("sidebar.console")
   return (
     <header className="console-header">
       <div className="console-header-main">
@@ -306,11 +310,16 @@ function FeatureHeader(props: {
         <span className="console-header-separator" aria-hidden="true" />
         <div
           className="workspace-custom-header-title"
-          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-          onDoubleClick={props.onTitlebarDoubleClick}
         >
-          <h1>{props.descriptor.title ?? t("sidebar.console")}</h1>
-          {props.descriptor.detail ? <small>{props.descriptor.detail}</small> : null}
+          <div
+            className="workspace-header-title-text"
+            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+            onDoubleClick={props.onTitlebarDoubleClick}
+          >
+            <h1>{headerTitle}</h1>
+            {props.descriptor.detail ? <small>{props.descriptor.detail}</small> : null}
+          </div>
+          <WorkspaceTitleMenu title={headerTitle} />
         </div>
         <span
           aria-hidden="true"

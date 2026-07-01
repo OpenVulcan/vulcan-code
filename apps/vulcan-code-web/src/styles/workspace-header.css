@@ -28,9 +28,25 @@
   max-width: 100%;
   flex: 0 1 auto;
   display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.workspace-header-title-text {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  display: flex;
   align-items: baseline;
   gap: 8px;
   white-space: nowrap;
+  user-select: none;
+}
+
+.workspace-header-title-text[data-tauri-drag-region] > * {
+  pointer-events: none;
 }
 
 .workspace-custom-header-title h1 {
@@ -51,6 +67,36 @@
   text-overflow: clip;
   white-space: nowrap;
   mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent 100%);
+}
+
+.workspace-title-menu-trigger {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  user-select: none;
+}
+
+.workspace-title-menu-trigger:hover,
+.workspace-title-menu-trigger:focus-visible {
+  background: var(--muted);
+  color: var(--foreground);
+  outline: none;
+}
+
+.conversation-title-menu {
+  min-width: 210px;
+}
+
+.conversation-title-menu svg {
+  color: var(--muted-foreground);
 }
 
 .workspace-custom-header .console-header-actions {

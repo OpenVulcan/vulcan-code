@@ -276,6 +276,10 @@ export function ConversationContextMenu(props: {
           <FolderOpen size={15} />
           <span>{t("conversationMenu.openDirectory")}</span>
         </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("copy-title", props.conversation)}>
+          <Copy size={15} />
+          <span>{t("conversationMenu.copyTitle")}</span>
+        </ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onAction("copy-workdir", props.conversation)}>
           <Copy size={15} />
           <span>{t("conversationMenu.copyWorkspace")}</span>

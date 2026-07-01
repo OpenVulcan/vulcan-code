@@ -9,5 +9,6 @@ export type ConversationMenuAction =
   | "rename"
   | "archive"
   | "open-directory"
+  | "copy-title"
   | "copy-workdir"
   | "copy-session-id";

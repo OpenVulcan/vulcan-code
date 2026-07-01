@@ -657,6 +657,11 @@ export function WorkbenchLayout(props: {
         toast.success(i18n.t("workbenchConversation.copiedWorkspace"));
         return;
       }
+      if (action === "copy-title") {
+        await navigator.clipboard.writeText(conversation.title);
+        toast.success(i18n.t("workbenchConversation.copiedTitle"));
+        return;
+      }
       if (action === "copy-session-id") {
         await navigator.clipboard.writeText(conversation.id);
         toast.success(i18n.t("workbenchConversation.copiedSessionId"));
