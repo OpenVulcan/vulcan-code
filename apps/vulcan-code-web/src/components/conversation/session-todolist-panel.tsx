@@ -348,6 +348,14 @@ function ConversationSessionReviewSection(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // hasGitCommitOrPushContent tracks whether the compact Git entry can open a meaningful action.
+  // hasGitCommitOrPushContent 判断紧凑 Git 入口是否存在可执行的提交或推送内容。
+  const hasGitCommitOrPushContent = props.reviewSummary.stagedChangedFiles > 0
+    || props.reviewSummary.unstagedChangedFiles > 0
+    || props.reviewSummary.unpushedCommits > 0;
+  // commitTriggerDisabled disables the entry while Git is busy or no commit/push action is possible.
+  // commitTriggerDisabled 在 Git 忙碌或没有可提交/可推送内容时禁用入口。
+  const commitTriggerDisabled = Boolean(props.commitBusyState) || !hasGitCommitOrPushContent;
 
   return (
     <section className="conversation-session-tool-section conversation-session-review-section">
@@ -381,7 +389,7 @@ function ConversationSessionReviewSection(props: {
             "workspace-tool-panel-menu-row conversation-session-review-row conversation-session-commit-trigger",
             props.commitDialogOpen && "active",
           )}
-          disabled={Boolean(props.commitBusyState)}
+          disabled={commitTriggerDisabled}
           onClick={() => props.onCommitDialogOpenChange(true)}
           type="button"
         >

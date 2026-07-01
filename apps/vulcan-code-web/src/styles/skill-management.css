@@ -338,6 +338,15 @@
   cursor: pointer;
 }
 
+.conversation-session-commit-trigger.workspace-tool-panel-menu-row:disabled {
+  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  cursor: not-allowed;
+}
+
+.conversation-session-commit-trigger.workspace-tool-panel-menu-row:disabled:hover {
+  background: transparent;
+}
+
 .conversation-session-commit-trigger.workspace-tool-panel-menu-row.active {
   background: color-mix(in oklch, var(--muted) 76%, transparent);
 }
