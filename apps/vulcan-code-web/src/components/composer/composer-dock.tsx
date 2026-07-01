@@ -36,6 +36,7 @@ import type {
   SessionGoalSummary,
   SessionPlanModeSummary,
   SessionTodolistSummary,
+  SessionVmmPolicySummary,
 } from "@/types";
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
@@ -140,6 +141,9 @@ export function ComposerDock(props: {
   // onSetSessionPlanMode persists the current session Plan-mode toggle.
   // onSetSessionPlanMode 持久化当前会话计划模式开关。
   onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;
+  // onSetSessionVmmPolicy persists one current session VMM memory policy mode.
+  // onSetSessionVmmPolicy 持久化当前会话的单个 VMM 记忆策略模式。
+  onSetSessionVmmPolicy: (policy: string, mode: string) => Promise<boolean>;
   // onStopConversationRun stops the selected backend conversation stream.
   // onStopConversationRun 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -177,6 +181,9 @@ export function ComposerDock(props: {
   // Current session Plan mode state.
   // 当前会话计划模式状态。
   sessionPlanMode: SessionPlanModeSummary | null;
+  // Current session VMM memory policy state.
+  // 当前会话 VMM 记忆策略状态。
+  sessionVmmPolicy: SessionVmmPolicySummary | null;
   // runtimeCue shows the current session in-progress activity near the composer.
   // runtimeCue 在输入区附近显示当前会话的进行中活动。
   runtimeCue: ComposerRuntimeCue | null;
@@ -275,6 +282,7 @@ export function ComposerDock(props: {
         onClearSessionGoal={props.onClearSessionGoal}
         onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
         onSetSessionPlanMode={props.onSetSessionPlanMode}
+        onSetSessionVmmPolicy={props.onSetSessionVmmPolicy}
         onStopConversationRun={props.onStopConversationRun}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -286,6 +294,7 @@ export function ComposerDock(props: {
         onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
         reasoningSelection={props.reasoningSelection}
         sessionPlanMode={props.sessionPlanMode}
+        sessionVmmPolicy={props.sessionVmmPolicy}
       />
     </div>
   );

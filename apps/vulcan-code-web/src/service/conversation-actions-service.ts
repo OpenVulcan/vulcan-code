@@ -376,6 +376,25 @@ export async function setSessionPlanMode(
   });
 }
 
+// setSessionVmmPolicy persists one selected conversation VMM memory policy mode.
+// setSessionVmmPolicy 持久化当前选中会话的单个 VMM 记忆策略模式。
+export async function setSessionVmmPolicy(
+  conversationId: string | null,
+  policy: string,
+  mode: string,
+): Promise<SessionAddonsChangedResponse | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<SessionAddonsChangedResponse>("service_set_session_vmm_policy", {
+    request: {
+      conversationId,
+      policy,
+      mode,
+    },
+  });
+}
+
 // compactSelectedConversationContext starts backend context compaction for the selected conversation.
 // compactSelectedConversationContext 为当前选中会话启动后端上下文压缩。
 export async function compactSelectedConversationContext(): Promise<WorkbenchSnapshot | null> {

@@ -285,6 +285,26 @@ pub(crate) fn emit_session_addons_changed_delta(
         let session_goal = guard.session_goal_summaries.get(&session_id).cloned();
         let session_todolist = session_todolist_summary_from_runtime_state(runtime_state);
         let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
+        let provider_vmm_layer = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.vmm.clone())
+            .unwrap_or_default();
+        let session_record = workspace
+            .sessions
+            .iter()
+            .chain(workspace.archived_sessions.iter())
+            .find(|session| session.id == session_id);
+        let project_layer = session_record
+            .and_then(|session| cached_project_vmm_layer_for_session(workspace, session));
+        let session_vmm_policy = Some(session_vmm_policy_summary_from_layers(
+            &provider_vmm_layer,
+            project_layer.as_ref(),
+            runtime_state,
+        ));
+        let session_vmm_policy_for_list = runtime_state
+            .filter(|runtime_state| !runtime_state.vmm.is_empty())
+            .and(session_vmm_policy.clone());
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
@@ -292,6 +312,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             guard.workbench.session_goal = session_goal.clone();
             guard.workbench.session_todolist = session_todolist.clone();
             guard.workbench.session_plan_mode = session_plan_mode.clone();
+            guard.workbench.session_vmm_policy = session_vmm_policy.clone();
         }
         let pending_questions =
             pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
@@ -299,7 +320,11 @@ pub(crate) fn emit_session_addons_changed_delta(
             .workbench
             .session_addons_by_conversation
             .retain(|entry| entry.conversation_id != conversation_id);
-        if session_goal.is_some() || session_todolist.is_some() || session_plan_mode.is_some() {
+        if session_goal.is_some()
+            || session_todolist.is_some()
+            || session_plan_mode.is_some()
+            || session_vmm_policy_for_list.is_some()
+        {
             guard
                 .workbench
                 .session_addons_by_conversation
@@ -308,6 +333,27 @@ pub(crate) fn emit_session_addons_changed_delta(
                     session_goal: session_goal.clone(),
                     session_todolist: session_todolist.clone(),
                     session_plan_mode: session_plan_mode.clone(),
+                    session_vmm_policy: session_vmm_policy_for_list.clone(),
+                });
+        }
+        let conversation_is_visible = guard
+            .workbench
+            .conversations
+            .iter()
+            .any(|candidate| candidate.id == conversation_id);
+        guard
+            .workbench
+            .session_vmm_policies_by_conversation
+            .retain(|entry| entry.conversation_id != conversation_id);
+        if conversation_is_visible
+            && let Some(session_vmm_policy) = session_vmm_policy.clone()
+        {
+            guard
+                .workbench
+                .session_vmm_policies_by_conversation
+                .push(SessionVmmPolicyByConversation {
+                    conversation_id: conversation_id.clone(),
+                    session_vmm_policy,
                 });
         }
         if let Some(conversation) = guard
@@ -334,6 +380,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             session_goal: session_goal.clone(),
             session_todolist: session_todolist.clone(),
             session_plan_mode: session_plan_mode.clone(),
+            session_vmm_policy: session_vmm_policy.clone(),
         };
         (
             WorkbenchDeltaEnvelope {
@@ -345,6 +392,7 @@ pub(crate) fn emit_session_addons_changed_delta(
                 session_goal,
                 session_todolist,
                 session_plan_mode,
+                session_vmm_policy,
                 revision: generation,
             },
         )

@@ -14,8 +14,8 @@ use super::*;
 /// `workspace_snapshot` 包含会话级 VMM 覆盖配置。
 /// `session_id` selects the session being prepared.
 /// `session_id` 选择正在准备的会话。
-/// `workspace_path` identifies the project configuration file to load.
-/// `workspace_path` 标识需要加载的项目配置文件。
+/// `workspace_path` identifies the cached project VMM layer.
+/// `workspace_path` 标识缓存中的项目 VMM 配置层。
 ///
 /// # Returns
 /// 返回值
@@ -28,7 +28,7 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
     workspace_path: &str,
 ) -> Result<SharedPromptPrecheckPlan, String> {
     let project_configuration_started_at = current_unix_millis_value();
-    let project_configuration = load_project_configuration(workspace_path);
+    let project_layer = cached_project_vmm_layer(workspace_path);
     webui_trace(
         "precheck_plan_project_config_ready",
         format!(
@@ -42,7 +42,7 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
         .map(|runtime_state| &runtime_state.vmm);
     let effective_vmm_config = vulcan_vmm::VmmEffectiveConfig::resolve(
         &agent_runtime.provider_configuration.vmm,
-        Some(&project_configuration.vmm),
+        Some(&project_layer),
         session_layer,
     );
     let hook_snapshot_started_at = current_unix_millis_value();
@@ -674,6 +674,24 @@ pub(crate) fn start_webui_precheck_or_continue(
         );
         return Ok(false);
     }
+    // Emits the memory-recall phase only after the shared plan confirms dispatch will run.
+    // 仅在共享计划确认会调度 precheck 后才发出记忆召回阶段。
+    let mut workspace_snapshot = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .workspace_snapshot
+        .clone()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::MemoryRecall);
+    commit_workspace_snapshot_and_emit_session_phase_delta(
+        app,
+        state,
+        workspace_snapshot,
+        session_id,
+        SessionRunPhase::MemoryRecall,
+    )?;
     spawn_webui_precheck_continue_task(
         app.clone(),
         state.clone(),

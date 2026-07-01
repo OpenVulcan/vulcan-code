@@ -78,6 +78,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       onClearSessionGoal={chatAreaProps.onClearSessionGoal}
       onUpdateSessionGoalStatus={chatAreaProps.onUpdateSessionGoalStatus}
       onSetSessionPlanMode={chatAreaProps.onSetSessionPlanMode}
+      onSetSessionVmmPolicy={chatAreaProps.onSetSessionVmmPolicy}
       onStopConversationRun={chatAreaProps.onStopConversationRun}
       onStageAttachmentBytes={chatAreaProps.onStageAttachmentBytes}
       resolveMediaSourceUrl={chatAreaProps.resolveMediaSourceUrl}
@@ -91,6 +92,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       sessionTodolist={props.isEmptyConversation ? null : workbench.sessionTodolist ?? null}
       sessionReviewSummary={props.isEmptyConversation ? null : props.sessionReviewSummary}
       sessionPlanMode={props.isEmptyConversation ? null : workbench.sessionPlanMode ?? null}
+      sessionVmmPolicy={props.isEmptyConversation ? null : workbench.sessionVmmPolicy ?? null}
       runtimeCue={props.isEmptyConversation ? null : props.runtimeCue}
       showScrollToBottom={props.showScrollToBottom}
       onEditPendingPrompt={chatAreaProps.onEditPendingPrompt}

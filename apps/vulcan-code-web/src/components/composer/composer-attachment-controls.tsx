@@ -35,7 +35,11 @@ import {
 } from "@/components/conversation/thinking-display";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary } from "@/types";
+import type {
+  ComposerAttachmentCapabilitySummary,
+  ComposerAttachmentSummary,
+  SessionVmmPolicySummary,
+} from "@/types";
 
 import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
 
@@ -51,6 +55,9 @@ export function ComposerAttachmentMenu(props: {
   // Whether session Plan mode is currently enabled.
   // 当前会话计划模式是否已启用。
   planModeEnabled: boolean;
+  // Current selected-session VMM memory policy state.
+  // 当前选中会话的 VMM 记忆策略状态。
+  sessionVmmPolicy: SessionVmmPolicySummary | null;
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
@@ -60,6 +67,9 @@ export function ComposerAttachmentMenu(props: {
   // Updates the session Plan mode from the plus menu.
   // 从加号菜单更新会话计划模式。
   onPlanModeChange: (enabled: boolean) => void;
+  // Updates one selected-session VMM memory policy from the plus menu.
+  // 从加号菜单更新当前会话的单个 VMM 记忆策略。
+  onVmmPolicyChange: (policy: string, mode: string) => void;
   // Opens the session goal editor from the plus menu.
   // 从加号菜单打开会话目标编辑器。
   onOpenGoal: () => void;
@@ -139,6 +149,26 @@ export function ComposerAttachmentMenu(props: {
           <ListChecks size={15} />
           <span>{t("composer.planMode")}</span>
         </DropdownMenuCheckboxItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <BrainCircuit size={15} />
+            <span>{t("composer.vmmMemory")}</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="composer-thinking-menu">
+            <VmmPolicySubMenu
+              label={t("composer.vmm.precheckInjection")}
+              policy="precheck"
+              selectedMode={props.sessionVmmPolicy?.precheckMode ?? "inherit"}
+              onChange={props.onVmmPolicyChange}
+            />
+            <VmmPolicySubMenu
+              label={t("composer.vmm.memoryWriteback")}
+              policy="writeback"
+              selectedMode={props.sessionVmmPolicy?.memoryWritebackMode ?? "inherit"}
+              onChange={props.onVmmPolicyChange}
+            />
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
         <DropdownMenuItem onSelect={props.onOpenGoal}>
           <Target size={15} />
           <span>{t("composer.goal")}</span>
@@ -147,6 +177,53 @@ export function ComposerAttachmentMenu(props: {
     </DropdownMenu>
   );
 }
+
+// VmmPolicySubMenu renders one VMM policy's tri-state choice menu.
+// VmmPolicySubMenu 渲染单个 VMM 策略的三态选择菜单。
+function VmmPolicySubMenu(props: {
+  // User-facing VMM policy label.
+  // 面向用户的 VMM 策略标签。
+  label: string;
+  // Backend VMM policy key.
+  // 后端 VMM 策略键。
+  policy: string;
+  // Currently selected tri-state mode.
+  // 当前选中的三态模式。
+  selectedMode: string;
+  // Applies one selected policy mode.
+  // 应用单个选中的策略模式。
+  onChange: (policy: string, mode: string) => void;
+}) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <span>{props.label}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        {VMM_POLICY_MODE_OPTIONS.map((option) => (
+          <DropdownMenuItem
+            key={option.mode}
+            onSelect={() => props.onChange(props.policy, option.mode)}
+          >
+            <span>{t(option.labelKey)}</span>
+            {props.selectedMode === option.mode ? <CheckCircle2 size={14} /> : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+// VMM_POLICY_MODE_OPTIONS lists the session-level VMM policy modes.
+// VMM_POLICY_MODE_OPTIONS 列出会话级 VMM 策略模式。
+const VMM_POLICY_MODE_OPTIONS: Array<{ mode: string; labelKey: TranslationKey }> = [
+  { mode: "inherit", labelKey: "composer.vmm.mode.inheritProject" },
+  { mode: "enabled", labelKey: "composer.vmm.mode.enabled" },
+  { mode: "disabled", labelKey: "composer.vmm.mode.disabled" },
+];
 
 // composerAttachmentKindLabelKey returns the localized label key for one attachment kind.
 // composerAttachmentKindLabelKey 返回单个附件类型的本地化标签键。

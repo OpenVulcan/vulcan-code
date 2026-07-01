@@ -108,7 +108,10 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
         profile_refresh_turns: String::from("13"),
         profile_node_limit: String::from("17"),
         ai_tools_enabled: true,
+        precheck_mode: String::from("disabled"),
         precheck_enabled: false,
+        memory_writeback_enabled: true,
+        memory_writeback_mode: String::from("enabled"),
         injection_tag: String::from("VMM_TAG"),
         injection_description: String::from("Visible memories"),
     };
@@ -132,6 +135,7 @@ fn vmm_config_layer_from_draft_parses_transport_and_behavior_fields() {
     assert_eq!(layer.profile_node_limit, Some(17));
     assert_eq!(layer.ai_tools_enabled, Some(true));
     assert_eq!(layer.precheck_enabled, Some(false));
+    assert_eq!(layer.memory_writeback_enabled, Some(true));
     assert_eq!(layer.injection_tag.as_deref(), Some("VMM_TAG"));
     assert_eq!(
         layer.injection_description.as_deref(),

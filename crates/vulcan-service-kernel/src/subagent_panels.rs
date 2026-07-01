@@ -279,9 +279,12 @@ pub(super) async fn service_close_subagent_panel(
 ) -> Result<SubagentPanelRouteResponse, String> {
     let _ = runtime_parts_from_state(&state)?;
     let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-    webui_trace("close_subagent_panel_local_noop", String::from("scope=client"));
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    webui_trace(
+        "close_subagent_panel_local_noop",
+        String::from("scope=client"),
+    );
     Ok(SubagentPanelRouteResponse {
         active_conversation_id: guard.workbench.selected_conversation_id.clone(),
         subagent_navigation: None,

@@ -3,6 +3,7 @@ import { StatusPill } from "@/components/shared/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { VmmSelectField, vmmPolicyModeOptions } from "@/components/features/memory/vmm-memory-components";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
@@ -94,6 +95,20 @@ export function ProjectVmmSection(props: {
   onSaveDraft: () => void;
 }) {
   const { t } = useI18n();
+  const policyOptions = vmmPolicyModeOptions(t);
+  const updatePolicyMode = (policy: "precheck" | "writeback", mode: string) => {
+    if (policy === "precheck") {
+      props.onUpdateDraft({
+        precheckMode: mode,
+        precheckEnabled: mode === "inherit" ? props.vmmDraft?.precheckEnabled ?? true : mode === "enabled",
+      });
+      return;
+    }
+    props.onUpdateDraft({
+      memoryWritebackMode: mode,
+      memoryWritebackEnabled: mode === "inherit" ? props.vmmDraft?.memoryWritebackEnabled ?? true : mode === "enabled",
+    });
+  };
   return (
     <div className="project-settings-section">
       <header className="project-settings-heading">
@@ -127,10 +142,8 @@ export function ProjectVmmSection(props: {
               <input checked={props.vmmDraft.aiToolsEnabled} disabled={!props.vmmDraft.hasOverride} onChange={(event) => props.onUpdateDraft({ aiToolsEnabled: event.target.checked })} type="checkbox" />
               {t("vmm.settings.exposeAiTools")}
             </label>
-            <label className="project-settings-check-row">
-              <input checked={props.vmmDraft.precheckEnabled} disabled={!props.vmmDraft.hasOverride} onChange={(event) => props.onUpdateDraft({ precheckEnabled: event.target.checked })} type="checkbox" />
-              {t("vmm.settings.autoPrecheck")}
-            </label>
+            <VmmSelectField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.precheckPolicy")} options={policyOptions} value={props.vmmDraft.precheckMode} onChange={(mode) => updatePolicyMode("precheck", mode)} />
+            <VmmSelectField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.writebackPolicy")} options={policyOptions} value={props.vmmDraft.memoryWritebackMode} onChange={(mode) => updatePolicyMode("writeback", mode)} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.userId")} value={props.vmmDraft.userId} onChange={(userId) => props.onUpdateDraft({ userId })} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.projectId")} value={props.vmmDraft.projectId} onChange={(projectId) => props.onUpdateDraft({ projectId })} />
             <ProjectSettingsField disabled={!props.vmmDraft.hasOverride} label={t("vmm.settings.implicitMemoryTtl")} value={props.vmmDraft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onUpdateDraft({ implicitMemoryTurns })} />

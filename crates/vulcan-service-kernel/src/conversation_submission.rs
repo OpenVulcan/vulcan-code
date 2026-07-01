@@ -3,10 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use uuid::Uuid;
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
-use uuid::Uuid;
 use vulcan_service_api::{
     ComposerAttachmentSummary, ConversationSummary, ConversationSummaryChangedDelta, ServiceEvent,
     ServiceEventEmitter, SubmitConversationPromptAck, UpdateConversationRunPhaseDelta,
@@ -21,8 +21,8 @@ use super::{
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
     build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
     capture_preserved_workspace_run_state, composer_attachment_summary_to_core,
-    conversation_fork_source_summary_from_session, conversation_messages_from_session,
-    current_unix_millis_text, current_unix_millis_value,
+    conversation_attention_summary_for_session, conversation_fork_source_summary_from_session,
+    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
     current_workspace_snapshot_from_shared_state, effective_workbench_disabled_ai_capability_kinds,
     emit_materialized_session_message_delta, emit_pending_prompts_changed_delta,
     emit_service_event_with_trace, enqueue_webui_pending_prompt_from_submission,
@@ -30,16 +30,14 @@ use super::{
     ensure_webui_session_runtime_state, hydrate_retained_submission_session_if_needed,
     is_active_session_run_phase, load_workspace_for_submission,
     mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
-    conversation_attention_summary_for_session, pending_question_snapshots_from_agent_runtime,
     parse_ai_capability_target_order_overrides, parse_ai_capability_target_selectors,
-    parse_reasoning_effort, parse_session_id, preserve_active_session_run_state,
-    replace_conversation_messages_in_workbench_window,
+    parse_reasoning_effort, parse_session_id, pending_question_snapshots_from_agent_runtime,
+    preserve_active_session_run_state, replace_conversation_messages_in_workbench_window,
     retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
     rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
     session_ai_tool_configuration_or_default, session_has_blocking_system_prompt_work,
-    session_plan_mode_summary_from_runtime_state,
-    snapshot_webui_context_before_user_prompt, spawn_service_task,
-    spawn_workspace_session_persist_task, start_webui_precheck_or_continue,
+    session_plan_mode_summary_from_runtime_state, snapshot_webui_context_before_user_prompt,
+    spawn_service_task, spawn_workspace_session_persist_task, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, webui_session_allows_user_prompt_editing,
     webui_session_has_active_run, webui_session_kernel_has_active_turn,
@@ -300,12 +298,7 @@ pub(super) async fn service_submit_conversation_prompt(
                 .unwrap_or(SessionRunPhase::Idle);
             store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot.clone())?;
             let _pending_revision = emit_pending_prompts_changed_delta(&app, &state, session_id)?;
-            let revision = emit_queued_prompt_run_phase_delta(
-                &app,
-                &state,
-                session_id,
-                run_phase,
-            )?;
+            let revision = emit_queued_prompt_run_phase_delta(&app, &state, session_id, run_phase)?;
             let state_for_persist = state.clone();
             let controller_runtime_for_persist = controller_runtime.clone();
             spawn_service_task(async move {
@@ -480,6 +473,33 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(turn_begin_started_at)
         ),
     );
+    // Resolves the precheck decision before the first visible delta chooses its phase.
+    // 在首个可见增量选择阶段前解析 precheck 决策。
+    let precheck_plan_started_at = current_unix_millis_value();
+    let precheck_plan = webui_shared_prompt_precheck_plan(
+        &agent_runtime,
+        &workspace_snapshot,
+        session_id,
+        &workspace_path,
+    )?;
+    webui_submit_trace(
+        "submit_prompt_precheck_plan_ready",
+        format!(
+            "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
+            precheck_plan.has_precheck_hooks,
+            precheck_plan.should_skip_precheck,
+            precheck_plan.progress_labels.len(),
+            current_unix_millis_value().saturating_sub(precheck_plan_started_at)
+        ),
+    );
+    // Keeps skipped precheck turns in the preparatory phase until provider execution starts.
+    // 在 precheck 跳过时保持准备阶段，直到模型执行真正开始。
+    let submit_visible_run_phase =
+        if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
+            SessionRunPhase::Preparing
+        } else {
+            SessionRunPhase::MemoryRecall
+        };
     if let Some(message_id) = precheck_start.visible_user_prompt_record_id.as_deref()
         && let Some(message) = workspace_snapshot
             .session_messages
@@ -492,7 +512,7 @@ pub(super) async fn service_submit_conversation_prompt(
             &state,
             session_id,
             message,
-            SessionRunPhase::MemoryRecall,
+            submit_visible_run_phase,
         )?;
         webui_submit_trace(
             "submit_prompt_user_message_delta_ready",
@@ -575,23 +595,6 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(hook_snapshot_started_at)
         ),
     );
-    let precheck_plan_started_at = current_unix_millis_value();
-    let precheck_plan = webui_shared_prompt_precheck_plan(
-        &agent_runtime,
-        &workspace_snapshot,
-        session_id,
-        &workspace_path,
-    )?;
-    webui_submit_trace(
-        "submit_prompt_precheck_plan_ready",
-        format!(
-            "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
-            precheck_plan.has_precheck_hooks,
-            precheck_plan.should_skip_precheck,
-            precheck_plan.progress_labels.len(),
-            current_unix_millis_value().saturating_sub(precheck_plan_started_at)
-        ),
-    );
     let precheck_workspace_commit_started_at = current_unix_millis_value();
     store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
     webui_submit_trace(
@@ -649,7 +652,7 @@ pub(super) async fn service_submit_conversation_prompt(
         conversation_id: session_id.to_string(),
         accepted_message_id,
         turn_id,
-        run_phase: SessionRunPhase::MemoryRecall.to_string(),
+        run_phase: submit_visible_run_phase.to_string(),
         queued: false,
         revision,
     })

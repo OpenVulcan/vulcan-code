@@ -9,6 +9,7 @@ import {
   saveSessionAiCapabilityConfiguration,
   saveSessionGoal,
   setSessionPlanMode,
+  setSessionVmmPolicy,
   updateSessionGoalStatus,
 } from "@/service/conversation-actions-service";
 import { applySessionAddonsChangedResponse } from "@/state/workbench-state";
@@ -198,6 +199,29 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     }
   }, [selectedConversation, selectedDraftConversation, t]);
 
+  // handleSetSessionVmmPolicy persists one current conversation VMM memory policy mode.
+  // handleSetSessionVmmPolicy 持久化当前会话的单个 VMM 记忆策略模式。
+  const handleSetSessionVmmPolicy = React.useCallback(async (policy: string, mode: string): Promise<boolean> => {
+    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
+    if (!activeConversationId) {
+      toast.error(t("sessionActions.noConversationForVmmPolicy"));
+      return false;
+    }
+    try {
+      const response = await setSessionVmmPolicy(activeConversationId, policy, mode);
+      if (!response) {
+        toast.info(t("sessionActions.previewCannotSetVmmPolicy"));
+        return false;
+      }
+      setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
+      toast.success(t("sessionActions.vmmPolicySaved"));
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, [selectedConversation, selectedDraftConversation, t]);
+
   // handleEditPendingPrompt restores one queued prompt back into the active composer.
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
   const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
@@ -222,6 +246,7 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
     handleClearSessionGoal,
     handleUpdateSessionGoalStatus,
     handleSetSessionPlanMode,
+    handleSetSessionVmmPolicy,
     handleEditPendingPrompt,
   };
 }

@@ -60,6 +60,7 @@ import type {
   SessionPlanModeSummary,
   SessionTodolistItemSummary,
   SessionTodolistSummary,
+  SessionVmmPolicySummary,
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
@@ -119,6 +120,9 @@ export function ComposerPanel(props: {
   // Current persisted Plan mode state for the selected conversation.
   // 当前选中会话的持久化计划模式状态。
   sessionPlanMode: SessionPlanModeSummary | null;
+  // Current persisted VMM memory policy for the selected conversation.
+  // 当前选中会话的持久化 VMM 记忆策略。
+  sessionVmmPolicy: SessionVmmPolicySummary | null;
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
@@ -171,6 +175,9 @@ export function ComposerPanel(props: {
   // Persists the current session Plan-mode toggle.
   // 持久化当前会话计划模式开关。
   onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;
+  // Persists one current session VMM memory policy mode.
+  // 持久化当前会话的单个 VMM 记忆策略模式。
+  onSetSessionVmmPolicy: (policy: string, mode: string) => Promise<boolean>;
   // Stops the selected backend conversation stream.
   // 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -947,10 +954,12 @@ export function ComposerPanel(props: {
               capabilities={enabledAttachmentCapabilities}
               thinkingDisplayMode={props.thinkingDisplayMode}
               planModeEnabled={planModeEnabled}
+              sessionVmmPolicy={props.sessionVmmPolicy}
               onPick={openAttachmentPicker}
               onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
               onOpenGoal={() => void openGoalDialog()}
               onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
+              onVmmPolicyChange={(policy, mode) => void props.onSetSessionVmmPolicy(policy, mode)}
             />
             {planModeEnabled ? (
               <ComposerPlanModeChip

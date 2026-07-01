@@ -109,6 +109,15 @@ impl VmmHookRuntimeHandle {
         }
     }
 
+    /// Returns a cloned VMM hook configuration snapshot for UI projection.
+    /// 返回一份克隆的 VMM hook 配置快照供 UI 投影使用。
+    pub fn config_snapshot(&self) -> VmmHookConfigSnapshot {
+        self.state
+            .read()
+            .map(|state| state.clone())
+            .unwrap_or_default()
+    }
+
     /// Seeds the runtime profile cache from persisted state during startup or session load.
     /// 在启动或会话加载时用持久化状态初始化运行时画像缓存。
     pub fn seed_profile_cache(&self, profile_sync: BTreeMap<String, VmmProfileSyncState>) {
@@ -159,7 +168,7 @@ impl VmmHookRuntimeHandle {
         config: &VmmEffectiveConfig,
         phase: SystemPromptHookPhase,
     ) -> Vec<SystemPromptHookBlock> {
-        if config.diagnose_memory_flow(true) != VmmConfigDiagnostic::Ready {
+        if config.diagnose_precheck_flow(true) != VmmConfigDiagnostic::Ready {
             return Vec::new();
         }
         self.profile_cache
@@ -320,7 +329,7 @@ fn vmm_hook_registration(id: &str, point: &str, mode: HookMode) -> HookRegistrat
 /// Returns whether one effective VMM configuration should run automatic precheck now.
 /// 返回一个最终 VMM 配置当前是否应运行自动 precheck。
 fn should_run_vmm_precheck(config: &VmmEffectiveConfig) -> bool {
-    config.precheck_enabled
+    config.diagnose_precheck_flow(true) == VmmConfigDiagnostic::Ready
 }
 
 /// Returns the current Unix timestamp in milliseconds as stable text.
@@ -339,23 +348,19 @@ async fn handle_vmm_precheck(
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
     let config = runtime.resolve_effective_config(&invocation);
-    if !config.enabled {
+    if !should_run_vmm_precheck(&config) {
         return Ok(HookResult::default());
     }
     ensure_vmm_ready(&config)?;
     let client = connect_vmm_client(&config).await?;
     let profile_sync = maybe_sync_vmm_profile(&client, &runtime, &invocation, &config).await?;
-    let injection = if should_run_vmm_precheck(&config) {
-        let request = precheck_request_from_payload(&invocation.payload.value, &config)
-            .map_err(|error| HookError::handler(error.to_string()))?;
-        let response = client
-            .pre_check(request)
-            .await
-            .map_err(|error| HookError::handler(error.to_string()))?;
-        injection_from_precheck_response(&response, &config)
-    } else {
-        None
-    };
+    let request = precheck_request_from_payload(&invocation.payload.value, &config)
+        .map_err(|error| HookError::handler(error.to_string()))?;
+    let response = client
+        .pre_check(request)
+        .await
+        .map_err(|error| HookError::handler(error.to_string()))?;
+    let injection = injection_from_precheck_response(&response, &config);
     let mut metadata = BTreeMap::new();
     let mut system_prompt_blocks = Vec::new();
     let mut injections = injection.into_iter().collect::<Vec<_>>();
@@ -392,7 +397,9 @@ async fn handle_vmm_post_action(
         return Ok(HookResult::default());
     }
     let config = runtime.resolve_effective_config(&invocation);
-    ensure_vmm_ready(&config)?;
+    if config.diagnose_writeback_flow(true) != VmmConfigDiagnostic::Ready {
+        return Ok(HookResult::default());
+    }
     let request = post_action_request_from_completed_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
     let client = match connect_vmm_client(&config).await {

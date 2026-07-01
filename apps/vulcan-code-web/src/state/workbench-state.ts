@@ -14,6 +14,7 @@ import type {
   PendingPromptSummary,
   SessionAddonsChangedResponse,
   SessionAddonsChangedDelta,
+  SessionVmmPolicyByConversation,
   SubagentNavigationSnapshot,
   SubagentPanelRouteResponse,
   UpdateConversationRunPhaseDelta,
@@ -110,6 +111,7 @@ export function mergeWorkbenchSnapshot(
     pendingPromptsByConversation: incoming.pendingPromptsByConversation ?? current.pendingPromptsByConversation ?? [],
     pendingQuestions: incoming.pendingQuestions ?? current.pendingQuestions ?? [],
     sessionAddonsByConversation: incoming.sessionAddonsByConversation ?? current.sessionAddonsByConversation ?? [],
+    sessionVmmPoliciesByConversation: incoming.sessionVmmPoliciesByConversation ?? current.sessionVmmPoliciesByConversation ?? [],
     subagentNavigationByConversation: mergeSubagentNavigationsByConversation(
       current.subagentNavigationByConversation ?? [],
       deriveIncomingSubagentNavigations(incoming),
@@ -153,6 +155,9 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
   const sessionAddons = selectedConversationId
     ? workbench.sessionAddonsByConversation?.find((entry) => entry.conversationId === selectedConversationId) ?? null
     : null;
+  const sessionVmmPolicyEntry = selectedConversationId
+    ? workbench.sessionVmmPoliciesByConversation?.find((entry) => entry.conversationId === selectedConversationId) ?? null
+    : null;
   const subagentNavigation = selectedConversationId
     ? workbench.subagentNavigationByConversation?.find((navigation) => navigation.parentConversationId === selectedConversationId) ?? null
     : null;
@@ -163,6 +168,7 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
     sessionGoal: sessionAddons?.sessionGoal ?? null,
     sessionTodolist: sessionAddons?.sessionTodolist ?? null,
     sessionPlanMode: sessionAddons?.sessionPlanMode ?? null,
+    sessionVmmPolicy: sessionVmmPolicyEntry?.sessionVmmPolicy ?? null,
     subagentNavigation,
   };
 }
@@ -186,6 +192,22 @@ function upsertSessionAddonsForConversation(
   const next = current.filter((candidate) => candidate.conversationId !== entry.conversationId);
   const hasAddon = Boolean(entry.sessionGoal || entry.sessionTodolist || entry.sessionPlanMode);
   return hasAddon ? [...next, entry] : next;
+}
+
+// upsertSessionVmmPolicyForConversation upserts or removes one conversation VMM policy projection.
+// upsertSessionVmmPolicyForConversation 写入或删除单个会话的 VMM 策略投影。
+function upsertSessionVmmPolicyForConversation(
+  current: SessionVmmPolicyByConversation[],
+  entry: SessionAddonsChangedDelta,
+): SessionVmmPolicyByConversation[] {
+  if (entry.sessionVmmPolicy === undefined) {
+    return current;
+  }
+  const next = current.filter((candidate) => candidate.conversationId !== entry.conversationId);
+  return entry.sessionVmmPolicy ? [...next, {
+    conversationId: entry.conversationId,
+    sessionVmmPolicy: entry.sessionVmmPolicy,
+  }] : next;
 }
 
 // deriveIncomingSubagentNavigations extracts full-snapshot subagent navigation cache entries.
@@ -425,6 +447,10 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
           workbench.sessionAddonsByConversation ?? [],
           envelope.delta.payload,
         ),
+        sessionVmmPoliciesByConversation: upsertSessionVmmPolicyForConversation(
+          workbench.sessionVmmPoliciesByConversation ?? [],
+          envelope.delta.payload,
+        ),
       });
   }
 }
@@ -588,6 +614,10 @@ export function applySessionAddonsChangedResponse(
     conversations: applySessionAddonAttention(workbench.conversations, response),
     sessionAddonsByConversation: upsertSessionAddonsForConversation(
       workbench.sessionAddonsByConversation ?? [],
+      response,
+    ),
+    sessionVmmPoliciesByConversation: upsertSessionVmmPolicyForConversation(
+      workbench.sessionVmmPoliciesByConversation ?? [],
       response,
     ),
   });

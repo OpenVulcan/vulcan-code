@@ -103,6 +103,9 @@ export interface ChatAreaProps {
   // Persists the current session Plan-mode toggle.
   // 持久化当前会话计划模式开关。
   onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;
+  // Persists one current session VMM memory policy mode.
+  // 持久化当前会话的单个 VMM 记忆策略模式。
+  onSetSessionVmmPolicy: (policy: string, mode: string) => Promise<boolean>;
   // Stops the currently running conversation.
   // 停止当前运行中的会话。
   onStopConversationRun: () => Promise<boolean>;

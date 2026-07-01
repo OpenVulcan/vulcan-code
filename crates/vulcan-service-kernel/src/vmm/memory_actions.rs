@@ -194,7 +194,7 @@ pub(crate) fn vmm_action_context(
     if scope == "project" {
         let project = vmm_request_project_scope(&workspace_snapshot, request.project_id.as_deref())
             .ok_or_else(|| String::from("请先选择一个项目作用域。"))?;
-        let project_layer = load_project_configuration(&project.path).vmm;
+        let project_layer = cached_project_vmm_layer(&project.path);
         let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
             &provider_configuration.vmm,
             Some(&project_layer),
@@ -245,6 +245,7 @@ pub(crate) fn vmm_action_layer_from_effective(
         profile_node_limit: Some(effective.profile_node_limit),
         session_compact_recall: Some(effective.session_compact_recall),
         precheck_enabled: Some(effective.precheck_enabled),
+        memory_writeback_enabled: Some(effective.memory_writeback_enabled),
         ai_tools_enabled: Some(effective.ai_tools_enabled),
         injection_tag: Some(effective.injection_tag.clone()),
         injection_description: Some(effective.injection_description.clone()),

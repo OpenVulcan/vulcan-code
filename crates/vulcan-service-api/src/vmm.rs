@@ -83,12 +83,18 @@ pub struct VmmEffectiveSummary {
     /// Effective automatic precheck diagnostic key.
     /// 最终自动前置召回诊断键。
     pub precheck_diagnostic: String,
+    /// Effective completed-turn memory writeback diagnostic key.
+    /// 最终已完成回合记忆写回诊断键。
+    pub writeback_diagnostic: String,
     /// Whether VMM AI-only tools are exposed.
     /// 是否暴露 VMM AI 专属工具。
     pub ai_tools_enabled: bool,
     /// Whether automatic precheck recall is enabled.
     /// 是否启用自动前置召回。
     pub precheck_enabled: bool,
+    /// Whether completed-turn memory writeback is enabled.
+    /// 是否启用已完成回合记忆写回。
+    pub memory_writeback_enabled: bool,
     /// Transient recall TTL in turns.
     /// 临时召回持续回合数。
     pub implicit_memory_turns: u32,
@@ -162,6 +168,15 @@ pub struct VmmConfigDraftSummary {
     /// Whether automatic precheck recall is enabled.
     /// 是否启用自动前置召回。
     pub precheck_enabled: bool,
+    /// Precheck policy mode for this layer.
+    /// 当前层的前置召回策略模式。
+    pub precheck_mode: String,
+    /// Whether completed-turn memory writeback is enabled.
+    /// 是否启用已完成回合记忆写回。
+    pub memory_writeback_enabled: bool,
+    /// Completed-turn writeback policy mode for this layer.
+    /// 当前层的已完成回合写回策略模式。
+    pub memory_writeback_mode: String,
     /// Editable injection tag.
     /// 可编辑注入标签。
     pub injection_tag: String,

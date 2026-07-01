@@ -312,6 +312,33 @@ pub(crate) fn webui_trace_if_slow(stage: &str, started_at_ms: i128, detail: impl
     }
 }
 
+/// Resolves the cached project VMM layer for one session.
+/// 解析单个会话对应的缓存项目 VMM 配置层。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the in-memory workspace snapshot containing task projects.
+/// `workspace` 是包含任务项目的内存工作区快照。
+/// `session` is the session whose project binding should be resolved.
+/// `session` 是需要解析项目绑定的会话。
+///
+/// # Returns
+/// 返回值
+/// The cached project VMM layer when the session is bound to a known project.
+/// 当会话绑定到已知项目时返回缓存项目 VMM 配置层。
+pub(crate) fn cached_project_vmm_layer_for_session(
+    workspace: &WorkspaceSnapshot,
+    session: &SessionSummary,
+) -> Option<vulcan_vmm::VmmConfigLayer> {
+    let project_id = session.project_id.as_deref()?;
+    workspace
+        .task_projects
+        .iter()
+        .chain(workspace.archived_task_projects.iter())
+        .find(|project| project.id == project_id)
+        .map(|project| cached_project_vmm_layer(&project.path))
+}
+
 /// Builds compact RuntimeEvent metadata for WebUI trace logs.
 /// 为 WebUI 跟踪日志构建紧凑的 RuntimeEvent 元数据。
 pub(crate) fn runtime_event_trace_detail(event: &RuntimeEvent) -> String {
@@ -496,6 +523,8 @@ pub(crate) fn workbench_from_runtime(
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
+    let selected_session_vmm_project_layer = selected_workspace_session(workspace)
+        .and_then(|session| cached_project_vmm_layer_for_session(workspace, session));
     let selected_ai_tool_configuration = selected_runtime_state
         .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
         .unwrap_or(ai_tool_configuration);
@@ -529,7 +558,21 @@ pub(crate) fn workbench_from_runtime(
             let session_goal = session_goal_summaries.get(&session.id).cloned();
             let session_todolist = session_todolist_summary_from_runtime_state(runtime_state);
             let session_plan_mode = session_plan_mode_summary_from_runtime_state(runtime_state);
-            if session_goal.is_none() && session_todolist.is_none() && session_plan_mode.is_none() {
+            let session_vmm_policy = runtime_state
+                .filter(|runtime_state| !runtime_state.vmm.is_empty())
+                .map(|runtime_state| {
+                    let project_layer = cached_project_vmm_layer_for_session(workspace, session);
+                    session_vmm_policy_summary_from_layers(
+                        &provider_configuration.vmm,
+                        project_layer.as_ref(),
+                        Some(runtime_state),
+                    )
+                });
+            if session_goal.is_none()
+                && session_todolist.is_none()
+                && session_plan_mode.is_none()
+                && session_vmm_policy.is_none()
+            {
                 return None;
             }
             Some(SessionAddonsChangedDelta {
@@ -537,7 +580,25 @@ pub(crate) fn workbench_from_runtime(
                 session_goal,
                 session_todolist,
                 session_plan_mode,
+                session_vmm_policy,
             })
+        })
+        .collect::<Vec<_>>();
+    let session_vmm_policies_by_conversation = workspace
+        .sessions
+        .iter()
+        .filter(|session| session_segmented_metadata_exists(session))
+        .map(|session| {
+            let runtime_state = workspace.session_runtime_state.get(&session.id);
+            let project_layer = cached_project_vmm_layer_for_session(workspace, session);
+            SessionVmmPolicyByConversation {
+                conversation_id: session.id.to_string(),
+                session_vmm_policy: session_vmm_policy_summary_from_layers(
+                    &provider_configuration.vmm,
+                    project_layer.as_ref(),
+                    runtime_state,
+                ),
+            }
         })
         .collect::<Vec<_>>();
     WorkbenchSnapshot {
@@ -686,7 +747,13 @@ pub(crate) fn workbench_from_runtime(
             .get(&workspace.selected_session)
             .cloned(),
         session_plan_mode: session_plan_mode_summary_from_runtime_state(selected_runtime_state),
+        session_vmm_policy: Some(session_vmm_policy_summary_from_layers(
+            &provider_configuration.vmm,
+            selected_session_vmm_project_layer.as_ref(),
+            selected_runtime_state,
+        )),
         session_addons_by_conversation,
+        session_vmm_policies_by_conversation,
         memories: memories(workspace),
         vmm_memory: vmm_memory_snapshot(workspace, provider_configuration, selected_runtime_state),
         command_sessions: command_sessions(controller, command_session_runtime),

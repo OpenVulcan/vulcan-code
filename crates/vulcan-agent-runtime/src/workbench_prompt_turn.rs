@@ -795,17 +795,16 @@ pub fn shared_prompt_precheck_plan(
     effective_vmm_config: &VmmEffectiveConfig,
     precheck_hook_snapshots: &[HookRegistrationSnapshot],
 ) -> SharedPromptPrecheckPlan {
-    let vmm_memory_ready =
-        effective_vmm_config.diagnose_memory_flow(true) == VmmConfigDiagnostic::Ready;
-    let vmm_precheck_enabled = vmm_memory_ready && effective_vmm_config.precheck_enabled;
-    let should_skip_precheck = !vmm_memory_ready
+    let vmm_precheck_ready =
+        effective_vmm_config.diagnose_precheck_flow(true) == VmmConfigDiagnostic::Ready;
+    let should_skip_precheck = !vmm_precheck_ready
         && !precheck_hook_snapshots.is_empty()
         && precheck_hook_snapshots
             .iter()
             .all(|snapshot| snapshot.registration.id == VMM_PRECHECK_HOOK_ID);
     let progress_labels = precheck_hook_snapshots
         .iter()
-        .filter(|snapshot| vmm_precheck_enabled || snapshot.registration.id != VMM_PRECHECK_HOOK_ID)
+        .filter(|snapshot| vmm_precheck_ready || snapshot.registration.id != VMM_PRECHECK_HOOK_ID)
         .filter_map(|snapshot| snapshot.registration.progress_label.clone())
         .map(|label| label.trim().to_string())
         .filter(|label| !label.is_empty())

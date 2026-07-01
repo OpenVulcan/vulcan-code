@@ -82,6 +82,60 @@ pub(crate) fn session_plan_mode_summary_from_runtime_state(
     })
 }
 
+/// Converts session VMM policy layers into a WebUI summary.
+/// 将会话 VMM 策略层转换为 WebUI 摘要。
+///
+/// # Parameters
+/// 参数
+/// `global_layer` is the system-level VMM configuration layer.
+/// `global_layer` 是系统级 VMM 配置层。
+/// `project_layer` is the project-level VMM configuration layer.
+/// `project_layer` 是项目级 VMM 配置层。
+/// `runtime_state` is the optional selected-session runtime entry.
+/// `runtime_state` 是可选的当前选中会话运行态条目。
+///
+/// # Returns
+/// 返回值
+/// The session VMM policy summary with final effective booleans.
+/// 返回带最终布尔值的会话 VMM 策略摘要。
+pub(crate) fn session_vmm_policy_summary_from_layers(
+    global_layer: &vulcan_vmm::VmmConfigLayer,
+    project_layer: Option<&vulcan_vmm::VmmConfigLayer>,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> SessionVmmPolicySummary {
+    let session_layer = runtime_state.map(|runtime_state| &runtime_state.vmm);
+    let empty_session_layer = vulcan_vmm::VmmConfigLayer::default();
+    let summary_layer = session_layer.unwrap_or(&empty_session_layer);
+    let effective =
+        vulcan_vmm::VmmEffectiveConfig::resolve(global_layer, project_layer, session_layer);
+    SessionVmmPolicySummary {
+        precheck_mode: vmm_policy_mode_key(summary_layer.precheck_enabled),
+        precheck_enabled: effective.precheck_enabled,
+        memory_writeback_mode: vmm_policy_mode_key(summary_layer.memory_writeback_enabled),
+        memory_writeback_enabled: effective.memory_writeback_enabled,
+    }
+}
+
+/// Converts one optional VMM policy override into a tri-state mode key.
+/// 将单个可选 VMM 策略覆盖转换为三态模式键。
+///
+/// # Parameters
+/// 参数
+/// `value` is the optional override value from a configuration layer.
+/// `value` 是配置层中的可选覆盖值。
+///
+/// # Returns
+/// 返回值
+/// The stable WebUI mode key.
+/// 返回稳定的 WebUI 模式键。
+fn vmm_policy_mode_key(value: Option<bool>) -> String {
+    match value {
+        None => String::from("inherit"),
+        Some(true) => String::from("enabled"),
+        Some(false) => String::from("disabled"),
+    }
+}
+
 /// Converts one persisted Plan artifact state into a WebUI summary.
 /// 将单个持久化计划产物状态转换为 WebUI 摘要。
 ///
@@ -217,8 +271,7 @@ pub(crate) fn conversation_attention_summary_for_session(
             updated_at,
         });
     }
-    if session_plan_mode
-        .is_some_and(|summary| summary.execution_mode.eq_ignore_ascii_case("plan"))
+    if session_plan_mode.is_some_and(|summary| summary.execution_mode.eq_ignore_ascii_case("plan"))
     {
         return Some(ConversationAttentionSummary {
             kind: String::from("plan_confirm"),

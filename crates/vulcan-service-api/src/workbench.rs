@@ -150,10 +150,18 @@ pub struct WorkbenchSnapshot {
     /// 当前会话输入区控制项展示的计划模式状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_plan_mode: Option<SessionPlanModeSummary>,
+    /// Current session VMM memory policy shown in the composer controls.
+    /// 当前会话输入区控制项展示的 VMM 记忆策略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_vmm_policy: Option<SessionVmmPolicySummary>,
     /// Session addon projections retained for every conversation that has addon state.
     /// 为每个存在附属状态的会话保留的会话附属投影。
     #[serde(default)]
     pub session_addons_by_conversation: Vec<SessionAddonsChangedDelta>,
+    /// VMM policy projections retained for every visible conversation.
+    /// 为每个可见会话保留的 VMM 策略投影。
+    #[serde(default)]
+    pub session_vmm_policies_by_conversation: Vec<SessionVmmPolicyByConversation>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,

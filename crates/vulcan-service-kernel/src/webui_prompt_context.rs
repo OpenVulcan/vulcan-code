@@ -264,7 +264,7 @@ pub(crate) fn materialize_prompt_session(
     workspace_snapshot.sessions.insert(0, session);
     workspace_snapshot
         .session_run_phases
-        .insert(session_id, SessionRunPhase::MemoryRecall);
+        .insert(session_id, SessionRunPhase::Preparing);
     workspace_snapshot.selected_session = session_id;
     Ok((session_id, session_title, workspace_path))
 }

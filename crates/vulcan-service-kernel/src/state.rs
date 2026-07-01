@@ -95,6 +95,22 @@ pub(crate) struct SessionPlanModeUpdateRequest {
     pub(crate) enabled: bool,
 }
 
+/// Session-scoped VMM memory policy update request sent by the WebUI composer menu.
+/// WebUI 输入区菜单发送的会话级 VMM 记忆策略更新请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionVmmPolicyUpdateRequest {
+    /// Conversation id whose VMM memory policy should change.
+    /// 需要更新 VMM 记忆策略的会话标识。
+    pub(crate) conversation_id: Option<String>,
+    /// Policy key to update: precheck or writeback.
+    /// 需要更新的策略键：前置注入或后置提交。
+    pub(crate) policy: String,
+    /// New tri-state policy mode: inherit, enabled, or disabled.
+    /// 新的三态策略模式：跟随、开启或关闭。
+    pub(crate) mode: String,
+}
+
 /// Empty session lifecycle hook used by the WebUI external stream lifecycle runner.
 /// WebUI 外部流生命周期 runner 使用的空会话生命周期 hook。
 #[derive(Debug, Clone, Copy)]

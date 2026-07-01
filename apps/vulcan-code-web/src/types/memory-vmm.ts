@@ -55,8 +55,14 @@ export interface VmmEffectiveSummary {
   projectId?: number | null;
   diagnostic: string;
   precheckDiagnostic: string;
+  // Completed-turn writeback diagnostic key.
+  // 完成回合写回诊断键。
+  writebackDiagnostic: string;
   aiToolsEnabled: boolean;
   precheckEnabled: boolean;
+  // Effective completed-turn writeback enablement.
+  // 最终完成回合写回启用状态。
+  memoryWritebackEnabled: boolean;
   implicitMemoryTurns: number;
   profileRefreshTurns: number;
   profileNodeLimit: number;
@@ -84,6 +90,15 @@ export interface VmmConfigDraftSummary {
   profileNodeLimit: string;
   aiToolsEnabled: boolean;
   precheckEnabled: boolean;
+  // Tri-state precheck policy mode for this editable layer.
+  // 当前可编辑层的三态前置注入策略模式。
+  precheckMode: string;
+  // Editable completed-turn writeback boolean fallback.
+  // 可编辑的完成回合写回布尔回退值。
+  memoryWritebackEnabled: boolean;
+  // Tri-state writeback policy mode for this editable layer.
+  // 当前可编辑层的三态写回策略模式。
+  memoryWritebackMode: string;
   injectionTag: string;
   injectionDescription: string;
 }

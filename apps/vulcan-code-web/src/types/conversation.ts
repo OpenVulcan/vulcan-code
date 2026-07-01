@@ -282,6 +282,37 @@ export interface SessionAddonsChangedDelta {
   // Current Plan mode state, or null when Plan mode is inactive and no artifact exists.
   // 当前计划模式状态；计划模式未启用且无产物时为空。
   sessionPlanMode?: SessionPlanModeSummary | null;
+  // Current session VMM memory policy overrides.
+  // 当前会话 VMM 记忆策略覆盖。
+  sessionVmmPolicy?: SessionVmmPolicySummary | null;
+}
+
+// SessionVmmPolicySummary describes session VMM policy override and effective state.
+// SessionVmmPolicySummary 描述会话 VMM 策略覆盖与最终状态。
+export interface SessionVmmPolicySummary {
+  // Precheck memory injection policy mode: inherit, enabled, or disabled.
+  // 前置记忆注入策略模式：跟随、开启或关闭。
+  precheckMode: string;
+  // Effective precheck memory injection enablement.
+  // 最终前置记忆注入启用状态。
+  precheckEnabled: boolean;
+  // Completed-turn memory writeback policy mode: inherit, enabled, or disabled.
+  // 完成回合记忆写回策略模式：跟随、开启或关闭。
+  memoryWritebackMode: string;
+  // Effective completed-turn memory writeback enablement.
+  // 最终完成回合记忆写回启用状态。
+  memoryWritebackEnabled: boolean;
+}
+
+// SessionVmmPolicyByConversation stores one conversation's VMM policy projection.
+// SessionVmmPolicyByConversation 保存单个会话的 VMM 策略投影。
+export interface SessionVmmPolicyByConversation {
+  // Stable conversation id that owns the VMM policy projection.
+  // 拥有该 VMM 策略投影的稳定会话标识。
+  conversationId: string;
+  // VMM policy override and effective state for this conversation.
+  // 该会话的 VMM 策略覆盖与最终状态。
+  sessionVmmPolicy: SessionVmmPolicySummary;
 }
 
 // SessionAddonsChangedResponse carries addon state returned by direct RPC calls.

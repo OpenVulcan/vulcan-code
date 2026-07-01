@@ -15,6 +15,8 @@ import type {
   ConversationSummary,
   PendingPromptsChangedDelta,
   SessionAddonsChangedDelta,
+  SessionVmmPolicyByConversation,
+  SessionVmmPolicySummary,
 } from "./conversation";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type {
@@ -166,9 +168,15 @@ export interface WorkbenchSnapshot {
   // Current session Plan mode state shown in the composer controls.
   // 当前会话输入区控制项展示的计划模式状态。
   sessionPlanMode?: SessionPlanModeSummary | null;
+  // Current session VMM memory policy shown in the composer controls.
+  // 当前会话输入区控制项展示的 VMM 记忆策略。
+  sessionVmmPolicy?: SessionVmmPolicySummary | null;
   // Session addon projections retained for every conversation that has addon state.
   // 为每个存在附属状态的会话保留的会话附属投影。
   sessionAddonsByConversation?: SessionAddonsChangedDelta[];
+  // VMM policy projections retained for every visible conversation.
+  // 为每个可见会话保留的 VMM 策略投影。
+  sessionVmmPoliciesByConversation?: SessionVmmPolicyByConversation[];
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

@@ -296,6 +296,12 @@ export type TranslationKey =
   | "composer.attachment.kind.pdf"
   | "composer.thinkingProcess"
   | "composer.planMode"
+  | "composer.vmmMemory"
+  | "composer.vmm.precheckInjection"
+  | "composer.vmm.memoryWriteback"
+  | "composer.vmm.mode.inheritProject"
+  | "composer.vmm.mode.enabled"
+  | "composer.vmm.mode.disabled"
   | "composer.goal"
   | "composer.scrollToBottom"
   | "composer.goalDialog.resumeTitle"
@@ -373,6 +379,9 @@ export type TranslationKey =
   | "sessionActions.previewCannotTogglePlanMode"
   | "sessionActions.planModeEnabled"
   | "sessionActions.planModeDisabled"
+  | "sessionActions.noConversationForVmmPolicy"
+  | "sessionActions.previewCannotSetVmmPolicy"
+  | "sessionActions.vmmPolicySaved"
   | "conversationActions.noProjectForSend"
   | "conversationActions.previewCannotSend"
   | "conversationActions.previewCannotCompact"
@@ -821,6 +830,7 @@ export type TranslationKey =
   | "vmm.overview.recallPolicy"
   | "vmm.overview.ttlTurns"
   | "vmm.overview.precheckAiTools"
+  | "vmm.overview.writeback"
   | "vmm.overview.runtime"
   | "vmm.overview.outboxProfiles"
   | "vmm.overview.completedTurns"
@@ -849,6 +859,11 @@ export type TranslationKey =
   | "vmm.settings.enableMemoryConnection"
   | "vmm.settings.exposeAiTools"
   | "vmm.settings.autoPrecheck"
+  | "vmm.settings.precheckPolicy"
+  | "vmm.settings.writebackPolicy"
+  | "vmm.settings.policy.inherit"
+  | "vmm.settings.policy.enabled"
+  | "vmm.settings.policy.disabled"
   | "vmm.settings.userId"
   | "vmm.settings.projectId"
   | "vmm.settings.implicitMemoryTtl"
@@ -1392,6 +1407,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.kind.pdf": "PDF",
     "composer.thinkingProcess": "思考过程",
     "composer.planMode": "计划模式",
+    "composer.vmmMemory": "VMM 记忆",
+    "composer.vmm.precheckInjection": "前置记忆注入",
+    "composer.vmm.memoryWriteback": "后置记忆提交",
+    "composer.vmm.mode.inheritProject": "跟随项目",
+    "composer.vmm.mode.enabled": "开启",
+    "composer.vmm.mode.disabled": "关闭",
     "composer.goal": "目标",
     "composer.scrollToBottom": "滚动到底部",
     "composer.goalDialog.resumeTitle": "继续任务",
@@ -1469,6 +1490,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "sessionActions.previewCannotTogglePlanMode": "浏览器预览模式下无法切换计划模式。",
     "sessionActions.planModeEnabled": "计划模式已开启。",
     "sessionActions.planModeDisabled": "计划模式已关闭。",
+    "sessionActions.noConversationForVmmPolicy": "请先创建或选择一个会话，再切换 VMM 记忆策略。",
+    "sessionActions.previewCannotSetVmmPolicy": "浏览器预览模式下无法切换 VMM 记忆策略。",
+    "sessionActions.vmmPolicySaved": "VMM 记忆策略已保存。",
     "conversationActions.noProjectForSend": "当前会话没有明确关联项目，无法发送。",
     "conversationActions.previewCannotSend": "浏览器预览模式下无法发送真实会话。",
     "conversationActions.previewCannotCompact": "浏览器预览模式下无法执行真实上下文压缩。",
@@ -1917,6 +1941,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.overview.recallPolicy": "召回策略",
     "vmm.overview.ttlTurns": "TTL：{turns} 回合",
     "vmm.overview.precheckAiTools": "前置召回：{precheck} · AI 工具：{tools}",
+    "vmm.overview.writeback": "后置提交：{writeback}",
     "vmm.overview.runtime": "运行态",
     "vmm.overview.outboxProfiles": "outbox：{outbox} · 画像节点：{profiles}",
     "vmm.overview.completedTurns": "已完成回合：{turns}",
@@ -1945,6 +1970,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.settings.enableMemoryConnection": "启用记忆连接",
     "vmm.settings.exposeAiTools": "暴露 AI 专属工具",
     "vmm.settings.autoPrecheck": "自动前置召回",
+    "vmm.settings.precheckPolicy": "前置记忆注入",
+    "vmm.settings.writebackPolicy": "后置记忆提交",
+    "vmm.settings.policy.inherit": "跟随上级",
+    "vmm.settings.policy.enabled": "开启",
+    "vmm.settings.policy.disabled": "关闭",
     "vmm.settings.userId": "用户 ID",
     "vmm.settings.projectId": "项目 ID",
     "vmm.settings.implicitMemoryTtl": "临时记忆 TTL",
@@ -2485,6 +2515,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.attachment.kind.pdf": "PDF",
     "composer.thinkingProcess": "Thinking",
     "composer.planMode": "Plan mode",
+    "composer.vmmMemory": "VMM memory",
+    "composer.vmm.precheckInjection": "Precheck memory injection",
+    "composer.vmm.memoryWriteback": "Post-turn memory writeback",
+    "composer.vmm.mode.inheritProject": "Follow project",
+    "composer.vmm.mode.enabled": "On",
+    "composer.vmm.mode.disabled": "Off",
     "composer.goal": "Goal",
     "composer.scrollToBottom": "Scroll to bottom",
     "composer.goalDialog.resumeTitle": "Resume task",
@@ -2562,6 +2598,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "sessionActions.previewCannotTogglePlanMode": "Plan mode cannot be toggled in browser preview mode.",
     "sessionActions.planModeEnabled": "Plan mode enabled.",
     "sessionActions.planModeDisabled": "Plan mode disabled.",
+    "sessionActions.noConversationForVmmPolicy": "Create or select a conversation before changing VMM memory policy.",
+    "sessionActions.previewCannotSetVmmPolicy": "VMM memory policy cannot be changed in browser preview mode.",
+    "sessionActions.vmmPolicySaved": "VMM memory policy saved.",
     "conversationActions.noProjectForSend": "The current conversation is not linked to a project, so it cannot be sent.",
     "conversationActions.previewCannotSend": "Real conversations cannot be sent in browser preview mode.",
     "conversationActions.previewCannotCompact": "Real context compaction cannot run in browser preview mode.",
@@ -3010,6 +3049,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.overview.recallPolicy": "Recall policy",
     "vmm.overview.ttlTurns": "TTL: {turns} turns",
     "vmm.overview.precheckAiTools": "Precheck recall: {precheck} · AI tools: {tools}",
+    "vmm.overview.writeback": "Writeback: {writeback}",
     "vmm.overview.runtime": "Runtime",
     "vmm.overview.outboxProfiles": "outbox: {outbox} · profile nodes: {profiles}",
     "vmm.overview.completedTurns": "Completed turns: {turns}",
@@ -3038,6 +3078,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "vmm.settings.enableMemoryConnection": "Enable memory connection",
     "vmm.settings.exposeAiTools": "Expose AI-only tools",
     "vmm.settings.autoPrecheck": "Automatic precheck recall",
+    "vmm.settings.precheckPolicy": "Precheck memory injection",
+    "vmm.settings.writebackPolicy": "Post-turn memory writeback",
+    "vmm.settings.policy.inherit": "Follow parent",
+    "vmm.settings.policy.enabled": "On",
+    "vmm.settings.policy.disabled": "Off",
     "vmm.settings.userId": "User ID",
     "vmm.settings.projectId": "Project ID",
     "vmm.settings.implicitMemoryTtl": "Temporary memory TTL",

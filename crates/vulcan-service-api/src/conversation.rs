@@ -395,6 +395,42 @@ pub struct SessionAddonsChangedDelta {
     /// 当前计划模式状态；计划模式未启用且无产物时为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_plan_mode: Option<SessionPlanModeSummary>,
+    /// Current session VMM memory policy overrides.
+    /// 当前会话 VMM 记忆策略覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_vmm_policy: Option<SessionVmmPolicySummary>,
+}
+
+/// Describes the selected session's VMM memory policy override and effective state.
+/// 描述当前会话的 VMM 记忆策略覆盖与最终状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionVmmPolicySummary {
+    /// Precheck memory injection policy mode: inherit, enabled, or disabled.
+    /// 前置记忆注入策略模式：继承、开启或关闭。
+    pub precheck_mode: String,
+    /// Final precheck memory injection enablement after all layers resolve.
+    /// 所有层级解析后的最终前置记忆注入启用状态。
+    pub precheck_enabled: bool,
+    /// Completed-turn memory writeback policy mode: inherit, enabled, or disabled.
+    /// 完成回合记忆写回策略模式：继承、开启或关闭。
+    pub memory_writeback_mode: String,
+    /// Final completed-turn memory writeback enablement after all layers resolve.
+    /// 所有层级解析后的最终完成回合记忆写回启用状态。
+    pub memory_writeback_enabled: bool,
+}
+
+/// Stores one conversation's VMM memory policy projection for stable UI lookup.
+/// 为稳定 UI 查找保存单个会话的 VMM 记忆策略投影。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionVmmPolicyByConversation {
+    /// Stable conversation identifier owning this VMM policy projection.
+    /// 拥有该 VMM 策略投影的稳定会话标识。
+    pub conversation_id: String,
+    /// VMM policy override and effective state for this conversation.
+    /// 该会话的 VMM 策略覆盖与最终状态。
+    pub session_vmm_policy: SessionVmmPolicySummary,
 }
 
 /// Carries the applied session addon projection for direct RPC responses.
@@ -417,6 +453,10 @@ pub struct SessionAddonsChangedResponse {
     /// 当前计划模式状态；计划模式未启用且无产物时为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_plan_mode: Option<SessionPlanModeSummary>,
+    /// Current session VMM memory policy overrides.
+    /// 当前会话 VMM 记忆策略覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_vmm_policy: Option<SessionVmmPolicySummary>,
     /// Latest workbench revision after applying this addon update.
     /// 应用该附属状态更新后的最新工作台版本。
     pub revision: u64,

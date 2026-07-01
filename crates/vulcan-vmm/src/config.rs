@@ -138,6 +138,10 @@ pub struct VmmConfigLayer {
     /// 可选自动前置召回开关。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precheck_enabled: Option<bool>,
+    /// Optional completed-turn memory writeback switch.
+    /// 可选已完成回合记忆写回开关。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_writeback_enabled: Option<bool>,
     /// Optional AI-only VMM tool exposure switch.
     /// 可选 AI 专属 VMM 工具暴露开关。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,6 +248,15 @@ pub struct VmmEffectiveConfig {
     /// Final automatic precheck recall switch.
     /// 最终自动前置召回开关。
     pub precheck_enabled: bool,
+    /// Source of the final automatic precheck recall switch.
+    /// 最终自动前置召回开关的来源。
+    pub precheck_enabled_source: VmmEffectiveConfigSource,
+    /// Final completed-turn memory writeback switch.
+    /// 最终已完成回合记忆写回开关。
+    pub memory_writeback_enabled: bool,
+    /// Source of the final completed-turn memory writeback switch.
+    /// 最终已完成回合记忆写回开关的来源。
+    pub memory_writeback_enabled_source: VmmEffectiveConfigSource,
     /// Final AI-only VMM tool exposure switch.
     /// 最终 AI 专属 VMM 工具暴露开关。
     pub ai_tools_enabled: bool,
@@ -282,6 +295,9 @@ impl Default for VmmEffectiveConfig {
             profile_node_limit: DEFAULT_PROFILE_NODE_LIMIT,
             session_compact_recall: true,
             precheck_enabled: true,
+            precheck_enabled_source: VmmEffectiveConfigSource::Default,
+            memory_writeback_enabled: true,
+            memory_writeback_enabled_source: VmmEffectiveConfigSource::Default,
             ai_tools_enabled: true,
             injection_tag: DEFAULT_VMM_INJECTION_TAG.to_string(),
             injection_description: DEFAULT_VMM_INJECTION_DESCRIPTION.to_string(),
@@ -350,6 +366,15 @@ impl VmmEffectiveConfig {
     /// 诊断当前自动 VMM 前置召回是否可运行。
     pub fn diagnose_precheck_flow(&self, grpc_online: bool) -> VmmConfigDiagnostic {
         if !self.precheck_enabled {
+            return VmmConfigDiagnostic::DisabledByConfig;
+        }
+        self.diagnose_memory_flow(grpc_online)
+    }
+
+    /// Diagnoses whether completed-turn memory writeback may run now.
+    /// 诊断当前已完成回合记忆写回是否可运行。
+    pub fn diagnose_writeback_flow(&self, grpc_online: bool) -> VmmConfigDiagnostic {
+        if !self.memory_writeback_enabled {
             return VmmConfigDiagnostic::DisabledByConfig;
         }
         self.diagnose_memory_flow(grpc_online)
@@ -434,6 +459,11 @@ fn apply_layer(
     }
     if let Some(precheck_enabled) = layer.precheck_enabled {
         config.precheck_enabled = precheck_enabled;
+        config.precheck_enabled_source = source;
+    }
+    if let Some(memory_writeback_enabled) = layer.memory_writeback_enabled {
+        config.memory_writeback_enabled = memory_writeback_enabled;
+        config.memory_writeback_enabled_source = source;
     }
     if let Some(ai_tools_enabled) = layer.ai_tools_enabled {
         config.ai_tools_enabled = ai_tools_enabled;

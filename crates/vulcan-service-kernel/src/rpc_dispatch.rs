@@ -273,6 +273,10 @@ pub(super) async fn dispatch_service_rpc(
             service_set_session_plan_mode(app, state, rpc_required_param(&params, "request")?)
                 .await,
         ),
+        "service_set_session_vmm_policy" => rpc_json_result(
+            service_set_session_vmm_policy(app, state, rpc_required_param(&params, "request")?)
+                .await,
+        ),
         "service_compact_selected_conversation_context" => {
             rpc_json_result(service_compact_selected_conversation_context(app, state).await)
         }

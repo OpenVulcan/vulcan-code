@@ -2,7 +2,7 @@ import * as React from "react"
 import { FileText, History, Trash2 } from "lucide-react"
 
 import { StatusPill } from "@/components/shared/status"
-import { useI18n } from "@/i18n"
+import { useI18n, type TranslationKey } from "@/i18n"
 import type { MemorySummary, VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
 
 // VmmEffectiveOverview renders compact effective-config cards.
@@ -30,6 +30,7 @@ export function VmmEffectiveOverview(props: {
         <strong>{t("vmm.overview.recallPolicy")}</strong>
         <span>{t("vmm.overview.ttlTurns").replace("{turns}", String(effective.implicitMemoryTurns))}</span>
         <span>{t("vmm.overview.precheckAiTools").replace("{precheck}", effective.precheckEnabled ? t("vmm.common.enabled") : t("vmm.common.disabled")).replace("{tools}", effective.aiToolsEnabled ? t("vmm.common.enabled") : t("vmm.common.disabled"))}</span>
+        <span>{t("vmm.overview.writeback").replace("{writeback}", effective.memoryWritebackEnabled ? t("vmm.common.enabled") : t("vmm.common.disabled"))}</span>
       </article>
       <article className="vmm-overview-card">
         <StatusPill status="ready" label="runtime" />
@@ -146,6 +147,37 @@ export function VmmTextField(props: {
   );
 }
 
+// VmmSelectField renders one compact VMM select field.
+// VmmSelectField 渲染单个紧凑 VMM 下拉字段。
+export function VmmSelectField(props: {
+  // Visible field label.
+  // 可见字段标签。
+  label: string
+  // Current selected value.
+  // 当前选中的值。
+  value: string
+  // Whether the field is disabled.
+  // 字段是否禁用。
+  disabled?: boolean
+  // Available select options.
+  // 可用下拉选项。
+  options: Array<{ value: string; label: string }>
+  // Updates the selected value.
+  // 更新选中的值。
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="vmm-field">
+      <span>{props.label}</span>
+      <select disabled={props.disabled} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+        {props.options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 // VmmActionButton renders one VMM action button.
 // VmmActionButton 渲染单个 VMM 动作按钮。
 export function VmmActionButton(props: {
@@ -187,6 +219,7 @@ export function VmmSettingsForm(props: {
   onChange: (patch: Partial<VmmConfigDraftSummary>) => void
 }) {
   const { t } = useI18n();
+  const policyOptions = vmmPolicyModeOptions(t);
   if (props.mode === "transport") {
     return (
       <div className="vmm-form-grid">
@@ -201,11 +234,25 @@ export function VmmSettingsForm(props: {
       </div>
     );
   }
+  const updatePolicyMode = (policy: "precheck" | "writeback", mode: string) => {
+    if (policy === "precheck") {
+      props.onChange({
+        precheckMode: mode,
+        precheckEnabled: mode === "inherit" ? props.draft.precheckEnabled : mode === "enabled",
+      });
+      return;
+    }
+    props.onChange({
+      memoryWritebackMode: mode,
+      memoryWritebackEnabled: mode === "inherit" ? props.draft.memoryWritebackEnabled : mode === "enabled",
+    });
+  };
   return (
     <div className="vmm-form-grid">
       <label className="vmm-check-row"><input checked={props.draft.enabled} onChange={(event) => props.onChange({ enabled: event.target.checked })} type="checkbox" />{t("vmm.settings.enableMemoryConnection")}</label>
       <label className="vmm-check-row"><input checked={props.draft.aiToolsEnabled} onChange={(event) => props.onChange({ aiToolsEnabled: event.target.checked })} type="checkbox" />{t("vmm.settings.exposeAiTools")}</label>
-      <label className="vmm-check-row"><input checked={props.draft.precheckEnabled} onChange={(event) => props.onChange({ precheckEnabled: event.target.checked })} type="checkbox" />{t("vmm.settings.autoPrecheck")}</label>
+      <VmmSelectField label={t("vmm.settings.precheckPolicy")} options={policyOptions} value={props.draft.precheckMode} onChange={(mode) => updatePolicyMode("precheck", mode)} />
+      <VmmSelectField label={t("vmm.settings.writebackPolicy")} options={policyOptions} value={props.draft.memoryWritebackMode} onChange={(mode) => updatePolicyMode("writeback", mode)} />
       <VmmTextField label={t("vmm.settings.userId")} placeholder={t("vmm.common.number")} value={props.draft.userId} onChange={(userId) => props.onChange({ userId })} />
       <VmmTextField label={t("vmm.settings.projectId")} placeholder={t("vmm.common.number")} value={props.draft.projectId} onChange={(projectId) => props.onChange({ projectId })} />
       <VmmTextField label={t("vmm.settings.implicitMemoryTtl")} placeholder="5" value={props.draft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => props.onChange({ implicitMemoryTurns })} />
@@ -215,6 +262,16 @@ export function VmmSettingsForm(props: {
       <VmmTextField label={t("vmm.settings.injectionDescription")} placeholder="VMM recalled memory" value={props.draft.injectionDescription} onChange={(injectionDescription) => props.onChange({ injectionDescription })} />
     </div>
   );
+}
+
+// vmmPolicyModeOptions returns localized VMM policy mode options.
+// vmmPolicyModeOptions 返回本地化的 VMM 策略模式选项。
+export function vmmPolicyModeOptions(t: (key: TranslationKey) => string): Array<{ value: string; label: string }> {
+  return [
+    { value: "inherit", label: t("vmm.settings.policy.inherit") },
+    { value: "enabled", label: t("vmm.settings.policy.enabled") },
+    { value: "disabled", label: t("vmm.settings.policy.disabled") },
+  ];
 }
 
 // VmmUserRows renders user rows from a VMM result.

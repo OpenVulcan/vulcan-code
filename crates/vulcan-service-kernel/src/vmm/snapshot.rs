@@ -30,7 +30,7 @@ pub(crate) fn vmm_memory_snapshot(
         selected_session.and_then(|session| session.project_id.as_deref()),
     );
     let project_layer = selected_project
-        .map(|project| load_project_configuration(&project.path).vmm)
+        .map(|project| cached_project_vmm_layer(&project.path))
         .unwrap_or_default();
     let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
         &provider_configuration.vmm,
@@ -50,17 +50,19 @@ pub(crate) fn vmm_memory_snapshot(
             &provider_configuration.vmm,
             &global_effective,
             !provider_configuration.vmm.is_empty(),
+            true,
         ),
         project_draft: vmm_config_draft_summary(
             &project_layer,
             &project_effective,
             !project_layer.is_empty(),
+            false,
         ),
         project_scopes: workspace
             .task_projects
             .iter()
             .map(|project| {
-                let project_vmm = load_project_configuration(&project.path).vmm;
+                let project_vmm = cached_project_vmm_layer(&project.path);
                 VmmProjectScopeSummary {
                     project_id: project.id.clone(),
                     name: project.title.clone(),
@@ -91,8 +93,12 @@ pub(crate) fn vmm_effective_summary(
         project_id: effective.project_id,
         diagnostic: vmm_diagnostic_key(effective.diagnose_memory_flow(grpc_configured)),
         precheck_diagnostic: vmm_diagnostic_key(effective.diagnose_precheck_flow(grpc_configured)),
+        writeback_diagnostic: vmm_diagnostic_key(
+            effective.diagnose_writeback_flow(grpc_configured),
+        ),
         ai_tools_enabled: effective.ai_tools_enabled,
         precheck_enabled: effective.precheck_enabled,
+        memory_writeback_enabled: effective.memory_writeback_enabled,
         implicit_memory_turns: effective.implicit_memory_turns,
         profile_refresh_turns: effective.profile_refresh_turns,
         profile_node_limit: effective.profile_node_limit,
@@ -121,6 +127,7 @@ pub(crate) fn vmm_config_draft_summary(
     layer: &vulcan_vmm::VmmConfigLayer,
     effective: &vulcan_vmm::VmmEffectiveConfig,
     has_override: bool,
+    force_explicit_policy_modes: bool,
 ) -> VmmConfigDraftSummary {
     VmmConfigDraftSummary {
         has_override,
@@ -182,6 +189,19 @@ pub(crate) fn vmm_config_draft_summary(
             .to_string(),
         ai_tools_enabled: layer.ai_tools_enabled.unwrap_or(effective.ai_tools_enabled),
         precheck_enabled: layer.precheck_enabled.unwrap_or(effective.precheck_enabled),
+        precheck_mode: vmm_layer_policy_mode_for_draft(
+            layer.precheck_enabled,
+            effective.precheck_enabled,
+            force_explicit_policy_modes,
+        ),
+        memory_writeback_enabled: layer
+            .memory_writeback_enabled
+            .unwrap_or(effective.memory_writeback_enabled),
+        memory_writeback_mode: vmm_layer_policy_mode_for_draft(
+            layer.memory_writeback_enabled,
+            effective.memory_writeback_enabled,
+            force_explicit_policy_modes,
+        ),
         injection_tag: layer
             .injection_tag
             .clone()
@@ -190,6 +210,29 @@ pub(crate) fn vmm_config_draft_summary(
             .injection_description
             .clone()
             .unwrap_or_else(|| effective.injection_description.clone()),
+    }
+}
+
+/// Converts one optional layer policy into a draft mode key.
+/// 将单个可选层级策略转换为草稿模式键。
+fn vmm_layer_policy_mode_for_draft(
+    value: Option<bool>,
+    effective: bool,
+    force_explicit: bool,
+) -> String {
+    if value.is_none() && force_explicit {
+        return vmm_layer_policy_mode(Some(effective));
+    }
+    vmm_layer_policy_mode(value)
+}
+
+/// Converts one optional layer policy into the WebUI tri-state mode key.
+/// 将单个可选层级策略转换为 WebUI 三态模式键。
+fn vmm_layer_policy_mode(value: Option<bool>) -> String {
+    match value {
+        None => String::from("inherit"),
+        Some(true) => String::from("enabled"),
+        Some(false) => String::from("disabled"),
     }
 }
 

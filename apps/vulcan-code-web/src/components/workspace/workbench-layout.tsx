@@ -562,6 +562,7 @@ export function WorkbenchLayout(props: {
     handleClearSessionGoal,
     handleUpdateSessionGoalStatus,
     handleSetSessionPlanMode,
+    handleSetSessionVmmPolicy,
     handleEditPendingPrompt,
   } = useWorkbenchSessionActions({
     selectedConversation,
@@ -927,6 +928,7 @@ export function WorkbenchLayout(props: {
             onClearSessionGoal={handleClearSessionGoal}
             onUpdateSessionGoalStatus={handleUpdateSessionGoalStatus}
             onSetSessionPlanMode={handleSetSessionPlanMode}
+            onSetSessionVmmPolicy={handleSetSessionVmmPolicy}
             onStopConversationRun={handleStopConversationRun}
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onStopSubagentTask={handleStopSubagentTask}

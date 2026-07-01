@@ -1,7 +1,13 @@
 //! VMM hook snapshot and writeback integration for service-kernel runtime paths.
 //! service-kernel 运行时路径使用的 VMM hook 快照与写回集成逻辑。
 
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use vulcan_agent_runtime::{
     agent_runtime::{conversation_hooks::VmmWritebackHookEffect, vmm_hooks::VmmHookConfigSnapshot},
@@ -14,6 +20,227 @@ use crate::{
     ServiceBridgeState, SharedServiceBridgeState, current_unix_millis_value,
     load_project_configuration, webui_trace,
 };
+
+/// Process-local project VMM layer cache keyed by normalized workspace path.
+/// 按规范化工作区路径索引的进程内项目 VMM 配置层缓存。
+static PROJECT_VMM_LAYER_CACHE: OnceLock<ProjectVmmLayerCache> = OnceLock::new();
+
+/// Cached project VMM layer with monotonic metadata for debugging and tests.
+/// 带单调元数据的项目 VMM 配置层缓存项，用于调试与测试。
+#[derive(Clone)]
+struct CachedProjectVmmLayer {
+    /// Cached project VMM configuration layer.
+    /// 已缓存的项目 VMM 配置层。
+    layer: vulcan_vmm::VmmConfigLayer,
+    /// Monotonic cache generation assigned when this entry is written.
+    /// 写入该缓存项时分配的单调缓存代次。
+    generation: u64,
+    /// Millisecond timestamp recorded when this entry is written.
+    /// 写入该缓存项时记录的毫秒时间戳。
+    loaded_at_ms: i128,
+}
+
+/// Process-local manager for project VMM layer caching and write-through updates.
+/// 进程内项目 VMM 配置层缓存与写穿更新管理器。
+struct ProjectVmmLayerCache {
+    /// Cached entries keyed by normalized workspace path.
+    /// 以规范化工作区路径为键的缓存项集合。
+    entries: RwLock<BTreeMap<String, CachedProjectVmmLayer>>,
+    /// Global monotonic generation for cache writes.
+    /// 缓存写入使用的全局单调代次。
+    generation: AtomicU64,
+}
+
+impl ProjectVmmLayerCache {
+    /// Creates an empty project VMM layer cache manager.
+    /// 创建空的项目 VMM 配置层缓存管理器。
+    fn new() -> Self {
+        Self {
+            entries: RwLock::new(BTreeMap::new()),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    /// Acquires the project VMM cache read guard and recovers poisoned locks.
+    /// 获取项目 VMM 缓存读锁，并恢复已中毒的锁。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The read guard for cached project VMM entries.
+    /// 返回项目 VMM 缓存项的读锁守卫。
+    fn read_entries(&self) -> RwLockReadGuard<'_, BTreeMap<String, CachedProjectVmmLayer>> {
+        self.entries
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Acquires the project VMM cache write guard and recovers poisoned locks.
+    /// 获取项目 VMM 缓存写锁，并恢复已中毒的锁。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The write guard for cached project VMM entries.
+    /// 返回项目 VMM 缓存项的写锁守卫。
+    fn write_entries(&self) -> RwLockWriteGuard<'_, BTreeMap<String, CachedProjectVmmLayer>> {
+        self.entries
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Returns a cached layer or loads it once without overwriting concurrent writes.
+    /// 返回缓存配置层，未命中时加载一次且不会覆盖并发写入的新值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `workspace_path` is the workspace path used to identify the project VMM layer.
+    /// `workspace_path` 是用于标识项目 VMM 配置层的工作区路径。
+    /// `loader` reads the authoritative project VMM layer on a cache miss.
+    /// `loader` 在缓存未命中时读取权威项目 VMM 配置层。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The cached or freshly loaded project VMM configuration layer.
+    /// 返回缓存中或刚加载的项目 VMM 配置层。
+    fn get_or_load(
+        &self,
+        workspace_path: &str,
+        loader: impl FnOnce(&str) -> vulcan_vmm::VmmConfigLayer,
+    ) -> vulcan_vmm::VmmConfigLayer {
+        let key = project_vmm_cache_key(workspace_path);
+        if let Some(entry) = self.get_entry(&key) {
+            return Self::layer_from_entry(&entry);
+        }
+
+        let loaded_layer = loader(workspace_path);
+        let mut entries = self.write_entries();
+        if let Some(existing) = entries.get(&key) {
+            return Self::layer_from_entry(existing);
+        }
+        entries.insert(key, self.entry_for_layer(loaded_layer.clone()));
+        loaded_layer
+    }
+
+    /// Writes one authoritative project VMM layer into the cache.
+    /// 将单个权威项目 VMM 配置层写入缓存。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `workspace_path` identifies the project whose cached VMM layer is replaced.
+    /// `workspace_path` 标识被替换缓存 VMM 配置层的项目。
+    /// `layer` is the authoritative project VMM layer that has already been saved.
+    /// `layer` 是已经完成保存的权威项目 VMM 配置层。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This function updates the cache in place and returns no value.
+    /// 该函数原地更新缓存且不返回值。
+    fn update(&self, workspace_path: &str, layer: vulcan_vmm::VmmConfigLayer) {
+        let key = project_vmm_cache_key(workspace_path);
+        let entry = self.entry_for_layer(layer);
+        let mut entries = self.write_entries();
+        entries.insert(key, entry);
+    }
+
+    /// Reads one cached entry by an already normalized key.
+    /// 通过已经规范化的键读取单个缓存项。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `key` is the normalized project VMM cache key.
+    /// `key` 是规范化后的项目 VMM 缓存键。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The cached entry when present.
+    /// 存在时返回对应缓存项。
+    fn get_entry(&self, key: &str) -> Option<CachedProjectVmmLayer> {
+        let entries = self.read_entries();
+        entries.get(key).cloned()
+    }
+
+    /// Creates a cache entry for one project VMM layer.
+    /// 为单个项目 VMM 配置层创建缓存项。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `layer` is the VMM layer stored in the cache entry.
+    /// `layer` 是写入缓存项的 VMM 配置层。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A cache entry with fresh generation and timestamp metadata.
+    /// 返回带有新代次与时间戳元数据的缓存项。
+    fn entry_for_layer(&self, layer: vulcan_vmm::VmmConfigLayer) -> CachedProjectVmmLayer {
+        CachedProjectVmmLayer {
+            layer,
+            generation: self.generation.fetch_add(1, Ordering::Relaxed) + 1,
+            loaded_at_ms: current_unix_millis_value(),
+        }
+    }
+
+    /// Clones the cached layer while intentionally touching metadata.
+    /// 克隆缓存配置层，同时显式读取缓存元数据。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `entry` is the cached project VMM layer entry.
+    /// `entry` 是项目 VMM 配置层缓存项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The cloned project VMM configuration layer.
+    /// 返回克隆后的项目 VMM 配置层。
+    fn layer_from_entry(entry: &CachedProjectVmmLayer) -> vulcan_vmm::VmmConfigLayer {
+        let _ = (entry.generation, entry.loaded_at_ms);
+        entry.layer.clone()
+    }
+}
+
+/// Returns the shared project VMM layer cache manager.
+/// 返回共享项目 VMM 配置层缓存管理器。
+fn project_vmm_layer_cache() -> &'static ProjectVmmLayerCache {
+    PROJECT_VMM_LAYER_CACHE.get_or_init(ProjectVmmLayerCache::new)
+}
+
+/// Builds the canonical cache key for one workspace path.
+/// 为单个工作区路径构建规范缓存键。
+///
+/// # Parameters
+/// 参数
+/// `workspace_path` is the raw workspace path persisted in the project snapshot.
+/// `workspace_path` 是项目快照中持久化的原始工作区路径。
+///
+/// # Returns
+/// 返回值
+/// The normalized workspace path used as the project VMM cache key.
+/// 返回作为项目 VMM 缓存键使用的规范化工作区路径。
+fn project_vmm_cache_key(workspace_path: &str) -> String {
+    let mut key = workspace_path.trim().replace('\\', "/");
+    while key.len() > 1 && key.ends_with('/') {
+        key.pop();
+    }
+    if key.len() >= 2 && key.as_bytes()[1] == b':' && key.as_bytes()[0].is_ascii_alphabetic() {
+        let drive = key[..1].to_ascii_lowercase();
+        key.replace_range(0..1, &drive);
+    }
+    key
+}
+
+/// Reads one project VMM layer from memory, loading it once on a cache miss.
+/// 从内存读取单个项目 VMM 配置层；缓存未命中时只加载一次。
+pub(super) fn cached_project_vmm_layer(workspace_path: &str) -> vulcan_vmm::VmmConfigLayer {
+    project_vmm_layer_cache()
+        .get_or_load(workspace_path, |path| load_project_configuration(path).vmm)
+}
+
+/// Updates one cached project VMM layer after an authoritative save.
+/// 在权威保存后更新单个项目 VMM 配置层缓存。
+pub(super) fn update_cached_project_vmm_layer(
+    workspace_path: &str,
+    layer: vulcan_vmm::VmmConfigLayer,
+) {
+    project_vmm_layer_cache().update(workspace_path, layer);
+}
 
 /// Refreshes the retained VMM hook snapshot from shared service state.
 /// 从共享服务状态刷新保留的 VMM hook 快照。
@@ -101,9 +328,9 @@ pub(super) fn build_vmm_hook_config_snapshot(
         .chain(workspace_snapshot.archived_task_projects.iter())
     {
         project_count += 1;
-        let project_configuration = load_project_configuration(&project.path);
-        if !project_configuration.vmm.is_empty() {
-            projects_by_workspace.insert(project.path.clone(), project_configuration.vmm);
+        let project_layer = cached_project_vmm_layer(&project.path);
+        if !project_layer.is_empty() {
+            projects_by_workspace.insert(project.path.clone(), project_layer);
         }
     }
 
@@ -331,6 +558,15 @@ mod tests {
     use vulcan_workbench_model::VmmWritebackOutboxEntry;
     use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
+    /// Builds a project VMM layer with a deterministic enabled flag.
+    /// 构建带有确定 enabled 标记的项目 VMM 配置层。
+    fn test_vmm_layer(enabled: bool) -> vulcan_vmm::VmmConfigLayer {
+        vulcan_vmm::VmmConfigLayer {
+            enabled: Some(enabled),
+            ..Default::default()
+        }
+    }
+
     /// Builds a minimal workspace snapshot for VMM hook integration tests.
     /// 为 VMM hook 集成测试构建最小工作区快照。
     fn test_workspace_snapshot() -> WorkspaceSnapshot {
@@ -350,6 +586,95 @@ mod tests {
             selected_session: Uuid::nil(),
             hydrated_session_ids: BTreeSet::new(),
         }
+    }
+
+    /// Verifies Windows-style workspace paths share one project VMM cache key.
+    /// 验证 Windows 风格工作区路径会共享同一个项目 VMM 缓存键。
+    #[test]
+    fn project_vmm_cache_key_normalizes_windows_style_paths() {
+        assert_eq!(
+            project_vmm_cache_key(r"D:\OpenVulcan\vulcan-code\"),
+            "d:/OpenVulcan/vulcan-code"
+        );
+        assert_eq!(
+            project_vmm_cache_key("D:/OpenVulcan/vulcan-code/"),
+            "d:/OpenVulcan/vulcan-code"
+        );
+    }
+
+    /// Verifies a cache miss loads once and equivalent paths reuse the cached entry.
+    /// 验证缓存未命中只加载一次，且等价路径会复用同一个缓存项。
+    #[test]
+    fn project_vmm_layer_cache_loads_and_reuses_entry() {
+        let cache = ProjectVmmLayerCache::new();
+        let calls = AtomicU64::new(0);
+
+        let first = cache.get_or_load("D:/repo", |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            test_vmm_layer(true)
+        });
+        let second = cache.get_or_load(r"D:\repo\", |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            test_vmm_layer(false)
+        });
+
+        let entry = cache
+            .get_entry(&project_vmm_cache_key("D:/repo"))
+            .expect("cache entry should exist after load");
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(first.enabled, Some(true));
+        assert_eq!(second.enabled, Some(true));
+        assert_eq!(entry.generation, 1);
+        assert!(entry.loaded_at_ms > 0);
+    }
+
+    /// Verifies saved project VMM layers take precedence over later cache-miss loaders.
+    /// 验证已保存的项目 VMM 配置层优先于后续缓存未命中加载器。
+    #[test]
+    fn project_vmm_layer_cache_update_writes_authoritative_value() {
+        let cache = ProjectVmmLayerCache::new();
+
+        cache.update("D:/repo", test_vmm_layer(false));
+        let layer = cache.get_or_load("D:/repo", |_| test_vmm_layer(true));
+
+        assert_eq!(layer.enabled, Some(false));
+    }
+
+    /// Verifies a stale miss load cannot overwrite a concurrent authoritative update.
+    /// 验证过期的未命中加载结果不能覆盖并发权威更新。
+    #[test]
+    fn project_vmm_layer_cache_miss_does_not_overwrite_concurrent_update() {
+        let cache = ProjectVmmLayerCache::new();
+
+        let layer = cache.get_or_load("D:/repo", |_| {
+            cache.update("D:/repo", test_vmm_layer(false));
+            test_vmm_layer(true)
+        });
+
+        let entry = cache
+            .get_entry(&project_vmm_cache_key("D:/repo"))
+            .expect("cache entry should keep the authoritative update");
+        assert_eq!(layer.enabled, Some(false));
+        assert_eq!(entry.layer.enabled, Some(false));
+    }
+
+    /// Verifies the cache keeps working after a panic poisons its lock.
+    /// 验证缓存锁被 panic 标记为中毒后仍能继续工作。
+    #[test]
+    fn project_vmm_layer_cache_recovers_poisoned_lock() {
+        let cache = ProjectVmmLayerCache::new();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _entries = cache
+                .entries
+                .write()
+                .expect("test lock should start healthy");
+            panic!("poison project VMM cache lock for recovery coverage");
+        }));
+
+        cache.update("D:/repo", test_vmm_layer(true));
+        let layer = cache.get_or_load("D:/repo", |_| test_vmm_layer(false));
+
+        assert_eq!(layer.enabled, Some(true));
     }
 
     /// Builds a stable PostAction request for writeback tests.

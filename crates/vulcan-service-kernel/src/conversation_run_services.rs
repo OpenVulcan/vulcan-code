@@ -378,6 +378,136 @@ pub(crate) async fn service_set_session_plan_mode(
     emit_session_addons_changed_delta(&app, &state, session_id)
 }
 
+/// Persists one session-scoped VMM memory policy override.
+/// 持久化单个会话级 VMM 记忆策略覆盖。
+///
+/// # Parameters
+/// 参数
+/// `app` emits addon and workbench delta events after the update.
+/// `app` 在更新后发送附属状态与工作台增量事件。
+/// `state` owns retained workspace and runtime snapshots.
+/// `state` 持有保留的工作区与运行时快照。
+/// `request` describes the policy key and tri-state mode selected by the user.
+/// `request` 描述用户选择的策略键与三态模式。
+///
+/// # Returns
+/// 返回值
+/// The updated addon projection for the target session.
+/// 返回目标会话更新后的附属状态投影。
+pub(crate) async fn service_set_session_vmm_policy(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: SessionVmmPolicyUpdateRequest,
+) -> Result<SessionAddonsChangedResponse, String> {
+    let session_id = request
+        .conversation_id
+        .as_deref()
+        .and_then(parse_session_id)
+        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换 VMM 记忆策略。"))?;
+    let policy_value = session_vmm_policy_mode_from_request(&request.mode)?;
+    let (controller_runtime, workspace_snapshot, mut next_vmm) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
+            return Err(format!("未找到要切换 VMM 记忆策略的会话：{session_id}"));
+        }
+        let next_vmm = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .map(|runtime_state| runtime_state.vmm.clone())
+            .unwrap_or_default();
+        (controller_runtime, workspace_snapshot.clone(), next_vmm)
+    };
+    match request.policy.trim().to_ascii_lowercase().as_str() {
+        "precheck" | "precheck_enabled" | "precheck-injection" | "precheck_injection" => {
+            next_vmm.precheck_enabled = policy_value;
+        }
+        "writeback" | "memory_writeback" | "memory_writeback_enabled" | "post_action" => {
+            next_vmm.memory_writeback_enabled = policy_value;
+        }
+        other => return Err(format!("不支持的 VMM 记忆策略：{other}")),
+    }
+    let updated_at = current_unix_millis_text();
+    let mut addon_state = SessionAddonState::new(session_id);
+    let _ =
+        addon_state.set_typed_namespace(SessionAddonNamespace::Vmm, &next_vmm, updated_at.clone());
+    invalidate_webui_session_addon_persist_version(&state, session_id, SessionAddonNamespace::Vmm)?;
+    let addon_persist_lock = webui_workspace_persist_lock();
+    let _addon_persist_guard = addon_persist_lock.lock().await;
+    persist_workspace_session_addon_state_update(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        addon_state,
+    )
+    .await?;
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone());
+        let vmm_hook_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.vmm_hook_runtime.clone());
+        let refreshed_workspace_snapshot = {
+            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: updated_at.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            runtime_state.vmm = next_vmm;
+            runtime_state.updated_at = updated_at.clone();
+            workspace.clone()
+        };
+        if let (Some(vmm_hook_runtime), Some(provider_configuration)) =
+            (vmm_hook_runtime, provider_configuration)
+        {
+            vmm_hook_runtime.replace_snapshot(build_vmm_hook_config_snapshot(
+                &provider_configuration,
+                &refreshed_workspace_snapshot,
+            ));
+        }
+    }
+    emit_session_addons_changed_delta(&app, &state, session_id)
+}
+
+/// Parses one WebUI VMM policy mode into an optional layer value.
+/// 将单个 WebUI VMM 策略模式解析为可选配置层值。
+///
+/// # Parameters
+/// 参数
+/// `mode` is the raw mode key sent by the WebUI.
+/// `mode` 是 WebUI 发送的原始模式键。
+///
+/// # Returns
+/// 返回值
+/// `None` for inheritance, or `Some` for explicit enablement.
+/// 继承时返回 `None`，显式开关时返回 `Some`。
+fn session_vmm_policy_mode_from_request(mode: &str) -> Result<Option<bool>, String> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "inherit" | "inherit_project" | "inheritproject" => Ok(None),
+        "enabled" | "on" | "true" => Ok(Some(true)),
+        "disabled" | "off" | "false" => Ok(Some(false)),
+        other => Err(format!("不支持的 VMM 记忆策略模式：{other}")),
+    }
+}
+
 /// Builds one context-window-scoped model notice for session AI capability changes.
 /// 为会话 AI 能力变化构建一条仅在当前上下文窗口内生效的模型通知。
 ///

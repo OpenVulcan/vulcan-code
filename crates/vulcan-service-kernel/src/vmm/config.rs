@@ -38,6 +38,7 @@ pub(crate) fn save_vmm_memory_config(
             &PathBuf::from(&project_path),
             &project_configuration,
         )?;
+        update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
         refresh_service_vmm_hook_snapshot(state)?;
         return Ok(());
     }
@@ -65,7 +66,7 @@ pub(crate) fn load_project_vmm_config(
 ) -> Result<VmmConfigDraftSummary, String> {
     let project_path = vmm_project_scope_path(state, Some(project_id))?;
     let provider_configuration = provider_configuration_from_state(state)?;
-    let project_layer = load_project_configuration(&project_path).vmm;
+    let project_layer = cached_project_vmm_layer(&project_path);
     let project_effective = vulcan_vmm::VmmEffectiveConfig::resolve(
         &provider_configuration.vmm,
         Some(&project_layer),
@@ -75,6 +76,7 @@ pub(crate) fn load_project_vmm_config(
         &project_layer,
         &project_effective,
         !project_layer.is_empty(),
+        false,
     ))
 }
 
@@ -141,12 +143,42 @@ pub(crate) fn vmm_config_layer_from_draft(
         )?,
         profile_node_limit: vmm_parse_optional_u32(&draft.profile_node_limit, "画像节点上限")?,
         session_compact_recall: Some(true),
-        precheck_enabled: Some(draft.precheck_enabled),
+        precheck_enabled: vmm_policy_from_draft_mode(
+            &draft.precheck_mode,
+            draft.precheck_enabled,
+            include_transport,
+            "前置记忆注入",
+        )?,
+        memory_writeback_enabled: vmm_policy_from_draft_mode(
+            &draft.memory_writeback_mode,
+            draft.memory_writeback_enabled,
+            include_transport,
+            "后置记忆提交",
+        )?,
         ai_tools_enabled: Some(draft.ai_tools_enabled),
         injection_tag: vmm_non_empty_text(&draft.injection_tag),
         injection_description: vmm_non_empty_text(&draft.injection_description),
         install: None,
     })
+}
+
+/// Converts one WebUI policy mode into an optional persisted layer override.
+/// 将单个 WebUI 策略模式转换为可选持久化层级覆盖。
+fn vmm_policy_from_draft_mode(
+    mode: &str,
+    enabled: bool,
+    force_explicit: bool,
+    label: &str,
+) -> Result<Option<bool>, String> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(Some(enabled)),
+        "inherit" | "inherit_project" | "inheritproject" | "inherit_system" | "inheritsystem" => {
+            Ok(force_explicit.then_some(enabled))
+        }
+        "enabled" | "on" | "true" => Ok(Some(true)),
+        "disabled" | "off" | "false" => Ok(Some(false)),
+        other => Err(format!("{label} 策略模式不受支持：{other}")),
+    }
 }
 
 /// Parses one profile target key from WebUI.

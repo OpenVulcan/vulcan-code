@@ -93,14 +93,14 @@ use vulcan_service_api::{
     ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter,
     SessionAddonChangedEvent, SessionAddonsChangedDelta, SessionAddonsChangedResponse,
     SessionGoalSummary, SessionPlanArtifactSummary, SessionPlanModeSummary,
-    SessionTodolistItemSummary, SessionTodolistSummary, SettingSectionSummary, StartupSnapshot,
-    StartupStepStatus, SubagentNavigationChangedDelta, SubagentNavigationSnapshot,
-    SubagentPanelRouteResponse, ToolCallSummary, UpdateConversationRunPhaseDelta,
-    UserPromptEditDraftSummary, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
-    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
-    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
-    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
-    webui_static_root_from_candidates,
+    SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
+    SessionVmmPolicySummary, SettingSectionSummary, StartupSnapshot, StartupStepStatus,
+    SubagentNavigationChangedDelta, SubagentNavigationSnapshot, SubagentPanelRouteResponse, ToolCallSummary,
+    UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary, VmmMemorySnapshot,
+    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
+    WorkbenchSnapshot, webui_service_discovery_snapshot_with_status,
+    webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
     SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
@@ -329,7 +329,10 @@ use vmm::{
     service_load_project_vmm_config, service_run_vmm_memory_action, service_save_vmm_memory_config,
     static_vmm_profile_snapshot, vmm_memory_snapshot,
 };
-use vmm_hooks::{apply_vmm_writeback_effects_to_runtime_state, build_vmm_hook_config_snapshot};
+use vmm_hooks::{
+    apply_vmm_writeback_effects_to_runtime_state, build_vmm_hook_config_snapshot,
+    cached_project_vmm_layer,
+};
 use webui_prompt_context::*;
 use webui_prompt_lifecycle::{
     maybe_prepare_next_webui_pending_prompt, maybe_start_webui_mailbox_turn_if_ready,

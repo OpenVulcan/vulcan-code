@@ -297,15 +297,16 @@ pub(crate) fn workbench_with_live_pending_question(
     }
     workbench.pending_questions =
         pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
-    workbench.pending_question = workbench
-        .selected_conversation_id
-        .as_ref()
-        .and_then(|conversation_id| {
-            workbench
-                .pending_questions
-                .iter()
-                .find(|question| question.session_id == *conversation_id)
-                .cloned()
-        });
+    workbench.pending_question =
+        workbench
+            .selected_conversation_id
+            .as_ref()
+            .and_then(|conversation_id| {
+                workbench
+                    .pending_questions
+                    .iter()
+                    .find(|question| question.session_id == *conversation_id)
+                    .cloned()
+            });
     workbench
 }
