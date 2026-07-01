@@ -115,9 +115,10 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
             .enumerate()
             .map(|(index, message)| {
                 log_entry(&format!("fallback-{index}"), "info", "service", message)
-            })
-            .collect(),
+        })
+        .collect(),
         context_injection: None,
+        context_injection_by_conversation: Vec::new(),
         context_usage: None,
     }
 }

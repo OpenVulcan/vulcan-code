@@ -2,6 +2,7 @@
 //! WebUI 提示词生命周期 precheck continue 辅助逻辑。
 
 use super::*;
+use crate::emit_context_injection_changed_delta;
 
 /// Builds the shared precheck plan for a WebUI session using the service VMM layering rules.
 /// 使用服务运行时的 VMM 分层规则为一个 WebUI 会话构建共享 precheck 计划。
@@ -432,6 +433,7 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         session_id,
         SessionRunPhase::Preparing,
     )?;
+    emit_context_injection_changed_delta(app, state, session_id)?;
     webui_trace(
         "precheck_continue_phase_committed",
         format!(

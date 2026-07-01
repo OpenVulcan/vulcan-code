@@ -502,13 +502,21 @@ export function WorkbenchLayout(props: {
   // consoleWorkbenchState 在本地草稿会话激活时清空当前会话投影，避免沿用上一会话的侧栏状态。
   const consoleWorkbenchState = React.useMemo<WorkbenchSnapshot>(() => {
     if (!selectedDraftConversation) {
-      return workbenchState;
+      const selectedContextInjection = selectedConversationId
+        ? workbenchState.contextInjectionByConversation
+          ?.find((entry) => entry.conversationId === selectedConversationId)
+          ?.contextInjection ?? workbenchState.contextInjection ?? null
+        : null;
+      return {
+        ...workbenchState,
+        contextInjection: selectedContextInjection,
+      };
     }
     return {
       ...workbenchState,
       contextInjection: null,
     };
-  }, [selectedDraftConversation, workbenchState]);
+  }, [selectedConversationId, selectedDraftConversation, workbenchState]);
   // showStartupOverlay blocks workspace interaction until the real service bootstrap completes.
   // showStartupOverlay 在真实服务启动完成前阻塞工作区交互。
   const showStartupOverlay = !props.startup.ready && props.startup.phase !== "browser-preview";

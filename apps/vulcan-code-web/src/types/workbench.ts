@@ -13,6 +13,7 @@ import type {
 import type {
   ConversationMessage,
   ConversationSummary,
+  ContextInjectionChangedDelta,
   PendingPromptsChangedDelta,
   SessionAddonsChangedDelta,
   SessionVmmPolicyByConversation,
@@ -192,6 +193,9 @@ export interface WorkbenchSnapshot {
   // Context injection cards projected from the selected session runtime state.
   // 从当前选中会话运行态投影出的上下文注入卡片。
   contextInjection?: ContextInjectionSnapshot | null;
+  // Context injection projections retained by conversation id.
+  // 按会话标识保留的上下文注入投影。
+  contextInjectionByConversation?: ContextInjectionChangedDelta[];
   // Context token usage snapshot projected from the latest execution preparation.
   // 从最近一次执行准备投影出的上下文 Token 占用快照。
   contextUsage?: ContextUsageSnapshot | null;

@@ -345,16 +345,13 @@ pub(crate) fn emit_session_addons_changed_delta(
             .workbench
             .session_vmm_policies_by_conversation
             .retain(|entry| entry.conversation_id != conversation_id);
-        if conversation_is_visible
-            && let Some(session_vmm_policy) = session_vmm_policy.clone()
-        {
-            guard
-                .workbench
-                .session_vmm_policies_by_conversation
-                .push(SessionVmmPolicyByConversation {
+        if conversation_is_visible && let Some(session_vmm_policy) = session_vmm_policy.clone() {
+            guard.workbench.session_vmm_policies_by_conversation.push(
+                SessionVmmPolicyByConversation {
                     conversation_id: conversation_id.clone(),
                     session_vmm_policy,
-                });
+                },
+            );
         }
         if let Some(conversation) = guard
             .workbench

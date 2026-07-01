@@ -646,10 +646,10 @@ function ContextInjectionLookupDialog(props: {
             <div className="context-injection-turn-list">
               {turnEntries.map((turn, index) => (
                 <article className="context-injection-turn-entry" key={index}>
-                  <strong>TURNID:{String(turn.turnId ?? props.state.target.turnId)}</strong>
-                  <span>{t("workspaceMemory.user").replace("{content}", String(turn.userQuestion ?? ""))}</span>
-                  <span>{t("workspaceMemory.assistant").replace("{content}", String(turn.assistantAnswer ?? ""))}</span>
-                  {turn.detail ? <pre>{String(turn.detail)}</pre> : null}
+                  <strong>TURNID:{String(contextInjectionLookupTurnId(turn, props.state.target.turnId))}</strong>
+                  <span>{t("workspaceMemory.user").replace("{content}", contextInjectionLookupText(turn, "user_question"))}</span>
+                  <span>{t("workspaceMemory.assistant").replace("{content}", contextInjectionLookupText(turn, "assistant_answer"))}</span>
+                  {contextInjectionLookupText(turn, "detail") ? <pre>{contextInjectionLookupText(turn, "detail")}</pre> : null}
                 </article>
               ))}
             </div>
@@ -801,6 +801,27 @@ function contextInjectionLookupTurns(result: VmmMemoryActionResult | undefined):
   return Array.isArray(turns)
     ? turns.filter((turn): turn is Record<string, unknown> => typeof turn === "object" && turn !== null)
     : [];
+}
+
+// contextInjectionLookupText reads one VMM turn detail text field from the wire payload.
+// contextInjectionLookupText 从 VMM 回合详情 wire 载荷读取单个文本字段。
+function contextInjectionLookupText(turn: Record<string, unknown>, field: "user_question" | "assistant_answer" | "detail"): string {
+  const camelField = field.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase());
+  const value = turn[field] ?? turn[camelField];
+  return typeof value === "string" ? value : "";
+}
+
+// contextInjectionLookupTurnId reads the VMM turn id from the wire payload.
+// contextInjectionLookupTurnId 从 VMM wire 载荷读取回合标识。
+function contextInjectionLookupTurnId(turn: Record<string, unknown>, fallbackTurnId: number): number | string {
+  const value = turn.turn_id ?? turn.turnId;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  return fallbackTurnId;
 }
 
 // vmmDeletedMemoryIds extracts deleted ids from a delete action response.

@@ -7,6 +7,7 @@ import {
 } from "@/state/workbench-message-merge";
 import type {
   ConversationHydrationProgress,
+  ContextInjectionChangedDelta,
   ConversationMessage,
   ConversationSummary,
   PendingPromptsChangedDelta,
@@ -112,6 +113,10 @@ export function mergeWorkbenchSnapshot(
     pendingQuestions: incoming.pendingQuestions ?? current.pendingQuestions ?? [],
     sessionAddonsByConversation: incoming.sessionAddonsByConversation ?? current.sessionAddonsByConversation ?? [],
     sessionVmmPoliciesByConversation: incoming.sessionVmmPoliciesByConversation ?? current.sessionVmmPoliciesByConversation ?? [],
+    contextInjectionByConversation: mergeContextInjectionByConversation(
+      current.contextInjectionByConversation ?? [],
+      incoming.contextInjectionByConversation ?? [],
+    ),
     subagentNavigationByConversation: mergeSubagentNavigationsByConversation(
       current.subagentNavigationByConversation ?? [],
       deriveIncomingSubagentNavigations(incoming),
@@ -161,6 +166,9 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
   const subagentNavigation = selectedConversationId
     ? workbench.subagentNavigationByConversation?.find((navigation) => navigation.parentConversationId === selectedConversationId) ?? null
     : null;
+  const contextInjectionEntry = selectedConversationId
+    ? workbench.contextInjectionByConversation?.find((entry) => entry.conversationId === selectedConversationId) ?? null
+    : null;
   return {
     ...workbench,
     pendingQuestion,
@@ -170,6 +178,7 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
     sessionPlanMode: sessionAddons?.sessionPlanMode ?? null,
     sessionVmmPolicy: sessionVmmPolicyEntry?.sessionVmmPolicy ?? null,
     subagentNavigation,
+    contextInjection: contextInjectionEntry?.contextInjection ?? workbench.contextInjection ?? null,
   };
 }
 
@@ -208,6 +217,40 @@ function upsertSessionVmmPolicyForConversation(
     conversationId: entry.conversationId,
     sessionVmmPolicy: entry.sessionVmmPolicy,
   }] : next;
+}
+
+// mergeContextInjectionByConversation merges memory-panel projections by conversation id.
+// mergeContextInjectionByConversation 按会话标识合并记忆面板投影。
+function mergeContextInjectionByConversation(
+  current: ContextInjectionChangedDelta[],
+  incoming: ContextInjectionChangedDelta[],
+): ContextInjectionChangedDelta[] {
+  const merged = new Map(current.map((entry) => [entry.conversationId, entry]));
+  for (const entry of incoming) {
+    merged.set(entry.conversationId, entry);
+  }
+  return [...merged.values()];
+}
+
+// upsertContextInjectionForConversation upserts or removes one memory-panel projection.
+// upsertContextInjectionForConversation 写入或删除单个会话的记忆面板投影。
+function upsertContextInjectionForConversation(
+  current: ContextInjectionChangedDelta[],
+  entry: ContextInjectionChangedDelta,
+): ContextInjectionChangedDelta[] {
+  const next = current.filter((candidate) => candidate.conversationId !== entry.conversationId);
+  return entry.contextInjection ? [...next, entry] : next;
+}
+
+// contextInjectionForConversation returns the cached memory-panel projection for one conversation.
+// contextInjectionForConversation 返回单个会话缓存的记忆面板投影。
+function contextInjectionForConversation(
+  workbench: WorkbenchSnapshot,
+  conversationId: string,
+): WorkbenchSnapshot["contextInjection"] {
+  return workbench.contextInjectionByConversation
+    ?.find((entry) => entry.conversationId === conversationId)
+    ?.contextInjection ?? null;
 }
 
 // deriveIncomingSubagentNavigations extracts full-snapshot subagent navigation cache entries.
@@ -427,6 +470,8 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
         ...workbench,
         contextUsage: envelope.delta.payload.contextUsage ?? null,
       };
+    case "contextInjectionChanged":
+      return applyContextInjectionChangedDelta(workbench, envelope.delta.payload);
     case "conversationMessagesChanged":
       return mergeConversationMessagesWithSubagentSurfaceMessageCache(
         workbench,
@@ -506,6 +551,21 @@ function applyUpdateConversationRunPhaseDelta(
       delta.runPhase,
     ),
   };
+}
+
+// applyContextInjectionChangedDelta replaces the selected conversation memory-panel projection.
+// applyContextInjectionChangedDelta 替换当前选中会话的记忆面板投影。
+function applyContextInjectionChangedDelta(
+  workbench: WorkbenchSnapshot,
+  delta: ContextInjectionChangedDelta,
+): WorkbenchSnapshot {
+  return deriveSelectedConversationFields({
+    ...workbench,
+    contextInjectionByConversation: upsertContextInjectionForConversation(
+      workbench.contextInjectionByConversation ?? [],
+      delta,
+    ),
+  });
 }
 
 // syncSubagentSurfaceMessageCacheForDelta updates the cached child transcript touched by one delta.
@@ -742,6 +802,7 @@ export function markConversationLocallyRead(workbench: WorkbenchSnapshot, conver
   return deriveSelectedConversationFields({
     ...workbench,
     selectedConversationId: conversationId,
+    contextInjection: contextInjectionForConversation(workbench, conversationId),
     conversations: workbench.conversations.map((conversation) => (
       conversation.id === conversationId
         ? {

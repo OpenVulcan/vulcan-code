@@ -173,6 +173,9 @@ pub enum WorkbenchDelta {
     /// Context-usage replacement for the composer usage indicator.
     /// 用于输入区上下文用量指示器的上下文用量替换增量。
     ContextUsageChanged(ContextUsageChangedDelta),
+    /// Context-injection replacement for the selected-session memory panel.
+    /// 用于当前选中会话记忆面板的上下文注入替换增量。
+    ContextInjectionChanged(ContextInjectionChangedDelta),
     /// Message-window replacement for one focused conversation surface.
     /// 单个聚焦会话界面的消息窗口替换增量。
     ConversationMessagesChanged(ConversationMessagesChangedDelta),
@@ -337,6 +340,20 @@ pub struct ContextUsageChangedDelta {
     /// 当前上下文用量；没有活动用量时为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Replaces the selected-session context injection memory-panel projection.
+/// 替换当前选中会话的上下文注入记忆面板投影。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextInjectionChangedDelta {
+    /// Stable conversation identifier that owns the memory-panel projection.
+    /// 拥有记忆面板投影的稳定会话标识。
+    pub conversation_id: String,
+    /// Current context injection projection, or null when no runtime state is available.
+    /// 当前上下文注入投影；运行态不可用时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_injection: Option<ContextInjectionSnapshot>,
 }
 
 /// Replaces the visible message window for one conversation.

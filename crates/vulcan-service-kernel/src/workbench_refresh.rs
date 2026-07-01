@@ -774,6 +774,9 @@ pub(crate) fn workbench_from_runtime(
             )
             .collect(),
         context_injection: context_injection_snapshot_from_runtime_state(selected_runtime_state),
+        context_injection_by_conversation: context_injection_by_conversation_from_workspace(
+            workspace,
+        ),
         context_usage: context_usage_snapshot_from_runtime_state(
             workspace.selected_session,
             selected_runtime_state,

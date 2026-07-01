@@ -321,6 +321,37 @@ pub(crate) fn context_injection_snapshot_from_runtime_state(
     })
 }
 
+/// Builds retained context injection projections for hydrated conversations.
+/// 为已水合会话构建保留的上下文注入投影。
+///
+/// # Parameters
+/// 参数
+/// `workspace` provides session runtime states and hydration ownership.
+/// `workspace` 提供会话运行态与水合归属信息。
+///
+/// # Returns
+/// 返回值
+/// Per-conversation memory-panel projections with empty runtime entries omitted.
+/// 返回按会话归属的记忆面板投影，并省略缺少运行态的条目。
+pub(crate) fn context_injection_by_conversation_from_workspace(
+    workspace: &WorkspaceSnapshot,
+) -> Vec<ContextInjectionChangedDelta> {
+    let mut session_ids = workspace.hydrated_session_ids.clone();
+    session_ids.insert(workspace.selected_session);
+    session_ids
+        .iter()
+        .filter_map(|session_id| {
+            let context_injection = context_injection_snapshot_from_runtime_state(
+                workspace.session_runtime_state.get(session_id),
+            )?;
+            Some(ContextInjectionChangedDelta {
+                conversation_id: session_id.to_string(),
+                context_injection: Some(context_injection),
+            })
+        })
+        .collect()
+}
+
 /// Converts shared injection panel cards into service API DTOs.
 /// 将共享注入面板卡片转换为 service API DTO。
 pub(crate) fn context_injection_cards_to_summary(

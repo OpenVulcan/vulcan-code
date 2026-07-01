@@ -9,7 +9,7 @@ import type {
   SessionTodolistSummary,
   SubagentNavigationSnapshot,
 } from "./planning-questions";
-import type { CommandSessionSummary, ContextUsageSnapshot } from "./runtime-context";
+import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
 
 export interface ConversationSummary {
   // Stable conversation identifier.
@@ -239,6 +239,17 @@ export interface ContextUsageChangedDelta {
   contextUsage?: ContextUsageSnapshot | null;
 }
 
+// ContextInjectionChangedDelta replaces the selected-session memory-panel projection.
+// ContextInjectionChangedDelta 替换当前选中会话的记忆面板投影。
+export interface ContextInjectionChangedDelta {
+  // Stable conversation identifier that owns this memory-panel projection.
+  // 拥有该记忆面板投影的稳定会话标识。
+  conversationId: string;
+  // Current context injection projection, or null when runtime state is unavailable.
+  // 当前上下文注入投影；运行态不可用时为空。
+  contextInjection?: ContextInjectionSnapshot | null;
+}
+
 // ConversationMessagesChangedDelta replaces one focused conversation message window.
 // ConversationMessagesChangedDelta 替换单个聚焦会话的消息窗口。
 export interface ConversationMessagesChangedDelta {
@@ -360,6 +371,7 @@ export type WorkbenchDelta =
   | { kind: "commandSessionsChanged"; payload: CommandSessionsChangedDelta }
   | { kind: "subagentNavigationChanged"; payload: SubagentNavigationChangedDelta }
   | { kind: "contextUsageChanged"; payload: ContextUsageChangedDelta }
+  | { kind: "contextInjectionChanged"; payload: ContextInjectionChangedDelta }
   | { kind: "conversationMessagesChanged"; payload: ConversationMessagesChangedDelta }
   | { kind: "conversationMessagesPatched"; payload: ConversationMessagesPatchedDelta }
   | { kind: "sessionAddonsChanged"; payload: SessionAddonsChangedDelta };

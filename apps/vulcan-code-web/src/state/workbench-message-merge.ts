@@ -34,6 +34,8 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
         ?? null;
     case "contextUsageChanged":
       return null;
+    case "contextInjectionChanged":
+      return envelope.delta.payload.conversationId;
     case "conversationMessagesChanged":
       return envelope.delta.payload.conversationId;
     case "conversationMessagesPatched":

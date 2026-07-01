@@ -179,6 +179,10 @@ pub struct WorkbenchSnapshot {
     /// 从当前选中会话运行态投影出的上下文注入卡片。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_injection: Option<ContextInjectionSnapshot>,
+    /// Context injection projections retained by conversation id.
+    /// 按会话标识保留的上下文注入投影。
+    #[serde(default)]
+    pub context_injection_by_conversation: Vec<ContextInjectionChangedDelta>,
     /// Context token usage snapshot projected from the latest execution preparation.
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]

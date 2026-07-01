@@ -276,6 +276,96 @@ pub(crate) fn commit_workspace_snapshot_and_emit_session_phase_delta(
     Ok(())
 }
 
+/// Emits the selected-session context injection side-panel projection as its own delta.
+/// 将当前选中会话的上下文注入侧面板投影作为独立增量发出。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the delta event to connected WebUI clients.
+/// `app` 将增量事件发送给已连接的 WebUI 客户端。
+/// `state` owns the retained workspace and workbench projections.
+/// `state` 持有保留的工作区与工作台投影。
+/// `session_id` selects the session whose memory-panel projection changed.
+/// `session_id` 选择记忆面板投影发生变化的会话。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the selected-session projection was emitted or skipped for a background session.
+/// 当前选中会话投影已发出，或后台会话被跳过时返回 `Ok(())`。
+pub(crate) fn emit_context_injection_changed_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+            return Ok(());
+        };
+        let Some(delta) = context_injection_changed_delta_from_workspace_snapshot(
+            workspace_snapshot,
+            session_id,
+        ) else {
+            return Ok(());
+        };
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        guard.workbench.context_injection = delta.context_injection.clone();
+        guard
+            .workbench
+            .context_injection_by_conversation
+            .retain(|entry| entry.conversation_id != delta.conversation_id);
+        if delta.context_injection.is_some() {
+            guard
+                .workbench
+                .context_injection_by_conversation
+                .push(delta.clone());
+        }
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::ContextInjectionChanged(delta),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_context_injection_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
+/// Builds a memory-panel delta from the selected session runtime projection.
+/// 从当前选中会话运行态投影构建记忆面板增量。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` provides the retained session runtime state.
+/// `workspace_snapshot` 提供保留的会话运行态。
+/// `session_id` selects the session whose projection may have changed.
+/// `session_id` 选择可能发生投影变化的会话。
+///
+/// # Returns
+/// 返回值
+/// A context-injection delta when `session_id` is the selected session.
+/// 当 `session_id` 是当前选中会话时返回上下文注入增量。
+fn context_injection_changed_delta_from_workspace_snapshot(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<ContextInjectionChangedDelta> {
+    if workspace_snapshot.selected_session != session_id {
+        return None;
+    }
+    Some(ContextInjectionChangedDelta {
+        conversation_id: session_id.to_string(),
+        context_injection: context_injection_snapshot_from_runtime_state(
+            workspace_snapshot.session_runtime_state.get(&session_id),
+        ),
+    })
+}
+
 /// Maps one execution phase to the compact sidebar session status.
 /// 将单个执行阶段映射为侧栏使用的紧凑会话状态。
 fn session_state_for_run_phase(run_phase: SessionRunPhase) -> SessionState {
@@ -745,6 +835,7 @@ pub(crate) fn apply_observed_usage_to_context_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// Verifies runtime tool patches use the same visible transcript projection as final hydration.
     /// 验证运行时工具补丁使用与最终水合一致的可见转录投影。
@@ -831,6 +922,81 @@ mod tests {
                 .and_then(|detail_ref| detail_ref.get("message_index"))
                 .and_then(serde_json::Value::as_u64),
             Some(1)
+        );
+    }
+
+    /// Verifies selected-session memory injections are projected through a dedicated workbench delta.
+    /// 验证当前选中会话的记忆注入会通过专用工作台增量投影。
+    #[test]
+    fn context_injection_delta_projects_selected_session_memory_panel() {
+        let session_id = SessionId::new_v4();
+        let background_session_id = SessionId::new_v4();
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.context_injection_state.apply_insert(
+            InjectionInsert::single(
+                InjectionKind::Transient,
+                "vmm_inject",
+                "Dynamic memory",
+                "动态记忆内容",
+                Some(1),
+            ),
+            "turn-1",
+        );
+        runtime_state.context_injection_state.apply_insert(
+            InjectionInsert::single(
+                InjectionKind::Persistent,
+                "profile",
+                "Static profile",
+                "持久画像内容",
+                None,
+            ),
+            "turn-1",
+        );
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        let delta = context_injection_changed_delta_from_workspace_snapshot(
+            &workspace_snapshot,
+            session_id,
+        )
+        .expect("selected session should produce context injection delta");
+
+        assert_eq!(delta.conversation_id, session_id.to_string());
+        let snapshot = delta
+            .context_injection
+            .expect("runtime state should produce a memory-panel snapshot");
+        assert_eq!(snapshot.dynamic_cards.len(), 1);
+        assert_eq!(snapshot.static_cards.len(), 1);
+        assert!(
+            snapshot.dynamic_cards[0].items[0]
+                .content
+                .contains("动态记忆内容")
+        );
+        assert!(
+            snapshot.static_cards[0].items[0]
+                .content
+                .contains("持久画像内容")
+        );
+        assert!(
+            context_injection_changed_delta_from_workspace_snapshot(
+                &workspace_snapshot,
+                background_session_id,
+            )
+            .is_none()
         );
     }
 
