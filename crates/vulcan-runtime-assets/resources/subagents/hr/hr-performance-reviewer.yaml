@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Performance Reviewer"
+description: "HR performance review specialist for fair evaluation, feedback structure, competency mapping, development plans, and calibration."
+emoji: "📋"
+color: "#F39C12"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/hr/hr-performance-reviewer.md"
+locales:
+  zh-CN:
+    name: "绩效管理专家"
+    description: "深耕中国企业绩效管理体系的实战专家，精通 OKR/KPI 双轨制、360 度反馈、绩效校准会、PIP 改进计划等全流程绩效管理，帮助企业建立科学公正的绩效评估与人才发展机制。"
+
+

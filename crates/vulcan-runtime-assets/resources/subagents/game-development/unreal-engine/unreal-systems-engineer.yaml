@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Unreal Systems Engineer"
+description: "Performance and hybrid architecture specialist - Masters C++/Blueprint continuum, Nanite geometry, Lumen GI, and Gameplay Ability System for AAA-grade Unreal Engine projects"
+emoji: "⚙️"
+color: "orange"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/game-development/unreal-engine/unreal-systems-engineer.md"
+locales:
+  zh-CN:
+    name: "Unreal 系统工程师"
+    description: "性能与混合架构专家——精通 C++/Blueprint 边界、Nanite 几何体、Lumen GI 和 Gameplay Ability System，面向 AAA 级 Unreal Engine 项目"
+vibe: "Masters the C++/Blueprint continuum for AAA-grade Unreal Engine projects."
+
+

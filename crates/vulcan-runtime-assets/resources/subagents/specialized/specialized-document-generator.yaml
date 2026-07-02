@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Document Generator"
+description: "Expert document creation specialist who generates professional PDF, PPTX, DOCX, and XLSX files using code-based approaches with proper formatting, charts, and data visualization."
+emoji: "📄"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/specialized/specialized-document-generator.md"
+locales:
+  zh-CN:
+    name: "文档生成器"
+    description: "专业文档创建专家，通过代码化方式生成专业的 PDF、PPTX、DOCX 和 XLSX 文件，支持格式化、图表和数据可视化。"
+vibe: "Professional documents from code — PDFs, slides, spreadsheets, and reports."
+
+

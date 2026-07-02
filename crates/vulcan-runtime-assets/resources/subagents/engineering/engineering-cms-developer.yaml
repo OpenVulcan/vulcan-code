@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "CMS Developer"
+description: "Drupal and WordPress specialist for theme development, custom plugins/modules, content architecture, and code-first CMS implementation"
+emoji: "🧱"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-cms-developer.md"
+locales:
+  zh-CN:
+    name: "CMS 开发者"
+    description: "Drupal 与 WordPress 专家，精通主题开发、自定义插件/模块、内容架构和代码优先的 CMS 实现。"
+
+

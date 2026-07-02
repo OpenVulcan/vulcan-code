@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Design"
+description: "Visual design, user experience, brand, and design-system specialists."
+emoji: "🎨"
+color: "#EC4899"
+order: 20
+locales:
+  zh-CN:
+    name: "设计"
+    description: "视觉、体验、品牌与设计系统相关专家。"
+

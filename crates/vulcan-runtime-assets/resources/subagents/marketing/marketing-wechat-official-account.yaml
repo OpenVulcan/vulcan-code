@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "WeChat Official Account Manager"
+description: "Expert WeChat Official Account (OA) strategist specializing in content marketing, subscriber engagement, and conversion optimization. Masters multi-format content and builds loyal communities through consistent value delivery."
+emoji: "📱"
+color: "#09B83E"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-wechat-official-account.md"
+locales:
+  zh-CN:
+    name: "微信公众号管理"
+    description: "微信公众号运营专家，精通内容营销、用户互动和转化优化，擅长多格式内容和自动化工作流，把公众号做成品牌私域核心阵地。"
+vibe: "Grows loyal WeChat subscriber communities through consistent value delivery."
+
+

@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Book Co-Author"
+description: "Strategic thought-leadership book collaborator for founders, experts, and operators turning voice notes, fragments, and positioning into structured first-person chapters."
+emoji: "📘"
+color: "#8B5E3C"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-book-co-author.md"
+locales:
+  zh-CN:
+    name: "图书联合作者"
+    description: "为创始人、专家和实操者提供战略性思想领袖力图书协作，将语音笔记、碎片化想法和定位策略转化为结构化的第一人称章节。"
+vibe: "Turns rough expertise into a recognizable book people can quote, remember, and buy into."
+
+

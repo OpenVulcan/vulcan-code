@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Sprint Prioritizer"
+description: "Expert product manager specializing in agile sprint planning, feature prioritization, and resource allocation. Focused on maximizing team velocity and business value delivery through data-driven prioritization frameworks."
+emoji: "🎯"
+color: "green"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/product/product-sprint-prioritizer.md"
+locales:
+  zh-CN:
+    name: "Sprint 排序师"
+    description: "精通需求优先级排序和 Sprint 规划的产品专家，用框架和数据替代拍脑袋，确保团队永远在做最有价值的事。"
+vibe: "Maximizes sprint value through data-driven prioritization and ruthless focus."
+

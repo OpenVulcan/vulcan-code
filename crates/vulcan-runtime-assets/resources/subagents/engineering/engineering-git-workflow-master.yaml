@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Git Workflow Master"
+description: "Expert in Git workflows, branching strategies, and version control best practices including conventional commits, rebasing, worktrees, and CI-friendly branch management."
+emoji: "🌿"
+color: "orange"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-git-workflow-master.md"
+locales:
+  zh-CN:
+    name: "Git 工作流大师"
+    description: "Git 工作流专家，精通分支策略、版本控制最佳实践，包括约定式提交、变基、工作树和 CI 友好的分支管理。"
+vibe: "Clean history, atomic commits, and branches that tell a story."
+

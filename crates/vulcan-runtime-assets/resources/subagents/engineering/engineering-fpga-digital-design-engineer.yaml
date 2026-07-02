@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "FPGA/ASIC Digital Design Engineer"
+description: "Digital front-end design expert for FPGA and ASIC workflows, Verilog/SystemVerilog, bus protocols, timing, verification, and synthesis."
+emoji: "🔬"
+color: "#1565C0"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/engineering/engineering-fpga-digital-design-engineer.md"
+locales:
+  zh-CN:
+    name: "FPGA/ASIC 数字设计工程师"
+    description: "FPGA 与 ASIC 数字前端设计专家——精通 Verilog/SystemVerilog、VHDL、Vivado/Quartus、AXI/AHB 总线、时序收敛、Zynq/Intel SoC FPGA、高层次综合（HLS）。"
+
+

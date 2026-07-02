@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Finance"
+description: "Finance, forecasting, tax, bookkeeping, investment, and control specialists."
+emoji: "💵"
+color: "#22C55E"
+order: 40
+locales:
+  zh-CN:
+    name: "财务"
+    description: "财务分析、预测、税务、记账、投资研究与经营控制专家。"
+

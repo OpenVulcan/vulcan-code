@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Instagram Curator"
+description: "Expert Instagram marketing specialist focused on visual storytelling, community building, and multi-format content optimization. Masters aesthetic development and drives meaningful engagement."
+emoji: "📸"
+color: "#E4405F"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-instagram-curator.md"
+locales:
+  zh-CN:
+    name: "Instagram 策展师"
+    description: "Instagram 营销专家，适合出海营销场景。擅长视觉叙事、社区运营和多格式内容优化，打造品牌美学体系，驱动真实互动。"
+vibe: "Masters the grid aesthetic and turns scrollers into an engaged community."
+
+

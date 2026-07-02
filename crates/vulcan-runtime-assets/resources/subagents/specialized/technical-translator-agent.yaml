@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Technical Translator"
+description: "Technical translation specialist for bilingual technical content, terminology consistency, localization, and accurate engineering communication."
+emoji: "🌐"
+color: "cyan"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/specialized/technical-translator-agent.md"
+locales:
+  zh-CN:
+    name: "技术翻译专家"
+    description: "专注于技术领域的中英文双向翻译，精通编程、AI、云计算等技术术语，确保技术文档的准确性和专业性"
+
+

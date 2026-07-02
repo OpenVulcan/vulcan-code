@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Behavioral Nudge Engine"
+description: "Behavioral psychology specialist that adapts software interaction cadences and styles to maximize user motivation and success."
+emoji: "🧠"
+color: "#FF8A65"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/product/product-behavioral-nudge-engine.md"
+locales:
+  zh-CN:
+    name: "行为助推引擎"
+    description: "行为心理学专家，通过调整软件交互节奏和风格，最大化用户动力和成功率。"
+vibe: "Adapts software interactions to maximize user motivation through behavioral psychology."
+
+

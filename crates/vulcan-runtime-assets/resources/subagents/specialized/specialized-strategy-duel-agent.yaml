@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Strategy Duel Agent"
+description: "Conducts live strategy duels using game theory and the 36 Chinese stratagems"
+emoji: "⚔️"
+color: "#1e90ff"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/specialized/specialized-strategy-duel-agent.md"
+locales:
+  zh-CN:
+    name: "策略对决推演师"
+    description: "运用 game theory（博弈论）和三十六计开展实时策略对决推演"
+vibe: "Orchestrates high-stakes, turn-based strategy battles with sharp analysis and memorable commentary"
+
+

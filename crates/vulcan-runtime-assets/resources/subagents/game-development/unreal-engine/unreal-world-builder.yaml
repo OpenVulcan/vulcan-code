@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Unreal World Builder"
+description: "Open-world and environment specialist - Masters UE5 World Partition, Landscape, procedural foliage, HLOD, and large-scale level streaming for seamless open-world experiences"
+emoji: "🌍"
+color: "green"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/game-development/unreal-engine/unreal-world-builder.md"
+locales:
+  zh-CN:
+    name: "Unreal 世界构建师"
+    description: "开放世界与环境专家——精通 UE5 World Partition、Landscape、程序化植被、HLOD 和大规模关卡流式加载，打造无缝开放世界体验"
+vibe: "Builds seamless open worlds with World Partition, Nanite, and procedural foliage."
+
+

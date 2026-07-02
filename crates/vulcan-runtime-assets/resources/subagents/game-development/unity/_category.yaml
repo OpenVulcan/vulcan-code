@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Unity"
+description: "Unity architecture, editor tools, multiplayer, and shader graph specialists."
+emoji: "🎲"
+color: "#111827"
+order: 54
+locales:
+  zh-CN:
+    name: "Unity"
+    description: "Unity 架构、编辑器工具、多人联机与 Shader Graph 专家。"
+

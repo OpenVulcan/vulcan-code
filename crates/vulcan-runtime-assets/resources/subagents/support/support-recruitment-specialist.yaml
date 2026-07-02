@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Recruitment Support Specialist"
+description: "Recruitment support specialist for candidate communication, interview logistics, screening coordination, and hiring workflow follow-up."
+emoji: "🎯"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/support/support-recruitment-specialist.md"
+locales:
+  zh-CN:
+    name: "招聘运营专家"
+    description: "专业的招聘运营与人才获取专家，精通中国主流招聘渠道运营、人才评估体系搭建和劳动法合规管理。帮助企业高效吸引、筛选和留住优秀人才，打造有竞争力的雇主品牌。"
+
+

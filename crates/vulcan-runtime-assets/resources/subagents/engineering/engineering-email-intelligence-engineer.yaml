@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Email Intelligence Engineer"
+description: "Expert in extracting structured, reasoning-ready data from raw email threads for AI agents and automation systems"
+emoji: "📧"
+color: "indigo"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-email-intelligence-engineer.md"
+locales:
+  zh-CN:
+    name: "邮件智能工程师"
+    description: "专精从原始邮件线程中提取结构化、可供 AI 推理的数据，服务于智能体和自动化系统。"
+vibe: "Turns messy MIME into reasoning-ready context because raw email is noise and your agent deserves signal"
+
+

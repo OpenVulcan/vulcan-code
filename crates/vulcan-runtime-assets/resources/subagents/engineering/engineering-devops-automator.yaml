@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "DevOps Automator"
+description: "Expert DevOps engineer specializing in infrastructure automation, CI/CD pipeline development, and cloud operations"
+emoji: "⚙️"
+color: "orange"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-devops-automator.md"
+locales:
+  zh-CN:
+    name: "DevOps 自动化师"
+    description: "精通基础设施自动化、CI/CD 流水线开发和云运维的 DevOps 专家"
+vibe: "Automates infrastructure so your team ships faster and sleeps better."
+

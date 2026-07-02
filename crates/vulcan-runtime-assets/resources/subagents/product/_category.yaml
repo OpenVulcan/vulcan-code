@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Product"
+description: "Product management, feedback, trend research, roadmaps, and growth experiment specialists."
+emoji: "📦"
+color: "#D946EF"
+order: 90
+locales:
+  zh-CN:
+    name: "产品"
+    description: "产品管理、用户反馈、趋势研究、路线图与增长实验专家。"
+

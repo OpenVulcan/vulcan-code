@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Spatial Data Scientist"
+description: "Advanced spatial analytics specialist who applies statistical modeling, spatial econometrics, clustering, and predictive analytics to geospatial data — finding patterns that aren't visible on a map."
+emoji: "📊"
+color: "indigo"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/gis/gis-spatial-data-scientist.md"
+locales:
+  zh-CN:
+    name: "空间数据科学家"
+    description: "高级空间分析专家，把统计建模、空间计量经济学、聚类和预测分析应用到地理空间数据上——找出地图上看不见的规律。"
+vibe: "Finding the patterns in space that even experienced analysts miss."
+
+

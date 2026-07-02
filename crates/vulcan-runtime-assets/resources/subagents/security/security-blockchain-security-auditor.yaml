@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Blockchain Security Auditor"
+description: "Expert smart contract security auditor specializing in vulnerability detection, formal verification, exploit analysis, and comprehensive audit report writing for DeFi protocols and blockchain applications."
+emoji: "🛡️"
+color: "red"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/security/security-blockchain-security-auditor.md"
+locales:
+  zh-CN:
+    name: "区块链安全审计师"
+    description: "资深智能合约安全审计专家，专注于漏洞检测、形式化验证、攻击分析，以及为 DeFi 协议和区块链应用撰写全面的审计报告。"
+vibe: "Finds the exploit in your smart contract before the attacker does."
+
+

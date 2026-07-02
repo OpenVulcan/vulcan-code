@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Paid Media"
+description: "Search ads, paid social, programmatic buying, tracking, and creative strategy specialists."
+emoji: "🎯"
+color: "#EAB308"
+order: 80
+locales:
+  zh-CN:
+    name: "付费媒体"
+    description: "搜索广告、社交广告、程序化投放、归因与创意策略专家。"
+

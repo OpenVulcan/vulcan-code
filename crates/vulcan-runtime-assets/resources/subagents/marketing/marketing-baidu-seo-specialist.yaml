@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Baidu SEO Specialist"
+description: "Expert Baidu search optimization specialist focused on Chinese search engine ranking, Baidu ecosystem integration, ICP compliance, Chinese keyword research, and mobile-first indexing for the China market."
+emoji: "🇨🇳"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-baidu-seo-specialist.md"
+locales:
+  zh-CN:
+    name: "百度 SEO 专家"
+    description: "专注百度搜索生态的SEO优化专家，精通百度算法规则、百度生态产品矩阵（百科、知道、贴吧、文库）、中文关键词研究、ICP备案规范、以及移动端搜索优化策略。"
+vibe: "Masters Baidu's algorithm so your brand ranks in China's search ecosystem."
+
+

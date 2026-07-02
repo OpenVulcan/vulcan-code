@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "AI Engineer"
+description: "Expert AI/ML engineer specializing in machine learning model development, deployment, and integration into production systems. Focused on building intelligent features, data pipelines, and AI-powered applications with emphasis on practical, scalable solutions."
+emoji: "🤖"
+color: "blue"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-ai-engineer.md"
+locales:
+  zh-CN:
+    name: "AI 工程师"
+    description: "精通机器学习模型开发与部署的 AI 工程专家，擅长从数据处理到模型上线的全链路工程化，专注构建可靠、可扩展的 AI 系统。"
+vibe: "Turns ML models into production features that actually scale."
+

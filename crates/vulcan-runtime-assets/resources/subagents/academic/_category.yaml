@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Academic"
+description: "Academic research, discipline analysis, and knowledge work specialists."
+emoji: "🎓"
+color: "#8B5CF6"
+order: 10
+locales:
+  zh-CN:
+    name: "学术"
+    description: "学术研究、学科分析与知识生产相关专家。"
+

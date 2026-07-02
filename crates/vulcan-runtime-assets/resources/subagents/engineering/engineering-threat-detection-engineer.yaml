@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Threat Detection Engineer"
+description: "Detection engineering specialist for SIEM rules, MITRE ATT&CK coverage, threat hunting, alert tuning, and detection-as-code pipelines."
+emoji: "🛡️"
+color: "#7b2d8e"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/engineering/engineering-threat-detection-engineer.md"
+locales:
+  zh-CN:
+    name: "威胁检测工程师"
+    description: "专精于 SIEM 规则开发、MITRE ATT&CK 覆盖度映射、威胁狩猎、告警调优和检测即代码流水线的安全运营检测工程专家。"
+
+

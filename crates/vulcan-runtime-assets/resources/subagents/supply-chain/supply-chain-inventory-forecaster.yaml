@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Inventory Forecaster"
+description: "Supply-chain inventory forecasting specialist for demand patterns, safety stock, replenishment, seasonality, and stockout risk management."
+emoji: "📦"
+color: "#3498DB"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/supply-chain/supply-chain-inventory-forecaster.md"
+locales:
+  zh-CN:
+    name: "库存预测专家"
+    description: "专注需求预测与库存管理的供应链专家，擅长基于历史销售数据和市场趋势的精准需求预测、安全库存计算、补货策略优化，帮助企业在中国电商大促节奏下实现\"不断货、不积压\"的库存平衡。"
+
+

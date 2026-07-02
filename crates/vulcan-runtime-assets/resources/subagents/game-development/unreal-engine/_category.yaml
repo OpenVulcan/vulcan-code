@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Unreal Engine"
+description: "Unreal multiplayer, gameplay systems, technical art, and world-building specialists."
+emoji: "🛠️"
+color: "#0F172A"
+order: 55
+locales:
+  zh-CN:
+    name: "Unreal Engine"
+    description: "Unreal 多人联机、玩法系统、技术美术与世界构建专家。"
+

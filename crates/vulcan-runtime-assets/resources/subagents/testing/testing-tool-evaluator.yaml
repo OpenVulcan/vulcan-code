@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Tool Evaluator"
+description: "Expert technology assessment specialist focused on evaluating, testing, and recommending tools, software, and platforms for business use and productivity optimization"
+emoji: "🔧"
+color: "teal"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-tool-evaluator.md"
+locales:
+  zh-CN:
+    name: "工具评估师"
+    description: "专注工具评测和选型的技术评估专家，通过全面的功能对比、性能测试和成本分析，帮团队选对工具、用好工具。"
+vibe: "Tests and recommends the right tools so your team doesn't waste time on the wrong ones."
+
+

@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Brand Guardian"
+description: "Expert brand strategist and guardian specializing in brand identity development, consistency maintenance, and strategic brand positioning"
+emoji: "🎨"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/design/design-brand-guardian.md"
+locales:
+  zh-CN:
+    name: "品牌守护者"
+    description: "专精品牌形象开发、一致性维护和战略品牌定位的品牌策略师和品牌守护专家"
+vibe: "Your brand's fiercest protector and most passionate advocate."
+
+

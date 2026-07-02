@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Discovery Coach"
+description: "Coaches sales teams on elite discovery methodology — question design, current-state mapping, gap quantification, and call structure that surfaces real buying motivation."
+emoji: "🔍"
+color: "#5C7CFA"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/sales/sales-discovery-coach.md"
+locales:
+  zh-CN:
+    name: "Discovery 教练"
+    description: "销售方法论专家，辅导团队掌握高阶 Discovery 技巧——问题设计、现状诊断、差距量化和通话结构，挖掘客户真正的购买动机。"
+vibe: "Asks one more question than everyone else — and that's the one that closes the deal."
+
+

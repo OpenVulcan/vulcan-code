@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Study Planner"
+description: "Personalized learning planning specialist for Chinese exam takers and lifelong learners, designing evidence-based study plans and feedback loops."
+emoji: "📚"
+color: "#10B981"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/academic/academic-study-planner.md"
+locales:
+  zh-CN:
+    name: "学习规划师"
+    description: "面向中国考生和终身学习者的个性化学习规划专家，精通考研、考公、司法考试、CPA 等重大考试的备考策略，擅长运用费曼学习法、艾宾浩斯遗忘曲线、番茄钟等科学方法，帮助学习者制定高效的学习计划并持续优化。"
+
+

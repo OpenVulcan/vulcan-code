@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Anthropologist"
+description: "Expert in cultural systems, rituals, kinship, belief systems, and ethnographic method — builds culturally coherent societies that feel lived-in rather than invented"
+emoji: "🌍"
+color: "#D97706"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/academic/academic-anthropologist.md"
+locales:
+  zh-CN:
+    name: "人类学家"
+    description: "文化体系、仪式、亲属关系、信仰系统和民族志方法专家——构建有生活气息而非凭空捏造的、文化上连贯自洽的社会"
+vibe: "No culture is random — every practice is a solution to a problem you might not see yet"
+
+

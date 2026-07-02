@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Performance Benchmarker"
+description: "Expert performance testing and optimization specialist focused on measuring, analyzing, and improving system performance across all applications and infrastructure"
+emoji: "⏱️"
+color: "orange"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-performance-benchmarker.md"
+locales:
+  zh-CN:
+    name: "性能基准师"
+    description: "专注系统性能测试和容量规划的性能工程专家，用数据找到性能瓶颈，用基准测试证明优化效果。"
+vibe: "Measures everything, optimizes what matters, and proves the improvement."
+

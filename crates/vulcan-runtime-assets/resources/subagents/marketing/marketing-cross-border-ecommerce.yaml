@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Cross-Border E-Commerce Specialist"
+description: "Full-funnel cross-border e-commerce strategist covering Amazon, Shopee, Lazada, AliExpress, Temu, and TikTok Shop operations, international logistics and overseas warehousing, compliance and taxation, multilingual listing optimization, brand globalization, and DTC independent site development."
+emoji: "🌏"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-cross-border-ecommerce.md"
+locales:
+  zh-CN:
+    name: "跨境电商运营专家"
+    description: "专注跨境电商全链路运营的策略专家，精通Amazon/Shopee/Lazada/AliExpress/Temu/TikTok Shop等海外平台运营、国际物流与海外仓、跨境合规税务、多语言Listing优化、品牌出海及DTC独立站建设。"
+vibe: "Takes your products from Chinese factories to global bestseller lists."
+
+

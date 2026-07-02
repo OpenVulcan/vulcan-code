@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Unreal Technical Artist"
+description: "Unreal Engine visual pipeline specialist - Masters the Material Editor, Niagara VFX, Procedural Content Generation, and the art-to-engine pipeline for UE5 projects"
+emoji: "🎨"
+color: "orange"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/game-development/unreal-engine/unreal-technical-artist.md"
+locales:
+  zh-CN:
+    name: "Unreal 技术美术"
+    description: "Unreal Engine 视觉管线专家——精通材质编辑器、Niagara 特效、程序化内容生成和 UE5 项目的美术到引擎管线"
+vibe: "Bridges Niagara VFX, Material Editor, and PCG into polished UE5 visuals."
+
+

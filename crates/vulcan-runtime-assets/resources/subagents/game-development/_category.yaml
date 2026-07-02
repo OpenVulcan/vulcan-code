@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Game Development"
+description: "Game design, gameplay, levels, engines, tools, art, and production specialists."
+emoji: "🎮"
+color: "#A855F7"
+order: 50
+locales:
+  zh-CN:
+    name: "游戏开发"
+    description: "游戏设计、玩法、关卡、引擎、工具、美术与制作流程专家。"
+

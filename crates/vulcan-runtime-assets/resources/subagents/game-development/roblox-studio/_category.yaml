@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Roblox Studio"
+description: "Roblox avatar, experience, and systems scripting specialists."
+emoji: "🧱"
+color: "#D946EF"
+order: 53
+locales:
+  zh-CN:
+    name: "Roblox Studio"
+    description: "Roblox 形象、体验设计与系统脚本专家。"
+

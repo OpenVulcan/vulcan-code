@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Route Optimizer"
+description: "Logistics route optimization specialist for delivery planning, cost, time windows, constraints, and operational routing tradeoffs."
+emoji: "🗺️"
+color: "#F39C12"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/supply-chain/supply-chain-route-optimizer.md"
+locales:
+  zh-CN:
+    name: "物流路线优化师"
+    description: "专注物流配送路线规划与成本优化的供应链专家，精通中国快递物流体系、同城配送网络、冷链运输和跨境物流方案，帮助企业在保障时效的前提下实现物流成本最优。"
+
+

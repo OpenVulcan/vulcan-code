@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Douyin Strategist"
+description: "Short-video marketing expert specializing in the Douyin platform, with deep expertise in recommendation algorithm mechanics, viral video planning, livestream commerce workflows, and full-funnel brand growth through content matrix strategies."
+emoji: "🎵"
+color: "#000000"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-douyin-strategist.md"
+locales:
+  zh-CN:
+    name: "抖音策略师"
+    description: "专注抖音平台的短视频营销专家，精通算法推荐机制、爆款视频策划、直播带货流程、以及通过内容矩阵实现品牌在抖音生态的全链路增长。"
+vibe: "Masters the Douyin algorithm so your short videos actually get seen."
+
+

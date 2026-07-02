@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "GIS"
+description: "GIS, spatial data, cartography, remote sensing, and geospatial analysis specialists."
+emoji: "🗺️"
+color: "#14B8A6"
+order: 60
+locales:
+  zh-CN:
+    name: "地理信息"
+    description: "GIS、空间数据、地图制图、遥感与地理分析专家。"
+

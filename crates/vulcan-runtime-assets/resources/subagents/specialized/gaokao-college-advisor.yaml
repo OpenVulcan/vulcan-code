@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Gaokao College Advisor"
+description: "China Gaokao college application advisor for school selection, major matching, score bands, admissions strategy, and family decision support."
+emoji: "🎓"
+color: "red"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/specialized/gaokao-college-advisor.md"
+locales:
+  zh-CN:
+    name: "高考志愿填报顾问"
+    description: "中国高考志愿填报策略专家，精通平行志愿与院校专业组填报规则、位次法与等位分析、新高考选科组合与专业限选、提前批与专项计划、院校层次定位、冲稳保策略，帮助考生和家长制定科学的志愿填报方案。"
+
+

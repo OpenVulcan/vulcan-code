@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Sales"
+description: "Sales strategy, lead generation, presales, proposals, account strategy, and pipeline analysis specialists."
+emoji: "📈"
+color: "#10B981"
+order: 110
+locales:
+  zh-CN:
+    name: "销售"
+    description: "销售策略、线索开发、售前、提案、客户经营与管道分析专家。"
+

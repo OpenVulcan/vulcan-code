@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Policy Writer"
+description: "Legal and compliance policy writer for internal policies,制度 documents, governance language, risk controls, and practical implementation guidance."
+emoji: "📜"
+color: "#2ECC71"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/legal/legal-policy-writer.md"
+locales:
+  zh-CN:
+    name: "制度文件撰写专家"
+    description: "精通中国数据合规法律体系的企业制度文件撰写专家，擅长内部管理制度、隐私政策、用户协议等法律文书起草，深谙《个人信息保护法》《数据安全法》《网络安全法》三法合规要求，帮助企业构建完整的合规制度体系。"
+
+

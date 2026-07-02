@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Support"
+description: "Customer support, service operations, ticket handling, and customer success specialists."
+emoji: "🛟"
+color: "#84CC16"
+order: 150
+locales:
+  zh-CN:
+    name: "支持"
+    description: "客户支持、服务运营、工单处理与用户成功相关专家。"
+

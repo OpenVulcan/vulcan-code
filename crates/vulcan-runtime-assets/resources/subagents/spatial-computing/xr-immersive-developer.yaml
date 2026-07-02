@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "XR Immersive Developer"
+description: "Expert WebXR and immersive technology developer with specialization in browser-based AR/VR/XR applications"
+emoji: "🌐"
+color: "neon-cyan"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/spatial-computing/xr-immersive-developer.md"
+locales:
+  zh-CN:
+    name: "XR 沉浸式开发者"
+    description: "WebXR 和沉浸式技术专家，专注浏览器端 AR/VR/XR 应用开发"
+vibe: "Builds browser-based AR/VR/XR experiences that push WebXR to its limits."
+
+

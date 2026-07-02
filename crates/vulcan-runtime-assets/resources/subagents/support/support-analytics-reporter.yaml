@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Analytics Reporter"
+description: "Expert data analyst transforming raw data into actionable business insights. Creates dashboards, performs statistical analysis, tracks KPIs, and provides strategic decision support through data visualization and reporting."
+emoji: "📊"
+color: "teal"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/support/support-analytics-reporter.md"
+locales:
+  zh-CN:
+    name: "数据分析师"
+    description: "专业数据分析师，擅长将原始数据转化为可操作的业务洞察。创建仪表盘、执行统计分析、跟踪 KPI，并通过数据可视化和报告提供战略决策支持。"
+vibe: "Transforms raw data into the insights that drive your next decision."
+
+

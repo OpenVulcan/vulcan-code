@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Web GIS Developer"
+description: "Full-stack web GIS engineer who builds interactive mapping applications — MapLibre GL JS, ArcGIS JS API, Leaflet, real-time dashboards, REST API integration, and geospatial web services."
+emoji: "🌐"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/gis/gis-web-gis-developer.md"
+locales:
+  zh-CN:
+    name: "Web GIS 开发工程师"
+    description: "全栈 Web GIS 工程师，负责构建交互式地图应用——MapLibre GL JS、ArcGIS JS API、Leaflet、实时仪表盘、REST API 集成与地理空间 Web 服务。"
+vibe: "Maps on the web that actually work — fast, responsive, and beautiful."
+
+

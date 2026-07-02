@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Prompt Engineer"
+description: "Prompt engineering specialist for Chinese and English instruction design, prompt testing, model behavior tuning, and reusable prompt workflows."
+emoji: "🧠"
+color: "violet"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/specialized/prompt-engineer.md"
+locales:
+  zh-CN:
+    name: "提示词工程师"
+    description: "专注大语言模型提示词设计与优化的专家，精通系统提示词架构、思维链设计、少样本学习策略、以及提示词效果评测和迭代方法论。"
+
+

@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Financial Analyst"
+description: "Expert financial analyst specializing in financial modeling, forecasting, scenario analysis, and data-driven decision support. Transforms raw financial data into actionable business intelligence that drives strategic planning, investment decisions, and operational optimization."
+emoji: "📊"
+color: "green"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/finance/finance-financial-analyst.md"
+locales:
+  zh-CN:
+    name: "财务分析师"
+    description: "专业财务分析师，精通财务建模、预测、场景分析和数据驱动的决策支持。将原始财务数据转化为可行动的商业智能，驱动战略规划、投资决策和运营优化。"
+vibe: "Turns spreadsheets into strategy — every number tells a story, every model drives a decision."
+
+

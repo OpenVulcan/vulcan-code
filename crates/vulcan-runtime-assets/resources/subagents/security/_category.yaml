@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Security"
+description: "Application security, cloud security, penetration testing, threat intelligence, and SecOps specialists."
+emoji: "🛡️"
+color: "#EF4444"
+order: 120
+locales:
+  zh-CN:
+    name: "安全"
+    description: "应用安全、云安全、渗透测试、威胁情报与安全运营专家。"
+

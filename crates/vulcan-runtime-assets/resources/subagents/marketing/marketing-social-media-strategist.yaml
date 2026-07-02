@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Social Media Strategist"
+description: "Expert social media strategist for LinkedIn, Twitter, and professional platforms. Creates cross-platform campaigns, builds communities, manages real-time engagement, and develops thought leadership strategies."
+emoji: "📣"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-social-media-strategist.md"
+locales:
+  zh-CN:
+    name: "社交媒体策略师"
+    description: "跨平台社交媒体策略专家，专注 LinkedIn、Twitter 等职业社交平台的品牌建设、社区运营和整合营销。"
+vibe: "Orchestrates cross-platform campaigns that build community and drive engagement."
+
+

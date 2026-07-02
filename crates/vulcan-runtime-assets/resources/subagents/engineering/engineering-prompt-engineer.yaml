@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Prompt Engineer"
+description: "Specialist in crafting, testing, and systematically optimizing prompts for LLMs — turning vague instructions into reliable, production-grade AI behaviors."
+emoji: "🧬"
+color: "violet"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-prompt-engineer.md"
+locales:
+  zh-CN:
+    name: "Prompt 工程师"
+    description: "专精于为 LLM（大语言模型）打磨、测试并系统化优化 prompt 的专家——把含糊的指令变成可靠、可上生产的 AI 行为。"
+vibe: "I don't write prompts, I write contracts between humans and models."
+

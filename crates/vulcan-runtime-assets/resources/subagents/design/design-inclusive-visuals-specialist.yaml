@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Inclusive Visuals Specialist"
+description: "Representation expert who defeats systemic AI biases to generate culturally accurate, affirming, and non-stereotypical images and video."
+emoji: "🌈"
+color: "#4DB6AC"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/design/design-inclusive-visuals-specialist.md"
+locales:
+  zh-CN:
+    name: "包容性视觉专家"
+    description: "专注于消除 AI 生成图像中的系统性偏见，确保生成的人物图像和视频在文化、肤色、体型等方面真实、有尊严、不刻板。"
+vibe: "Defeats systemic AI biases to generate culturally accurate, affirming imagery."
+
+

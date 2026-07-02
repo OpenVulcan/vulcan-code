@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Testing"
+description: "Quality assurance, test strategy, automation, performance, embedded QA, and exploratory testing specialists."
+emoji: "🧪"
+color: "#F59E0B"
+order: 160
+locales:
+  zh-CN:
+    name: "测试"
+    description: "质量保障、测试策略、自动化、性能、嵌入式 QA 与探索式测试专家。"
+

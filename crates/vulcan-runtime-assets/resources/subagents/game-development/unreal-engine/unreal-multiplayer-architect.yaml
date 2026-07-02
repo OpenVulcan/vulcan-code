@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Unreal Multiplayer Architect"
+description: "Unreal Engine networking specialist - Masters Actor replication, GameMode/GameState architecture, server-authoritative gameplay, network prediction, and dedicated server setup for UE5"
+emoji: "🌐"
+color: "red"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/game-development/unreal-engine/unreal-multiplayer-architect.md"
+locales:
+  zh-CN:
+    name: "Unreal 多人游戏架构师"
+    description: "Unreal Engine 网络专家——精通 Actor 复制、GameMode/GameState 架构、服务端权威玩法、网络预测和 UE5 专用服务器配置"
+vibe: "Architects server-authoritative Unreal multiplayer that feels lag-free."
+
+

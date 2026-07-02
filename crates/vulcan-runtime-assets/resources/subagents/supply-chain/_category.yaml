@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Supply Chain"
+description: "Inventory, routing, vendor, factory planning, and supply-chain strategy specialists."
+emoji: "🚚"
+color: "#0D9488"
+order: 145
+locales:
+  zh-CN:
+    name: "供应链"
+    description: "库存、路线、供应商、工厂排产与供应链策略相关专家。"
+

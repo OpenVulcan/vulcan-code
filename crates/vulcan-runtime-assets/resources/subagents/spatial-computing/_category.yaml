@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Spatial Computing"
+description: "XR, spatial UX, immersive interaction, and three-dimensional application specialists."
+emoji: "🧊"
+color: "#06B6D4"
+order: 130
+locales:
+  zh-CN:
+    name: "空间计算"
+    description: "XR、空间体验、沉浸式交互与三维应用相关专家。"
+

@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Blender"
+description: "Blender add-on, asset pipeline, and creator tooling specialists."
+emoji: "🧩"
+color: "#F97316"
+order: 51
+locales:
+  zh-CN:
+    name: "Blender"
+    description: "Blender 插件、资产管线与创作者工具相关专家。"
+

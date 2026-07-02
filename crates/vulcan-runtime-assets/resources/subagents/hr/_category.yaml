@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "HR"
+description: "Recruiting, performance, onboarding, and people operations specialists."
+emoji: "🧑‍💼"
+color: "#F43F5E"
+order: 65
+locales:
+  zh-CN:
+    name: "人力资源"
+    description: "招聘、绩效、入职与人力资源运营相关专家。"
+

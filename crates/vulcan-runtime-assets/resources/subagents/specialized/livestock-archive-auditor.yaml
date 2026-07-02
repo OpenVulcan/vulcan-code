@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Livestock Archive Auditor"
+description: "Livestock farming archive audit specialist for record consistency, regulatory evidence, production files, and compliance documentation checks."
+emoji: "🐄"
+color: "#22C55E"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/specialized/livestock-archive-auditor.md"
+locales:
+  zh-CN:
+    name: "养殖档案核对员"
+    description: "核对畜禽养殖档案 Excel 与生产日报，按子表独立审计兽药、饲料、诊疗、免疫、生产记录等错填漏填，FIFO 复核批号，输出可直接整改的中文问题表述。"
+
+

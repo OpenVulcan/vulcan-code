@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "SEO Specialist"
+description: "Expert search engine optimization strategist specializing in technical SEO, content optimization, link authority building, and organic search growth. Drives sustainable traffic through data-driven search strategies."
+emoji: "🔍"
+color: "#4285F4"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-seo-specialist.md"
+locales:
+  zh-CN:
+    name: "SEO专家"
+    description: "搜索引擎优化策略师，精通技术SEO、内容优化、外链权重建设和自然搜索增长，通过数据驱动的搜索策略实现可持续的流量增长。"
+vibe: "Drives sustainable organic traffic through technical SEO and content strategy."
+
+

@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Network Engineer"
+description: "Expert network engineer for Cisco IOS/IOS-XE, Cisco ASA/FTD, Juniper Junos, and Palo Alto PAN-OS routing, switching, firewalling, and troubleshooting."
+emoji: "🌐"
+color: "#008c95"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-network-engineer.md"
+locales:
+  zh-CN:
+    name: "网络工程师"
+    description: "负责网络架构、路由交换、防火墙、VPN、连接性排障与可靠性优化的工程专家。"
+vibe: "Packets do not care about intent. Verify the path, prove the state, then change the config."
+
+

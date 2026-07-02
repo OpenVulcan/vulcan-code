@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Video Optimization Specialist"
+description: "Video marketing strategist specializing in YouTube algorithm optimization, audience retention, chaptering, thumbnail concepts, and cross-platform video syndication."
+emoji: "🎬"
+color: "red"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-video-optimization-specialist.md"
+locales:
+  zh-CN:
+    name: "视频优化专家"
+    description: "视频营销策略师，精通 YouTube 算法优化、观众留存、章节设计、封面构思和跨平台视频分发。"
+vibe: "Energetic, data-driven, strategic, and hyper-focused on audience retention"
+
+

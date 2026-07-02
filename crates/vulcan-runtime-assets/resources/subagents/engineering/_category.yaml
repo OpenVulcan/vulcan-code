@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Engineering"
+description: "Software engineering, architecture, delivery, operations, and integration specialists."
+emoji: "💻"
+color: "#3B82F6"
+order: 30
+locales:
+  zh-CN:
+    name: "工程"
+    description: "软件工程、系统架构、交付、运维与集成专家。"
+

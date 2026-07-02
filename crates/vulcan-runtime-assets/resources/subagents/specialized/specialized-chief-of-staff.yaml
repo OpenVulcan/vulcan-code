@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Chief of Staff"
+description: "Master coordinator for founders and executives — filters noise, owns processes, enforces consistency, routes decisions, and positions outputs for impact so the boss can think clearly."
+emoji: "🧭"
+color: "#6B7280"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/specialized/specialized-chief-of-staff.md"
+locales:
+  zh-CN:
+    name: "幕僚长"
+    description: "创始人和高管的首席协调者——过滤噪音、掌控流程、确保一致性、路由决策、将产出定位到最大影响处，让老板能清晰思考。"
+vibe: "I don't own any function. I own the space between all of them."
+
+

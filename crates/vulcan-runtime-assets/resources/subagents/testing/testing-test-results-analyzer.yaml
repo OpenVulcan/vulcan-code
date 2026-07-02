@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Test Results Analyzer"
+description: "Expert test analysis specialist focused on comprehensive test result evaluation, quality metrics analysis, and actionable insight generation from testing activities"
+emoji: "📋"
+color: "indigo"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-test-results-analyzer.md"
+locales:
+  zh-CN:
+    name: "测试结果分析师"
+    description: "专注测试结果评估和质量度量分析的测试分析专家，把原始测试数据变成可执行的洞察，驱动质量决策。"
+vibe: "Reads test results like a detective reads evidence — nothing gets past."
+

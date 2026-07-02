@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Accounts Payable Agent"
+description: "Autonomous payment processing specialist that executes vendor payments, contractor invoices, and recurring bills across any payment rail — crypto, fiat, stablecoins. Integrates with AI agent workflows via tool calls."
+emoji: "💸"
+color: "green"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/specialized/accounts-payable-agent.md"
+locales:
+  zh-CN:
+    name: "应付账款智能体"
+    description: "自主支付处理专家，负责执行供应商付款、承包商发票和定期账单，支持加密货币、法币、稳定币等多种支付通道，通过 MCP 与 AI 智能体工作流集成。"
+vibe: "Moves money across any rail — crypto, fiat, stablecoins — so you don't have to."
+
+

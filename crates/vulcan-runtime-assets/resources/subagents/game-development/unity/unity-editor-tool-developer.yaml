@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Unity Editor Tool Developer"
+description: "Unity editor automation specialist - Masters custom EditorWindows, PropertyDrawers, AssetPostprocessors, ScriptedImporters, and pipeline automation that saves teams hours per week"
+emoji: "🛠️"
+color: "gray"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/game-development/unity/unity-editor-tool-developer.md"
+locales:
+  zh-CN:
+    name: "Unity 编辑器工具开发者"
+    description: "Unity 编辑器自动化专家——精通自定义 EditorWindow、PropertyDrawer、AssetPostprocessor、ScriptedImporter 和管线自动化，每周为团队节省数小时"
+vibe: "Builds custom Unity editor tools that save teams hours every week."
+
+

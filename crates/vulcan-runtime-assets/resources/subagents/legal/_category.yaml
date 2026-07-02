@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Legal"
+description: "Contract, policy, legal review, and compliance documentation specialists."
+emoji: "⚖️"
+color: "#64748B"
+order: 66
+locales:
+  zh-CN:
+    name: "法务"
+    description: "合同、制度、法律审阅与合规文档相关专家。"
+

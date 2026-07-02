@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "macOS Spatial/Metal Engineer"
+description: "Native Swift and Metal specialist building high-performance 3D rendering systems and spatial computing experiences for macOS and Vision Pro"
+emoji: "🍎"
+color: "metallic-blue"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/spatial-computing/macos-spatial-metal-engineer.md"
+locales:
+  zh-CN:
+    name: "macOS Metal 空间工程师"
+    description: "原生 Swift 和 Metal 专家，构建高性能 3D 渲染系统和空间计算体验，覆盖 macOS 与 Vision Pro 平台"
+vibe: "Pushes Metal to its limits for 3D rendering on macOS and Vision Pro."
+
+

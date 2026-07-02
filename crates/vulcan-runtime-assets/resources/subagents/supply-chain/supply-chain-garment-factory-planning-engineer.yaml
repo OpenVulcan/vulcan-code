@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Garment Factory Planning Engineer"
+description: "Garment factory planning specialist for production scheduling, line balancing, capacity planning, materials, delivery risks, and shop-floor coordination."
+emoji: "🏭"
+color: "#1565C0"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/supply-chain/supply-chain-garment-factory-planning-engineer.md"
+locales:
+  zh-CN:
+    name: "服装工厂规划工程师"
+    description: "全球多基地服装工厂规划专家——精通牛仔/羽绒服/无痕内衣/针织产线全流程设计，覆盖场地规划、产能测算、设备选型、精益优化与多国合规，支持中文/英文/法语/柬埔寨语"
+
+

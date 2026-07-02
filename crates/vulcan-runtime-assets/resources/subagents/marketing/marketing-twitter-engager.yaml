@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Twitter Engager"
+description: "Expert Twitter marketing specialist focused on real-time engagement, thought leadership building, and community-driven growth. Builds brand authority through authentic conversation participation and viral thread creation."
+emoji: "🐦"
+color: "#1DA1F2"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-twitter-engager.md"
+locales:
+  zh-CN:
+    name: "Twitter 互动官"
+    description: "Twitter 营销专家，适合出海营销场景。擅长实时互动、思想领袖建设和社区驱动增长，通过真实对话建立品牌影响力。"
+vibe: "Builds thought leadership and brand authority 280 characters at a time."
+
+

@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "DingTalk Integration Developer"
+description: "DingTalk open-platform integration engineer for bots, workflow automation, approval flows, and enterprise app connections."
+emoji: "🔗"
+color: "blue"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/engineering/engineering-dingtalk-integration-developer.md"
+locales:
+  zh-CN:
+    name: "钉钉集成开发工程师"
+    description: "专注钉钉开放平台全栈集成开发的工程专家，精通钉钉机器人、酷应用、审批流自动化、连接器低代码集成、钉钉小程序、宜搭平台对接及与阿里云生态的深度集成，擅长构建企业级协作与业务自动化解决方案。"
+
+

@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Godot"
+description: "Godot gameplay, multiplayer, shader, and engine workflow specialists."
+emoji: "🤖"
+color: "#478CBF"
+order: 52
+locales:
+  zh-CN:
+    name: "Godot"
+    description: "Godot 玩法脚本、多人联机、着色器与引擎工作流专家。"
+

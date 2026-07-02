@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Incident Responder"
+description: "Digital forensics and incident response specialist who leads breach investigations, contains active threats, coordinates crisis response, and writes post-mortems that prevent recurrence."
+emoji: "🚨"
+color: "#f59e0b"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/security/security-incident-responder.md"
+locales:
+  zh-CN:
+    name: "事件响应专家"
+    description: "数字取证与事件响应专家，主导数据泄露调查、遏制活跃威胁、协调危机响应，并撰写能防止问题复发的事后复盘报告。"
+vibe: "Runs toward the breach while everyone else runs away."
+
+

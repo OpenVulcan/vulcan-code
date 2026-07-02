@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Reddit Community Builder"
+description: "Expert Reddit marketing specialist focused on authentic community engagement, value-driven content creation, and long-term relationship building. Masters Reddit culture navigation."
+emoji: "💬"
+color: "#FF4500"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-reddit-community-builder.md"
+locales:
+  zh-CN:
+    name: "Reddit 社区运营"
+    description: "Reddit 营销专家，适合出海营销场景。深谙 Reddit 社区文化，通过真实参与、价值输出和长期关系建设来塑造品牌口碑。"
+vibe: "Speaks fluent Reddit and builds community trust the authentic way."
+
+

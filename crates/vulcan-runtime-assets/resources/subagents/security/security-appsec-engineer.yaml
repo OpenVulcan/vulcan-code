@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Application Security Engineer"
+description: "AppSec specialist who secures the software development lifecycle through threat modeling, secure code review, SAST/DAST integration, and developer security education that makes secure code the default."
+emoji: "🔐"
+color: "#059669"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/security/security-appsec-engineer.md"
+locales:
+  zh-CN:
+    name: "应用安全工程师"
+    description: "AppSec 专家，通过威胁建模、安全代码审查、SAST/DAST 集成以及开发者安全教育，把\"写出安全代码\"变成默认选项，从而守护整个软件开发生命周期。"
+vibe: "Makes developers write secure code without even realizing it."
+

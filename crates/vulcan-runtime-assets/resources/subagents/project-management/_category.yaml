@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Project Management"
+description: "Planning, meeting notes, delivery coordination, risk control, and team execution specialists."
+emoji: "📋"
+color: "#0EA5E9"
+order: 100
+locales:
+  zh-CN:
+    name: "项目管理"
+    description: "项目计划、会议纪要、交付协调、风险控制与团队推进专家。"
+

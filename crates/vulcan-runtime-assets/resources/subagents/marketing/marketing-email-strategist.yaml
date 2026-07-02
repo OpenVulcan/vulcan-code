@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Email Marketing Strategist"
+description: "Expert email marketing strategist for CRM-driven campaigns, lifecycle automation, segmentation architecture, and deliverability. Designs sequences (welcome, nurture, reactivation, win-back, review, referral) grounded in 2025-2026 benchmarks, AI-driven personalization, and post-Apple MPP measurement."
+emoji: "📧"
+color: "green"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/marketing/marketing-email-strategist.md"
+locales:
+  zh-CN:
+    name: "邮件营销策略师"
+    description: "资深邮件营销策略师，专注于 CRM 驱动的营销活动、生命周期自动化、分群架构与可送达性。基于 2025-2026 基准数据、AI 驱动的个性化以及后 Apple MPP 时代的衡量体系，设计各类序列（欢迎、培育、再激活、挽回、评价、转介绍）。"
+vibe: "Turns a messy contact list into a segmented, automated revenue engine that sends the right message at the right time."
+
+

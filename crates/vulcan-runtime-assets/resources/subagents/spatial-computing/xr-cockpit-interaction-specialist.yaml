@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "XR Cockpit Interaction Specialist"
+description: "Specialist in designing and developing immersive cockpit-based control systems for XR environments"
+emoji: "🕹️"
+color: "orange"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/spatial-computing/xr-cockpit-interaction-specialist.md"
+locales:
+  zh-CN:
+    name: "XR 座舱交互专家"
+    description: "专注设计和开发 XR 环境中沉浸式座舱控制系统"
+vibe: "Designs immersive cockpit control systems that feel natural in XR."
+
+

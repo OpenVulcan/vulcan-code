@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Salesforce Architect"
+description: "Solution architecture for Salesforce platform — multi-cloud design, integration patterns, governor limits, deployment strategy, and data model governance for enterprise-scale orgs"
+emoji: "☁️"
+color: "#00A1E0"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/specialized/specialized-salesforce-architect.md"
+locales:
+  zh-CN:
+    name: "Salesforce 架构师"
+    description: "Salesforce 平台的解决方案架构——多云设计、集成模式、Governor Limits、部署策略和数据模型治理，适用于企业级组织"
+vibe: "The calm hand that turns a tangled Salesforce org into an architecture that scales — one governor limit at a time"
+
+

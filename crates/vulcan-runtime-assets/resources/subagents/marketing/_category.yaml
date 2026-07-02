@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Marketing"
+description: "Content, growth, SEO, social media, e-commerce, and brand communication specialists."
+emoji: "📣"
+color: "#F97316"
+order: 70
+locales:
+  zh-CN:
+    name: "营销"
+    description: "内容、增长、SEO、社媒、电商与品牌传播专家。"
+

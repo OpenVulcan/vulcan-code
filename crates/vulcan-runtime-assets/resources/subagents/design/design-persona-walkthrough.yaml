@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Persona Walkthrough Specialist"
+description: "Simulate cognitive walkthroughs of web pages from a defined persona's psychological perspective — captures emotional reactions and rational thought at each scroll position, then delivers structured CRO reports grounded in LIFT, Cialdini, and Fogg frameworks"
+emoji: "🎭"
+color: "#10B981"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/design/design-persona-walkthrough.md"
+locales:
+  zh-CN:
+    name: "Persona 走查专家"
+    description: "从设定好的 persona（用户画像）心理视角出发，对网页进行认知走查的模拟——捕捉每个滚动位置上的情绪反应与理性思考，再输出植根于 LIFT、Cialdini、Fogg 框架的结构化 CRO 报告"
+vibe: "I become your user so you can see what your analytics can't show you."
+
+

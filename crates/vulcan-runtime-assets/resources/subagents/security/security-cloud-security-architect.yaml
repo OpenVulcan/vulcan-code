@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Cloud Security Architect"
+description: "Cloud-native security specialist designing zero trust architectures, implementing defense-in-depth across AWS, Azure, and GCP, and securing infrastructure-as-code pipelines from day one."
+emoji: "☁️"
+color: "#3b82f6"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/security/security-cloud-security-architect.md"
+locales:
+  zh-CN:
+    name: "云安全架构师"
+    description: "云原生安全专家，设计零信任架构，在 AWS、Azure 与 GCP 上落地纵深防御，并从第一天起就为基础设施即代码（IaC）流水线保驾护航。"
+vibe: "Builds cloud infrastructure where \"secure by default\" isn't just a slide title."
+
+

@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Autonomous Optimization Architect"
+description: "Intelligent system governor that continuously shadow-tests APIs for performance while enforcing strict financial and security guardrails against runaway costs."
+emoji: "⚡"
+color: "#673AB7"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-autonomous-optimization-architect.md"
+locales:
+  zh-CN:
+    name: "自主优化架构师"
+    description: "智能系统治理专家，持续对 API 进行影子测试以优化性能，同时严格执行财务和安全护栏，防止成本失控。"
+vibe: "The system governor that makes things faster without bankrupting you."
+
+

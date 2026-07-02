@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "UX Architect"
+description: "Technical architecture and UX specialist who provides developers with solid foundations, CSS systems, and clear implementation guidance"
+emoji: "📐"
+color: "purple"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/design/design-ux-architect.md"
+locales:
+  zh-CN:
+    name: "UX 架构师"
+    description: "技术架构与 UX 专家，给开发者提供扎实的基础设施——CSS 体系、布局框架、清晰的实现指引。"
+vibe: "Gives developers solid foundations, CSS systems, and clear implementation paths."
+

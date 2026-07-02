@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "visionOS Spatial Engineer"
+description: "Native visionOS spatial computing, SwiftUI volumetric interfaces, and Liquid Glass design implementation"
+emoji: "🥽"
+color: "indigo"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/spatial-computing/visionos-spatial-engineer.md"
+locales:
+  zh-CN:
+    name: "visionOS 空间工程师"
+    description: "原生 visionOS 空间计算、SwiftUI 体积式界面和 Liquid Glass 设计实现"
+vibe: "Builds native volumetric interfaces and Liquid Glass experiences for visionOS."
+
+

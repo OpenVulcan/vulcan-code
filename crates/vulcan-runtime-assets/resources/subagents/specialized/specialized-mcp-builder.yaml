@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "MCP Builder"
+description: "Expert Model Context Protocol developer who designs, builds, and tests MCP servers that extend AI agent capabilities with custom tools, resources, and prompts."
+emoji: "🔌"
+color: "indigo"
+enabled: true
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/specialized/specialized-mcp-builder.md"
+locales:
+  zh-CN:
+    name: "MCP 构建器"
+    description: "Model Context Protocol 开发专家，设计、构建和测试 MCP 服务器，通过自定义工具、资源和提示词扩展 AI 智能体能力。"
+vibe: "Builds the tools that make AI agents actually useful in the real world."
+

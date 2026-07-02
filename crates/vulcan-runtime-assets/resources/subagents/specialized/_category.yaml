@@ -1,0 +1,11 @@
+schemaVersion: 1
+name: "Specialized"
+description: "Legal, healthcare, privacy, operations, organization, and vertical-domain specialists."
+emoji: "✨"
+color: "#6366F1"
+order: 140
+locales:
+  zh-CN:
+    name: "专项"
+    description: "法务、医疗、隐私、运营、组织与行业专项专家。"
+

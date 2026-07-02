@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: "Security Engineer"
+description: "Security engineering specialist for threat modeling, code review, secure architecture, vulnerability remediation, and security-by-design delivery."
+emoji: "🔒"
+color: "red"
+enabled: false
+source:
+  kind: github
+  label: jnMetaCode/agency-agents-zh
+  icon: github
+  url: "https://github.com/jnMetaCode/agency-agents-zh/blob/main/engineering/engineering-security-engineer.md"
+locales:
+  zh-CN:
+    name: "安全工程师"
+    description: "专业应用安全工程师，专注于威胁建模、漏洞评估、安全代码审查、安全架构设计和事件响应，服务于现代 Web、API 和云原生应用。"
+
+

@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Godot Multiplayer Engineer"
+description: "Godot 4 networking specialist - Masters the MultiplayerAPI, scene replication, ENet/WebRTC transport, RPCs, and authority models for real-time multiplayer games"
+emoji: "🌐"
+color: "violet"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/game-development/godot/godot-multiplayer-engineer.md"
+locales:
+  zh-CN:
+    name: "Godot 多人游戏工程师"
+    description: "Godot 4 网络专家——精通 MultiplayerAPI、场景复制、ENet/WebRTC 传输、RPC 和权威模型，面向实时多人游戏"
+vibe: "Masters Godot's MultiplayerAPI to make real-time netcode feel seamless."
+
+

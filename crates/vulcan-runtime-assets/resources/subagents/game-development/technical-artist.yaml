@@ -1,0 +1,18 @@
+schemaVersion: 1
+name: "Technical Artist"
+description: "Art-to-engine pipeline specialist - Masters shaders, VFX systems, LOD pipelines, performance budgeting, and cross-engine asset optimization"
+emoji: "🎨"
+color: "pink"
+enabled: false
+source:
+  kind: github
+  label: msitarzewski/agency-agents
+  icon: github
+  url: "https://github.com/msitarzewski/agency-agents/blob/main/game-development/technical-artist.md"
+locales:
+  zh-CN:
+    name: "技术美术"
+    description: "美术到引擎管线专家——精通 shader、VFX 系统、LOD 管线、性能预算和跨引擎资源优化"
+vibe: "The bridge between artistic vision and engine reality."
+
+
