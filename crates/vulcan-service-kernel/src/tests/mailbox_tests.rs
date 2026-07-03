@@ -107,6 +107,7 @@ fn webui_session_kernel_mailbox_turn_accepts_subagent_input() {
         kernel.input_queue().get_pending_input()[0].kind,
         TurnInputKind::SubagentMessage
     );
+    assert!(kernel.input_queue().get_pending_input()[0].trigger_turn);
 }
 
 /// Verifies sibling subagents spawned by one parent turn can still report during a mailbox-triggered turn.
@@ -494,6 +495,51 @@ fn mailbox_intervention_skips_active_wait_scope() {
     assert_eq!(kernel.input_queue().consumed_input_count(), 0);
 }
 
+/// Verifies active wait scopes suppress automatic mailbox-turn wakeups.
+/// 验证活跃等待范围会抑制自动 mailbox 回合唤醒。
+#[test]
+fn active_wait_scope_suppresses_subagent_mailbox_trigger() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let metadata = serde_json::json!({
+        "payload": {
+            "subagent_mailbox_event": {
+                "kind": "completed",
+                "child_thread_id": task_session_id.to_string(),
+                "payload": {
+                    "task_name": "agent-image",
+                    "subagent_task_id": task_session_id.to_string(),
+                    "result_text": "image done"
+                }
+            }
+        }
+    });
+    session_runtime_kernel_mut(&mut service_state, parent_session_id)
+        .register_wait_scope(
+            "wait-agent",
+            [task_session_id.to_string()],
+            current_unix_millis_u64(),
+        )
+        .expect("wait scope should register");
+
+    assert!(enqueue_webui_subagent_mailbox_input(
+        &mut service_state,
+        parent_session_id,
+        task_session_id,
+        &metadata,
+    ));
+
+    let kernel = service_state
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("kernel should exist");
+    let mailbox_inputs = kernel.input_queue().get_mailbox_input();
+    assert_eq!(mailbox_inputs.len(), 1);
+    assert!(!mailbox_inputs[0].trigger_turn);
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
+}
+
 /// Verifies stopped subagent metadata enters the parent mailbox as a child-agent message.
 /// 验证已停止子代理元数据会作为子代理消息进入父会话 mailbox。
 #[test]
@@ -523,7 +569,7 @@ fn stopped_subagent_metadata_enqueues_parent_mailbox_notification() {
 
     assert_eq!(mailbox_inputs.len(), 1);
     assert_eq!(mailbox_inputs[0].kind, TurnInputKind::SubagentMessage);
-    assert!(!mailbox_inputs[0].trigger_turn);
+    assert!(mailbox_inputs[0].trigger_turn);
     assert_eq!(
         mailbox_inputs[0].payload["mailbox_event"]["payload"]["execution_status"],
         "stopped"

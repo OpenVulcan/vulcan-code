@@ -590,6 +590,142 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
     ));
 }
 
+/// Verifies delegate-finished events force stale running payloads into a terminal panel state.
+/// 验证 delegate-finished 事件会将陈旧 running 载荷强制归一为终态面板状态。
+#[test]
+fn delegate_finished_ingest_terminalizes_stale_running_payload() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    {
+        let mut guard = state.lock().unwrap();
+        guard
+            .detached_subagent_task_listeners
+            .insert(task_session_id);
+    }
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "子代理完成",
+        "子代理任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "stale-running-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_status": "running",
+            "description": "生成图片",
+            "subagent": "image-worker",
+            "result": "已完成但状态载荷陈旧",
+        }
+    })));
+
+    let consumed =
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("delegate finished should ingest");
+
+    assert!(consumed);
+    let guard = state.lock().unwrap();
+    let task_state = guard
+        .session_subagent_tasks
+        .get(&parent_session_id)
+        .and_then(|tasks| tasks.get(&task_session_id))
+        .expect("terminal task state should be cached");
+    assert_eq!(task_state.run_state, SubagentTaskRunState::Completed);
+    assert!(
+        !guard
+            .detached_subagent_task_listeners
+            .contains(&task_session_id)
+    );
+}
+
+/// Verifies the final child completion closes a parent hook turn that was awaiting subagents.
+/// 验证最后一个子代理完成后会闭合等待子代理的父级 hook 回合。
+#[test]
+fn final_subagent_completion_closes_parent_awaiting_hook_turn() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let runtime = test_agent_runtime_bridge();
+    {
+        let mut guard = state.lock().unwrap();
+        guard
+            .session_subagent_tasks
+            .entry(parent_session_id)
+            .or_default()
+            .insert(
+                task_session_id,
+                SubagentTaskPanelState {
+                    task_id: task_session_id,
+                    public_task_id: String::from("review-worker"),
+                    parent_session_id,
+                    subagent_label: String::from("Review Worker"),
+                    description: Some(String::from("审核代码")),
+                    run_state: SubagentTaskRunState::Completed,
+                    result_text: String::from("审核完成"),
+                    conversation_state: None,
+                },
+            );
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("workspace should exist");
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(parent_session_id)
+            .or_insert_with(SessionRuntimeStateEntry::default);
+        runtime_state.last_safe_provider_request_count = Some(2);
+        runtime_state
+            .conversation_state
+            .messages
+            .push(SessionConversationMessage {
+                id: String::from("assistant-1"),
+                payload: SessionConversationPayload::Assistant {
+                    text: String::from("父代理已等待子代理结果。"),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            });
+    }
+    {
+        let mut hook_runtime = runtime.conversation_hook_runtime.lock().unwrap();
+        hook_runtime.record_queued_user_prompt(
+            parent_session_id,
+            "prompt-1",
+            Some(String::from("project-a")),
+            String::from("D:\\openvulcan\\vulcan-code"),
+            PendingSessionPromptSource::UserFollowup,
+            "请调用子代理审核代码",
+        );
+        assert!(hook_runtime.has_active_turn(parent_session_id));
+    }
+
+    let completion_request = maybe_prepare_webui_parent_completion_after_subagent_finished(
+        &state,
+        &runtime,
+        parent_session_id,
+    )
+    .expect("completion preparation should not fail");
+
+    assert!(completion_request.is_some());
+    assert!(
+        !runtime
+            .conversation_hook_runtime
+            .lock()
+            .unwrap()
+            .has_active_turn(parent_session_id)
+    );
+}
+
 /// Verifies stopped parents never dispatch queued work when detached subagents report terminal events.
 /// 验证已停止父会话收到分离子代理终态事件时绝不会调度排队工作。
 #[test]
@@ -692,7 +828,8 @@ fn subagent_completion_queues_session_mailbox_without_wait_agent() {
     let mailbox_inputs = kernel.input_queue().get_mailbox_input();
     assert_eq!(mailbox_inputs.len(), 1);
     assert_eq!(mailbox_inputs[0].kind, TurnInputKind::SubagentMessage);
-    assert!(!mailbox_inputs[0].trigger_turn);
+    assert!(mailbox_inputs[0].trigger_turn);
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
     assert_eq!(
         mailbox_inputs[0].payload["mailbox_event"]["payload"]["result"],
         "生成完成：a.jpg"
@@ -768,7 +905,7 @@ fn subagent_completion_queues_session_mailbox_after_completed_wait_agent() {
         .get(&parent_session_id)
         .expect("parent session kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
 /// Verifies child completion mailbox input no longer depends on legacy wait-agent selectors.
@@ -798,7 +935,7 @@ fn subagent_completion_after_completed_wait_agent_allows_any_agent() {
         .get(&parent_session_id)
         .expect("kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
 /// Verifies child-agent usage segments are drained once before parent turn statistics aggregate them.

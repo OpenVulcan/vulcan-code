@@ -537,6 +537,14 @@ export function WorkbenchLayout(props: {
   React.useEffect(() => {
     selectedConversationIdRef.current = selectedConversationId;
   }, [selectedConversationId]);
+  // Keep the normalized workbench projection aligned with the locally selected chat.
+  // 保持归一化工作台投影与本地选中的聊天会话一致。
+  React.useEffect(() => {
+    if (!selectedConversationId || draftConversation?.id === selectedConversationId) {
+      return;
+    }
+    setWorkbenchState((current) => markConversationLocallyRead(current, selectedConversationId));
+  }, [draftConversation?.id, selectedConversationId]);
   // showConsoleSidebar limits project and conversation context to the console view.
   // showConsoleSidebar 将项目与会话上下文限定在控制台页面内。
   const showConsoleSidebar = activeArea === "chat";

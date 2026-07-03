@@ -55,8 +55,8 @@ static RUNTIME_EVENT_PROJECTION_BARRIERS: OnceLock<Mutex<HashMap<String, oneshot
 /// 工具等待界面投影确认后继续执行的最长时间。
 const RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// One pending projection barrier created for a runtime start event.
-/// 为一条运行时开始事件创建的待确认投影屏障。
+/// One pending projection barrier created for a runtime event.
+/// 为一条运行时事件创建的待确认投影屏障。
 pub(crate) struct RuntimeEventProjectionBarrier {
     /// Stable barrier id copied into runtime-event metadata.
     /// 复制到运行时事件元数据中的稳定屏障标识。
@@ -161,8 +161,8 @@ pub(crate) fn attach_runtime_event_projection_barrier(
     )
 }
 
-/// Waits until the host bridge confirms the start event has been projected.
-/// 等待宿主桥接层确认开始事件已经完成投影。
+/// Waits until the host bridge confirms the runtime event has been projected.
+/// 等待宿主桥接层确认运行时事件已经完成投影。
 pub(crate) async fn wait_runtime_event_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
 ) {

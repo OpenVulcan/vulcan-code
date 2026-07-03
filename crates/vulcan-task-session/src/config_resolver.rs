@@ -295,17 +295,18 @@ fn overlay_provider_model(target: &mut ProviderModelSnapshot, overlay: &Provider
 /// Applies tool exposure override fields when they are present.
 /// 在字段存在时应用工具可见性覆盖。
 fn overlay_tool_exposure(target: &mut ToolExposureSnapshot, overlay: &ToolExposureSnapshot) {
+    if overlay.policy.mode != vulcan_session_core::CapabilityPolicyMode::All
+        || !overlay.policy.selectors.is_empty()
+    {
+        target.policy = overlay.policy.clone();
+        target.allowed_tools = overlay.allowed_tools.clone();
+        target.disabled_tools = overlay.disabled_tools.clone();
+    }
     if !overlay.allowed_tools.is_empty() {
         target.allowed_tools = overlay.allowed_tools.clone();
     }
     if !overlay.disabled_tools.is_empty() {
         target.disabled_tools = overlay.disabled_tools.clone();
-    }
-    if !overlay.allowed_ai_capabilities.is_empty() {
-        target.allowed_ai_capabilities = overlay.allowed_ai_capabilities.clone();
-    }
-    if !overlay.disabled_ai_capabilities.is_empty() {
-        target.disabled_ai_capabilities = overlay.disabled_ai_capabilities.clone();
     }
     if !overlay.luaskills_overrides.is_null() {
         target.luaskills_overrides = overlay.luaskills_overrides.clone();
@@ -318,6 +319,13 @@ fn overlay_tool_exposure(target: &mut ToolExposureSnapshot, overlay: &ToolExposu
 /// Applies prompt skill override fields when they are present.
 /// 在字段存在时应用提示词技能覆盖。
 fn overlay_prompt_skills(target: &mut PromptSkillSnapshot, overlay: &PromptSkillSnapshot) {
+    if overlay.policy.mode != vulcan_session_core::CapabilityPolicyMode::All
+        || !overlay.policy.selectors.is_empty()
+    {
+        target.policy = overlay.policy.clone();
+        target.enabled = overlay.enabled.clone();
+        target.disabled = overlay.disabled.clone();
+    }
     if !overlay.enabled.is_empty() {
         target.enabled = overlay.enabled.clone();
     }

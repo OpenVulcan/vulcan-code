@@ -49,9 +49,8 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace_snapshot = guard.workspace_snapshot.as_ref();
         let normalized = if is_finished {
-            normalize_webui_subagent_task_state(workspace_snapshot, &panel_state, None, false)
+            terminal_webui_subagent_task_state(panel_state.clone())
         } else {
             panel_state.clone()
         };
@@ -80,7 +79,7 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
     webui_trace(
         "subagent_runtime_event_normalized",
         format!(
-            "parent={parent_session_id} task={} run_state={} has_conversation_state={} result_chars={}",
+            "parent={parent_session_id} task={} run_state={} has_conversation_state={} result_chars={} terminal={is_finished}",
             normalized_state.task_id,
             subagent_run_state_key(normalized_state.run_state),
             normalized_state.conversation_state.is_some(),
@@ -170,6 +169,15 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         );
     }
     Ok(true)
+}
+
+/// Converts one delegate-finished panel payload into an authoritative terminal state.
+/// 将单条 delegate-finished 面板载荷转换为权威终态状态。
+fn terminal_webui_subagent_task_state(mut state: SubagentTaskPanelState) -> SubagentTaskPanelState {
+    if state.run_state.is_running() {
+        state.run_state = SubagentTaskRunState::Completed;
+    }
+    state
 }
 
 /// Drains pending child-agent usage segments for one parent session exactly once.

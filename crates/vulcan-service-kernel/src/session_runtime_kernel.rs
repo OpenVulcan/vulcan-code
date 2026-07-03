@@ -535,8 +535,13 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         );
         return false;
     }
-    let trigger_parent_turn = false;
+    let parent_is_waiting_for_subagents = state
+        .parent_sessions_waiting_for_subagents
+        .contains(&parent_session_id);
     let kernel = session_runtime_kernel_mut(state, parent_session_id);
+    // Terminal child-agent messages should wake an idle parent unless wait_agent owns delivery.
+    // 终态子代理消息应唤醒空闲父会话，除非当前由 wait_agent 接管投递。
+    let trigger_parent_turn = !parent_is_waiting_for_subagents && !kernel.has_wait_scopes();
     let source_generation = binding
         .as_ref()
         .map(|binding| binding.source_generation)

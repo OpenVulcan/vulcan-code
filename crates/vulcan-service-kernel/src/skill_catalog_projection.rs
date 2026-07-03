@@ -257,21 +257,37 @@ fn subagent_definition_summary(
         source_hash: definition.source.source_hash.clone(),
         version: definition.source.version.clone(),
         updated_at: definition.source.updated_at.clone(),
+        tool_policy_mode: capability_policy_mode_key(definition.tool_exposure.policy.mode)
+            .to_string(),
+        tool_policy_tools: definition.tool_exposure.policy.selectors.clone(),
         allowed_tool_count: definition.tool_exposure.allowed_tools.len(),
         disabled_tool_count: definition.tool_exposure.disabled_tools.len(),
         enabled_prompt_skill_count: definition.prompt_skills.enabled.len(),
         disabled_prompt_skill_count: definition.prompt_skills.disabled.len(),
+        prompt_skill_policy_mode: capability_policy_mode_key(definition.prompt_skills.policy.mode)
+            .to_string(),
+        prompt_skill_policy_skills: definition.prompt_skills.policy.selectors.clone(),
         system_prompt: definition.system_prompt.clone(),
         system_prompt_append: definition.system_prompt_append.clone(),
         allowed_tools: definition.tool_exposure.allowed_tools.clone(),
         disabled_tools: definition.tool_exposure.disabled_tools.clone(),
-        allowed_ai_capabilities: definition.tool_exposure.allowed_ai_capabilities.clone(),
-        disabled_ai_capabilities: definition.tool_exposure.disabled_ai_capabilities.clone(),
+        allowed_ai_capabilities: Vec::new(),
+        disabled_ai_capabilities: Vec::new(),
         luaskills_overrides: definition.tool_exposure.luaskills_overrides.clone(),
         mcp_server_overrides: definition.tool_exposure.mcp_server_overrides.clone(),
         enabled_prompt_skills: definition.prompt_skills.enabled.clone(),
         disabled_prompt_skills: definition.prompt_skills.disabled.clone(),
         capability_diagnostics: subagent_capability_diagnostics(definition),
+    }
+}
+
+/// Returns the stable API key for one capability policy mode.
+/// 返回单个能力策略模式的稳定 API 键。
+fn capability_policy_mode_key(mode: vulcan_session_core::CapabilityPolicyMode) -> &'static str {
+    match mode {
+        vulcan_session_core::CapabilityPolicyMode::All => "all",
+        vulcan_session_core::CapabilityPolicyMode::AllowOnly => "allow_only",
+        vulcan_session_core::CapabilityPolicyMode::DenyOnly => "deny_only",
     }
 }
 
@@ -323,8 +339,6 @@ fn subagent_capability_diagnostics(
     }
     if definition.tool_exposure.allowed_tools.is_empty()
         && definition.tool_exposure.disabled_tools.is_empty()
-        && definition.tool_exposure.allowed_ai_capabilities.is_empty()
-        && definition.tool_exposure.disabled_ai_capabilities.is_empty()
         && definition.tool_exposure.luaskills_overrides.is_null()
         && definition.tool_exposure.mcp_server_overrides.is_null()
         && definition.prompt_skills.enabled.is_empty()

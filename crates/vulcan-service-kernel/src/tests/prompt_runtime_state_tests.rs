@@ -328,6 +328,76 @@ fn display_session_messages_prefer_display_window_over_dialogue_context() {
     );
 }
 
+/// Verifies hidden runtime records do not enter the user-facing display transcript.
+/// 验证隐藏运行时记录不会进入面向用户的显示转录。
+#[test]
+fn display_transcript_filters_hidden_runtime_records() {
+    let session_id = SessionId::new_v4();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("hidden-agent-message"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: false,
+            title: String::from("子代理消息"),
+            body: String::from("<agent_message>hidden</agent_message>"),
+            metadata: None,
+            created_at: String::from("100"),
+        });
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("legacy-visible-agent-message"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("子代理消息"),
+            body: String::from("<agent_message>legacy visible</agent_message>"),
+            metadata: None,
+            created_at: String::from("100"),
+        });
+    runtime_state
+        .conversation_state
+        .records
+        .push(SessionConversationRecord {
+            id: String::from("visible-assistant-message"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("模型输出"),
+            body: String::from("visible answer"),
+            metadata: None,
+            created_at: String::from("101"),
+        });
+    let workspace_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: Vec::new(),
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::from([session_id]),
+    };
+
+    let display_messages = display_session_messages_from_workspace(&workspace_snapshot, session_id)
+        .expect("display messages should exist");
+
+    assert_eq!(display_messages.len(), 1);
+    assert_eq!(display_messages[0].id, "visible-assistant-message");
+    assert_eq!(display_messages[0].body, "visible answer");
+}
+
 /// Verifies runtime-log hydrated messages can back compaction without display records.
 /// 验证运行时日志水合消息在没有显示记录时也能支撑压缩。
 #[test]

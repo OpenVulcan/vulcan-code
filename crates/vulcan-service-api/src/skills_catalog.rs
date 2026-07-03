@@ -143,6 +143,22 @@ pub struct SubagentCatalogSummary {
     pub errors: Vec<SubagentCatalogIssueSummary>,
 }
 
+/// Lightweight response for one agent enabled-state update.
+/// 单个智能体启停状态更新的轻量响应。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentDefinitionEnabledUpdate {
+    /// Stable agent id that was updated.
+    /// 已更新的稳定智能体标识。
+    pub agent_id: String,
+    /// Updated enabled state.
+    /// 更新后的启停状态。
+    pub enabled: bool,
+    /// Updated catalog notice after the local mutation.
+    /// 局部变更后的目录提示。
+    pub notice: String,
+}
+
 /// One agent catalog category projected for the WebUI.
 /// 投影给 WebUI 的单个智能体目录分类。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -258,6 +274,12 @@ pub struct SubagentDefinitionSummary {
     /// Optional last-updated timestamp string.
     /// 可选最近更新时间戳字符串。
     pub updated_at: Option<String>,
+    /// Unified tool policy mode.
+    /// 统一工具策略模式。
+    pub tool_policy_mode: String,
+    /// Unified tool policy selectors.
+    /// 统一工具策略选择器。
+    pub tool_policy_tools: Vec<String>,
     /// Number of explicitly allowed host tools.
     /// 显式允许的宿主工具数量。
     pub allowed_tool_count: usize,
@@ -270,6 +292,12 @@ pub struct SubagentDefinitionSummary {
     /// Number of disabled prompt skills declared by this definition.
     /// 当前定义声明禁用的提示词技能数量。
     pub disabled_prompt_skill_count: usize,
+    /// Unified prompt-skill policy mode.
+    /// 统一提示词技能策略模式。
+    pub prompt_skill_policy_mode: String,
+    /// Unified prompt-skill policy selectors.
+    /// 统一提示词技能策略选择器。
+    pub prompt_skill_policy_skills: Vec<String>,
     /// Editable base system prompt restored into the agent editor.
     /// 恢复到智能体编辑器中的可编辑基础系统提示词。
     pub system_prompt: Option<String>,
@@ -388,8 +416,8 @@ impl<'de> Deserialize<'de> for OptionalTextPatch {
     }
 }
 
-/// Save request for one user-owned or system-overriding agent definition.
-/// 单个用户拥有或覆盖系统定义的智能体保存请求。
+/// Save request for one user-owned agent definition.
+/// 单个用户拥有的智能体保存请求。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentDefinitionSaveRequest {
@@ -441,6 +469,14 @@ pub struct SubagentDefinitionSaveRequest {
     /// Explicitly disabled host tool selectors.
     /// 显式禁用的宿主工具选择器。
     pub disabled_tools: Vec<String>,
+    /// Unified tool policy mode.
+    /// 统一工具策略模式。
+    #[serde(default)]
+    pub tool_policy_mode: Option<String>,
+    /// Unified tool policy selectors.
+    /// 统一工具策略选择器。
+    #[serde(default)]
+    pub tool_policy_tools: Vec<String>,
     /// Explicitly allowed AI capability selectors.
     /// 显式允许的 AI 能力选择器。
     #[serde(default)]
@@ -463,6 +499,14 @@ pub struct SubagentDefinitionSaveRequest {
     /// Explicitly disabled prompt skill names.
     /// 显式禁用的提示词技能名称。
     pub disabled_prompt_skills: Vec<String>,
+    /// Unified prompt-skill policy mode.
+    /// 统一提示词技能策略模式。
+    #[serde(default)]
+    pub prompt_skill_policy_mode: Option<String>,
+    /// Unified prompt-skill policy selectors.
+    /// 统一提示词技能策略选择器。
+    #[serde(default)]
+    pub prompt_skill_policy_skills: Vec<String>,
 }
 
 /// One agent catalog loading issue projected for diagnostics.

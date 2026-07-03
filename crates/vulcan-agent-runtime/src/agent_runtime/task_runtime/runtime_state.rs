@@ -120,6 +120,40 @@ impl TaskRuntime {
         Ok(())
     }
 
+    /// Updates one catalog definition enabled state in-place.
+    /// 原地更新单个目录定义的启停状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `agent_id` is the stable catalog definition id.
+    /// `agent_id` 是稳定目录定义标识。
+    /// `enabled` is the next model exposure state.
+    /// `enabled` 是新的模型暴露状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether a matching catalog definition was updated.
+    /// 返回是否更新了匹配的目录定义。
+    pub fn set_subagent_definition_enabled(
+        &self,
+        agent_id: &str,
+        enabled: bool,
+    ) -> Result<bool, String> {
+        let mut catalog = self
+            .subagent_catalog
+            .write()
+            .map_err(|_| String::from("The subagent catalog is locked and cannot be updated."))?;
+        let Some(definition) = catalog
+            .definitions
+            .iter_mut()
+            .find(|definition| definition.id == agent_id)
+        else {
+            return Ok(false);
+        };
+        definition.enabled = enabled;
+        Ok(true)
+    }
+
     /// Returns a clone of the merged subagent catalog.
     /// 返回合并子代理目录的克隆快照。
     ///

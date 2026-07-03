@@ -3,7 +3,7 @@ import {
   applyConversationMessagesPatchedDelta,
   groupMessagesByConversation,
   mergeIncomingConversationMessages,
-  updateSubagentNavigationRunPhase,
+  updateWorkbenchSubagentNavigationRunPhase,
 } from "@/state/workbench-message-merge";
 import type {
   ConversationHydrationProgress,
@@ -533,7 +533,8 @@ function applyUpdateConversationRunPhaseDelta(
   workbench: WorkbenchSnapshot,
   delta: UpdateConversationRunPhaseDelta,
 ): WorkbenchSnapshot {
-  return {
+  const subagentNavigationProjection = updateWorkbenchSubagentNavigationRunPhase(workbench, delta.conversationId, delta.runPhase);
+  return deriveSelectedConversationFields({
     ...workbench,
     conversations: workbench.conversations.map((conversation) => (
       conversation.id === delta.conversationId
@@ -545,12 +546,8 @@ function applyUpdateConversationRunPhaseDelta(
           }
         : conversation
     )),
-    subagentNavigation: updateSubagentNavigationRunPhase(
-      workbench.subagentNavigation,
-      delta.conversationId,
-      delta.runPhase,
-    ),
-  };
+    ...subagentNavigationProjection,
+  });
 }
 
 // applyContextInjectionChangedDelta replaces the selected conversation memory-panel projection.

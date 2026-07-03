@@ -194,6 +194,23 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                         .map_err(|error| format!("failed to lock service state: {error}"))?;
                     clear_webui_subagent_parent_turn_binding(&mut guard, task_id);
                 }
+                if parent_is_regular_session
+                    && !parent_is_stopped
+                    && let Some(completion_request) =
+                        maybe_prepare_webui_parent_completion_after_subagent_finished(
+                            state,
+                            agent_runtime,
+                            parent_session_id,
+                        )?
+                {
+                    spawn_conversation_completion_hook_task(
+                        app.clone(),
+                        state.clone(),
+                        controller_runtime.clone(),
+                        agent_runtime.clone(),
+                        completion_request,
+                    );
+                }
             }
             if webui_detached_parent_event_should_continue_pending_prompt(
                 parent_is_regular_session,
@@ -269,6 +286,102 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
             Ok(())
         }
     }
+}
+
+/// Prepares parent logical turn completion once its final child subagent reaches a terminal state.
+/// 当最后一个子代理进入终态后准备父级逻辑回合闭合请求。
+pub(crate) fn maybe_prepare_webui_parent_completion_after_subagent_finished(
+    state: &SharedServiceBridgeState,
+    agent_runtime: &AgentRuntimeBridge,
+    parent_session_id: SessionId,
+) -> Result<
+    Option<vulcan_agent_runtime::agent_runtime::conversation_hooks::ConversationCompletionRequest>,
+    String,
+> {
+    let gate = webui_turn_completion_gate_from_state(state, agent_runtime, parent_session_id)?;
+    webui_trace(
+        "subagent_parent_completion_gate",
+        format!(
+            "parent={parent_session_id} pending_subagents={} has_active_hook_turn={}",
+            gate.pending_subagent_count, gate.has_active_hook_turn
+        ),
+    );
+    if gate.has_pending_work() || !gate.has_active_hook_turn {
+        return Ok(None);
+    }
+
+    let completion_request = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        let now = current_unix_millis_text();
+        let project_id = workspace
+            .sessions
+            .iter()
+            .find(|session| session.id == parent_session_id)
+            .and_then(|session| session.project_id.clone());
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(parent_session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        let assistant_content =
+            latest_assistant_content_for_parent_completion(&runtime_state.conversation_state);
+        let provider_request_count = runtime_state
+            .last_safe_provider_request_count
+            .unwrap_or_default();
+        let conversation_state = runtime_state.conversation_state.clone();
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        let (hook_turn_id, request) = hook_runtime.prepare_turn_completion_dispatch_with_status(
+            parent_session_id,
+            project_id,
+            assistant_content.as_str(),
+            provider_request_count,
+            &conversation_state,
+            ConversationTurnCompletionStatus::Completed,
+            0,
+        );
+        runtime_state
+            .context_injection_state
+            .consume_turn(&hook_turn_id, &now);
+        runtime_state.vmm_profile_sync.record_completed_turn();
+        agent_runtime
+            .vmm_hook_runtime
+            .store_profile_sync_state(parent_session_id, runtime_state.vmm_profile_sync.clone());
+        runtime_state.updated_at = now;
+        request
+    };
+    Ok(Some(completion_request))
+}
+
+/// Returns the latest assistant text to close a parent completion hook payload.
+/// 返回用于闭合父级完成 hook 载荷的最近助手文本。
+fn latest_assistant_content_for_parent_completion(
+    conversation_state: &vulcan_agent_runtime::conversation_protocol::SessionConversationState,
+) -> String {
+    for message in conversation_state.messages.iter().rev() {
+        if let vulcan_agent_runtime::conversation_protocol::SessionConversationPayload::Assistant {
+            text,
+            ..
+        } = &message.payload
+        {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+
+    String::from("The model completed the run but did not return visible text output.")
 }
 
 /// Enqueues one completed subagent result into the parent kernel mailbox for provider delivery.

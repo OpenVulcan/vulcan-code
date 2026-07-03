@@ -46,8 +46,9 @@ pub use compactor::{
     SessionContextCompactionRequest, SessionContextCompactor,
 };
 pub use config::{
-    ContextCompactionPolicyRequest, ContextCompactionPolicySnapshot, PromptSkillSnapshot,
-    ProviderModelSnapshot, SessionEffectiveConfig, SessionRequestedConfig, ToolExposureSnapshot,
+    CapabilityPolicyMode, CapabilityPolicySnapshot, ContextCompactionPolicyRequest,
+    ContextCompactionPolicySnapshot, PromptSkillSnapshot, ProviderModelSnapshot,
+    SessionEffectiveConfig, SessionRequestedConfig, ToolExposureSnapshot,
 };
 pub use context::{
     SessionCompactionCheckpoint, SessionContextDocument, SessionContextSnapshot,

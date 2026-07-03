@@ -142,6 +142,10 @@ pub(super) async fn dispatch_service_rpc(
             service_save_subagent_definition(state, rpc_required_param(&params, "definition")?)
                 .await,
         ),
+        "service_delete_subagent_definition" => rpc_json_result(
+            service_delete_subagent_definition(state, rpc_required_param(&params, "agentId")?)
+                .await,
+        ),
         "service_restore_subagent_definition_default" => rpc_json_result(
             service_restore_subagent_definition_default(
                 state,

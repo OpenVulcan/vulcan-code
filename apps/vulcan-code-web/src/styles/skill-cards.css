@@ -128,8 +128,16 @@
 }
 
 .agent-catalog-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 16;
   display: grid;
-  gap: 8px;
+  gap: 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: color-mix(in oklch, var(--background) 96%, var(--card));
+  padding: 14px 14px 12px;
 }
 
 .agent-catalog-toolbar-main,
@@ -139,6 +147,83 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.agent-catalog-toolbar-heading,
+.agent-catalog-filter-row {
+  min-width: 0;
+  display: grid;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-catalog-toolbar-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.agent-catalog-toolbar-heading p {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-catalog-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.agent-catalog-icon-button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0;
+}
+
+.agent-catalog-icon-button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.agent-catalog-icon-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.agent-catalog-filter-row {
+  grid-template-columns: minmax(0, 1fr) 144px;
+}
+
+.agent-catalog-search-input,
+.agent-catalog-status-select {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.agent-catalog-search-input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.agent-catalog-status-select {
+  padding-right: 28px;
 }
 
 .agent-catalog-notice {
@@ -245,7 +330,8 @@
   gap: 10px;
 }
 
-.agent-editor-grid label {
+.agent-editor-grid label,
+.agent-editor-field {
   min-width: 0;
   display: grid;
   gap: 5px;
@@ -283,12 +369,38 @@
   line-height: 1.45;
 }
 
-.agent-editor-color-field {
+.agent-editor-color-picker {
+  position: relative;
   min-width: 0;
+}
+
+.agent-editor-color-trigger {
+  width: 100%;
+  height: 32px;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-editor-color-trigger.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-editor-color-trigger > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-editor-color-swatch {
@@ -296,6 +408,16 @@
   height: 18px;
   border: 1px solid var(--border);
   border-radius: 50%;
+}
+
+.agent-editor-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .agent-prompt-field textarea {
@@ -319,7 +441,7 @@
 .agent-tool-policy-toolbar {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 280px) minmax(180px, 260px);
   align-items: center;
   gap: 10px;
 }
@@ -362,8 +484,8 @@
 }
 
 .agent-tool-policy-row {
-  grid-template-columns: minmax(0, 1fr) minmax(210px, 280px);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 150px);
+  align-items: center;
 }
 
 .agent-tool-policy-main {
@@ -387,8 +509,26 @@
   font-size: 11px;
 }
 
-.agent-tool-policy-state {
-  align-self: start;
+.agent-tool-policy-mode {
+  align-self: center;
+}
+
+.agent-tool-policy-checkbox {
+  min-width: 0;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.agent-tool-policy-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
 }
 
 @media (max-width: 760px) {
@@ -398,8 +538,32 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .agent-tool-policy-state {
+  .agent-definition-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .agent-definition-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .agent-catalog-toolbar-heading,
+  .agent-catalog-filter-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-catalog-toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .agent-tool-policy-mode,
+  .agent-tool-policy-checkbox {
     width: 100%;
+  }
+
+  .agent-tool-policy-checkbox {
+    justify-content: flex-start;
   }
 }
 
@@ -507,8 +671,13 @@
 }
 
 .agent-skill-card-list {
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  overflow: hidden;
 }
 
 .skill-card {
@@ -535,6 +704,186 @@
 .subagent-definition-card {
   height: 196px;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+
+.agent-definition-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  padding: 14px 16px;
+}
+
+.agent-definition-row:last-child {
+  border-bottom: 0;
+}
+
+.agent-definition-row-icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  padding: 0;
+}
+
+.agent-definition-row-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.agent-definition-row-color-marker {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--card);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--border);
+  pointer-events: none;
+}
+
+.agent-definition-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.agent-definition-row-title-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-definition-title-button {
+  min-width: 0;
+  max-width: min(360px, 100%);
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  padding: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-definition-title-button:hover {
+  color: var(--primary);
+}
+
+.agent-definition-row-badges {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.agent-definition-row-badges [data-slot="badge"] {
+  max-width: 160px;
+  font-size: 11px;
+}
+
+.agent-definition-row-main p,
+.agent-definition-row-path {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-definition-row-main p {
+  color: var(--foreground);
+}
+
+.agent-definition-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.agent-definition-switch {
+  width: 32px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+  padding: 2px;
+  transition: background-color 120ms ease;
+}
+
+.agent-definition-switch span {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--background);
+  transform: translateX(0);
+  transition: transform 120ms ease;
+}
+
+.agent-definition-switch.on {
+  background: var(--foreground);
+}
+
+.agent-definition-switch.on span {
+  transform: translateX(14px);
+}
+
+.agent-definition-switch:disabled,
+.agent-definition-icon-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.agent-definition-icon-button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0;
+}
+
+.agent-definition-icon-button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.agent-definition-icon-button.danger:hover {
+  color: var(--destructive);
 }
 
 .skill-card-header {

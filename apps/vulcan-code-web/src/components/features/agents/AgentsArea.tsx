@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Bot, ChevronDown, ExternalLink, FileText, FolderOpen, Github, Maximize2, Minimize2, Pencil, Plus, Power, RefreshCw, RotateCcw, Save, X } from "lucide-react"
+import { Bot, ExternalLink, FolderOpen, Github, Maximize2, Minimize2, Pencil, Plus, RefreshCw, Save, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { formatSkillText } from "@/components/features/featureText"
@@ -13,16 +13,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { StatusPill } from "@/components/shared/status"
 import { useI18n } from "@/i18n"
 import { openExternalUrl } from "@/service/project-actions-service"
-import type { SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, SubagentOriginSummary, WorkbenchSnapshot } from "@/types"
+import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, SubagentOriginSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
 
 export type { AgentActionProps } from "./agent-area-types"
@@ -72,30 +66,18 @@ interface AgentEditorDraft {
   // Appended system prompt text.
   // 追加系统提示词文本。
   systemPromptAppend: string
-  // Newline-separated tool ids forced on by the three-state policy.
-  // 三态策略中按换行分隔的强制启用工具标识。
-  allowedTools: string
-  // Newline-separated tool ids forced off by the three-state policy.
-  // 三态策略中按换行分隔的强制关闭工具标识。
-  disabledTools: string
-  // Newline-separated AI capability selectors forced on.
-  // 按换行分隔的强制启用 AI 能力选择器。
-  allowedAiCapabilities: string
-  // Newline-separated AI capability selectors forced off.
-  // 按换行分隔的强制关闭 AI 能力选择器。
-  disabledAiCapabilities: string
-  // JSON payload for LuaSkills-specific exposure overrides.
-  // LuaSkills 专属可见性覆盖 JSON 载荷。
-  luaskillsOverridesJson: string
-  // JSON payload for MCP-specific exposure overrides.
-  // MCP 专属可见性覆盖 JSON 载荷。
-  mcpServerOverridesJson: string
-  // Newline-separated enabled prompt skill names.
-  // 按换行分隔的启用提示词技能名称。
-  enabledPromptSkills: string
-  // Newline-separated disabled prompt skill names.
-  // 按换行分隔的禁用提示词技能名称。
-  disabledPromptSkills: string
+  // Unified tool policy mode.
+  // 统一工具策略模式。
+  toolPolicyMode: CapabilityPolicyMode
+  // Newline-separated tool selectors used by the policy mode.
+  // 当前策略模式使用的按换行分隔工具选择器。
+  toolPolicyTools: string
+  // Unified prompt skill policy mode.
+  // 统一提示词技能策略模式。
+  promptSkillPolicyMode: CapabilityPolicyMode
+  // Newline-separated prompt skill selectors used by the policy mode.
+  // 当前策略模式使用的按换行分隔提示词技能选择器。
+  promptSkillPolicySkills: string
   // Whether this draft edits an existing id.
   // 当前草稿是否编辑已有标识。
   existing: boolean
@@ -124,9 +106,9 @@ const AGENT_METADATA_LOCALES: Array<{ locale: AgentMetadataLocale; zh: string; e
   { locale: "en-US", zh: "英文", en: "English" },
 ]
 
-// AgentCapabilityPolicyState represents the per-agent override state for one capability item.
-// AgentCapabilityPolicyState 表示单个能力项在当前智能体中的覆盖状态。
-type AgentCapabilityPolicyState = "default" | "allow" | "deny"
+// AgentStatusFilter represents the top-level enabled-state filter.
+// AgentStatusFilter 表示顶部启停状态筛选。
+type AgentStatusFilter = "all" | "enabled" | "disabled"
 
 // AgentCapabilityPolicyOption describes one selectable policy row.
 // AgentCapabilityPolicyOption 描述策略表中的单个可选能力行。
@@ -183,12 +165,21 @@ export function AgentsArea(props: {
   // busyAction stores the catalog action currently in flight.
   // busyAction 保存当前正在执行的目录动作。
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
+  // togglingAgentIds stores row-level enabled-state updates currently in flight.
+  // togglingAgentIds 保存当前正在执行启停更新的行级智能体标识。
+  const [togglingAgentIds, setTogglingAgentIds] = React.useState<ReadonlySet<string>>(() => new Set())
   // editorDraft stores the currently edited or newly created definition.
   // editorDraft 保存当前正在编辑或新建的定义。
   const [editorDraft, setEditorDraft] = React.useState<AgentEditorDraft | null>(null)
   // detailDefinition stores the agent selected for the details dialog.
   // detailDefinition 保存当前打开详情弹窗的智能体定义。
   const [detailDefinition, setDetailDefinition] = React.useState<SubagentDefinitionSummary | null>(null)
+  // searchQuery stores the cross-locale keyword filter text.
+  // searchQuery 保存跨语言关键词筛选文本。
+  const [searchQuery, setSearchQuery] = React.useState("")
+  // statusFilter stores the enabled-state filter.
+  // statusFilter 保存启停状态筛选。
+  const [statusFilter, setStatusFilter] = React.useState<AgentStatusFilter>("all")
   // localCategoryId stores standalone category filtering outside the adaptive shell.
   // localCategoryId 保存自适应外壳之外的独立分类筛选。
   const [localCategoryId, setLocalCategoryId] = React.useState("")
@@ -204,23 +195,21 @@ export function AgentsArea(props: {
   // editorPromptSkillOptions merges live Agent Skill rows with the draft's persisted policy ids.
   // editorPromptSkillOptions 合并实时 Agent Skill 行与草稿中已持久化的策略标识。
   const editorPromptSkillOptions = React.useMemo(() => buildAgentPromptSkillPolicyOptions(props.workbench, editorDraft, locale), [editorDraft, locale, props.workbench])
-  // editorMcpToolOptions merges discovered MCP tools with draft policy ids.
-  // editorMcpToolOptions 合并已发现 MCP 工具与草稿策略标识。
-  const editorMcpToolOptions = React.useMemo(() => buildAgentMcpToolPolicyOptions(props.workbench, editorDraft, locale), [editorDraft, locale, props.workbench])
   // categoryRows sorts catalog categories for the filter menu.
   // categoryRows 对目录分类排序以供筛选菜单使用。
   const categoryRows = React.useMemo(() => sortedAgentCategories(props.workbench.subagentCatalog.categories, locale), [locale, props.workbench.subagentCatalog.categories])
   // categoryById resolves localized category metadata for definition cards.
   // categoryById 为定义卡片解析本地化分类元数据。
   const categoryById = React.useMemo(() => new Map(categoryRows.map((category) => [category.categoryId, category])), [categoryRows])
-  // visibleDefinitions applies the selected category filter.
-  // visibleDefinitions 应用当前选中的分类筛选。
+  // visibleDefinitions applies category, status, and cross-locale keyword filters.
+  // visibleDefinitions 应用分类、启停状态与跨语言关键词筛选。
   const visibleDefinitions = React.useMemo(() => {
-    if (!selectedCategoryId) {
-      return props.workbench.subagentCatalog.definitions
-    }
-    return props.workbench.subagentCatalog.definitions.filter((definition) => definition.categoryId === selectedCategoryId)
-  }, [props.workbench.subagentCatalog.definitions, selectedCategoryId])
+    return props.workbench.subagentCatalog.definitions.filter((definition) => (
+      (!selectedCategoryId || definition.categoryId === selectedCategoryId)
+        && agentDefinitionMatchesStatusFilter(definition, statusFilter)
+        && agentDefinitionMatchesSearch(definition, searchQuery)
+    ))
+  }, [props.workbench.subagentCatalog.definitions, searchQuery, selectedCategoryId, statusFilter])
 
   React.useEffect(() => {
     if (selectedCategoryId && !props.workbench.subagentCatalog.categories.some((category) => category.categoryId === selectedCategoryId)) {
@@ -237,42 +226,90 @@ export function AgentsArea(props: {
     }
   }, [])
 
+  // runToggleAction executes one enabled-state update without blocking the whole page.
+  // runToggleAction 执行单个启停更新且不阻塞整个页面。
+  const runToggleAction = React.useCallback(async (agentId: string, action: () => Promise<void>) => {
+    setTogglingAgentIds((current) => {
+      const next = new Set(current)
+      next.add(agentId)
+      return next
+    })
+    try {
+      await action()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setTogglingAgentIds((current) => {
+        const next = new Set(current)
+        next.delete(agentId)
+        return next
+      })
+    }
+  }, [])
+
   // submitEditorDraft persists the current draft through the user catalog.
   // submitEditorDraft 通过用户目录持久化当前草稿。
   const submitEditorDraft = React.useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!editorDraft || editorDraft.agentId.trim().length === 0) {
+    const normalizedDraft = editorDraft ? normalizedAgentEditorDraftFileIdentity(editorDraft) : null
+    if (!normalizedDraft || normalizedDraft.agentId.trim().length === 0) {
+      return
+    }
+    const conflictsWithExistingDefinition = !normalizedDraft.existing
+      && props.workbench.subagentCatalog.definitions.some((definition) => definition.agentId === targetAgentIdFromDraft(normalizedDraft))
+    if (conflictsWithExistingDefinition) {
+      setEditorDraft(normalizedDraft)
+      toast.error(text("技能文件名已存在，请换一个文件名。", "Skill file name already exists. Choose another file name."))
       return
     }
     let request: SubagentDefinitionSaveRequest
     try {
-      request = saveRequestFromDraft(editorDraft)
+      request = saveRequestFromDraft(normalizedDraft)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return
     }
     await runAction("save", () => props.actions.onSaveAgentDefinition(request))
     setEditorDraft(null)
-  }, [editorDraft, props.actions, runAction])
+  }, [editorDraft, props.actions, props.workbench.subagentCatalog.definitions, runAction, text])
 
   return (
     <section className="skill-management-surface agent-management-surface">
       <div className="skill-page-body agent-skill-page-body">
         <section className="skill-toolbar agent-catalog-toolbar" aria-label={text("智能体目录操作", "Agent catalog actions")}>
-          <div className="agent-catalog-toolbar-main">
-            <button className="skill-action-button" disabled={busyAction !== null} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} type="button">
-              <Plus size={15} />
-              <span>{text("新增智能体", "New agent")}</span>
-            </button>
-            <button className="skill-action-button secondary" disabled={busyAction !== null} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} type="button">
-              <RefreshCw size={15} />
-              <span>{busyAction === "refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
-            </button>
-            <button className="skill-action-button secondary" disabled={busyAction !== null} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} type="button">
-              <FolderOpen size={15} />
-              <span>{text("打开用户目录", "Open user directory")}</span>
-            </button>
-            <span className="agent-catalog-notice">{props.workbench.subagentCatalog.notice}</span>
+          <div className="agent-catalog-toolbar-heading">
+            <p>{text("管理 Vulcan Code Agent 运行时消费的用户级子智能体 Markdown 文件。", "Manage user-level subagent Markdown files consumed by the Vulcan Code Agent runtime.")}</p>
+            <div className="agent-catalog-toolbar-actions">
+              <button aria-label={text("新增智能体", "New agent")} className="agent-catalog-icon-button" disabled={busyAction !== null} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} title={text("新增智能体", "New agent")} type="button">
+                <Plus size={15} />
+              </button>
+              <button aria-label={text("打开用户目录", "Open user directory")} className="agent-catalog-icon-button" disabled={busyAction !== null} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} title={text("打开用户目录", "Open user directory")} type="button">
+                <FolderOpen size={15} />
+              </button>
+              <button aria-label={t("skills.action.refresh")} className="agent-catalog-icon-button" disabled={busyAction !== null} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} title={t("skills.action.refresh")} type="button">
+                <RefreshCw className={busyAction === "refresh" ? "spin" : undefined} size={15} />
+              </button>
+            </div>
+          </div>
+          <div className="agent-catalog-filter-row">
+            <input
+              aria-label={text("搜索子智能体", "Search subagents")}
+              className="agent-catalog-search-input"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={text("搜索子智能体...", "Search subagents...")}
+              type="search"
+              value={searchQuery}
+            />
+            <select
+              aria-label={text("启停状态筛选", "Enabled-state filter")}
+              className="agent-catalog-status-select"
+              onChange={(event) => setStatusFilter(event.target.value as AgentStatusFilter)}
+              value={statusFilter}
+            >
+              <option value="all">{text("全部", "All")}</option>
+              <option value="enabled">{text("已启用", "Enabled")}</option>
+              <option value="disabled">{text("已停用", "Disabled")}</option>
+            </select>
           </div>
         </section>
         <AgentCatalogIssues catalog={props.workbench.subagentCatalog} />
@@ -286,8 +323,8 @@ export function AgentsArea(props: {
           ) : visibleDefinitions.length === 0 ? (
             <article className="skill-empty-card">
               <StatusPill status="pending" label="pending" />
-              <strong>{text("当前分类暂无智能体", "No agents in this category")}</strong>
-              <span>{text("切换到全部或选择其他分类。", "Switch to All or choose another category.")}</span>
+              <strong>{text("没有匹配的智能体", "No matching agents")}</strong>
+              <span>{text("调整分类、启停状态或搜索关键词。", "Adjust the category, enabled state, or search keywords.")}</span>
             </article>
           ) : visibleDefinitions.map((definition) => (
             <AgentDefinitionCard
@@ -299,6 +336,8 @@ export function AgentsArea(props: {
               onEdit={() => setEditorDraft(draftFromDefinition(definition, defaultAgentMetadataLocale(locale)))}
               onOpenDetail={setDetailDefinition}
               onRunAction={runAction}
+              onRunToggleAction={runToggleAction}
+              toggleBusy={togglingAgentIds.has(definition.agentId)}
             />
           ))}
         </div>
@@ -307,7 +346,6 @@ export function AgentsArea(props: {
           draft={editorDraft}
           onCancel={() => setEditorDraft(null)}
           onDraftChange={setEditorDraft}
-          mcpToolOptions={editorMcpToolOptions}
           promptSkillOptions={editorPromptSkillOptions}
           onSubmit={submitEditorDraft}
           toolOptions={editorToolOptions}
@@ -462,9 +500,6 @@ function AgentEditorForm(props: {
   // Updates the draft state.
   // 更新草稿状态。
   onDraftChange: (draft: AgentEditorDraft) => void
-  // Selectable MCP tool rows available to the three-state policy table.
-  // 三态策略表可选择的 MCP 工具行。
-  mcpToolOptions: AgentCapabilityPolicyOption[]
   // Selectable prompt skill rows available to the three-state policy table.
   // 三态策略表可选择的提示词技能行。
   promptSkillOptions: AgentCapabilityPolicyOption[]
@@ -479,6 +514,7 @@ function AgentEditorForm(props: {
   const text = React.useCallback((zh: string, en: string) => localizedAgentLiteral(locale, zh, en), [locale])
   const draft = props.draft
   const editingSystemBackedDefinition = draft?.sourceScopeKey === "system" || Boolean(draft?.overrideOf)
+  const readOnlySystemMetadata = Boolean(editingSystemBackedDefinition)
   const selectedMetadataLocale = draft?.metadataLocale ?? defaultAgentMetadataLocale(locale)
   const selectedMetadataName = draft?.localizedNames[selectedMetadataLocale] ?? ""
   const selectedMetadataDescription = draft?.localizedDescriptions[selectedMetadataLocale] ?? ""
@@ -505,29 +541,21 @@ function AgentEditorForm(props: {
       },
     })
   }, [props])
-  // updateToolPolicyState applies a mutually exclusive state to one tool id.
-  // updateToolPolicyState 为单个工具标识应用互斥的策略状态。
-  const updateToolPolicyState = React.useCallback((toolId: string, state: AgentCapabilityPolicyState) => {
+  // updateToolPolicyItems replaces the unified tool policy selector list.
+  // updateToolPolicyItems 替换统一工具策略选择器列表。
+  const updateToolPolicyItems = React.useCallback((toolIds: string[]) => {
     if (!props.draft) {
       return
     }
-    props.onDraftChange(setDraftToolPolicyState(props.draft, toolId, state))
+    props.onDraftChange({ ...props.draft, toolPolicyTools: listText(toolIds) })
   }, [props])
-  // updateMcpToolPolicyState applies a mutually exclusive state to one MCP tool selector.
-  // updateMcpToolPolicyState 为单个 MCP 工具选择器应用互斥策略状态。
-  const updateMcpToolPolicyState = React.useCallback((toolId: string, state: AgentCapabilityPolicyState) => {
+  // updatePromptSkillPolicyItems replaces the prompt skill policy selector list.
+  // updatePromptSkillPolicyItems 替换提示词技能策略选择器列表。
+  const updatePromptSkillPolicyItems = React.useCallback((skillNames: string[]) => {
     if (!props.draft) {
       return
     }
-    props.onDraftChange(setDraftMcpToolPolicyState(props.draft, toolId, state))
-  }, [props])
-  // updatePromptSkillPolicyState applies a mutually exclusive state to one prompt skill.
-  // updatePromptSkillPolicyState 为单个提示词技能应用互斥的策略状态。
-  const updatePromptSkillPolicyState = React.useCallback((skillName: string, state: AgentCapabilityPolicyState) => {
-    if (!props.draft) {
-      return
-    }
-    props.onDraftChange(setDraftPromptSkillPolicyState(props.draft, skillName, state))
+    props.onDraftChange({ ...props.draft, promptSkillPolicySkills: listText(skillNames) })
   }, [props])
 
   return (
@@ -541,7 +569,7 @@ function AgentEditorForm(props: {
           <DialogTitle>{draft?.existing ? text("编辑智能体", "Edit agent") : text("新增智能体", "New agent")}</DialogTitle>
           <DialogDescription>
             {editingSystemBackedDefinition
-              ? text("这是系统内置智能体。保存后不会修改系统文件，而是写入用户目录覆盖。", "This is a system agent. Saving writes a user-layer override instead of changing the system file.")
+              ? text("系统内置智能体只允许保存用户侧元数据覆盖，例如工具策略和追加提示词。", "System agents only allow user metadata overrides, such as tool policy and appended prompts.")
               : text("保存后写入用户智能体目录。", "Saving writes to the user agent directory.")}
           </DialogDescription>
         </DialogHeader>
@@ -549,8 +577,8 @@ function AgentEditorForm(props: {
           <form className="agent-editor-form" onSubmit={props.onSubmit}>
             <div className="agent-editor-grid">
               <label>
-                <span>agent_id</span>
-                <input disabled={props.busy || draft.existing} pattern="[A-Za-z0-9._/-]+" required value={draft.agentId} onChange={(event) => updateDraftField("agentId", event.target.value)} />
+                <span>{text("技能文件名", "Skill file name")}</span>
+                <input disabled={props.busy || draft.existing} pattern="[A-Za-z0-9._/-]+" required value={draft.agentId} onChange={(event) => updateDraftField("agentId", normalizeAgentFileNameInput(event.target.value))} />
               </label>
               <label>
                 <span>{text("用户包", "User package")}</span>
@@ -558,7 +586,7 @@ function AgentEditorForm(props: {
               </label>
               <label>
                 <span>{text("元数据语言", "Metadata language")}</span>
-                <select disabled={props.busy} value={selectedMetadataLocale} onChange={(event) => updateDraftField("metadataLocale", event.target.value as AgentMetadataLocale)}>
+                <select disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataLocale} onChange={(event) => updateDraftField("metadataLocale", event.target.value as AgentMetadataLocale)}>
                   {AGENT_METADATA_LOCALES.map((option) => (
                     <option key={option.locale} value={option.locale}>{text(option.zh, option.en)}</option>
                   ))}
@@ -566,94 +594,67 @@ function AgentEditorForm(props: {
               </label>
               <label>
                 <span>{text("名称", "Name")}</span>
-                <input disabled={props.busy} value={selectedMetadataName} onChange={(event) => updateDraftMetadataField("name", event.target.value)} />
+                <input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataName} onChange={(event) => updateDraftMetadataField("name", event.target.value)} />
               </label>
               <label className="agent-editor-checkbox">
-                <input checked={draft.enabled} disabled={props.busy} type="checkbox" onChange={(event) => updateDraftField("enabled", event.target.checked)} />
+                <input checked={draft.enabled} disabled={props.busy || readOnlySystemMetadata} type="checkbox" onChange={(event) => updateDraftField("enabled", event.target.checked)} />
                 <span>{text("暴露给模型", "Expose to model")}</span>
               </label>
               <label className="wide">
                 <span>{text("描述", "Description")}</span>
-                <input disabled={props.busy} value={selectedMetadataDescription} onChange={(event) => updateDraftMetadataField("description", event.target.value)} />
+                <input disabled={props.busy || readOnlySystemMetadata} value={selectedMetadataDescription} onChange={(event) => updateDraftMetadataField("description", event.target.value)} />
               </label>
               <label>
                 <span>{text("图标", "Emoji")}</span>
-                <input disabled={props.busy} value={draft.emoji} onChange={(event) => updateDraftField("emoji", event.target.value)} />
+                <input disabled={props.busy || readOnlySystemMetadata} value={draft.emoji} onChange={(event) => updateDraftField("emoji", event.target.value)} />
               </label>
-              <label>
-                <span>{text("颜色", "Color")}</span>
-                <span className="agent-editor-color-field">
-                  <span className="agent-editor-color-swatch" style={{ backgroundColor: colorSwatchValue(draft.color) }} />
-                  <input disabled={props.busy} value={draft.color} onChange={(event) => updateDraftField("color", event.target.value)} />
-                </span>
-              </label>
+              <div className="agent-editor-field">
+                <span>{text("颜色标记", "Color marker")}</span>
+                <AgentColorPicker disabled={props.busy || readOnlySystemMetadata} value={draft.color} onChange={(color) => updateDraftField("color", color)} />
+              </div>
               <label className="wide">
                 <span>vibe</span>
-                <input disabled={props.busy} value={draft.vibe} onChange={(event) => updateDraftField("vibe", event.target.value)} />
+                <input disabled={props.busy || readOnlySystemMetadata} value={draft.vibe} onChange={(event) => updateDraftField("vibe", event.target.value)} />
               </label>
               <label className="wide agent-prompt-field primary">
                 <span>{text("系统提示词", "System prompt")}</span>
-                <textarea autoFocus disabled={props.busy} rows={14} value={draft.systemPrompt} onChange={(event) => updateDraftField("systemPrompt", event.target.value)} />
+                <textarea autoFocus={!readOnlySystemMetadata} disabled={props.busy || readOnlySystemMetadata} rows={14} value={draft.systemPrompt} onChange={(event) => updateDraftField("systemPrompt", event.target.value)} />
               </label>
               <label className="wide agent-prompt-field">
                 <span>{text("追加提示词", "Prompt append")}</span>
-                <textarea disabled={props.busy} rows={5} value={draft.systemPromptAppend} onChange={(event) => updateDraftField("systemPromptAppend", event.target.value)} />
+                <textarea autoFocus={readOnlySystemMetadata} disabled={props.busy} rows={5} value={draft.systemPromptAppend} onChange={(event) => updateDraftField("systemPromptAppend", event.target.value)} />
               </label>
               <div className="wide">
                 <AgentCapabilityPolicyTable
-                  allowCountLabel={text("启用", "Enable")}
-                  allowedItems={listFromText(draft.allowedTools)}
                   disabled={props.busy}
-                  disabledItems={listFromText(draft.disabledTools)}
-                  denyCountLabel={text("关闭", "Disable")}
                   emptyLabel={text("没有匹配工具", "No matching tools")}
-                  onStateChange={updateToolPolicyState}
+                  mode={draft.toolPolicyMode}
+                  onModeChange={(mode) => props.onDraftChange({
+                    ...draft,
+                    toolPolicyMode: mode,
+                    toolPolicyTools: mode === "all" ? "" : draft.toolPolicyTools,
+                  })}
+                  onSelectedItemsChange={updateToolPolicyItems}
                   options={props.toolOptions}
                   searchPlaceholder={text("搜索工具", "Search tools")}
+                  selectedItems={listFromText(draft.toolPolicyTools)}
                   title={text("工具策略", "Tool policy")}
                 />
               </div>
               <div className="wide">
                 <AgentCapabilityPolicyTable
-                  allowCountLabel={text("启用", "Enable")}
-                  allowedItems={mcpExposurePolicyFromJson(draft.mcpServerOverridesJson).allowedTools}
                   disabled={props.busy}
-                  disabledItems={mcpExposurePolicyFromJson(draft.mcpServerOverridesJson).disabledTools}
-                  denyCountLabel={text("关闭", "Disable")}
-                  emptyLabel={text("没有匹配 MCP 工具", "No matching MCP tools")}
-                  onStateChange={updateMcpToolPolicyState}
-                  options={props.mcpToolOptions}
-                  searchPlaceholder={text("搜索 MCP 工具", "Search MCP tools")}
-                  title={text("MCP 工具策略", "MCP tool policy")}
-                />
-              </div>
-              <label className="wide agent-prompt-field">
-                <span>{text("AI 能力允许", "Allowed AI capabilities")}</span>
-                <textarea disabled={props.busy} rows={3} value={draft.allowedAiCapabilities} onChange={(event) => updateDraftField("allowedAiCapabilities", event.target.value)} />
-              </label>
-              <label className="wide agent-prompt-field">
-                <span>{text("AI 能力关闭", "Disabled AI capabilities")}</span>
-                <textarea disabled={props.busy} rows={3} value={draft.disabledAiCapabilities} onChange={(event) => updateDraftField("disabledAiCapabilities", event.target.value)} />
-              </label>
-              <label className="wide agent-prompt-field">
-                <span>{text("LuaSkills 覆盖 JSON", "LuaSkills override JSON")}</span>
-                <textarea disabled={props.busy} rows={4} value={draft.luaskillsOverridesJson} onChange={(event) => updateDraftField("luaskillsOverridesJson", event.target.value)} />
-              </label>
-              <label className="wide agent-prompt-field">
-                <span>{text("MCP 覆盖 JSON", "MCP override JSON")}</span>
-                <textarea disabled={props.busy} rows={4} value={draft.mcpServerOverridesJson} onChange={(event) => updateDraftField("mcpServerOverridesJson", event.target.value)} />
-              </label>
-              <div className="wide">
-                <AgentCapabilityPolicyTable
-                  allowCountLabel={text("启用", "Enable")}
-                  allowedItems={listFromText(draft.enabledPromptSkills)}
-                  disabled={props.busy}
-                  disabledItems={listFromText(draft.disabledPromptSkills)}
-                  denyCountLabel={text("关闭", "Disable")}
                   emptyLabel={text("没有匹配 Prompt Skills", "No matching Prompt Skills")}
-                  onStateChange={updatePromptSkillPolicyState}
+                  mode={draft.promptSkillPolicyMode}
+                  onModeChange={(mode) => props.onDraftChange({
+                    ...draft,
+                    promptSkillPolicyMode: mode,
+                    promptSkillPolicySkills: mode === "all" ? "" : draft.promptSkillPolicySkills,
+                  })}
+                  onSelectedItemsChange={updatePromptSkillPolicyItems}
                   options={props.promptSkillOptions}
                   searchPlaceholder={text("搜索 Prompt Skills", "Search Prompt Skills")}
+                  selectedItems={listFromText(draft.promptSkillPolicySkills)}
                   title="Prompt Skills"
                 />
               </div>
@@ -661,7 +662,7 @@ function AgentEditorForm(props: {
             <div className="agent-editor-context">
               <span>{text("当前层级", "Current layer")}: {draft.sourceScope || text("用户", "User")}</span>
               {draft.definitionFile ? <span>{draft.definitionFile}</span> : null}
-              {editingSystemBackedDefinition ? <strong>{text("保存目标：用户目录覆盖", "Save target: user override")}</strong> : null}
+              {editingSystemBackedDefinition ? <strong>{text("仅保存用户侧元数据覆盖", "Only user metadata override will be saved")}</strong> : null}
             </div>
             <DialogFooter>
               <button className="skill-action-button secondary" disabled={props.busy} onClick={props.onCancel} type="button">
@@ -680,30 +681,104 @@ function AgentEditorForm(props: {
   )
 }
 
-// AgentCapabilityPolicyTable renders one mutually exclusive policy selector per capability item.
-// AgentCapabilityPolicyTable 为每个能力项渲染一个互斥策略选择器。
+// AgentColorPicker renders a native palette picker for agent metadata.
+// AgentColorPicker 渲染智能体元数据使用的原生调色板选择器。
+function AgentColorPicker(props: {
+  // Current color token or CSS color value.
+  // 当前颜色标识或 CSS 颜色值。
+  value: string
+  // Whether the picker is disabled.
+  // 选择器是否禁用。
+  disabled: boolean
+  // Updates the selected color token.
+  // 更新选中的颜色标识。
+  onChange: (value: string) => void
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedAgentLiteral(locale, zh, en), [locale])
+  const onChange = props.onChange
+  const inputRef = React.useRef<HTMLInputElement | null>(null)
+  const dirtyRef = React.useRef(false)
+  const normalizedPropColor = colorInputValue(props.value)
+  // draftColor keeps native palette dragging local so the large agent editor does not rerender per pixel.
+  // draftColor 将原生调色板拖动限制在本地，避免大型智能体编辑器逐像素重渲染。
+  const [draftColor, setDraftColor] = React.useState(normalizedPropColor)
+
+  React.useEffect(() => {
+    setDraftColor(normalizedPropColor)
+  }, [normalizedPropColor])
+
+  React.useEffect(() => {
+    const input = inputRef.current
+    if (!input) {
+      return
+    }
+    // handleNativeChange commits only the browser's final color change event.
+    // handleNativeChange 只提交浏览器最终确认的颜色 change 事件。
+    const handleNativeChange = () => {
+      if (!dirtyRef.current) {
+        return
+      }
+      dirtyRef.current = false
+      onChange(input.value)
+    }
+    input.addEventListener("change", handleNativeChange)
+    return () => input.removeEventListener("change", handleNativeChange)
+  }, [onChange])
+
+  const commitDraftColor = React.useCallback(() => {
+    if (!dirtyRef.current) {
+      return
+    }
+    dirtyRef.current = false
+    onChange(inputRef.current?.value ?? draftColor)
+  }, [draftColor, onChange])
+
+  const displayValue = draftColor
+  return (
+    <div className="agent-editor-color-picker">
+      <label className={`agent-editor-color-trigger ${props.disabled ? "disabled" : ""}`}>
+        <span className="agent-editor-color-swatch" style={{ backgroundColor: draftColor }} />
+        <span>{displayValue || text("选择颜色", "Choose color")}</span>
+        <input
+          aria-label={text("选择颜色", "Choose color")}
+          className="agent-editor-color-input"
+          disabled={props.disabled}
+          onBlur={commitDraftColor}
+          onInput={(event) => {
+            dirtyRef.current = true
+            setDraftColor(event.currentTarget.value)
+          }}
+          ref={inputRef}
+          type="color"
+          value={draftColor}
+        />
+      </label>
+    </div>
+  )
+}
+
+// AgentCapabilityPolicyTable renders one mode-plus-list policy selector.
+// AgentCapabilityPolicyTable 渲染一个规则加列表策略选择器。
 function AgentCapabilityPolicyTable(props: {
-  // Label used for the allow count and button.
-  // 用于启用计数与按钮的标签。
-  allowCountLabel: string
-  // Policy ids currently forced on.
-  // 当前被强制启用的策略标识。
-  allowedItems: string[]
+  // Current policy mode.
+  // 当前策略模式。
+  mode: CapabilityPolicyMode
+  // Changes the current policy mode.
+  // 修改当前策略模式。
+  onModeChange: (mode: CapabilityPolicyMode) => void
+  // Policy selectors currently listed by the mode.
+  // 当前模式列出的策略选择器。
+  selectedItems: string[]
+  // Updates policy selectors.
+  // 更新策略选择器。
+  onSelectedItemsChange: (items: string[]) => void
   // Whether the table controls are disabled.
   // 表格控件是否禁用。
   disabled: boolean
-  // Policy ids currently forced off.
-  // 当前被强制关闭的策略标识。
-  disabledItems: string[]
-  // Label used for the deny count and button.
-  // 用于关闭计数与按钮的标签。
-  denyCountLabel: string
   // Empty search result label.
   // 空搜索结果标签。
   emptyLabel: string
-  // Applies the next state for one capability id.
-  // 应用单个能力标识的下一个状态。
-  onStateChange: (itemId: string, state: AgentCapabilityPolicyState) => void
   // Capability rows that can be selected.
   // 可供选择的能力行。
   options: AgentCapabilityPolicyOption[]
@@ -719,22 +794,9 @@ function AgentCapabilityPolicyTable(props: {
   // filterText stores the current local search query.
   // filterText 保存当前本地搜索条件。
   const [filterText, setFilterText] = React.useState("")
-  // allowedSet accelerates state lookup for enabled overrides.
-  // allowedSet 加速启用覆盖状态查询。
-  const allowedSet = React.useMemo(() => new Set(props.allowedItems), [props.allowedItems])
-  // disabledSet accelerates state lookup for disabled overrides.
-  // disabledSet 加速关闭覆盖状态查询。
-  const disabledSet = React.useMemo(() => new Set(props.disabledItems), [props.disabledItems])
-  // stateCounts summarizes current mutually exclusive table states.
-  // stateCounts 汇总当前互斥表格状态。
-  const stateCounts = React.useMemo(() => props.options.reduce(
-    (counts, option) => {
-      const state = capabilityPolicyState(option.id, allowedSet, disabledSet)
-      counts[state] += 1
-      return counts
-    },
-    { default: 0, allow: 0, deny: 0 } satisfies Record<AgentCapabilityPolicyState, number>,
-  ), [allowedSet, disabledSet, props.options])
+  // selectedSet accelerates selected selector lookup.
+  // selectedSet 加速已选择选择器查询。
+  const selectedSet = React.useMemo(() => new Set(props.selectedItems), [props.selectedItems])
   // visibleOptions applies the local search filter to known tools.
   // visibleOptions 对已知工具应用本地搜索过滤。
   const visibleOptions = React.useMemo(() => {
@@ -756,7 +818,36 @@ function AgentCapabilityPolicyTable(props: {
       <div className="agent-tool-policy-toolbar">
         <div>
           <strong>{props.title}</strong>
-          <span>{text("默认", "Default")} {stateCounts.default} · {props.allowCountLabel} {stateCounts.allow} · {props.denyCountLabel} {stateCounts.deny}</span>
+          <span>{agentPolicyModeSummary(props.mode, props.selectedItems.length, locale)}</span>
+        </div>
+        <div className="skill-tool-segmented agent-tool-policy-mode" role="group" aria-label={props.title}>
+          <button
+            aria-pressed={props.mode === "all"}
+            className={props.mode === "all" ? "active" : undefined}
+            disabled={props.disabled}
+            onClick={() => props.onModeChange("all")}
+            type="button"
+          >
+            {text("全部", "All")}
+          </button>
+          <button
+            aria-pressed={props.mode === "allow_only"}
+            className={props.mode === "allow_only" ? "active" : undefined}
+            disabled={props.disabled}
+            onClick={() => props.onModeChange("allow_only")}
+            type="button"
+          >
+            {text("仅允许", "Allow only")}
+          </button>
+          <button
+            aria-pressed={props.mode === "deny_only"}
+            className={props.mode === "deny_only" ? "active" : undefined}
+            disabled={props.disabled}
+            onClick={() => props.onModeChange("deny_only")}
+            type="button"
+          >
+            {text("仅禁止", "Deny only")}
+          </button>
         </div>
         <input
           disabled={props.disabled}
@@ -771,7 +862,7 @@ function AgentCapabilityPolicyTable(props: {
             <strong>{props.emptyLabel}</strong>
           </div>
         ) : visibleOptions.map((option) => {
-          const currentState = capabilityPolicyState(option.id, allowedSet, disabledSet)
+          const checked = selectedSet.has(option.id)
           return (
             <div className="skill-tool-row agent-tool-policy-row" key={option.id}>
               <div className="agent-tool-policy-main">
@@ -783,41 +874,57 @@ function AgentCapabilityPolicyTable(props: {
                 {option.description ? <p>{option.description}</p> : null}
                 {option.detail ? <span>{option.detail}</span> : null}
               </div>
-              <div className="skill-tool-segmented agent-tool-policy-state" role="group" aria-label={option.id}>
-                <button
-                  aria-pressed={currentState === "default"}
-                  className={currentState === "default" ? "active" : undefined}
-                  disabled={props.disabled}
-                  onClick={() => props.onStateChange(option.id, "default")}
-                  type="button"
-                >
-                  {text("默认", "Default")}
-                </button>
-                <button
-                  aria-pressed={currentState === "allow"}
-                  className={currentState === "allow" ? "active" : undefined}
-                  disabled={props.disabled}
-                  onClick={() => props.onStateChange(option.id, "allow")}
-                  type="button"
-                >
-                  {props.allowCountLabel}
-                </button>
-                <button
-                  aria-pressed={currentState === "deny"}
-                  className={currentState === "deny" ? "active" : undefined}
-                  disabled={props.disabled}
-                  onClick={() => props.onStateChange(option.id, "deny")}
-                  type="button"
-                >
-                  {props.denyCountLabel}
-                </button>
-              </div>
+              <label className="agent-tool-policy-checkbox">
+                <input
+                  checked={checked}
+                  disabled={props.disabled || props.mode === "all"}
+                  type="checkbox"
+                  onChange={(event) => {
+                    props.onSelectedItemsChange(setPolicyItemSelection(props.selectedItems, option.id, event.target.checked))
+                  }}
+                />
+                <span>{policySelectionLabel(props.mode, locale)}</span>
+              </label>
             </div>
           )
         })}
       </div>
     </section>
   )
+}
+
+// setPolicyItemSelection returns a normalized selector list after one checkbox change.
+// setPolicyItemSelection 返回单次勾选变化后的规范化选择器列表。
+function setPolicyItemSelection(items: string[], itemId: string, selected: boolean): string[] {
+  const nextItems = items.filter((item) => item !== itemId)
+  if (selected) {
+    nextItems.push(itemId)
+  }
+  return nextItems
+}
+
+// agentPolicyModeSummary returns compact human text for one policy mode.
+// agentPolicyModeSummary 返回单个策略模式的紧凑人类可读文本。
+function agentPolicyModeSummary(mode: CapabilityPolicyMode, count: number, locale: string): string {
+  if (mode === "allow_only") {
+    return localizedAgentLiteral(locale, `仅允许 ${count} 个`, `Allow only ${count}`)
+  }
+  if (mode === "deny_only") {
+    return localizedAgentLiteral(locale, `仅禁止 ${count} 个`, `Deny only ${count}`)
+  }
+  return localizedAgentLiteral(locale, "全部", "All")
+}
+
+// policySelectionLabel returns the checkbox label for one policy mode.
+// policySelectionLabel 返回单个策略模式下的复选框标签。
+function policySelectionLabel(mode: CapabilityPolicyMode, locale: string): string {
+  if (mode === "allow_only") {
+    return localizedAgentLiteral(locale, "允许", "Allow")
+  }
+  if (mode === "deny_only") {
+    return localizedAgentLiteral(locale, "禁止", "Deny")
+  }
+  return localizedAgentLiteral(locale, "全部", "All")
 }
 
 // AgentSourceOriginLink renders a display-only provenance link for an agent.
@@ -836,7 +943,7 @@ function AgentSourceOriginLink(props: {
     return null
   }
   const iconKey = agentSourceOriginIconKey(origin)
-  const label = iconKey === "github" ? "github" : origin.kind?.trim() || "source"
+  const label = iconKey === "github" ? "Github" : origin.kind?.trim() || "source"
   const className = props.detail ? "agent-source-origin-detail-link" : "agent-source-origin-link"
   // handleClick opens the source URL through the same host shell path as the status bar repository link.
   // handleClick 通过与状态栏仓库链接相同的宿主壳路径打开来源地址。
@@ -898,6 +1005,12 @@ function AgentDefinitionCard(props: {
   // Runs a labeled async action with page-level busy state.
   // 使用页面级忙碌状态运行带标签的异步动作。
   onRunAction: (label: string, action: () => Promise<void>) => Promise<void>
+  // Runs one enabled-state action with row-level busy state.
+  // 使用行级忙碌状态运行单个启停动作。
+  onRunToggleAction: (agentId: string, action: () => Promise<void>) => Promise<void>
+  // Whether this row is currently persisting its enabled state.
+  // 当前行是否正在持久化启停状态。
+  toggleBusy: boolean
 }) {
   const { locale, t } = useI18n()
   const text = React.useCallback((zh: string, en: string) => localizedAgentLiteral(locale, zh, en), [locale])
@@ -907,59 +1020,59 @@ function AgentDefinitionCard(props: {
   const category = definition.categoryId ? props.categoryById.get(definition.categoryId) : undefined
   const categoryLabel = category ? localizedCategoryName(category, locale) : definition.categoryId
   const fallbackIcon = definition.emoji?.trim() || displayName.trim().charAt(0).toUpperCase() || "*"
+  const userOwnedDefinition = (definition.scopeKey === "user" || definition.scopeKey === "package") && !definition.overrideOf
+  const editableDefinition = userOwnedDefinition || definition.scopeKey === "system" || Boolean(definition.overrideOf)
+  const toolAccessLabel = agentDefinitionToolAccessLabel(definition, locale)
   return (
-    <article className="skill-card agent-skill-card subagent-definition-card">
-      <header className="skill-card-header">
-        <div className="agent-skill-title">
-          <span className="agent-skill-icon fallback">{fallbackIcon}</span>
-          <div>
-            <strong>{displayName}</strong>
-            <div className="skill-card-badges">
-              {definition.enabled ? <Badge className="skill-card-enabled-badge">{t("skills.status.enabled")}</Badge> : <Badge variant="destructive">{t("skills.status.stopped")}</Badge>}
-              <Badge variant="outline">{definition.scope}</Badge>
-              {definition.categoryId ? <Badge variant="outline" title={definition.categoryId}>{categoryLabel}</Badge> : null}
-              {definition.packageId ? <Badge variant="outline">{definition.packageId}</Badge> : null}
-              {definition.overrideOf ? <Badge variant="outline">{text("覆盖", "Override")}</Badge> : null}
-              {definition.remoteUrl ? <Badge variant="outline">Remote</Badge> : null}
-              <AgentSourceOriginLink origin={definition.sourceOrigin} />
-            </div>
+    <article className="agent-definition-row">
+      <button className="agent-definition-row-icon" onClick={() => props.onOpenDetail(definition)} title={t("skills.action.details")} type="button">
+        <span className="agent-definition-row-glyph">{fallbackIcon}</span>
+        <span className="agent-definition-row-color-marker" style={{ backgroundColor: colorSwatchValue(definition.color) }} />
+      </button>
+      <div className="agent-definition-row-main">
+        <div className="agent-definition-row-title-line">
+          <button className="agent-definition-title-button" onClick={() => props.onOpenDetail(definition)} type="button">{displayName}</button>
+          <div className="agent-definition-row-badges">
+            <Badge variant="outline">{definition.scope}</Badge>
+            <Badge variant="outline">{toolAccessLabel}</Badge>
+            {definition.categoryId ? <Badge variant="outline" title={definition.categoryId}>{categoryLabel}</Badge> : null}
+            {definition.packageId ? <Badge variant="outline">{definition.packageId}</Badge> : null}
+            {definition.remoteUrl ? <Badge variant="outline">Remote</Badge> : null}
+            <AgentSourceOriginLink origin={definition.sourceOrigin} />
           </div>
         </div>
-      </header>
-      <p>{displayDescription || text("未填写描述。", "No description provided.")}</p>
-      <div className="skill-card-metrics">
-        <span>{text("工具", "Tools")} {definition.allowedToolCount}/{definition.disabledToolCount}</span>
-        <span>Prompt Skills {definition.enabledPromptSkillCount}/{definition.disabledPromptSkillCount}</span>
+        <p>{displayDescription || text("未填写描述。", "No description provided.")}</p>
+        <span className="agent-definition-row-path">{definition.definitionFile}</span>
       </div>
-      <div className="skill-actions-row">
-        <button className="skill-action-button secondary" onClick={() => props.onOpenDetail(definition)} type="button">
-          <FileText size={15} />
-          <span>{t("skills.action.details")}</span>
+      <div className="agent-definition-row-actions">
+        <button
+          aria-checked={definition.enabled}
+          aria-label={definition.enabled ? t("skills.action.disable") : t("skills.action.enable")}
+          className={`agent-definition-switch ${definition.enabled ? "on" : ""}`}
+          disabled={props.busy || props.toggleBusy}
+          onClick={() => void props.onRunToggleAction(definition.agentId, () => props.actions.onSetAgentDefinitionEnabled(definition.agentId, !definition.enabled))}
+          role="switch"
+          title={definition.enabled ? t("skills.action.disable") : t("skills.action.enable")}
+          type="button"
+        >
+          <span />
         </button>
-        <button className="skill-action-button secondary" disabled={props.busy} onClick={props.onEdit} type="button">
-          <Pencil size={15} />
-          <span>{text("编辑", "Edit")}</span>
-        </button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="skill-action-button secondary" disabled={props.busy} type="button">
-              <span>{t("skills.action.action")}</span>
-              <ChevronDown size={14} />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="lua-skill-action-menu">
-            <DropdownMenuItem onSelect={() => void props.onRunAction("toggle", () => props.actions.onSetAgentDefinitionEnabled(definition.agentId, !definition.enabled))}>
-              <Power size={15} />
-              <span>{definition.enabled ? t("skills.action.disable") : t("skills.action.enable")}</span>
-            </DropdownMenuItem>
-            {definition.canRestoreDefault ? (
-              <DropdownMenuItem onSelect={() => void props.onRunAction("restore", () => props.actions.onRestoreAgentDefinitionDefault(definition.agentId))}>
-                <RotateCcw size={15} />
-                <span>{text("恢复系统默认", "Restore default")}</span>
-              </DropdownMenuItem>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {editableDefinition ? (
+          <button className="agent-definition-icon-button" disabled={props.busy} onClick={props.onEdit} title={text("编辑", "Edit")} type="button">
+            <Pencil size={15} />
+          </button>
+        ) : null}
+        {userOwnedDefinition ? (
+          <button
+            className="agent-definition-icon-button danger"
+            disabled={props.busy}
+            onClick={() => void props.onRunAction("delete", () => props.actions.onDeleteAgentDefinition(definition.agentId))}
+            title={text("删除", "Delete")}
+            type="button"
+          >
+            <Trash2 size={15} />
+          </button>
+        ) : null}
       </div>
     </article>
   )
@@ -1076,14 +1189,10 @@ function emptyAgentDraft(metadataLocale: AgentMetadataLocale): AgentEditorDraft 
     enabled: true,
     systemPrompt: "",
     systemPromptAppend: "",
-    allowedTools: "",
-    disabledTools: "",
-    allowedAiCapabilities: "",
-    disabledAiCapabilities: "",
-    luaskillsOverridesJson: "",
-    mcpServerOverridesJson: "",
-    enabledPromptSkills: "",
-    disabledPromptSkills: "",
+    toolPolicyMode: "all",
+    toolPolicyTools: "",
+    promptSkillPolicyMode: "all",
+    promptSkillPolicySkills: "",
     existing: false,
     sourceScope: "用户",
     sourceScopeKey: "user",
@@ -1112,14 +1221,10 @@ function draftFromDefinition(definition: SubagentDefinitionSummary, metadataLoca
     enabled: definition.enabled,
     systemPrompt: definition.systemPrompt ?? "",
     systemPromptAppend: definition.systemPromptAppend ?? "",
-    allowedTools: listText(definition.allowedTools),
-    disabledTools: listText(definition.disabledTools),
-    allowedAiCapabilities: listText(definition.allowedAiCapabilities ?? []),
-    disabledAiCapabilities: listText(definition.disabledAiCapabilities ?? []),
-    luaskillsOverridesJson: jsonTextFromValue(definition.luaskillsOverrides),
-    mcpServerOverridesJson: jsonTextFromValue(definition.mcpServerOverrides),
-    enabledPromptSkills: listText(definition.enabledPromptSkills),
-    disabledPromptSkills: listText(definition.disabledPromptSkills),
+    toolPolicyMode: normalizedCapabilityPolicyMode(definition.toolPolicyMode, definition.allowedTools, definition.disabledTools),
+    toolPolicyTools: listText(definition.toolPolicyTools?.length ? definition.toolPolicyTools : legacyPolicyTools(definition.allowedTools, definition.disabledTools)),
+    promptSkillPolicyMode: normalizedCapabilityPolicyMode(definition.promptSkillPolicyMode, definition.enabledPromptSkills, definition.disabledPromptSkills),
+    promptSkillPolicySkills: listText(definition.promptSkillPolicySkills?.length ? definition.promptSkillPolicySkills : legacyPolicyTools(definition.enabledPromptSkills, definition.disabledPromptSkills)),
     existing: true,
     sourceScope: definition.scope,
     sourceScopeKey: definition.scopeKey,
@@ -1131,13 +1236,14 @@ function draftFromDefinition(definition: SubagentDefinitionSummary, metadataLoca
 // saveRequestFromDraft converts form state into the service request shape.
 // saveRequestFromDraft 将表单状态转换为服务请求结构。
 function saveRequestFromDraft(draft: AgentEditorDraft): SubagentDefinitionSaveRequest {
+  const normalizedDraft = normalizedAgentEditorDraftFileIdentity(draft)
   const locales = localizedSaveLocalesFromDraft(draft)
   const name = preferredDraftMetadataField(locales, "name") ?? draft.name.trim()
   const description = preferredDraftMetadataField(locales, "description") ?? nonEmptyText(draft.description)
   return {
-    agentId: draft.agentId.trim(),
-    originalAgentId: nonEmptyText(draft.originalAgentId),
-    packageId: nonEmptyText(draft.packageId),
+    agentId: normalizedDraft.agentId,
+    originalAgentId: nonEmptyText(normalizedDraft.originalAgentId),
+    packageId: nonEmptyText(normalizedDraft.packageId),
     name,
     description,
     locales,
@@ -1147,15 +1253,101 @@ function saveRequestFromDraft(draft: AgentEditorDraft): SubagentDefinitionSaveRe
     enabled: draft.enabled,
     systemPrompt: nonEmptyText(draft.systemPrompt),
     systemPromptAppend: nonEmptyText(draft.systemPromptAppend),
-    allowedTools: listFromText(draft.allowedTools),
-    disabledTools: listFromText(draft.disabledTools),
-    allowedAiCapabilities: listFromText(draft.allowedAiCapabilities),
-    disabledAiCapabilities: listFromText(draft.disabledAiCapabilities),
-    luaskillsOverrides: jsonValueFromText(draft.luaskillsOverridesJson, "LuaSkills override JSON"),
-    mcpServerOverrides: jsonValueFromText(draft.mcpServerOverridesJson, "MCP override JSON"),
-    enabledPromptSkills: listFromText(draft.enabledPromptSkills),
-    disabledPromptSkills: listFromText(draft.disabledPromptSkills),
+    allowedTools: [],
+    disabledTools: [],
+    toolPolicyMode: draft.toolPolicyMode,
+    toolPolicyTools: listFromText(draft.toolPolicyTools),
+    allowedAiCapabilities: [],
+    disabledAiCapabilities: [],
+    luaskillsOverrides: null,
+    mcpServerOverrides: null,
+    enabledPromptSkills: [],
+    disabledPromptSkills: [],
+    promptSkillPolicyMode: draft.promptSkillPolicyMode,
+    promptSkillPolicySkills: listFromText(draft.promptSkillPolicySkills),
   }
+}
+
+// normalizedAgentEditorDraftFileIdentity normalizes file-backed identity fields before save.
+// normalizedAgentEditorDraftFileIdentity 在保存前规范化文件承载的标识字段。
+function normalizedAgentEditorDraftFileIdentity(draft: AgentEditorDraft): AgentEditorDraft {
+  return {
+    ...draft,
+    agentId: normalizeAgentFileNameInput(draft.agentId),
+    originalAgentId: normalizeAgentFileNameInput(draft.originalAgentId),
+    packageId: normalizeAgentPackageIdInput(draft.packageId),
+  }
+}
+
+// normalizeAgentFileNameInput keeps the editable value as a file stem without a trailing extension.
+// normalizeAgentFileNameInput 将可编辑值保持为不带尾部扩展名的文件 stem。
+function normalizeAgentFileNameInput(value: string): string {
+  const normalizedSeparators = value.replace(/\\/g, "/")
+  const filtered = normalizedSeparators.replace(/[^A-Za-z0-9._/-]/g, "")
+  const segments = filtered
+    .split("/")
+    .filter((segment, index, segments) => segment.length > 0 || index < segments.length - 1)
+  const lastSegmentIndex = segments.length - 1
+  if (lastSegmentIndex >= 0) {
+    segments[lastSegmentIndex] = stripAgentFileSegmentExtension(segments[lastSegmentIndex])
+  }
+  return segments.join("/").replace(/^\/+/, "")
+}
+
+// normalizeAgentPackageIdInput applies the package id character contract used by the form.
+// normalizeAgentPackageIdInput 应用表单使用的用户包标识字符约束。
+function normalizeAgentPackageIdInput(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "")
+}
+
+// stripAgentFileSegmentExtension removes the last extension-like suffix from one path segment.
+// stripAgentFileSegmentExtension 从单个路径片段移除最后一个扩展名形式的后缀。
+function stripAgentFileSegmentExtension(segment: string): string {
+  const dotIndex = segment.lastIndexOf(".")
+  if (dotIndex <= 0) {
+    return segment
+  }
+  return segment.slice(0, dotIndex)
+}
+
+// targetAgentIdFromDraft mirrors the service-side package assignment for duplicate checks.
+// targetAgentIdFromDraft 镜像服务端包分配规则，用于重复检测。
+function targetAgentIdFromDraft(draft: AgentEditorDraft): string {
+  const packageId = normalizeAgentPackageIdInput(draft.packageId)
+  let baseId = normalizeAgentFileNameInput(draft.agentId)
+  if (!packageId) {
+    return baseId
+  }
+  const packagePrefix = `${packageId}/`
+  if (baseId.startsWith(packagePrefix)) {
+    baseId = baseId.slice(packagePrefix.length)
+  }
+  return `${packagePrefix}${baseId}`
+}
+
+// normalizedCapabilityPolicyMode resolves a modern policy mode with legacy list fallback.
+// normalizedCapabilityPolicyMode 解析新版策略模式，并用旧列表作为回退。
+function normalizedCapabilityPolicyMode(mode: CapabilityPolicyMode | null | undefined, legacyAllowed: string[] = [], legacyDisabled: string[] = []): CapabilityPolicyMode {
+  if (mode === "all" || mode === "allow_only" || mode === "deny_only") {
+    return mode
+  }
+  if (legacyAllowed.length > 0) {
+    return "allow_only"
+  }
+  if (legacyDisabled.length > 0) {
+    return "deny_only"
+  }
+  return "all"
+}
+
+// legacyPolicyTools returns the selector list implied by legacy allow/deny lists.
+// legacyPolicyTools 返回旧版允许/禁止列表隐含的选择器列表。
+function legacyPolicyTools(legacyAllowed: string[] = [], legacyDisabled: string[] = []): string[] {
+  if (legacyAllowed.length > 0) {
+    const disabledSet = new Set(legacyDisabled.map((item) => item.trim().toLowerCase()))
+    return legacyAllowed.filter((item) => !disabledSet.has(item.trim().toLowerCase()))
+  }
+  return legacyDisabled
 }
 
 // localizedFieldMapFromDefinition builds editable locale text maps from one definition row.
@@ -1306,11 +1498,26 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
       }
       appendAgentCapabilityPolicyOption(optionMap, {
         id: toolId,
-        label: tool.localName || toolId,
+        label: toolId,
         family: "LuaSkills",
         description: tool.description,
-        detail: `${skill.displayName || skill.skillId} · ${tool.registrationLabel}`,
+        detail: [skill.displayName || skill.skillId, tool.localName, tool.registrationLabel].filter(Boolean).join(" · "),
       })
+    })
+  })
+  const serverNameById = new Map((workbench.mcpServers ?? []).map((server) => [server.id, server.name || server.id]))
+  workbench.mcpTools?.forEach((tool) => {
+    const toolId = tool.id.trim()
+    if (toolId.length === 0) {
+      return
+    }
+    const serverLabel = serverNameById.get(tool.serverId) ?? tool.serverId
+    appendAgentCapabilityPolicyOption(optionMap, {
+      id: toolId,
+      label: tool.id || tool.name || toolId,
+      family: "MCP",
+      description: tool.description || localizedAgentLiteral(locale, "当前 MCP 工具未提供说明。", "This MCP tool does not provide a description."),
+      detail: `${serverLabel} · ${tool.originToolId || tool.name || toolId}`,
     })
   })
   if (draft) {
@@ -1319,7 +1526,7 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
       "已保存到当前智能体，但当前工作台快照未解析到对应工具。",
       "Saved on this agent, but not resolved in the current workbench snapshot.",
     )
-    listFromText(`${draft.allowedTools}\n${draft.disabledTools}`).forEach((toolId) => {
+    listFromText(draft.toolPolicyTools).forEach((toolId) => {
       appendAgentCapabilityPolicyOption(optionMap, {
         id: toolId,
         label: toolId,
@@ -1365,58 +1572,11 @@ function buildAgentPromptSkillPolicyOptions(workbench: WorkbenchSnapshot, draft:
       "已保存到当前智能体，但当前 Agent Skills 目录未解析到对应技能。",
       "Saved on this agent, but not resolved in the current Agent Skills catalog.",
     )
-    listFromText(`${draft.enabledPromptSkills}\n${draft.disabledPromptSkills}`).forEach((skillName) => {
+    listFromText(draft.promptSkillPolicySkills).forEach((skillName) => {
       appendAgentCapabilityPolicyOption(optionMap, {
         id: skillName,
         label: skillName,
         family: localizedAgentLiteral(locale, "已配置", "Configured"),
-        description: configuredDescription,
-        detail: "",
-      })
-    })
-  }
-  return Array.from(optionMap.values()).sort((left, right) => {
-    const familyComparison = left.family.localeCompare(right.family)
-    if (familyComparison !== 0) {
-      return familyComparison
-    }
-    return left.label.localeCompare(right.label)
-  })
-}
-
-// buildAgentMcpToolPolicyOptions builds selectable MCP tool rows from the workbench snapshot and draft policies.
-// buildAgentMcpToolPolicyOptions 从工作台快照与草稿策略构建可选择 MCP 工具行。
-function buildAgentMcpToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentEditorDraft | null, locale: string): AgentCapabilityPolicyOption[] {
-  // optionMap keeps one row per MCP tool selector.
-  // optionMap 确保每个 MCP 工具选择器只保留一行。
-  const optionMap = new Map<string, AgentCapabilityPolicyOption>()
-  const serverNameById = new Map((workbench.mcpServers ?? []).map((server) => [server.id, server.name || server.id]))
-  workbench.mcpTools?.forEach((tool) => {
-    const toolId = tool.id.trim()
-    if (toolId.length === 0) {
-      return
-    }
-    const serverLabel = serverNameById.get(tool.serverId) ?? tool.serverId
-    appendAgentCapabilityPolicyOption(optionMap, {
-      id: toolId,
-      label: tool.name || toolId,
-      family: "MCP",
-      description: tool.description || localizedAgentLiteral(locale, "当前 MCP 工具未提供说明。", "This MCP tool does not provide a description."),
-      detail: `${serverLabel} · ${tool.originToolId || toolId}`,
-    })
-  })
-  if (draft) {
-    const policy = mcpExposurePolicyFromJson(draft.mcpServerOverridesJson)
-    const configuredDescription = localizedAgentLiteral(
-      locale,
-      "已保存到当前智能体，但当前工作台快照未解析到对应 MCP 工具。",
-      "Saved on this agent, but not resolved in the current workbench snapshot.",
-    )
-    ;[...policy.allowedTools, ...policy.disabledTools].forEach((toolId) => {
-      appendAgentCapabilityPolicyOption(optionMap, {
-        id: toolId,
-        label: toolId,
-        family: localizedAgentLiteral(locale, "已配置 MCP", "Configured MCP"),
         description: configuredDescription,
         detail: "",
       })
@@ -1469,6 +1629,72 @@ function localizedDefinitionDescription(definition: SubagentDefinitionSummary, l
   return localizedDefinitionText(definition, locale, "description") ?? definition.description ?? null
 }
 
+// agentDefinitionMatchesStatusFilter returns whether a definition passes the enabled-state filter.
+// agentDefinitionMatchesStatusFilter 返回定义是否通过启停状态筛选。
+function agentDefinitionMatchesStatusFilter(definition: SubagentDefinitionSummary, filter: AgentStatusFilter): boolean {
+  if (filter === "enabled") {
+    return definition.enabled
+  }
+  if (filter === "disabled") {
+    return !definition.enabled
+  }
+  return true
+}
+
+// agentDefinitionMatchesSearch returns whether all keyword tokens match cross-locale metadata.
+// agentDefinitionMatchesSearch 返回所有关键词是否命中跨语言元数据。
+function agentDefinitionMatchesSearch(definition: SubagentDefinitionSummary, query: string): boolean {
+  const tokens = normalizedAgentSearchTokens(query)
+  if (tokens.length === 0) {
+    return true
+  }
+  const searchableText = agentDefinitionSearchableText(definition)
+  return tokens.every((token) => searchableText.includes(token))
+}
+
+// normalizedAgentSearchTokens normalizes one search input into lowercase keyword tokens.
+// normalizedAgentSearchTokens 将搜索输入规范化为小写关键词。
+function normalizedAgentSearchTokens(query: string): string[] {
+  return query
+    .trim()
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+}
+
+// agentDefinitionSearchableText builds a cross-locale search haystack without changing display language.
+// agentDefinitionSearchableText 构建跨语言搜索文本且不改变展示语言。
+function agentDefinitionSearchableText(definition: SubagentDefinitionSummary): string {
+  const values = [
+    definition.name,
+    definition.description ?? "",
+    ...Object.values(definition.locales ?? {}).flatMap((metadata) => [
+      metadata?.name ?? "",
+      metadata?.description ?? "",
+    ]),
+  ]
+  return values.join("\n").toLocaleLowerCase()
+}
+
+// agentDefinitionToolAccessLabel returns the compact tool access summary for one row.
+// agentDefinitionToolAccessLabel 返回单行使用的紧凑工具暴露摘要。
+function agentDefinitionToolAccessLabel(definition: SubagentDefinitionSummary, locale: string): string {
+  return localizedAgentToolPolicyLabel(definition.toolPolicyMode, definition.toolPolicyTools.length, locale)
+}
+
+// localizedAgentToolPolicyLabel returns the compact row badge for tool policy.
+// localizedAgentToolPolicyLabel 返回工具策略的紧凑行徽标。
+function localizedAgentToolPolicyLabel(mode: CapabilityPolicyMode, count: number, locale: string): string {
+  if (mode === "allow_only") {
+    return localizedAgentLiteral(locale, `仅允许 ${count} 个工具`, `Allow ${count} tools`)
+  }
+  if (mode === "deny_only") {
+    return localizedAgentLiteral(locale, `仅禁止 ${count} 个工具`, `Deny ${count} tools`)
+  }
+  return localizedAgentLiteral(locale, "全部工具", "All tools")
+}
+
 // localizedDefinitionText selects exact or language-prefix metadata from definition locales.
 // localizedDefinitionText 从定义 locales 中选择精确或语言前缀匹配的元数据。
 function localizedDefinitionText(definition: SubagentDefinitionSummary, locale: string, field: "name" | "description"): string | null {
@@ -1518,146 +1744,6 @@ function localizedMetadataText(
   return prefixValue || null
 }
 
-// setDraftToolPolicyState updates both persisted policy lists as one mutually exclusive choice.
-// setDraftToolPolicyState 将两个持久化策略列表作为一个互斥选择进行更新。
-function setDraftToolPolicyState(draft: AgentEditorDraft, toolId: string, state: AgentCapabilityPolicyState): AgentEditorDraft {
-  const allowedTools = listFromText(draft.allowedTools).filter((entry) => entry !== toolId)
-  const disabledTools = listFromText(draft.disabledTools).filter((entry) => entry !== toolId)
-  if (state === "allow") {
-    allowedTools.push(toolId)
-  }
-  if (state === "deny") {
-    disabledTools.push(toolId)
-  }
-  return {
-    ...draft,
-    allowedTools: listText(allowedTools),
-    disabledTools: listText(disabledTools),
-  }
-}
-
-// setDraftPromptSkillPolicyState updates both persisted prompt skill policy lists as one mutually exclusive choice.
-// setDraftPromptSkillPolicyState 将两个持久化提示词技能策略列表作为一个互斥选择进行更新。
-function setDraftPromptSkillPolicyState(draft: AgentEditorDraft, skillName: string, state: AgentCapabilityPolicyState): AgentEditorDraft {
-  const enabledPromptSkills = listFromText(draft.enabledPromptSkills).filter((entry) => entry !== skillName)
-  const disabledPromptSkills = listFromText(draft.disabledPromptSkills).filter((entry) => entry !== skillName)
-  if (state === "allow") {
-    enabledPromptSkills.push(skillName)
-  }
-  if (state === "deny") {
-    disabledPromptSkills.push(skillName)
-  }
-  return {
-    ...draft,
-    enabledPromptSkills: listText(enabledPromptSkills),
-    disabledPromptSkills: listText(disabledPromptSkills),
-  }
-}
-
-// setDraftMcpToolPolicyState updates the MCP override JSON while preserving unrelated MCP selectors.
-// setDraftMcpToolPolicyState 更新 MCP 覆盖 JSON，同时保留无关 MCP 选择器。
-function setDraftMcpToolPolicyState(draft: AgentEditorDraft, toolId: string, state: AgentCapabilityPolicyState): AgentEditorDraft {
-  const payload = objectFromJsonText(draft.mcpServerOverridesJson)
-  const policy = mcpExposurePolicyFromObject(payload)
-  const allowedTools = policy.allowedTools.filter((entry) => entry !== toolId)
-  const disabledTools = policy.disabledTools.filter((entry) => entry !== toolId)
-  if (state === "allow") {
-    allowedTools.push(toolId)
-  }
-  if (state === "deny") {
-    disabledTools.push(toolId)
-  }
-  const nextPayload = {
-    ...payload,
-    tools: allowedTools,
-    disabled: disabledTools,
-  }
-  removeMcpToolPolicyAliasKeys(nextPayload)
-  return {
-    ...draft,
-    mcpServerOverridesJson: jsonTextFromValue(pruneEmptyMcpPolicyArrays(nextPayload)),
-  }
-}
-
-// AgentMcpExposurePolicy stores parsed MCP tool and server selectors.
-// AgentMcpExposurePolicy 保存解析后的 MCP 工具与服务器选择器。
-interface AgentMcpExposurePolicy {
-  // MCP tool selectors forced on.
-  // 被强制启用的 MCP 工具选择器。
-  allowedTools: string[]
-  // MCP tool selectors forced off.
-  // 被强制关闭的 MCP 工具选择器。
-  disabledTools: string[]
-  // MCP server ids forced on.
-  // 被强制启用的 MCP 服务器标识。
-  allowedServers: string[]
-  // MCP server ids forced off.
-  // 被强制关闭的 MCP 服务器标识。
-  disabledServers: string[]
-}
-
-// mcpExposurePolicyFromJson parses MCP selectors from an editable JSON payload.
-// mcpExposurePolicyFromJson 从可编辑 JSON 载荷解析 MCP 选择器。
-function mcpExposurePolicyFromJson(value: string): AgentMcpExposurePolicy {
-  return mcpExposurePolicyFromObject(objectFromJsonText(value))
-}
-
-// mcpExposurePolicyFromObject extracts supported MCP selector keys from an object payload.
-// mcpExposurePolicyFromObject 从对象载荷中提取受支持的 MCP 选择器键。
-function mcpExposurePolicyFromObject(value: Record<string, unknown>): AgentMcpExposurePolicy {
-  return {
-    allowedTools: stringListFromUnknownValues([value.tools, value.mcp_tools, value.allow, value.allowed, value.enabled, value.include]),
-    disabledTools: stringListFromUnknownValues([value.disabled, value.deny, value.denied, value.disable, value.exclude]),
-    allowedServers: stringListFromUnknown(value.servers ?? value.server ?? value.server_ids ?? value.mcp_servers),
-    disabledServers: stringListFromUnknown(value.disabled_servers ?? value.deny_servers ?? value.exclude_servers),
-  }
-}
-
-// removeMcpToolPolicyAliasKeys removes non-canonical tool selector keys after table edits.
-// removeMcpToolPolicyAliasKeys 在表格编辑后移除非规范工具选择器键。
-function removeMcpToolPolicyAliasKeys(value: Record<string, unknown>): void {
-  delete value.mcp_tools
-  delete value.allow
-  delete value.allowed
-  delete value.enabled
-  delete value.include
-  delete value.deny
-  delete value.denied
-  delete value.disable
-  delete value.exclude
-}
-
-// pruneEmptyMcpPolicyArrays removes empty table-managed arrays from MCP override payloads.
-// pruneEmptyMcpPolicyArrays 从 MCP 覆盖载荷中移除表格管理的空数组。
-function pruneEmptyMcpPolicyArrays(value: Record<string, unknown>): Record<string, unknown> {
-  const next = { ...value }
-  if (Array.isArray(next.servers) && next.servers.length === 0) {
-    delete next.servers
-  }
-  if (Array.isArray(next.tools) && next.tools.length === 0) {
-    delete next.tools
-  }
-  if (Array.isArray(next.disabled) && next.disabled.length === 0) {
-    delete next.disabled
-  }
-  if (Array.isArray(next.disabled_servers) && next.disabled_servers.length === 0) {
-    delete next.disabled_servers
-  }
-  return next
-}
-
-// capabilityPolicyState resolves the effective editor state for one capability id.
-// capabilityPolicyState 解析单个能力标识在编辑器中的有效状态。
-function capabilityPolicyState(itemId: string, allowedSet: Set<string>, disabledSet: Set<string>): AgentCapabilityPolicyState {
-  if (disabledSet.has(itemId)) {
-    return "deny"
-  }
-  if (allowedSet.has(itemId)) {
-    return "allow"
-  }
-  return "default"
-}
-
 // nonEmptyText returns trimmed text only when it is non-empty.
 // nonEmptyText 仅在文本非空时返回裁剪后的文本。
 function nonEmptyText(value: string): string | null {
@@ -1669,68 +1755,6 @@ function nonEmptyText(value: string): string | null {
 // nullableTextPatch 将空编辑字段转换为显式清空请求。
 function nullableTextPatch(value: string): string | null {
   return nonEmptyText(value)
-}
-
-// jsonTextFromValue formats JSON for stable textarea editing.
-// jsonTextFromValue 将 JSON 格式化为稳定的文本域内容。
-function jsonTextFromValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return ""
-  }
-  if (typeof value === "object" && Object.keys(value as Record<string, unknown>).length === 0) {
-    return ""
-  }
-  return JSON.stringify(value, null, 2)
-}
-
-// jsonValueFromText parses optional JSON text for service persistence.
-// jsonValueFromText 解析可选 JSON 文本以供服务端持久化。
-function jsonValueFromText(value: string, label: string): unknown {
-  const trimmed = value.trim()
-  if (trimmed.length === 0) {
-    return null
-  }
-  try {
-    return JSON.parse(trimmed)
-  } catch (error) {
-    throw new Error(`${label}: ${error instanceof Error ? error.message : String(error)}`)
-  }
-}
-
-// objectFromJsonText parses JSON object text and falls back to an empty object for local table edits.
-// objectFromJsonText 解析 JSON 对象文本，并在本地表格编辑时回退为空对象。
-function objectFromJsonText(value: string): Record<string, unknown> {
-  try {
-    const parsed = jsonValueFromText(value, "MCP override JSON")
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch {
-    return {}
-  }
-  return {}
-}
-
-// stringListFromUnknown normalizes unknown JSON values into a string list.
-// stringListFromUnknown 将未知 JSON 值规范化为字符串列表。
-function stringListFromUnknown(value: unknown): string[] {
-  if (typeof value === "string") {
-    return listFromText(value)
-  }
-  if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter((entry) => entry.length > 0)
-  }
-  return []
-}
-
-// stringListFromUnknownValues merges multiple unknown JSON values into one de-duplicated string list.
-// stringListFromUnknownValues 将多个未知 JSON 值合并为去重字符串列表。
-function stringListFromUnknownValues(values: unknown[]): string[] {
-  const merged = new Set<string>()
-  values.forEach((value) => {
-    stringListFromUnknown(value).forEach((entry) => merged.add(entry))
-  })
-  return Array.from(merged)
 }
 
 // colorSwatchValue returns a renderable color for an agent color token or CSS color value.
@@ -1752,6 +1776,21 @@ function colorSwatchValue(value: string): string {
     yellow: "#eab308",
   }
   return palette[trimmed.toLowerCase()] ?? "#6b7280"
+}
+
+// colorInputValue normalizes metadata colors into the value shape required by native color inputs.
+// colorInputValue 将元数据颜色规范化为原生颜色输入框要求的取值形式。
+function colorInputValue(value: string): string {
+  const renderedColor = colorSwatchValue(value).trim()
+  const longHex = renderedColor.match(/^#([0-9a-f]{6})$/i)
+  if (longHex) {
+    return `#${longHex[1].toLowerCase()}`
+  }
+  const shortHex = renderedColor.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i)
+  if (shortHex) {
+    return `#${shortHex[1]}${shortHex[1]}${shortHex[2]}${shortHex[2]}${shortHex[3]}${shortHex[3]}`.toLowerCase()
+  }
+  return "#6b7280"
 }
 
 // listText formats one list for textarea editing.

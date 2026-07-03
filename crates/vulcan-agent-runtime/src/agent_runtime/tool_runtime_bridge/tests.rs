@@ -1,4 +1,7 @@
-use super::VulcanManagedToolRuntimeBridge;
+use super::{
+    VulcanManagedToolRuntimeBridge, acknowledge_runtime_event_projection_barrier_from_event,
+    set_runtime_event_projection_barriers_enabled,
+};
 use crate::agent_runtime::events::RuntimeEventKind;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
@@ -171,6 +174,18 @@ fn drain_live_events(
         events.push(item.expect("live event should not fail"));
     }
     events
+}
+
+/// Resets runtime projection barriers when a test scope exits.
+/// 测试作用域退出时重置运行时投影屏障。
+struct RuntimeProjectionBarrierResetGuard;
+
+impl Drop for RuntimeProjectionBarrierResetGuard {
+    /// Disables projection barriers during test cleanup.
+    /// 在测试清理阶段禁用投影屏障。
+    fn drop(&mut self) {
+        set_runtime_event_projection_barriers_enabled(false);
+    }
 }
 
 /// Captures pre-planned provider turn responses and records the built request history for assertions.
@@ -819,5 +834,78 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
             .expect("tool task should join")
             .expect("tool call should complete");
         assert_eq!(result.model_output, "gated done");
+    });
+}
+
+/// Verifies the streaming executor waits for the terminal tool event projection before returning to Core.
+/// 验证流式执行器会等待工具终态事件完成投影后再返回给 Core。
+#[test]
+fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning() {
+    let (manager, definitions) = build_demo_manager();
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(manager),
+        &definitions,
+        Uuid::nil(),
+        "Build",
+    ));
+    let (sender, mut receiver): (
+        ProviderLiveDeltaSender,
+        tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+    ) = tokio::sync::mpsc::unbounded_channel();
+    let executor =
+        StreamingRuntimeToolExecutor::new(runtime_bridge, sender, None, false, Vec::new());
+    let request = ToolInvocationRequest {
+        tool_call_id: String::from("barrier-call-1"),
+        tool_name: String::from("demo_tool"),
+        arguments: json!({ "path": "src/main.rs" }),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    runtime.block_on(async {
+        set_runtime_event_projection_barriers_enabled(false);
+        set_runtime_event_projection_barriers_enabled(true);
+        let _barrier_reset = RuntimeProjectionBarrierResetGuard;
+        let task = tokio::spawn(async move { executor.execute_tool(&request).await });
+
+        let started_event = receiver
+            .recv()
+            .await
+            .expect("tool-start event should be sent")
+            .expect("tool-start event should be ok");
+        let ProviderStreamDelta::RuntimeEvent(started_event) = started_event else {
+            panic!("first delta should be a tool-start runtime event");
+        };
+        assert_eq!(started_event.kind, RuntimeEventKind::ToolStarted);
+        assert!(
+            acknowledge_runtime_event_projection_barrier_from_event(&started_event),
+            "tool-start barrier should acknowledge"
+        );
+
+        let finished_event = receiver
+            .recv()
+            .await
+            .expect("tool-finished event should be sent")
+            .expect("tool-finished event should be ok");
+        let ProviderStreamDelta::RuntimeEvent(finished_event) = finished_event else {
+            panic!("second delta should be a tool-finished runtime event");
+        };
+        assert_eq!(finished_event.kind, RuntimeEventKind::ToolFinished);
+        assert!(
+            !task.is_finished(),
+            "execute_tool must wait until the terminal projection is acknowledged"
+        );
+
+        assert!(
+            acknowledge_runtime_event_projection_barrier_from_event(&finished_event),
+            "tool-finished barrier should acknowledge"
+        );
+        let result = task
+            .await
+            .expect("tool task should join")
+            .expect("tool call should complete");
+        assert!(result.model_output.contains("src/main.rs"));
     });
 }

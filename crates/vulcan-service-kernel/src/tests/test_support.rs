@@ -95,6 +95,26 @@ pub(super) fn test_service_state_with_parent_session(
     }
 }
 
+/// Builds a minimal agent-runtime bridge for lifecycle unit tests.
+/// 为生命周期单元测试构建最小代理运行时桥。
+pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
+    AgentRuntimeBridge {
+        provider_configuration: ProviderConfigurationFile::default(),
+        ai_tool_configuration: PersistedAiToolConfiguration::default(),
+        agent_profile_catalog: AgentProfileCatalog::default(),
+        luaskills_runtime: None,
+        mcp_runtime: None,
+        task_runtime: Arc::new(TaskRuntime::new()),
+        question_runtime: Arc::new(QuestionRuntime::new()),
+        command_session_runtime: Arc::new(CommandSessionRuntime::new()),
+        token_budget_runtime: Arc::new(TokenBudgetRuntime::pending()),
+        conversation_hook_runtime: Arc::new(Mutex::new(ConversationHookRuntime::new())),
+        vmm_hook_runtime: VmmHookRuntimeHandle::new(
+            vulcan_agent_runtime::agent_runtime::vmm_hooks::VmmHookConfigSnapshot::default(),
+        ),
+    }
+}
+
 /// Builds one delegate-finished runtime event carrying task-session metadata.
 /// 构建一条携带 task-session 元数据的委派完成运行时事件。
 pub(super) fn test_delegate_finished_event(

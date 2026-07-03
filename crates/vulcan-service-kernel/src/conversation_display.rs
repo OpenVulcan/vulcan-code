@@ -10,7 +10,7 @@ pub(crate) fn display_session_messages_from_workspace(
     session_id: SessionId,
 ) -> Option<Vec<SessionMessageEntry>> {
     if let Some(messages) = workspace_snapshot.session_messages.get(&session_id) {
-        return Some(filter_legacy_goal_internal_user_messages(messages.clone()));
+        return Some(filter_display_session_messages(messages.clone()));
     }
     display_record_messages_from_workspace(workspace_snapshot, session_id)
 }
@@ -24,7 +24,7 @@ pub(crate) fn display_record_messages_from_workspace(
     if let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) {
         let messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
         if !messages.is_empty() {
-            return Some(filter_legacy_goal_internal_user_messages(messages));
+            return Some(filter_display_session_messages(messages));
         }
     }
     None
@@ -54,6 +54,7 @@ pub(crate) fn merge_runtime_state_records_into_display_messages(
             .unwrap_or(&[]),
         &runtime_state.conversation_state,
     );
+    let merged_messages = filter_display_session_messages(merged_messages);
     workspace_snapshot
         .session_messages
         .insert(session_id, merged_messages);
@@ -75,7 +76,9 @@ pub(crate) fn replace_display_messages_with_runtime_state_records(
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) {
-    let messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
+    let messages = filter_display_session_messages(conversation_state_to_session_messages(
+        &runtime_state.conversation_state,
+    ));
     if messages.is_empty() {
         workspace_snapshot.session_messages.remove(&session_id);
     } else {
@@ -83,6 +86,19 @@ pub(crate) fn replace_display_messages_with_runtime_state_records(
             .session_messages
             .insert(session_id, messages);
     }
+}
+
+/// Keeps only transcript entries intended for normal user-facing display.
+/// 仅保留用于常规用户可见显示的转录条目。
+pub(crate) fn filter_display_session_messages(
+    messages: Vec<SessionMessageEntry>,
+) -> Vec<SessionMessageEntry> {
+    messages
+        .into_iter()
+        .filter(SessionMessageEntry::is_visible_to_user)
+        .filter(|message| !session_message_is_legacy_goal_internal_user_prompt(message))
+        .filter(|message| !session_message_is_internal_agent_message_injection(message))
+        .collect()
 }
 
 /// Removes legacy persisted Goal internal prompts that were incorrectly stored as user messages.
@@ -124,4 +140,10 @@ pub(crate) fn session_message_is_legacy_goal_internal_user_prompt(
     body.starts_with("Continue working toward the active thread goal.")
         || body.starts_with("The active thread goal has reached its token budget.")
         || body.starts_with("The active thread goal objective was edited by the user.")
+}
+
+/// Returns whether one message is an internal inter-agent XML injection row.
+/// 返回单条消息是否为内部代理间 XML 注入行。
+fn session_message_is_internal_agent_message_injection(message: &SessionMessageEntry) -> bool {
+    message.body.trim_start().starts_with("<agent_message>")
 }

@@ -131,60 +131,97 @@ pub(crate) async fn service_refresh_subagent_catalog(
     refresh_subagent_catalog_local_state(&state)
 }
 
-/// Opens the user-owned subagent directory in the host file manager.
-/// 在宿主文件管理器中打开用户拥有的智能体目录。
+/// Opens the user-owned subagent definition directory in the host file manager.
+/// 在宿主文件管理器中打开用户拥有的智能体定义目录。
 pub(crate) async fn service_open_subagent_user_directory(
     state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
-    let user_root = user_subagent_root();
-    std::fs::create_dir_all(&user_root)
-        .map_err(|error| format!("创建用户智能体目录 `{}` 失败：{error}", user_root.display()))?;
-    shell_host_from_state(&state)?.open_path(&user_root.to_string_lossy())?;
-    refresh_subagent_catalog_local_state(&state)
+    let user_definition_root = user_subagent_definition_root();
+    std::fs::create_dir_all(&user_definition_root).map_err(|error| {
+        format!(
+            "创建用户智能体定义目录 `{}` 失败：{error}",
+            user_definition_root.display()
+        )
+    })?;
+    let snapshot = refresh_subagent_catalog_local_state(&state)?;
+    shell_host_from_state(&state)?.open_path(&user_definition_root.to_string_lossy())?;
+    Ok(snapshot)
 }
 
-/// Persists one agent definition enabled state through the user override layer.
-/// 通过用户覆盖层持久化单个智能体定义启停状态。
+/// Persists one agent definition enabled state through the sidecar configuration layer.
+/// 通过 sidecar 配置层持久化单个智能体定义启停状态。
 pub(crate) async fn service_set_subagent_definition_enabled(
     state: SharedServiceBridgeState,
     agent_id: String,
     enabled: bool,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentDefinitionEnabledUpdate, String> {
     let agent_id = agent_id.trim();
     if agent_id.is_empty() {
         return Err(String::from("智能体定义标识不能为空。"));
     }
-    let catalog = load_current_subagent_catalog();
-    let mut definition = catalog
-        .definitions
-        .iter()
-        .find(|definition| definition.id == agent_id)
-        .cloned()
-        .ok_or_else(|| format!("未找到智能体定义：{agent_id}"))?;
-    definition.enabled = enabled;
-    definition.source.scope = vulcan_task_session::SubagentDefinitionScope::User;
-    if definition.source.override_of.is_none() && system_subagent_definition_exists(&definition.id)
     {
-        definition.source.override_of = Some(definition.id.clone());
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if !guard
+            .workbench
+            .subagent_catalog
+            .definitions
+            .iter()
+            .any(|definition| definition.agent_id == agent_id)
+        {
+            return Err(format!("未找到智能体定义：{agent_id}"));
+        }
     }
-    vulcan_task_session::write_user_subagent_override(user_subagent_root().as_path(), &definition)
-        .map_err(|error| {
-            format!(
-                "写入智能体启停覆盖 `{}` 失败：{}",
-                error.path.display(),
-                error.message
-            )
-        })?;
-    refresh_subagent_catalog_local_state(&state)
+    vulcan_task_session::write_user_subagent_enabled_override(
+        user_subagent_root().as_path(),
+        agent_id,
+        enabled,
+    )
+    .map_err(|error| {
+        format!(
+            "写入智能体启停覆盖 `{}` 失败：{}",
+            error.path.display(),
+            error.message
+        )
+    })?;
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(definition) = guard
+        .workbench
+        .subagent_catalog
+        .definitions
+        .iter_mut()
+        .find(|definition| definition.agent_id == agent_id)
+    else {
+        return Err(format!("未找到智能体定义：{agent_id}"));
+    };
+    definition.enabled = enabled;
+    if let Some(runtime) = guard.agent_runtime.as_ref() {
+        runtime
+            .task_runtime
+            .set_subagent_definition_enabled(agent_id, enabled)
+            .map_err(|error| format!("更新运行时智能体启停状态失败：{error}"))?;
+    }
+    let notice = subagent_catalog_notice_from_summary(&guard.workbench.subagent_catalog);
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
+    guard.workbench.subagent_catalog.notice = notice.clone();
+    Ok(SubagentDefinitionEnabledUpdate {
+        agent_id: agent_id.to_string(),
+        enabled,
+        notice,
+    })
 }
 
-/// Saves one user-authored or system-overriding agent definition into the user catalog.
-/// 将单个用户编写或覆盖系统定义的智能体定义保存到用户目录。
+/// Saves one user-authored agent definition into the user catalog.
+/// 将单个用户编写的智能体定义保存到用户目录。
 pub(crate) async fn service_save_subagent_definition(
     state: SharedServiceBridgeState,
     request: SubagentDefinitionSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
-    let requested_agent_id = request.agent_id.trim();
+    let requested_agent_id = normalize_agent_file_name_input(&request.agent_id);
     if requested_agent_id.is_empty() {
         return Err(String::from("智能体标识不能为空。"));
     }
@@ -193,26 +230,53 @@ pub(crate) async fn service_save_subagent_definition(
     let submitted_original_agent_id = request
         .original_agent_id
         .as_deref()
-        .map(str::trim)
+        .map(normalize_agent_file_name_input)
         .filter(|value| !value.is_empty());
-    let original_agent_id = submitted_original_agent_id.unwrap_or(requested_agent_id);
+    let original_agent_id = submitted_original_agent_id
+        .as_deref()
+        .unwrap_or(requested_agent_id.as_str());
     let catalog = load_current_subagent_catalog();
-    let existing = submitted_original_agent_id.and_then(|original_agent_id| {
-        catalog
-            .definitions
-            .iter()
-            .find(|definition| definition.id == original_agent_id)
-            .cloned()
-    });
-    if existing
+    let existing = submitted_original_agent_id
+        .as_deref()
+        .and_then(|original_agent_id| {
+            catalog
+                .definitions
+                .iter()
+                .find(|definition| definition.id == original_agent_id)
+                .cloned()
+        });
+    if let Some(existing_definition) = existing
         .as_ref()
-        .is_some_and(subagent_definition_is_system_backed)
-        && target_package_id.is_some()
+        .filter(|definition| subagent_definition_is_system_backed(definition))
     {
-        return Err(String::from("系统内置智能体不允许转移到用户包。"));
+        if requested_agent_id != original_agent_id {
+            return Err(String::from("系统智能体不允许修改 agent_id。"));
+        }
+        if target_package_id.is_some() {
+            return Err(String::from("系统智能体不允许转移到用户包。"));
+        }
+        let mut metadata_override = existing_definition.clone();
+        apply_request_tool_policy(&mut metadata_override.tool_exposure, &request);
+        apply_request_prompt_skill_policy(&mut metadata_override.prompt_skills, &request);
+        metadata_override.system_prompt_append = request
+            .system_prompt_append
+            .as_deref()
+            .and_then(non_empty_request_text);
+        metadata_override.enabled = existing_definition.enabled;
+        vulcan_task_session::write_user_subagent_metadata_override(
+            user_subagent_root().as_path(),
+            &metadata_override,
+        )
+        .map_err(|error| {
+            format!(
+                "保存系统智能体 `{}` 的用户元数据覆盖失败：{}",
+                existing_definition.id, error.message
+            )
+        })?;
+        return refresh_subagent_catalog_local_state(&state);
     }
     let target_agent_id = target_agent_id_for_save(
-        requested_agent_id,
+        &requested_agent_id,
         existing.as_ref(),
         target_package_id.as_deref(),
     )?;
@@ -255,9 +319,10 @@ pub(crate) async fn service_save_subagent_definition(
             file: user_file.clone(),
             sidecar_file: None,
             source_key: format!("user:{target_agent_id}"),
-            category_id: target_agent_id
-                .rsplit_once('/')
-                .map(|(category, _)| category.to_string()),
+            category_id: vulcan_task_session::display_subagent_category_id(
+                &target_agent_id,
+                target_package_id.as_deref(),
+            ),
             package_id: target_package_id.clone(),
             remote_url: None,
             override_of: None,
@@ -273,6 +338,8 @@ pub(crate) async fn service_save_subagent_definition(
     let previous_source = definition.source.clone();
     let previous_scope = definition.source.scope;
     definition.id = target_agent_id.clone();
+    apply_request_tool_policy(&mut definition.tool_exposure, &request);
+    apply_request_prompt_skill_policy(&mut definition.prompt_skills, &request);
     let request_locales = normalized_request_definition_locales(request.locales);
     definition.name = preferred_definition_locale_name(&request_locales)
         .or_else(|| non_empty_request_text(&request.name))
@@ -298,31 +365,19 @@ pub(crate) async fn service_save_subagent_definition(
         .system_prompt_append
         .as_deref()
         .and_then(non_empty_request_text);
-    definition.tool_exposure.allowed_tools = normalized_request_text_list(request.allowed_tools);
-    definition.tool_exposure.disabled_tools = normalized_request_text_list(request.disabled_tools);
-    definition.tool_exposure.allowed_ai_capabilities =
-        normalized_request_text_list(request.allowed_ai_capabilities);
-    definition.tool_exposure.disabled_ai_capabilities =
-        normalized_request_text_list(request.disabled_ai_capabilities);
     definition.tool_exposure.luaskills_overrides = request.luaskills_overrides;
     definition.tool_exposure.mcp_server_overrides = request.mcp_server_overrides;
-    definition.prompt_skills.enabled = normalized_request_text_list(request.enabled_prompt_skills);
-    definition.prompt_skills.disabled =
-        normalized_request_text_list(request.disabled_prompt_skills);
     definition.source.scope = vulcan_task_session::SubagentDefinitionScope::User;
     definition.source.file = user_file;
     definition.source.sidecar_file = None;
     definition.source.source_key = format!("user:{target_agent_id}");
-    definition.source.category_id = target_agent_id
-        .rsplit_once('/')
-        .map(|(category, _)| category.to_string());
+    definition.source.category_id = vulcan_task_session::display_subagent_category_id(
+        &target_agent_id,
+        target_package_id.as_deref(),
+    );
     definition.source.package_id = target_package_id.clone();
     definition.source.updated_at = Some(current_unix_millis_text());
-    if target_package_id.is_none() && system_subagent_definition_exists(&target_agent_id) {
-        definition.source.override_of = Some(target_agent_id.clone());
-    } else if previous_scope != vulcan_task_session::SubagentDefinitionScope::System {
-        definition.source.override_of = None;
-    }
+    definition.source.override_of = None;
     let written_user_file = vulcan_task_session::write_user_subagent_definition(
         user_subagent_root().as_path(),
         &definition,
@@ -343,6 +398,44 @@ pub(crate) async fn service_save_subagent_definition(
             &previous_source,
             &written_user_file,
         )?;
+    }
+    refresh_subagent_catalog_local_state(&state)
+}
+
+/// Deletes one user-owned agent definition from the user catalog.
+/// 从用户目录删除单个用户拥有的智能体定义。
+pub(crate) async fn service_delete_subagent_definition(
+    state: SharedServiceBridgeState,
+    agent_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let agent_id = agent_id.trim();
+    if agent_id.is_empty() {
+        return Err(String::from("智能体定义标识不能为空。"));
+    }
+    let catalog = load_current_subagent_catalog();
+    let definition = catalog
+        .definitions
+        .iter()
+        .find(|definition| definition.id == agent_id)
+        .ok_or_else(|| format!("未找到智能体定义：{agent_id}"))?;
+    if !matches!(
+        definition.source.scope,
+        vulcan_task_session::SubagentDefinitionScope::User
+            | vulcan_task_session::SubagentDefinitionScope::Package
+    ) || definition.source.override_of.is_some()
+    {
+        return Err(String::from("只有用户自定义智能体允许删除。"));
+    }
+    let delete_candidates = user_definition_delete_candidates(agent_id, definition)?;
+    let mut deleted_any = false;
+    for path in delete_candidates {
+        if user_subagent_file_exists_inside_root(&path)? {
+            remove_user_subagent_file_if_inside_root(&path)?;
+            deleted_any = true;
+        }
+    }
+    if !deleted_any {
+        return Err(format!("未找到可删除的用户智能体文件：{agent_id}"));
     }
     refresh_subagent_catalog_local_state(&state)
 }
@@ -508,6 +601,22 @@ fn refresh_subagent_catalog_local_state_with_errors(
     Ok(guard.workbench.clone())
 }
 
+/// Builds the agent catalog notice from the current projected summary.
+/// 从当前已投影摘要构建智能体目录提示。
+fn subagent_catalog_notice_from_summary(catalog: &SubagentCatalogSummary) -> String {
+    let enabled_count = catalog
+        .definitions
+        .iter()
+        .filter(|definition| definition.enabled)
+        .count();
+    format!(
+        "智能体定义 {} 个，已启用 {} 个，加载警告 {}。",
+        catalog.definitions.len(),
+        enabled_count,
+        catalog.errors.len()
+    )
+}
+
 /// Loads the current two-layer agent catalog from system and user roots.
 /// 从系统根与用户根加载当前双层智能体目录。
 fn load_current_subagent_catalog() -> vulcan_task_session::SubagentCatalog {
@@ -549,6 +658,12 @@ fn subagent_definition_is_system_backed(
 /// 返回用户拥有的智能体目录根路径。
 fn user_subagent_root() -> PathBuf {
     vulcan_workspace_store::data_plane::application_data_root().join("agents")
+}
+
+/// Returns the user-owned agent definition directory.
+/// 返回用户拥有的智能体定义目录。
+fn user_subagent_definition_root() -> PathBuf {
+    user_subagent_root().join("definitions")
 }
 
 /// Returns the user-owned file path for one agent definition id.
@@ -608,6 +723,130 @@ fn apply_optional_text_patch(patch: OptionalTextPatch, value: &mut Option<String
     }
 }
 
+/// Applies the save request's unified tool policy to one exposure snapshot.
+/// 将保存请求中的统一工具策略应用到可见性快照。
+fn apply_request_tool_policy(
+    snapshot: &mut vulcan_session_core::ToolExposureSnapshot,
+    request: &SubagentDefinitionSaveRequest,
+) {
+    let policy = request_capability_policy(
+        request.tool_policy_mode.as_deref(),
+        request.tool_policy_tools.clone(),
+        request.allowed_tools.clone(),
+        request.disabled_tools.clone(),
+    );
+    snapshot.policy = policy;
+    match snapshot.policy.mode {
+        vulcan_session_core::CapabilityPolicyMode::All => {
+            snapshot.allowed_tools.clear();
+            snapshot.disabled_tools.clear();
+        }
+        vulcan_session_core::CapabilityPolicyMode::AllowOnly => {
+            snapshot.allowed_tools = snapshot.policy.selectors.clone();
+            snapshot.disabled_tools.clear();
+        }
+        vulcan_session_core::CapabilityPolicyMode::DenyOnly => {
+            snapshot.allowed_tools.clear();
+            snapshot.disabled_tools = snapshot.policy.selectors.clone();
+        }
+    }
+    snapshot.allowed_ai_capabilities.clear();
+    snapshot.disabled_ai_capabilities.clear();
+}
+
+/// Applies the save request's unified prompt-skill policy to one snapshot.
+/// 将保存请求中的统一提示词技能策略应用到快照。
+fn apply_request_prompt_skill_policy(
+    snapshot: &mut vulcan_session_core::PromptSkillSnapshot,
+    request: &SubagentDefinitionSaveRequest,
+) {
+    let policy = request_capability_policy(
+        request.prompt_skill_policy_mode.as_deref(),
+        request.prompt_skill_policy_skills.clone(),
+        request.enabled_prompt_skills.clone(),
+        request.disabled_prompt_skills.clone(),
+    );
+    snapshot.policy = policy;
+    match snapshot.policy.mode {
+        vulcan_session_core::CapabilityPolicyMode::All => {
+            snapshot.enabled.clear();
+            snapshot.disabled.clear();
+        }
+        vulcan_session_core::CapabilityPolicyMode::AllowOnly => {
+            snapshot.enabled = snapshot.policy.selectors.clone();
+            snapshot.disabled.clear();
+        }
+        vulcan_session_core::CapabilityPolicyMode::DenyOnly => {
+            snapshot.enabled.clear();
+            snapshot.disabled = snapshot.policy.selectors.clone();
+        }
+    }
+}
+
+/// Builds a capability policy from new request fields or legacy allow/deny lists.
+/// 从新版请求字段或旧版允许/禁止列表构建能力策略。
+fn request_capability_policy(
+    mode: Option<&str>,
+    selectors: Vec<String>,
+    legacy_allowed: Vec<String>,
+    legacy_disabled: Vec<String>,
+) -> vulcan_session_core::CapabilityPolicySnapshot {
+    if let Some(mode) = mode.and_then(parse_capability_policy_mode) {
+        return normalized_capability_policy_snapshot(
+            mode,
+            normalized_request_text_list(selectors),
+        );
+    }
+    let allowed = normalized_request_text_list(legacy_allowed);
+    let disabled = normalized_request_text_list(legacy_disabled);
+    if !allowed.is_empty() {
+        let disabled_set = normalized_request_text_set(&disabled);
+        return normalized_capability_policy_snapshot(
+            vulcan_session_core::CapabilityPolicyMode::AllowOnly,
+            allowed
+                .into_iter()
+                .filter(|selector| {
+                    !disabled_set.contains(&normalized_request_selector_key(selector))
+                })
+                .collect(),
+        );
+    }
+    if !disabled.is_empty() {
+        return normalized_capability_policy_snapshot(
+            vulcan_session_core::CapabilityPolicyMode::DenyOnly,
+            disabled,
+        );
+    }
+    vulcan_session_core::CapabilityPolicySnapshot::default()
+}
+
+/// Parses a request policy mode key.
+/// 解析请求中的策略模式键。
+fn parse_capability_policy_mode(mode: &str) -> Option<vulcan_session_core::CapabilityPolicyMode> {
+    match mode.trim() {
+        "all" => Some(vulcan_session_core::CapabilityPolicyMode::All),
+        "allow_only" | "allowOnly" => Some(vulcan_session_core::CapabilityPolicyMode::AllowOnly),
+        "deny_only" | "denyOnly" => Some(vulcan_session_core::CapabilityPolicyMode::DenyOnly),
+        _ => None,
+    }
+}
+
+/// Normalizes a capability policy from a mode and selector list.
+/// 根据模式与选择器列表规范化能力策略。
+fn normalized_capability_policy_snapshot(
+    mode: vulcan_session_core::CapabilityPolicyMode,
+    selectors: Vec<String>,
+) -> vulcan_session_core::CapabilityPolicySnapshot {
+    vulcan_session_core::CapabilityPolicySnapshot {
+        mode,
+        selectors: if mode == vulcan_session_core::CapabilityPolicyMode::All {
+            Vec::new()
+        } else {
+            normalized_request_text_list(selectors)
+        },
+    }
+}
+
 /// Normalizes one user-supplied string list by trimming empty entries and preserving first occurrence order.
 /// 通过裁剪空项并保留首次出现顺序来规范化用户提交的字符串列表。
 fn normalized_request_text_list(values: Vec<String>) -> Vec<String> {
@@ -621,6 +860,22 @@ fn normalized_request_text_list(values: Vec<String>) -> Vec<String> {
         }
     }
     normalized
+}
+
+/// Builds a normalized lookup set for request selector comparison.
+/// 构建用于请求选择器比较的规范化查找集合。
+fn normalized_request_text_set(values: &[String]) -> std::collections::BTreeSet<String> {
+    values
+        .iter()
+        .map(|value| normalized_request_selector_key(value))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+/// Builds the normalized comparison key for one request selector.
+/// 构建单个请求选择器的规范化比较键。
+fn normalized_request_selector_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 /// Normalizes localized definition metadata from a save request.
@@ -755,7 +1010,7 @@ fn target_agent_id_for_save(
     existing: Option<&vulcan_task_session::SubagentDefinition>,
     target_package_id: Option<&str>,
 ) -> Result<String, String> {
-    let mut base_id = requested_agent_id.trim().to_string();
+    let mut base_id = normalize_agent_file_name_input(requested_agent_id);
     if let Some(existing_package_id) = existing
         .and_then(|definition| definition.source.package_id.as_deref())
         .filter(|package_id| !package_id.is_empty())
@@ -781,6 +1036,32 @@ fn target_agent_id_for_save(
     Ok(base_id)
 }
 
+/// Normalizes an editable agent file name into a stable definition id.
+/// 将可编辑智能体文件名规范化为稳定定义标识。
+fn normalize_agent_file_name_input(value: &str) -> String {
+    let mut segments = value
+        .trim()
+        .replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if let Some(last_segment) = segments.last_mut() {
+        *last_segment = strip_agent_file_segment_extension(last_segment);
+    }
+    segments.join("/")
+}
+
+/// Removes the last extension-like suffix from one agent id path segment.
+/// 从单个智能体标识路径片段移除最后一个扩展名形式的后缀。
+fn strip_agent_file_segment_extension(segment: &str) -> String {
+    segment
+        .rsplit_once('.')
+        .filter(|(stem, _extension)| !stem.is_empty())
+        .map(|(stem, _extension)| stem.to_string())
+        .unwrap_or_else(|| segment.to_string())
+}
+
 /// Collects all possible user-layer files that can override one system agent definition.
 /// 收集可能覆盖某个系统智能体定义的所有用户层文件。
 fn restore_default_user_file_candidates(
@@ -797,6 +1078,23 @@ fn restore_default_user_file_candidates(
     if let Some(sidecar_file) = definition.source.sidecar_file.as_ref() {
         push_unique_path(&mut candidates, sidecar_file.clone());
     }
+    Ok(candidates)
+}
+
+/// Collects user-owned files that define one deletable user agent.
+/// 收集定义单个可删除用户智能体的用户文件。
+fn user_definition_delete_candidates(
+    agent_id: &str,
+    definition: &vulcan_task_session::SubagentDefinition,
+) -> Result<Vec<PathBuf>, String> {
+    let mut candidates = Vec::new();
+    push_unique_path(&mut candidates, definition.source.file.clone());
+    if let Some(sidecar_file) = definition.source.sidecar_file.as_ref() {
+        push_unique_path(&mut candidates, sidecar_file.clone());
+    }
+    push_unique_path(&mut candidates, user_subagent_definition_path(agent_id)?);
+    push_unique_path(&mut candidates, user_subagent_sidecar_path(agent_id)?);
+    push_unique_path(&mut candidates, user_subagent_override_path(agent_id)?);
     Ok(candidates)
 }
 

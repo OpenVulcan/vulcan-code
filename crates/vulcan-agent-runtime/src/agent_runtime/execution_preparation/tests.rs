@@ -127,6 +127,7 @@ fn execution_tool_exposure_keeps_universal_goal_and_todolist_tools() {
         ..ToolExposureSnapshot::default()
     };
     let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
+    let exposure = test_exposure_with_selectors(selectors);
 
     for tool_id in [
         TODOLIST_TOOL_ID,
@@ -139,7 +140,7 @@ fn execution_tool_exposure_keeps_universal_goal_and_todolist_tools() {
             tool_id,
             "Universal native tool.",
             VulcanToolSourceKind::Native,
-            &selectors,
+            &exposure,
         ));
     }
 }
@@ -234,20 +235,21 @@ fn ai_fallback_visibility_ignores_legacy_global_tool_allow_list() {
         ..ToolExposureSnapshot::default()
     };
     let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
+    let exposure = test_exposure_with_selectors(selectors);
 
     assert!(vulcan_tool_descriptor_is_visible(
         "understand_image",
         "understand_image",
         "Read image attachments",
         VulcanToolSourceKind::AiFallback,
-        &selectors,
+        &exposure,
     ));
     assert!(!vulcan_tool_descriptor_is_visible(
         "read_file",
         "read_file",
         "Read one file",
         VulcanToolSourceKind::Native,
-        &selectors,
+        &exposure,
     ));
 }
 
@@ -284,8 +286,11 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
     let exposure = ExecutionToolExposureSelection {
         native_tool_ids: Vec::new(),
         luaskills_tools: Vec::new(),
-        luaskills_dispatch_tools: Vec::new(),
-        luaskill_prompt_entries: Vec::new(),
+        luaskills_dispatch_tools: vec![test_luaskills_entry("vulcan-codekit", "rg")],
+        luaskill_prompt_entries: vec![LuaSkillPromptEntry::new(
+            "vulcan-codekit-rg",
+            "codekit search",
+        )],
         mcp_tools: Vec::new(),
         ai_tool_configuration: PersistedAiToolConfiguration::default(),
         selectors,
@@ -439,6 +444,22 @@ fn test_luaskills_entry(skill_id: &str, local_name: &str) -> RuntimeEntryDescrip
         input_schema: json!({
             "type": "object"
         }),
+    }
+}
+
+/// Builds one minimal exposure selection for public selector tests.
+/// 为公开选择器测试构建一份最小可见性选择。
+fn test_exposure_with_selectors(
+    selectors: ToolExposureSelectorState,
+) -> ExecutionToolExposureSelection {
+    ExecutionToolExposureSelection {
+        native_tool_ids: Vec::new(),
+        luaskills_tools: Vec::new(),
+        luaskills_dispatch_tools: Vec::new(),
+        luaskill_prompt_entries: Vec::new(),
+        mcp_tools: Vec::new(),
+        ai_tool_configuration: PersistedAiToolConfiguration::default(),
+        selectors,
     }
 }
 

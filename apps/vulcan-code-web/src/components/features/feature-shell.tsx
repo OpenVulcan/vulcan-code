@@ -175,21 +175,9 @@ function FeatureShell(props: {
       </button>
     </div>
   ) : null
-  // agentsHeaderAction renders actions for the independent Agents page.
-  // agentsHeaderAction 渲染独立智能体页面操作。
-  const agentsHeaderAction = props.activeArea === "agents" ? (
-    <div className="feature-header-actions">
-      <button
-        className="skill-action-button secondary"
-        disabled={skillHeaderBusyAction !== null}
-        onClick={() => void runSkillHeaderAction("agent-refresh", props.agentActions.onRefreshAgentCatalog)}
-        type="button"
-      >
-        <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
-        <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
-      </button>
-    </div>
-  ) : null
+  // agentsHeaderAction stays empty because the agents page owns a sticky action bar.
+  // agentsHeaderAction 保持为空，因为智能体页面自行持有锁顶操作栏。
+  const agentsHeaderAction = null
   // settingsHeaderAction renders actions for the active settings page in the shared title bar.
   // settingsHeaderAction 在共享标题栏中渲染当前设置页操作。
   const settingsHeaderAction = props.activeArea === "settings" && props.activeSettingsSubArea === "model-providers" ? (

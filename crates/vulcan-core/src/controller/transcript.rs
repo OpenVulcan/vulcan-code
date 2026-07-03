@@ -164,7 +164,7 @@ impl VulcanCoreController {
             id: record_id,
             role: TranscriptRole::Assistant,
             record_kind: TranscriptRecordKind::Visible,
-            visible: true,
+            visible: false,
             title: String::from("子代理消息"),
             body: model_text,
             metadata,

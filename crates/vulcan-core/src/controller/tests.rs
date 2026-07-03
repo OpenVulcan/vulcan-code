@@ -379,6 +379,40 @@ fn build_test_config(max_turns: usize) -> ControllerConfig {
     }
 }
 
+/// Verifies inter-agent injections stay provider-visible but transcript-hidden.
+/// 验证代理间注入对 Provider 可见，但在转录显示中保持隐藏。
+#[test]
+fn append_agent_message_keeps_transcript_record_hidden() {
+    let mut controller =
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+
+    controller.append_agent_message(
+        "FINAL_ANSWER",
+        "code-review",
+        "code-review",
+        "parent",
+        "review complete",
+        true,
+        Some(json!({ "source": "test" })),
+    );
+
+    let snapshot = controller.snapshot();
+    assert_eq!(snapshot.messages.len(), 1);
+    assert_eq!(snapshot.records.len(), 1);
+    assert!(matches!(
+        &snapshot.messages[0].payload,
+        ConversationPayload::AgentMessage {
+            task_name,
+            payload,
+            trigger_turn,
+            ..
+        } if task_name == "code-review" && payload == "review complete" && *trigger_turn
+    ));
+    assert!(!snapshot.records[0].visible);
+    assert!(snapshot.records[0].body.contains("<agent_message>"));
+    assert!(snapshot.records[0].body.contains("review complete"));
+}
+
 mod interventions;
 mod loop_flow;
 mod streaming;

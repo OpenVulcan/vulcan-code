@@ -143,14 +143,20 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
             ),
             &request.tool_name,
         );
-        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+        let (tool_finished_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolFinished,
                 format!("工具返回 · {}", request.tool_call_id),
                 format_host_tool_result_runtime_detail(&tool_result_id, &result.model_output),
             )
             .with_metadata(event_metadata),
-        )));
+        );
+        let _ = self
+            .live_sender
+            .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_finished_event)));
+        // Wait for the host bridge to observe terminal tool state before Core enters the next provider turn.
+        // 在 Core 进入下一次 Provider 回合前，等待宿主桥接层先观察到工具终态。
+        wait_runtime_event_projection_barrier(projection_barrier).await;
         Ok(result)
     }
 }

@@ -1,5 +1,6 @@
 import type {
   AgentSkillsCatalogSummary,
+  SubagentDefinitionEnabledUpdate,
   SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
 } from "@/types";
@@ -165,6 +166,12 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
       const originalAgentId = definition.originalAgentId?.trim() || definition.agentId;
       const existingIndex = snapshot.subagentCatalog.definitions.findIndex((item) => item.agentId === originalAgentId);
       const existingDefinition = existingIndex >= 0 ? snapshot.subagentCatalog.definitions[existingIndex] : undefined;
+      if (existingDefinition?.scopeKey === "system" || existingDefinition?.overrideOf) {
+        throw new Error("系统内置智能体不允许编辑；只能启用或关闭。");
+      }
+      if (existingIndex < 0 && snapshot.subagentCatalog.definitions.some((item) => item.agentId === targetAgentId)) {
+        throw new Error(`目标智能体 ${targetAgentId} 已存在。`);
+      }
       const locales = definition.locales ?? {};
       const nextDefinition = {
         agentId: targetAgentId,
@@ -183,27 +190,25 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
         definitionFile: browserPreviewAgentDefinitionPath(snapshot.subagentCatalog.userRoot, targetAgentId, "md"),
         sidecarFile: browserPreviewAgentDefinitionPath(snapshot.subagentCatalog.userRoot, targetAgentId, "yaml"),
         remoteUrl: null,
-        overrideOf: existingIndex >= 0 && existingDefinition?.scopeKey === "system"
-          ? targetAgentId
-          : existingDefinition?.overrideOf ?? null,
-        canRestoreDefault: existingIndex >= 0
-          ? existingDefinition?.scopeKey === "system"
-            || Boolean(existingDefinition?.canRestoreDefault)
-            || Boolean(existingDefinition?.overrideOf)
-          : false,
+        overrideOf: null,
+        canRestoreDefault: false,
         sourceHash: null,
         version: null,
         updatedAt: Date.now().toString(),
-        allowedToolCount: definition.allowedTools.length,
-        disabledToolCount: definition.disabledTools.length,
-        enabledPromptSkillCount: definition.enabledPromptSkills.length,
-        disabledPromptSkillCount: definition.disabledPromptSkills.length,
+        toolPolicyMode: definition.toolPolicyMode ?? "all",
+        toolPolicyTools: definition.toolPolicyTools ?? [],
+        allowedToolCount: definition.toolPolicyMode === "allow_only" ? (definition.toolPolicyTools?.length ?? 0) : definition.allowedTools.length,
+        disabledToolCount: definition.toolPolicyMode === "deny_only" ? (definition.toolPolicyTools?.length ?? 0) : definition.disabledTools.length,
+        enabledPromptSkillCount: definition.promptSkillPolicyMode === "allow_only" ? (definition.promptSkillPolicySkills?.length ?? 0) : definition.enabledPromptSkills.length,
+        disabledPromptSkillCount: definition.promptSkillPolicyMode === "deny_only" ? (definition.promptSkillPolicySkills?.length ?? 0) : definition.disabledPromptSkills.length,
+        promptSkillPolicyMode: definition.promptSkillPolicyMode ?? "all",
+        promptSkillPolicySkills: definition.promptSkillPolicySkills ?? [],
         systemPrompt: definition.systemPrompt ?? null,
         systemPromptAppend: definition.systemPromptAppend ?? null,
         allowedTools: definition.allowedTools,
         disabledTools: definition.disabledTools,
-        allowedAiCapabilities: definition.allowedAiCapabilities ?? [],
-        disabledAiCapabilities: definition.disabledAiCapabilities ?? [],
+        allowedAiCapabilities: [],
+        disabledAiCapabilities: [],
         luaskillsOverrides: definition.luaskillsOverrides ?? null,
         mcpServerOverrides: definition.mcpServerOverrides ?? null,
         enabledPromptSkills: definition.enabledPromptSkills,
@@ -271,25 +276,37 @@ function preferredBrowserPreviewLocaleField(
 
 // setSubagentDefinitionEnabled persists one subagent definition enabled state.
 // setSubagentDefinitionEnabled 持久化单个子代理定义启停状态。
-export async function setSubagentDefinitionEnabled(agentId: string, enabled: boolean): Promise<WorkbenchSnapshot> {
+export async function setSubagentDefinitionEnabled(agentId: string, enabled: boolean): Promise<SubagentDefinitionEnabledUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    const snapshot = await updateBrowserFallbackWorkbench((snapshot) => {
       const definition = snapshot.subagentCatalog.definitions.find((item) => item.agentId === agentId);
       if (definition) {
-        // systemBacked preserves override metadata only for system-backed definitions.
-        // systemBacked 仅为系统集成定义保留覆盖元数据。
-        const systemBacked = definition.scopeKey === "system" || Boolean(definition.overrideOf);
         definition.enabled = enabled;
-        definition.scope = definition.scopeKey === "system" ? "User" : definition.scope;
-        definition.scopeKey = definition.scopeKey === "system" ? "user" : definition.scopeKey;
-        if (systemBacked) {
-          definition.overrideOf = definition.overrideOf ?? agentId;
-          definition.canRestoreDefault = true;
-        }
       }
     });
+    return {
+      agentId,
+      enabled,
+      notice: snapshot.subagentCatalog.notice,
+    };
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_set_subagent_definition_enabled", { agentId, enabled });
+  return serviceClient.request<SubagentDefinitionEnabledUpdate>("service_set_subagent_definition_enabled", { agentId, enabled });
+}
+
+// deleteSubagentDefinition removes one user-owned subagent definition.
+// deleteSubagentDefinition 移除单个用户拥有的子代理定义。
+export async function deleteSubagentDefinition(agentId: string): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const index = snapshot.subagentCatalog.definitions.findIndex((item) => item.agentId === agentId);
+      const definition = index >= 0 ? snapshot.subagentCatalog.definitions[index] : undefined;
+      if (!definition || (definition.scopeKey !== "user" && definition.scopeKey !== "package") || definition.overrideOf) {
+        throw new Error("只有用户自定义智能体允许删除。");
+      }
+      snapshot.subagentCatalog.definitions.splice(index, 1);
+    });
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_delete_subagent_definition", { agentId });
 }
 
 // restoreSubagentDefinitionDefault removes one user override for a system-backed definition.

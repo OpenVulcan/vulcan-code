@@ -347,13 +347,6 @@ pub(super) fn tool_exposure_snapshot_from_args(
             &mut snapshot.disabled_tools,
         );
     }
-    if let Some(ai_capabilities) = args.ai_capabilities.as_ref() {
-        apply_tool_selector_value(
-            ai_capabilities,
-            &mut snapshot.allowed_ai_capabilities,
-            &mut snapshot.disabled_ai_capabilities,
-        );
-    }
     if let Some(luaskills) = args.luaskills.as_ref() {
         snapshot.luaskills_overrides = luaskills.clone();
     }
@@ -362,8 +355,10 @@ pub(super) fn tool_exposure_snapshot_from_args(
     }
     dedupe_preserving_order(&mut snapshot.allowed_tools);
     dedupe_preserving_order(&mut snapshot.disabled_tools);
-    dedupe_preserving_order(&mut snapshot.allowed_ai_capabilities);
-    dedupe_preserving_order(&mut snapshot.disabled_ai_capabilities);
+    snapshot.policy = capability_policy_from_legacy_lists(
+        snapshot.allowed_tools.clone(),
+        snapshot.disabled_tools.clone(),
+    );
     snapshot
 }
 
@@ -381,6 +376,8 @@ pub(super) fn prompt_skill_snapshot_from_args(
     }
     dedupe_preserving_order(&mut snapshot.enabled);
     dedupe_preserving_order(&mut snapshot.disabled);
+    snapshot.policy =
+        capability_policy_from_legacy_lists(snapshot.enabled.clone(), snapshot.disabled.clone());
     snapshot
 }
 
@@ -528,6 +525,47 @@ pub(super) fn dedupe_preserving_order(values: &mut Vec<String>) {
     values.retain(|value| seen.insert(value.clone()));
 }
 
+/// Builds a unified capability policy from legacy allow and deny lists.
+/// 从旧版允许与禁止列表构建统一能力策略。
+fn capability_policy_from_legacy_lists(
+    allowed: Vec<String>,
+    disabled: Vec<String>,
+) -> CapabilityPolicySnapshot {
+    if !allowed.is_empty() {
+        let disabled_set = normalized_selector_set(&disabled);
+        return CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::AllowOnly,
+            selectors: allowed
+                .into_iter()
+                .filter(|selector| !disabled_set.contains(&normalized_selector_key(selector)))
+                .collect(),
+        };
+    }
+    if !disabled.is_empty() {
+        return CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::DenyOnly,
+            selectors: disabled,
+        };
+    }
+    CapabilityPolicySnapshot::default()
+}
+
+/// Builds normalized selector lookup keys.
+/// 构建规范化选择器查找键集合。
+fn normalized_selector_set(values: &[String]) -> BTreeSet<String> {
+    values
+        .iter()
+        .map(|value| normalized_selector_key(value))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+/// Builds a normalized comparison key for one selector.
+/// 为单个选择器构建规范化比较键。
+fn normalized_selector_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
 /// Merges an incoming resume invocation without clearing stored explicit task configuration.
 /// 合并续跑传入配置，同时避免清除已存储的显式任务配置。
 pub(super) fn merge_task_invocation_config_for_resume(
@@ -577,10 +615,10 @@ pub(super) fn provider_model_has_override(snapshot: &ProviderModelSnapshot) -> b
 /// Returns whether a tool exposure snapshot carries any explicit override.
 /// 返回工具可见性快照是否携带显式覆盖。
 pub(super) fn tool_exposure_has_override(snapshot: &ToolExposureSnapshot) -> bool {
-    !snapshot.allowed_tools.is_empty()
+    snapshot.policy.mode != CapabilityPolicyMode::All
+        || !snapshot.policy.selectors.is_empty()
+        || !snapshot.allowed_tools.is_empty()
         || !snapshot.disabled_tools.is_empty()
-        || !snapshot.allowed_ai_capabilities.is_empty()
-        || !snapshot.disabled_ai_capabilities.is_empty()
         || !snapshot.luaskills_overrides.is_null()
         || !snapshot.mcp_server_overrides.is_null()
 }
@@ -588,7 +626,10 @@ pub(super) fn tool_exposure_has_override(snapshot: &ToolExposureSnapshot) -> boo
 /// Returns whether a prompt-skill snapshot carries any explicit override.
 /// 返回提示词技能快照是否携带显式覆盖。
 pub(super) fn prompt_skills_have_override(snapshot: &PromptSkillSnapshot) -> bool {
-    !snapshot.enabled.is_empty() || !snapshot.disabled.is_empty()
+    snapshot.policy.mode != CapabilityPolicyMode::All
+        || !snapshot.policy.selectors.is_empty()
+        || !snapshot.enabled.is_empty()
+        || !snapshot.disabled.is_empty()
 }
 
 /// Returns whether a context-compaction request carries any explicit override.

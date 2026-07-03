@@ -60,12 +60,12 @@ use vulcan_session_boundary::{
     SubagentMailboxEvent, SubagentMailboxEventKind, SubagentMailboxStatus,
 };
 use vulcan_session_core::{
-    ContextCompactionPolicyRequest, ContextCompactionPolicySnapshot, ExecutionRuntimePolicyRequest,
-    ExecutionScope, ParentSessionRef, PromptSkillSnapshot, ProviderModelSnapshot,
-    SessionContextDocument, SessionEffectiveConfig, SessionEventKind, SessionEventRecord,
-    SessionNodeId, SessionNodeStore, SessionRequestedConfig, SessionRuntimeCheckpoint,
-    SessionSegmentSummary, SubagentKind, SubagentRegistry, SubagentRegistryEntry, SubagentStatus,
-    ToolExposureSnapshot,
+    CapabilityPolicyMode, CapabilityPolicySnapshot, ContextCompactionPolicyRequest,
+    ContextCompactionPolicySnapshot, ExecutionRuntimePolicyRequest, ExecutionScope,
+    ParentSessionRef, PromptSkillSnapshot, ProviderModelSnapshot, SessionContextDocument,
+    SessionEffectiveConfig, SessionEventKind, SessionEventRecord, SessionNodeId, SessionNodeStore,
+    SessionRequestedConfig, SessionRuntimeCheckpoint, SessionSegmentSummary, SubagentKind,
+    SubagentRegistry, SubagentRegistryEntry, SubagentStatus, ToolExposureSnapshot,
 };
 use vulcan_subagent_core::{
     FOLLOWUP_TASK_TOOL, INTERRUPT_AGENT_TOOL, LIST_AGENTS_TOOL, SEND_MESSAGE_TOOL,
@@ -192,9 +192,6 @@ struct TaskToolInvocationArgs {
     /// Flexible tool allow/deny override payload.
     /// 灵活的工具允许与禁用覆盖载荷。
     tools: Option<Value>,
-    /// Flexible AI capability allow/deny override payload.
-    /// 灵活的 AI 能力允许与禁用覆盖载荷。
-    ai_capabilities: Option<Value>,
     /// Flexible prompt-skill override payload.
     /// 灵活的提示词技能覆盖载荷。
     skills: Option<Value>,

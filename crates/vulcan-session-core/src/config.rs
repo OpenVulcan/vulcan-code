@@ -2,6 +2,43 @@ use crate::policy::ExecutionRuntimePolicyRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Capability policy mode used by tool and prompt-skill selectors.
+/// 工具与提示词技能选择器使用的能力策略模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityPolicyMode {
+    /// Expose every capability allowed by the lower runtime layers.
+    /// 暴露下层运行时允许的全部能力。
+    All,
+    /// Expose only selectors listed by the policy.
+    /// 仅暴露策略列表中声明的选择器。
+    AllowOnly,
+    /// Expose every lower-layer capability except selectors listed by the policy.
+    /// 暴露除策略列表声明项以外的下层能力。
+    DenyOnly,
+}
+
+impl Default for CapabilityPolicyMode {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+/// Selector policy snapshot shared by tools and prompt skills.
+/// 工具与提示词技能共享的选择器策略快照。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityPolicySnapshot {
+    /// Policy mode that gives the selector list its meaning.
+    /// 赋予选择器列表语义的策略模式。
+    #[serde(default)]
+    pub mode: CapabilityPolicyMode,
+    /// Selectors used by allow-only or deny-only modes.
+    /// 仅允许或仅禁止模式使用的选择器列表。
+    #[serde(default)]
+    pub selectors: Vec<String>,
+}
+
 /// Provider and model snapshot selected for one session node.
 /// 单个会话节点选定的供应商与模型快照。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -24,6 +61,10 @@ pub struct ProviderModelSnapshot {
 /// 提示词组装与执行使用的工具可见性快照。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ToolExposureSnapshot {
+    /// Unified tool selector policy.
+    /// 统一工具选择器策略。
+    #[serde(default)]
+    pub policy: CapabilityPolicySnapshot,
     /// Explicitly allowed tool identifiers.
     /// 显式允许的工具标识符。
     pub allowed_tools: Vec<String>,
@@ -48,6 +89,10 @@ pub struct ToolExposureSnapshot {
 /// 单个会话节点可见的提示词技能快照。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PromptSkillSnapshot {
+    /// Unified prompt-skill selector policy.
+    /// 统一提示词技能选择器策略。
+    #[serde(default)]
+    pub policy: CapabilityPolicySnapshot,
     /// Enabled prompt skill identifiers.
     /// 启用的提示词技能标识符。
     pub enabled: Vec<String>,

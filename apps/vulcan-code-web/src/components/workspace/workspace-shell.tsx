@@ -694,21 +694,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       </div>
     );
   }, [props.activeSkillSubArea, props.skillActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
-  // agentsHeaderActions stores registered actions for the independent Agents page.
-  // agentsHeaderActions 保存独立智能体页面注册的标题栏动作。
-  const agentsHeaderActions = React.useMemo(() => (
-    <div className="feature-header-actions workspace-skills-header-actions">
-      <button
-        className="skill-action-button secondary"
-        disabled={skillHeaderBusyAction !== null}
-        onClick={() => void runSkillHeaderAction("agent-refresh", props.agentActions.onRefreshAgentCatalog)}
-        type="button"
-      >
-        <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
-        <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
-      </button>
-    </div>
-  ), [props.agentActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
+  // agentsHeaderActions stays empty because the agents page owns a sticky action bar.
+  // agentsHeaderActions 保持为空，因为智能体页面自行持有锁顶操作栏。
+  const agentsHeaderActions = null;
   // memoryHeaderMeta stores the active memory page title detail for descriptor generation.
   // memoryHeaderMeta 保存当前记忆页 descriptor 使用的标题详情。
   const memoryHeaderMeta = memorySubAreaMeta(props.activeMemorySubArea, props.workbench, t);

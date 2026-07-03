@@ -245,7 +245,9 @@ export function ChatArea(props: ChatAreaProps) {
   const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
     ? null
     : conversationRuntimeCue(surfaceConversation, renderItems, t);
-  const isConversationRunning = conversationIsRunning(selectedConversation) || hasRunningSubagents;
+  // isConversationRunning controls only the main composer stop affordance.
+  // isConversationRunning 仅控制主输入区的停止操作展示。
+  const isConversationRunning = conversationIsRunning(selectedConversation);
   // pendingPlanArtifact tracks the current submit_plan artifact that still requires a user decision.
   // pendingPlanArtifact 跟踪当前仍需要用户决策的 submit_plan 计划产物。
   const pendingPlanArtifact = React.useMemo(() => {

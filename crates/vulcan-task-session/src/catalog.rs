@@ -11,8 +11,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 use vulcan_session_core::{
-    ContextCompactionPolicyRequest, ExecutionRuntimePolicyRequest, PromptSkillSnapshot,
-    ProviderModelSnapshot, ToolExposureSnapshot,
+    CapabilityPolicyMode, CapabilityPolicySnapshot, ContextCompactionPolicyRequest,
+    ExecutionRuntimePolicyRequest, PromptSkillSnapshot, ProviderModelSnapshot,
+    ToolExposureSnapshot,
 };
 
 /// File extension used by user-facing subagent definition files.
@@ -482,8 +483,8 @@ impl SubagentCatalog {
 ///
 /// # Returns
 /// 返回值
-/// A merged catalog where user definitions override system definitions by string id.
-/// 一个按字符串标识使用用户定义覆盖系统定义的合并目录。
+/// A merged catalog where user definitions cannot replace shipped definitions by string id.
+/// 一个不允许用户定义按字符串标识替换内置定义的合并目录。
 pub fn load_subagent_catalog_from_roots(
     system_root: PathBuf,
     user_root: PathBuf,
@@ -495,6 +496,12 @@ pub fn load_subagent_catalog_from_roots(
         categories: Vec::new(),
         errors: Vec::new(),
     };
+    catalog
+        .errors
+        .extend(ensure_user_subagent_category_directories(
+            &system_root,
+            &user_root,
+        ));
     let mut by_id = BTreeMap::<String, SubagentDefinition>::new();
     let mut categories = BTreeMap::<String, SubagentCategoryDefinition>::new();
     scan_subagent_definition_root(
@@ -713,22 +720,24 @@ fn parse_subagent_definition_text_with_metadata(
         .unwrap_or_else(|| String::from(DEFAULT_AGENT_COLOR));
     let vibe = non_empty_owned(sidecar.vibe).or_else(|| non_empty_owned(parsed.vibe));
     let mut tool_exposure = if tool_exposure_snapshot_has_override(&sidecar.tool_exposure) {
-        merged_tool_exposure_from_sidecar(sidecar.tool_exposure, &sidecar.tool_policy)
-    } else if !sidecar.tool_policy.is_empty() {
-        tool_exposure_from_policy_map(&sidecar.tool_policy)
+        sidecar.tool_exposure
     } else {
         parsed.tool_exposure
     };
+    if let Some(tool_policy) = sidecar.tool_policy {
+        apply_tool_policy_to_exposure(&mut tool_exposure, tool_policy.into_snapshot());
+    }
     normalize_tool_exposure(&mut tool_exposure);
-    let mut prompt_skills = if !sidecar.prompt_skill_policy.is_empty() {
-        prompt_skills_from_policy_map(&sidecar.prompt_skill_policy)
-    } else if !sidecar.prompt_skills.enabled.is_empty()
+    let mut prompt_skills = if !sidecar.prompt_skills.enabled.is_empty()
         || !sidecar.prompt_skills.disabled.is_empty()
     {
         sidecar.prompt_skills
     } else {
         parsed.prompt_skills
     };
+    if let Some(prompt_skill_policy) = sidecar.prompt_skill_policy {
+        apply_prompt_skill_policy(&mut prompt_skills, prompt_skill_policy.into_snapshot());
+    }
     normalize_prompt_skills(&mut prompt_skills);
     let system_prompt = parsed
         .system_prompt
@@ -922,6 +931,141 @@ pub fn write_user_subagent_override(
     write_subagent_sidecar_to_path(&path, definition)
 }
 
+/// Writes one system-backed metadata override without copying the prompt Markdown.
+/// 写入一个系统智能体元数据覆盖，而不复制提示词 Markdown。
+///
+/// # Parameters
+/// 参数
+/// `user_root` is the user subagent catalog directory.
+/// `user_root` 是用户子代理目录。
+/// `definition` is the effective system-backed definition with editable metadata already applied.
+/// `definition` 是已经应用可编辑元数据后的系统智能体生效定义。
+///
+/// # Returns
+/// 返回值
+/// The override sidecar path that was written.
+/// 返回已写入的覆盖 sidecar 路径。
+pub fn write_user_subagent_metadata_override(
+    user_root: &Path,
+    definition: &SubagentDefinition,
+) -> Result<PathBuf, SubagentCatalogLoadError> {
+    let path = user_subagent_override_path(user_root, &definition.id)?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| SubagentCatalogLoadError {
+        path: parent.to_path_buf(),
+        message: format!("Failed to create user subagent metadata override root: {error}"),
+    })?;
+    let sidecar = SubagentDefinitionSidecar {
+        schema_version: Some(1),
+        enabled: Some(definition.enabled),
+        system_prompt_append: definition.system_prompt_append.clone(),
+        tool_exposure: sidecar_tool_exposure_from_definition(&definition.tool_exposure),
+        tool_policy: SubagentToolPolicySidecar::from_snapshot(&definition.tool_exposure.policy),
+        prompt_skill_policy: SubagentPromptSkillPolicySidecar::from_snapshot(
+            &definition.prompt_skills.policy,
+        ),
+        ..SubagentDefinitionSidecar::default()
+    };
+    let yaml = serde_yaml::to_string(&sidecar).map_err(|error| SubagentCatalogLoadError {
+        path: path.to_path_buf(),
+        message: format!("Failed to serialize subagent metadata override: {error}"),
+    })?;
+    let mut file = fs::File::create(&path).map_err(|error| SubagentCatalogLoadError {
+        path: path.clone(),
+        message: format!("Failed to create user subagent metadata override: {error}"),
+    })?;
+    file.write_all(yaml.as_bytes())
+        .map_err(|error| SubagentCatalogLoadError {
+            path: path.clone(),
+            message: format!("Failed to write user subagent metadata override: {error}"),
+        })?;
+    Ok(path)
+}
+
+/// Writes one minimal user-owned enabled-state override sidecar.
+/// 写入一个只包含启停状态的用户拥有覆盖 sidecar。
+///
+/// # Parameters
+/// 参数
+/// `user_root` is the user subagent catalog directory.
+/// `user_root` 是用户子代理目录。
+/// `id` is the stable subagent definition id.
+/// `id` 是稳定子代理定义标识。
+/// `enabled` is the model exposure state to persist.
+/// `enabled` 是需要持久化的模型暴露状态。
+///
+/// # Returns
+/// 返回值
+/// The override sidecar path that was written.
+/// 返回已写入的覆盖 sidecar 路径。
+pub fn write_user_subagent_enabled_override(
+    user_root: &Path,
+    id: &str,
+    enabled: bool,
+) -> Result<PathBuf, SubagentCatalogLoadError> {
+    let path = user_subagent_override_path(user_root, id)?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| SubagentCatalogLoadError {
+        path: parent.to_path_buf(),
+        message: format!("Failed to create user subagent override root: {error}"),
+    })?;
+    let sidecar = SubagentDefinitionSidecar {
+        schema_version: Some(1),
+        enabled: Some(enabled),
+        ..SubagentDefinitionSidecar::default()
+    };
+    let yaml = serde_yaml::to_string(&sidecar).map_err(|error| SubagentCatalogLoadError {
+        path: path.to_path_buf(),
+        message: format!("Failed to serialize subagent enabled override: {error}"),
+    })?;
+    let mut file = fs::File::create(&path).map_err(|error| SubagentCatalogLoadError {
+        path: path.to_path_buf(),
+        message: format!("Failed to create user subagent enabled override: {error}"),
+    })?;
+    file.write_all(yaml.as_bytes())
+        .map_err(|error| SubagentCatalogLoadError {
+            path: path.to_path_buf(),
+            message: format!("Failed to write user subagent enabled override: {error}"),
+        })?;
+    Ok(path)
+}
+
+/// Ensures the user definition directory contains the system category directory tree.
+/// 确保用户定义目录包含系统分类目录树。
+///
+/// # Parameters
+/// 参数
+/// `system_root` is the application-integrated definition directory.
+/// `system_root` 是应用集成定义目录。
+/// `user_root` is the user-owned agent catalog root.
+/// `user_root` 是用户拥有的智能体目录根。
+///
+/// # Returns
+/// 返回值
+/// Non-fatal directory creation errors that should be surfaced with catalog load issues.
+/// 返回应随目录加载问题展示的非致命目录创建错误。
+pub fn ensure_user_subagent_category_directories(
+    system_root: &Path,
+    user_root: &Path,
+) -> Vec<SubagentCatalogLoadError> {
+    let mut errors = Vec::new();
+    if user_root.as_os_str().is_empty() {
+        return errors;
+    }
+    let user_definition_root = user_root.join(USER_DEFINITIONS_DIR_NAME);
+    create_subagent_directory(&user_definition_root, &mut errors);
+    if system_root.as_os_str().is_empty() || !system_root.is_dir() {
+        return errors;
+    }
+    mirror_system_top_level_category_directories(
+        system_root,
+        system_root,
+        &user_definition_root,
+        &mut errors,
+    );
+    errors
+}
+
 /// Serializes one definition into the catalog Markdown file format.
 /// 将单个定义序列化为目录 Markdown 文件格式。
 ///
@@ -1005,10 +1149,65 @@ fn scan_subagent_definition_root(
         }
         match parse_subagent_definition_file_in_root(&path, base_root, scope, package_id) {
             Ok(definition) => {
+                if user_definition_conflicts_with_existing_system_or_package(
+                    &definition,
+                    by_id,
+                    errors,
+                ) {
+                    continue;
+                }
                 by_id.insert(definition.id.clone(), definition);
             }
             Err(error) => errors.push(error),
         }
+    }
+}
+
+/// Mirrors system top-level category directories into the user definition directory.
+/// 将系统顶层分类目录镜像到用户定义目录。
+fn mirror_system_top_level_category_directories(
+    root: &Path,
+    base_root: &Path,
+    user_definition_root: &Path,
+    errors: &mut Vec<SubagentCatalogLoadError>,
+) {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            errors.push(SubagentCatalogLoadError {
+                path: root.to_path_buf(),
+                message: format!("Failed to read system subagent category directory: {error}"),
+            });
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if !directory_is_top_level_category(base_root, &path) {
+            continue;
+        }
+        if let Some(category_id) = category_id_for_directory(base_root, &path) {
+            match safe_relative_directory_path(&category_id) {
+                Ok(relative_path) => {
+                    create_subagent_directory(&user_definition_root.join(relative_path), errors);
+                }
+                Err(error) => errors.push(error),
+            }
+        }
+    }
+}
+
+/// Creates one subagent directory and records non-fatal errors.
+/// 创建单个子代理目录并记录非致命错误。
+fn create_subagent_directory(path: &Path, errors: &mut Vec<SubagentCatalogLoadError>) {
+    if let Err(error) = fs::create_dir_all(path) {
+        errors.push(SubagentCatalogLoadError {
+            path: path.to_path_buf(),
+            message: format!("Failed to create user subagent category directory: {error}"),
+        });
     }
 }
 
@@ -1079,11 +1278,44 @@ fn scan_legacy_flat_subagent_definition_root(
         }
         match parse_subagent_definition_file(&path, scope) {
             Ok(definition) => {
+                if user_definition_conflicts_with_existing_system_or_package(
+                    &definition,
+                    by_id,
+                    errors,
+                ) {
+                    continue;
+                }
                 by_id.insert(definition.id.clone(), definition);
             }
             Err(error) => errors.push(error),
         }
     }
+}
+
+/// Returns whether a user definition is ignored because it would shadow a shipped definition.
+/// 返回用户定义是否因会遮蔽内置定义而被忽略。
+fn user_definition_conflicts_with_existing_system_or_package(
+    definition: &SubagentDefinition,
+    by_id: &BTreeMap<String, SubagentDefinition>,
+    errors: &mut Vec<SubagentCatalogLoadError>,
+) -> bool {
+    if definition.source.scope != SubagentDefinitionScope::User {
+        return false;
+    }
+    let Some(existing) = by_id.get(&definition.id) else {
+        return false;
+    };
+    if existing.source.scope == SubagentDefinitionScope::User {
+        return false;
+    }
+    errors.push(SubagentCatalogLoadError {
+        path: definition.source.file.clone(),
+        message: format!(
+            "User subagent definition `{}` is ignored because it conflicts with an existing system or package definition.",
+            definition.id
+        ),
+    });
+    true
 }
 
 /// Applies user override sidecars to already loaded definitions.
@@ -1136,7 +1368,7 @@ fn parse_subagent_definition_file_in_root(
     let id = package_id
         .map(|package_id| format!("{package_id}/{relative_id}"))
         .unwrap_or(relative_id);
-    let category_id = category_id_for_definition_id(&id);
+    let category_id = display_subagent_category_id(&id, package_id);
     let sidecar_file = find_definition_sidecar(definition_file);
     let sidecar = match sidecar_file.as_deref() {
         Some(path) => Some(read_definition_sidecar(path)?),
@@ -1163,6 +1395,9 @@ fn register_category_if_needed(
     categories: &mut BTreeMap<String, SubagentCategoryDefinition>,
     errors: &mut Vec<SubagentCatalogLoadError>,
 ) {
+    if !directory_is_top_level_category(base_root, directory) {
+        return;
+    }
     let Some(raw_id) = category_id_for_directory(base_root, directory) else {
         return;
     };
@@ -1370,9 +1605,11 @@ fn write_subagent_sidecar_to_path(
         enabled: Some(definition.enabled),
         system_prompt_append: definition.system_prompt_append.clone(),
         provider_model: definition.provider_model.clone(),
-        tool_exposure: definition.tool_exposure.clone(),
-        tool_policy: policy_map_from_tool_exposure(&definition.tool_exposure),
-        prompt_skill_policy: policy_map_from_prompt_skills(&definition.prompt_skills),
+        tool_exposure: sidecar_tool_exposure_from_definition(&definition.tool_exposure),
+        tool_policy: SubagentToolPolicySidecar::from_snapshot(&definition.tool_exposure.policy),
+        prompt_skill_policy: SubagentPromptSkillPolicySidecar::from_snapshot(
+            &definition.prompt_skills.policy,
+        ),
         context_compaction: definition.context_compaction.clone(),
         runtime_policy: definition.runtime_policy,
         max_depth: definition.max_depth,
@@ -1401,6 +1638,16 @@ fn write_subagent_sidecar_to_path(
             message: format!("Failed to write user subagent sidecar: {error}"),
         })?;
     Ok(path.to_path_buf())
+}
+
+/// Builds the sidecar legacy exposure payload after extracting unified tool policy.
+/// 在抽离统一工具策略后构建 sidecar 旧版可见性载荷。
+fn sidecar_tool_exposure_from_definition(snapshot: &ToolExposureSnapshot) -> ToolExposureSnapshot {
+    let mut sidecar_snapshot = snapshot.clone();
+    sidecar_snapshot.policy = CapabilityPolicySnapshot::default();
+    sidecar_snapshot.allowed_tools.clear();
+    sidecar_snapshot.disabled_tools.clear();
+    sidecar_snapshot
 }
 
 /// Applies a parsed sidecar as an override to an existing definition.
@@ -1439,17 +1686,21 @@ fn apply_sidecar_override(
         definition.system_prompt_append = Some(system_prompt_append);
     }
     if tool_exposure_snapshot_has_override(&sidecar.tool_exposure) {
-        definition.tool_exposure =
-            merged_tool_exposure_from_sidecar(sidecar.tool_exposure, &sidecar.tool_policy);
-    } else if !sidecar.tool_policy.is_empty() {
-        definition.tool_exposure = tool_exposure_from_policy_map(&sidecar.tool_policy);
+        definition.tool_exposure = sidecar.tool_exposure;
     }
-    if !sidecar.prompt_skill_policy.is_empty() {
-        definition.prompt_skills = prompt_skills_from_policy_map(&sidecar.prompt_skill_policy);
-    } else if !sidecar.prompt_skills.enabled.is_empty()
-        || !sidecar.prompt_skills.disabled.is_empty()
-    {
+    if let Some(tool_policy) = sidecar.tool_policy {
+        apply_tool_policy_to_exposure(&mut definition.tool_exposure, tool_policy.into_snapshot());
+        normalize_tool_exposure(&mut definition.tool_exposure);
+    }
+    if !sidecar.prompt_skills.enabled.is_empty() || !sidecar.prompt_skills.disabled.is_empty() {
         definition.prompt_skills = sidecar.prompt_skills;
+    }
+    if let Some(prompt_skill_policy) = sidecar.prompt_skill_policy {
+        apply_prompt_skill_policy(
+            &mut definition.prompt_skills,
+            prompt_skill_policy.into_snapshot(),
+        );
+        normalize_prompt_skills(&mut definition.prompt_skills);
     }
     if sidecar.provider_model != ProviderModelSnapshot::default() {
         definition.provider_model = sidecar.provider_model;
@@ -1463,7 +1714,6 @@ fn apply_sidecar_override(
     if sidecar.max_depth.is_some() {
         definition.max_depth = sidecar.max_depth;
     }
-    definition.source.scope = SubagentDefinitionScope::User;
     definition.source.sidecar_file = Some(sidecar_file);
     definition.source.override_of = sidecar.override_of.or_else(|| {
         (original_scope == SubagentDefinitionScope::System).then(|| definition.id.clone())
@@ -1568,95 +1818,91 @@ fn collect_sidecar_files(
     }
 }
 
-/// Converts a sidecar tool policy map into the legacy exposure snapshot.
-/// 将 sidecar 工具策略映射转换为旧版可见性快照。
-fn tool_exposure_from_policy_map(
+/// Converts the legacy three-state map into a mode-plus-selector policy.
+/// 将旧版三态映射转换为规则加选择器策略。
+fn policy_snapshot_from_state_map(
     policy: &BTreeMap<String, SubagentPolicyState>,
-) -> ToolExposureSnapshot {
-    let mut snapshot = ToolExposureSnapshot::default();
+) -> CapabilityPolicySnapshot {
+    let mut allowed = Vec::new();
+    let mut disabled = Vec::new();
     for (id, state) in policy {
         match state {
-            SubagentPolicyState::Allow => snapshot.allowed_tools.push(id.clone()),
-            SubagentPolicyState::Deny => snapshot.disabled_tools.push(id.clone()),
+            SubagentPolicyState::Allow => allowed.push(id.clone()),
+            SubagentPolicyState::Deny => disabled.push(id.clone()),
             SubagentPolicyState::Default => {}
         }
     }
-    normalize_tool_exposure(&mut snapshot);
-    snapshot
+    policy_snapshot_from_legacy_lists(allowed, disabled)
 }
 
-/// Merges full exposure payloads with the modern three-state policy map.
-/// 将完整工具可见性载荷与新版三态策略映射合并。
-///
-/// # Parameters
-/// 参数
-/// `snapshot` is the sidecar exposure payload that may include MCP, LuaSkills, and AI selectors.
-/// `snapshot` 是可能包含 MCP、LuaSkills 与 AI 选择器的 sidecar 可见性载荷。
-/// `policy` is the sidecar three-state policy map for generic host tools.
-/// `policy` 是 sidecar 中用于通用宿主工具的三态策略映射。
-///
-/// # Returns
-/// 返回值
-/// A normalized exposure snapshot preserving specialized selectors and applying generic policies.
-/// 返回保留专属选择器并应用通用策略的规范化可见性快照。
-fn merged_tool_exposure_from_sidecar(
-    mut snapshot: ToolExposureSnapshot,
-    policy: &BTreeMap<String, SubagentPolicyState>,
-) -> ToolExposureSnapshot {
-    if !policy.is_empty() {
-        let generic_policy = tool_exposure_from_policy_map(policy);
-        snapshot.allowed_tools = generic_policy.allowed_tools;
-        snapshot.disabled_tools = generic_policy.disabled_tools;
+/// Converts legacy allow and deny lists into a deterministic unified policy.
+/// 将旧版允许与禁止列表转换为确定性的统一策略。
+fn policy_snapshot_from_legacy_lists(
+    allowed: Vec<String>,
+    disabled: Vec<String>,
+) -> CapabilityPolicySnapshot {
+    let allowed = normalized_string_list(allowed);
+    let disabled = normalized_string_list(disabled);
+    if !allowed.is_empty() {
+        let disabled_set = normalized_string_set(&disabled);
+        return CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::AllowOnly,
+            selectors: allowed
+                .into_iter()
+                .filter(|selector| !disabled_set.contains(&normalized_selector_key(selector)))
+                .collect(),
+        };
     }
-    normalize_tool_exposure(&mut snapshot);
-    snapshot
+    if !disabled.is_empty() {
+        return CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::DenyOnly,
+            selectors: disabled,
+        };
+    }
+    CapabilityPolicySnapshot::default()
 }
 
-/// Converts a sidecar prompt skill policy map into the legacy snapshot.
-/// 将 sidecar 提示词技能策略映射转换为旧版快照。
-fn prompt_skills_from_policy_map(
-    policy: &BTreeMap<String, SubagentPolicyState>,
-) -> PromptSkillSnapshot {
-    let mut snapshot = PromptSkillSnapshot::default();
-    for (id, state) in policy {
-        match state {
-            SubagentPolicyState::Allow => snapshot.enabled.push(id.clone()),
-            SubagentPolicyState::Deny => snapshot.disabled.push(id.clone()),
-            SubagentPolicyState::Default => {}
+/// Applies a unified tool policy to the legacy exposure lists used by older call sites.
+/// 将统一工具策略应用到旧调用点仍使用的可见性列表。
+fn apply_tool_policy_to_exposure(
+    snapshot: &mut ToolExposureSnapshot,
+    policy: CapabilityPolicySnapshot,
+) {
+    snapshot.policy = normalized_policy_snapshot(policy);
+    match snapshot.policy.mode {
+        CapabilityPolicyMode::All => {
+            snapshot.allowed_tools.clear();
+            snapshot.disabled_tools.clear();
+        }
+        CapabilityPolicyMode::AllowOnly => {
+            snapshot.allowed_tools = snapshot.policy.selectors.clone();
+            snapshot.disabled_tools.clear();
+        }
+        CapabilityPolicyMode::DenyOnly => {
+            snapshot.allowed_tools.clear();
+            snapshot.disabled_tools = snapshot.policy.selectors.clone();
         }
     }
-    normalize_prompt_skills(&mut snapshot);
-    snapshot
 }
 
-/// Converts the legacy exposure snapshot into a sidecar policy map.
-/// 将旧版可见性快照转换为 sidecar 策略映射。
-fn policy_map_from_tool_exposure(
-    snapshot: &ToolExposureSnapshot,
-) -> BTreeMap<String, SubagentPolicyState> {
-    let mut policy = BTreeMap::new();
-    for id in &snapshot.allowed_tools {
-        policy.insert(id.clone(), SubagentPolicyState::Allow);
+/// Applies a unified prompt-skill policy to the legacy prompt-skill lists.
+/// 将统一提示词技能策略应用到旧提示词技能列表。
+fn apply_prompt_skill_policy(snapshot: &mut PromptSkillSnapshot, policy: CapabilityPolicySnapshot) {
+    snapshot.policy = normalized_policy_snapshot(policy);
+    match snapshot.policy.mode {
+        CapabilityPolicyMode::All => {
+            snapshot.enabled.clear();
+            snapshot.disabled.clear();
+        }
+        CapabilityPolicyMode::AllowOnly => {
+            snapshot.enabled = snapshot.policy.selectors.clone();
+            snapshot.disabled.clear();
+        }
+        CapabilityPolicyMode::DenyOnly => {
+            snapshot.enabled.clear();
+            snapshot.disabled = snapshot.policy.selectors.clone();
+        }
     }
-    for id in &snapshot.disabled_tools {
-        policy.insert(id.clone(), SubagentPolicyState::Deny);
-    }
-    policy
-}
-
-/// Converts the legacy prompt skill snapshot into a sidecar policy map.
-/// 将旧版提示词技能快照转换为 sidecar 策略映射。
-fn policy_map_from_prompt_skills(
-    snapshot: &PromptSkillSnapshot,
-) -> BTreeMap<String, SubagentPolicyState> {
-    let mut policy = BTreeMap::new();
-    for id in &snapshot.enabled {
-        policy.insert(id.clone(), SubagentPolicyState::Allow);
-    }
-    for id in &snapshot.disabled {
-        policy.insert(id.clone(), SubagentPolicyState::Deny);
-    }
-    policy
 }
 
 /// Normalizes one tool exposure snapshot in place.
@@ -1668,12 +1914,139 @@ fn normalize_tool_exposure(snapshot: &mut ToolExposureSnapshot) {
         normalized_string_list(std::mem::take(&mut snapshot.allowed_ai_capabilities));
     snapshot.disabled_ai_capabilities =
         normalized_string_list(std::mem::take(&mut snapshot.disabled_ai_capabilities));
+    if snapshot.policy.mode == CapabilityPolicyMode::All && snapshot.policy.selectors.is_empty() {
+        let (legacy_allowed, legacy_disabled) = legacy_tool_policy_lists_from_exposure(snapshot);
+        let policy = policy_snapshot_from_legacy_lists(legacy_allowed, legacy_disabled);
+        apply_tool_policy_to_exposure(snapshot, policy);
+    } else {
+        let policy = std::mem::take(&mut snapshot.policy);
+        apply_tool_policy_to_exposure(snapshot, policy);
+    }
+}
+
+/// Collects legacy generic, LuaSkills, and MCP tool selectors for policy migration.
+/// 收集旧版通用、LuaSkills 与 MCP 工具选择器以执行策略迁移。
+fn legacy_tool_policy_lists_from_exposure(
+    snapshot: &ToolExposureSnapshot,
+) -> (Vec<String>, Vec<String>) {
+    let mut allowed = snapshot.allowed_tools.clone();
+    let mut disabled = snapshot.disabled_tools.clone();
+    append_legacy_luaskills_policy_selectors(
+        &snapshot.luaskills_overrides,
+        &mut allowed,
+        &mut disabled,
+    );
+    append_legacy_mcp_tool_policy_selectors(
+        &snapshot.mcp_server_overrides,
+        &mut allowed,
+        &mut disabled,
+    );
+    (allowed, disabled)
+}
+
+/// Appends legacy LuaSkills tool selectors from a flexible JSON payload.
+/// 从灵活 JSON 载荷追加旧版 LuaSkills 工具选择器。
+fn append_legacy_luaskills_policy_selectors(
+    value: &Value,
+    allowed: &mut Vec<String>,
+    disabled: &mut Vec<String>,
+) {
+    append_legacy_json_policy_selectors(
+        value,
+        &[
+            "allow",
+            "allowed",
+            "enabled",
+            "include",
+            "tools",
+            "entries",
+            "skills",
+            "luaskills",
+        ],
+        &["deny", "denied", "disabled", "disable", "exclude"],
+        allowed,
+        disabled,
+    );
+}
+
+/// Appends legacy MCP tool selectors while leaving server selectors as advanced compatibility data.
+/// 追加旧版 MCP 工具选择器，同时将服务器选择器保留为高级兼容数据。
+fn append_legacy_mcp_tool_policy_selectors(
+    value: &Value,
+    allowed: &mut Vec<String>,
+    disabled: &mut Vec<String>,
+) {
+    append_legacy_json_policy_selectors(
+        value,
+        &[
+            "allow",
+            "allowed",
+            "enabled",
+            "include",
+            "tools",
+            "mcp_tools",
+        ],
+        &["deny", "denied", "disabled", "disable", "exclude"],
+        allowed,
+        disabled,
+    );
+}
+
+/// Appends string selectors from legacy JSON strings, arrays, or objects.
+/// 从旧版 JSON 字符串、数组或对象追加字符串选择器。
+fn append_legacy_json_policy_selectors(
+    value: &Value,
+    allowed_keys: &[&str],
+    disabled_keys: &[&str],
+    allowed: &mut Vec<String>,
+    disabled: &mut Vec<String>,
+) {
+    match value {
+        Value::String(_) | Value::Array(_) => append_legacy_json_string_values(allowed, value),
+        Value::Object(map) => {
+            for key in allowed_keys {
+                if let Some(value) = map.get(*key) {
+                    append_legacy_json_string_values(allowed, value);
+                }
+            }
+            for key in disabled_keys {
+                if let Some(value) = map.get(*key) {
+                    append_legacy_json_string_values(disabled, value);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Appends string or string-array JSON values into one selector list.
+/// 将字符串或字符串数组 JSON 值追加到选择器列表。
+fn append_legacy_json_string_values(target: &mut Vec<String>, value: &Value) {
+    match value {
+        Value::String(text) => {
+            if let Some(value) = non_empty_text(text) {
+                target.push(value.to_string());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                if let Value::String(text) = item {
+                    if let Some(value) = non_empty_text(text) {
+                        target.push(value.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Returns whether any field in a tool exposure snapshot carries an explicit override.
 /// 返回工具可见性快照中是否存在任何显式覆盖字段。
 fn tool_exposure_snapshot_has_override(snapshot: &ToolExposureSnapshot) -> bool {
-    !snapshot.allowed_tools.is_empty()
+    snapshot.policy.mode != CapabilityPolicyMode::All
+        || !snapshot.policy.selectors.is_empty()
+        || !snapshot.allowed_tools.is_empty()
         || !snapshot.disabled_tools.is_empty()
         || !snapshot.allowed_ai_capabilities.is_empty()
         || !snapshot.disabled_ai_capabilities.is_empty()
@@ -1681,11 +2054,41 @@ fn tool_exposure_snapshot_has_override(snapshot: &ToolExposureSnapshot) -> bool 
         || !snapshot.mcp_server_overrides.is_null()
 }
 
+/// Returns whether one legacy tool exposure payload is empty for sidecar serialization.
+/// 返回旧版工具可见性载荷在 sidecar 序列化中是否为空。
+fn tool_exposure_snapshot_is_empty(snapshot: &ToolExposureSnapshot) -> bool {
+    snapshot.policy.mode == CapabilityPolicyMode::All
+        && snapshot.policy.selectors.is_empty()
+        && snapshot.allowed_tools.is_empty()
+        && snapshot.disabled_tools.is_empty()
+        && snapshot.allowed_ai_capabilities.is_empty()
+        && snapshot.disabled_ai_capabilities.is_empty()
+        && snapshot.luaskills_overrides.is_null()
+        && snapshot.mcp_server_overrides.is_null()
+}
+
 /// Normalizes one prompt skill snapshot in place.
 /// 原地规范化一个提示词技能快照。
 fn normalize_prompt_skills(snapshot: &mut PromptSkillSnapshot) {
     snapshot.enabled = normalized_string_list(std::mem::take(&mut snapshot.enabled));
     snapshot.disabled = normalized_string_list(std::mem::take(&mut snapshot.disabled));
+    if snapshot.policy.mode == CapabilityPolicyMode::All && snapshot.policy.selectors.is_empty() {
+        let policy =
+            policy_snapshot_from_legacy_lists(snapshot.enabled.clone(), snapshot.disabled.clone());
+        apply_prompt_skill_policy(snapshot, policy);
+    } else {
+        let policy = std::mem::take(&mut snapshot.policy);
+        apply_prompt_skill_policy(snapshot, policy);
+    }
+}
+
+/// Returns whether one legacy prompt skill payload is empty for sidecar serialization.
+/// 返回旧版提示词技能载荷在 sidecar 序列化中是否为空。
+fn prompt_skill_snapshot_is_empty(snapshot: &PromptSkillSnapshot) -> bool {
+    snapshot.policy.mode == CapabilityPolicyMode::All
+        && snapshot.policy.selectors.is_empty()
+        && snapshot.enabled.is_empty()
+        && snapshot.disabled.is_empty()
 }
 
 /// Normalizes string lists by trimming empties and preserving first occurrence order.
@@ -1701,6 +2104,32 @@ fn normalized_string_list(values: Vec<String>) -> Vec<String> {
         }
     }
     normalized
+}
+
+/// Normalizes one selector policy snapshot.
+/// 规范化单个选择器策略快照。
+fn normalized_policy_snapshot(mut policy: CapabilityPolicySnapshot) -> CapabilityPolicySnapshot {
+    policy.selectors = normalized_string_list(std::mem::take(&mut policy.selectors));
+    if policy.mode == CapabilityPolicyMode::All {
+        policy.selectors.clear();
+    }
+    policy
+}
+
+/// Builds a normalized lookup set for selector conflict removal.
+/// 构建用于移除选择器冲突的规范化查找集合。
+fn normalized_string_set(values: &[String]) -> std::collections::BTreeSet<String> {
+    values
+        .iter()
+        .map(|value| normalized_selector_key(value))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+/// Builds the canonical comparison key for one selector.
+/// 构建单个选择器的规范化比较键。
+fn normalized_selector_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 /// Returns a non-empty trimmed owned string.
@@ -1749,18 +2178,49 @@ fn source_key_for_definition(
     }
 }
 
-/// Returns the category id for one canonical definition id.
-/// 返回单个规范定义标识的分类标识。
-fn category_id_for_definition_id(id: &str) -> Option<String> {
-    id.rsplit_once('/')
-        .map(|(category, _)| category.to_string())
-        .filter(|category| !category.is_empty())
+/// Returns the display category id for one canonical agent id.
+/// 返回单个规范智能体标识对应的展示分类标识。
+pub fn display_subagent_category_id(id: &str, package_id: Option<&str>) -> Option<String> {
+    let package_id = package_id.map(str::trim).filter(|value| !value.is_empty());
+    let relative_id = package_id
+        .and_then(|package_id| id.strip_prefix(&format!("{package_id}/")))
+        .unwrap_or(id);
+    let (top_level_category, _) = relative_id.split_once('/')?;
+    let top_level_category = top_level_category.trim();
+    if top_level_category.is_empty() {
+        return None;
+    }
+    package_id
+        .map(|package_id| format!("{package_id}/{top_level_category}"))
+        .or_else(|| Some(top_level_category.to_string()))
 }
 
 /// Returns one category id for a directory relative to the catalog root.
 /// 返回一个目录相对目录根的分类标识。
 fn category_id_for_directory(base_root: &Path, directory: &Path) -> Option<String> {
     relative_path_id(base_root, directory)
+}
+
+/// Returns whether one directory is a first-level display category.
+/// 返回一个目录是否为第一层展示分类目录。
+fn directory_is_top_level_category(base_root: &Path, directory: &Path) -> bool {
+    let Ok(relative) = directory.strip_prefix(base_root) else {
+        return false;
+    };
+    let mut normal_count = 0usize;
+    for component in relative.components() {
+        let Component::Normal(value) = component else {
+            return false;
+        };
+        if value.to_str().is_none_or(|part| part.trim().is_empty()) {
+            return false;
+        }
+        normal_count += 1;
+        if normal_count > 1 {
+            return false;
+        }
+    }
+    normal_count == 1
 }
 
 /// Returns a canonical id for a file relative to one catalog root.
@@ -1793,6 +2253,35 @@ fn path_to_canonical_id(path: &Path) -> Option<String> {
         parts.push(part.to_string());
     }
     (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// Builds a safe relative directory path from a canonical category id.
+/// 从规范分类标识构建安全相对目录路径。
+fn safe_relative_directory_path(id: &str) -> Result<PathBuf, SubagentCatalogLoadError> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(SubagentCatalogLoadError {
+            path: PathBuf::new(),
+            message: format!("Invalid subagent category id `{id}`."),
+        });
+    }
+    let mut path = PathBuf::new();
+    for part in id.split('/') {
+        let part = part.trim();
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.contains('\\')
+            || part.contains(':')
+        {
+            return Err(SubagentCatalogLoadError {
+                path: PathBuf::from(id),
+                message: format!("Invalid subagent category id `{id}`."),
+            });
+        }
+        path.push(part);
+    }
+    Ok(path)
 }
 
 /// Builds a safe relative file path from a canonical id and extension.
@@ -2114,20 +2603,20 @@ struct SubagentDefinitionSidecar {
     provider_model: ProviderModelSnapshot,
     /// Legacy tool exposure snapshot.
     /// 旧版工具可见性快照。
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "tool_exposure_snapshot_is_empty")]
     tool_exposure: ToolExposureSnapshot,
-    /// Three-state tool policy map keyed by tool id.
-    /// 按工具标识索引的三态工具策略映射。
-    #[serde(default)]
-    tool_policy: BTreeMap<String, SubagentPolicyState>,
+    /// Unified tool policy, compatible with the legacy three-state map.
+    /// 统一工具策略，兼容旧版三态映射。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_policy: Option<SubagentToolPolicySidecar>,
     /// Legacy prompt skill snapshot.
     /// 旧版提示词技能快照。
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "prompt_skill_snapshot_is_empty")]
     prompt_skills: PromptSkillSnapshot,
-    /// Three-state prompt skill policy map keyed by skill id.
-    /// 按技能标识索引的三态提示词技能策略映射。
-    #[serde(default)]
-    prompt_skill_policy: BTreeMap<String, SubagentPolicyState>,
+    /// Unified prompt skill policy, compatible with the legacy three-state map.
+    /// 统一提示词技能策略，兼容旧版三态映射。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_skill_policy: Option<SubagentPromptSkillPolicySidecar>,
     /// Context compaction override snapshot.
     /// 上下文压缩覆盖快照。
     #[serde(default)]
@@ -2176,6 +2665,114 @@ struct SubagentDefinitionSidecar {
     /// 可选扩展载荷。
     #[serde(default)]
     extra: Option<Value>,
+}
+
+/// Unified tool policy sidecar with legacy map compatibility.
+/// 兼容旧版映射的统一工具策略 sidecar。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+enum SubagentToolPolicySidecar {
+    /// Modern mode-plus-list tool policy.
+    /// 新版规则加列表工具策略。
+    Modern(SubagentToolPolicyObject),
+    /// Legacy per-tool state map.
+    /// 旧版逐工具状态映射。
+    Legacy(BTreeMap<String, SubagentPolicyState>),
+}
+
+impl SubagentToolPolicySidecar {
+    /// Builds a sidecar policy from a normalized snapshot.
+    /// 从规范化快照构建 sidecar 策略。
+    fn from_snapshot(snapshot: &CapabilityPolicySnapshot) -> Option<Self> {
+        if snapshot.mode == CapabilityPolicyMode::All && snapshot.selectors.is_empty() {
+            return None;
+        }
+        Some(Self::Modern(SubagentToolPolicyObject {
+            mode: snapshot.mode,
+            tools: snapshot.selectors.clone(),
+        }))
+    }
+
+    /// Converts this sidecar policy into the shared snapshot shape.
+    /// 将当前 sidecar 策略转换为共享快照结构。
+    fn into_snapshot(self) -> CapabilityPolicySnapshot {
+        match self {
+            Self::Modern(policy) => CapabilityPolicySnapshot {
+                mode: policy.mode,
+                selectors: policy.tools,
+            },
+            Self::Legacy(policy) => policy_snapshot_from_state_map(&policy),
+        }
+    }
+}
+
+/// Modern tool policy object serialized to YAML.
+/// 序列化到 YAML 的新版工具策略对象。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubagentToolPolicyObject {
+    /// Tool policy mode.
+    /// 工具策略模式。
+    #[serde(default)]
+    mode: CapabilityPolicyMode,
+    /// Tool selectors used by the mode.
+    /// 当前模式使用的工具选择器。
+    #[serde(default, alias = "selectors")]
+    tools: Vec<String>,
+}
+
+/// Unified prompt-skill policy sidecar with legacy map compatibility.
+/// 兼容旧版映射的统一提示词技能策略 sidecar。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+enum SubagentPromptSkillPolicySidecar {
+    /// Modern mode-plus-list prompt skill policy.
+    /// 新版规则加列表提示词技能策略。
+    Modern(SubagentPromptSkillPolicyObject),
+    /// Legacy per-skill state map.
+    /// 旧版逐技能状态映射。
+    Legacy(BTreeMap<String, SubagentPolicyState>),
+}
+
+impl SubagentPromptSkillPolicySidecar {
+    /// Builds a sidecar policy from a normalized snapshot.
+    /// 从规范化快照构建 sidecar 策略。
+    fn from_snapshot(snapshot: &CapabilityPolicySnapshot) -> Option<Self> {
+        if snapshot.mode == CapabilityPolicyMode::All && snapshot.selectors.is_empty() {
+            return None;
+        }
+        Some(Self::Modern(SubagentPromptSkillPolicyObject {
+            mode: snapshot.mode,
+            skills: snapshot.selectors.clone(),
+        }))
+    }
+
+    /// Converts this sidecar policy into the shared snapshot shape.
+    /// 将当前 sidecar 策略转换为共享快照结构。
+    fn into_snapshot(self) -> CapabilityPolicySnapshot {
+        match self {
+            Self::Modern(policy) => CapabilityPolicySnapshot {
+                mode: policy.mode,
+                selectors: policy.skills,
+            },
+            Self::Legacy(policy) => policy_snapshot_from_state_map(&policy),
+        }
+    }
+}
+
+/// Modern prompt skill policy object serialized to YAML.
+/// 序列化到 YAML 的新版提示词技能策略对象。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubagentPromptSkillPolicyObject {
+    /// Prompt skill policy mode.
+    /// 提示词技能策略模式。
+    #[serde(default)]
+    mode: CapabilityPolicyMode,
+    /// Prompt skill selectors used by the mode.
+    /// 当前模式使用的提示词技能选择器。
+    #[serde(default, alias = "selectors", alias = "tools")]
+    skills: Vec<String>,
 }
 
 /// Three-state policy value for tools and prompt skills.
@@ -2279,10 +2876,10 @@ mod tests {
         assert_eq!(definition.name, "Code Reviewer");
     }
 
-    /// Verifies user definitions override system definitions by string id.
-    /// 验证用户定义按字符串标识覆盖系统定义。
+    /// Verifies user definitions cannot replace system definitions by string id.
+    /// 验证用户定义不能按字符串标识替换系统定义。
     #[test]
-    fn user_definition_overrides_system_definition_by_id() {
+    fn user_definition_conflict_preserves_system_definition_by_id() {
         let root = std::env::temp_dir().join(format!(
             "vulcan-subagent-catalog-test-{}",
             std::process::id()
@@ -2310,9 +2907,15 @@ mod tests {
             .find(|definition| definition.id == "reviewer")
             .expect("merged definition");
 
-        assert_eq!(definition.name, "User Reviewer");
-        assert!(!definition.enabled);
-        assert!(catalog.enabled_definition("reviewer").is_none());
+        assert_eq!(definition.name, "System Reviewer");
+        assert!(definition.enabled);
+        assert!(catalog.enabled_definition("reviewer").is_some());
+        assert!(
+            catalog
+                .errors
+                .iter()
+                .any(|error| error.message.contains("conflicts with an existing system"))
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2471,6 +3074,7 @@ mod tests {
             .expect("system definition");
 
         assert!(!definition.enabled);
+        assert_eq!(definition.source.scope, SubagentDefinitionScope::System);
         assert_eq!(
             definition
                 .origin
@@ -2552,6 +3156,64 @@ mod tests {
 
         assert!(catalog.enabled_definition("reviewer").is_none());
         assert!(catalog.enabled_definition("engineering/reviewer").is_some());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies nested directories keep full ids while filtering under the top category.
+    /// 验证深层目录保留完整标识但归入顶层分类筛选。
+    #[test]
+    fn nested_definition_uses_top_level_display_category() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-nested-category-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let system_root = root.join("system");
+        let nested_root = system_root.join("game-development").join("blender");
+        fs::create_dir_all(&nested_root).expect("nested category root");
+        fs::write(
+            system_root.join("game-development").join("_category.yaml"),
+            "name: Game Development\nemoji: G\ncolor: purple\n",
+        )
+        .expect("top category sidecar");
+        fs::write(
+            nested_root.join("_category.yaml"),
+            "name: Blender\nemoji: B\ncolor: orange\n",
+        )
+        .expect("nested category sidecar");
+        fs::write(
+            nested_root.join("asset-reviewer.md"),
+            "---\nname: Asset Reviewer\n---\nReview game assets.",
+        )
+        .expect("nested definition");
+
+        let catalog = load_subagent_catalog_from_roots(system_root, PathBuf::new());
+        let definition = catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "game-development/blender/asset-reviewer")
+            .expect("nested definition should load");
+
+        assert_eq!(
+            definition.source.category_id.as_deref(),
+            Some("game-development")
+        );
+        assert!(
+            catalog
+                .categories
+                .iter()
+                .any(|category| category.id == "game-development")
+        );
+        assert!(
+            catalog
+                .categories
+                .iter()
+                .all(|category| category.id != "game-development/blender")
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2641,6 +3303,44 @@ mod tests {
                 .expect_err("path-like ids should be rejected");
             assert!(error.message.contains("Invalid subagent definition id"));
         }
+    }
+
+    /// Verifies catalog loading creates only top-level user category directories.
+    /// 验证目录加载只创建用户顶层分类目录。
+    #[test]
+    fn load_catalog_creates_user_category_directories_from_system_catalog() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-category-sync-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let system_root = root.join("system");
+        let user_root = root.join("user");
+        fs::create_dir_all(system_root.join("engineering").join("frontend"))
+            .expect("system nested category root");
+        fs::write(
+            system_root.join("engineering").join("reviewer.md"),
+            "---\nname: Reviewer\n---\nReview.",
+        )
+        .expect("system definition");
+
+        let catalog = load_subagent_catalog_from_roots(system_root, user_root.clone());
+
+        assert!(catalog.errors.is_empty());
+        assert!(user_root.join("definitions").is_dir());
+        assert!(user_root.join("definitions").join("engineering").is_dir());
+        assert!(
+            !user_root
+                .join("definitions")
+                .join("engineering")
+                .join("frontend")
+                .exists()
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Verifies persisted user definitions roundtrip by the same string id.

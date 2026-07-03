@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
 use vulcan_session_core::{
-    ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
+    CapabilityPolicyMode, ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
 };
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind};
@@ -109,9 +109,7 @@ pub(crate) fn filter_resolved_tool_definitions_by_tool_exposure(
     definitions: &mut Vec<ResolvedToolDefinition>,
     tool_exposure: &ExecutionToolExposureSelection,
 ) {
-    definitions.retain(|definition| {
-        resolved_tool_definition_is_visible(definition, &tool_exposure.selectors)
-    });
+    definitions.retain(|definition| resolved_tool_definition_is_visible(definition, tool_exposure));
 }
 
 /// Applies request-scoped public-tool selectors to descriptors and definitions together.
@@ -126,7 +124,7 @@ pub(crate) fn filter_resolved_tool_set_by_tool_exposure(
             descriptor.name.as_str(),
             descriptor.description.as_str(),
             descriptor.source,
-            &tool_exposure.selectors,
+            tool_exposure,
         )
     });
     filter_resolved_tool_definitions_by_tool_exposure(
@@ -201,9 +199,10 @@ impl ToolExposureSelectorState {
     pub(crate) fn from_snapshot(snapshot: &ToolExposureSnapshot) -> Self {
         let luaskills_override = lua_selector_override_from_value(&snapshot.luaskills_overrides);
         let mcp_override = mcp_selector_override_from_value(&snapshot.mcp_server_overrides);
+        let (policy_allowed, policy_disabled) = selector_sets_from_policy(snapshot);
         Self {
-            global_allowed: normalized_tool_selector_set(&snapshot.allowed_tools),
-            global_disabled: normalized_tool_selector_set(&snapshot.disabled_tools),
+            global_allowed: policy_allowed,
+            global_disabled: policy_disabled,
             luaskills_allowed: normalized_tool_selector_set(&luaskills_override.allowed),
             luaskills_disabled: normalized_tool_selector_set(&luaskills_override.disabled),
             mcp_tool_allowed: normalized_tool_selector_set(&mcp_override.allowed),
@@ -237,6 +236,30 @@ impl ToolExposureSelectorState {
     /// 返回当前请求是否启用了 MCP 专属允许选择器。
     fn has_mcp_allow(&self) -> bool {
         !self.mcp_tool_allowed.is_empty() || !self.mcp_server_allowed.is_empty()
+    }
+}
+
+/// Builds global allow and deny selector sets from the unified policy or legacy lists.
+/// 从统一策略或旧版列表构建全局允许与禁用选择器集合。
+fn selector_sets_from_policy(
+    snapshot: &ToolExposureSnapshot,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    if snapshot.policy.mode == CapabilityPolicyMode::All && snapshot.policy.selectors.is_empty() {
+        return (
+            normalized_tool_selector_set(&snapshot.allowed_tools),
+            normalized_tool_selector_set(&snapshot.disabled_tools),
+        );
+    }
+    match snapshot.policy.mode {
+        CapabilityPolicyMode::All => (BTreeSet::new(), BTreeSet::new()),
+        CapabilityPolicyMode::AllowOnly => (
+            normalized_tool_selector_set(&snapshot.policy.selectors),
+            BTreeSet::new(),
+        ),
+        CapabilityPolicyMode::DenyOnly => (
+            BTreeSet::new(),
+            normalized_tool_selector_set(&snapshot.policy.selectors),
+        ),
     }
 }
 
@@ -522,14 +545,14 @@ fn mcp_tool_binding_matches_any(
 /// 返回最终解析出的公开工具在请求选择器之后是否仍然可见。
 fn resolved_tool_definition_is_visible(
     definition: &ResolvedToolDefinition,
-    selectors: &ToolExposureSelectorState,
+    tool_exposure: &ExecutionToolExposureSelection,
 ) -> bool {
     vulcan_tool_descriptor_is_visible(
         definition.descriptor.id.as_str(),
         definition.descriptor.name.as_str(),
         definition.descriptor.description.as_str(),
         definition.descriptor.source,
-        selectors,
+        tool_exposure,
     )
 }
 
@@ -540,8 +563,9 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
     name: &str,
     description: &str,
     source: VulcanToolSourceKind,
-    selectors: &ToolExposureSelectorState,
+    tool_exposure: &ExecutionToolExposureSelection,
 ) -> bool {
+    let selectors = &tool_exposure.selectors;
     if source == VulcanToolSourceKind::Native && native_tool_id_is_universal(id) {
         return true;
     }
@@ -559,7 +583,8 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
         VulcanToolSourceKind::LuaSkills => selectors.has_luaskills_allow(),
         VulcanToolSourceKind::Mcp => selectors.has_mcp_allow(),
         VulcanToolSourceKind::Native => {
-            selectors.has_luaskills_allow()
+            (!tool_exposure.luaskills_dispatch_tools.is_empty()
+                || !tool_exposure.luaskill_prompt_entries.is_empty())
                 && (id == LUASKILL_HELP_TOOL_NAME || id == CALL_LUASKILL_TOOL_NAME)
         }
     }

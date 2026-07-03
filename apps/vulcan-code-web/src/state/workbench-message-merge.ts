@@ -116,6 +116,7 @@ export function applyAppendMessageBodyDelta(
 ): WorkbenchSnapshot {
   const messages = appendMessageBodyDeltaToMessages(workbench.messages, delta);
   const runPhase = delta.runPhase ?? undefined;
+  const subagentNavigationProjection = updateWorkbenchSubagentNavigationRunPhase(workbench, delta.conversationId, runPhase);
   return {
     ...workbench,
     conversations: workbench.conversations.map((conversation) => {
@@ -131,7 +132,7 @@ export function applyAppendMessageBodyDelta(
         lastUpdatedLabel: "now",
       };
     }),
-    subagentNavigation: updateSubagentNavigationRunPhase(workbench.subagentNavigation, delta.conversationId, runPhase),
+    ...subagentNavigationProjection,
     messages,
   };
 }
@@ -143,6 +144,7 @@ export function applyConversationMessagesPatchedDelta(
   delta: ConversationMessagesPatchedDelta,
 ): WorkbenchSnapshot {
   const runPhase = delta.runPhase ?? undefined;
+  const subagentNavigationProjection = updateWorkbenchSubagentNavigationRunPhase(workbench, delta.conversationId, runPhase);
   return {
     ...workbench,
     conversations: runPhase
@@ -160,7 +162,7 @@ export function applyConversationMessagesPatchedDelta(
         };
       })
       : workbench.conversations,
-    subagentNavigation: updateSubagentNavigationRunPhase(workbench.subagentNavigation, delta.conversationId, runPhase),
+    ...subagentNavigationProjection,
     messages: patchConversationMessages(workbench.messages, delta),
   };
 }
@@ -413,6 +415,21 @@ export function updateSubagentNavigationRunPhase(
       task.taskId === conversationId
         ? { ...task, isRunning: running, runState }
         : task
+    )),
+  };
+}
+
+// updateWorkbenchSubagentNavigationRunPhase mirrors child run-phase changes into selected and cached navigation projections.
+// updateWorkbenchSubagentNavigationRunPhase 将子任务运行阶段同步到当前与缓存的子代理导航投影。
+export function updateWorkbenchSubagentNavigationRunPhase(
+  workbench: WorkbenchSnapshot,
+  conversationId: string,
+  runPhase?: string,
+): Pick<WorkbenchSnapshot, "subagentNavigation" | "subagentNavigationByConversation"> {
+  return {
+    subagentNavigation: updateSubagentNavigationRunPhase(workbench.subagentNavigation, conversationId, runPhase),
+    subagentNavigationByConversation: workbench.subagentNavigationByConversation?.map((navigation) => (
+      updateSubagentNavigationRunPhase(navigation, conversationId, runPhase) ?? navigation
     )),
   };
 }

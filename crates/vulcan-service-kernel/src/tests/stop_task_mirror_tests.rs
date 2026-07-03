@@ -71,8 +71,14 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     assert!(messages.iter().any(|message| {
         message.visible && message.title == "执行已停止" && message.body.contains("当前 AI 调用")
     }));
-    assert!(messages.iter().any(|message| {
-        !message.visible && message.record_kind == SessionMessageRecordKind::TurnTerminated
+    let runtime_records = &workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .expect("runtime state should exist")
+        .conversation_state
+        .records;
+    assert!(runtime_records.iter().any(|record| {
+        !record.visible && record.record_kind == SessionMessageRecordKind::TurnTerminated
     }));
     let turn_stats = messages
         .iter()

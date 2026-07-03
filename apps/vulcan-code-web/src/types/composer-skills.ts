@@ -310,6 +310,12 @@ export interface SubagentDefinitionSummary {
   // Optional last-updated timestamp string.
   // 可选最近更新时间戳字符串。
   updatedAt?: string | null;
+  // Unified tool policy mode.
+  // 统一工具策略模式。
+  toolPolicyMode: CapabilityPolicyMode;
+  // Unified tool policy selectors.
+  // 统一工具策略选择器。
+  toolPolicyTools: string[];
   // Number of explicitly allowed host tools.
   // 显式允许的宿主工具数量。
   allowedToolCount: number;
@@ -322,6 +328,12 @@ export interface SubagentDefinitionSummary {
   // Number of disabled prompt skills declared by this definition.
   // 当前定义声明禁用的提示词技能数量。
   disabledPromptSkillCount: number;
+  // Unified prompt skill policy mode.
+  // 统一提示词技能策略模式。
+  promptSkillPolicyMode: CapabilityPolicyMode;
+  // Unified prompt skill policy selectors.
+  // 统一提示词技能策略选择器。
+  promptSkillPolicySkills: string[];
   // Optional base system prompt.
   // 可选基础系统提示词。
   systemPrompt?: string | null;
@@ -357,6 +369,10 @@ export interface SubagentDefinitionSummary {
   capabilityDiagnostics: string[];
 }
 
+// CapabilityPolicyMode describes how a selector list affects visible capabilities.
+// CapabilityPolicyMode 描述选择器列表如何影响可见能力。
+export type CapabilityPolicyMode = "all" | "allow_only" | "deny_only";
+
 // SubagentDefinitionLocaleSummary describes localized agent display metadata.
 // SubagentDefinitionLocaleSummary 描述智能体本地化展示元数据。
 export interface SubagentDefinitionLocaleSummary {
@@ -383,6 +399,20 @@ export interface SubagentOriginSummary {
   // Optional source URL.
   // 可选来源链接。
   url?: string | null;
+}
+
+// SubagentDefinitionEnabledUpdate describes one lightweight enabled-state update.
+// SubagentDefinitionEnabledUpdate 描述单个轻量启停状态更新。
+export interface SubagentDefinitionEnabledUpdate {
+  // Stable agent id that was updated.
+  // 已更新的稳定智能体标识。
+  agentId: string;
+  // Updated enabled state.
+  // 更新后的启停状态。
+  enabled: boolean;
+  // Updated catalog notice.
+  // 更新后的目录提示。
+  notice: string;
 }
 
 // SubagentDefinitionSaveRequest describes one editable agent definition form submission.
@@ -430,6 +460,12 @@ export interface SubagentDefinitionSaveRequest {
   // Explicitly disabled host tool names.
   // 显式禁用的宿主工具名称。
   disabledTools: string[];
+  // Unified tool policy mode.
+  // 统一工具策略模式。
+  toolPolicyMode?: CapabilityPolicyMode | null;
+  // Unified tool policy selectors.
+  // 统一工具策略选择器。
+  toolPolicyTools?: string[];
   // Explicitly allowed AI capability selectors.
   // 显式允许的 AI 能力选择器。
   allowedAiCapabilities?: string[];
@@ -448,6 +484,12 @@ export interface SubagentDefinitionSaveRequest {
   // Explicitly disabled prompt skill names.
   // 显式禁用的提示词技能名称。
   disabledPromptSkills: string[];
+  // Unified prompt skill policy mode.
+  // 统一提示词技能策略模式。
+  promptSkillPolicyMode?: CapabilityPolicyMode | null;
+  // Unified prompt skill policy selectors.
+  // 统一提示词技能策略选择器。
+  promptSkillPolicySkills?: string[];
 }
 
 // SubagentCategorySummary describes one parsed agent catalog category.
