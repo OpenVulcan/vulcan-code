@@ -74,9 +74,11 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
             &ProviderConfigurationFile::default(),
         ),
         agent_skills: agent_skills_catalog_summary(&ProviderConfigurationFile::default()),
+        subagent_catalog: subagent_catalog_summary(),
         settings: settings(),
         providers: providers(&ProviderConfigurationFile::default()),
         mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
+        mcp_tools: Vec::new(),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
         thinking_display_mode: workbench_thinking_display_mode(
             &ProviderConfigurationFile::default(),
@@ -115,8 +117,8 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
             .enumerate()
             .map(|(index, message)| {
                 log_entry(&format!("fallback-{index}"), "info", "service", message)
-        })
-        .collect(),
+            })
+            .collect(),
         context_injection: None,
         context_injection_by_conversation: Vec::new(),
         context_usage: None,

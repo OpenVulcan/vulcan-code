@@ -22,6 +22,7 @@ pub(super) fn build_task_invocation_result(
         "provider_turns_executed": outcome.provider_turns_executed,
         "tool_calls_processed": outcome.tool_calls_processed,
         "final_assistant_message_id": outcome.final_assistant_message_id.clone(),
+        "debug": subagent_runtime_debug_payload(&invocation.invocation_config),
         "result": outcome.final_output_text.clone(),
     });
     let payload = build_task_host_payload(
@@ -55,6 +56,7 @@ pub(super) fn build_spawn_agent_invocation_result(
         "display_title": invocation.display_title.clone(),
         "execution_status": execution_status,
         "message": "Subagent scheduled.",
+        "debug": subagent_runtime_debug_payload(&invocation.invocation_config),
     });
     let payload = build_task_host_payload(
         invocation,

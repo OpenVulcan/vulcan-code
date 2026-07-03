@@ -676,6 +676,8 @@ fn subagent_completion_queues_session_mailbox_without_wait_agent() {
     .expect("mailbox prompt should read")
     .expect("mailbox prompt should exist");
     assert!(mailbox_prompt.contains("生成完成：a.jpg"));
+    assert!(mailbox_prompt.contains("<message_type>FINAL_ANSWER</message_type>"));
+    assert!(!mailbox_prompt.contains("<subagent_mailbox_event>"));
     let guard = state.lock().expect("state lock");
     let runtime_state = guard
         .workspace_snapshot
@@ -690,7 +692,7 @@ fn subagent_completion_queues_session_mailbox_without_wait_agent() {
     let mailbox_inputs = kernel.input_queue().get_mailbox_input();
     assert_eq!(mailbox_inputs.len(), 1);
     assert_eq!(mailbox_inputs[0].kind, TurnInputKind::SubagentMessage);
-    assert!(mailbox_inputs[0].trigger_turn);
+    assert!(!mailbox_inputs[0].trigger_turn);
     assert_eq!(
         mailbox_inputs[0].payload["mailbox_event"]["payload"]["result"],
         "生成完成：a.jpg"
@@ -731,7 +733,7 @@ fn subagent_completion_queues_session_mailbox_during_wait_agent() {
         .get(&parent_session_id)
         .expect("parent session kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
 /// Verifies child completion mailbox input queues after wait_agent coordination ends.
@@ -766,7 +768,7 @@ fn subagent_completion_queues_session_mailbox_after_completed_wait_agent() {
         .get(&parent_session_id)
         .expect("parent session kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
 /// Verifies child completion mailbox input no longer depends on legacy wait-agent selectors.
@@ -796,7 +798,7 @@ fn subagent_completion_after_completed_wait_agent_allows_any_agent() {
         .get(&parent_session_id)
         .expect("kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
 /// Verifies child-agent usage segments are drained once before parent turn statistics aggregate them.

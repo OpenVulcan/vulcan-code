@@ -18,6 +18,7 @@ impl TaskRuntime {
             parent_input_activity_sessions: RwLock::new(BTreeSet::new()),
             agent_inboxes: RwLock::new(HashMap::new()),
             subagent_registry: RwLock::new(SubagentRegistry::new()),
+            subagent_catalog: RwLock::new(SubagentCatalog::default()),
             task_session_store_roots: RwLock::new(HashMap::new()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
         }
@@ -102,6 +103,63 @@ impl TaskRuntime {
             .read()
             .map_err(|_| String::from("The subagent registry is locked and cannot be read."))
             .map(|registry| registry.clone())
+    }
+
+    /// Replaces the merged subagent catalog used by future spawn_agent calls.
+    /// 替换后续 spawn_agent 调用使用的合并子代理目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `catalog` is the latest merged catalog from system and user roots.
+    /// `catalog` 是来自系统根与用户根的最新合并目录。
+    pub fn replace_subagent_catalog(&self, catalog: SubagentCatalog) -> Result<(), String> {
+        self.subagent_catalog
+            .write()
+            .map_err(|_| String::from("The subagent catalog is locked and cannot be updated."))?
+            .clone_from(&catalog);
+        Ok(())
+    }
+
+    /// Returns a clone of the merged subagent catalog.
+    /// 返回合并子代理目录的克隆快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A catalog snapshot that callers can inspect without holding runtime locks.
+    /// 调用方可在不持有运行时锁的情况下检查的目录快照。
+    pub fn subagent_catalog_snapshot(&self) -> Result<SubagentCatalog, String> {
+        self.subagent_catalog
+            .read()
+            .map_err(|_| String::from("The subagent catalog is locked and cannot be read."))
+            .map(|catalog| catalog.clone())
+    }
+
+    /// Resolves one enabled catalog definition by string id.
+    /// 按字符串标识解析一个已启用目录定义。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `agent_id` is the model-visible catalog id, usually a Markdown file stem.
+    /// `agent_id` 是模型可见目录标识，通常为 Markdown 文件 stem。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The enabled definition or an explicit error.
+    /// 已启用定义或显式错误。
+    pub fn enabled_subagent_definition(
+        &self,
+        agent_id: &str,
+    ) -> Result<SubagentDefinition, String> {
+        self.subagent_catalog
+            .read()
+            .map_err(|_| String::from("The subagent catalog is locked and cannot be read."))?
+            .enabled_definition(agent_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Subagent definition `{agent_id}` is not enabled or does not exist in the catalog."
+                )
+            })
     }
 
     /// Registers the file-domain root used by TaskSession artifacts under one root main session.

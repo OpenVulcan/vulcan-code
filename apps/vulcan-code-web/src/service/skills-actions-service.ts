@@ -1,5 +1,6 @@
 import type {
   AgentSkillsCatalogSummary,
+  SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
 } from "@/types";
 import {
@@ -25,6 +26,12 @@ function luaSkillRegistrationLabel(registrationState: string): string {
     return "Implicit";
   }
   return "Disabled";
+}
+
+// browserPreviewAgentDefinitionPath builds the user definition path shown by browser fallback data.
+// browserPreviewAgentDefinitionPath 构建浏览器预览数据展示的用户定义路径。
+function browserPreviewAgentDefinitionPath(userRoot: string, agentId: string, extension: "md" | "yaml"): string {
+  return `${userRoot}/definitions/${agentId}.${extension}`;
 }
 
 // refreshLuaSkillsCatalog refreshes the Lua Skills catalog through the local service.
@@ -127,6 +134,179 @@ export async function refreshAgentSkillsCatalog(): Promise<WorkbenchSnapshot> {
     return browserFallbackSnapshot();
   }
   return serviceClient.request<WorkbenchSnapshot>("service_refresh_agent_skills_catalog");
+}
+
+// refreshSubagentCatalog refreshes subagent and expert definitions through the local service.
+// refreshSubagentCatalog 通过本地服务刷新子代理与专家定义。
+export async function refreshSubagentCatalog(): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    return browserFallbackSnapshot();
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_refresh_subagent_catalog");
+}
+
+// openSubagentUserDirectory opens the user-owned agent definition directory.
+// openSubagentUserDirectory 打开用户拥有的智能体定义目录。
+export async function openSubagentUserDirectory(): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      snapshot.subagentCatalog.notice = `Browser preview user agent directory: ${snapshot.subagentCatalog.userRoot}`;
+    });
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_open_subagent_user_directory");
+}
+
+// saveSubagentDefinition persists one editable agent definition.
+// saveSubagentDefinition 持久化单个可编辑智能体定义。
+export async function saveSubagentDefinition(definition: SubagentDefinitionSaveRequest): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const targetAgentId = browserPreviewTargetAgentId(definition);
+      const originalAgentId = definition.originalAgentId?.trim() || definition.agentId;
+      const existingIndex = snapshot.subagentCatalog.definitions.findIndex((item) => item.agentId === originalAgentId);
+      const existingDefinition = existingIndex >= 0 ? snapshot.subagentCatalog.definitions[existingIndex] : undefined;
+      const locales = definition.locales ?? {};
+      const nextDefinition = {
+        agentId: targetAgentId,
+        name: preferredBrowserPreviewLocaleField(locales, "name") ?? (definition.name.trim() || targetAgentId),
+        description: preferredBrowserPreviewLocaleField(locales, "description") ?? definition.description ?? null,
+        locales,
+        emoji: browserPreviewDefaultedTextPatch(definition.emoji, existingDefinition?.emoji, "🤖"),
+        color: browserPreviewDefaultedTextPatch(definition.color, existingDefinition?.color, "gray"),
+        vibe: browserPreviewOptionalTextPatch(definition.vibe, existingDefinition?.vibe ?? null),
+        sourceKey: `user:${targetAgentId}`,
+        categoryId: targetAgentId.includes("/") ? targetAgentId.split("/").slice(0, -1).join("/") : null,
+        packageId: definition.packageId?.trim() || null,
+        scope: "User",
+        scopeKey: "user",
+        enabled: definition.enabled,
+        definitionFile: browserPreviewAgentDefinitionPath(snapshot.subagentCatalog.userRoot, targetAgentId, "md"),
+        sidecarFile: browserPreviewAgentDefinitionPath(snapshot.subagentCatalog.userRoot, targetAgentId, "yaml"),
+        remoteUrl: null,
+        overrideOf: existingIndex >= 0 && existingDefinition?.scopeKey === "system"
+          ? targetAgentId
+          : existingDefinition?.overrideOf ?? null,
+        canRestoreDefault: existingIndex >= 0
+          ? existingDefinition?.scopeKey === "system"
+            || Boolean(existingDefinition?.canRestoreDefault)
+            || Boolean(existingDefinition?.overrideOf)
+          : false,
+        sourceHash: null,
+        version: null,
+        updatedAt: Date.now().toString(),
+        allowedToolCount: definition.allowedTools.length,
+        disabledToolCount: definition.disabledTools.length,
+        enabledPromptSkillCount: definition.enabledPromptSkills.length,
+        disabledPromptSkillCount: definition.disabledPromptSkills.length,
+        systemPrompt: definition.systemPrompt ?? null,
+        systemPromptAppend: definition.systemPromptAppend ?? null,
+        allowedTools: definition.allowedTools,
+        disabledTools: definition.disabledTools,
+        allowedAiCapabilities: definition.allowedAiCapabilities ?? [],
+        disabledAiCapabilities: definition.disabledAiCapabilities ?? [],
+        luaskillsOverrides: definition.luaskillsOverrides ?? null,
+        mcpServerOverrides: definition.mcpServerOverrides ?? null,
+        enabledPromptSkills: definition.enabledPromptSkills,
+        disabledPromptSkills: definition.disabledPromptSkills,
+        capabilityDiagnostics: ["Browser preview saved this definition in the user agent layer."],
+      };
+      if (existingIndex >= 0) {
+        snapshot.subagentCatalog.definitions[existingIndex] = nextDefinition;
+      } else {
+        snapshot.subagentCatalog.definitions.push(nextDefinition);
+      }
+    });
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_save_subagent_definition", { definition });
+}
+
+// browserPreviewTargetAgentId applies package assignment in browser fallback mode.
+// browserPreviewTargetAgentId 在浏览器预览模式下应用包分配。
+function browserPreviewTargetAgentId(definition: SubagentDefinitionSaveRequest): string {
+  const agentId = definition.agentId.trim();
+  const packageId = definition.packageId?.trim();
+  if (!packageId) {
+    return agentId;
+  }
+  const prefix = `${packageId}/`;
+  return agentId.startsWith(prefix) ? agentId : `${packageId}/${agentId}`;
+}
+
+// browserPreviewDefaultedTextPatch applies the service tri-state text patch contract to a defaulted field.
+// browserPreviewDefaultedTextPatch 将服务端三态文本补丁契约应用到带默认值字段。
+function browserPreviewDefaultedTextPatch(value: string | null | undefined, previousValue: string | null | undefined, defaultValue: string): string {
+  if (value === undefined) {
+    return previousValue?.trim() || defaultValue;
+  }
+  if (value === null) {
+    return defaultValue;
+  }
+  return value.trim() || defaultValue;
+}
+
+// browserPreviewOptionalTextPatch applies the service tri-state text patch contract to an optional field.
+// browserPreviewOptionalTextPatch 将服务端三态文本补丁契约应用到可选字段。
+function browserPreviewOptionalTextPatch(value: string | null | undefined, previousValue: string | null | undefined): string | null {
+  if (value === undefined) {
+    return previousValue?.trim() || null;
+  }
+  if (value === null) {
+    return null;
+  }
+  return value.trim() || null;
+}
+
+// preferredBrowserPreviewLocaleField chooses English metadata first and Chinese as fallback.
+// preferredBrowserPreviewLocaleField 选择英文优先、中文兜底的元数据字段。
+function preferredBrowserPreviewLocaleField(
+  locales: Record<string, { name?: string | null; description?: string | null }>,
+  field: "name" | "description",
+): string | null {
+  return locales["en-US"]?.[field]?.trim()
+    || locales.en?.[field]?.trim()
+    || locales["zh-CN"]?.[field]?.trim()
+    || locales.zh?.[field]?.trim()
+    || null;
+}
+
+// setSubagentDefinitionEnabled persists one subagent definition enabled state.
+// setSubagentDefinitionEnabled 持久化单个子代理定义启停状态。
+export async function setSubagentDefinitionEnabled(agentId: string, enabled: boolean): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const definition = snapshot.subagentCatalog.definitions.find((item) => item.agentId === agentId);
+      if (definition) {
+        // systemBacked preserves override metadata only for system-backed definitions.
+        // systemBacked 仅为系统集成定义保留覆盖元数据。
+        const systemBacked = definition.scopeKey === "system" || Boolean(definition.overrideOf);
+        definition.enabled = enabled;
+        definition.scope = definition.scopeKey === "system" ? "User" : definition.scope;
+        definition.scopeKey = definition.scopeKey === "system" ? "user" : definition.scopeKey;
+        if (systemBacked) {
+          definition.overrideOf = definition.overrideOf ?? agentId;
+          definition.canRestoreDefault = true;
+        }
+      }
+    });
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_set_subagent_definition_enabled", { agentId, enabled });
+}
+
+// restoreSubagentDefinitionDefault removes one user override for a system-backed definition.
+// restoreSubagentDefinitionDefault 移除单个系统集成定义的用户覆盖。
+export async function restoreSubagentDefinitionDefault(agentId: string): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const definition = snapshot.subagentCatalog.definitions.find((item) => item.agentId === agentId);
+      if (definition?.canRestoreDefault || definition?.overrideOf) {
+        definition.scope = "System";
+        definition.scopeKey = "system";
+        definition.overrideOf = null;
+        definition.canRestoreDefault = false;
+      }
+    });
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_restore_subagent_definition_default", { agentId });
 }
 
 // setAgentSkillsEnabled persists the global Agent Skills switch.

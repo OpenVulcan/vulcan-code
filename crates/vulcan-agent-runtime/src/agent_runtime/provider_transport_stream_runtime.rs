@@ -66,7 +66,9 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
-    reject_tool_requests: bool,
+    tool_request_rejection_reason: Option<String>,
+    tool_request_rejection_all_tools: bool,
+    tool_request_rejection_tool_ids: Vec<String>,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<
@@ -100,7 +102,9 @@ where
                 let tool_executor = StreamingRuntimeToolExecutor::new(
                     Arc::clone(&runtime_bridge),
                     attempt_sender.clone(),
-                    reject_tool_requests,
+                    tool_request_rejection_reason.clone(),
+                    tool_request_rejection_all_tools,
+                    tool_request_rejection_tool_ids.clone(),
                 );
                 let task_backend_guard = task_runtime.install_backend(
                     session_id,
@@ -283,7 +287,9 @@ where
             },
         request_budget_guard,
         retry_policy,
-        reject_tool_requests,
+        tool_request_rejection_reason,
+        tool_request_rejection_all_tools,
+        tool_request_rejection_tool_ids,
     } = prepared_runtime_inputs;
 
     let adapter_inputs = PreparedProviderTransportAdapterInputs {
@@ -305,6 +311,8 @@ where
         request_budget_guard,
         retry_policy,
         prompt_intervention,
-        reject_tool_requests,
+        tool_request_rejection_reason,
+        tool_request_rejection_all_tools,
+        tool_request_rejection_tool_ids,
     )
 }

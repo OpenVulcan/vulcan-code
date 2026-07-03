@@ -3,6 +3,24 @@
 
 use super::*;
 
+/// Builds one minimal core controller for mailbox bridge assertions.
+/// 为 mailbox bridge 断言构建一个最小 core 控制器。
+fn test_mailbox_controller() -> vulcan_core::controller::VulcanCoreController {
+    vulcan_core::controller::VulcanCoreController::new(
+        vulcan_core::types::ControllerConfig {
+            provider_id: String::from("test"),
+            model_id: String::from("test-model"),
+            system_prompt: String::from("test"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::default(),
+            temperature: None,
+            max_turns: 4,
+            additional_params: None,
+            context_injection: None,
+        },
+        vulcan_core::types::ConversationSnapshot::default(),
+    )
+}
+
 /// Verifies subagent mailbox input uses the generation captured when the child was spawned.
 /// 验证子代理 mailbox 输入使用子任务创建时捕获的父级代际。
 #[test]
@@ -230,8 +248,9 @@ fn wait_agent_completion_leaves_matching_mailbox_input() {
         .session_runtime_kernels
         .get(&parent_session_id)
         .expect("kernel should exist");
-    assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert_eq!(kernel.input_queue().current_turn_len(), 1);
+    assert_eq!(kernel.input_queue().mailbox_len(), 0);
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
     assert_eq!(kernel.input_queue().consumed_input_count(), 0);
     assert_eq!(kernel.wait_scope_count(), 0);
 }
@@ -296,8 +315,9 @@ fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
         .session_runtime_kernels
         .get(&parent_session_id)
         .expect("kernel should exist");
-    assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert_eq!(kernel.input_queue().current_turn_len(), 1);
+    assert_eq!(kernel.input_queue().mailbox_len(), 0);
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
     assert_eq!(kernel.input_queue().consumed_input_count(), 0);
     assert_eq!(kernel.wait_scope_count(), 0);
 }
@@ -362,10 +382,10 @@ fn session_mailbox_skips_stopped_parent_session() {
     );
 }
 
-/// Verifies provider-loop mailbox intervention consumes unclaimed child-agent messages.
-/// 验证 Provider 循环 mailbox 干预会消费未被 wait 接管的子代理消息。
+/// Verifies provider-loop mailbox intervention appends typed child-agent messages.
+/// 验证 Provider 循环 mailbox 干预会追加类型化子代理消息。
 #[test]
-fn mailbox_intervention_prompt_consumes_unclaimed_mailbox_input() {
+fn mailbox_intervention_appends_typed_agent_message() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -388,28 +408,42 @@ fn mailbox_intervention_prompt_consumes_unclaimed_mailbox_input() {
         task_session_id,
         &metadata,
     ));
+    start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
+        .expect("parent turn should start");
     let state = Arc::new(Mutex::new(service_state));
+    let mut controller = test_mailbox_controller();
 
-    let prompt = take_webui_mailbox_intervention_prompt(&state, parent_session_id)
-        .expect("mailbox intervention should read")
-        .expect("mailbox intervention prompt should exist");
+    let appended =
+        append_webui_mailbox_intervention_messages(&state, parent_session_id, &mut controller)
+            .expect("mailbox intervention should append");
 
-    assert!(prompt.contains("<subagent_mailbox_event>"));
-    assert!(prompt.contains("image done"));
+    assert!(appended);
+    assert_eq!(controller.snapshot().messages.len(), 1);
+    let vulcan_core::types::ConversationPayload::AgentMessage {
+        message_type,
+        task_name,
+        payload,
+        ..
+    } = &controller.snapshot().messages[0].payload
+    else {
+        panic!("expected typed agent message");
+    };
+    assert_eq!(message_type, "FINAL_ANSWER");
+    assert_eq!(task_name, "agent-image");
+    assert_eq!(payload, "image done");
     let guard = state.lock().expect("state lock");
     let kernel = guard
         .session_runtime_kernels
         .get(&parent_session_id)
         .expect("kernel should exist");
-    assert_eq!(kernel.input_queue().mailbox_len(), 1);
+    assert_eq!(kernel.input_queue().current_turn_len(), 0);
     assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
-    assert_eq!(kernel.input_queue().consumed_input_count(), 1);
 }
 
-/// Verifies provider-loop mailbox intervention leaves wait-agent-owned messages untouched.
-/// 验证 Provider 循环 mailbox 干预不会消费 wait_agent 接管的消息。
+/// Verifies provider-loop mailbox intervention leaves active wait-scope messages untouched.
+/// 验证 Provider 循环 mailbox 干预不会处理仍处于活动等待范围内的消息。
 #[test]
-fn mailbox_intervention_prompt_skips_active_wait_scope() {
+fn mailbox_intervention_skips_active_wait_scope() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -432,6 +466,8 @@ fn mailbox_intervention_prompt_skips_active_wait_scope() {
         task_session_id,
         &metadata,
     ));
+    start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
+        .expect("parent turn should start");
     session_runtime_kernel_mut(&mut service_state, parent_session_id)
         .register_wait_scope(
             "wait-agent",
@@ -440,18 +476,21 @@ fn mailbox_intervention_prompt_skips_active_wait_scope() {
         )
         .expect("wait scope should register");
     let state = Arc::new(Mutex::new(service_state));
+    let mut controller = test_mailbox_controller();
 
-    let prompt = take_webui_mailbox_intervention_prompt(&state, parent_session_id)
-        .expect("mailbox intervention should read");
+    let appended =
+        append_webui_mailbox_intervention_messages(&state, parent_session_id, &mut controller)
+            .expect("mailbox intervention should inspect");
 
-    assert!(prompt.is_none());
+    assert!(!appended);
+    assert!(controller.snapshot().messages.is_empty());
     let guard = state.lock().expect("state lock");
     let kernel = guard
         .session_runtime_kernels
         .get(&parent_session_id)
         .expect("kernel should exist");
-    assert_eq!(kernel.input_queue().mailbox_len(), 1);
-    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert_eq!(kernel.input_queue().current_turn_len(), 1);
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
     assert_eq!(kernel.input_queue().consumed_input_count(), 0);
 }
 
@@ -484,7 +523,7 @@ fn stopped_subagent_metadata_enqueues_parent_mailbox_notification() {
 
     assert_eq!(mailbox_inputs.len(), 1);
     assert_eq!(mailbox_inputs[0].kind, TurnInputKind::SubagentMessage);
-    assert!(mailbox_inputs[0].trigger_turn);
+    assert!(!mailbox_inputs[0].trigger_turn);
     assert_eq!(
         mailbox_inputs[0].payload["mailbox_event"]["payload"]["execution_status"],
         "stopped"

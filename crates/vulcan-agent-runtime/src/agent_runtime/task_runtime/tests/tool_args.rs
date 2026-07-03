@@ -205,6 +205,8 @@ fn spawn_agent_schema_requires_task_name_and_message() {
     for key in [
         "message",
         "agent_type",
+        "agent_mode",
+        "agent_id",
         "fork_turns",
         "model",
         "reasoning_effort",
@@ -214,6 +216,56 @@ fn spawn_agent_schema_requires_task_name_and_message() {
     }
     assert!(!properties.contains_key("description"));
     assert_eq!(schema["required"], json!(["task_name", "message"]));
+}
+
+/// Verifies spawn_agent maps string agent ids into expert profile bindings.
+/// 验证 spawn_agent 会将字符串 agent_id 映射为专家画像绑定。
+#[test]
+fn spawn_agent_arguments_map_agent_id_to_profile_binding() {
+    let mapped = task_tool_args_from_spawn_agent_args(json!({
+        "message": "Audit the subagent implementation.",
+        "task_name": "audit-worker",
+        "agent_type": "reviewer",
+        "agent_mode": "expert",
+        "agent_id": "code-reviewer",
+        "fork_turns": "all"
+    }))
+    .expect("expert spawn arguments should map to task arguments");
+
+    assert_eq!(mapped["agent_mode"], SUBAGENT_MODE_EXPERT);
+    assert_eq!(mapped["subagent_profile_id"], "code-reviewer");
+    assert_eq!(mapped["subagent"], "reviewer");
+    assert_eq!(mapped["task_id"], "audit-worker");
+    assert_eq!(mapped["fork_turns"], "none");
+}
+
+/// Rejects expert-mode spawn_agent calls that omit the string agent id.
+/// 拒绝缺少字符串 agent_id 的专家模式 spawn_agent 调用。
+#[test]
+fn spawn_agent_arguments_require_agent_id_for_expert_mode() {
+    let error = task_tool_args_from_spawn_agent_args(json!({
+        "message": "Audit the subagent implementation.",
+        "task_name": "audit-worker",
+        "agent_mode": "expert"
+    }))
+    .expect_err("expert spawn should require agent_id");
+
+    assert!(error.contains("agent_id"));
+}
+
+/// Verifies mirror-mode spawn_agent calls keep the mode without requiring an agent id.
+/// 验证镜像模式 spawn_agent 会保留模式且不要求 agent_id。
+#[test]
+fn spawn_agent_arguments_allow_mirror_without_agent_id() {
+    let mapped = task_tool_args_from_spawn_agent_args(json!({
+        "message": "Analyze inherited context.",
+        "task_name": "mirror-worker",
+        "agent_mode": "mirror"
+    }))
+    .expect("mirror spawn should not require agent_id");
+
+    assert_eq!(mapped["agent_mode"], SUBAGENT_MODE_MIRROR);
+    assert!(mapped.get("subagent_profile_id").is_none());
 }
 
 /// Rejects legacy subagent profile and non-Vulcan override arguments from the core spawn tool.

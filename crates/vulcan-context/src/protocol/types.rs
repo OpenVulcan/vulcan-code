@@ -133,6 +133,32 @@ pub enum SessionConversationPayload {
         /// 已扁平化的人类可读工具结果文本。
         text: String,
     },
+    /// Inter-agent message delivered through the session mailbox.
+    /// 通过会话 mailbox 投递的代理间消息。
+    AgentMessage {
+        /// Stable message type shown to the receiving model.
+        /// 展示给接收模型的稳定消息类型。
+        message_type: String,
+        /// Logical task name or agent path associated with the message.
+        /// 与该消息关联的逻辑任务名或代理路径。
+        task_name: String,
+        /// Logical sender name or agent path.
+        /// 逻辑发送方名称或代理路径。
+        sender: String,
+        /// Logical recipient name or agent path.
+        /// 逻辑接收方名称或代理路径。
+        recipient: String,
+        /// Model-visible payload text.
+        /// 模型可见的载荷文本。
+        payload: String,
+        /// Whether this message may wake an idle parent turn.
+        /// 该消息是否允许唤醒空闲父级回合。
+        trigger_turn: bool,
+        /// Host-only metadata retained for UI, audit, and diagnostics.
+        /// 供 UI、审计与诊断保留的宿主侧元数据。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<Value>,
+    },
 }
 
 /// Structured assistant tool-call item captured inside the canonical session protocol.

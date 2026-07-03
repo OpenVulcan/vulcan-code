@@ -419,7 +419,7 @@ pub(crate) fn filter_luaskills_entries(
 
 /// Filters LuaSkills prompt entries with global and LuaSkills-specific selectors.
 /// 使用全局与 LuaSkills 专属选择器过滤 LuaSkills 提示词入口。
-fn filter_luaskill_prompt_entries(
+pub(crate) fn filter_luaskill_prompt_entries(
     entries: Vec<LuaSkillPromptEntry>,
     selectors: &ToolExposureSelectorState,
 ) -> Vec<LuaSkillPromptEntry> {

@@ -261,6 +261,10 @@ pub(super) fn core_message_to_openai_compatible_message(
                 "content": text
             }))
         }
+        CoreConversationPayload::AgentMessage { .. } => Ok(json!({
+            "role": "user",
+            "content": message.payload.agent_message_model_text().unwrap_or_default()
+        })),
     }
 }
 

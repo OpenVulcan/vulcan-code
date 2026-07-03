@@ -142,6 +142,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   featureAreas: [
     { id: "chat", label: "Workspace", description: "Project conversations, message stream, and model input", status: "Available" },
     { id: "skills", label: "Skills", description: "LuaSkills, tool capabilities, and skill packages", status: "Preview" },
+    { id: "agents", label: "Agents", description: "Subagents, expert profiles, and delegation prompts", status: "Preview" },
     { id: "memory", label: "Memory", description: "VMM user, project, and conversation memory", status: "Preview" },
     { id: "settings", label: "Settings", description: "Project, model, tool, diagnostics, and system settings", status: "Preview" },
   ],
@@ -202,6 +203,79 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       },
     ],
   },
+  subagentCatalog: {
+    systemRoot: "D:/openvulcan/vulcan-code/output/resources/subagents",
+    userRoot: "C:/Users/20000/.vulcan/agents",
+    notice: "Browser preview mode is showing a sample subagent catalog.",
+    errors: [],
+    categories: [
+      {
+        categoryId: "engineering",
+        name: "Engineering",
+        description: "Software engineering and review specialists.",
+        locales: {
+          "zh-CN": {
+            name: "工程",
+            description: "软件工程、交付、审核与实现专家。",
+          },
+        },
+        emoji: "💻",
+        color: "#3B82F6",
+        order: 10,
+      },
+    ],
+    definitions: [
+      {
+        agentId: "code-reviewer",
+        name: "Code Reviewer",
+        description: "Review code changes and return focused engineering findings.",
+        locales: {
+          "zh-CN": {
+            name: "代码审核专家",
+            description: "审核代码变更中的正确性、回归风险、可维护性与测试缺口。",
+          },
+        },
+        sourceOrigin: {
+          kind: "github",
+          label: "OpenVulcan/vulcan-code",
+          icon: "github",
+          url: "https://github.com/OpenVulcan/vulcan-code",
+        },
+        emoji: "👁️",
+        color: "purple",
+        vibe: "Reviews code like a mentor, not a gatekeeper.",
+        sourceKey: "system:engineering/code-reviewer",
+        categoryId: "engineering",
+        packageId: null,
+        scope: "System",
+        scopeKey: "system",
+        enabled: true,
+        definitionFile: "D:/openvulcan/vulcan-code/output/resources/subagents/code-reviewer.md",
+        sidecarFile: null,
+        remoteUrl: null,
+        overrideOf: null,
+        canRestoreDefault: false,
+        sourceHash: null,
+        version: "preview",
+        updatedAt: null,
+        allowedToolCount: 0,
+        disabledToolCount: 0,
+        enabledPromptSkillCount: 0,
+        disabledPromptSkillCount: 0,
+        systemPrompt: "Review code changes and return actionable findings first.",
+        systemPromptAppend: null,
+        allowedTools: [],
+        disabledTools: [],
+        allowedAiCapabilities: [],
+        disabledAiCapabilities: [],
+        luaskillsOverrides: null,
+        mcpServerOverrides: null,
+        enabledPromptSkills: [],
+        disabledPromptSkills: [],
+        capabilityDiagnostics: ["No explicit restriction; final abilities are filtered by runtime policy."],
+      },
+    ],
+  },
   settings: [
     { id: "runtime", label: "Runtime", description: "Core Service, LuaSkills, VLDB, and MCP", items: ["Startup mode", "Runtime directory", "MCP tool policy"] },
     { id: "providers", label: "Models & Providers", description: "Model providers, defaults, tool support, and reasoning configuration", items: ["Default provider", "Default model", "Tool calls", "Reasoning effort"] },
@@ -228,6 +302,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
     { id: "local", name: "Local Models", status: "Pending", enabledModels: "0", models: [] },
   ],
+  mcpTools: [],
   reasoningSelection: {
     selectedEffort: "x-high",
     options: [
@@ -238,6 +313,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   },
   thinkingDisplayMode: "first_inline_with_popup",
   hostTools: {
+    nativeTools: [],
     rtk: {
       enabled: true,
       routeMode: "selected",

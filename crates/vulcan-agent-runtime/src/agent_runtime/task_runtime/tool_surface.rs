@@ -30,13 +30,12 @@ pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<Vul
 pub(super) fn build_spawn_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
+    let description = spawn_agent_tool_description(&task_runtime);
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: String::from(SPAWN_AGENT_TOOL),
             name: String::from(SPAWN_AGENT_TOOL),
-            description: String::from(
-                "Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name \"task_3\" the agent will have canonical task name `/root/task1/task_3`. You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally. Ordinary Vulcan child agents do not receive subagent orchestration tools by default.",
-            ),
+            description,
             help_text: None,
             source: VulcanToolSourceKind::Native,
         },
@@ -72,6 +71,57 @@ pub(super) fn build_spawn_agent_tool_candidate(
             })
         }),
     }
+}
+
+/// Builds the spawn_agent description with currently enabled expert catalog hints.
+/// 使用当前已启用专家目录提示构建 spawn_agent 描述。
+fn spawn_agent_tool_description(task_runtime: &TaskRuntime) -> String {
+    let base = "Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name \"task_3\" the agent will have canonical task name `/root/task1/task_3`. You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally. Ordinary Vulcan child agents do not receive subagent orchestration tools by default.";
+    match enabled_expert_catalog_hint(task_runtime) {
+        Some(hint) => format!("{base}\n\n{hint}"),
+        None => base.to_string(),
+    }
+}
+
+/// Builds a compact model-visible list of enabled expert agent ids.
+/// 构建模型可见的紧凑已启用专家智能体标识列表。
+fn enabled_expert_catalog_hint(task_runtime: &TaskRuntime) -> Option<String> {
+    let catalog = task_runtime.subagent_catalog_snapshot().ok()?;
+    let mut enabled_experts = catalog
+        .definitions
+        .iter()
+        .filter(|definition| {
+            definition.enabled
+                && definition.mode == vulcan_task_session::SubagentDefinitionMode::Expert
+        })
+        .map(|definition| {
+            let description = definition
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("No description provided.");
+            format!(
+                "- `{}`: {} - {}",
+                definition.id, definition.name, description
+            )
+        })
+        .collect::<Vec<_>>();
+    if enabled_experts.is_empty() {
+        return None;
+    }
+    let total_count = enabled_experts.len();
+    enabled_experts.truncate(24);
+    if total_count > enabled_experts.len() {
+        enabled_experts.push(format!(
+            "- ... {} additional enabled experts omitted from the tool description.",
+            total_count - enabled_experts.len()
+        ));
+    }
+    Some(format!(
+        "Enabled catalog-backed experts for `agent_mode: \"expert\"` and `agent_id`:\n{}",
+        enabled_experts.join("\n")
+    ))
 }
 
 /// Builds the model-visible child-agent queue-only message tool.
@@ -171,7 +221,7 @@ pub(super) fn build_list_agents_tool_candidate(
             id: String::from(LIST_AGENTS_TOOL),
             name: String::from(LIST_AGENTS_TOOL),
             description: String::from(
-                "List live agents in the current Vulcan root subagent tree. Optionally filter by task-path prefix such as `/root/review`.",
+                "List known child agents and their current status. This tool does not collect child-agent results and does not consume mailbox updates; use wait_agent to wait for activity, then continue normally so pending inter-agent messages can enter the next model request.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -233,9 +283,18 @@ pub(super) fn spawn_agent_args_schema() -> Value {
                 "type": "string",
                 "description": "Optional agent type or role hint for the new agent."
             },
+            "agent_mode": {
+                "type": "string",
+                "enum": ["default", "mirror", "expert"],
+                "description": "Optional explicit child-agent mode. Use `expert` with agent_id for a catalog-backed expert, `mirror` for a mirror child agent, or `default` for an ordinary child agent."
+            },
+            "agent_id": {
+                "type": "string",
+                "description": "Optional string id of a catalog-backed subagent definition. Prefer the canonical category path such as `engineering/code-reviewer`; an unambiguous legacy file stem such as `code-reviewer` may also resolve. This is not a numeric id."
+            },
             "fork_turns": {
                 "type": "string",
-                "description": "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
+                "description": "Optional number of turns to fork. Defaults to `all` for default and mirror agents. Expert agents always start from `none` so catalog roles do not inherit parent conversation turns. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
             },
             "model": {
                 "type": "string",
@@ -300,7 +359,11 @@ pub(super) fn list_agents_args_schema() -> Value {
         "properties": {
             "path_prefix": {
                 "type": "string",
-                "description": "Vulcan task-path prefix filter without a trailing slash. Omit to list all live agents in the root subagent tree."
+                "description": "Optional Vulcan task-path prefix filter without a trailing slash."
+            },
+            "include_all": {
+                "type": "boolean",
+                "description": "Deprecated compatibility flag. It is accepted but ignored; list_agents always returns status only and never consumes mailbox updates."
             }
         },
         "additionalProperties": false
@@ -385,6 +448,8 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
                 "message"
                     | "task_name"
                     | "agent_type"
+                    | "agent_mode"
+                    | "agent_id"
                     | "fork_turns"
                     | "model"
                     | "reasoning_effort"
@@ -394,21 +459,37 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
         return Err(format!(
-            "`spawn_agent` only accepts message, task_name, agent_type, fork_turns, model, and reasoning_effort; unsupported keys: {}",
+            "`spawn_agent` only accepts message, task_name, agent_type, agent_mode, agent_id, fork_turns, model, and reasoning_effort; unsupported keys: {}",
             unsupported_keys.join(", ")
         ));
     }
     let agent_type = string_field(&map, &["agent_type"]);
+    let agent_mode = normalize_subagent_mode(string_field(&map, &["agent_mode"]).as_deref())?;
+    let agent_id = string_field(&map, &["agent_id"]);
+    if agent_mode.as_deref() == Some(SUBAGENT_MODE_EXPERT) && agent_id.is_none() {
+        return Err(String::from(
+            "`spawn_agent` requires `agent_id` when agent_mode is `expert`.",
+        ));
+    }
     let model = string_field(&map, &["model"]);
     let reasoning_effort = string_field(&map, &["reasoning_effort"]);
-    let fork_turns = string_field(&map, &["fork_turns"]);
-    let fork_turns = normalize_spawn_agent_fork_turns(fork_turns.as_deref())?;
+    let fork_turns = effective_spawn_agent_fork_turns(
+        agent_mode.as_deref(),
+        agent_id.as_deref(),
+        string_field(&map, &["fork_turns"]).as_deref(),
+    )?;
     let mut task_args = serde_json::Map::new();
     task_args.insert(String::from("prompt"), Value::String(prompt));
     task_args.insert(String::from("task_id"), Value::String(task_id.clone()));
     task_args.insert(String::from("description"), Value::String(task_id));
     if let Some(agent_type) = agent_type {
         task_args.insert(String::from("subagent"), Value::String(agent_type));
+    }
+    if let Some(agent_mode) = agent_mode {
+        task_args.insert(String::from("agent_mode"), Value::String(agent_mode));
+    }
+    if let Some(agent_id) = agent_id {
+        task_args.insert(String::from("subagent_profile_id"), Value::String(agent_id));
     }
     if let Some(model) = model {
         task_args.insert(String::from("model"), Value::String(model));
@@ -419,11 +500,35 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
             Value::String(reasoning_effort),
         );
     }
-    task_args.insert(
-        String::from("fork_turns"),
-        Value::String(fork_turns.unwrap_or_else(|| String::from("all"))),
-    );
+    task_args.insert(String::from("fork_turns"), Value::String(fork_turns));
     Ok(Value::Object(task_args))
+}
+
+/// Resolves the effective fork selector for a model-visible spawn request.
+/// 解析模型可见 spawn 请求的有效上下文派生选择器。
+///
+/// # Parameters
+/// 参数
+/// `agent_mode` is the normalized optional child-agent mode.
+/// `agent_mode` 是已规范化的可选子代理模式。
+/// `fork_turns` is the caller supplied optional fork selector.
+/// `fork_turns` 是调用方提供的可选派生选择器。
+///
+/// # Returns
+/// 返回值
+/// The enforced fork selector used by the TaskSession runtime.
+/// TaskSession 运行时使用的强制派生选择器。
+pub(super) fn effective_spawn_agent_fork_turns(
+    agent_mode: Option<&str>,
+    agent_id: Option<&str>,
+    fork_turns: Option<&str>,
+) -> Result<String, String> {
+    if agent_mode == Some(SUBAGENT_MODE_EXPERT)
+        || agent_id.is_some_and(|value| !value.trim().is_empty())
+    {
+        return Ok(String::from("none"));
+    }
+    Ok(normalize_spawn_agent_fork_turns(fork_turns)?.unwrap_or_else(|| String::from("all")))
 }
 
 /// Normalizes the Vulcan fork_turns selector before it reaches execution.
@@ -459,7 +564,7 @@ pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, St
     };
     let unsupported_keys = object
         .keys()
-        .filter(|key| key.as_str() != "path_prefix")
+        .filter(|key| !matches!(key.as_str(), "path_prefix" | "include_all"))
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
@@ -469,6 +574,28 @@ pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, St
         ));
     }
     Ok(string_field(object, &["path_prefix"]))
+}
+
+/// Parses whether list_agents should return the full registry snapshot instead of pending updates.
+/// 解析 list_agents 是否应返回完整注册表快照而不是待收集更新。
+///
+/// # Parameters
+/// 参数
+/// `args` is the raw list_agents argument object.
+/// `args` 是原始 list_agents 参数对象。
+///
+/// # Returns
+/// 返回值
+/// `Ok(true)` when the caller explicitly requested the all-agent snapshot.
+/// 调用方显式请求全部智能体快照时返回 `Ok(true)`。
+pub(super) fn list_agents_include_all(args: &Value) -> Result<bool, String> {
+    let Some(object) = args.as_object() else {
+        return Err(String::from("list_agents arguments must be a JSON object."));
+    };
+    Ok(object
+        .get("include_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false))
 }
 
 /// Builds the Vulcan tree path for one registry entry when it belongs to the selected root.

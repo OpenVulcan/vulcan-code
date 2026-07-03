@@ -255,6 +255,7 @@ pub(crate) fn empty_mcp_catalog() -> TauriMcpRuntimeCatalog {
         prompt_count: 0,
         resource_count: 0,
         summary_rows: Vec::new(),
+        tools: Vec::new(),
     }
 }
 
@@ -502,6 +503,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subag
         pending_questions,
         session_goal_summaries,
         command_session_runtime,
+        native_tools,
         hydrated_window_summaries,
     ) = {
         let mut guard = state
@@ -574,6 +576,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subag
             .agent_runtime
             .as_ref()
             .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
+        let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
         (
             live_context_budgets,
             surface_messages,
@@ -581,6 +584,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subag
             pending_questions,
             session_goal_summaries,
             command_session_runtime,
+            native_tools,
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
@@ -601,6 +605,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subag
         &live_context_budgets,
         &session_goal_summaries,
         &hydrated_window_summaries,
+        native_tools,
     );
     webui_trace(
         "store_workbench_built",

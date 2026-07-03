@@ -1,4 +1,5 @@
 import type { useI18n } from "@/i18n"
+import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
 
 // SkillActionProps groups service-backed actions used by the skill page.
 // SkillActionProps 分组技能页面使用的服务端动作。
@@ -40,16 +41,9 @@ export type SkillSubAreaId = "lua" | "agent"
 // SkillHeaderBusyActionId 标识当前正在标题栏展示反馈的技能动作。
 export type SkillHeaderBusyActionId = "lua-refresh" | "agent-refresh"
 
-// SkillHeaderSummary describes the active skill page header copy.
-// SkillHeaderSummary 描述当前技能页标题文案。
-export interface SkillHeaderSummary {
-  // Header title shown on the first line.
-  // 第一行展示的标题。
-  title: string
-  // Compact metrics shown on the second line.
-  // 第二行展示的紧凑统计。
-  detail: string
-}
+// SkillHeaderSummary aliases the shared feature header shape for skill pages.
+// SkillHeaderSummary 为技能页面复用共享功能标题结构。
+export type SkillHeaderSummary = FeatureHeaderSummary
 
 // localizedAgentSkillScope maps backend scope labels into the active UI language.
 // localizedAgentSkillScope 将后端作用域标签映射到当前界面语言。

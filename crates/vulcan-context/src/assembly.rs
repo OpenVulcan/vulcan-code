@@ -485,6 +485,10 @@ fn render_message_layer_content(message: &ConversationMessage) -> String {
             }
             sections.join("\n")
         }
+        ConversationPayload::AgentMessage { .. } => message
+            .payload
+            .agent_message_model_text()
+            .unwrap_or_default(),
     }
 }
 
@@ -495,6 +499,7 @@ fn render_message_role(message: &ConversationMessage) -> &'static str {
         ConversationPayload::UserText { .. } => "user",
         ConversationPayload::Assistant { .. } => "assistant",
         ConversationPayload::ToolResult { .. } => "tool_result",
+        ConversationPayload::AgentMessage { .. } => "agent_message",
     }
 }
 

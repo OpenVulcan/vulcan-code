@@ -108,6 +108,46 @@ fn runtime_log_projection_marks_orphan_tool_result() {
     assert_eq!(status, &RuntimeToolResultStatus::Orphan);
 }
 
+/// Verifies agent mailbox messages are replayed as provider-facing user messages.
+/// 验证代理 mailbox 消息会按面向 Provider 的用户消息回放。
+#[test]
+fn runtime_log_projection_projects_agent_messages_as_user_messages() {
+    let state = SessionConversationState {
+        messages: vec![SessionConversationMessage {
+            id: String::from("agent-message-1"),
+            payload: SessionConversationPayload::AgentMessage {
+                message_type: String::from("FINAL_ANSWER"),
+                task_name: String::from("code-review"),
+                sender: String::from("code-review"),
+                recipient: String::from("parent"),
+                payload: String::from("review complete"),
+                trigger_turn: true,
+                metadata: None,
+            },
+        }],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+
+    let lines = runtime_log_lines_from_conversation_state(&state, "1", 1);
+    let message = lines
+        .iter()
+        .find_map(|line| match &line.event {
+            RuntimeLogEvent::UserMessage(event) => Some(event),
+            _ => None,
+        })
+        .expect("agent message should project as user message");
+
+    assert_eq!(message.message_id, "agent-message-1");
+    assert!(message.text.contains("<agent_message>"));
+    assert!(message.text.contains("review complete"));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| matches!(line.event, RuntimeLogEvent::AssistantMessage(_)))
+    );
+}
+
 /// Verifies repaired runtime replay groups adjacent display-derived tool-call messages.
 /// 验证修复后的 runtime 重放会合并相邻的展示派生工具调用消息。
 #[test]

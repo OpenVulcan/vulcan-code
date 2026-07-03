@@ -245,7 +245,8 @@ fn terminal_report_preserves_streamed_records() {
         .filter_map(|message| match &message.payload {
             SessionConversationPayload::UserText { text, .. } => Some(text.as_str()),
             SessionConversationPayload::Assistant { text, .. } => Some(text.as_str()),
-            SessionConversationPayload::ToolResult { .. } => None,
+            SessionConversationPayload::ToolResult { .. }
+            | SessionConversationPayload::AgentMessage { .. } => None,
         })
         .collect::<Vec<_>>();
     assert!(canonical_texts.contains(&"随便调用两个工具"));

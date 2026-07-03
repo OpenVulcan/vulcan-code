@@ -95,9 +95,15 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Optional host intervention invoked at replay-safe tool boundaries.
     /// 在可回放安全工具边界调用的可选宿主干预钩子。
     pub(crate) prompt_intervention: Option<RuntimePromptIntervention>,
-    /// Whether host-managed tool requests must be rejected before execution.
-    /// 宿主管理工具请求是否必须在执行前被拒绝。
-    pub(crate) reject_tool_requests: bool,
+    /// Optional reason used to reject host-managed tool requests before execution.
+    /// 在执行前拒绝宿主管理工具请求时使用的可选原因。
+    pub(crate) tool_request_rejection_reason: Option<String>,
+    /// Whether the rejection reason applies to every host-managed tool.
+    /// 拒绝原因是否应用到全部宿主管理工具。
+    pub(crate) tool_request_rejection_all_tools: bool,
+    /// Optional scoped tool ids rejected with the rejection reason.
+    /// 使用拒绝原因拒绝的可选限定工具标识。
+    pub(crate) tool_request_rejection_tool_ids: Vec<String>,
 }
 
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
@@ -127,7 +133,9 @@ pub(crate) fn build_provider_transport_execution_request(
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
-    reject_tool_requests: bool,
+    tool_request_rejection_reason: Option<String>,
+    tool_request_rejection_all_tools: bool,
+    tool_request_rejection_tool_ids: Vec<String>,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         api_family: runtime_kind.api_family(),
@@ -155,6 +163,8 @@ pub(crate) fn build_provider_transport_execution_request(
         request_budget_guard,
         retry_policy,
         prompt_intervention,
-        reject_tool_requests,
+        tool_request_rejection_reason,
+        tool_request_rejection_all_tools,
+        tool_request_rejection_tool_ids,
     }
 }

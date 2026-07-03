@@ -39,6 +39,23 @@ pub(crate) fn session_message_to_core_message(
             tool_call_id: tool_call_id.clone(),
             text: text.clone(),
         },
+        SessionConversationPayload::AgentMessage {
+            message_type,
+            task_name,
+            sender,
+            recipient,
+            payload,
+            trigger_turn,
+            metadata,
+        } => CoreConversationPayload::AgentMessage {
+            message_type: message_type.clone(),
+            task_name: task_name.clone(),
+            sender: sender.clone(),
+            recipient: recipient.clone(),
+            payload: payload.clone(),
+            trigger_turn: *trigger_turn,
+            metadata: metadata.clone(),
+        },
     };
 
     CoreConversationMessage {
@@ -85,6 +102,23 @@ pub(crate) fn core_message_to_session_message(
             tool_result_id: tool_result_id.clone(),
             tool_call_id: tool_call_id.clone(),
             text: text.clone(),
+        },
+        CoreConversationPayload::AgentMessage {
+            message_type,
+            task_name,
+            sender,
+            recipient,
+            payload,
+            trigger_turn,
+            metadata,
+        } => SessionConversationPayload::AgentMessage {
+            message_type: message_type.clone(),
+            task_name: task_name.clone(),
+            sender: sender.clone(),
+            recipient: recipient.clone(),
+            payload: payload.clone(),
+            trigger_turn: *trigger_turn,
+            metadata: metadata.clone(),
         },
     };
 

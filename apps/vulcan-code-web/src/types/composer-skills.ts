@@ -240,3 +240,283 @@ export interface AgentSkillsCatalogSummary {
   // 非致命加载问题。
   errors: AgentSkillLoadIssueSummary[];
 }
+
+// SubagentDefinitionSummary describes one subagent or expert definition.
+// SubagentDefinitionSummary 描述单个子代理或专家定义。
+export interface SubagentDefinitionSummary {
+  // Stable agent id, normally the Markdown file stem.
+  // 稳定代理标识，通常为 Markdown 文件 stem。
+  agentId: string;
+  // Human-facing display name.
+  // 面向用户的显示名称。
+  name: string;
+  // Optional human-facing description.
+  // 可选的人类可读说明。
+  description?: string | null;
+  // Localized display metadata keyed by locale tag.
+  // 按语言标签索引的本地化展示元数据。
+  locales?: Record<string, SubagentDefinitionLocaleSummary> | null;
+  // Optional upstream or license source metadata for the agent page.
+  // 智能体页面使用的可选上游或协议来源元数据。
+  sourceOrigin?: SubagentOriginSummary | null;
+  // Human-facing emoji.
+  // 面向用户的图标。
+  emoji: string;
+  // Human-facing color token or color value.
+  // 面向用户的颜色标识或颜色值。
+  color: string;
+  // Optional short tone or persona hint.
+  // 可选简短语气或人格提示。
+  vibe?: string | null;
+  // Stable source key for this definition row.
+  // 当前定义行的稳定来源键。
+  sourceKey: string;
+  // Optional canonical category id.
+  // 可选规范分类标识。
+  categoryId?: string | null;
+  // Optional package id.
+  // 可选包标识。
+  packageId?: string | null;
+  // Source scope label.
+  // 来源作用域标签。
+  scope: string;
+  // Stable source scope key used by UI logic.
+  // UI 逻辑使用的稳定来源作用域键。
+  scopeKey: "system" | "user" | "package" | string;
+  // Whether this definition is exposed to models and spawn_agent.
+  // 该定义是否暴露给模型与 spawn_agent。
+  enabled: boolean;
+  // Filesystem path to the Markdown definition file.
+  // 指向 Markdown 定义文件的文件系统路径。
+  definitionFile: string;
+  // Optional filesystem path to the sidecar metadata file.
+  // 指向 sidecar 元数据文件的可选文件系统路径。
+  sidecarFile?: string | null;
+  // Optional remote URL that supplied this user definition.
+  // 提供该用户定义的可选远程 URL。
+  remoteUrl?: string | null;
+  // Optional system definition id overridden by this row.
+  // 被当前行覆盖的可选系统定义标识。
+  overrideOf?: string | null;
+  // Whether the user layer can be removed to restore a system definition.
+  // 是否可以移除用户层以恢复系统定义。
+  canRestoreDefault?: boolean;
+  // Optional source hash for audit and cache diagnostics.
+  // 用于审计与缓存诊断的可选来源哈希。
+  sourceHash?: string | null;
+  // Optional source version string.
+  // 可选来源版本字符串。
+  version?: string | null;
+  // Optional last-updated timestamp string.
+  // 可选最近更新时间戳字符串。
+  updatedAt?: string | null;
+  // Number of explicitly allowed host tools.
+  // 显式允许的宿主工具数量。
+  allowedToolCount: number;
+  // Number of explicitly disabled host tools.
+  // 显式禁用的宿主工具数量。
+  disabledToolCount: number;
+  // Number of enabled prompt skills declared by this definition.
+  // 当前定义声明启用的提示词技能数量。
+  enabledPromptSkillCount: number;
+  // Number of disabled prompt skills declared by this definition.
+  // 当前定义声明禁用的提示词技能数量。
+  disabledPromptSkillCount: number;
+  // Optional base system prompt.
+  // 可选基础系统提示词。
+  systemPrompt?: string | null;
+  // Optional appended system prompt.
+  // 可选追加系统提示词。
+  systemPromptAppend?: string | null;
+  // Explicitly allowed host tool names.
+  // 显式允许的宿主工具名称。
+  allowedTools: string[];
+  // Explicitly disabled host tool names.
+  // 显式禁用的宿主工具名称。
+  disabledTools: string[];
+  // Explicitly allowed AI capability selectors.
+  // 显式允许的 AI 能力选择器。
+  allowedAiCapabilities: string[];
+  // Explicitly disabled AI capability selectors.
+  // 显式禁用的 AI 能力选择器。
+  disabledAiCapabilities: string[];
+  // LuaSkills-specific exposure override payload.
+  // LuaSkills 专属可见性覆盖载荷。
+  luaskillsOverrides: unknown;
+  // MCP-specific exposure override payload.
+  // MCP 专属可见性覆盖载荷。
+  mcpServerOverrides: unknown;
+  // Explicitly enabled prompt skill names.
+  // 显式启用的提示词技能名称。
+  enabledPromptSkills: string[];
+  // Explicitly disabled prompt skill names.
+  // 显式禁用的提示词技能名称。
+  disabledPromptSkills: string[];
+  // Effective capability diagnostic messages.
+  // 最终能力诊断消息。
+  capabilityDiagnostics: string[];
+}
+
+// SubagentDefinitionLocaleSummary describes localized agent display metadata.
+// SubagentDefinitionLocaleSummary 描述智能体本地化展示元数据。
+export interface SubagentDefinitionLocaleSummary {
+  // Optional localized agent name.
+  // 可选本地化智能体名称。
+  name?: string | null;
+  // Optional localized agent description.
+  // 可选本地化智能体说明。
+  description?: string | null;
+}
+
+// SubagentOriginSummary describes upstream or license source metadata.
+// SubagentOriginSummary 描述上游或协议来源元数据。
+export interface SubagentOriginSummary {
+  // Source kind such as github, system, or other.
+  // 来源类型，例如 github、system 或 other。
+  kind?: string | null;
+  // Optional human-facing source label.
+  // 可选的人类可读来源标签。
+  label?: string | null;
+  // Optional icon key used by the WebUI.
+  // WebUI 使用的可选图标键。
+  icon?: string | null;
+  // Optional source URL.
+  // 可选来源链接。
+  url?: string | null;
+}
+
+// SubagentDefinitionSaveRequest describes one editable agent definition form submission.
+// SubagentDefinitionSaveRequest 描述单次可编辑智能体定义表单提交。
+export interface SubagentDefinitionSaveRequest {
+  // Stable agent id, normally the Markdown file stem.
+  // 稳定智能体标识，通常为 Markdown 文件 stem。
+  agentId: string;
+  // Optional original agent id when saving a moved definition.
+  // 保存已转移定义时使用的可选原始智能体标识。
+  originalAgentId?: string | null;
+  // Optional user package id assigned to this definition.
+  // 分配给当前定义的可选用户包标识。
+  packageId?: string | null;
+  // Human-facing display name.
+  // 面向用户的显示名称。
+  name: string;
+  // Optional human-facing description.
+  // 可选的人类可读说明。
+  description?: string | null;
+  // Localized display metadata keyed by locale tag.
+  // 按语言标签索引的本地化展示元数据。
+  locales?: Record<string, SubagentDefinitionLocaleSummary> | null;
+  // Optional human-facing emoji override.
+  // 可选的人类可读图标覆盖。
+  emoji?: string | null;
+  // Optional human-facing color token or value override.
+  // 可选的人类可读颜色标识或颜色值覆盖。
+  color?: string | null;
+  // Optional short tone or persona hint override.
+  // 可选简短语气或人格提示覆盖。
+  vibe?: string | null;
+  // Whether this definition is exposed to models and spawn_agent.
+  // 该定义是否暴露给模型与 spawn_agent。
+  enabled: boolean;
+  // Optional base system prompt.
+  // 可选基础系统提示词。
+  systemPrompt?: string | null;
+  // Optional appended system prompt.
+  // 可选追加系统提示词。
+  systemPromptAppend?: string | null;
+  // Explicitly allowed host tool names.
+  // 显式允许的宿主工具名称。
+  allowedTools: string[];
+  // Explicitly disabled host tool names.
+  // 显式禁用的宿主工具名称。
+  disabledTools: string[];
+  // Explicitly allowed AI capability selectors.
+  // 显式允许的 AI 能力选择器。
+  allowedAiCapabilities?: string[];
+  // Explicitly disabled AI capability selectors.
+  // 显式禁用的 AI 能力选择器。
+  disabledAiCapabilities?: string[];
+  // LuaSkills-specific exposure override payload.
+  // LuaSkills 专属可见性覆盖载荷。
+  luaskillsOverrides?: unknown;
+  // MCP-specific exposure override payload.
+  // MCP 专属可见性覆盖载荷。
+  mcpServerOverrides?: unknown;
+  // Explicitly enabled prompt skill names.
+  // 显式启用的提示词技能名称。
+  enabledPromptSkills: string[];
+  // Explicitly disabled prompt skill names.
+  // 显式禁用的提示词技能名称。
+  disabledPromptSkills: string[];
+}
+
+// SubagentCategorySummary describes one parsed agent catalog category.
+// SubagentCategorySummary 描述单个已解析智能体目录分类。
+export interface SubagentCategorySummary {
+  // Stable category id.
+  // 稳定分类标识。
+  categoryId: string;
+  // Human-facing category name.
+  // 面向用户的分类名称。
+  name: string;
+  // Optional category description.
+  // 可选分类说明。
+  description?: string | null;
+  // Localized display metadata keyed by locale tag.
+  // 按语言标签索引的本地化展示元数据。
+  locales?: Record<string, SubagentCategoryLocaleSummary> | null;
+  // Human-facing category emoji.
+  // 面向用户的分类图标。
+  emoji: string;
+  // Human-facing category color token or value.
+  // 面向用户的分类颜色标识或颜色值。
+  color: string;
+  // Optional category order.
+  // 可选分类排序值。
+  order?: number | null;
+}
+
+// SubagentCategoryLocaleSummary describes localized category display metadata.
+// SubagentCategoryLocaleSummary 描述分类本地化展示元数据。
+export interface SubagentCategoryLocaleSummary {
+  // Optional localized category name.
+  // 可选本地化分类名称。
+  name?: string | null;
+  // Optional localized category description.
+  // 可选本地化分类说明。
+  description?: string | null;
+}
+
+// SubagentCatalogIssueSummary describes one subagent catalog loading issue.
+// SubagentCatalogIssueSummary 描述单个子代理目录加载问题。
+export interface SubagentCatalogIssueSummary {
+  // Path related to the loading issue.
+  // 与加载问题相关的路径。
+  path: string;
+  // Human-readable diagnostic message.
+  // 人类可读诊断信息。
+  message: string;
+}
+
+// SubagentCatalogSummary describes the full subagent and expert catalog.
+// SubagentCatalogSummary 描述完整子代理与专家目录。
+export interface SubagentCatalogSummary {
+  // System subagent definition root shipped with the application.
+  // 随应用发布的系统子代理定义根目录。
+  systemRoot: string;
+  // User-owned subagent definition and override root.
+  // 用户拥有的子代理定义与覆盖根目录。
+  userRoot: string;
+  // Human-readable notice for the current catalog state.
+  // 当前目录状态的人类可读提示。
+  notice: string;
+  // Merged subagent and expert definition rows.
+  // 合并后的子代理与专家定义行。
+  definitions: SubagentDefinitionSummary[];
+  // Parsed category rows.
+  // 已解析的分类行。
+  categories: SubagentCategorySummary[];
+  // Non-fatal loading issues.
+  // 非致命加载问题。
+  errors: SubagentCatalogIssueSummary[];
+}

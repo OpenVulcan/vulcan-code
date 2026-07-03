@@ -1,4 +1,5 @@
 import React from "react";
+import type { AgentActionProps } from "@/components/features/agents/AgentsArea";
 import type { SkillActionProps } from "@/components/features/skills/SkillsArea";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
@@ -18,11 +19,16 @@ import {
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
   installLuaSkill,
+  openSubagentUserDirectory,
   refreshAgentSkillsCatalog,
   refreshLuaSkillsCatalog,
+  refreshSubagentCatalog,
+  restoreSubagentDefinitionDefault,
+  saveSubagentDefinition,
   setAgentSkillEnabled,
   setAgentSkillProjectState,
   setAgentSkillsEnabled,
+  setSubagentDefinitionEnabled,
   setLuaSkillEnabled,
   setLuaSkillToolRegistrationState,
   uninstallLuaSkill,
@@ -262,6 +268,16 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
   }), [applySkillWorkbenchAction, handleSetAgentSkillEnabled, handleSetAgentSkillsEnabled]);
 
+  // agentActions groups service-backed independent agent management actions.
+  // agentActions 归组独立智能体管理使用的服务端动作。
+  const agentActions = React.useMemo<AgentActionProps>(() => ({
+    onRefreshAgentCatalog: () => applySkillWorkbenchAction(refreshSubagentCatalog),
+    onOpenAgentUserDirectory: () => applySkillWorkbenchAction(openSubagentUserDirectory),
+    onSetAgentDefinitionEnabled: (agentId, enabled) => applySkillWorkbenchAction(() => setSubagentDefinitionEnabled(agentId, enabled)),
+    onSaveAgentDefinition: (definition) => applySkillWorkbenchAction(() => saveSubagentDefinition(definition)),
+    onRestoreAgentDefinitionDefault: (agentId) => applySkillWorkbenchAction(() => restoreSubagentDefinitionDefault(agentId)),
+  }), [applySkillWorkbenchAction]);
+
   // handleProjectIconConfirm persists the selected project icon override.
   // handleProjectIconConfirm 持久化选择的项目图标覆盖。
   const handleProjectIconConfirm = React.useCallback(async (project: ProjectSummary, icon: ProjectIconSelection) => {
@@ -357,6 +373,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     handleSetAgentSkillsEnabled,
     handleSetAgentSkillEnabled,
     skillActions,
+    agentActions,
     handleProjectIconConfirm,
     handleProjectIconReset,
     handleCreateConversation,

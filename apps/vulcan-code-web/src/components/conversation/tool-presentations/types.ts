@@ -269,6 +269,9 @@ export interface SubagentOrchestrationPresentation {
   // Optional note returned by the runtime.
   // 运行时返回的可选说明。
   note?: string | null;
+  // Optional runtime debug summary for subagent source and fork diagnostics.
+  // 可选的子代理来源与派生诊断运行时调试摘要。
+  debugSummary?: string | null;
   // Whether a wait_agent call ended by timeout.
   // wait_agent 调用是否因超时结束。
   timedOut?: boolean | null;
@@ -298,6 +301,9 @@ export interface SubagentOrchestrationAgent {
   // Optional result summary.
   // 可选结果摘要。
   result?: string | null;
+  // Optional runtime debug summary for this collected child agent.
+  // 该已收集子代理的可选运行时调试摘要。
+  debugSummary?: string | null;
 }
 
 // ToolPresentation is the union of all recognized custom tool displays.

@@ -234,6 +234,36 @@ fn compaction_source_projects_runtime_messages() {
     );
 }
 
+/// Verifies agent mailbox messages keep their provider-facing user role during compaction.
+/// 验证代理 mailbox 消息在压缩来源中保持面向 Provider 的用户角色。
+#[test]
+fn compaction_source_projects_agent_messages_as_user_messages() {
+    let state = SessionConversationState {
+        messages: vec![SessionConversationMessage {
+            id: String::from("agent-message-1"),
+            payload: SessionConversationPayload::AgentMessage {
+                message_type: String::from("FINAL_ANSWER"),
+                task_name: String::from("code-review"),
+                sender: String::from("code-review"),
+                recipient: String::from("parent"),
+                payload: String::from("review complete"),
+                trigger_turn: true,
+                metadata: None,
+            },
+        }],
+        records: Vec::new(),
+        continuation: SessionProviderContinuationState::default(),
+    };
+
+    let messages = conversation_state_to_compaction_source_messages(&state);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, "agent-message-1");
+    assert_eq!(messages[0].kind, SessionMessageKind::User);
+    assert!(messages[0].body.contains("<agent_message>"));
+    assert!(messages[0].body.contains("review complete"));
+}
+
 /// Verifies display records cannot become compaction source messages.
 /// 验证显示记录不能成为压缩来源消息。
 #[test]

@@ -233,6 +233,35 @@ impl TurnInputQueue {
             .collect()
     }
 
+    /// Drains current-turn inputs of the requested kind while retaining every other input.
+    /// 取出指定类型的当前回合输入，并保留其他所有输入。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `kind` is the input kind that should be removed and returned.
+    /// `kind` 是需要移除并返回的输入类型。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Matching unconsumed inputs in FIFO order.
+    /// 按 FIFO 顺序返回匹配的未消费输入。
+    pub fn drain_current_turn_inputs_by_kind(&mut self, kind: TurnInputKind) -> Vec<TurnInput> {
+        let mut retained = VecDeque::new();
+        let mut drained = Vec::new();
+        while let Some(input) = self.current_turn_inputs.pop_front() {
+            if self.consumed_input_ids.contains(&input.input_id) {
+                continue;
+            }
+            if input.kind == kind {
+                drained.push(input);
+            } else {
+                retained.push_back(input);
+            }
+        }
+        self.current_turn_inputs = retained;
+        drained
+    }
+
     /// Moves unconsumed current-turn inputs back to the session mailbox for a later turn.
     /// 将当前回合尚未消费的输入移回会话 mailbox，等待后续回合处理。
     ///

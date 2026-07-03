@@ -131,5 +131,8 @@ export function FloatingSkillMenu(props: {
 // skillSubAreaLabel returns the compact label for one embedded skills sub page.
 // skillSubAreaLabel 返回单个内嵌技能子页面的紧凑标签。
 export function skillSubAreaLabel(subArea: SkillSubAreaId): string {
-  return subArea === "agent" ? "AgentSkills" : "LuaSkills";
+  if (subArea === "agent") {
+    return "AgentSkills";
+  }
+  return "LuaSkills";
 }

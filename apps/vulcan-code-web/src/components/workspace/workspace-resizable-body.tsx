@@ -460,6 +460,9 @@ function ConsoleHeader(props: {
   // headerTitle chooses an embedded view title before falling back to conversation naming.
   // headerTitle 优先使用内嵌视图标题，否则回退到会话命名。
   const headerTitle = props.title ?? (props.draftConversation ? t("console.newConversation") : props.conversation?.title ?? t("console.title"));
+  // titleMenuConversation limits overflow actions to real conversation headers.
+  // titleMenuConversation 将溢出操作限制在真实会话标题栏中。
+  const titleMenuConversation = props.title || props.draftConversation ? undefined : props.conversation;
 
   return (
     <header className={cn("console-header", props.className)}>
@@ -478,7 +481,7 @@ function ConsoleHeader(props: {
             {props.detail ? <small>{props.detail}</small> : null}
           </div>
           <WorkspaceTitleMenu
-            conversation={props.conversation}
+            conversation={titleMenuConversation}
             isPinned={props.isConversationPinned}
             title={headerTitle}
             onConversationMenuAction={props.onConversationMenuAction}

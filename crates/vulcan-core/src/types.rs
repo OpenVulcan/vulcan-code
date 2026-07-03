@@ -342,6 +342,80 @@ pub enum ConversationPayload {
         /// 已扁平化的人类可读工具结果文本。
         text: String,
     },
+    /// Inter-agent message delivered through the session mailbox.
+    /// 通过会话 mailbox 投递的代理间消息。
+    AgentMessage {
+        /// Stable message type shown to the receiving model.
+        /// 展示给接收模型的稳定消息类型。
+        message_type: String,
+        /// Logical task name or agent path associated with the message.
+        /// 与该消息关联的逻辑任务名或代理路径。
+        task_name: String,
+        /// Logical sender name or agent path.
+        /// 逻辑发送方名称或代理路径。
+        sender: String,
+        /// Logical recipient name or agent path.
+        /// 逻辑接收方名称或代理路径。
+        recipient: String,
+        /// Model-visible payload text.
+        /// 模型可见的载荷文本。
+        payload: String,
+        /// Whether this message may wake an idle parent turn.
+        /// 该消息是否允许唤醒空闲父级回合。
+        trigger_turn: bool,
+        /// Host-only metadata retained for UI, audit, and diagnostics.
+        /// 供 UI、审计与诊断保留的宿主侧元数据。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<Value>,
+    },
+}
+
+impl ConversationPayload {
+    /// Renders an inter-agent message into a provider-compatible user-message XML envelope.
+    /// 将代理间消息渲染为兼容 Provider 的用户消息 XML 信封。
+    pub fn render_agent_message_text(
+        message_type: &str,
+        task_name: &str,
+        sender: &str,
+        payload: &str,
+    ) -> String {
+        format!(
+            "<agent_message>\n  <message_type>{}</message_type>\n  <task_name>{}</task_name>\n  <sender>{}</sender>\n  <payload>{}</payload>\n</agent_message>",
+            xml_escape_text(message_type.trim()),
+            xml_escape_text(task_name.trim()),
+            xml_escape_text(sender.trim()),
+            xml_escape_text(payload)
+        )
+    }
+
+    /// Returns the full provider-compatible text for one agent message payload.
+    /// 返回单条代理消息载荷的完整 Provider 兼容文本。
+    pub fn agent_message_model_text(&self) -> Option<String> {
+        match self {
+            Self::AgentMessage {
+                message_type,
+                task_name,
+                sender,
+                payload,
+                ..
+            } => Some(Self::render_agent_message_text(
+                message_type,
+                task_name,
+                sender,
+                payload,
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Escapes text inserted into model-visible XML compatibility envelopes.
+/// 转义插入模型可见 XML 兼容信封的文本。
+fn xml_escape_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Represents the role that a transcript record should surface in the projection layer.

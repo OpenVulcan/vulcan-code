@@ -321,6 +321,17 @@ fn render_core_conversation_message_preview(
                 .unwrap_or_default(),
             render_text_code_fence(text)
         ),
+        CoreConversationPayload::AgentMessage { .. } => format!(
+            "### {}. agent_message · `{}`\n{}",
+            index + 1,
+            message.id,
+            render_text_code_fence(
+                &message
+                    .payload
+                    .agent_message_model_text()
+                    .unwrap_or_default()
+            )
+        ),
     }
 }
 
@@ -520,6 +531,9 @@ mod tests {
             prompt_skill_developer_segment: None,
             skill_names: Vec::new(),
             tool_descriptors: Vec::new(),
+            tool_request_rejection_reason: None,
+            tool_request_rejection_all_tools: false,
+            tool_request_rejection_tool_ids: Vec::new(),
             delegate_agents: Vec::new(),
             enabled_mcp_servers: Vec::new(),
             warnings: Vec::new(),

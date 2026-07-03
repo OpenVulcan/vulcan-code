@@ -19,10 +19,10 @@ use super::{
     apply_hydration_to_selected_workspace_snapshot, cached_luaskills_catalog_from_state,
     cached_mcp_catalog_from_state, capture_preserved_workspace_run_state,
     conversation_messages_from_session, emit_workbench_event,
-    load_selected_session_display_hydration, pending_question_snapshots_from_agent_runtime,
-    preserve_active_session_run_state, subagent_navigation_snapshot_from_state,
-    sync_selected_session_goal_summary_from_store, workbench_from_runtime,
-    workspace_surface_allows_user_prompt_editing,
+    load_selected_session_display_hydration, native_tool_summaries_from_agent_runtime,
+    pending_question_snapshots_from_agent_runtime, preserve_active_session_run_state,
+    subagent_navigation_snapshot_from_state, sync_selected_session_goal_summary_from_store,
+    workbench_from_runtime, workspace_surface_allows_user_prompt_editing,
 };
 
 mod tool_detail;
@@ -542,6 +542,7 @@ pub(super) async fn load_hydrated_session_workbench(
         &live_context_budgets,
         &session_goal_summaries,
         &hydrated_window_summaries,
+        native_tool_summaries_from_agent_runtime(agent_runtime_for_status.as_ref()),
     );
     {
         let mut guard = state

@@ -8,7 +8,7 @@ use super::types::{
 use crate::transcript::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde_json::Value;
 use std::collections::BTreeSet;
-use vulcan_core::types::ConversationAttachment;
+use vulcan_core::types::{ConversationAttachment, ConversationPayload};
 
 /// Appends one user-authored text input to the canonical conversation state.
 /// 向规范会话状态追加一条用户文本输入。
@@ -488,6 +488,21 @@ fn conversation_message_to_compaction_source_message(
             tool_call_id.as_deref(),
             text,
         ),
+        SessionConversationPayload::AgentMessage {
+            message_type,
+            task_name,
+            sender,
+            payload,
+            ..
+        } => {
+            let text = ConversationPayload::render_agent_message_text(
+                message_type,
+                task_name,
+                sender,
+                payload,
+            );
+            compaction_user_text_message(message.id.clone(), &text, &[])
+        }
     }
 }
 

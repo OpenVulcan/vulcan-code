@@ -7,6 +7,7 @@ import {
   type SkillActionProps,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
+import { AgentsArea, type AgentActionProps } from "@/components/features/agents/AgentsArea";
 import {
   MemoryArea,
   type MemoryActionProps,
@@ -41,6 +42,9 @@ export function FeatureContent(props: {
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps;
+  // Service-backed independent agent page actions.
+  // 服务端支持的独立智能体页面动作。
+  agentActions: AgentActionProps;
   // Service-backed VMM memory page actions.
   // 服务端支持的 VMM 记忆页面动作。
   memoryActions: MemoryActionProps;
@@ -81,6 +85,16 @@ export function FeatureContent(props: {
         <SkillsArea
           activeTab={props.activeSkillSubArea}
           skillActions={props.skillActions}
+          workbench={props.workbench}
+        />
+      </div>
+    );
+  }
+  if (props.activeArea === "agents") {
+    return (
+      <div className="feature-content">
+        <AgentsArea
+          actions={props.agentActions}
           workbench={props.workbench}
         />
       </div>

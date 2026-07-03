@@ -15,6 +15,11 @@ import {
   type SkillHeaderBusyActionId,
 } from "@/components/features/skills/SkillsArea";
 import {
+  AgentsArea,
+  activeAgentsHeaderSummary,
+  FloatingAgentCategoryMenu,
+} from "@/components/features/agents/AgentsArea";
+import {
   ProjectSidebar,
 } from "@/components/project/ProjectSidebar";
 import { Button } from "@/components/ui/button";
@@ -160,6 +165,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // memoryMenuExpanded stores the shared adaptive menu state for the memory page.
   // memoryMenuExpanded 保存记忆页共享自适应菜单展开状态。
   const [memoryMenuExpanded, setMemoryMenuExpanded] = React.useState(true);
+  // agentsMenuExpanded stores the shared adaptive menu state for the agents page.
+  // agentsMenuExpanded 保存智能体页共享自适应菜单展开状态。
+  const [agentsMenuExpanded, setAgentsMenuExpanded] = React.useState(true);
+  // selectedAgentCategoryId stores the active agents page category filter.
+  // selectedAgentCategoryId 保存智能体页当前分类筛选。
+  const [selectedAgentCategoryId, setSelectedAgentCategoryId] = React.useState("");
   // sessionToolExpanded stores the shared adaptive menu state for the chat tool panel.
   // sessionToolExpanded 保存会话工具共享自适应面板展开状态。
   const [sessionToolExpanded, setSessionToolExpanded] = React.useState(false);
@@ -644,6 +655,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // skillHeaderSummary stores the active skills page title detail for descriptor generation.
   // skillHeaderSummary 保存当前技能页 descriptor 使用的标题详情。
   const skillHeaderSummary = activeSkillHeaderSummary(props.activeSkillSubArea, props.workbench, t);
+  // agentsHeaderSummary stores the independent Agents page title detail for descriptor generation.
+  // agentsHeaderSummary 保存独立智能体页 descriptor 使用的标题详情。
+  const agentsHeaderSummary = activeAgentsHeaderSummary(props.workbench, t);
   // skillHeaderActions stores the registered actions for the active skills sub page.
   // skillHeaderActions 保存当前技能子页面注册的标题栏动作。
   const skillHeaderActions = React.useMemo(() => {
@@ -680,6 +694,21 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       </div>
     );
   }, [props.activeSkillSubArea, props.skillActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
+  // agentsHeaderActions stores registered actions for the independent Agents page.
+  // agentsHeaderActions 保存独立智能体页面注册的标题栏动作。
+  const agentsHeaderActions = React.useMemo(() => (
+    <div className="feature-header-actions workspace-skills-header-actions">
+      <button
+        className="skill-action-button secondary"
+        disabled={skillHeaderBusyAction !== null}
+        onClick={() => void runSkillHeaderAction("agent-refresh", props.agentActions.onRefreshAgentCatalog)}
+        type="button"
+      >
+        <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
+        <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
+      </button>
+    </div>
+  ), [props.agentActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
   // memoryHeaderMeta stores the active memory page title detail for descriptor generation.
   // memoryHeaderMeta 保存当前记忆页 descriptor 使用的标题详情。
   const memoryHeaderMeta = memorySubAreaMeta(props.activeMemorySubArea, props.workbench, t);
@@ -762,6 +791,35 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           expanded={skillsMenuExpanded}
           onExpandedChange={setSkillsMenuExpanded}
           onSelectSubArea={props.onSelectSkillSubArea}
+        />
+      ),
+      side: "left",
+    }],
+  } : props.mainView === "agents" ? {
+    content: (
+      <AgentsArea
+        actions={props.agentActions}
+        selectedCategoryId={selectedAgentCategoryId}
+        onSelectCategory={setSelectedAgentCategoryId}
+        workbench={props.workbench}
+      />
+    ),
+    detail: agentsHeaderSummary.detail,
+    headerActions: agentsHeaderActions,
+    title: t("workspaceShell.agentsTitle"),
+    toolPanels: [{
+      className: "workspace-tool-panel-page workspace-skills-settings workspace-agent-settings",
+      contentClassName: "workspace-skills-content workspace-agent-content",
+      contentShellClassName: "workspace-skills-content-shell",
+      expanded: agentsMenuExpanded,
+      onLayoutModeWillChange: notifyConversationLayoutWillChange,
+      panel: (
+        <FloatingAgentCategoryMenu
+          expanded={agentsMenuExpanded}
+          selectedCategoryId={selectedAgentCategoryId}
+          onExpandedChange={setAgentsMenuExpanded}
+          onSelectCategory={setSelectedAgentCategoryId}
+          workbench={props.workbench}
         />
       ),
       side: "left",
@@ -896,11 +954,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
         onOpenSkills={props.onOpenSkills}
+        onOpenAgents={props.onOpenAgents}
         onOpenMemory={props.onOpenMemory}
         onSelectArea={props.onSelectArea}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         memoryActive={props.mainView === "memory"}
+        agentsActive={props.mainView === "agents"}
         skillsActive={props.mainView === "skills"}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}

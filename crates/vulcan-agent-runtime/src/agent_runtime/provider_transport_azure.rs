@@ -47,7 +47,9 @@ pub(crate) fn execute_azure_openai_stream(
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
-    reject_tool_requests: bool,
+    tool_request_rejection_reason: Option<String>,
+    tool_request_rejection_all_tools: bool,
+    tool_request_rejection_tool_ids: Vec<String>,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
     let base_url = normalize_optional_base_url(base_url);
@@ -68,7 +70,9 @@ pub(crate) fn execute_azure_openai_stream(
         task_runtime,
         request_budget_guard,
         retry_policy,
-        reject_tool_requests,
+        tool_request_rejection_reason,
+        tool_request_rejection_all_tools,
+        tool_request_rejection_tool_ids,
     );
 
     execute_host_controlled_stream_with_prepared_inputs(

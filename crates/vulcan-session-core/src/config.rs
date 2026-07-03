@@ -96,6 +96,9 @@ pub struct SessionRequestedConfig {
     /// Optional subagent profile identifier.
     /// 可选的子代理配置标识符。
     pub subagent_profile_id: Option<String>,
+    /// Optional subagent execution mode key.
+    /// 可选的子代理执行模式键。
+    pub subagent_mode: Option<String>,
     /// Optional replacement system prompt.
     /// 可选的替换系统提示词。
     pub system_prompt: Option<String>,
@@ -129,6 +132,7 @@ impl Default for SessionRequestedConfig {
         Self {
             inherit_parent_config: true,
             subagent_profile_id: None,
+            subagent_mode: None,
             system_prompt: None,
             system_prompt_append: None,
             provider_model: ProviderModelSnapshot::default(),
@@ -151,6 +155,9 @@ pub struct SessionEffectiveConfig {
     /// Resolved subagent profile identifier.
     /// 已解析的子代理配置标识符。
     pub subagent_profile_id: Option<String>,
+    /// Resolved subagent execution mode key.
+    /// 已解析的子代理执行模式键。
+    pub subagent_mode: Option<String>,
     /// Resolved provider and model snapshot.
     /// 已解析的供应商与模型快照。
     pub provider_model: ProviderModelSnapshot,
@@ -178,6 +185,7 @@ impl Default for SessionEffectiveConfig {
         Self {
             inherit_parent_config: true,
             subagent_profile_id: None,
+            subagent_mode: None,
             provider_model: ProviderModelSnapshot::default(),
             system_prompt_layers: Vec::new(),
             tool_exposure: ToolExposureSnapshot::default(),

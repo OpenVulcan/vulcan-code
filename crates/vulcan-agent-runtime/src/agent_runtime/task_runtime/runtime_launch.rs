@@ -41,7 +41,19 @@ pub(super) fn build_task_runtime_preparation_request(
     request.prompt = invocation.prompt.clone();
     request.conversation_state = core_snapshot_to_session_conversation_state(&invocation.snapshot);
     request.tool_exposure_override = resolved_config.effective_config.tool_exposure.clone();
-    if !context.allow_subagent_tools {
+    let mirror_subagent =
+        resolved_config.effective_config.subagent_mode.as_deref() == Some(SUBAGENT_MODE_MIRROR);
+    if mirror_subagent {
+        request.tool_request_rejection_reason = Some(String::from(
+            "当前为子代理镜像，不允许使用子代理调度相关工具。请使用其他可用工具完成分析，并将结果交回父代理。",
+        ));
+        request.tool_request_rejection_all_tools = false;
+        request.tool_request_rejection_tool_ids = SUBAGENT_ORCHESTRATION_TOOL_IDS
+            .iter()
+            .map(|tool_id| (*tool_id).to_string())
+            .collect();
+    }
+    if !context.allow_subagent_tools && !mirror_subagent {
         disable_subagent_orchestration_tools(&mut request.tool_exposure_override);
     }
     if let Some(execution_mode) = resolved_config

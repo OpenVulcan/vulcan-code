@@ -46,7 +46,8 @@ use uuid::Uuid;
 use vulcan_context::{ContextCompactionPolicy, conversation_state_to_compaction_source_messages};
 use vulcan_context_compaction::{CompactionPlanInput, plan_context_compaction};
 use vulcan_core::types::{
-    ControllerConfig as CoreControllerConfig, ConversationPayload as CoreConversationPayload,
+    ControllerConfig as CoreControllerConfig, ConversationMessage as CoreConversationMessage,
+    ConversationPayload as CoreConversationPayload,
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderPromptLayers as CoreProviderPromptLayers,
 };
@@ -72,10 +73,11 @@ use vulcan_subagent_core::{
     WAIT_AGENT_TOOL, WaitAgentActivityResult,
 };
 use vulcan_task_session::{
-    SegmentedTaskSessionStore, TaskInvocationConfig, TaskInvocationEvent, TaskInvocationEventKind,
-    TaskSessionCompactionStore, TaskSessionConfigResolutionInput, TaskSessionConfigResolver,
-    TaskSessionMetadata, TaskSessionResolvedConfig, TaskSessionStatus, TaskSessionStore,
-    apply_task_session_compaction_result,
+    SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR, SegmentedTaskSessionStore,
+    SubagentCatalog, SubagentDefinition, TaskInvocationConfig, TaskInvocationEvent,
+    TaskInvocationEventKind, TaskSessionCompactionStore, TaskSessionConfigResolutionInput,
+    TaskSessionConfigResolver, TaskSessionMetadata, TaskSessionResolvedConfig, TaskSessionStatus,
+    TaskSessionStore, apply_task_session_compaction_result,
 };
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
@@ -154,6 +156,12 @@ struct TaskToolInvocationArgs {
     /// Optional subagent label used for display and system-prompt augmentation.
     /// 用于展示和系统提示词增强的可选子代理标签。
     subagent: Option<String>,
+    /// Optional explicit subagent mode key.
+    /// 可选的显式子代理模式键。
+    agent_mode: Option<String>,
+    /// Optional string catalog id for the requested subagent definition.
+    /// 请求的子代理定义可选字符串目录标识。
+    subagent_profile_id: Option<String>,
     /// Optional Vulcan context fork selector for a new subagent.
     /// 新子代理使用的可选 Vulcan 上下文派生选择器。
     fork_turns: Option<String>,
@@ -650,6 +658,9 @@ pub struct TaskRuntime {
     /// Vulcan-native child-agent registry used as the future single source for subagent state.
     /// Vulcan 原生子代理注册表，用作未来子代理状态的单一事实源。
     subagent_registry: RwLock<SubagentRegistry>,
+    /// Merged subagent catalog used to resolve expert and catalog-backed child agents.
+    /// 用于解析专家与目录驱动子代理的合并子代理目录。
+    subagent_catalog: RwLock<SubagentCatalog>,
     /// Segmented task-session roots keyed by root main-session identifier.
     /// 按根主会话标识索引的分段子代理会话根目录。
     task_session_store_roots: RwLock<HashMap<SessionId, PathBuf>>,

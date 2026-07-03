@@ -70,6 +70,56 @@ fn task_runtime_publishes_subagent_mailbox_events() {
     assert_eq!(events[0].payload["result_text"], "review complete");
 }
 
+/// Verifies expert profile invocations are reported as agent-profile subagents.
+/// 验证专家配置调用会按 agent-profile 子代理上报。
+#[test]
+fn task_runtime_reports_expert_profile_mailbox_kind() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let invocation_config =
+        TaskInvocationConfig::with_profile("engineering/code-reviewer", "review this change");
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config,
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-1")),
+        final_output_text: String::from("review complete"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &outcome)
+        .expect("completed expert task should store");
+
+    let events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(root_session_id))
+        .expect("mailbox should drain");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].payload["agent_kind"], "agent_profile");
+}
+
 /// Verifies TaskRuntime mirrors task-session lifecycle changes into the native subagent registry.
 /// 验证 TaskRuntime 会把任务会话生命周期变化镜像到原生子代理注册表。
 #[test]
@@ -146,6 +196,62 @@ fn task_runtime_mirrors_lifecycle_into_subagent_registry() {
     assert_eq!(
         completed_registry.running_count_for_parent(SessionNodeId::from(root_session_id)),
         0
+    );
+}
+
+/// Verifies expert profile invocations are mirrored into the native registry as agent-md entries.
+/// 验证专家配置调用会以 agent-md 条目镜像到原生注册表。
+#[test]
+fn task_runtime_mirrors_expert_profile_into_subagent_registry() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let invocation_config =
+        TaskInvocationConfig::with_profile("engineering/code-reviewer", "review this change");
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config,
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
+    };
+
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &outcome)
+        .expect("running expert task should store");
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read");
+    let entry = registry
+        .get("agent-review")
+        .expect("running expert registry entry should exist");
+
+    assert_eq!(entry.agent_kind, SubagentKind::AgentMd);
+    assert_eq!(
+        entry.prompt_source.as_deref(),
+        Some("agent_md:engineering/code-reviewer")
     );
 }
 
@@ -226,7 +332,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         .expect("nested running task outcome should store");
 
     let result = task_runtime
-        .invoke_list_agents(root_session_id, json!({}))
+        .invoke_list_agents(root_session_id, json!({ "include_all": true }))
         .await
         .expect("list_agents should succeed");
 
@@ -249,7 +355,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     let filtered = task_runtime
         .invoke_list_agents(
             root_session_id,
-            json!({ "path_prefix": "/root/agent-review" }),
+            json!({ "include_all": true, "path_prefix": "/root/agent-review" }),
         )
         .await
         .expect("list_agents path_prefix filter should succeed");
@@ -265,7 +371,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     let nested_only = task_runtime
         .invoke_list_agents(
             root_session_id,
-            json!({ "path_prefix": "/root/agent-review/nested-check" }),
+            json!({ "include_all": true, "path_prefix": "/root/agent-review/nested-check" }),
         )
         .await
         .expect("list_agents nested path_prefix filter should succeed");
@@ -282,7 +388,10 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     );
 
     let empty = task_runtime
-        .invoke_list_agents(root_session_id, json!({ "path_prefix": "/root/other" }))
+        .invoke_list_agents(
+            root_session_id,
+            json!({ "include_all": true, "path_prefix": "/root/other" }),
+        )
         .await
         .expect("list_agents non-matching path_prefix should succeed");
     assert_eq!(
@@ -336,7 +445,7 @@ async fn list_agents_keeps_completed_registry_entries_visible() {
         .expect("completed task outcome should store");
 
     let result = task_runtime
-        .invoke_list_agents(root_session_id, json!({}))
+        .invoke_list_agents(root_session_id, json!({ "include_all": true }))
         .await
         .expect("list_agents should succeed");
 
@@ -348,6 +457,80 @@ async fn list_agents_keeps_completed_registry_entries_visible() {
     assert_eq!(
         result.model_output["agents"][0]["result"],
         "review complete"
+    );
+}
+
+/// Verifies list_agents returns registry status without consuming mailbox updates.
+/// 验证 list_agents 返回注册表状态且不会消费 mailbox 更新。
+#[tokio::test]
+async fn list_agents_does_not_consume_pending_mailbox_updates() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let invocation_config = TaskInvocationConfig::main("review this change");
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config,
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-1")),
+        final_output_text: String::from("review complete"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &outcome)
+        .expect("completed task outcome should store");
+
+    let first_listing = task_runtime
+        .invoke_list_agents(root_session_id, json!({}))
+        .await
+        .expect("first list_agents status query should succeed");
+
+    assert_eq!(
+        first_listing.model_output["agents"][0]["task_name"],
+        "agent-review"
+    );
+    assert_eq!(
+        first_listing.model_output["agents"][0]["result"],
+        "review complete"
+    );
+
+    let second_listing = task_runtime
+        .invoke_list_agents(root_session_id, json!({}))
+        .await
+        .expect("second list_agents status query should succeed");
+
+    assert_eq!(
+        second_listing.model_output["agents"]
+            .as_array()
+            .expect("agents should be an array")
+            .len(),
+        1
+    );
+    assert!(
+        task_runtime
+            .has_subagent_events_for_parent(SessionNodeId::from(root_session_id))
+            .expect("mailbox pending check should succeed")
     );
 }
 

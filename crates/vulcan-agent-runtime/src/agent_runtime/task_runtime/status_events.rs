@@ -204,6 +204,7 @@ pub(super) fn build_subagent_mailbox_payload(
     outcome: Option<&TaskExecutionOutcome>,
 ) -> Value {
     let agent_kind = subagent_kind_for_invocation(&invocation.invocation_config);
+    let debug = subagent_runtime_debug_payload(&invocation.invocation_config);
     json!({
         "child_thread_id": invocation.task_id.to_string(),
         "public_id": invocation.public_task_id,
@@ -212,6 +213,8 @@ pub(super) fn build_subagent_mailbox_payload(
         "parent_task_id": invocation.parent_task_id.map(|value| value.to_string()),
         "parent_turn_id": Value::Null,
         "agent_kind": agent_kind,
+        "prompt_source": debug.get("prompt_source").cloned().unwrap_or(Value::Null),
+        "debug": debug,
         "status": subagent_status_from_task_status(status),
         "task_status": status,
         "description": invocation.description,
@@ -231,8 +234,15 @@ pub(super) fn build_subagent_mailbox_payload(
 pub(super) fn subagent_kind_for_invocation(
     invocation: &TaskInvocationConfig,
 ) -> SubagentMailboxAgentKind {
-    let _ = invocation;
-    SubagentMailboxAgentKind::ParentClone
+    if invocation
+        .subagent_profile_id
+        .as_deref()
+        .is_some_and(|profile_id| !profile_id.trim().is_empty())
+    {
+        SubagentMailboxAgentKind::AgentProfile
+    } else {
+        SubagentMailboxAgentKind::ParentClone
+    }
 }
 
 /// Maps one task-session record into the Vulcan-native subagent kind.
@@ -248,8 +258,16 @@ pub(super) fn subagent_kind_for_invocation(
 /// The subagent kind stored in the native registry.
 /// 写入原生注册表的子代理类型。
 pub(super) fn subagent_kind_for_task_record(record: &TaskSessionRecord) -> SubagentKind {
-    let _ = record;
-    SubagentKind::Clone
+    if record
+        .invocation_config
+        .subagent_profile_id
+        .as_deref()
+        .is_some_and(|profile_id| !profile_id.trim().is_empty())
+    {
+        SubagentKind::AgentMd
+    } else {
+        SubagentKind::Clone
+    }
 }
 
 /// Resolves a prompt-source label for one task-session record.
@@ -265,8 +283,14 @@ pub(super) fn subagent_kind_for_task_record(record: &TaskSessionRecord) -> Subag
 /// A stable source marker for core subagent tasks.
 /// 核心子代理任务使用的稳定来源标记。
 pub(super) fn subagent_prompt_source_for_task_record(record: &TaskSessionRecord) -> Option<String> {
-    let _ = record;
-    Some(String::from("core"))
+    Some(
+        record
+            .invocation_config
+            .subagent_profile_id
+            .as_deref()
+            .map(|profile_id| format!("agent_md:{profile_id}"))
+            .unwrap_or_else(|| String::from("core")),
+    )
 }
 
 /// Maps a persisted TaskSession status into the subagent mailbox status contract.

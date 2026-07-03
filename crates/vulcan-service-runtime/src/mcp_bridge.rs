@@ -4,7 +4,9 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 
 use tokio::sync::Mutex;
-use vulcan_mcp_runtime::{McpTransport, McpTransportLaunchSpec, McpTransportOAuthSpec};
+use vulcan_mcp_runtime::{
+    McpToolSchema, McpTransport, McpTransportLaunchSpec, McpTransportOAuthSpec,
+};
 use vulcan_provider_config::config::{
     PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
     ProviderConfigurationFile,
@@ -58,6 +60,30 @@ pub struct TauriMcpRuntimeCatalog {
     /// Human-readable summary rows.
     /// 人类可读摘要行。
     pub summary_rows: Vec<String>,
+    /// Discovered runtime tool summaries.
+    /// 已发现的运行时工具摘要。
+    pub tools: Vec<TauriMcpRuntimeToolSummary>,
+}
+
+/// Lightweight MCP runtime tool summary exposed to the WebUI snapshot.
+/// 暴露给 WebUI 快照的轻量 MCP 运行时工具摘要。
+#[derive(Debug, Clone)]
+pub struct TauriMcpRuntimeToolSummary {
+    /// Stable tool selector accepted by runtime exposure policies.
+    /// 运行时暴露策略可接受的稳定工具选择器。
+    pub id: String,
+    /// Owning MCP server identifier.
+    /// 所属 MCP 服务器标识。
+    pub server_id: String,
+    /// Stable remote tool name.
+    /// 稳定的远端工具名称。
+    pub name: String,
+    /// Human-readable remote tool description.
+    /// 人类可读的远端工具描述。
+    pub description: String,
+    /// Original qualified MCP tool identifier.
+    /// 原始限定 MCP 工具标识。
+    pub origin_tool_id: String,
 }
 
 /// Runtime snapshot for one configured MCP server.
@@ -88,6 +114,9 @@ struct TauriMcpServerSnapshot {
     /// Discovered resource count.
     /// 已发现 resource 数量。
     resource_count: usize,
+    /// Discovered runtime tool summaries.
+    /// 已发现的运行时工具摘要。
+    tools: Vec<TauriMcpRuntimeToolSummary>,
     /// Latest connection or discovery error.
     /// 最近一次连接或发现错误。
     last_error: Option<String>,
@@ -119,6 +148,11 @@ impl TauriMcpRuntimeHandle {
             .values()
             .map(|server| server.resource_count)
             .sum();
+        let tools = self
+            .servers
+            .values()
+            .flat_map(|server| server.tools.iter().cloned())
+            .collect();
         let summary_rows = self
             .servers
             .values()
@@ -148,6 +182,7 @@ impl TauriMcpRuntimeHandle {
             prompt_count,
             resource_count,
             summary_rows,
+            tools,
         }
     }
 }
@@ -168,9 +203,16 @@ pub async fn bootstrap_mcp_runtime(
         }
 
         let snapshot = match connect_server(&server).await {
-            Ok((transport, tool_count, prompt_count, resource_count)) => {
+            Ok((transport, tools, prompt_count, resource_count)) => {
+                let tool_count = tools.len();
                 transports.lock().await.insert(server_id.clone(), transport);
-                server.connected_snapshot(tool_count, prompt_count, resource_count)
+                server.connected_snapshot(
+                    &server_id,
+                    tools,
+                    tool_count,
+                    prompt_count,
+                    resource_count,
+                )
             }
             Err(error) => server.disconnected_snapshot(error),
         };
@@ -187,7 +229,7 @@ pub async fn bootstrap_mcp_runtime(
 /// 连接单个 MCP 服务器并发现轻量统计数量。
 async fn connect_server(
     server: &TauriMcpServerConfig,
-) -> Result<(Arc<dyn McpTransport>, usize, usize, usize), String> {
+) -> Result<(Arc<dyn McpTransport>, Vec<McpToolSchema>, usize, usize), String> {
     tokio::time::timeout(
         Duration::from_secs(8),
         connect_server_without_timeout(server),
@@ -200,7 +242,7 @@ async fn connect_server(
 /// 在不应用外层启动超时的情况下连接单个 MCP 服务器。
 async fn connect_server_without_timeout(
     server: &TauriMcpServerConfig,
-) -> Result<(Arc<dyn McpTransport>, usize, usize, usize), String> {
+) -> Result<(Arc<dyn McpTransport>, Vec<McpToolSchema>, usize, usize), String> {
     let transport = server
         .launch_spec()?
         .launch(None)
@@ -218,7 +260,7 @@ async fn connect_server_without_timeout(
         .list_resources()
         .await
         .map_err(|error| format!("发现 MCP resources 失败：{error}"))?;
-    Ok((transport, tools.len(), prompts.len(), resources.len()))
+    Ok((transport, tools, prompts.len(), resources.len()))
 }
 
 /// Runtime-facing MCP server configuration entry.
@@ -342,24 +384,33 @@ impl TauriMcpServerConfig {
     /// Builds the disabled server snapshot.
     /// 构建禁用服务器快照。
     fn disabled_snapshot(&self) -> TauriMcpServerSnapshot {
-        self.snapshot("禁用", 0, 0, 0, None)
+        self.snapshot("禁用", Vec::new(), 0, 0, 0, None)
     }
 
     /// Builds the connected server snapshot.
     /// 构建已连接服务器快照。
     fn connected_snapshot(
         &self,
+        server_id: &str,
+        tools: Vec<McpToolSchema>,
         tool_count: usize,
         prompt_count: usize,
         resource_count: usize,
     ) -> TauriMcpServerSnapshot {
-        self.snapshot("在线", tool_count, prompt_count, resource_count, None)
+        self.snapshot(
+            "在线",
+            runtime_tool_summaries_from_schemas(server_id, tools),
+            tool_count,
+            prompt_count,
+            resource_count,
+            None,
+        )
     }
 
     /// Builds the disconnected server snapshot.
     /// 构建已断开服务器快照。
     fn disconnected_snapshot(&self, error: String) -> TauriMcpServerSnapshot {
-        self.snapshot("离线", 0, 0, 0, Some(error))
+        self.snapshot("离线", Vec::new(), 0, 0, 0, Some(error))
     }
 
     /// Builds one server snapshot with common fields.
@@ -367,6 +418,7 @@ impl TauriMcpServerConfig {
     fn snapshot(
         &self,
         status: &str,
+        tools: Vec<TauriMcpRuntimeToolSummary>,
         tool_count: usize,
         prompt_count: usize,
         resource_count: usize,
@@ -381,6 +433,7 @@ impl TauriMcpServerConfig {
             tool_count,
             prompt_count,
             resource_count,
+            tools,
             last_error,
         }
     }
@@ -414,6 +467,27 @@ impl TauriMcpServerConfig {
         }
         resolved_headers
     }
+}
+
+/// Converts discovered MCP schemas into lightweight WebUI-safe tool summaries.
+/// 将已发现的 MCP schema 转换为适合 WebUI 使用的轻量工具摘要。
+fn runtime_tool_summaries_from_schemas(
+    server_id: &str,
+    tools: Vec<McpToolSchema>,
+) -> Vec<TauriMcpRuntimeToolSummary> {
+    tools
+        .into_iter()
+        .map(|tool| {
+            let origin_tool_id = format!("{server_id}/{}", tool.name);
+            TauriMcpRuntimeToolSummary {
+                id: origin_tool_id.clone(),
+                server_id: server_id.to_string(),
+                name: tool.name,
+                description: tool.description,
+                origin_tool_id,
+            }
+        })
+        .collect()
 }
 
 /// Converts persisted OAuth config into MCP runtime OAuth spec.

@@ -304,10 +304,9 @@ pub(crate) fn emit_context_injection_changed_delta(
         let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
             return Ok(());
         };
-        let Some(delta) = context_injection_changed_delta_from_workspace_snapshot(
-            workspace_snapshot,
-            session_id,
-        ) else {
+        let Some(delta) =
+            context_injection_changed_delta_from_workspace_snapshot(workspace_snapshot, session_id)
+        else {
             return Ok(());
         };
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);

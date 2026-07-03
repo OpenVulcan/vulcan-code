@@ -18,7 +18,9 @@ pub(crate) fn execute_provider_transport_stream(
     request: ProviderTransportExecutionRequest,
 ) -> ProviderDeltaStream {
     let execution_mode = request.execution_mode.clone();
-    let reject_tool_requests = request.reject_tool_requests;
+    let tool_request_rejection_reason = request.tool_request_rejection_reason.clone();
+    let tool_request_rejection_all_tools = request.tool_request_rejection_all_tools;
+    let tool_request_rejection_tool_ids = request.tool_request_rejection_tool_ids.clone();
     match request.api_family {
         ProviderApiFamily::OpenAiResponses => execute_openai_responses_stream(
             &request.provider_id,
@@ -42,7 +44,9 @@ pub(crate) fn execute_provider_transport_stream(
             request.request_budget_guard,
             request.retry_policy,
             request.prompt_intervention,
-            reject_tool_requests,
+            tool_request_rejection_reason.clone(),
+            tool_request_rejection_all_tools,
+            tool_request_rejection_tool_ids.clone(),
         ),
         ProviderApiFamily::OpenAiChatCompatible => match request.runtime_kind {
             ProviderRuntimeKind::AzureOpenAi => execute_azure_openai_stream(
@@ -68,7 +72,9 @@ pub(crate) fn execute_provider_transport_stream(
                 request.request_budget_guard,
                 request.retry_policy,
                 request.prompt_intervention,
-                reject_tool_requests,
+                tool_request_rejection_reason.clone(),
+                tool_request_rejection_all_tools,
+                tool_request_rejection_tool_ids.clone(),
             ),
             ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
                 &request.provider_id,
@@ -92,7 +98,9 @@ pub(crate) fn execute_provider_transport_stream(
                 request.request_budget_guard,
                 request.retry_policy,
                 request.prompt_intervention,
-                reject_tool_requests,
+                tool_request_rejection_reason.clone(),
+                tool_request_rejection_all_tools,
+                tool_request_rejection_tool_ids.clone(),
             ),
             _ => execute_openai_compatible_stream(
                 &request.provider_id,
@@ -118,7 +126,9 @@ pub(crate) fn execute_provider_transport_stream(
                 request.request_budget_guard,
                 request.retry_policy,
                 request.prompt_intervention,
-                reject_tool_requests,
+                tool_request_rejection_reason.clone(),
+                tool_request_rejection_all_tools,
+                tool_request_rejection_tool_ids.clone(),
             ),
         },
         ProviderApiFamily::GoogleGeminiGenerateContent => execute_google_gemini_stream(
@@ -143,7 +153,9 @@ pub(crate) fn execute_provider_transport_stream(
             request.request_budget_guard,
             request.retry_policy,
             request.prompt_intervention,
-            reject_tool_requests,
+            tool_request_rejection_reason.clone(),
+            tool_request_rejection_all_tools,
+            tool_request_rejection_tool_ids.clone(),
         ),
         ProviderApiFamily::CohereChat => execute_cohere_stream(
             &request.provider_id,
@@ -167,7 +179,9 @@ pub(crate) fn execute_provider_transport_stream(
             request.request_budget_guard,
             request.retry_policy,
             request.prompt_intervention,
-            reject_tool_requests,
+            tool_request_rejection_reason.clone(),
+            tool_request_rejection_all_tools,
+            tool_request_rejection_tool_ids.clone(),
         ),
         ProviderApiFamily::AnthropicMessages => execute_anthropic_stream(
             &request.provider_id,
@@ -191,7 +205,9 @@ pub(crate) fn execute_provider_transport_stream(
             request.request_budget_guard,
             request.retry_policy,
             request.prompt_intervention,
-            reject_tool_requests,
+            tool_request_rejection_reason,
+            tool_request_rejection_all_tools,
+            tool_request_rejection_tool_ids,
         ),
         ProviderApiFamily::BedrockConverse => Box::pin(futures_util::stream::once(async {
             Err(String::from(

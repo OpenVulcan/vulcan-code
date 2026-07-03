@@ -376,6 +376,7 @@ pub(crate) async fn service_select_conversation(
         subagent_navigation,
         session_goal_summaries,
         command_session_runtime,
+        native_tools,
         hydrated_window_summaries,
     ) = {
         let mut guard = state
@@ -393,11 +394,13 @@ pub(crate) async fn service_select_conversation(
             .agent_runtime
             .as_ref()
             .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
+        let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
             subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
             guard.session_goal_summaries.clone(),
             command_session_runtime,
+            native_tools,
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
@@ -417,6 +420,7 @@ pub(crate) async fn service_select_conversation(
         &live_context_budgets,
         &session_goal_summaries,
         &hydrated_window_summaries,
+        native_tools,
     );
     {
         let mut guard = state

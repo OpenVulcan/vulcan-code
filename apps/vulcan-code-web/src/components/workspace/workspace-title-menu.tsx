@@ -47,6 +47,9 @@ export function WorkspaceTitleMenu(props: {
   // hasConversationMenu determines whether conversation-only commands can be shown.
   // hasConversationMenu 判断是否可以展示仅会话可用的命令。
   const hasConversationMenu = Boolean(props.conversation && props.onConversationMenuAction);
+  if (!hasConversationMenu) {
+    return null;
+  }
 
   // handleCopyTitle copies the visible header title and reports completion.
   // handleCopyTitle 复制当前可见标题并反馈完成状态。
@@ -88,58 +91,54 @@ export function WorkspaceTitleMenu(props: {
           <Copy size={15} />
           <span>{t("conversationMenu.copyTitle")}</span>
         </DropdownMenuItem>
-        {hasConversationMenu ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => runConversationAction("pin")}>
-              <Pin size={15} />
-              <span>{props.isPinned ? t("conversationMenu.unpin") : t("conversationMenu.pin")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => runConversationAction("rename")}>
-              <Pencil size={15} />
-              <span>{t("conversationMenu.rename")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => runConversationAction("archive")}>
-              <Archive size={15} />
-              <span>{t("conversationMenu.archive")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled>
-              <MailOpen size={15} />
-              <span>{t("conversationMenu.markUnread")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => runConversationAction("open-directory")}>
-              <FolderOpen size={15} />
-              <span>{t("conversationMenu.openDirectory")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => runConversationAction("copy-workdir")}>
-              <Copy size={15} />
-              <span>{t("conversationMenu.copyWorkspace")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => runConversationAction("copy-session-id")}>
-              <FileText size={15} />
-              <span>{t("conversationMenu.copySessionId")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled>
-              <Link size={15} />
-              <span>{t("conversationMenu.copyDeepLink")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled>
-              <GitBranch size={15} />
-              <span>{t("conversationMenu.forkLocal")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled>
-              <GitBranch size={15} />
-              <span>{t("conversationMenu.forkWorktree")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled>
-              <ExternalLink size={15} />
-              <span>{t("conversationMenu.openNewWindow")}</span>
-            </DropdownMenuItem>
-          </>
-        ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => runConversationAction("pin")}>
+          <Pin size={15} />
+          <span>{props.isPinned ? t("conversationMenu.unpin") : t("conversationMenu.pin")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => runConversationAction("rename")}>
+          <Pencil size={15} />
+          <span>{t("conversationMenu.rename")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => runConversationAction("archive")}>
+          <Archive size={15} />
+          <span>{t("conversationMenu.archive")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled>
+          <MailOpen size={15} />
+          <span>{t("conversationMenu.markUnread")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => runConversationAction("open-directory")}>
+          <FolderOpen size={15} />
+          <span>{t("conversationMenu.openDirectory")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => runConversationAction("copy-workdir")}>
+          <Copy size={15} />
+          <span>{t("conversationMenu.copyWorkspace")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => runConversationAction("copy-session-id")}>
+          <FileText size={15} />
+          <span>{t("conversationMenu.copySessionId")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled>
+          <Link size={15} />
+          <span>{t("conversationMenu.copyDeepLink")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled>
+          <GitBranch size={15} />
+          <span>{t("conversationMenu.forkLocal")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled>
+          <GitBranch size={15} />
+          <span>{t("conversationMenu.forkWorktree")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled>
+          <ExternalLink size={15} />
+          <span>{t("conversationMenu.openNewWindow")}</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -313,6 +313,28 @@ pub struct McpServerSummary {
     pub env_passthrough: Vec<String>,
 }
 
+/// Summarizes one discovered MCP runtime tool.
+/// 汇总单个已发现的 MCP 运行时工具。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolSummary {
+    /// Stable selector identifier accepted by runtime tool exposure policies.
+    /// 运行时工具暴露策略可接受的稳定选择器标识。
+    pub id: String,
+    /// Owning MCP server identifier.
+    /// 所属 MCP 服务器标识。
+    pub server_id: String,
+    /// Remote tool name.
+    /// 远端工具名称。
+    pub name: String,
+    /// Human-readable remote tool description.
+    /// 人类可读的远端工具描述。
+    pub description: String,
+    /// Original qualified MCP tool identifier.
+    /// 原始限定 MCP 工具标识。
+    pub origin_tool_id: String,
+}
+
 /// Summarizes one string key/value pair.
 /// 汇总单个字符串键值对。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

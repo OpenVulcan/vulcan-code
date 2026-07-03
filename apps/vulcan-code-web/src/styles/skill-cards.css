@@ -67,8 +67,16 @@
   grid-template-rows: minmax(0, 1fr);
 }
 
+.agent-management-surface .agent-skill-page-body:has(> .agent-catalog-toolbar) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .agent-skill-page-body:has(> .skill-warning-list) {
   grid-template-rows: minmax(0, 96px) minmax(0, 1fr);
+}
+
+.agent-management-surface .agent-skill-page-body:has(> .agent-catalog-toolbar):has(> .skill-warning-list) {
+  grid-template-rows: auto minmax(0, 96px) minmax(0, 1fr);
 }
 
 .skill-summary-grid {
@@ -117,6 +125,315 @@
   border-radius: 7px;
   padding: 9px;
   background: var(--muted);
+}
+
+.agent-catalog-toolbar {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-catalog-toolbar-main,
+.agent-import-inline-form {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-catalog-notice {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-import-inline-form input {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.agent-import-inline-form input:first-child {
+  flex: 1 1 260px;
+}
+
+.agent-import-inline-form.remote input:first-child {
+  flex-basis: 320px;
+}
+
+.agent-import-inline-form.remote input:nth-child(2) {
+  flex: 0 1 160px;
+}
+
+.agent-import-inline-form.package input:first-child {
+  flex: 0 1 160px;
+}
+
+.agent-import-inline-form.package input:nth-child(2) {
+  flex: 1 1 320px;
+}
+
+.agent-category-floating-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+}
+
+.agent-category-floating-menu .workspace-tool-panel-menu-list {
+  max-height: min(52vh, 420px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.agent-category-floating-row > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-category-floating-row strong {
+  min-width: 22px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 82%, transparent);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.agent-category-floating-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: white;
+  font-size: 12px;
+}
+
+.agent-editor-form {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  max-height: min(680px, calc(100vh - 190px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.agent-editor-dialog {
+  width: min(860px, calc(100vw - 32px));
+  max-width: min(860px, calc(100vw - 32px)) !important;
+}
+
+.agent-editor-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-editor-grid label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.agent-editor-grid > .wide {
+  grid-column: 1 / -1;
+}
+
+.agent-editor-grid span,
+.agent-editor-checkbox span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.agent-editor-grid input,
+.agent-editor-grid select,
+.agent-editor-grid textarea {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 8px 9px;
+  font-size: 12px;
+}
+
+.agent-editor-grid input,
+.agent-editor-grid select {
+  height: 32px;
+}
+
+.agent-editor-grid textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.agent-editor-color-field {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.agent-editor-color-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+
+.agent-prompt-field textarea {
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+}
+
+.agent-prompt-field.primary textarea {
+  min-height: 260px;
+}
+
+.agent-tool-policy-table {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 9px;
+}
+
+.agent-tool-policy-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-tool-policy-toolbar > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.agent-tool-policy-toolbar strong {
+  font-size: 13px;
+}
+
+.agent-tool-policy-toolbar span,
+.agent-tool-policy-main span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.agent-tool-policy-toolbar input {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.agent-tool-policy-list {
+  min-width: 0;
+  max-height: 300px;
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.agent-tool-policy-row {
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 280px);
+  align-items: start;
+}
+
+.agent-tool-policy-main {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.agent-tool-policy-main > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.agent-tool-policy-main code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.agent-tool-policy-state {
+  align-self: start;
+}
+
+@media (max-width: 760px) {
+  .agent-editor-grid,
+  .agent-tool-policy-toolbar,
+  .agent-tool-policy-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-tool-policy-state {
+    width: 100%;
+  }
+}
+
+.agent-editor-context {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.agent-editor-context span,
+.agent-editor-context strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-editor-context strong {
+  color: var(--foreground);
+}
+
+.agent-editor-checkbox {
+  align-content: end;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-editor-checkbox input {
+  width: 15px;
+  height: 15px;
+  padding: 0;
 }
 
 .skill-toolbar input,
@@ -215,6 +532,11 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+.subagent-definition-card {
+  height: 196px;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+
 .skill-card-header {
   min-width: 0;
   display: grid;
@@ -270,6 +592,46 @@
   max-width: 100%;
   font-size: 11px;
   text-overflow: ellipsis;
+}
+
+.agent-source-origin-link,
+.agent-source-origin-detail-link {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.agent-source-origin-link {
+  max-width: 86px;
+  padding: 3px 7px;
+}
+
+.agent-source-origin-detail-link {
+  max-width: 100%;
+  padding: 4px 8px;
+}
+
+.agent-source-origin-link span,
+.agent-source-origin-detail-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-source-origin-link:hover,
+.agent-source-origin-detail-link:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .skill-card-title-meta [data-slot="badge"] {

@@ -226,6 +226,7 @@ impl TaskRuntime {
             "subagent_list_agents_start",
             format!("parent={current_session_id}"),
         );
+        let _include_all = list_agents_include_all(&args)?;
         let registry_entries =
             self.subagent_registry_entries_for_list_request(current_session_id, &args)?;
         let result = build_subagent_registry_status_tool_result(

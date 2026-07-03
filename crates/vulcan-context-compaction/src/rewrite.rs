@@ -7,7 +7,7 @@ use vulcan_context::{
     SessionConversationRecord, SessionConversationState, SessionMessageKind,
     SessionMessageRecordKind, estimate_mixed_language_text_tokens,
 };
-use vulcan_core::types::ConversationAttachment;
+use vulcan_core::types::{ConversationAttachment, ConversationPayload};
 
 /// Number of latest canonical records retained verbatim after one compaction rewrite.
 /// 一次压缩改写后按原样保留的最新规范记录条数。
@@ -365,6 +365,21 @@ fn canonical_message_token_estimate(message: &SessionConversationMessage) -> usi
         }
         SessionConversationPayload::ToolResult { text, .. } => {
             estimate_compaction_text_tokens(text) + 12usize
+        }
+        SessionConversationPayload::AgentMessage {
+            message_type,
+            task_name,
+            sender,
+            payload,
+            ..
+        } => {
+            let text = ConversationPayload::render_agent_message_text(
+                message_type,
+                task_name,
+                sender,
+                payload,
+            );
+            estimate_compaction_text_tokens(&text) + 16usize
         }
     }
 }

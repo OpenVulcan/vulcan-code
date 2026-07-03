@@ -82,6 +82,15 @@ pub struct ExecutionPreparationRequest {
     /// Request-scoped tool exposure override applied by the shared preparation bridge.
     /// 由共享准备桥应用的请求级工具可见性覆盖。
     pub tool_exposure_override: ToolExposureSnapshot,
+    /// Optional reason used to reject visible tool calls before host execution.
+    /// 在宿主执行前拒绝可见工具调用时使用的可选原因。
+    pub tool_request_rejection_reason: Option<String>,
+    /// Whether the rejection reason applies to every visible tool.
+    /// 拒绝原因是否应用到全部可见工具。
+    pub tool_request_rejection_all_tools: bool,
+    /// Optional scoped tool ids rejected with `tool_request_rejection_reason`.
+    /// 使用 `tool_request_rejection_reason` 拒绝的可选限定工具标识。
+    pub tool_request_rejection_tool_ids: Vec<String>,
     /// Prompt purpose used to choose runtime prompt assembly and tool exposure.
     /// 用于选择运行时提示词装配与工具暴露策略的提示词用途。
     pub prompt_purpose: ExecutionPromptPurpose,
@@ -276,6 +285,15 @@ pub struct ExecutionPreparation {
     /// Unified AI-visible tool descriptors resolved for the active mode.
     /// 为当前模式解析出的统一 AI 可见工具描述集合。
     pub tool_descriptors: Vec<VulcanToolDescriptor>,
+    /// Optional reason used to reject visible tool calls before host execution.
+    /// 在宿主执行前拒绝可见工具调用时使用的可选原因。
+    pub tool_request_rejection_reason: Option<String>,
+    /// Whether the rejection reason applies to every visible tool.
+    /// 拒绝原因是否应用到全部可见工具。
+    pub tool_request_rejection_all_tools: bool,
+    /// Optional scoped tool ids rejected with `tool_request_rejection_reason`.
+    /// 使用 `tool_request_rejection_reason` 拒绝的可选限定工具标识。
+    pub tool_request_rejection_tool_ids: Vec<String>,
     /// Delegate agent identifiers exposed to the active agent.
     /// 暴露给当前代理的委派代理标识集合。
     pub delegate_agents: Vec<String>,

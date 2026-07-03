@@ -317,8 +317,8 @@ pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
     Ok(true)
 }
 
-/// Builds one provider input from the parent session kernel mailbox.
-/// 从父会话内核 mailbox 构建一条 provider 输入。
+/// Builds Codex-compatible provider input from the parent session kernel mailbox.
+/// 从父会话内核 mailbox 构建 Codex 兼容的 provider 输入。
 ///
 /// # Parameters
 /// 参数
@@ -331,8 +331,8 @@ pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
 ///
 /// # Returns
 /// 返回值
-/// A structured mailbox prompt when matching mailbox input exists.
-/// 当存在匹配 mailbox 输入时返回结构化 mailbox prompt。
+/// Inter-agent message text when matching mailbox input exists.
+/// 当存在匹配 mailbox 输入时返回代理间消息文本。
 pub(crate) fn webui_session_mailbox_input_from_kernel(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
@@ -358,28 +358,11 @@ pub(crate) fn webui_session_mailbox_input_from_kernel(
     if matching_inputs.is_empty() {
         return Ok(None);
     };
-    let events = matching_inputs
+    let messages = matching_inputs
         .into_iter()
-        .map(|input| {
-            input
-                .payload
-                .get("mailbox_event")
-                .cloned()
-                .unwrap_or(input.payload)
-        })
+        .map(|input| webui_agent_message_text_from_turn_input(parent_session_id, &input))
         .collect::<Vec<_>>();
-    if events.len() == 1 {
-        let event_text =
-            serde_json::to_string_pretty(&events[0]).unwrap_or_else(|_| events[0].to_string());
-        return Ok(Some(format!(
-            "<subagent_mailbox_event>\n{event_text}\n</subagent_mailbox_event>"
-        )));
-    }
-    let event_text =
-        serde_json::to_string_pretty(&events).unwrap_or_else(|_| json!(events).to_string());
-    Ok(Some(format!(
-        "<subagent_mailbox_events>\n{event_text}\n</subagent_mailbox_events>"
-    )))
+    Ok(Some(messages.join("\n\n")))
 }
 
 /// Returns whether a detached subagent parent event may dispatch the next queued prompt.

@@ -103,6 +103,8 @@ fn test_task_args(prompt: &str, task_id: Option<&str>) -> TaskToolInvocationArgs
         description: None,
         task_id: task_id.map(str::to_string),
         subagent: None,
+        agent_mode: None,
+        subagent_profile_id: None,
         fork_turns: None,
         inherit_parent_config: None,
         system_prompt: None,

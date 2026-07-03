@@ -118,6 +118,366 @@ pub struct AgentSkillsCatalogSummary {
     pub errors: Vec<AgentSkillLoadIssueSummary>,
 }
 
+/// Full WebUI summary for the agent and expert catalog.
+/// 智能体与专家目录的完整 WebUI 摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCatalogSummary {
+    /// System agent definition root shipped with the application.
+    /// 随应用发布的系统智能体定义根目录。
+    pub system_root: String,
+    /// User-owned agent definition and override root.
+    /// 用户拥有的智能体定义与覆盖根目录。
+    pub user_root: String,
+    /// Human-readable notice for the current catalog state.
+    /// 当前目录状态的人类可读提示。
+    pub notice: String,
+    /// Merged agent and expert definition rows.
+    /// 合并后的智能体与专家定义行。
+    pub definitions: Vec<SubagentDefinitionSummary>,
+    /// Parsed category rows.
+    /// 已解析的分类行。
+    pub categories: Vec<SubagentCategorySummary>,
+    /// Non-fatal loading issues.
+    /// 非致命加载问题。
+    pub errors: Vec<SubagentCatalogIssueSummary>,
+}
+
+/// One agent catalog category projected for the WebUI.
+/// 投影给 WebUI 的单个智能体目录分类。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCategorySummary {
+    /// Stable category id.
+    /// 稳定分类标识。
+    pub category_id: String,
+    /// Human-facing category name.
+    /// 面向用户的分类名称。
+    pub name: String,
+    /// Optional category description.
+    /// 可选分类说明。
+    pub description: Option<String>,
+    /// Localized display metadata keyed by locale tag.
+    /// 按语言标签索引的本地化展示元数据。
+    #[serde(default)]
+    pub locales: std::collections::BTreeMap<String, SubagentCategoryLocaleSummary>,
+    /// Human-facing category emoji.
+    /// 面向用户的分类图标。
+    pub emoji: String,
+    /// Human-facing category color token or value.
+    /// 面向用户的分类颜色标识或颜色值。
+    pub color: String,
+    /// Optional category order.
+    /// 可选分类排序值。
+    pub order: Option<i32>,
+}
+
+/// Localized WebUI metadata for one agent catalog category.
+/// 单个智能体目录分类的本地化 WebUI 元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCategoryLocaleSummary {
+    /// Optional localized category name.
+    /// 可选本地化分类名称。
+    pub name: Option<String>,
+    /// Optional localized category description.
+    /// 可选本地化分类说明。
+    pub description: Option<String>,
+}
+
+/// One agent or expert definition row projected for the WebUI.
+/// 投影给 WebUI 的单个智能体或专家定义行。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentDefinitionSummary {
+    /// Stable agent id, normally the Markdown file stem.
+    /// 稳定智能体标识，通常为 Markdown 文件 stem。
+    pub agent_id: String,
+    /// Human-facing display name.
+    /// 面向用户的显示名称。
+    pub name: String,
+    /// Optional human-facing description.
+    /// 可选的人类可读说明。
+    pub description: Option<String>,
+    /// Localized display metadata keyed by locale tag.
+    /// 按语言标签索引的本地化展示元数据。
+    #[serde(default)]
+    pub locales: std::collections::BTreeMap<String, SubagentDefinitionLocaleSummary>,
+    /// Optional upstream or license source metadata.
+    /// 可选上游或协议来源元数据。
+    pub source_origin: Option<SubagentOriginSummary>,
+    /// Human-facing emoji.
+    /// 面向用户的图标。
+    pub emoji: String,
+    /// Human-facing color token or color value.
+    /// 面向用户的颜色标识或颜色值。
+    pub color: String,
+    /// Optional short tone or persona hint.
+    /// 可选简短语气或人格提示。
+    pub vibe: Option<String>,
+    /// Stable source key for this definition row.
+    /// 当前定义行的稳定来源键。
+    pub source_key: String,
+    /// Optional canonical category id.
+    /// 可选规范分类标识。
+    pub category_id: Option<String>,
+    /// Optional package id.
+    /// 可选包标识。
+    pub package_id: Option<String>,
+    /// Source scope label.
+    /// 来源作用域标签。
+    pub scope: String,
+    /// Stable source scope key used by UI logic.
+    /// UI 逻辑使用的稳定来源作用域键。
+    pub scope_key: String,
+    /// Whether this definition is exposed to models and spawn_agent.
+    /// 该定义是否暴露给模型与 spawn_agent。
+    pub enabled: bool,
+    /// Filesystem path to the Markdown definition file.
+    /// 指向 Markdown 定义文件的文件系统路径。
+    pub definition_file: String,
+    /// Optional filesystem path to the sidecar metadata file.
+    /// 指向 sidecar 元数据文件的可选文件系统路径。
+    pub sidecar_file: Option<String>,
+    /// Optional remote URL that supplied this user definition.
+    /// 提供该用户定义的可选远程 URL。
+    pub remote_url: Option<String>,
+    /// Optional system definition id overridden by this row.
+    /// 被当前行覆盖的可选系统定义标识。
+    pub override_of: Option<String>,
+    /// Whether the user layer can be removed to restore a system definition.
+    /// 是否可以移除用户层以恢复系统定义。
+    #[serde(default)]
+    pub can_restore_default: bool,
+    /// Optional source hash for audit and cache diagnostics.
+    /// 用于审计与缓存诊断的可选来源哈希。
+    pub source_hash: Option<String>,
+    /// Optional source version string.
+    /// 可选来源版本字符串。
+    pub version: Option<String>,
+    /// Optional last-updated timestamp string.
+    /// 可选最近更新时间戳字符串。
+    pub updated_at: Option<String>,
+    /// Number of explicitly allowed host tools.
+    /// 显式允许的宿主工具数量。
+    pub allowed_tool_count: usize,
+    /// Number of explicitly disabled host tools.
+    /// 显式禁用的宿主工具数量。
+    pub disabled_tool_count: usize,
+    /// Number of enabled prompt skills declared by this definition.
+    /// 当前定义声明启用的提示词技能数量。
+    pub enabled_prompt_skill_count: usize,
+    /// Number of disabled prompt skills declared by this definition.
+    /// 当前定义声明禁用的提示词技能数量。
+    pub disabled_prompt_skill_count: usize,
+    /// Editable base system prompt restored into the agent editor.
+    /// 恢复到智能体编辑器中的可编辑基础系统提示词。
+    pub system_prompt: Option<String>,
+    /// Editable appended system prompt restored into the agent editor.
+    /// 恢复到智能体编辑器中的可编辑追加系统提示词。
+    pub system_prompt_append: Option<String>,
+    /// Explicitly allowed host tool selectors.
+    /// 显式允许的宿主工具选择器。
+    pub allowed_tools: Vec<String>,
+    /// Explicitly disabled host tool selectors.
+    /// 显式禁用的宿主工具选择器。
+    pub disabled_tools: Vec<String>,
+    /// Explicitly allowed AI capability selectors.
+    /// 显式允许的 AI 能力选择器。
+    pub allowed_ai_capabilities: Vec<String>,
+    /// Explicitly disabled AI capability selectors.
+    /// 显式禁用的 AI 能力选择器。
+    pub disabled_ai_capabilities: Vec<String>,
+    /// LuaSkills-specific exposure override payload.
+    /// LuaSkills 专属可见性覆盖载荷。
+    pub luaskills_overrides: serde_json::Value,
+    /// MCP-specific exposure override payload.
+    /// MCP 专属可见性覆盖载荷。
+    pub mcp_server_overrides: serde_json::Value,
+    /// Explicitly enabled prompt skill names.
+    /// 显式启用的提示词技能名称。
+    pub enabled_prompt_skills: Vec<String>,
+    /// Explicitly disabled prompt skill names.
+    /// 显式禁用的提示词技能名称。
+    pub disabled_prompt_skills: Vec<String>,
+    /// Human-readable effective capability diagnostics.
+    /// 人类可读的最终能力诊断信息。
+    pub capability_diagnostics: Vec<String>,
+}
+
+/// Localized WebUI metadata for one agent definition.
+/// 单个智能体定义的本地化 WebUI 元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentDefinitionLocaleSummary {
+    /// Optional localized agent name.
+    /// 可选本地化智能体名称。
+    pub name: Option<String>,
+    /// Optional localized agent description.
+    /// 可选本地化智能体说明。
+    pub description: Option<String>,
+}
+
+/// Upstream or license source metadata projected for the WebUI.
+/// 投影给 WebUI 的上游或协议来源元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentOriginSummary {
+    /// Source kind such as github, system, or other.
+    /// 来源类型，例如 github、system 或 other。
+    pub kind: Option<String>,
+    /// Optional human-facing source label.
+    /// 可选的人类可读来源标签。
+    pub label: Option<String>,
+    /// Optional icon key used by WebUI.
+    /// WebUI 使用的可选图标键。
+    pub icon: Option<String>,
+    /// Optional source URL.
+    /// 可选来源链接。
+    pub url: Option<String>,
+}
+
+/// Tri-state text patch used by partial agent metadata saves.
+/// 智能体元数据局部保存使用的三态文本补丁。
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum OptionalTextPatch {
+    /// The request omitted this field and the previous value must be kept.
+    /// 请求未提交该字段，必须保留旧值。
+    Missing,
+    /// The request explicitly sent null and the previous value must be cleared.
+    /// 请求显式提交 null，必须清空旧值。
+    Clear,
+    /// The request supplied a replacement text value.
+    /// 请求提交了用于替换的文本值。
+    Set(String),
+}
+
+impl Default for OptionalTextPatch {
+    fn default() -> Self {
+        Self::Missing
+    }
+}
+
+impl OptionalTextPatch {
+    /// Returns true when the patch carries no requested change.
+    /// 当补丁不携带变更请求时返回 true。
+    pub fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+}
+
+impl Serialize for OptionalTextPatch {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Missing | Self::Clear => serializer.serialize_none(),
+            Self::Set(value) => serializer.serialize_some(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionalTextPatch {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer)
+            .map(|value| value.map(Self::Set).unwrap_or(Self::Clear))
+    }
+}
+
+/// Save request for one user-owned or system-overriding agent definition.
+/// 单个用户拥有或覆盖系统定义的智能体保存请求。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentDefinitionSaveRequest {
+    /// Stable agent id, normally the Markdown file stem.
+    /// 稳定智能体标识，通常为 Markdown 文件 stem。
+    pub agent_id: String,
+    /// Optional original agent id when saving a moved definition.
+    /// 保存已转移定义时使用的可选原始智能体标识。
+    #[serde(default)]
+    pub original_agent_id: Option<String>,
+    /// Optional user package id assigned to this definition.
+    /// 分配给当前定义的可选用户包标识。
+    #[serde(default)]
+    pub package_id: Option<String>,
+    /// Human-facing display name.
+    /// 面向用户的显示名称。
+    pub name: String,
+    /// Optional human-facing description.
+    /// 可选的人类可读说明。
+    pub description: Option<String>,
+    /// Localized display metadata keyed by locale tag.
+    /// 按语言标签索引的本地化展示元数据。
+    #[serde(default)]
+    pub locales: std::collections::BTreeMap<String, SubagentDefinitionLocaleSummary>,
+    /// Optional human-facing emoji override.
+    /// 可选的人类可读图标覆盖。
+    #[serde(default, skip_serializing_if = "OptionalTextPatch::is_missing")]
+    pub emoji: OptionalTextPatch,
+    /// Optional human-facing color token or value override.
+    /// 可选的人类可读颜色标识或颜色值覆盖。
+    #[serde(default, skip_serializing_if = "OptionalTextPatch::is_missing")]
+    pub color: OptionalTextPatch,
+    /// Optional short tone or persona hint override.
+    /// 可选简短语气或人格提示覆盖。
+    #[serde(default, skip_serializing_if = "OptionalTextPatch::is_missing")]
+    pub vibe: OptionalTextPatch,
+    /// Whether this definition is exposed to models and spawn_agent.
+    /// 该定义是否暴露给模型与 spawn_agent。
+    pub enabled: bool,
+    /// Base system prompt saved for the agent.
+    /// 为该智能体保存的基础系统提示词。
+    pub system_prompt: Option<String>,
+    /// Appended system prompt saved for the agent.
+    /// 为该智能体保存的追加系统提示词。
+    pub system_prompt_append: Option<String>,
+    /// Explicitly allowed host tool selectors.
+    /// 显式允许的宿主工具选择器。
+    pub allowed_tools: Vec<String>,
+    /// Explicitly disabled host tool selectors.
+    /// 显式禁用的宿主工具选择器。
+    pub disabled_tools: Vec<String>,
+    /// Explicitly allowed AI capability selectors.
+    /// 显式允许的 AI 能力选择器。
+    #[serde(default)]
+    pub allowed_ai_capabilities: Vec<String>,
+    /// Explicitly disabled AI capability selectors.
+    /// 显式禁用的 AI 能力选择器。
+    #[serde(default)]
+    pub disabled_ai_capabilities: Vec<String>,
+    /// LuaSkills-specific exposure override payload.
+    /// LuaSkills 专属可见性覆盖载荷。
+    #[serde(default)]
+    pub luaskills_overrides: serde_json::Value,
+    /// MCP-specific exposure override payload.
+    /// MCP 专属可见性覆盖载荷。
+    #[serde(default)]
+    pub mcp_server_overrides: serde_json::Value,
+    /// Explicitly enabled prompt skill names.
+    /// 显式启用的提示词技能名称。
+    pub enabled_prompt_skills: Vec<String>,
+    /// Explicitly disabled prompt skill names.
+    /// 显式禁用的提示词技能名称。
+    pub disabled_prompt_skills: Vec<String>,
+}
+
+/// One agent catalog loading issue projected for diagnostics.
+/// 投影给诊断界面的单个智能体目录加载问题。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCatalogIssueSummary {
+    /// Path related to the loading issue.
+    /// 与加载问题相关的路径。
+    pub path: String,
+    /// Human-readable diagnostic message.
+    /// 人类可读诊断信息。
+    pub message: String,
+}
+
 /// One prompt-based Agent Skill row projected for the WebUI.
 /// 投影给 WebUI 的单个提示词 Agent Skill 行。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -163,4 +523,76 @@ pub struct AgentSkillLoadIssueSummary {
     /// Human-readable diagnostic message.
     /// 人类可读诊断信息。
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Builds a minimal valid subagent save request payload for serde tests.
+    /// 为 serde 测试构建最小有效智能体保存请求载荷。
+    fn minimal_save_request_payload() -> serde_json::Value {
+        json!({
+            "agentId": "reviewer",
+            "name": "Reviewer",
+            "enabled": true,
+            "systemPrompt": null,
+            "systemPromptAppend": null,
+            "allowedTools": [],
+            "disabledTools": [],
+            "enabledPromptSkills": [],
+            "disabledPromptSkills": []
+        })
+    }
+
+    /// Verifies omitted optional text fields are preserved as missing patches.
+    /// 验证省略的可选文本字段会保留为缺失补丁。
+    #[test]
+    fn optional_text_patch_deserializes_missing_fields() {
+        let request: SubagentDefinitionSaveRequest =
+            serde_json::from_value(minimal_save_request_payload())
+                .expect("request payload should deserialize");
+
+        assert_eq!(request.emoji, OptionalTextPatch::Missing);
+        assert_eq!(request.color, OptionalTextPatch::Missing);
+        assert_eq!(request.vibe, OptionalTextPatch::Missing);
+    }
+
+    /// Verifies explicit null optional text fields become clear patches.
+    /// 验证显式 null 的可选文本字段会成为清空补丁。
+    #[test]
+    fn optional_text_patch_deserializes_null_fields() {
+        let mut payload = minimal_save_request_payload();
+        payload["emoji"] = serde_json::Value::Null;
+        payload["color"] = serde_json::Value::Null;
+        payload["vibe"] = serde_json::Value::Null;
+
+        let request: SubagentDefinitionSaveRequest =
+            serde_json::from_value(payload).expect("request payload should deserialize");
+
+        assert_eq!(request.emoji, OptionalTextPatch::Clear);
+        assert_eq!(request.color, OptionalTextPatch::Clear);
+        assert_eq!(request.vibe, OptionalTextPatch::Clear);
+    }
+
+    /// Verifies string optional text fields become set patches.
+    /// 验证字符串可选文本字段会成为设置补丁。
+    #[test]
+    fn optional_text_patch_deserializes_string_fields() {
+        let mut payload = minimal_save_request_payload();
+        payload["emoji"] = json!("🧪");
+        payload["color"] = json!("green");
+        payload["vibe"] = json!("focused");
+
+        let request: SubagentDefinitionSaveRequest =
+            serde_json::from_value(payload).expect("request payload should deserialize");
+
+        assert_eq!(request.emoji, OptionalTextPatch::Set(String::from("🧪")));
+        assert_eq!(request.color, OptionalTextPatch::Set(String::from("green")));
+        assert_eq!(
+            request.vibe,
+            OptionalTextPatch::Set(String::from("focused"))
+        );
+    }
 }

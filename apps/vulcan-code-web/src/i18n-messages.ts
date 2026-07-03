@@ -11,10 +11,12 @@ export type TranslationKey =
   | "app.serviceCheckingRecovery"
   | "area.chat"
   | "area.skills"
+  | "area.agents"
   | "area.memory"
   | "area.settings"
   | "area.chat.description"
   | "area.skills.description"
+  | "area.agents.description"
   | "area.memory.description"
   | "area.settings.description"
   | "feature.status.available"
@@ -561,10 +563,12 @@ export type TranslationKey =
   | "workspaceToolPanel.expandState"
   | "workspaceToolPanel.memorySettingsMenu"
   | "workspaceToolPanel.skillsSettingsMenu"
+  | "workspaceToolPanel.agentsSettingsMenu"
   | "workspaceToolPanel.menu"
   | "workspaceToolPanel.collapseToPill"
   | "workspaceToolPanel.status"
   | "workspaceShell.skillsTitle"
+  | "workspaceShell.agentsTitle"
   | "workspaceShell.memoryTitle"
   | "workspaceShell.version"
   | "workspacePanel.resizeRight"
@@ -676,6 +680,7 @@ export type TranslationKey =
   | "conversation.subagent.detail.description"
   | "conversation.subagent.detail.prompt"
   | "conversation.subagent.detail.effectivePrompt"
+  | "conversation.subagent.detail.debug"
   | "conversation.subagent.detail.empty"
   | "conversation.subagent.detail.message"
   | "conversation.subagent.detail.wait"
@@ -1090,8 +1095,11 @@ export type TranslationKey =
   | "skills.source.unknown"
   | "skills.sidebar.luaDetail"
   | "skills.sidebar.agentDetail"
+  | "skills.sidebar.subagentDetail"
   | "skills.header.luaDetail"
   | "skills.header.agentDetail"
+  | "skills.header.subagentDetail"
+  | "agents.header.detail"
   | "skills.lua.emptyTitle"
   | "skills.lua.emptyDetail"
   | "skills.lua.installTitle"
@@ -1125,10 +1133,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.serviceCheckingRecovery": "本地服务连接已断开，正在检测恢复...",
     "area.chat": "工作台",
     "area.skills": "技能",
+    "area.agents": "智能体",
     "area.memory": "记忆",
     "area.settings": "设置",
     "area.chat.description": "项目会话、消息流与模型输入区",
     "area.skills.description": "LuaSkills、工具能力与技能包",
+    "area.agents.description": "子代理、专家画像与调度提示词",
     "area.memory.description": "VMM 用户、项目与会话记忆",
     "area.settings.description": "项目、模型、工具、诊断与系统设置",
     "feature.status.available": "可用",
@@ -1675,10 +1685,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceToolPanel.expandState": "展开状态",
     "workspaceToolPanel.memorySettingsMenu": "记忆设置菜单",
     "workspaceToolPanel.skillsSettingsMenu": "技能设置菜单",
+    "workspaceToolPanel.agentsSettingsMenu": "智能体设置菜单",
     "workspaceToolPanel.menu": "菜单",
     "workspaceToolPanel.collapseToPill": "收起为胶囊",
     "workspaceToolPanel.status": "状态",
     "workspaceShell.skillsTitle": "技能设置",
+    "workspaceShell.agentsTitle": "智能体设置",
     "workspaceShell.memoryTitle": "记忆设置",
     "workspaceShell.version": "版本 {version}",
     "workspacePanel.resizeRight": "调整右侧面板宽度",
@@ -1790,6 +1802,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.description": "描述",
     "conversation.subagent.detail.prompt": "提示词",
     "conversation.subagent.detail.effectivePrompt": "执行提示词",
+    "conversation.subagent.detail.debug": "调试信息",
     "conversation.subagent.detail.empty": "无内容。",
     "conversation.subagent.detail.message": "子代理消息",
     "conversation.subagent.detail.wait": "等待子代理消息",
@@ -2204,8 +2217,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.source.unknown": "未记录来源",
     "skills.sidebar.luaDetail": "{count} 个技能包",
     "skills.sidebar.agentDetail": "{count} 个提示词技能",
+    "skills.sidebar.subagentDetail": "{count} 个子代理定义",
     "skills.header.luaDetail": "总技能数 {total} · 显示工具数 {visible} · 隐式工具数 {implicit}",
     "skills.header.agentDetail": "总技能数 {total} · 已启用 {enabled} · 加载警告 {warnings}",
+    "skills.header.subagentDetail": "总定义数 {total} · 已启用 {enabled} · 加载警告 {warnings}",
+    "agents.header.detail": "总智能体 {total} · 已启用 {enabled} · 加载警告 {warnings}",
     "skills.lua.emptyTitle": "等待 LuaSkills 目录",
     "skills.lua.emptyDetail": "启动完成或刷新后会显示真实技能包。",
     "skills.lua.installTitle": "安装 LuaSkills",
@@ -2236,10 +2252,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.serviceCheckingRecovery": "Local service connection lost. Checking recovery...",
     "area.chat": "Workspace",
     "area.skills": "Skills",
+    "area.agents": "Agents",
     "area.memory": "Memory",
     "area.settings": "Settings",
     "area.chat.description": "Project sessions, message stream, and model input",
     "area.skills.description": "LuaSkills, tool capability, and skill packages",
+    "area.agents.description": "Subagents, expert profiles, and delegation prompts",
     "area.memory.description": "VMM user, project, and conversation memory",
     "area.settings.description": "Projects, models, tools, diagnostics, and system settings",
     "feature.status.available": "Available",
@@ -2786,10 +2804,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "workspaceToolPanel.expandState": "Expand state",
     "workspaceToolPanel.memorySettingsMenu": "Memory settings menu",
     "workspaceToolPanel.skillsSettingsMenu": "Skills settings menu",
+    "workspaceToolPanel.agentsSettingsMenu": "Agent settings menu",
     "workspaceToolPanel.menu": "Menu",
     "workspaceToolPanel.collapseToPill": "Collapse to pill",
     "workspaceToolPanel.status": "Status",
     "workspaceShell.skillsTitle": "Skill settings",
+    "workspaceShell.agentsTitle": "Agent settings",
     "workspaceShell.memoryTitle": "Memory settings",
     "workspaceShell.version": "Version {version}",
     "workspacePanel.resizeRight": "Resize right panel",
@@ -2901,6 +2921,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.description": "Description",
     "conversation.subagent.detail.prompt": "Prompt",
     "conversation.subagent.detail.effectivePrompt": "Effective prompt",
+    "conversation.subagent.detail.debug": "Debug",
     "conversation.subagent.detail.empty": "No content.",
     "conversation.subagent.detail.message": "Subagent message",
     "conversation.subagent.detail.wait": "Waiting for subagent message",
@@ -3315,8 +3336,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.source.unknown": "No source recorded",
     "skills.sidebar.luaDetail": "{count} skill packages",
     "skills.sidebar.agentDetail": "{count} prompt skills",
+    "skills.sidebar.subagentDetail": "{count} subagent definitions",
     "skills.header.luaDetail": "Total skills {total} · Visible tools {visible} · Implicit tools {implicit}",
     "skills.header.agentDetail": "Total skills {total} · Enabled {enabled} · Load warnings {warnings}",
+    "skills.header.subagentDetail": "Total definitions {total} · Enabled {enabled} · Load warnings {warnings}",
+    "agents.header.detail": "Total agents {total} · Enabled {enabled} · Load warnings {warnings}",
     "skills.lua.emptyTitle": "Waiting for LuaSkills catalog",
     "skills.lua.emptyDetail": "Real skill packages appear after startup completes or refresh runs.",
     "skills.lua.installTitle": "Install LuaSkills",

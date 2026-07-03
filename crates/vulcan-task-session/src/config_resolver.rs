@@ -1,3 +1,4 @@
+use crate::SUBAGENT_MODE_EXPERT;
 use crate::profile::SubagentProfile;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,6 +18,9 @@ pub struct TaskInvocationConfig {
     /// Optional profile identifier requested by the invocation.
     /// 调用请求的可选配置标识符。
     pub subagent_profile_id: Option<String>,
+    /// Optional subagent execution mode key requested by the invocation.
+    /// 调用请求的可选子代理执行模式键。
+    pub subagent_mode: Option<String>,
     /// Optional inheritance override for this invocation.
     /// 本次调用的可选继承覆盖。
     pub inherit_parent_config: Option<bool>,
@@ -53,6 +57,7 @@ impl TaskInvocationConfig {
         Self {
             prompt: prompt.into(),
             subagent_profile_id: None,
+            subagent_mode: None,
             inherit_parent_config: None,
             system_prompt: None,
             system_prompt_append: None,
@@ -70,6 +75,7 @@ impl TaskInvocationConfig {
     pub fn with_profile(profile_id: impl Into<String>, prompt: impl Into<String>) -> Self {
         let mut invocation = Self::main(prompt);
         invocation.subagent_profile_id = Some(profile_id.into());
+        invocation.subagent_mode = Some(SUBAGENT_MODE_EXPERT.to_string());
         invocation
     }
 }
@@ -140,6 +146,7 @@ impl TaskSessionConfigResolver {
 
         effective_config.inherit_parent_config = inherit_parent_config;
         effective_config.subagent_profile_id = profile_id.clone();
+        effective_config.subagent_mode = input.invocation.subagent_mode.clone();
 
         if let Some(profile) = input.profile.as_ref() {
             Self::apply_profile(&mut effective_config, profile);
@@ -211,6 +218,7 @@ impl TaskSessionConfigResolver {
         SessionRequestedConfig {
             inherit_parent_config,
             subagent_profile_id: profile_id,
+            subagent_mode: invocation.subagent_mode.clone(),
             system_prompt: invocation.system_prompt.clone(),
             system_prompt_append: invocation.system_prompt_append.clone(),
             provider_model: invocation.provider_model.clone(),

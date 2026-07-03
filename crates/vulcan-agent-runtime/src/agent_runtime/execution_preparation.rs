@@ -238,6 +238,17 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         prompt_skill_developer_segment,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors,
+        tool_request_rejection_reason: request.tool_request_rejection_reason.clone().or_else(
+            || {
+                request.prompt_purpose.rejects_tool_requests().then(|| {
+                    String::from("Tool calls are not allowed during this internal execution.")
+                })
+            },
+        ),
+        tool_request_rejection_all_tools: request.tool_request_rejection_all_tools
+            || (request.prompt_purpose.rejects_tool_requests()
+                && request.tool_request_rejection_reason.is_none()),
+        tool_request_rejection_tool_ids: request.tool_request_rejection_tool_ids.clone(),
         delegate_agents: active_agent.delegates.clone(),
         enabled_mcp_servers: mcp_overview.active_summary_rows().to_vec(),
         warnings,

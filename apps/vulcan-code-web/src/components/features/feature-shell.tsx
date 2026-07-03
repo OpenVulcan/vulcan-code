@@ -6,6 +6,7 @@ import {
 
 import { FeatureContent as FeatureShellContent } from "@/components/features/feature-shell-content"
 import { FeatureSidebar, areaIconMap, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
+import { activeAgentsHeaderSummary, type AgentActionProps } from "@/components/features/agents/AgentsArea"
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
 import {
   activeSettingsHeaderSummary,
@@ -73,6 +74,9 @@ function FeatureShell(props: {
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps
+  // Service-backed independent agent page actions.
+  // 服务端支持的独立智能体页面动作。
+  agentActions: AgentActionProps
   // Service-backed VMM memory page actions.
   // 服务端支持的 VMM 记忆页面动作。
   memoryActions: MemoryActionProps
@@ -171,6 +175,21 @@ function FeatureShell(props: {
       </button>
     </div>
   ) : null
+  // agentsHeaderAction renders actions for the independent Agents page.
+  // agentsHeaderAction 渲染独立智能体页面操作。
+  const agentsHeaderAction = props.activeArea === "agents" ? (
+    <div className="feature-header-actions">
+      <button
+        className="skill-action-button secondary"
+        disabled={skillHeaderBusyAction !== null}
+        onClick={() => void runSkillHeaderAction("agent-refresh", props.agentActions.onRefreshAgentCatalog)}
+        type="button"
+      >
+        <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
+        <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
+      </button>
+    </div>
+  ) : null
   // settingsHeaderAction renders actions for the active settings page in the shared title bar.
   // settingsHeaderAction 在共享标题栏中渲染当前设置页操作。
   const settingsHeaderAction = props.activeArea === "settings" && props.activeSettingsSubArea === "model-providers" ? (
@@ -197,6 +216,11 @@ function FeatureShell(props: {
   const skillHeaderSummary = props.activeArea === "skills"
     ? activeSkillHeaderSummary(activeSkillSubArea, props.workbench, t)
     : null
+  // agentsHeaderSummary stores the independent Agents page title and compact metrics.
+  // agentsHeaderSummary 保存独立智能体页面标题与紧凑统计。
+  const agentsHeaderSummary = props.activeArea === "agents"
+    ? activeAgentsHeaderSummary(props.workbench, t)
+    : null
   // settingsHeaderSummary stores the selected settings section title and description.
   // settingsHeaderSummary 保存当前设置分区标题与说明。
   const settingsHeaderSummary = props.activeArea === "settings"
@@ -204,7 +228,13 @@ function FeatureShell(props: {
     : null
   // headerFeature overrides the generic feature title while a skill sub page is active.
   // headerFeature 在技能子页面激活时覆盖通用功能标题。
-  const headerFeature = skillHeaderSummary
+  const headerFeature = agentsHeaderSummary
+    ? {
+      ...(props.activeFeature ?? { id: "agents" as MainAreaId, label: t("area.agents"), description: "", status: "" }),
+      label: agentsHeaderSummary.title,
+      description: agentsHeaderSummary.detail,
+    }
+    : skillHeaderSummary
     ? {
       ...(props.activeFeature ?? { id: "skills" as MainAreaId, label: t("area.skills"), description: "", status: "" }),
       label: skillHeaderSummary.title,
@@ -236,13 +266,14 @@ function FeatureShell(props: {
         onProviderPickerOpenChange={setProviderPickerOpen}
         providerPickerOpen={providerPickerOpen}
         settingsActions={props.settingsActions}
+        agentActions={props.agentActions}
         skillActions={props.skillActions}
         startup={props.startup}
         workbench={props.workbench}
       />
     ),
     detail: headerFeature?.description,
-    headerActions: skillHeaderAction ?? settingsHeaderAction,
+    headerActions: agentsHeaderAction ?? skillHeaderAction ?? settingsHeaderAction,
     title: headerFeature?.label ?? t("sidebar.console"),
   }
 

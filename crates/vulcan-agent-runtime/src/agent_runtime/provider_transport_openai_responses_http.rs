@@ -685,6 +685,13 @@ fn core_message_to_openai_responses_input_items(
                 "status": "completed"
             })])
         }
+        CoreConversationPayload::AgentMessage { .. } => Ok(vec![json!({
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": message.payload.agent_message_model_text().unwrap_or_default()
+            }]
+        })]),
     }
 }
 

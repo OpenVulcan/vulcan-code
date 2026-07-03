@@ -216,6 +216,22 @@ pub(crate) fn mcp_servers(
         .collect()
 }
 
+/// Creates MCP runtime tool summaries from the cached MCP runtime catalog.
+/// 从缓存的 MCP 运行时目录创建 MCP 工具摘要。
+pub(crate) fn mcp_tools(mcp_catalog: &TauriMcpRuntimeCatalog) -> Vec<McpToolSummary> {
+    mcp_catalog
+        .tools
+        .iter()
+        .map(|tool| McpToolSummary {
+            id: tool.id.clone(),
+            server_id: tool.server_id.clone(),
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            origin_tool_id: tool.origin_tool_id.clone(),
+        })
+        .collect()
+}
+
 /// Converts one ordered map into WebUI key/value summaries.
 /// 将单个有序映射转换为 WebUI 键值摘要。
 pub(crate) fn key_value_summaries(values: &BTreeMap<String, String>) -> Vec<KeyValueSummary> {

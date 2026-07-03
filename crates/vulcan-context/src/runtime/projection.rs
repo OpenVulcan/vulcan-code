@@ -7,6 +7,7 @@ use crate::protocol::{
     SessionConversationToolCall, normalize_replayed_protocol_messages,
 };
 use std::collections::BTreeMap;
+use vulcan_core::types::ConversationPayload;
 
 /// Converts one canonical conversation state into runtime log lines.
 /// 将一个规范会话状态转换为运行时日志行。
@@ -142,6 +143,26 @@ impl<'a> RuntimeLogProjectionBuilder<'a> {
                     text: text.clone(),
                     status,
                     error: None,
+                }));
+            }
+            SessionConversationPayload::AgentMessage {
+                message_type,
+                task_name,
+                sender,
+                payload,
+                ..
+            } => {
+                let text = ConversationPayload::render_agent_message_text(
+                    message_type,
+                    task_name,
+                    sender,
+                    payload,
+                );
+                self.append(RuntimeLogEvent::UserMessage(RuntimeUserMessageEvent {
+                    turn_id: Some(message.id.clone()),
+                    message_id: message.id.clone(),
+                    text,
+                    attachments: Vec::new(),
                 }));
             }
         }

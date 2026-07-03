@@ -44,6 +44,7 @@ export function resolveSubagentOrchestrationPresentation(
   const title = subagentPresentationTitle(operation, args, payload, toolName);
   return {
     agents: operation === "collect" ? subagentAgents(payload, blocks) : [],
+    debugSummary: subagentDebugSummary(payload?.debug),
     detailRef,
     effectivePrompt: stringValue(payload?.prompt),
     id: subagentPresentationId(blocks, operation, title),
@@ -96,6 +97,7 @@ function mergeSubagentPayload(
   return {
     ...presentation,
     agents: presentation.operation === "collect" ? subagentAgents(payload, []) : presentation.agents,
+    debugSummary: subagentDebugSummary(payload.debug) ?? presentation.debugSummary,
     effectivePrompt: stringValue(payload.prompt) ?? presentation.effectivePrompt,
     note: stringValue(payload.note) ?? presentation.note,
     prompt: presentation.prompt ?? stringValue(payload.prompt),
@@ -346,8 +348,43 @@ function subagentAgents(
       name,
       result: stringValue(agent?.result) ?? fallbackResultFromBlocks(blocks),
       status: stringValue(agent?.status) ?? "unknown",
+      debugSummary: subagentDebugSummary(agent?.debug),
     };
   });
+}
+
+// subagentDebugSummary converts runtime diagnostics into a compact human-readable line.
+// subagentDebugSummary 将运行时诊断转换为紧凑的人类可读信息行。
+function subagentDebugSummary(
+  // Raw debug payload from the runtime.
+  // 运行时返回的原始调试载荷。
+  value: unknown,
+): string | null {
+  const debug = objectValue(value);
+  if (!debug) {
+    return null;
+  }
+  const parts = [
+    stringValue(debug.agent_kind ?? debug.agentKind),
+    stringValue(debug.agent_mode ?? debug.agentMode),
+    stringValue(debug.prompt_source ?? debug.promptSource),
+    subagentDebugPart("fork", stringValue(debug.fork_turns ?? debug.forkTurns)),
+    subagentDebugPart("messages", numberValue(debug.initial_snapshot_messages ?? debug.initialSnapshotMessages)?.toString() ?? null),
+  ].filter((part): part is string => Boolean(part));
+  return parts.length ? parts.join(" · ") : null;
+}
+
+// subagentDebugPart formats one named diagnostic value.
+// subagentDebugPart 格式化单个带名称的诊断值。
+function subagentDebugPart(
+  // Label displayed before the diagnostic value.
+  // 显示在诊断值之前的标签。
+  label: string,
+  // Optional diagnostic value.
+  // 可选诊断值。
+  value: string | null,
+): string | null {
+  return value ? `${label}: ${value}` : null;
 }
 
 // fallbackResultFromBlocks returns a result text only when a row carries plain non-JSON output.

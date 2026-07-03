@@ -39,6 +39,29 @@ export interface HostToolsSettingsSummary {
   // RTK command-routing settings.
   // RTK 命令路由设置。
   rtk: RtkRoutingSettingsSummary;
+  // Runtime-registered native tool rows available for agent policy editing.
+  // 可用于智能体策略编辑的运行时已注册原生工具行。
+  nativeTools: NativeToolSummary[];
+}
+
+// NativeToolSummary describes one runtime-registered native host tool.
+// NativeToolSummary 描述单个运行时已注册原生宿主工具。
+export interface NativeToolSummary {
+  // Stable native tool identifier.
+  // 稳定原生工具标识。
+  id: string;
+  // Human-readable native tool name.
+  // 人类可读原生工具名称。
+  name: string;
+  // Human-readable native tool description.
+  // 人类可读原生工具描述。
+  description: string;
+  // Whether this native tool is normally visible to AI agents.
+  // 该原生工具通常是否对 AI 代理可见。
+  aiVisible: boolean;
+  // Whether this native tool may run while Plan mode is active.
+  // 该原生工具是否允许在计划模式激活时运行。
+  availableInPlan: boolean;
 }
 
 // RtkRoutingSettingsSummary describes RTK command-routing settings.
@@ -431,6 +454,26 @@ export interface McpServerSummary {
   // Stdio environment passthrough names.
   // Stdio 环境变量透传名称。
   envPassthrough: string[];
+}
+
+// McpToolSummary describes one discovered MCP runtime tool.
+// McpToolSummary 描述单个已发现的 MCP 运行时工具。
+export interface McpToolSummary {
+  // Stable selector id accepted by runtime tool exposure policies.
+  // 运行时工具暴露策略可接受的稳定选择器标识。
+  id: string;
+  // Owning MCP server id.
+  // 所属 MCP 服务器标识。
+  serverId: string;
+  // Remote tool name.
+  // 远端工具名称。
+  name: string;
+  // Remote tool description.
+  // 远端工具描述。
+  description: string;
+  // Original qualified MCP tool id.
+  // 原始限定 MCP 工具标识。
+  originToolId: string;
 }
 
 // ReasoningSelectionOptionSummary describes one backend-resolved reasoning selector option.

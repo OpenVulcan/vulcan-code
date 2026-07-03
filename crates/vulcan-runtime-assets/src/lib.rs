@@ -35,6 +35,10 @@ const PROMPT_SKILLS_DIR_NAME: &str = "prompt-skills";
 /// 位于提示词技能资源目录下的相对系统提示词技能目录名称。
 const SYSTEM_PROMPT_SKILLS_DIR_NAME: &str = "system";
 
+/// Relative subagent definition resource directory name nested below resources.
+/// 位于资源目录下的相对子代理定义目录名称。
+const SUBAGENTS_DIR_NAME: &str = "subagents";
+
 /// Relative Lua runtime packages directory name bundled into the output root.
 /// 打包到 output 根目录中的 Lua 运行时包目录名称。
 const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
@@ -90,6 +94,12 @@ pub fn resolve_system_prompt_skills_resource_directory() -> PathBuf {
     resolve_app_resources_directory()
         .join(PROMPT_SKILLS_DIR_NAME)
         .join(SYSTEM_PROMPT_SKILLS_DIR_NAME)
+}
+
+/// Returns the effective packaged system subagent definition directory for the current process.
+/// 返回当前进程使用的生效打包系统子代理定义目录。
+pub fn resolve_system_subagents_resource_directory() -> PathBuf {
+    resolve_app_resources_directory().join(SUBAGENTS_DIR_NAME)
 }
 
 /// Returns the effective application resource directory for the current process.

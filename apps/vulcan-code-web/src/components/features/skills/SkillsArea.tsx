@@ -57,13 +57,13 @@ export function SkillsArea(props: {
           actions={props.skillActions}
           skills={props.workbench.luaSkills.skills}
         />
-      ) : (
+      ) : props.activeTab === "agent" ? (
         <AgentSkillsPanel
           actions={props.skillActions}
           errors={props.workbench.agentSkills.errors}
           skills={props.workbench.agentSkills.skills}
         />
-      )}
+      ) : null}
     </section>
   )
 }

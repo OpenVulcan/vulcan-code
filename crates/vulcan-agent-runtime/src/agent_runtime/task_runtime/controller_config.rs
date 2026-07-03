@@ -10,7 +10,9 @@ pub(super) fn build_task_controller_config(
     invocation_config: &TaskInvocationConfig,
     resolved_config: &TaskSessionResolvedConfig,
 ) -> CoreControllerConfig {
-    if let Some(stored) = stored {
+    if let Some(stored) = stored
+        && stored_task_controller_config_can_be_reused(base, invocation_config, resolved_config)
+    {
         return stored;
     }
 
@@ -20,11 +22,13 @@ pub(super) fn build_task_controller_config(
     let functional_system_prompt =
         task_functional_system_prompt(base, invocation_config, resolved_config);
     let inherit_parent_config = resolved_config.effective_config.inherit_parent_config;
+    let include_base_provider_prompt =
+        subagent_profile_uses_base_provider_prompt(resolved_config, inherit_parent_config);
     let mut system_prompt = build_subagent_clone_system_prompt(
         base,
         description,
         subagent,
-        inherit_parent_config,
+        include_base_provider_prompt,
         functional_system_prompt.as_deref(),
     )
     .unwrap_or_else(|| {
@@ -32,7 +36,7 @@ pub(super) fn build_task_controller_config(
             base,
             description,
             subagent,
-            inherit_parent_config,
+            include_base_provider_prompt,
             functional_system_prompt.as_deref(),
         )
     });
@@ -41,6 +45,62 @@ pub(super) fn build_task_controller_config(
         config.system_prompt = system_prompt;
     }
     config
+}
+
+/// Returns whether a task-specific profile still needs the base provider prompt.
+/// 返回任务专属画像是否仍需要基础 provider 提示词。
+fn subagent_profile_uses_base_provider_prompt(
+    resolved_config: &TaskSessionResolvedConfig,
+    inherit_parent_config: bool,
+) -> bool {
+    inherit_parent_config
+        || resolved_config
+            .effective_config
+            .subagent_profile_id
+            .as_deref()
+            .is_some_and(|profile_id| !profile_id.trim().is_empty())
+}
+
+/// Decides whether a stored controller configuration still matches the resolved task prompt contract.
+/// 判断已存储的控制器配置是否仍匹配当前已解析的任务提示词契约。
+///
+/// # Parameters
+/// 参数
+/// `base` is the parent controller configuration used as the inherited prompt baseline.
+/// `base` 是作为继承提示词基线的父级控制器配置。
+/// `invocation_config` is the current task invocation request.
+/// `invocation_config` 是当前任务调用请求。
+/// `resolved_config` is the already resolved task-session configuration.
+/// `resolved_config` 是已经解析完成的子代理会话配置。
+///
+/// # Returns
+/// 返回值
+/// `true` when the stored controller config can be reused without hiding task-specific prompts.
+/// 当复用已存储控制器配置不会遮蔽任务专属提示词时返回 `true`。
+fn stored_task_controller_config_can_be_reused(
+    base: &CoreControllerConfig,
+    invocation_config: &TaskInvocationConfig,
+    resolved_config: &TaskSessionResolvedConfig,
+) -> bool {
+    if resolved_config
+        .effective_config
+        .subagent_profile_id
+        .as_deref()
+        .is_some_and(|profile_id| !profile_id.trim().is_empty())
+    {
+        return false;
+    }
+    if invocation_config.system_prompt.is_some() || invocation_config.system_prompt_append.is_some()
+    {
+        return false;
+    }
+    let parent_prompt = base.system_prompt.trim();
+    !resolved_config
+        .effective_config
+        .system_prompt_layers
+        .iter()
+        .filter_map(|layer| normalize_optional_task_label(Some(layer)))
+        .any(|layer| layer.trim() != parent_prompt)
 }
 
 /// Applies provider/model overrides that can safely use the existing provider transport.
@@ -103,7 +163,7 @@ pub(super) fn build_subagent_clone_system_prompt(
     base: &CoreControllerConfig,
     description: &Option<String>,
     subagent: &Option<String>,
-    inherit_parent_config: bool,
+    include_base_provider_prompt: bool,
     functional_system_prompt: Option<&str>,
 ) -> Option<String> {
     let functional_system_prompt = functional_system_prompt
@@ -122,7 +182,7 @@ pub(super) fn build_subagent_clone_system_prompt(
                 model_id: base.model_id.clone(),
                 supports_native_personality: true,
             },
-            provider_prompt: inherit_parent_config.then(|| {
+            provider_prompt: include_base_provider_prompt.then(|| {
                 ProviderPromptSnapshot::new(base.system_prompt.clone())
                     .with_source_label("Parent runtime system prompt")
             }),
@@ -184,10 +244,10 @@ pub(super) fn build_legacy_task_system_prompt(
     base: &CoreControllerConfig,
     description: &Option<String>,
     subagent: &Option<String>,
-    inherit_parent_config: bool,
+    include_base_provider_prompt: bool,
     functional_system_prompt: Option<&str>,
 ) -> String {
-    let mut system_prompt = if inherit_parent_config {
+    let mut system_prompt = if include_base_provider_prompt {
         base.system_prompt.clone()
     } else {
         String::new()

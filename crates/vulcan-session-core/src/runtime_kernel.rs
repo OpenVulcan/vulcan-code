@@ -408,6 +408,7 @@ impl SessionRuntimeKernel {
         if kind == ActiveTurnKind::MailboxTriggered {
             self.input_queue.accept_mailbox_delivery_for_current_turn();
         } else {
+            self.input_queue.accept_mailbox_delivery_for_current_turn();
             self.input_queue.defer_mailbox_delivery_to_next_turn();
         }
         let turn = ActiveTurn::new(turn_id, self.node_id, kind, self.generation, timestamp_ms);

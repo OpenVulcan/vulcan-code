@@ -2,6 +2,7 @@
 //! 浏览器服务桥接与 RPC 适配辅助函数。
 
 use super::*;
+use reqwest::Url;
 
 /// Opens a trusted external URL with the system default browser.
 /// 使用系统默认浏览器打开可信外部链接。
@@ -9,11 +10,23 @@ pub(crate) fn service_open_external_url(
     state: SharedServiceBridgeState,
     url: String,
 ) -> Result<String, String> {
-    if url != "https://github.com/OpenVulcan/vulcan-code" {
+    if !external_url_is_allowed(&url) {
         return Err(String::from("不允许打开未授权的外部链接。"));
     }
     shell_host_from_state(&state)?.open_url(&url)?;
-    Ok(String::from("已请求使用系统默认浏览器打开 GitHub。"))
+    Ok(String::from("已请求使用系统默认浏览器打开外部链接。"))
+}
+
+/// Returns whether one external URL may be opened by the host shell.
+/// 返回一个外部链接是否允许由宿主 shell 打开。
+fn external_url_is_allowed(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.host_str() == Some("github.com")
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
 }
 
 /// Returns the host shell adapter from shared service state.
@@ -266,4 +279,40 @@ pub(crate) fn service_workbench_snapshot(
         .lock()
         .map(|guard| workbench_with_live_pending_question(&guard))
         .map_err(|error| format!("failed to lock service workbench state: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies GitHub HTTPS URLs are allowed for provenance links.
+    /// 验证 GitHub HTTPS 链接允许作为来源链接打开。
+    #[test]
+    fn external_url_allowlist_accepts_github_https_urls() {
+        assert!(external_url_is_allowed(
+            "https://github.com/OpenVulcan/vulcan-code"
+        ));
+        assert!(external_url_is_allowed(
+            "https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-code-reviewer.md"
+        ));
+        assert!(external_url_is_allowed(
+            "https://github.com/jnMetaCode/agency-agents-zh/blob/main/academic/academic-study-planner.md"
+        ));
+    }
+
+    /// Verifies non-GitHub or unsafe URLs remain blocked.
+    /// 验证非 GitHub 或不安全链接仍会被阻止。
+    #[test]
+    fn external_url_allowlist_rejects_unsafe_urls() {
+        assert!(!external_url_is_allowed(
+            "http://github.com/OpenVulcan/vulcan-code"
+        ));
+        assert!(!external_url_is_allowed(
+            "https://example.com/msitarzewski/agency-agents"
+        ));
+        assert!(!external_url_is_allowed(
+            "https://user:token@github.com/msitarzewski/agency-agents"
+        ));
+        assert!(!external_url_is_allowed("not a url"));
+    }
 }

@@ -213,6 +213,8 @@ fn execute_provider_prompt_stream_with_capture_mode(
         request_budget_guard,
         retry_policy,
         prompt_intervention,
-        preparation.prompt_purpose.rejects_tool_requests(),
+        preparation.tool_request_rejection_reason.clone(),
+        preparation.tool_request_rejection_all_tools,
+        preparation.tool_request_rejection_tool_ids.clone(),
     ))
 }

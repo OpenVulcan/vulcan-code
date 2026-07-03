@@ -179,7 +179,8 @@ pub fn build_session_turn_stats_from_state_with_segments(
                 }
             }
             SessionConversationPayload::ToolResult { .. }
-            | SessionConversationPayload::UserText { .. } => {}
+            | SessionConversationPayload::UserText { .. }
+            | SessionConversationPayload::AgentMessage { .. } => {}
         }
     }
 

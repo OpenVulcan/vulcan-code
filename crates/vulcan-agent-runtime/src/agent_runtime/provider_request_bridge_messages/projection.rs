@@ -164,6 +164,19 @@ fn project_core_messages_to_provider_visible_history_for_model(
                 ));
                 index += 1;
             }
+            CoreConversationPayload::AgentMessage { .. } => {
+                projected.push(CoreConversationMessage {
+                    id: message.id.clone(),
+                    payload: CoreConversationPayload::UserText {
+                        text: message
+                            .payload
+                            .agent_message_model_text()
+                            .unwrap_or_default(),
+                        attachments: Vec::new(),
+                    },
+                });
+                index += 1;
+            }
         }
     }
 
@@ -343,7 +356,8 @@ pub(crate) fn validate_provider_visible_tool_topology(
                 }
             }
             CoreConversationPayload::Assistant { .. }
-            | CoreConversationPayload::UserText { .. } => {
+            | CoreConversationPayload::UserText { .. }
+            | CoreConversationPayload::AgentMessage { .. } => {
                 if !pending_tool_call_groups.is_empty() {
                     return Err(format!(
                         "message at index {index} interrupted assistant tool batch from index {}",

@@ -15,9 +15,14 @@ pub(super) fn prepare_task_execution_request(
         persisted_metadata,
     } = resolved_identifier;
     let normalized_description = normalize_optional_task_label(args.description.as_deref());
-    let normalized_subagent = normalize_optional_task_label(args.subagent.as_deref());
-    let fork_turns = args.fork_turns.clone();
-    let invocation_config = task_invocation_config_from_args(&args);
+    let normalized_subagent = normalize_optional_task_label(args.subagent.as_deref())
+        .or_else(|| normalize_optional_task_label(args.subagent_profile_id.as_deref()));
+    let mut invocation_config = task_invocation_config_from_args(&args);
+    let fork_turns = effective_spawn_agent_fork_turns(
+        invocation_config.subagent_mode.as_deref(),
+        invocation_config.subagent_profile_id.as_deref(),
+        args.fork_turns.as_deref(),
+    )?;
     let prompt = args.prompt;
     let (
         parent_task_id,
@@ -167,11 +172,22 @@ pub(super) fn prepare_task_execution_request(
                 task_id,
             );
             let timestamp = current_unix_millis_text();
-            let initial_snapshot = initial_spawn_snapshot_for_fork_turns(
+            let mut initial_snapshot = initial_spawn_snapshot_for_fork_turns(
                 task_runtime,
                 current_session_id,
-                fork_turns.as_deref(),
+                Some(fork_turns.as_str()),
             )?;
+            append_mirror_subagent_status_prompt_if_needed(
+                &mut initial_snapshot,
+                task_id,
+                &invocation_config,
+            );
+            attach_subagent_runtime_debug_extra(
+                &mut invocation_config,
+                &fork_turns,
+                initial_snapshot.messages.len(),
+                false,
+            );
             sessions.insert(
                 task_id,
                 TaskSessionRecord {
@@ -223,6 +239,103 @@ pub(super) fn prepare_task_execution_request(
         controller_config,
         is_resumed,
     })
+}
+
+/// Attaches non-secret runtime debug metadata to the invocation extra payload.
+/// 将不含敏感提示词正文的运行时调试元数据附加到调用扩展载荷。
+///
+/// # Parameters
+/// 参数
+/// `invocation_config` is the invocation being persisted for this task.
+/// `invocation_config` 是即将为该任务持久化的调用配置。
+/// `fork_turns` is the effective fork selector used for the initial snapshot.
+/// `fork_turns` 是构建初始快照时使用的有效派生选择器。
+/// `snapshot_message_count` is the number of messages in the child initial snapshot.
+/// `snapshot_message_count` 是子代理初始快照中的消息数量。
+/// `is_resumed` indicates whether this metadata was produced for a resumed task.
+/// `is_resumed` 表示该元数据是否来自续跑任务。
+fn attach_subagent_runtime_debug_extra(
+    invocation_config: &mut TaskInvocationConfig,
+    fork_turns: &str,
+    snapshot_message_count: usize,
+    is_resumed: bool,
+) {
+    let agent_id = invocation_config
+        .subagent_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let agent_kind = if agent_id.is_some() {
+        "agent_profile"
+    } else {
+        "parent_clone"
+    };
+    let prompt_source = agent_id
+        .map(|value| format!("agent_md:{value}"))
+        .unwrap_or_else(|| String::from("core"));
+    let debug = json!({
+        "agent_kind": agent_kind,
+        "agent_mode": invocation_config.subagent_mode,
+        "agent_id": invocation_config.subagent_profile_id,
+        "prompt_source": prompt_source,
+        "fork_turns": fork_turns,
+        "initial_snapshot_messages": snapshot_message_count,
+        "inherit_parent_config": invocation_config.inherit_parent_config,
+        "is_resumed": is_resumed,
+    });
+    match &mut invocation_config.extra {
+        Value::Object(map) => {
+            map.insert(String::from("_subagent_runtime_debug"), debug);
+        }
+        Value::Null => {
+            invocation_config.extra = json!({
+                "_subagent_runtime_debug": debug,
+            });
+        }
+        previous => {
+            let caller_extra = previous.clone();
+            invocation_config.extra = json!({
+                "_subagent_runtime_debug": debug,
+                "_caller_extra": caller_extra,
+            });
+        }
+    }
+}
+
+/// Appends the hidden mirror-mode user prompt to a newly forked child snapshot.
+/// 向新 fork 的子快照追加镜像模式隐藏用户提示词。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the child snapshot being prepared.
+/// `snapshot` 是正在准备的子快照。
+/// `task_id` is the child task session identifier.
+/// `task_id` 是子任务会话标识。
+/// `invocation_config` carries the resolved invocation mode.
+/// `invocation_config` 携带已解析的调用模式。
+fn append_mirror_subagent_status_prompt_if_needed(
+    snapshot: &mut CoreConversationSnapshot,
+    task_id: SessionId,
+    invocation_config: &TaskInvocationConfig,
+) {
+    if invocation_config.subagent_mode.as_deref() != Some(SUBAGENT_MODE_MIRROR) {
+        return;
+    }
+    snapshot.messages.push(CoreConversationMessage {
+        id: format!("mirror-subagent-status-{task_id}"),
+        payload: CoreConversationPayload::UserText {
+            text: mirror_subagent_status_prompt(),
+            attachments: Vec::new(),
+        },
+    });
+}
+
+/// Returns the hidden user prompt appended to mirror subagents.
+/// 返回追加给镜像子代理的隐藏用户提示词。
+fn mirror_subagent_status_prompt() -> String {
+    String::from(
+        "You are now running as a mirror subagent, not the root agent. You inherited the parent conversation context and may see the same tool schemas for cache stability and situational awareness. You may use ordinary available tools when they help complete the delegated task, but you must not use subagent orchestration tools such as spawning, listing, waiting for, interrupting, or messaging agents. If a subagent orchestration tool call is attempted, the host will reject it because the current execution is a mirror subagent. Complete the requested analysis from the inherited context and return your result to the parent agent.",
+    )
 }
 
 /// Builds the initial child snapshot for one Vulcan spawn fork selector.
@@ -454,7 +567,8 @@ pub(super) fn task_invocation_config_from_requested_config(
 ) -> TaskInvocationConfig {
     TaskInvocationConfig {
         prompt,
-        subagent_profile_id: None,
+        subagent_profile_id: requested_config.subagent_profile_id.clone(),
+        subagent_mode: requested_config.subagent_mode.clone(),
         inherit_parent_config: Some(requested_config.inherit_parent_config),
         system_prompt: requested_config.system_prompt.clone(),
         system_prompt_append: requested_config.system_prompt_append.clone(),

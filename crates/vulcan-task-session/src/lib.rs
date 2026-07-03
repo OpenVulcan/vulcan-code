@@ -1,6 +1,9 @@
 //! Segmented task-session routing and scheduling boundaries.
 //! 分段子代理会话路由与调度边界。
 
+/// Subagent catalog loading and profile conversion.
+/// 子代理目录加载与配置转换。
+pub mod catalog;
 /// Task-session compaction contracts.
 /// 子代理会话压缩契约。
 pub mod compaction;
@@ -26,6 +29,14 @@ pub mod segmented_store;
 /// 子代理会话存储契约。
 pub mod store;
 
+pub use catalog::{
+    SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR, SubagentCatalog,
+    SubagentCatalogLoadError, SubagentDefinition, SubagentDefinitionMode, SubagentDefinitionScope,
+    SubagentDefinitionSource, load_subagent_catalog_from_roots, parse_subagent_definition_file,
+    parse_subagent_definition_text, subagent_definition_to_markdown, user_subagent_definition_path,
+    user_subagent_override_path, user_subagent_sidecar_path, write_user_subagent_definition,
+    write_user_subagent_override,
+};
 pub use compaction::{
     TaskSessionCompactionApplication, TaskSessionCompactionJob, TaskSessionCompactionStore,
     apply_task_session_compaction_result,

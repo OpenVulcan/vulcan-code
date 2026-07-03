@@ -100,6 +100,79 @@ impl VulcanCoreController {
         Some(self.append_user_turn_with_metadata(trimmed_prompt, attachments, metadata))
     }
 
+    /// Appends one typed inter-agent message into canonical history and transcript records.
+    /// 将一条类型化代理间消息追加到规范历史与转录记录中。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `message_type` is the stable model-visible inter-agent message type.
+    /// `message_type` 是模型可见的稳定代理间消息类型。
+    /// `task_name` is the logical task or agent path associated with the message.
+    /// `task_name` 是该消息关联的逻辑任务或代理路径。
+    /// `sender` is the logical sender name or path.
+    /// `sender` 是逻辑发送方名称或路径。
+    /// `recipient` is the logical recipient name or path.
+    /// `recipient` 是逻辑接收方名称或路径。
+    /// `payload` is the model-visible child-agent result text.
+    /// `payload` 是模型可见的子代理结果文本。
+    /// `trigger_turn` indicates whether the message may wake an idle parent turn.
+    /// `trigger_turn` 表示该消息是否可以唤醒空闲父级回合。
+    /// `metadata` is host-only structured audit data.
+    /// `metadata` 是仅供宿主侧使用的结构化审计数据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The generated provider-visible message id.
+    /// 返回生成的 Provider 可见消息标识。
+    pub fn append_agent_message(
+        &mut self,
+        message_type: impl Into<String>,
+        task_name: impl Into<String>,
+        sender: impl Into<String>,
+        recipient: impl Into<String>,
+        payload: impl Into<String>,
+        trigger_turn: bool,
+        metadata: Option<Value>,
+    ) -> String {
+        let message_id = self.next_local_id("agent-message");
+        let record_id = self.next_local_id("agent-record");
+        let timestamp = current_unix_millis_text();
+        let message_type = message_type.into();
+        let task_name = task_name.into();
+        let sender = sender.into();
+        let recipient = recipient.into();
+        let payload = payload.into();
+        let model_text = ConversationPayload::render_agent_message_text(
+            &message_type,
+            &task_name,
+            &sender,
+            &payload,
+        );
+        self.snapshot.messages.push(ConversationMessage {
+            id: message_id.clone(),
+            payload: ConversationPayload::AgentMessage {
+                message_type,
+                task_name,
+                sender,
+                recipient,
+                payload,
+                trigger_turn,
+                metadata: metadata.clone(),
+            },
+        });
+        self.snapshot.records.push(ConversationRecord {
+            id: record_id,
+            role: TranscriptRole::Assistant,
+            record_kind: TranscriptRecordKind::Visible,
+            visible: true,
+            title: String::from("子代理消息"),
+            body: model_text,
+            metadata,
+            created_at: timestamp,
+        });
+        message_id
+    }
+
     /// Returns whether the controller still needs to append one new user turn instead of reusing the host-preseeded latest user prompt.
     /// 返回控制器当前是否仍需追加一条新的用户回合，而不是复用宿主已预播种的最新用户提示词。
     pub(super) fn should_append_user_turn(&self, prompt: &str) -> bool {

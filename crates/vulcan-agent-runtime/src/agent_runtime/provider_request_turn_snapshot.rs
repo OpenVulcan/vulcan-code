@@ -87,6 +87,12 @@ fn render_provider_visible_prompt_message(message: &CoreConversationMessage) -> 
         }
         CoreConversationPayload::Assistant { text, .. } => text.trim().to_string(),
         CoreConversationPayload::ToolResult { text, .. } => text.trim().to_string(),
+        CoreConversationPayload::AgentMessage { .. } => message
+            .payload
+            .agent_message_model_text()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
     }
 }
 

@@ -482,6 +482,11 @@ fn estimate_core_message_tokens(
         CoreConversationPayload::ToolResult { text, .. } => {
             estimate_text_tokens_for_model(model_id, estimator, text) + 12usize
         }
+        CoreConversationPayload::AgentMessage { .. } => message
+            .payload
+            .agent_message_model_text()
+            .map(|text| estimate_text_tokens_for_model(model_id, estimator, &text) + 16usize)
+            .unwrap_or(16usize),
     }
 }
 

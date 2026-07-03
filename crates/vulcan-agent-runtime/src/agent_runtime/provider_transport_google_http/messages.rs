@@ -121,6 +121,14 @@ pub(super) fn core_message_to_gemini_content(
                 },
             )]))
         }
+        CoreConversationPayload::AgentMessage { .. } => {
+            Ok(GeminiContent::user(vec![GeminiPart::text(
+                message
+                    .payload
+                    .agent_message_model_text()
+                    .unwrap_or_default(),
+            )]))
+        }
     }
 }
 

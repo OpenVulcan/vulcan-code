@@ -535,6 +535,7 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         );
         return false;
     }
+    let trigger_parent_turn = false;
     let kernel = session_runtime_kernel_mut(state, parent_session_id);
     let source_generation = binding
         .as_ref()
@@ -553,7 +554,7 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         format!("subagent-mailbox-{parent_session_id}-{task_id}"),
         SessionNodeId::from(parent_session_id),
         TurnInputKind::SubagentMessage,
-        true,
+        trigger_parent_turn,
         timestamp_ms,
         json!({
             "task_id": task_id.to_string(),
@@ -561,6 +562,7 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
             "source_generation": source_generation,
             "parent_turn_id": parent_turn_id_for_payload,
             "mailbox_event": mailbox_event,
+            "trigger_parent_turn": trigger_parent_turn,
         }),
     );
     if let Some(parent_turn_id) = parent_turn_id.clone() {
@@ -570,7 +572,7 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
     webui_trace(
         "subagent_mailbox_input_enqueued",
         format!(
-            "parent={parent_session_id} task={task_id} accepted={accepted} generation={source_generation}"
+            "parent={parent_session_id} task={task_id} accepted={accepted} generation={source_generation} trigger_parent_turn={trigger_parent_turn}"
         ),
     );
     accepted

@@ -2,7 +2,6 @@
 //! LuaSkills 与 AgentSkills 服务处理器。
 
 use super::*;
-
 pub(crate) async fn run_luaskills_management_blocking<T, F>(
     label: &'static str,
     operation: F,
@@ -124,6 +123,268 @@ pub(crate) async fn service_refresh_agent_skills_catalog(
     refresh_workbench_snapshot(state).await
 }
 
+/// Refreshes the agent catalog and updates the shared task runtime snapshot.
+/// 刷新智能体目录并更新共享任务运行时快照。
+pub(crate) async fn service_refresh_subagent_catalog(
+    state: SharedServiceBridgeState,
+) -> Result<WorkbenchSnapshot, String> {
+    refresh_subagent_catalog_local_state(&state)
+}
+
+/// Opens the user-owned subagent directory in the host file manager.
+/// 在宿主文件管理器中打开用户拥有的智能体目录。
+pub(crate) async fn service_open_subagent_user_directory(
+    state: SharedServiceBridgeState,
+) -> Result<WorkbenchSnapshot, String> {
+    let user_root = user_subagent_root();
+    std::fs::create_dir_all(&user_root)
+        .map_err(|error| format!("创建用户智能体目录 `{}` 失败：{error}", user_root.display()))?;
+    shell_host_from_state(&state)?.open_path(&user_root.to_string_lossy())?;
+    refresh_subagent_catalog_local_state(&state)
+}
+
+/// Persists one agent definition enabled state through the user override layer.
+/// 通过用户覆盖层持久化单个智能体定义启停状态。
+pub(crate) async fn service_set_subagent_definition_enabled(
+    state: SharedServiceBridgeState,
+    agent_id: String,
+    enabled: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    let agent_id = agent_id.trim();
+    if agent_id.is_empty() {
+        return Err(String::from("智能体定义标识不能为空。"));
+    }
+    let catalog = load_current_subagent_catalog();
+    let mut definition = catalog
+        .definitions
+        .iter()
+        .find(|definition| definition.id == agent_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到智能体定义：{agent_id}"))?;
+    definition.enabled = enabled;
+    definition.source.scope = vulcan_task_session::SubagentDefinitionScope::User;
+    if definition.source.override_of.is_none() && system_subagent_definition_exists(&definition.id)
+    {
+        definition.source.override_of = Some(definition.id.clone());
+    }
+    vulcan_task_session::write_user_subagent_override(user_subagent_root().as_path(), &definition)
+        .map_err(|error| {
+            format!(
+                "写入智能体启停覆盖 `{}` 失败：{}",
+                error.path.display(),
+                error.message
+            )
+        })?;
+    refresh_subagent_catalog_local_state(&state)
+}
+
+/// Saves one user-authored or system-overriding agent definition into the user catalog.
+/// 将单个用户编写或覆盖系统定义的智能体定义保存到用户目录。
+pub(crate) async fn service_save_subagent_definition(
+    state: SharedServiceBridgeState,
+    request: SubagentDefinitionSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let requested_agent_id = request.agent_id.trim();
+    if requested_agent_id.is_empty() {
+        return Err(String::from("智能体标识不能为空。"));
+    }
+    let mode = vulcan_task_session::SubagentDefinitionMode::Expert;
+    let target_package_id = normalized_optional_user_package_id(request.package_id.as_deref())?;
+    let submitted_original_agent_id = request
+        .original_agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let original_agent_id = submitted_original_agent_id.unwrap_or(requested_agent_id);
+    let catalog = load_current_subagent_catalog();
+    let existing = submitted_original_agent_id.and_then(|original_agent_id| {
+        catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == original_agent_id)
+            .cloned()
+    });
+    if existing
+        .as_ref()
+        .is_some_and(subagent_definition_is_system_backed)
+        && target_package_id.is_some()
+    {
+        return Err(String::from("系统内置智能体不允许转移到用户包。"));
+    }
+    let target_agent_id = target_agent_id_for_save(
+        requested_agent_id,
+        existing.as_ref(),
+        target_package_id.as_deref(),
+    )?;
+    let target_conflicts_with_other_definition = catalog
+        .definitions
+        .iter()
+        .any(|definition| definition.id == target_agent_id && definition.id != original_agent_id);
+    let new_definition_conflicts_with_existing = existing.is_none()
+        && catalog
+            .definitions
+            .iter()
+            .any(|definition| definition.id == target_agent_id);
+    if target_conflicts_with_other_definition || new_definition_conflicts_with_existing {
+        return Err(format!(
+            "目标智能体 `{target_agent_id}` 已存在，请更换文件名或先编辑已有智能体。"
+        ));
+    }
+    let user_file = user_subagent_definition_path(&target_agent_id)?;
+    let mut definition = existing.unwrap_or_else(|| vulcan_task_session::SubagentDefinition {
+        id: target_agent_id.clone(),
+        name: target_agent_id.clone(),
+        description: None,
+        locales: std::collections::BTreeMap::new(),
+        origin: None,
+        emoji: String::from("🤖"),
+        color: String::from("gray"),
+        vibe: None,
+        mode,
+        system_prompt: None,
+        system_prompt_append: None,
+        provider_model: Default::default(),
+        tool_exposure: Default::default(),
+        prompt_skills: Default::default(),
+        context_compaction: Default::default(),
+        runtime_policy: Default::default(),
+        max_depth: None,
+        enabled: true,
+        source: vulcan_task_session::SubagentDefinitionSource {
+            scope: vulcan_task_session::SubagentDefinitionScope::User,
+            file: user_file.clone(),
+            sidecar_file: None,
+            source_key: format!("user:{target_agent_id}"),
+            category_id: target_agent_id
+                .rsplit_once('/')
+                .map(|(category, _)| category.to_string()),
+            package_id: target_package_id.clone(),
+            remote_url: None,
+            override_of: None,
+            source_hash: None,
+            version: None,
+            etag: None,
+            last_modified: None,
+            updated_at: None,
+        },
+        extra: serde_json::Value::Null,
+    });
+    let previous_agent_id = definition.id.clone();
+    let previous_source = definition.source.clone();
+    let previous_scope = definition.source.scope;
+    definition.id = target_agent_id.clone();
+    let request_locales = normalized_request_definition_locales(request.locales);
+    definition.name = preferred_definition_locale_name(&request_locales)
+        .or_else(|| non_empty_request_text(&request.name))
+        .unwrap_or_else(|| target_agent_id.clone());
+    definition.description =
+        preferred_definition_locale_description(&request_locales).or_else(|| {
+            request
+                .description
+                .as_deref()
+                .and_then(non_empty_request_text)
+        });
+    definition.locales = request_locales;
+    apply_defaulted_text_patch(request.emoji, &mut definition.emoji, "🤖");
+    apply_defaulted_text_patch(request.color, &mut definition.color, "gray");
+    apply_optional_text_patch(request.vibe, &mut definition.vibe);
+    definition.mode = mode;
+    definition.enabled = request.enabled;
+    definition.system_prompt = request
+        .system_prompt
+        .as_deref()
+        .and_then(non_empty_request_text);
+    definition.system_prompt_append = request
+        .system_prompt_append
+        .as_deref()
+        .and_then(non_empty_request_text);
+    definition.tool_exposure.allowed_tools = normalized_request_text_list(request.allowed_tools);
+    definition.tool_exposure.disabled_tools = normalized_request_text_list(request.disabled_tools);
+    definition.tool_exposure.allowed_ai_capabilities =
+        normalized_request_text_list(request.allowed_ai_capabilities);
+    definition.tool_exposure.disabled_ai_capabilities =
+        normalized_request_text_list(request.disabled_ai_capabilities);
+    definition.tool_exposure.luaskills_overrides = request.luaskills_overrides;
+    definition.tool_exposure.mcp_server_overrides = request.mcp_server_overrides;
+    definition.prompt_skills.enabled = normalized_request_text_list(request.enabled_prompt_skills);
+    definition.prompt_skills.disabled =
+        normalized_request_text_list(request.disabled_prompt_skills);
+    definition.source.scope = vulcan_task_session::SubagentDefinitionScope::User;
+    definition.source.file = user_file;
+    definition.source.sidecar_file = None;
+    definition.source.source_key = format!("user:{target_agent_id}");
+    definition.source.category_id = target_agent_id
+        .rsplit_once('/')
+        .map(|(category, _)| category.to_string());
+    definition.source.package_id = target_package_id.clone();
+    definition.source.updated_at = Some(current_unix_millis_text());
+    if target_package_id.is_none() && system_subagent_definition_exists(&target_agent_id) {
+        definition.source.override_of = Some(target_agent_id.clone());
+    } else if previous_scope != vulcan_task_session::SubagentDefinitionScope::System {
+        definition.source.override_of = None;
+    }
+    let written_user_file = vulcan_task_session::write_user_subagent_definition(
+        user_subagent_root().as_path(),
+        &definition,
+    )
+    .map_err(|error| {
+        format!(
+            "保存智能体定义 `{}` 失败：{}",
+            error.path.display(),
+            error.message
+        )
+    })?;
+    remove_user_subagent_file_if_inside_root(&user_subagent_override_path(&target_agent_id)?)?;
+    if previous_agent_id != target_agent_id
+        && previous_scope != vulcan_task_session::SubagentDefinitionScope::System
+    {
+        remove_stale_user_subagent_files_for_source(
+            &previous_agent_id,
+            &previous_source,
+            &written_user_file,
+        )?;
+    }
+    refresh_subagent_catalog_local_state(&state)
+}
+
+/// Restores one system-backed agent definition by deleting its user override.
+/// 通过删除用户覆盖来恢复单个系统集成智能体定义。
+pub(crate) async fn service_restore_subagent_definition_default(
+    state: SharedServiceBridgeState,
+    agent_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let agent_id = agent_id.trim();
+    if agent_id.is_empty() {
+        return Err(String::from("智能体定义标识不能为空。"));
+    }
+    let catalog = load_current_subagent_catalog();
+    let definition = catalog
+        .definitions
+        .iter()
+        .find(|definition| definition.id == agent_id)
+        .ok_or_else(|| format!("未找到智能体定义：{agent_id}"))?;
+    let restore_candidates = restore_default_user_file_candidates(agent_id, definition)?;
+    let has_user_layer = restore_candidates.iter().try_fold(false, |found, path| {
+        user_subagent_file_exists_inside_root(path).map(|exists| found || exists)
+    })?;
+    let can_restore = has_user_layer
+        && (system_subagent_definition_exists(agent_id)
+            || definition
+                .source
+                .override_of
+                .as_deref()
+                .is_some_and(system_subagent_definition_exists));
+    if !can_restore {
+        return Err(format!(
+            "当前智能体没有可恢复的系统或包默认定义：{agent_id}"
+        ));
+    }
+    for path in restore_candidates {
+        remove_user_subagent_file_if_inside_root(&path)?;
+    }
+    refresh_subagent_catalog_local_state(&state)
+}
+
 /// Persists the Agent Skills global switch and refreshes only the Agent Skills catalog.
 /// 持久化 Agent Skills 全局开关并仅刷新 Agent Skills 目录。
 pub(crate) async fn service_set_agent_skills_enabled(
@@ -214,4 +475,421 @@ pub(crate) fn service_set_agent_skill_project_state(
         &project_configuration,
     )?;
     Ok(())
+}
+
+/// Reprojects agent catalog after a focused catalog write or refresh.
+/// 在聚焦的目录写入或刷新后重新投影智能体目录。
+fn refresh_subagent_catalog_local_state(
+    state: &SharedServiceBridgeState,
+) -> Result<WorkbenchSnapshot, String> {
+    refresh_subagent_catalog_local_state_with_errors(state, Vec::new())
+}
+
+/// Reprojects agent catalog and appends transient refresh errors.
+/// 重新投影智能体目录并追加临时刷新错误。
+fn refresh_subagent_catalog_local_state_with_errors(
+    state: &SharedServiceBridgeState,
+    transient_errors: Vec<vulcan_task_session::SubagentCatalogLoadError>,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut catalog = load_current_subagent_catalog();
+    catalog.errors.extend(transient_errors);
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(runtime) = guard.agent_runtime.as_ref() {
+        runtime
+            .task_runtime
+            .replace_subagent_catalog(catalog.clone())
+            .map_err(|error| format!("刷新运行时智能体目录失败：{error}"))?;
+    }
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
+    guard.workbench.subagent_catalog = subagent_catalog_summary_from_catalog(&catalog);
+    Ok(guard.workbench.clone())
+}
+
+/// Loads the current two-layer agent catalog from system and user roots.
+/// 从系统根与用户根加载当前双层智能体目录。
+fn load_current_subagent_catalog() -> vulcan_task_session::SubagentCatalog {
+    vulcan_task_session::load_subagent_catalog_from_roots(
+        vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
+        user_subagent_root(),
+    )
+}
+
+/// Returns whether a system-integrated agent definition exists before user overrides are applied.
+/// 返回应用用户覆盖前是否存在系统集成智能体定义。
+fn system_subagent_definition_exists(agent_id: &str) -> bool {
+    let catalog = vulcan_task_session::load_subagent_catalog_from_roots(
+        vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
+        PathBuf::new(),
+    );
+    catalog.definitions.iter().any(|definition| {
+        definition.id == agent_id
+            && definition.source.scope == vulcan_task_session::SubagentDefinitionScope::System
+    })
+}
+
+/// Returns whether one effective definition still represents a system-integrated agent.
+/// 返回单个生效定义是否仍代表系统集成智能体。
+fn subagent_definition_is_system_backed(
+    definition: &vulcan_task_session::SubagentDefinition,
+) -> bool {
+    definition.source.scope == vulcan_task_session::SubagentDefinitionScope::System
+        || definition
+            .source
+            .override_of
+            .as_deref()
+            .is_some_and(system_subagent_definition_exists)
+        || (definition.source.package_id.is_none()
+            && system_subagent_definition_exists(&definition.id))
+}
+
+/// Returns the user-owned agent catalog root.
+/// 返回用户拥有的智能体目录根路径。
+fn user_subagent_root() -> PathBuf {
+    vulcan_workspace_store::data_plane::application_data_root().join("agents")
+}
+
+/// Returns the user-owned file path for one agent definition id.
+/// 返回单个智能体定义标识对应的用户文件路径。
+fn user_subagent_definition_path(agent_id: &str) -> Result<PathBuf, String> {
+    vulcan_task_session::user_subagent_definition_path(user_subagent_root().as_path(), agent_id)
+        .map_err(|error| error.message)
+}
+
+/// Returns the user-owned sidecar file path for one agent definition id.
+/// 返回单个智能体定义标识对应的用户 sidecar 文件路径。
+fn user_subagent_sidecar_path(agent_id: &str) -> Result<PathBuf, String> {
+    vulcan_task_session::user_subagent_sidecar_path(user_subagent_root().as_path(), agent_id)
+        .map_err(|error| error.message)
+}
+
+/// Returns the user-owned override file path for one agent definition id.
+/// 返回单个智能体定义标识对应的用户覆盖文件路径。
+fn user_subagent_override_path(agent_id: &str) -> Result<PathBuf, String> {
+    vulcan_task_session::user_subagent_override_path(user_subagent_root().as_path(), agent_id)
+        .map_err(|error| error.message)
+}
+
+/// Returns trimmed request text only when it is non-empty.
+/// 仅在请求文本非空时返回裁剪后的文本。
+fn non_empty_request_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Applies one tri-state text patch to a defaulted string field.
+/// 将一个三态文本补丁应用到带默认值的字符串字段。
+fn apply_defaulted_text_patch(patch: OptionalTextPatch, value: &mut String, default_value: &str) {
+    match patch {
+        OptionalTextPatch::Missing => {}
+        OptionalTextPatch::Clear => {
+            *value = default_value.to_string();
+        }
+        OptionalTextPatch::Set(next_value) => {
+            *value =
+                non_empty_request_text(&next_value).unwrap_or_else(|| default_value.to_string());
+        }
+    }
+}
+
+/// Applies one tri-state text patch to an optional string field.
+/// 将一个三态文本补丁应用到可选字符串字段。
+fn apply_optional_text_patch(patch: OptionalTextPatch, value: &mut Option<String>) {
+    match patch {
+        OptionalTextPatch::Missing => {}
+        OptionalTextPatch::Clear => {
+            *value = None;
+        }
+        OptionalTextPatch::Set(next_value) => {
+            *value = non_empty_request_text(&next_value);
+        }
+    }
+}
+
+/// Normalizes one user-supplied string list by trimming empty entries and preserving first occurrence order.
+/// 通过裁剪空项并保留首次出现顺序来规范化用户提交的字符串列表。
+fn normalized_request_text_list(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let Some(trimmed) = non_empty_request_text(&value) else {
+            continue;
+        };
+        if !normalized.iter().any(|existing| existing == &trimmed) {
+            normalized.push(trimmed);
+        }
+    }
+    normalized
+}
+
+/// Normalizes localized definition metadata from a save request.
+/// 规范化保存请求中的智能体本地化元数据。
+fn normalized_request_definition_locales(
+    locales: std::collections::BTreeMap<String, SubagentDefinitionLocaleSummary>,
+) -> std::collections::BTreeMap<
+    String,
+    vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
+> {
+    locales
+        .into_iter()
+        .filter_map(|(locale, metadata)| {
+            let locale = locale.trim().to_string();
+            if locale.is_empty() {
+                return None;
+            }
+            let name = metadata.name.as_deref().and_then(non_empty_request_text);
+            let description = metadata
+                .description
+                .as_deref()
+                .and_then(non_empty_request_text);
+            if name.is_none() && description.is_none() {
+                return None;
+            }
+            Some((
+                locale,
+                vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition {
+                    name,
+                    description,
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Selects the default name from localized metadata with English taking priority.
+/// 从本地化元数据中选择默认名称，并优先使用英文。
+fn preferred_definition_locale_name(
+    locales: &std::collections::BTreeMap<
+        String,
+        vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
+    >,
+) -> Option<String> {
+    preferred_definition_locale_field(locales, |metadata| metadata.name.as_ref())
+}
+
+/// Selects the default description from localized metadata with English taking priority.
+/// 从本地化元数据中选择默认说明，并优先使用英文。
+fn preferred_definition_locale_description(
+    locales: &std::collections::BTreeMap<
+        String,
+        vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
+    >,
+) -> Option<String> {
+    preferred_definition_locale_field(locales, |metadata| metadata.description.as_ref())
+}
+
+/// Selects a localized text field using English first and Chinese as fallback.
+/// 按英文优先、中文兜底的顺序选择本地化文本字段。
+fn preferred_definition_locale_field(
+    locales: &std::collections::BTreeMap<
+        String,
+        vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition,
+    >,
+    field: impl Fn(&vulcan_task_session::catalog::SubagentDefinitionLocaleDefinition) -> Option<&String>,
+) -> Option<String> {
+    ["en-US", "en", "zh-CN", "zh"].iter().find_map(|preferred| {
+        let preferred_lower = preferred.to_ascii_lowercase();
+        locales
+            .iter()
+            .find(|(locale, metadata)| {
+                let locale_lower = locale.to_ascii_lowercase();
+                (locale_lower == preferred_lower
+                    || locale_lower.starts_with(&format!("{preferred_lower}-")))
+                    && field(metadata).is_some()
+            })
+            .and_then(|(_, metadata)| field(metadata).cloned())
+    })
+}
+
+/// Normalizes one package id for filesystem storage.
+/// 规范化一个用于文件系统存储的包标识。
+fn normalized_package_id(value: &str) -> Result<String, String> {
+    let package_id = value.trim();
+    if package_id.is_empty()
+        || package_id == "."
+        || package_id == ".."
+        || package_id.contains('/')
+        || package_id.contains('\\')
+        || package_id.contains(':')
+    {
+        return Err(format!("无效的智能体包标识：{value}"));
+    }
+    Ok(package_id.to_string())
+}
+
+/// Normalizes an optional user package id and rejects system package collisions.
+/// 规范化可选用户包标识并拒绝与系统包冲突。
+fn normalized_optional_user_package_id(value: Option<&str>) -> Result<Option<String>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let package_id = normalized_package_id(value)?;
+    if system_subagent_package_exists(&package_id) {
+        return Err(format!("用户自定义包不能与系统包 `{package_id}` 重名。"));
+    }
+    Ok(Some(package_id))
+}
+
+/// Returns whether the application ships a system package/category with the id.
+/// 返回应用是否内置了同名系统包或分类。
+fn system_subagent_package_exists(package_id: &str) -> bool {
+    let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
+    std::fs::read_dir(system_root)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .any(|entry| {
+            entry.path().is_dir()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name == package_id)
+        })
+}
+
+/// Builds the target agent id for a package assignment or transfer.
+/// 为包分配或转移构建目标智能体标识。
+fn target_agent_id_for_save(
+    requested_agent_id: &str,
+    existing: Option<&vulcan_task_session::SubagentDefinition>,
+    target_package_id: Option<&str>,
+) -> Result<String, String> {
+    let mut base_id = requested_agent_id.trim().to_string();
+    if let Some(existing_package_id) = existing
+        .and_then(|definition| definition.source.package_id.as_deref())
+        .filter(|package_id| !package_id.is_empty())
+    {
+        let prefix = format!("{existing_package_id}/");
+        if let Some(stripped) = base_id.strip_prefix(&prefix) {
+            base_id = stripped.to_string();
+        } else if let Some(stripped) = existing
+            .map(|definition| definition.id.as_str())
+            .and_then(|id| id.strip_prefix(&prefix))
+        {
+            base_id = stripped.to_string();
+        }
+    }
+    if let Some(target_package_id) = target_package_id {
+        let prefix = format!("{target_package_id}/");
+        if let Some(stripped) = base_id.strip_prefix(&prefix) {
+            base_id = stripped.to_string();
+        }
+        base_id = format!("{target_package_id}/{base_id}");
+    }
+    user_subagent_definition_path(&base_id)?;
+    Ok(base_id)
+}
+
+/// Collects all possible user-layer files that can override one system agent definition.
+/// 收集可能覆盖某个系统智能体定义的所有用户层文件。
+fn restore_default_user_file_candidates(
+    agent_id: &str,
+    definition: &vulcan_task_session::SubagentDefinition,
+) -> Result<Vec<PathBuf>, String> {
+    let mut candidates = Vec::new();
+    push_unique_path(&mut candidates, user_subagent_definition_path(agent_id)?);
+    push_unique_path(&mut candidates, user_subagent_sidecar_path(agent_id)?);
+    push_unique_path(&mut candidates, user_subagent_override_path(agent_id)?);
+    if definition.source.scope == vulcan_task_session::SubagentDefinitionScope::User {
+        push_unique_path(&mut candidates, definition.source.file.clone());
+    }
+    if let Some(sidecar_file) = definition.source.sidecar_file.as_ref() {
+        push_unique_path(&mut candidates, sidecar_file.clone());
+    }
+    Ok(candidates)
+}
+
+/// Removes stale user-owned source files after the definition has moved to a new id.
+/// 在定义移动到新标识后删除旧的用户来源文件。
+fn remove_stale_user_subagent_files_for_source(
+    previous_agent_id: &str,
+    previous_source: &vulcan_task_session::SubagentDefinitionSource,
+    retained_file: &Path,
+) -> Result<(), String> {
+    let mut candidates = Vec::new();
+    push_unique_path(&mut candidates, previous_source.file.clone());
+    if let Some(sidecar_file) = previous_source.sidecar_file.as_ref() {
+        push_unique_path(&mut candidates, sidecar_file.clone());
+    }
+    push_unique_path(
+        &mut candidates,
+        user_subagent_sidecar_path(previous_agent_id)?,
+    );
+    push_unique_path(
+        &mut candidates,
+        user_subagent_override_path(previous_agent_id)?,
+    );
+    for path in candidates {
+        remove_user_subagent_file_if_safe(&path, retained_file)?;
+    }
+    Ok(())
+}
+
+/// Returns whether one existing file is inside the user agent root.
+/// 返回一个已存在文件是否位于用户智能体根目录内。
+fn user_subagent_file_exists_inside_root(path: &Path) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let user_root = user_subagent_root();
+    let canonical_user_root = std::fs::canonicalize(&user_root).map_err(|error| {
+        format!(
+            "解析用户智能体根目录 `{}` 失败：{error}",
+            user_root.display()
+        )
+    })?;
+    let canonical_path = std::fs::canonicalize(path)
+        .map_err(|error| format!("解析智能体用户层文件 `{}` 失败：{error}", path.display()))?;
+    Ok(canonical_path.starts_with(canonical_user_root))
+}
+
+/// Removes one file when it is an existing user-layer agent file.
+/// 当文件是已存在的用户层智能体文件时删除它。
+fn remove_user_subagent_file_if_inside_root(path: &Path) -> Result<(), String> {
+    if !user_subagent_file_exists_inside_root(path)? {
+        return Ok(());
+    }
+    std::fs::remove_file(path)
+        .map_err(|error| format!("删除用户智能体文件 `{}` 失败：{error}", path.display()))
+}
+
+/// Pushes one filesystem path while preserving first occurrence order.
+/// 按首次出现顺序推入单个文件系统路径。
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+/// Removes one user catalog file only when it is still inside the user agent root.
+/// 仅在文件仍位于用户智能体根目录内时删除单个用户目录文件。
+fn remove_user_subagent_file_if_safe(path: &Path, retained_file: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let user_root = user_subagent_root();
+    let canonical_user_root = std::fs::canonicalize(&user_root).map_err(|error| {
+        format!(
+            "解析用户智能体根目录 `{}` 失败：{error}",
+            user_root.display()
+        )
+    })?;
+    let canonical_path = std::fs::canonicalize(path)
+        .map_err(|error| format!("解析旧智能体文件 `{}` 失败：{error}", path.display()))?;
+    if std::fs::canonicalize(retained_file)
+        .ok()
+        .as_ref()
+        .is_some_and(|canonical_retained| canonical_retained == &canonical_path)
+    {
+        return Ok(());
+    }
+    if !canonical_path.starts_with(&canonical_user_root) {
+        return Err(format!(
+            "拒绝删除用户智能体目录外的旧文件：{}",
+            path.display()
+        ));
+    }
+    std::fs::remove_file(path)
+        .map_err(|error| format!("删除旧智能体文件 `{}` 失败：{error}", path.display()))
 }

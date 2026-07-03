@@ -186,13 +186,30 @@ impl RuntimeFoundation {
         token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
         let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
+        let subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
+            vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
+            crate::data_plane::application_data_root().join("agents"),
+        );
         let native_tools = build_native_tool_catalog(
             &runtime_config,
             config.default_command_shell.as_deref(),
             Arc::clone(&command_session_runtime),
             config.vmm.clone(),
         );
-        let mut warnings = Vec::new();
+        let mut warnings = subagent_catalog
+            .errors
+            .iter()
+            .map(|error| {
+                format!(
+                    "加载子代理定义 `{}` 失败：{}",
+                    error.path.display(),
+                    error.message
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Err(error) = task_runtime.replace_subagent_catalog(subagent_catalog) {
+            warnings.push(error);
+        }
         let (luaskills_tools, luaskills_dispatch_tools, implicit_luaskill_prompt_entries) =
             match luaskills_runtime.as_ref() {
                 Some(handle) => match list_luaskills_tool_entries(handle) {

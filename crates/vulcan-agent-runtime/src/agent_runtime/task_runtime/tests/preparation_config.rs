@@ -35,6 +35,9 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         reasoning_effort: ReasoningEffortLevel::High,
         ai_tool_configuration: PersistedAiToolConfiguration::default(),
         tool_exposure_override: ToolExposureSnapshot::default(),
+        tool_request_rejection_reason: None,
+        tool_request_rejection_all_tools: false,
+        tool_request_rejection_tool_ids: Vec::new(),
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
         project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
         session_prompt_skill_overrides: BTreeMap::new(),
@@ -226,6 +229,88 @@ fn task_runtime_preparation_request_can_preserve_subagent_tools_when_allowed() {
     );
 }
 
+/// Verifies mirror child agents preserve tool schemas but reject subagent orchestration calls.
+/// 验证镜像子代理会保留工具 Schema，但拒绝子代理调度调用。
+#[test]
+fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror() {
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(parent_session_id),
+    );
+    let mut invocation_config = TaskInvocationConfig::main("review this change");
+    invocation_config.subagent_mode = Some(String::from(SUBAGENT_MODE_MIRROR));
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config,
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
+    );
+
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+
+    for tool_id in [
+        SPAWN_AGENT_TOOL,
+        SEND_MESSAGE_TOOL,
+        FOLLOWUP_TASK_TOOL,
+        WAIT_AGENT_TOOL,
+        INTERRUPT_AGENT_TOOL,
+        LIST_AGENTS_TOOL,
+    ] {
+        assert!(
+            !child_request
+                .tool_exposure_override
+                .disabled_tools
+                .iter()
+                .any(|disabled_tool| disabled_tool == tool_id),
+            "{tool_id} should remain visible for mirror child agents"
+        );
+    }
+    assert_eq!(
+        child_request.tool_request_rejection_reason.as_deref(),
+        Some(
+            "当前为子代理镜像，不允许使用子代理调度相关工具。请使用其他可用工具完成分析，并将结果交回父代理。"
+        )
+    );
+    assert!(!child_request.tool_request_rejection_all_tools);
+    assert_eq!(
+        child_request.tool_request_rejection_tool_ids,
+        vec![
+            SPAWN_AGENT_TOOL.to_string(),
+            SEND_MESSAGE_TOOL.to_string(),
+            FOLLOWUP_TASK_TOOL.to_string(),
+            WAIT_AGENT_TOOL.to_string(),
+            INTERRUPT_AGENT_TOOL.to_string(),
+            LIST_AGENTS_TOOL.to_string(),
+        ]
+    );
+}
+
 /// Verifies default spawn_agent fork keeps messages but clears provider continuation.
 /// 验证 spawn_agent 默认 fork 会保留消息但清空 Provider continuation。
 #[test]
@@ -276,6 +361,144 @@ fn spawn_agent_default_fork_clears_parent_continuation() {
             .continuation
             .last_provider_message_id
             .is_none()
+    );
+}
+
+/// Verifies new mirror child tasks append a status user prompt after inherited context.
+/// 验证新建镜像子任务会在继承上下文后追加状态用户提示词。
+#[test]
+fn spawn_agent_mirror_fork_appends_status_user_prompt() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let parent_snapshot = CoreConversationSnapshot {
+        messages: vec![vulcan_core::types::ConversationMessage {
+            id: String::from("u1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("parent"),
+                attachments: Vec::new(),
+            },
+        }],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(parent_session_id),
+    )
+    .with_parent_snapshot(parent_snapshot);
+    let _guard = task_runtime.install_execution_context(parent_session_id, context);
+    let args = parse_task_tool_arguments(json!({
+        "prompt": "review this change",
+        "task_id": "mirror-review",
+        "agent_mode": SUBAGENT_MODE_MIRROR,
+        "fork_turns": "all"
+    }))
+    .expect("mirror task arguments should parse");
+    let resolved_identifier = ResolvedTaskSessionIdentifier {
+        task_id,
+        public_task_id: String::from("mirror-review"),
+        is_resumed: false,
+        persisted_metadata: None,
+    };
+
+    let request =
+        prepare_task_execution_request(&task_runtime, parent_session_id, resolved_identifier, args)
+            .expect("mirror task execution request should be prepared");
+
+    assert_eq!(request.snapshot.messages.len(), 2);
+    assert_eq!(request.snapshot.messages[0].id, "u1");
+    let Some(last_message) = request.snapshot.messages.last() else {
+        panic!("mirror snapshot should contain the appended status prompt");
+    };
+    assert!(last_message.id.starts_with("mirror-subagent-status-"));
+    assert!(matches!(
+        &last_message.payload,
+        CoreConversationPayload::UserText { text, attachments }
+            if attachments.is_empty()
+                && text.contains("mirror subagent")
+                && text.contains("ordinary available tools")
+                && text.contains("subagent orchestration tools")
+    ));
+}
+
+/// Verifies expert child tasks always start without parent conversation turns.
+/// 验证专家子任务始终不携带父对话回合启动。
+#[test]
+fn spawn_agent_expert_forces_empty_initial_snapshot() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let parent_snapshot = CoreConversationSnapshot {
+        messages: vec![vulcan_core::types::ConversationMessage {
+            id: String::from("u1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("parent context that expert must not inherit"),
+                attachments: Vec::new(),
+            },
+        }],
+        records: Vec::new(),
+        continuation: Default::default(),
+    };
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(parent_session_id),
+    )
+    .with_parent_snapshot(parent_snapshot);
+    let _guard = task_runtime.install_execution_context(parent_session_id, context);
+    let args = parse_task_tool_arguments(json!({
+        "prompt": "review this change",
+        "task_id": "expert-review",
+        "agent_mode": SUBAGENT_MODE_EXPERT,
+        "subagent_profile_id": "engineering/code-reviewer",
+        "fork_turns": "all"
+    }))
+    .expect("expert task arguments should parse");
+    let resolved_identifier = ResolvedTaskSessionIdentifier {
+        task_id,
+        public_task_id: String::from("expert-review"),
+        is_resumed: false,
+        persisted_metadata: None,
+    };
+
+    let request =
+        prepare_task_execution_request(&task_runtime, parent_session_id, resolved_identifier, args)
+            .expect("expert task execution request should be prepared");
+
+    assert!(request.snapshot.messages.is_empty());
+    assert_eq!(
+        request.subagent.as_deref(),
+        Some("engineering/code-reviewer")
+    );
+    assert_eq!(
+        request.invocation_config.extra["_subagent_runtime_debug"]["fork_turns"],
+        "none"
+    );
+    assert_eq!(
+        request.invocation_config.extra["_subagent_runtime_debug"]["initial_snapshot_messages"],
+        0
+    );
+    assert_eq!(
+        request.invocation_config.extra["_subagent_runtime_debug"]["prompt_source"],
+        "agent_md:engineering/code-reviewer"
     );
 }
 
@@ -404,6 +627,55 @@ fn build_task_controller_config_reuses_stored_config() {
     assert_eq!(config.system_prompt, stored.system_prompt);
     assert_eq!(config.provider_id, stored.provider_id);
     assert_eq!(config.max_turns, stored.max_turns);
+}
+
+/// Verifies catalog expert prompts invalidate stale stored clone controller configs.
+/// 验证目录专家提示词会让陈旧的已存储克隆控制器配置失效。
+#[test]
+fn build_task_controller_config_rebuilds_stored_config_for_expert_profile() {
+    let base = build_test_controller_config("Base prompt");
+    let mut invocation_config =
+        TaskInvocationConfig::with_profile("engineering/code-reviewer", "Review code");
+    invocation_config.subagent_mode = Some(String::from(SUBAGENT_MODE_EXPERT));
+    let mut profile = vulcan_task_session::SubagentProfile::new(
+        "engineering/code-reviewer",
+        "Code Review Expert",
+    );
+    profile.base_system_prompt = Some(String::from(
+        "You are the catalog code review expert. Apply review-specific rules.",
+    ));
+    let resolved_config = TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
+        global_default_config: SessionEffectiveConfig::default(),
+        parent_config: Some(core_controller_config_to_effective_config(&base)),
+        profile: Some(profile),
+        invocation: invocation_config.clone(),
+    });
+    let stored = CoreControllerConfig {
+        provider_id: String::from("stored-provider"),
+        model_id: String::from("stored-model"),
+        system_prompt: String::from("Stored parent clone prompt"),
+        prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(String::from(
+            "Stored parent clone prompt",
+        )),
+        temperature: Some(0.7),
+        max_turns: 3,
+        additional_params: Some(json!({ "stored": true })),
+        context_injection: None,
+    };
+
+    let config = build_task_controller_config(
+        &base,
+        Some(stored),
+        &Some(String::from("Review code")),
+        &Some(String::from("reviewer")),
+        &invocation_config,
+        &resolved_config,
+    );
+
+    assert!(config.system_prompt.contains("Base prompt"));
+    assert!(config.system_prompt.contains("catalog code review expert"));
+    assert!(config.system_prompt.contains("Subagent identity: reviewer"));
+    assert!(!config.system_prompt.contains("Stored parent clone prompt"));
 }
 
 /// Verifies new child-task prompts use the clone-mode prompt composer shape.

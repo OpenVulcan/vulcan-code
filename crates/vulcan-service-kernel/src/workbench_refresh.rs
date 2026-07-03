@@ -149,6 +149,7 @@ pub(crate) async fn refresh_workbench_snapshot(
         &live_context_budgets,
         &session_goal_summaries,
         &hydrated_window_summaries,
+        native_tool_summaries_from_agent_runtime(agent_runtime_for_status.as_ref()),
     );
     {
         let mut guard = state
@@ -310,6 +311,41 @@ pub(crate) fn webui_trace_if_slow(stage: &str, started_at_ms: i128, detail: impl
             format!("elapsed_ms={elapsed_ms} {}", detail.as_ref()),
         );
     }
+}
+
+/// Builds WebUI native-tool policy rows from the current agent runtime bridge.
+/// 从当前 Agent 运行时桥接构建 WebUI 原生工具策略行。
+pub(crate) fn native_tool_summaries_from_agent_runtime(
+    agent_runtime: Option<&AgentRuntimeBridge>,
+) -> Vec<vulcan_service_api::NativeToolSummary> {
+    let Some(agent_runtime) = agent_runtime else {
+        return Vec::new();
+    };
+    let runtime_config =
+        vulcan_agent_runtime::agent_runtime::config::AgentRuntimeConfig::from_sources(
+            &agent_runtime.provider_configuration,
+            &agent_runtime.agent_profile_catalog,
+        );
+    let native_catalog = vulcan_agent_runtime::tooling::build_native_tool_catalog(
+        &runtime_config,
+        agent_runtime
+            .provider_configuration
+            .default_command_shell
+            .as_deref(),
+        std::sync::Arc::clone(&agent_runtime.command_session_runtime),
+        agent_runtime.provider_configuration.vmm.clone(),
+    );
+    native_catalog
+        .descriptors
+        .into_iter()
+        .map(|descriptor| vulcan_service_api::NativeToolSummary {
+            id: descriptor.id,
+            name: descriptor.name,
+            description: descriptor.description,
+            ai_visible: descriptor.ai_visible,
+            available_in_plan: descriptor.available_in_plan,
+        })
+        .collect()
 }
 
 /// Resolves the cached project VMM layer for one session.
@@ -487,6 +523,7 @@ pub(crate) fn workbench_from_runtime(
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
     session_goal_summaries: &BTreeMap<SessionId, SessionGoalSummary>,
     hydrated_conversation_windows: &[HydratedConversationWindowSummary],
+    native_tools: Vec<vulcan_service_api::NativeToolSummary>,
 ) -> WorkbenchSnapshot {
     let selected_conversation_id = if workspace.selected_session == SessionId::nil() {
         None
@@ -714,13 +751,15 @@ pub(crate) fn workbench_from_runtime(
         plugins: plugins_from_luaskills(luaskills_catalog),
         lua_skills: lua_skills_catalog_summary(luaskills_catalog, provider_configuration),
         agent_skills: agent_skills_catalog_summary(provider_configuration),
+        subagent_catalog: subagent_catalog_summary(),
         settings: settings(),
         providers: providers(provider_configuration),
         mcp_servers: mcp_servers(provider_configuration),
+        mcp_tools: mcp_tools(mcp_catalog),
         reasoning_selection: reasoning_selection(provider_configuration),
         thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
         git_commit: git_commit_settings(provider_configuration),
-        host_tools: host_tools_settings(provider_configuration),
+        host_tools: host_tools_settings_with_native_tools(provider_configuration, native_tools),
         ai_capabilities: ai_capabilities(
             selected_ai_tool_configuration,
             ai_capability_model_capabilities.as_ref(),

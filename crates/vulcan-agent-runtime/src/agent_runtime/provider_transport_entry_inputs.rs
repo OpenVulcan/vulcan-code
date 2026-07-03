@@ -53,9 +53,15 @@ pub(crate) struct PreparedProviderTransportRuntimeInputs {
     /// Runtime retry policy applied around provider attempts.
     /// 包裹 Provider 尝试的运行时重试策略。
     pub(crate) retry_policy: ProviderRetryPolicy,
-    /// Whether host-managed tool requests must be rejected before execution.
-    /// 宿主管理工具请求是否必须在执行前被拒绝。
-    pub(crate) reject_tool_requests: bool,
+    /// Optional reason used to reject host-managed tool requests before execution.
+    /// 在执行前拒绝宿主管理工具请求时使用的可选原因。
+    pub(crate) tool_request_rejection_reason: Option<String>,
+    /// Whether the rejection reason applies to every host-managed tool.
+    /// 拒绝原因是否应用到全部宿主管理工具。
+    pub(crate) tool_request_rejection_all_tools: bool,
+    /// Optional scoped tool ids rejected with the rejection reason.
+    /// 使用拒绝原因拒绝的可选限定工具标识。
+    pub(crate) tool_request_rejection_tool_ids: Vec<String>,
 }
 
 /// Prepares the shared provider transport entry inputs from lightweight borrowed arguments.
@@ -111,7 +117,9 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
     task_runtime: Arc<TaskRuntime>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
-    reject_tool_requests: bool,
+    tool_request_rejection_reason: Option<String>,
+    tool_request_rejection_all_tools: bool,
+    tool_request_rejection_tool_ids: Vec<String>,
 ) -> PreparedProviderTransportRuntimeInputs {
     PreparedProviderTransportRuntimeInputs {
         entry_inputs: prepare_provider_transport_entry_inputs(
@@ -134,7 +142,9 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
         ),
         request_budget_guard,
         retry_policy,
-        reject_tool_requests,
+        tool_request_rejection_reason,
+        tool_request_rejection_all_tools,
+        tool_request_rejection_tool_ids,
     }
 }
 

@@ -124,6 +124,31 @@ pub(super) async fn dispatch_service_rpc(
         "service_refresh_agent_skills_catalog" => {
             rpc_json_result(service_refresh_agent_skills_catalog(state).await)
         }
+        "service_refresh_subagent_catalog" => {
+            rpc_json_result(service_refresh_subagent_catalog(state).await)
+        }
+        "service_open_subagent_user_directory" => {
+            rpc_json_result(service_open_subagent_user_directory(state).await)
+        }
+        "service_set_subagent_definition_enabled" => rpc_json_result(
+            service_set_subagent_definition_enabled(
+                state,
+                rpc_required_param(&params, "agentId")?,
+                rpc_required_param(&params, "enabled")?,
+            )
+            .await,
+        ),
+        "service_save_subagent_definition" => rpc_json_result(
+            service_save_subagent_definition(state, rpc_required_param(&params, "definition")?)
+                .await,
+        ),
+        "service_restore_subagent_definition_default" => rpc_json_result(
+            service_restore_subagent_definition_default(
+                state,
+                rpc_required_param(&params, "agentId")?,
+            )
+            .await,
+        ),
         "service_set_agent_skills_enabled" => rpc_json_result(
             service_set_agent_skills_enabled(state, rpc_required_param(&params, "enabled")?).await,
         ),

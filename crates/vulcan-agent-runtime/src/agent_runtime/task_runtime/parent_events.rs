@@ -251,8 +251,30 @@ pub(super) fn build_task_host_payload(
         "result": result_text,
         "usage_segments": usage_segments,
         "updated_at": updated_at,
+        "debug": subagent_runtime_debug_payload(&invocation.invocation_config),
         "subagent_mailbox_event": subagent_mailbox_event,
     })
+}
+
+/// Reads the non-secret subagent runtime debug payload from one invocation.
+/// 从单次调用中读取不含敏感提示词正文的子代理运行时调试载荷。
+///
+/// # Parameters
+/// 参数
+/// `invocation` is the task invocation configuration to inspect.
+/// `invocation` 是需要检查的任务调用配置。
+///
+/// # Returns
+/// 返回值
+/// A JSON object with mode, source, fork, and snapshot diagnostics when available.
+/// 可用时返回包含模式、来源、派生和快照诊断信息的 JSON 对象。
+pub(super) fn subagent_runtime_debug_payload(invocation: &TaskInvocationConfig) -> Value {
+    invocation
+        .extra
+        .as_object()
+        .and_then(|extra| extra.get("_subagent_runtime_debug"))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 /// Builds one delegate runtime event used by the parent session to track child task lifecycle without replaying child transcript output inline.

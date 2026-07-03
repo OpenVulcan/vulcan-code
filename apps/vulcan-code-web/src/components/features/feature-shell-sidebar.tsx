@@ -4,6 +4,7 @@ import {
   BrainCircuit,
   ChevronDown,
   Hammer,
+  Network,
   PanelTopOpen,
   Undo2,
   Settings,
@@ -412,6 +413,7 @@ function CollapsedSettingsGroupMenu(props: {
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   chat: <PanelTopOpen size={17} />,
   skills: <Hammer size={17} />,
+  agents: <Network size={17} />,
   memory: <BrainCircuit size={17} />,
   settings: <Settings size={17} />,
 }
@@ -422,6 +424,7 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
   return [
     { id: "chat", label: t("area.chat"), description: t("area.chat.description"), status: t("feature.status.available") },
     { id: "skills", label: t("area.skills"), description: t("area.skills.description"), status: t("feature.status.preview") },
+    { id: "agents", label: t("area.agents"), description: t("area.agents.description"), status: t("feature.status.preview") },
     { id: "memory", label: t("area.memory"), description: t("area.memory.description"), status: t("feature.status.preview") },
   ]
 }
@@ -436,6 +439,11 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
     return [
       { id: "skills-lua", label: "Lua Skills", detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
       { id: "skills-agent", label: "Agent Skills", detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: workbench.agentSkills.skills.length }), icon: <Bot size={16} /> },
+    ]
+  }
+  if (activeArea === "agents") {
+    return [
+      { id: "agents-catalog", label: t("area.agents"), detail: formatSkillText(t("agents.header.detail"), { count: workbench.subagentCatalog.definitions.length, total: workbench.subagentCatalog.definitions.length, enabled: workbench.subagentCatalog.definitions.filter((definition) => definition.enabled).length, warnings: workbench.subagentCatalog.errors.length }), icon: <Network size={16} /> },
     ]
   }
   if (activeArea === "memory") {

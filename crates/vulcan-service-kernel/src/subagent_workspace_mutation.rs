@@ -165,6 +165,7 @@ where
         live_context_budgets,
         session_goal_summaries,
         command_session_runtime,
+        native_tools,
         hydrated_window_summaries,
     ) = {
         let trace_lock_wait_started_at = current_unix_millis_value();
@@ -256,6 +257,7 @@ where
         );
         let hydrated_window_summaries =
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
+        let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
         guard.workspace_snapshot = Some(workspace_snapshot);
         webui_trace_if_slow(
             "workspace_mutation_commit_workspace",
@@ -278,6 +280,7 @@ where
             live_context_budgets,
             session_goal_summaries,
             command_session_runtime,
+            native_tools,
             hydrated_window_summaries,
         )
     };
@@ -298,6 +301,7 @@ where
         &live_context_budgets,
         &session_goal_summaries,
         &hydrated_window_summaries,
+        native_tools,
     );
     webui_trace_if_slow(
         "workspace_mutation_workbench",

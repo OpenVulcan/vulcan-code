@@ -32,8 +32,9 @@ use super::{
     emit_service_event_with_trace, fallback_workbench_snapshot,
     hydrate_selected_session_runtime_if_needed, install_webui_question_runtime_event_bridge,
     mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
-    normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
-    token_budget_status, workbench_from_runtime, workspace_root,
+    native_tool_summaries_from_agent_runtime, normalized_workspace_path_text_from_path,
+    pending_question_snapshots_from_agent_runtime, token_budget_status, workbench_from_runtime,
+    workspace_root,
 };
 
 mod ai_tool_config;
@@ -520,6 +521,7 @@ fn run_service_bootstrap(
         &BTreeMap::new(),
         &BTreeMap::new(),
         &[],
+        native_tool_summaries_from_agent_runtime(Some(&agent_runtime)),
     );
 
     if let Ok(mut guard) = state.lock() {

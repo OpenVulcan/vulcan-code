@@ -8,6 +8,7 @@ import type {
   ComposerAttachmentCapabilitySummary,
   LuaSkillsCatalogSummary,
   PendingPromptSummary,
+  SubagentCatalogSummary,
   ToolCallSummary,
 } from "./composer-skills";
 import type {
@@ -45,6 +46,7 @@ import type {
   FeatureAreaSummary,
   HostToolsSettingsSummary,
   McpServerSummary,
+  McpToolSummary,
   ProviderSummary,
   ReasoningSelectionSummary,
   SettingSectionSummary,
@@ -109,6 +111,9 @@ export interface WorkbenchSnapshot {
   // Agent Skills catalog.
   // Agent Skills 目录。
   agentSkills: AgentSkillsCatalogSummary;
+  // Subagent and expert catalog.
+  // 子代理与专家目录。
+  subagentCatalog: SubagentCatalogSummary;
   // Settings sections.
   // 设置分组。
   settings: SettingSectionSummary[];
@@ -118,6 +123,9 @@ export interface WorkbenchSnapshot {
   // MCP server summaries.
   // MCP 服务器摘要。
   mcpServers?: McpServerSummary[];
+  // MCP runtime tool summaries available for capability policy pickers.
+  // 能力策略选择器可用的 MCP 运行时工具摘要。
+  mcpTools?: McpToolSummary[];
   // Backend-resolved reasoning selector view for the active model.
   // 后端根据当前激活模型解析出的思考选择器视图。
   reasoningSelection?: ReasoningSelectionSummary | null;

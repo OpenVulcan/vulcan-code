@@ -2,6 +2,9 @@
 //! skill catalog projection 辅助逻辑。
 
 use super::*;
+use vulcan_service_api::{
+    SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary, SubagentOriginSummary,
+};
 
 /// Converts LuaSkills catalog rows into plugin summaries.
 /// 将 LuaSkills 目录行转换为插件摘要。
@@ -124,6 +127,253 @@ pub(crate) fn agent_skills_catalog_summary(
                 message: error.message.clone(),
             })
             .collect(),
+    }
+}
+
+/// Projects agent and expert definitions into the WebUI service API shape.
+/// 将智能体与专家定义投影为 WebUI service API 结构。
+pub(crate) fn subagent_catalog_summary() -> SubagentCatalogSummary {
+    let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
+    let user_root = vulcan_workspace_store::data_plane::application_data_root().join("agents");
+    let catalog =
+        vulcan_task_session::load_subagent_catalog_from_roots(system_root.clone(), user_root);
+    subagent_catalog_summary_from_catalog(&catalog)
+}
+
+/// Projects one already loaded agent catalog into the WebUI service API shape.
+/// 将一个已加载的智能体目录投影为 WebUI service API 结构。
+pub(crate) fn subagent_catalog_summary_from_catalog(
+    catalog: &vulcan_task_session::SubagentCatalog,
+) -> SubagentCatalogSummary {
+    let system_definition_ids = system_subagent_definition_ids_for_summary();
+    let enabled_count = catalog
+        .definitions
+        .iter()
+        .filter(|definition| definition.enabled)
+        .count();
+    SubagentCatalogSummary {
+        system_root: normalized_workspace_path_text_from_path(&catalog.system_root),
+        user_root: normalized_workspace_path_text_from_path(&catalog.user_root),
+        notice: format!(
+            "智能体定义 {} 个，已启用 {} 个，加载警告 {}。",
+            catalog.definitions.len(),
+            enabled_count,
+            catalog.errors.len()
+        ),
+        definitions: catalog
+            .definitions
+            .iter()
+            .map(|definition| subagent_definition_summary(definition, &system_definition_ids))
+            .collect(),
+        categories: catalog
+            .categories
+            .iter()
+            .map(|category| SubagentCategorySummary {
+                category_id: category.id.clone(),
+                name: category.name.clone(),
+                description: category.description.clone(),
+                locales: category
+                    .locales
+                    .iter()
+                    .map(|(locale, metadata)| {
+                        (
+                            locale.clone(),
+                            SubagentCategoryLocaleSummary {
+                                name: metadata.name.clone(),
+                                description: metadata.description.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+                emoji: category.emoji.clone(),
+                color: category.color.clone(),
+                order: category.order,
+            })
+            .collect(),
+        errors: catalog
+            .errors
+            .iter()
+            .map(|error| SubagentCatalogIssueSummary {
+                path: normalized_workspace_path_text_from_path(&error.path),
+                message: error.message.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Projects one agent definition into a compact WebUI card row.
+/// 将单个智能体定义投影为紧凑 WebUI 卡片行。
+fn subagent_definition_summary(
+    definition: &vulcan_task_session::SubagentDefinition,
+    system_definition_ids: &std::collections::BTreeSet<String>,
+) -> SubagentDefinitionSummary {
+    SubagentDefinitionSummary {
+        agent_id: definition.id.clone(),
+        name: definition.name.clone(),
+        description: definition.description.clone(),
+        locales: definition
+            .locales
+            .iter()
+            .map(|(locale, metadata)| {
+                (
+                    locale.clone(),
+                    SubagentDefinitionLocaleSummary {
+                        name: metadata.name.clone(),
+                        description: metadata.description.clone(),
+                    },
+                )
+            })
+            .collect(),
+        source_origin: definition
+            .origin
+            .as_ref()
+            .map(|origin| SubagentOriginSummary {
+                kind: origin.kind.clone(),
+                label: origin.label.clone(),
+                icon: origin.icon.clone(),
+                url: origin.url.clone(),
+            }),
+        emoji: definition.emoji.clone(),
+        color: definition.color.clone(),
+        vibe: definition.vibe.clone(),
+        source_key: definition.source.source_key.clone(),
+        category_id: definition.source.category_id.clone(),
+        package_id: definition.source.package_id.clone(),
+        scope: subagent_definition_scope_label(definition.source.scope).to_string(),
+        scope_key: subagent_definition_scope_key(definition.source.scope).to_string(),
+        enabled: definition.enabled,
+        definition_file: normalized_workspace_path_text_from_path(&definition.source.file),
+        sidecar_file: definition
+            .source
+            .sidecar_file
+            .as_ref()
+            .map(|path| normalized_workspace_path_text_from_path(path)),
+        remote_url: definition.source.remote_url.clone(),
+        override_of: definition.source.override_of.clone(),
+        can_restore_default: subagent_definition_can_restore_default(
+            definition,
+            system_definition_ids,
+        ),
+        source_hash: definition.source.source_hash.clone(),
+        version: definition.source.version.clone(),
+        updated_at: definition.source.updated_at.clone(),
+        allowed_tool_count: definition.tool_exposure.allowed_tools.len(),
+        disabled_tool_count: definition.tool_exposure.disabled_tools.len(),
+        enabled_prompt_skill_count: definition.prompt_skills.enabled.len(),
+        disabled_prompt_skill_count: definition.prompt_skills.disabled.len(),
+        system_prompt: definition.system_prompt.clone(),
+        system_prompt_append: definition.system_prompt_append.clone(),
+        allowed_tools: definition.tool_exposure.allowed_tools.clone(),
+        disabled_tools: definition.tool_exposure.disabled_tools.clone(),
+        allowed_ai_capabilities: definition.tool_exposure.allowed_ai_capabilities.clone(),
+        disabled_ai_capabilities: definition.tool_exposure.disabled_ai_capabilities.clone(),
+        luaskills_overrides: definition.tool_exposure.luaskills_overrides.clone(),
+        mcp_server_overrides: definition.tool_exposure.mcp_server_overrides.clone(),
+        enabled_prompt_skills: definition.prompt_skills.enabled.clone(),
+        disabled_prompt_skills: definition.prompt_skills.disabled.clone(),
+        capability_diagnostics: subagent_capability_diagnostics(definition),
+    }
+}
+
+/// Returns whether one effective agent row can restore a shipped system definition.
+/// 返回一个生效智能体行是否可以恢复为随应用发布的系统定义。
+fn subagent_definition_can_restore_default(
+    definition: &vulcan_task_session::SubagentDefinition,
+    system_definition_ids: &std::collections::BTreeSet<String>,
+) -> bool {
+    let has_user_layer =
+        definition.source.scope == vulcan_task_session::SubagentDefinitionScope::User;
+    if !has_user_layer {
+        return false;
+    }
+    let system_agent_id = definition
+        .source
+        .override_of
+        .as_deref()
+        .unwrap_or(definition.id.as_str());
+    system_definition_ids.contains(system_agent_id)
+}
+
+/// Loads immutable system agent ids for one summary projection pass.
+/// 为单次摘要投影加载不可变系统智能体标识集合。
+fn system_subagent_definition_ids_for_summary() -> std::collections::BTreeSet<String> {
+    vulcan_task_session::load_subagent_catalog_from_roots(
+        vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
+        PathBuf::new(),
+    )
+    .definitions
+    .into_iter()
+    .filter(|definition| {
+        definition.source.scope == vulcan_task_session::SubagentDefinitionScope::System
+    })
+    .map(|definition| definition.id)
+    .collect()
+}
+
+/// Builds compact effective-capability diagnostics for one agent definition.
+/// 为单个智能体定义构建紧凑的最终能力诊断。
+fn subagent_capability_diagnostics(
+    definition: &vulcan_task_session::SubagentDefinition,
+) -> Vec<String> {
+    let mut diagnostics = Vec::new();
+    if !definition.enabled {
+        diagnostics.push(String::from(
+            "当前智能体已禁用，不会暴露给模型，也不能被 spawn_agent 解析。",
+        ));
+    }
+    if definition.tool_exposure.allowed_tools.is_empty()
+        && definition.tool_exposure.disabled_tools.is_empty()
+        && definition.tool_exposure.allowed_ai_capabilities.is_empty()
+        && definition.tool_exposure.disabled_ai_capabilities.is_empty()
+        && definition.tool_exposure.luaskills_overrides.is_null()
+        && definition.tool_exposure.mcp_server_overrides.is_null()
+        && definition.prompt_skills.enabled.is_empty()
+        && definition.prompt_skills.disabled.is_empty()
+    {
+        diagnostics.push(String::from(
+            "未声明额外限制；最终能力仍由系统策略、LuaSkills 状态、MCP 连接和运行时工具快照决定。",
+        ));
+    } else {
+        diagnostics.push(String::from(
+            "已声明能力策略；最终可见能力会继续受系统策略、LuaSkills 状态和 MCP 连接过滤。",
+        ));
+    }
+    if !definition.tool_exposure.allowed_tools.is_empty() {
+        diagnostics.push(format!(
+            "配置允许工具 {} 个；不存在或被系统禁用的工具不会进入最终工具集。",
+            definition.tool_exposure.allowed_tools.len()
+        ));
+    }
+    if !definition.prompt_skills.enabled.is_empty() {
+        diagnostics.push(format!(
+            "配置启用 Prompt Skills {} 个；不存在或被全局禁用的技能不会进入最终提示词组合。",
+            definition.prompt_skills.enabled.len()
+        ));
+    }
+    diagnostics
+}
+
+/// Returns the Chinese scope label for one agent definition source.
+/// 返回单个智能体定义来源的中文作用域标签。
+fn subagent_definition_scope_label(
+    scope: vulcan_task_session::SubagentDefinitionScope,
+) -> &'static str {
+    match scope {
+        vulcan_task_session::SubagentDefinitionScope::System => "系统",
+        vulcan_task_session::SubagentDefinitionScope::User => "用户",
+        vulcan_task_session::SubagentDefinitionScope::Package => "包",
+    }
+}
+
+/// Returns the stable API key for one subagent definition scope.
+/// 返回单个智能体定义来源作用域的稳定 API 键。
+fn subagent_definition_scope_key(
+    scope: vulcan_task_session::SubagentDefinitionScope,
+) -> &'static str {
+    match scope {
+        vulcan_task_session::SubagentDefinitionScope::System => "system",
+        vulcan_task_session::SubagentDefinitionScope::User => "user",
+        vulcan_task_session::SubagentDefinitionScope::Package => "package",
     }
 }
 

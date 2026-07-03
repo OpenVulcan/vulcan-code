@@ -72,6 +72,10 @@ pub struct WorkbenchSnapshot {
     /// 技能管理区域展示的 Agent Skills 目录。
     #[serde(default)]
     pub agent_skills: AgentSkillsCatalogSummary,
+    /// Subagent and expert catalog shown in the skill management area.
+    /// 技能管理区域展示的子代理与专家目录。
+    #[serde(default)]
+    pub subagent_catalog: SubagentCatalogSummary,
     /// Setting sections shown in the settings area.
     /// 设置区域展示的设置分组。
     pub settings: Vec<SettingSectionSummary>,
@@ -82,6 +86,10 @@ pub struct WorkbenchSnapshot {
     /// 设置区域展示的 MCP 服务器摘要。
     #[serde(default)]
     pub mcp_servers: Vec<McpServerSummary>,
+    /// MCP runtime tool summaries available for capability policy pickers.
+    /// 能力策略选择器可用的 MCP 运行时工具摘要。
+    #[serde(default)]
+    pub mcp_tools: Vec<McpToolSummary>,
     /// Reasoning selector view resolved from the active provider and model.
     /// 根据当前激活 Provider 与模型解析出的思考选择器视图。
     #[serde(default, skip_serializing_if = "Option::is_none")]

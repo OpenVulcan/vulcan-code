@@ -496,6 +496,14 @@ fn core_message_to_cohere_message(
                 tool_call_id,
             })
         }
+        CoreConversationPayload::AgentMessage { .. } => Ok(CohereChatMessage::User {
+            content: vec![CohereUserContent::Text {
+                text: message
+                    .payload
+                    .agent_message_model_text()
+                    .unwrap_or_default(),
+            }],
+        }),
     }
 }
 

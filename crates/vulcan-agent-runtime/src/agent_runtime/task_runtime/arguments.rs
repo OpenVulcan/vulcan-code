@@ -3,8 +3,17 @@ use super::*;
 /// Parses one raw JSON payload into strongly typed child-agent arguments.
 /// 将一份原始 JSON 载荷解析为强类型子代理 TaskSession 参数。
 pub(super) fn parse_task_tool_arguments(args: Value) -> Result<TaskToolInvocationArgs, String> {
-    serde_json::from_value(args)
-        .map_err(|error| format!("Failed to parse child-agent arguments: {error}"))
+    let mut parsed: TaskToolInvocationArgs = serde_json::from_value(args)
+        .map_err(|error| format!("Failed to parse child-agent arguments: {error}"))?;
+    parsed.agent_mode = normalize_subagent_mode(parsed.agent_mode.as_deref())?;
+    if parsed.agent_mode.as_deref() == Some(SUBAGENT_MODE_EXPERT)
+        && parsed.subagent_profile_id.is_none()
+    {
+        return Err(String::from(
+            "agent_mode `expert` requires subagent_profile_id.",
+        ));
+    }
+    Ok(parsed)
 }
 
 /// Resolves the stable task identifier and resume flag for the current invocation.
@@ -253,6 +262,8 @@ pub(super) fn task_invocation_config_from_args(
     args: &TaskToolInvocationArgs,
 ) -> TaskInvocationConfig {
     let mut config = TaskInvocationConfig::main(args.prompt.clone());
+    config.subagent_mode = args.agent_mode.clone();
+    config.subagent_profile_id = args.subagent_profile_id.clone();
     config.inherit_parent_config = args.inherit_parent_config;
     config.system_prompt = normalize_optional_task_label(args.system_prompt.as_deref());
     config.system_prompt_append =
@@ -592,6 +603,7 @@ pub(super) fn context_compaction_has_override(request: &ContextCompactionPolicyR
 /// 返回传入调用是否显式变更控制器拥有的运行时形态。
 pub(super) fn task_invocation_changes_controller_config(config: &TaskInvocationConfig) -> bool {
     config.inherit_parent_config.is_some()
+        || config.subagent_mode.is_some()
         || config.system_prompt.is_some()
         || config.system_prompt_append.is_some()
         || provider_model_has_override(&config.provider_model)
@@ -655,4 +667,18 @@ pub(super) fn build_task_display_title(
         return normalized_public_task_id.to_string();
     }
     format!("Subagent {}", task_id)
+}
+
+/// Normalizes and validates one optional subagent mode key.
+/// 规范化并校验一个可选子代理模式键。
+pub(super) fn normalize_subagent_mode(value: Option<&str>) -> Result<Option<String>, String> {
+    let Some(mode) = normalize_optional_task_label(value) else {
+        return Ok(None);
+    };
+    match mode.as_str() {
+        SUBAGENT_MODE_DEFAULT | SUBAGENT_MODE_MIRROR | SUBAGENT_MODE_EXPERT => Ok(Some(mode)),
+        other => Err(format!(
+            "agent_mode must be `default`, `mirror`, or `expert`; received `{other}`."
+        )),
+    }
 }

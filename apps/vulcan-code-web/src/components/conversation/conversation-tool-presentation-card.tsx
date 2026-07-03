@@ -270,7 +270,7 @@ function SubagentOrchestrationDetail(props: {
   const showResult = Boolean(resultText);
   // hasVisibleBody records whether the expanded area has user-facing content.
   // hasVisibleBody 记录展开区是否存在面向用户的内容。
-  const hasVisibleBody = Boolean(presentation.prompt || presentation.effectivePrompt || showResult || presentation.operation === "control");
+  const hasVisibleBody = Boolean(presentation.prompt || presentation.effectivePrompt || presentation.debugSummary || showResult || presentation.operation === "control");
   return (
     <div className="subagent-orchestration-detail">
       {presentation.queued !== null && presentation.queued !== undefined ? (
@@ -288,6 +288,9 @@ function SubagentOrchestrationDetail(props: {
       ) : null}
       {presentation.effectivePrompt && presentation.effectivePrompt !== presentation.prompt ? (
         <SubagentInlineTextLine label={t("conversation.subagent.detail.effectivePrompt")} text={presentation.effectivePrompt} />
+      ) : null}
+      {presentation.debugSummary ? (
+        <SubagentInlineTextLine label={t("conversation.subagent.detail.debug")} text={presentation.debugSummary} />
       ) : null}
       {resultText ? (
         <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={resultText} />
@@ -321,6 +324,9 @@ function SubagentOrchestrationAgentRow(props: {
         <strong>{props.agent.name}</strong>
         <span>{props.agent.status}</span>
       </div>
+      {props.agent.debugSummary ? (
+        <SubagentInlineTextLine label={props.t("conversation.subagent.detail.debug")} text={props.agent.debugSummary} />
+      ) : null}
       {props.agent.result ? (
         <pre className="subagent-orchestration-text">{compactSubagentText(props.agent.result)}</pre>
       ) : (

@@ -61,12 +61,13 @@ pub fn apply_task_session_compaction_result(
     let mut conversation_state: vulcan_context::SessionConversationState =
         serde_json::from_value(context.conversation_state.clone()).map_err(to_store_error)?;
 
-    vulcan_context_compaction::compact_conversation_with_summary(
+    vulcan_context_compaction::compact_conversation_with_summary_until(
         &mut conversation_state,
         summary_message_id.clone(),
         compaction_result.summary_record.kind,
         compaction_result.summary_record.body.clone(),
         compaction_result.created_at.clone(),
+        compaction_result.source_until_message_id.as_deref(),
         compaction_result.policy,
     );
     vulcan_context_compaction::compact_conversation_records_after_summary(

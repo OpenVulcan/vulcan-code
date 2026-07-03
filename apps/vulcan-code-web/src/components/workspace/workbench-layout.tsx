@@ -415,6 +415,11 @@ export function WorkbenchLayout(props: {
       setWorkspaceMainView("skills");
       return;
     }
+    if (area === "agents") {
+      setActiveArea("chat");
+      setWorkspaceMainView("agents");
+      return;
+    }
     if (area === "memory") {
       setActiveArea("chat");
       setWorkspaceMainView("memory");
@@ -428,6 +433,12 @@ export function WorkbenchLayout(props: {
   const handleOpenWorkspaceSkills = React.useCallback(() => {
     setActiveArea("chat");
     setWorkspaceMainView("skills");
+  }, []);
+  // handleOpenWorkspaceAgents opens agent management inside the workbench main panel.
+  // handleOpenWorkspaceAgents 在工作台主面板内部打开智能体管理。
+  const handleOpenWorkspaceAgents = React.useCallback(() => {
+    setActiveArea("chat");
+    setWorkspaceMainView("agents");
   }, []);
   // handleOpenWorkspaceMemory opens memory settings inside the workbench main panel.
   // handleOpenWorkspaceMemory 在工作台主面板内部打开记忆设置。
@@ -536,6 +547,7 @@ export function WorkbenchLayout(props: {
     handleProjectSettingsVmmSave,
     handleProjectSettingsAgentSkillSave,
     skillActions,
+    agentActions,
     handleProjectIconConfirm,
     handleProjectIconReset,
     handleCreateConversation,
@@ -914,6 +926,7 @@ export function WorkbenchLayout(props: {
             onCreateConversation={handleCreateConversation}
             onCreateProject={handleCreateProject}
             onOpenSkills={handleOpenWorkspaceSkills}
+            onOpenAgents={handleOpenWorkspaceAgents}
             onOpenMemory={handleOpenWorkspaceMemory}
             onSelectArea={handleSelectTopFeatureArea}
             onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
@@ -929,6 +942,7 @@ export function WorkbenchLayout(props: {
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
             onSelectWorkbenchThinkingDisplayMode={handleSelectWorkbenchThinkingDisplayMode}
             skillActions={skillActions}
+            agentActions={agentActions}
             memoryActions={{
               onRunVmmAction: runVmmMemoryAction,
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
@@ -982,6 +996,7 @@ export function WorkbenchLayout(props: {
             onSelectSettingsSubArea={setActiveSettingsSubArea}
             onSelectArea={handleSelectTopFeatureArea}
             skillActions={skillActions}
+            agentActions={agentActions}
             memoryActions={{
               onRunVmmAction: runVmmMemoryAction,
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),

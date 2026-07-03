@@ -48,28 +48,15 @@ pub(crate) fn build_webui_prompt_intervention(
                     })
                     .count()
                     > 0;
-                let mailbox_changed =
-                    match take_webui_mailbox_intervention_prompt(&state, session_id) {
-                        Ok(Some(prompt)) => {
-                            let changed =
-                                controller.append_interjected_user_turn(&prompt).is_some();
-                            webui_trace(
-                                "mailbox_intervention_appended",
-                                format!(
-                                    "session={session_id} changed={changed} prompt_chars={}",
-                                    prompt.chars().count()
-                                ),
-                            );
-                            changed
-                        }
-                        Ok(None) => false,
-                        Err(error) => {
-                            eprintln!(
-                                "[webui-service] mailbox intervention prompt failed: {error}"
-                            );
-                            false
-                        }
-                    };
+                let mailbox_changed = match append_webui_mailbox_intervention_messages(
+                    &state, session_id, controller,
+                ) {
+                    Ok(changed) => changed,
+                    Err(error) => {
+                        eprintln!("[webui-service] mailbox intervention append failed: {error}");
+                        false
+                    }
+                };
                 pending_prompt_changed || mailbox_changed
             }
             Err(error) => {
@@ -80,45 +67,184 @@ pub(crate) fn build_webui_prompt_intervention(
     })
 }
 
-/// Takes one provider-loop mailbox intervention prompt and marks included mailbox inputs consumed.
-/// 获取一条 Provider 循环 mailbox 干预提示词，并将包含的 mailbox 输入标记为已消费。
-pub(crate) fn take_webui_mailbox_intervention_prompt(
+/// Appends current-turn mailbox messages to the controller as typed inter-agent messages.
+/// 将当前回合 mailbox 消息以类型化代理间消息追加到控制器。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state that owns session runtime kernels.
+/// `state` 是持有会话运行内核的共享服务状态。
+/// `session_id` identifies the parent WebUI session.
+/// `session_id` 标识父级 WebUI 会话。
+/// `controller` owns the canonical provider-visible conversation history.
+/// `controller` 持有规范 Provider 可见会话历史。
+///
+/// # Returns
+/// 返回值
+/// `true` when at least one mailbox message was appended.
+/// 至少追加一条 mailbox 消息时返回 `true`。
+pub(crate) fn append_webui_mailbox_intervention_messages(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<Option<String>, String> {
-    let Some(prompt) = webui_session_mailbox_input_from_kernel(state, session_id, None)? else {
-        return Ok(None);
-    };
+    controller: &mut VulcanCoreController,
+) -> Result<bool, String> {
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     let Some(kernel) = guard.session_runtime_kernels.get_mut(&session_id) else {
-        return Ok(None);
+        return Ok(false);
     };
     if kernel.has_wait_scopes() {
-        return Ok(None);
+        return Ok(false);
     }
-    let input_ids = kernel
-        .input_queue()
-        .get_unconsumed_mailbox_input()
-        .into_iter()
-        .filter(|input| input.kind == TurnInputKind::SubagentMessage)
-        .map(|input| input.input_id)
-        .collect::<Vec<_>>();
-    if input_ids.is_empty() {
-        return Ok(None);
+    let inputs = kernel
+        .input_queue_mut()
+        .drain_current_turn_inputs_by_kind(TurnInputKind::SubagentMessage);
+    if inputs.is_empty() {
+        return Ok(false);
     }
-    let mut consumed = 0usize;
-    for input_id in input_ids {
-        if kernel.input_queue_mut().mark_input_consumed(input_id) {
-            consumed = consumed.saturating_add(1);
-        }
+    let mut appended = 0usize;
+    for input in inputs {
+        let message = webui_agent_message_from_turn_input(session_id, &input);
+        controller.append_agent_message(
+            message.message_type,
+            message.task_name,
+            message.sender,
+            message.recipient,
+            message.payload,
+            message.trigger_turn,
+            message.metadata,
+        );
+        appended = appended.saturating_add(1);
     }
     webui_trace(
-        "mailbox_intervention_inputs_consumed",
-        format!("session={session_id} consumed={consumed}"),
+        "mailbox_agent_messages_appended",
+        format!("session={session_id} appended={appended}"),
     );
-    Ok(Some(prompt))
+    Ok(appended > 0)
+}
+
+/// Host-side normalized representation of one mailbox agent message.
+/// 单条 mailbox 代理消息的宿主侧规范化表示。
+struct WebuiMailboxAgentMessage {
+    /// Stable model-visible message type.
+    /// 稳定的模型可见消息类型。
+    message_type: String,
+    /// Logical task name attached to the child-agent message.
+    /// 绑定到子代理消息的逻辑任务名称。
+    task_name: String,
+    /// Logical sender name attached to the child-agent message.
+    /// 绑定到子代理消息的逻辑发送方名称。
+    sender: String,
+    /// Logical recipient name attached to the child-agent message.
+    /// 绑定到子代理消息的逻辑接收方名称。
+    recipient: String,
+    /// Model-visible payload text.
+    /// 模型可见载荷文本。
+    payload: String,
+    /// Whether this message may wake an idle parent turn.
+    /// 该消息是否允许唤醒空闲父级回合。
+    trigger_turn: bool,
+    /// Host-only metadata for UI and diagnostics.
+    /// 供 UI 与诊断使用的宿主侧元数据。
+    metadata: Option<Value>,
+}
+
+/// Renders one queued WebUI mailbox input as a Codex-compatible inter-agent message.
+/// 将一条排队的 WebUI mailbox 输入渲染为 Codex 兼容的代理间消息。
+///
+/// # Parameters
+/// 参数
+/// `parent_session_id` identifies the parent WebUI session.
+/// `parent_session_id` 标识父级 WebUI 会话。
+/// `input` is the queued mailbox input being delivered to the parent.
+/// `input` 是待投递给父级的排队 mailbox 输入。
+///
+/// # Returns
+/// 返回值
+/// Provider-visible inter-agent message text.
+/// Provider 可见的代理间消息文本。
+pub(crate) fn webui_agent_message_text_from_turn_input(
+    parent_session_id: SessionId,
+    input: &TurnInput,
+) -> String {
+    let message = webui_agent_message_from_turn_input(parent_session_id, input);
+    vulcan_core::types::ConversationPayload::render_agent_message_text(
+        &message.message_type,
+        &message.task_name,
+        &message.sender,
+        &message.payload,
+    )
+}
+
+/// Builds one typed inter-agent message from a queued WebUI mailbox input.
+/// 从一条排队的 WebUI mailbox 输入构建类型化代理间消息。
+fn webui_agent_message_from_turn_input(
+    parent_session_id: SessionId,
+    input: &TurnInput,
+) -> WebuiMailboxAgentMessage {
+    let mailbox_event = input
+        .payload
+        .get("mailbox_event")
+        .cloned()
+        .unwrap_or_else(|| input.payload.clone());
+    let event_payload = mailbox_event
+        .get("payload")
+        .filter(|payload| payload.is_object())
+        .unwrap_or(&mailbox_event);
+    let task_name = event_payload
+        .get("task_name")
+        .or_else(|| event_payload.get("public_id"))
+        .or_else(|| input.payload.get("task_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("subagent")
+        .to_string();
+    let payload = mailbox_event_payload_text(event_payload);
+    let status = event_payload
+        .get("status")
+        .or_else(|| event_payload.get("execution_status"))
+        .or_else(|| mailbox_event.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("completed");
+    let message_type = if matches!(
+        status,
+        "completed" | "failed" | "cancelled" | "canceled" | "stopped"
+    ) {
+        String::from("FINAL_ANSWER")
+    } else {
+        String::from("MESSAGE")
+    };
+    WebuiMailboxAgentMessage {
+        message_type,
+        task_name: task_name.clone(),
+        sender: task_name,
+        recipient: format!("parent:{parent_session_id}"),
+        payload,
+        trigger_turn: input.trigger_turn,
+        metadata: Some(json!({
+            "input_id": input.input_id,
+            "node_id": input.node_id.to_string(),
+            "parent_turn_id": input.parent_turn_id,
+            "timestamp_ms": input.timestamp_ms,
+            "mailbox_event": mailbox_event,
+        })),
+    }
+}
+
+/// Extracts model-visible payload text from one mailbox event.
+/// 从单条 mailbox 事件中提取模型可见载荷文本。
+fn mailbox_event_payload_text(mailbox_event: &Value) -> String {
+    for key in ["result_text", "result", "error_text", "error", "message"] {
+        if let Some(value) = mailbox_event.get(key) {
+            if let Some(text) = value.as_str().filter(|text| !text.trim().is_empty()) {
+                return text.to_string();
+            }
+            if !value.is_null() {
+                return serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+            }
+        }
+    }
+    serde_json::to_string_pretty(mailbox_event).unwrap_or_else(|_| mailbox_event.to_string())
 }
 
 /// Updates the parent-session wait_agent guard from provider runtime tool events.
@@ -153,6 +279,9 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
                     format!("session={session_id} error={}", error.message),
                 );
             }
+            kernel
+                .input_queue_mut()
+                .accept_mailbox_delivery_for_current_turn();
         }
         ("wait_agent", RuntimeEventKind::ToolFinished) => {
             guard

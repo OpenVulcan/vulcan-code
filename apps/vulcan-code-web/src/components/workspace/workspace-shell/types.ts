@@ -7,6 +7,7 @@ import type {
   ComposerSubmission,
 } from "@/components/composer/composer-model";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
+import type { AgentActionProps } from "@/components/features/agents/AgentsArea";
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/SkillsArea";
 import type { MemoryActionProps, MemorySubAreaId } from "@/components/features/memory/MemoryArea";
 import type { ConversationMenuAction, ProjectMenuAction } from "@/components/project/ProjectSidebar";
@@ -42,7 +43,7 @@ import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-sna
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
-export type WorkspaceMainView = "chat" | "skills" | "memory";
+export type WorkspaceMainView = "chat" | "skills" | "agents" | "memory";
 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
@@ -107,6 +108,9 @@ export interface WorkspaceShellProps {
   // Opens the skills feature area from the workbench sidebar.
   // 从工作台侧栏打开技能功能区。
   onOpenSkills: () => void;
+  // Opens the agents feature area from the workbench sidebar.
+  // 从工作台侧栏打开智能体功能区。
+  onOpenAgents: () => void;
   // Opens the memory feature area from the workbench sidebar.
   // 从工作台侧栏打开记忆功能区。
   onOpenMemory: () => void;
@@ -159,6 +163,9 @@ export interface WorkspaceShellProps {
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps;
+  // Service-backed independent agent page actions.
+  // 服务端支持的独立智能体页面动作。
+  agentActions: AgentActionProps;
   // Service-backed memory page actions.
   // 服务端支持的记忆页面动作。
   memoryActions: MemoryActionProps;

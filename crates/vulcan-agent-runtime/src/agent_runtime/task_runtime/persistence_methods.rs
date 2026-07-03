@@ -356,7 +356,7 @@ impl TaskRuntime {
         };
         metadata.display_title = record.display_title.clone();
         metadata.description = record.description.clone();
-        metadata.subagent_profile_id = None;
+        metadata.subagent_profile_id = resolved_config.effective_config.subagent_profile_id.clone();
         metadata.inherit_parent_config = resolved_config.effective_config.inherit_parent_config;
         metadata.status = status;
         metadata.runtime_policy = resolved_config.runtime_policy;
@@ -540,12 +540,14 @@ impl TaskRuntime {
         let parent_config = Some(core_controller_config_to_effective_config(
             parent_controller_config,
         ));
+        let (profile, invocation) =
+            self.resolve_catalog_profile_for_invocation(invocation_config)?;
         Ok(TaskSessionConfigResolver::resolve(
             TaskSessionConfigResolutionInput {
                 global_default_config: SessionEffectiveConfig::default(),
                 parent_config,
-                profile: None,
-                invocation: invocation_config.clone(),
+                profile,
+                invocation,
             },
         ))
     }
@@ -558,11 +560,40 @@ impl TaskRuntime {
         controller_config: Option<&CoreControllerConfig>,
     ) -> TaskSessionResolvedConfig {
         let parent_config = controller_config.map(core_controller_config_to_effective_config);
+        let (profile, invocation) = self
+            .resolve_catalog_profile_for_invocation(&record.invocation_config)
+            .unwrap_or_else(|_| (None, record.invocation_config.clone()));
         TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
             global_default_config: SessionEffectiveConfig::default(),
             parent_config,
-            profile: None,
-            invocation: record.invocation_config.clone(),
+            profile,
+            invocation,
         })
+    }
+
+    /// Resolves the catalog profile and normalized invocation for one task call.
+    /// 为单次任务调用解析目录配置与规范化调用配置。
+    fn resolve_catalog_profile_for_invocation(
+        &self,
+        invocation_config: &TaskInvocationConfig,
+    ) -> Result<
+        (
+            Option<vulcan_task_session::SubagentProfile>,
+            TaskInvocationConfig,
+        ),
+        String,
+    > {
+        let mut invocation = invocation_config.clone();
+        if let Some(agent_id) = invocation.subagent_profile_id.as_deref() {
+            let definition = self.enabled_subagent_definition(agent_id)?;
+            if invocation.subagent_mode.is_none() {
+                invocation.subagent_mode = Some(definition.mode.as_str().to_string());
+            }
+            return Ok((Some(definition.to_profile()), invocation));
+        }
+        if invocation.subagent_mode.is_none() {
+            invocation.subagent_mode = Some(SUBAGENT_MODE_DEFAULT.to_string());
+        }
+        Ok((None, invocation))
     }
 }

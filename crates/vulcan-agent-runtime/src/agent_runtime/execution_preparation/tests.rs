@@ -1,8 +1,9 @@
 use super::prepare_execution_with_tool_snapshot;
 use super::tool_exposure::{
     ExecutionToolExposureSelection, ToolExposureSelectorState,
-    ai_tool_configuration_for_execution_request, filter_luaskills_entries, filter_native_tool_ids,
-    filter_resolved_tool_set_by_tool_exposure, vulcan_tool_descriptor_is_visible,
+    ai_tool_configuration_for_execution_request, filter_luaskill_prompt_entries,
+    filter_luaskills_entries, filter_native_tool_ids, filter_resolved_tool_set_by_tool_exposure,
+    vulcan_tool_descriptor_is_visible,
 };
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::config::PLAN_AGENT_ID;
@@ -22,6 +23,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
+use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_session_core::{
     ExecutionRuntimePolicy, ExecutionScope, SessionNodeId, ToolExposureSnapshot,
 };
@@ -164,6 +166,30 @@ fn execution_tool_exposure_filters_luaskills_with_family_overrides() {
 
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].canonical_name, "vulcan-codekit-rg");
+}
+
+/// Verifies LuaSkills family overrides trim implicit prompt entries with the same selectors.
+/// 验证 LuaSkills 族覆盖会使用同一选择器裁剪隐式提示词条目。
+#[test]
+fn execution_tool_exposure_filters_luaskill_prompt_entries_with_family_overrides() {
+    let snapshot = ToolExposureSnapshot {
+        luaskills_overrides: json!({
+            "enabled": ["vulcan-codekit-rg"],
+            "disabled": ["ast-detail"]
+        }),
+        ..ToolExposureSnapshot::default()
+    };
+    let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
+    let entries = vec![
+        LuaSkillPromptEntry::new("vulcan-codekit-rg", "codekit search"),
+        LuaSkillPromptEntry::new("vulcan-codekit-ast-detail", "codekit ast-detail"),
+        LuaSkillPromptEntry::new("vulcan-curl-get", "curl get"),
+    ];
+
+    let filtered = filter_luaskill_prompt_entries(entries, &selectors);
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].name, "vulcan-codekit-rg");
 }
 
 /// Verifies AI capability selectors narrow the effective AI-tool configuration before provider routing.
@@ -457,6 +483,9 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         reasoning_effort: ReasoningEffortLevel::Off,
         ai_tool_configuration: PersistedAiToolConfiguration::default(),
         tool_exposure_override: Default::default(),
+        tool_request_rejection_reason: None,
+        tool_request_rejection_all_tools: false,
+        tool_request_rejection_tool_ids: Vec::new(),
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
         project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
         session_prompt_skill_overrides: BTreeMap::new(),

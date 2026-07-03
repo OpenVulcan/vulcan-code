@@ -36,9 +36,15 @@ pub(crate) struct StreamingRuntimeToolExecutor {
     /// Live sender used to forward tool boundary runtime events into the host stream.
     /// 用于把工具边界运行时事件转发进宿主流中的实时发送器。
     live_sender: ProviderLiveDeltaSender,
-    /// Whether provider-requested tools must be rejected before host execution.
-    /// Provider 请求的工具是否必须在宿主执行前拒绝。
-    reject_tool_requests: bool,
+    /// Optional reason used to reject provider-requested tools before host execution.
+    /// 在宿主执行前拒绝 Provider 请求工具时使用的可选原因。
+    tool_request_rejection_reason: Option<String>,
+    /// Whether the rejection reason applies to every tool.
+    /// 拒绝原因是否应用到全部工具。
+    tool_request_rejection_all_tools: bool,
+    /// Optional scoped tool ids rejected with the rejection reason.
+    /// 使用拒绝原因拒绝的可选限定工具标识。
+    tool_request_rejection_tool_ids: Vec<String>,
 }
 
 impl StreamingRuntimeToolExecutor {
@@ -47,12 +53,16 @@ impl StreamingRuntimeToolExecutor {
     pub(crate) fn new(
         runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
         live_sender: ProviderLiveDeltaSender,
-        reject_tool_requests: bool,
+        tool_request_rejection_reason: Option<String>,
+        tool_request_rejection_all_tools: bool,
+        tool_request_rejection_tool_ids: Vec<String>,
     ) -> Self {
         Self {
             runtime_bridge,
             live_sender,
-            reject_tool_requests,
+            tool_request_rejection_reason,
+            tool_request_rejection_all_tools,
+            tool_request_rejection_tool_ids,
         }
     }
 }
@@ -65,10 +75,16 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
-        if self.reject_tool_requests {
+        if let Some(reason) = self.tool_request_rejection_reason.as_ref()
+            && (self.tool_request_rejection_all_tools
+                || self
+                    .tool_request_rejection_tool_ids
+                    .iter()
+                    .any(|tool_id| tool_id == &request.tool_name))
+        {
             return Err(VulcanCoreError::ToolFailure {
                 tool_name: request.tool_name.clone(),
-                message: String::from("Tool calls are not allowed during context compaction."),
+                message: reason.clone(),
             });
         }
         let (tool_started_event, projection_barrier) = attach_runtime_event_projection_barrier(

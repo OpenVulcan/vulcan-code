@@ -385,5 +385,14 @@ pub(super) fn core_message_to_anthropic_message(
                 ]
             }))
         }
+        CoreConversationPayload::AgentMessage { .. } => Ok(json!({
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": message.payload.agent_message_model_text().unwrap_or_default()
+                }
+            ]
+        })),
     }
 }

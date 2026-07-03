@@ -12,9 +12,9 @@ use vulcan_agent_runtime::provider_config::{self, ProviderConfigurationFile};
 use vulcan_provider_config::config::{PersistedRtkRouteMode, PersistedRtkToolConfiguration};
 use vulcan_runtime_assets::resolve_bundled_rtk_executable_path;
 use vulcan_service_api::{
-    HostToolsSettingsSummary, RtkGainCommandStats, RtkGainDailyStats, RtkGainMonthlyStats,
-    RtkGainStatsResponse, RtkGainStatsSummary, RtkGainWeeklyStats, RtkRoutingSettingsSummary,
-    ServiceEventEmitter, WorkbenchSnapshot,
+    HostToolsSettingsSummary, NativeToolSummary, RtkGainCommandStats, RtkGainDailyStats,
+    RtkGainMonthlyStats, RtkGainStatsResponse, RtkGainStatsSummary, RtkGainWeeklyStats,
+    RtkRoutingSettingsSummary, ServiceEventEmitter, WorkbenchSnapshot,
 };
 
 use crate::{SharedServiceBridgeState, emit_workbench_event, refresh_settings_projection_locked};
@@ -155,8 +155,18 @@ pub(crate) async fn service_get_rtk_gain_stats() -> Result<RtkGainStatsResponse,
 pub(crate) fn host_tools_settings(
     provider_configuration: &ProviderConfigurationFile,
 ) -> HostToolsSettingsSummary {
+    host_tools_settings_with_native_tools(provider_configuration, Vec::new())
+}
+
+/// Builds the WebUI host-tool settings snapshot with runtime native tool rows.
+/// 使用运行时原生工具行构建 WebUI 宿主工具设置快照。
+pub(crate) fn host_tools_settings_with_native_tools(
+    provider_configuration: &ProviderConfigurationFile,
+    native_tools: Vec<NativeToolSummary>,
+) -> HostToolsSettingsSummary {
     HostToolsSettingsSummary {
         rtk: rtk_routing_settings(&provider_configuration.host_tools.rtk),
+        native_tools,
     }
 }
 
