@@ -268,6 +268,7 @@ impl TaskRuntime {
         let path_prefix = list_agents_path_prefix(args)?;
         let registry = self.subagent_registry_snapshot()?;
         let root_session_id = self.root_session_id_for_subagent_tree(current_session_id)?;
+        let resident_session_ids = self.resident_subagent_session_ids_for_list()?;
         let entries_by_session = registry
             .list_all()
             .into_iter()
@@ -275,6 +276,10 @@ impl TaskRuntime {
             .collect::<BTreeMap<_, _>>();
         let mut entries = entries_by_session
             .values()
+            .filter(|entry| {
+                resident_session_ids.contains(&entry.session_id)
+                    && entry.status != SubagentStatus::Archived
+            })
             .filter_map(|entry| {
                 let entry_path =
                     subagent_entry_tree_path(entry, &entries_by_session, root_session_id)?;
@@ -290,6 +295,26 @@ impl TaskRuntime {
                 .then_with(|| left_entry.agent_id.cmp(&right_entry.agent_id))
         });
         Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+    }
+
+    /// Returns in-memory child sessions that are still resident for list_agents.
+    /// 返回 `list_agents` 仍可见的内存常驻子会话集合。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Child session node ids currently retained by the runtime session registry.
+    /// 当前仍由运行时会话注册表保留的子会话节点标识。
+    fn resident_subagent_session_ids_for_list(&self) -> Result<BTreeSet<SessionNodeId>, String> {
+        Ok(self
+            .sessions
+            .read()
+            .map_err(|_| {
+                String::from("The task-session registry is locked and cannot list resident agents.")
+            })?
+            .keys()
+            .copied()
+            .map(SessionNodeId::from)
+            .collect())
     }
 
     /// Resolves the root session id for one Vulcan subagent tree list request.
@@ -354,7 +379,7 @@ impl TaskRuntime {
             payload: json!({
                 "tool": INTERRUPT_AGENT_TOOL,
                 "parent_session_id": current_session_id.to_string(),
-                "matched_agents": [subagent_registry_entry_status_payload(&entry)],
+                "matched_agents": [subagent_registry_entry_host_status_payload(&entry)],
                 (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "stopped_count": stopped_task_ids.len(),
             }),

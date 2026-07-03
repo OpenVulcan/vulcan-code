@@ -556,8 +556,8 @@ pub(super) fn normalize_spawn_agent_fork_turns(
     Ok(Some(turn_count.to_string()))
 }
 
-/// Parses list_agents arguments using the Vulcan path_prefix-only contract.
-/// 按 Vulcan 仅支持 path_prefix 的契约解析 list_agents 参数。
+/// Parses list_agents arguments using path_prefix plus deprecated include_all compatibility.
+/// 按 path_prefix 加废弃 include_all 兼容参数的契约解析 list_agents 参数。
 pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, String> {
     let Some(object) = args.as_object() else {
         return Err(String::from("list_agents arguments must be a JSON object."));
@@ -576,8 +576,8 @@ pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, St
     Ok(string_field(object, &["path_prefix"]))
 }
 
-/// Parses whether list_agents should return the full registry snapshot instead of pending updates.
-/// 解析 list_agents 是否应返回完整注册表快照而不是待收集更新。
+/// Parses the deprecated include_all compatibility flag for list_agents.
+/// 解析 list_agents 的废弃 include_all 兼容标记。
 ///
 /// # Parameters
 /// 参数
@@ -586,8 +586,8 @@ pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, St
 ///
 /// # Returns
 /// 返回值
-/// `Ok(true)` when the caller explicitly requested the all-agent snapshot.
-/// 调用方显式请求全部智能体快照时返回 `Ok(true)`。
+/// `Ok(true)` when the caller supplied the compatibility flag as true.
+/// 调用方以 true 提供兼容标记时返回 `Ok(true)`。
 pub(super) fn list_agents_include_all(args: &Value) -> Result<bool, String> {
     let Some(object) = args.as_object() else {
         return Err(String::from("list_agents arguments must be a JSON object."));
@@ -696,18 +696,67 @@ pub(super) fn wait_agent_timeout_ms(args: &Value) -> Result<Option<u64>, String>
 /// 模型可见的 JSON 状态载荷。
 pub(super) fn subagent_registry_entry_status_payload(entry: &SubagentRegistryEntry) -> Value {
     json!({
-        "task_name": &entry.agent_id,
+        "agent_name": &entry.agent_id,
+        "agent_status": subagent_registry_agent_status_payload(entry),
+        "last_task_message": entry.last_task_message.clone(),
+    })
+}
+
+/// Builds one host-only diagnostic status payload for a native subagent registry entry.
+/// 为一条原生子代理注册表条目构建仅宿主可见的诊断状态载荷。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the subagent registry entry to expose to UI/debug surfaces.
+/// `entry` 是需要暴露给 UI 和调试界面的子代理注册表条目。
+///
+/// # Returns
+/// 返回值
+/// A host-visible JSON status payload with stable model fields and runtime diagnostics.
+/// 带稳定模型字段与运行时诊断信息的宿主可见 JSON 状态载荷。
+pub(super) fn subagent_registry_entry_host_status_payload(entry: &SubagentRegistryEntry) -> Value {
+    json!({
+        "agent_name": &entry.agent_id,
+        "agent_status": subagent_registry_agent_status_payload(entry),
+        "last_task_message": entry.last_task_message.clone(),
         (SUBAGENT_TASK_ID_KEY): entry.session_id.to_string(),
         "display_title": &entry.agent_id,
-        "description": Value::Null,
         "agent_kind": entry.agent_kind,
         "prompt_source": entry.prompt_source.clone(),
-        "status": entry.status,
-        "depth": Value::Null,
-        "result": entry.result_summary.clone(),
         "updated_at": entry.updated_at_ms.to_string(),
         "segments": entry.segments.clone(),
     })
+}
+
+/// Converts a registry status into the Codex-style `agent_status` payload.
+/// 将注册表状态转换为 Codex 风格的 `agent_status` 载荷。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the registry entry whose status should be exposed.
+/// `entry` 是需要暴露状态的注册表条目。
+///
+/// # Returns
+/// 返回值
+/// A compact status value compatible with the multi-agent V2 list semantics.
+/// 与多代理 V2 列表语义兼容的紧凑状态值。
+fn subagent_registry_agent_status_payload(entry: &SubagentRegistryEntry) -> Value {
+    match entry.status {
+        SubagentStatus::Created => json!("pending_init"),
+        SubagentStatus::Running
+        | SubagentStatus::WaitingChildren
+        | SubagentStatus::WaitingFollowup
+        | SubagentStatus::Compacting => json!("running"),
+        SubagentStatus::Completed => json!({ "completed": entry.result_summary.clone() }),
+        SubagentStatus::Failed => json!({
+            "errored": entry
+                .result_summary
+                .clone()
+                .unwrap_or_else(|| String::from("Agent errored.")),
+        }),
+        SubagentStatus::Stopped => json!("interrupted"),
+        SubagentStatus::Archived => json!("shutdown"),
+    }
 }
 
 /// Builds a model-visible status result from native subagent registry entries.
@@ -737,21 +786,32 @@ pub(super) fn build_subagent_registry_status_tool_result(
     timeout_ms: u64,
     completed: bool,
 ) -> VulcanToolInvocationResult {
-    let agents = entries
+    let model_agents = entries
         .iter()
         .map(subagent_registry_entry_status_payload)
         .collect::<Vec<_>>();
-    let payload = json!({
+    let host_agents = entries
+        .iter()
+        .map(subagent_registry_entry_host_status_payload)
+        .collect::<Vec<_>>();
+    let model_payload = json!({
         "tool": tool_name,
         "parent_session_id": current_session_id.to_string(),
         "completed": completed,
         "timeout_ms": timeout_ms,
-        "agents": agents,
+        "agents": model_agents,
     });
-    VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+    let host_payload = json!({
+        "tool": tool_name,
+        "parent_session_id": current_session_id.to_string(),
+        "completed": completed,
+        "timeout_ms": timeout_ms,
+        "agents": host_agents,
+    });
+    VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
         VulcanToolHostResult {
             kind: String::from("subagent_status"),
-            payload,
+            payload: host_payload,
         },
     )
 }

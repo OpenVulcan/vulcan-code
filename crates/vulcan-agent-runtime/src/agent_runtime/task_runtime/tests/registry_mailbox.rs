@@ -344,13 +344,31 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         2
     );
     assert_eq!(
-        result.model_output["agents"][0]["task_name"],
+        result.model_output["agents"][0]["agent_name"],
         "agent-review"
     );
-    assert_eq!(result.model_output["agents"][0]["agent_kind"], "clone");
-    assert_eq!(result.model_output["agents"][0]["prompt_source"], "core");
-    assert_eq!(result.model_output["agents"][0]["status"], "running");
-    assert!(result.model_output["agents"][0]["result"].is_null());
+    assert_eq!(result.model_output["agents"][0]["agent_status"], "running");
+    assert_eq!(
+        result.model_output["agents"][0]["last_task_message"],
+        "review this change"
+    );
+    assert!(result.model_output["agents"][0].get("agent_kind").is_none());
+    assert!(
+        result.model_output["agents"][0]
+            .get("prompt_source")
+            .is_none()
+    );
+    assert!(result.model_output["agents"][0].get("result").is_none());
+    let host_result = result
+        .host_result
+        .as_ref()
+        .expect("host result should exist");
+    assert_eq!(host_result.payload["agents"][0]["agent_kind"], "clone");
+    assert_eq!(host_result.payload["agents"][0]["prompt_source"], "core");
+    assert_eq!(
+        host_result.payload["agents"][0][SUBAGENT_TASK_ID_KEY],
+        task_id.to_string()
+    );
 
     let filtered = task_runtime
         .invoke_list_agents(
@@ -360,11 +378,11 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         .await
         .expect("list_agents path_prefix filter should succeed");
     assert_eq!(
-        filtered.model_output["agents"][0]["task_name"],
+        filtered.model_output["agents"][0]["agent_name"],
         "agent-review"
     );
     assert_eq!(
-        filtered.model_output["agents"][1]["task_name"],
+        filtered.model_output["agents"][1]["agent_name"],
         "nested-check"
     );
 
@@ -383,7 +401,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         1
     );
     assert_eq!(
-        nested_only.model_output["agents"][0]["task_name"],
+        nested_only.model_output["agents"][0]["agent_name"],
         "nested-check"
     );
 
@@ -450,14 +468,18 @@ async fn list_agents_keeps_completed_registry_entries_visible() {
         .expect("list_agents should succeed");
 
     assert_eq!(
-        result.model_output["agents"][0]["task_name"],
+        result.model_output["agents"][0]["agent_name"],
         "agent-review"
     );
-    assert_eq!(result.model_output["agents"][0]["status"], "completed");
     assert_eq!(
-        result.model_output["agents"][0]["result"],
+        result.model_output["agents"][0]["agent_status"]["completed"],
         "review complete"
     );
+    assert_eq!(
+        result.model_output["agents"][0]["last_task_message"],
+        "review this change"
+    );
+    assert!(result.model_output["agents"][0].get("result").is_none());
 }
 
 /// Verifies list_agents returns registry status without consuming mailbox updates.
@@ -507,11 +529,11 @@ async fn list_agents_does_not_consume_pending_mailbox_updates() {
         .expect("first list_agents status query should succeed");
 
     assert_eq!(
-        first_listing.model_output["agents"][0]["task_name"],
+        first_listing.model_output["agents"][0]["agent_name"],
         "agent-review"
     );
     assert_eq!(
-        first_listing.model_output["agents"][0]["result"],
+        first_listing.model_output["agents"][0]["agent_status"]["completed"],
         "review complete"
     );
 
@@ -531,6 +553,42 @@ async fn list_agents_does_not_consume_pending_mailbox_updates() {
         task_runtime
             .has_subagent_events_for_parent(SessionNodeId::from(root_session_id))
             .expect("mailbox pending check should succeed")
+    );
+}
+
+/// Verifies registry-only historical entries are hidden from list_agents once not resident.
+/// 验证仅存在于历史注册表且不再常驻的条目不会被 list_agents 暴露。
+#[tokio::test]
+async fn list_agents_hides_registry_only_non_resident_entries() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let historical_task_id = Uuid::new_v4();
+    let mut entry = SubagentRegistryEntry::new(
+        "historical-review",
+        SessionNodeId::from(historical_task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    entry.status = SubagentStatus::Completed;
+    entry.result_summary = Some(String::from("historical result"));
+    task_runtime
+        .subagent_registry
+        .write()
+        .expect("registry should write")
+        .upsert(entry);
+
+    let result = task_runtime
+        .invoke_list_agents(root_session_id, json!({ "include_all": true }))
+        .await
+        .expect("list_agents should succeed");
+
+    assert_eq!(
+        result.model_output["agents"]
+            .as_array()
+            .expect("agents should be an array")
+            .len(),
+        0
     );
 }
 

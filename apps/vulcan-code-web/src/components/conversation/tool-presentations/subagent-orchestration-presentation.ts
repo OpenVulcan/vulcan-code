@@ -340,17 +340,54 @@ function subagentAgents(
   return rawAgents.map((rawAgent, index) => {
     const agent = objectValue(rawAgent);
     const name = stringValue(agent?.display_title ?? agent?.displayTitle)
+      ?? stringValue(agent?.agent_name ?? agent?.agentName)
       ?? stringValue(agent?.task_name ?? agent?.taskName)
       ?? `agent-${index + 1}`;
     return {
       id: stringValue(agent?.subagent_task_id ?? agent?.subagentTaskId)
+        ?? stringValue(agent?.agent_name ?? agent?.agentName)
         ?? `${index}:${compactHash(JSON.stringify(rawAgent))}`,
       name,
-      result: stringValue(agent?.result) ?? fallbackResultFromBlocks(blocks),
-      status: stringValue(agent?.status) ?? "unknown",
+      result: subagentAgentStatusResult(agent) ?? stringValue(agent?.result) ?? fallbackResultFromBlocks(blocks),
+      status: subagentAgentStatusText(agent) ?? stringValue(agent?.status) ?? "unknown",
       debugSummary: subagentDebugSummary(agent?.debug),
     };
   });
+}
+
+// subagentAgentStatusText formats Codex-style agent_status values for rows.
+// subagentAgentStatusText 为行格式化 Codex 风格的 agent_status 值。
+function subagentAgentStatusText(
+  // Parsed agent payload.
+  // 已解析的代理载荷。
+  agent: Record<string, unknown> | null,
+): string | null {
+  const status = agent?.agent_status ?? agent?.agentStatus;
+  if (typeof status === "string" && status.trim()) {
+    return status.trim();
+  }
+  const statusObject = objectValue(status);
+  if (!statusObject) {
+    return null;
+  }
+  if ("completed" in statusObject) {
+    return "completed";
+  }
+  if ("errored" in statusObject) {
+    return "errored";
+  }
+  return null;
+}
+
+// subagentAgentStatusResult extracts terminal text from Codex-style agent_status values.
+// subagentAgentStatusResult 从 Codex 风格的 agent_status 值中提取终态文本。
+function subagentAgentStatusResult(
+  // Parsed agent payload.
+  // 已解析的代理载荷。
+  agent: Record<string, unknown> | null,
+): string | null {
+  const statusObject = objectValue(agent?.agent_status ?? agent?.agentStatus);
+  return stringValue(statusObject?.completed) ?? stringValue(statusObject?.errored);
 }
 
 // subagentDebugSummary converts runtime diagnostics into a compact human-readable line.

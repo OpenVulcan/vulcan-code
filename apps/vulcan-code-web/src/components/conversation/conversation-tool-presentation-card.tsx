@@ -109,8 +109,8 @@ const commandPresentationDetailCache = new Map<string, CommandExecutionPresentat
 // askQuestionPresentationDetailCache 避免虚拟滚动重挂后重复请求已完成 ask 答案。
 const askQuestionPresentationDetailCache = new Map<string, AskQuestionPresentation>();
 
-// subagentOrchestrationPresentationDetailCache avoids refetching hidden subagent collection results.
-// subagentOrchestrationPresentationDetailCache 避免重复请求隐藏子代理收集结果。
+// subagentOrchestrationPresentationDetailCache avoids refetching hidden subagent status details.
+// subagentOrchestrationPresentationDetailCache 避免重复请求隐藏子代理状态详情。
 const subagentOrchestrationPresentationDetailCache = new Map<string, SubagentOrchestrationPresentation>();
 
 // SubagentOrchestrationPresentationCard renders a compact inline subagent dispatch record.
@@ -308,8 +308,8 @@ function SubagentOrchestrationDetail(props: {
   );
 }
 
-// SubagentOrchestrationAgentRow renders one collected child-agent result.
-// SubagentOrchestrationAgentRow 渲染单条已收集子代理结果。
+// SubagentOrchestrationAgentRow renders one listed child-agent status row.
+// SubagentOrchestrationAgentRow 渲染单条已列出的子代理状态行。
 function SubagentOrchestrationAgentRow(props: {
   // Agent row model.
   // 代理行模型。

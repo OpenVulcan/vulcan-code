@@ -239,8 +239,8 @@ export interface SubagentOrchestrationPresentation {
   // Current compact display state.
   // 当前紧凑展示状态。
   state: ToolPresentationDisplayState;
-  // Hidden detail reference used to hydrate full collected results.
-  // 用于补全完整收集结果的隐藏详情引用。
+  // Hidden detail reference used to hydrate full status details.
+  // 用于补全完整状态详情的隐藏详情引用。
   detailRef?: ConversationDetailRef;
   // Normalized orchestration operation.
   // 规范化调度操作类型。
@@ -275,8 +275,8 @@ export interface SubagentOrchestrationPresentation {
   // Whether a wait_agent call ended by timeout.
   // wait_agent 调用是否因超时结束。
   timedOut?: boolean | null;
-  // Collected child-agent results.
-  // 已收集的子代理结果。
+  // Listed child-agent status rows.
+  // 已列出的子代理状态行。
   agents: SubagentOrchestrationAgent[];
   // Stopped subagent task ids from control calls.
   // 控制调用返回的已停止任务会话标识。
@@ -286,8 +286,8 @@ export interface SubagentOrchestrationPresentation {
   stoppedCount: number;
 }
 
-// SubagentOrchestrationAgent describes one collected child-agent row.
-// SubagentOrchestrationAgent 描述一条已收集子代理行。
+// SubagentOrchestrationAgent describes one listed child-agent status row.
+// SubagentOrchestrationAgent 描述一条已列出的子代理状态行。
 export interface SubagentOrchestrationAgent {
   // Stable row id.
   // 稳定行标识。
@@ -298,11 +298,11 @@ export interface SubagentOrchestrationAgent {
   // Runtime status text.
   // 运行时状态文本。
   status: string;
-  // Optional result summary.
-  // 可选结果摘要。
+  // Optional terminal status summary.
+  // 可选终态状态摘要。
   result?: string | null;
-  // Optional runtime debug summary for this collected child agent.
-  // 该已收集子代理的可选运行时调试摘要。
+  // Optional runtime debug summary for this listed child agent.
+  // 该已列出子代理的可选运行时调试摘要。
   debugSummary?: string | null;
 }
 

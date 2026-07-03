@@ -179,8 +179,8 @@ function buildSubagentWaitDetailBody(blocks: ToolExecutionConversationBlock[], t
   ].filter(Boolean).join("\n\n");
 }
 
-// buildSubagentCollectionDetailBody renders list results as a readable agent-result list.
-// buildSubagentCollectionDetailBody 将列出结果渲染为可读的代理结果列表。
+// buildSubagentCollectionDetailBody renders list results as a readable agent-status list.
+// buildSubagentCollectionDetailBody 将列出结果渲染为可读的代理状态列表。
 function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
   const payload = firstPayloadObject(blocks);
   const agents = arrayMetadata(payload, "agents").map(objectMetadata).filter((agent): agent is Record<string, unknown> => Boolean(agent));
@@ -189,7 +189,7 @@ function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBloc
   const message = stringMetadata(payload?.message);
   const result = stringMetadata(payload?.result);
   const header = [
-    `## ${text(t, "conversation.subagent.detail.collection", "Subagent collection")}`,
+    `## ${text(t, "conversation.subagent.detail.collection", "Subagent status")}`,
     detailLine(text(t, "conversation.subagent.detail.count", "Count"), String(agents.length)),
     completed !== null ? detailLine(text(t, "conversation.subagent.detail.completed", "Completed"), booleanText(completed, t)) : null,
     timeoutMs !== null && timeoutMs > 0 ? detailLine(text(t, "conversation.subagent.detail.timeout", "Timeout"), `${timeoutMs} ms`) : null,
@@ -199,14 +199,14 @@ function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBloc
       ...header,
       message ? detailLine(text(t, "conversation.subagent.detail.note", "Note"), message) : null,
       result ? `### ${text(t, "conversation.subagent.detail.result", "Result")}\n\n${fencedText(result)}` : null,
-      !message && !result ? text(t, "conversation.subagent.detail.noAgents", "No subagent result was returned.") : null,
+      !message && !result ? text(t, "conversation.subagent.detail.noAgents", "No visible subagent.") : null,
     ].filter(Boolean).join("\n\n");
   }
   const agentSections = agents.map((agent, index) => {
-    const name = stringMetadata(agent.display_title ?? agent.displayTitle ?? agent.task_name ?? agent.taskName)
+    const name = stringMetadata(agent.agent_name ?? agent.agentName ?? agent.display_title ?? agent.displayTitle ?? agent.task_name ?? agent.taskName)
       ?? `${text(t, "conversation.subagent.detail.agent", "Agent")} ${index + 1}`;
-    const status = stringMetadata(agent.status) ?? text(t, "conversation.subagent.detail.unknown", "Unknown");
-    const result = stringMetadata(agent.result) ?? stringMetadata(agent.error) ?? "";
+    const status = subagentAgentStatusText(agent) ?? stringMetadata(agent.status) ?? text(t, "conversation.subagent.detail.unknown", "Unknown");
+    const result = subagentAgentStatusResult(agent) ?? stringMetadata(agent.result) ?? stringMetadata(agent.error) ?? "";
     const description = stringMetadata(agent.description);
     return [
       `### ${index + 1}. ${name}`,
@@ -217,6 +217,33 @@ function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBloc
     ].filter(Boolean).join("\n\n");
   });
   return [...header, ...agentSections].join("\n\n");
+}
+
+// subagentAgentStatusText formats Codex-style agent_status values for detail panels.
+// subagentAgentStatusText 为详情面板格式化 Codex 风格的 agent_status 值。
+function subagentAgentStatusText(agent: Record<string, unknown>): string | null {
+  const status = agent.agent_status ?? agent.agentStatus;
+  if (typeof status === "string" && status.trim()) {
+    return status.trim();
+  }
+  const statusObject = objectMetadata(status);
+  if (!statusObject) {
+    return null;
+  }
+  if ("completed" in statusObject) {
+    return "completed";
+  }
+  if ("errored" in statusObject) {
+    return "errored";
+  }
+  return null;
+}
+
+// subagentAgentStatusResult extracts terminal text from Codex-style agent_status values.
+// subagentAgentStatusResult 从 Codex 风格的 agent_status 值中提取终态文本。
+function subagentAgentStatusResult(agent: Record<string, unknown>): string | null {
+  const statusObject = objectMetadata(agent.agent_status ?? agent.agentStatus);
+  return stringMetadata(statusObject?.completed) ?? stringMetadata(statusObject?.errored);
 }
 
 // buildSubagentControlDetailBody renders close-agent results as a compact operation summary.

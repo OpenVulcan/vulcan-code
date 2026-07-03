@@ -143,6 +143,9 @@ impl TaskRuntime {
         if let Some(prompt_source) = subagent_prompt_source_for_task_record(record) {
             entry.prompt_source = Some(prompt_source);
         }
+        if !record.last_prompt.trim().is_empty() {
+            entry.last_task_message = Some(record.last_prompt.clone());
+        }
         if let Some(result_summary) = result_summary
             && !result_summary.trim().is_empty()
         {
@@ -162,6 +165,9 @@ impl TaskRuntime {
             }
             if entry.result_summary.is_none() {
                 entry.result_summary = existing.result_summary;
+            }
+            if entry.last_task_message.is_none() {
+                entry.last_task_message = existing.last_task_message;
             }
         }
         registry.upsert(entry);
