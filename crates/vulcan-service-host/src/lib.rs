@@ -14,7 +14,7 @@ use axum::{
     Json, Router,
     body::Body as AxumBody,
     extract::{
-        OriginalUri as AxumOriginalUri, Path as AxumPath, State as AxumState,
+        DefaultBodyLimit, OriginalUri as AxumOriginalUri, Path as AxumPath, State as AxumState,
         ws::{Message as AxumWsMessage, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap as AxumHeaderMap, Method as AxumMethod, StatusCode as AxumStatusCode},
@@ -46,6 +46,10 @@ pub type WebuiServiceRpcDispatcher =
 /// Shared service discovery snapshot used by health checks while readiness changes.
 /// 健康检查在就绪状态变化时使用的共享服务发现快照。
 pub type SharedWebuiServiceDiscoverySnapshot = Arc<Mutex<WebuiServiceDiscoverySnapshot>>;
+
+/// Maximum JSON body size accepted by the browser-facing RPC endpoint.
+/// 浏览器侧 RPC 端点允许接收的最大 JSON 请求体大小。
+const WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Service event sink that forwards events into the browser WebSocket bus.
 /// 将服务事件转发到浏览器 WebSocket 总线的事件接收器。
@@ -238,7 +242,11 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         .allow_headers(Any);
     Router::new()
         .route("/health", get(webui_service_health_http_handler))
-        .route("/rpc", post(webui_service_rpc_http_handler))
+        .route(
+            "/rpc",
+            post(webui_service_rpc_http_handler)
+                .layer(DefaultBodyLimit::max(WEBUI_SERVICE_RPC_BODY_LIMIT_BYTES)),
+        )
         .route("/events", get(webui_service_events_ws_handler))
         .route(
             "/asset/{encoded_path}",
@@ -594,6 +602,42 @@ mod tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["result"]["method"], "workbench.snapshot");
         assert_eq!(payload["result"]["params"]["projectId"], "p1");
+    }
+
+    /// Verifies browser RPC accepts payloads above Axum's default two megabyte JSON limit.
+    /// 验证浏览器 RPC 可以接收超过 Axum 默认两兆 JSON 限制的载荷。
+    #[tokio::test]
+    async fn browser_rpc_accepts_large_authorized_request_body() {
+        // large_clipboard_payload simulates base64-rich clipboard data pasted from a browser.
+        // large_clipboard_payload 模拟从浏览器粘贴时包含大量 base64 数据的剪贴板载荷。
+        let large_clipboard_payload = "x".repeat(2_097_152 + 1024);
+
+        // request_body stores one JSON RPC body that would exceed Axum's default body limit.
+        // request_body 保存一个会超过 Axum 默认请求体限制的 JSON RPC 请求体。
+        let request_body = json!({
+            "method": "workbench.snapshot",
+            "params": {
+                "clipboardData": large_clipboard_payload,
+            },
+        })
+        .to_string();
+
+        // response stores the HTTP response produced by the browser service router.
+        // response 保存浏览器服务路由生成的 HTTP 响应。
+        let response = test_router()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/rpc")
+                    .header("content-type", "application/json")
+                    .header("x-vulcan-service-token", "test-token")
+                    .body(Body::from(request_body))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), AxumStatusCode::OK);
     }
 
     /// Verifies token-protected WebSocket handshakes tolerate host WebViews that omit Origin.
