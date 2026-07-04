@@ -1,70 +1,55 @@
 use super::*;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 
-/// Delivery mode shared by send_message and followup_task.
-/// `send_message` 与 `followup_task` 共享的投递模式。
+/// Delivery mode selected by send_message.
+/// `send_message` 选择的投递模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InterAgentDeliveryMode {
-    /// Queue the message without starting a new child-agent turn.
-    /// 仅将消息入队，不启动新的子代理回合。
-    QueueOnly,
-    /// Queue the message and wake an idle child-agent turn.
-    /// 将消息入队并唤醒空闲子代理回合。
-    TriggerTurn,
+    /// Queue the message behind the current task.
+    /// 将消息排在当前任务之后。
+    Queue,
+    /// Interrupt the current task before scheduling the message.
+    /// 在调度消息前中断当前任务。
+    Interrupt,
 }
 
 impl InterAgentDeliveryMode {
-    /// Returns whether this delivery mode should wake an idle target.
-    /// 返回该投递模式是否应唤醒空闲目标。
+    /// Returns whether this delivery mode is an interrupt request.
+    /// 返回该投递模式是否为插队中断请求。
     ///
     /// # Returns
     /// 返回值
-    /// `true` for followup_task-style delivery.
-    /// 对 `followup_task` 风格投递返回 `true`。
-    const fn trigger_turn(self) -> bool {
-        matches!(self, Self::TriggerTurn)
+    /// `true` when the caller asked to interrupt current work.
+    /// 调用方请求中断当前工作时返回 `true`。
+    const fn interrupts_current_task(self) -> bool {
+        matches!(self, Self::Interrupt)
     }
 
-    /// Returns the model-visible tool name for this delivery mode.
-    /// 返回该投递模式对应的模型可见工具名称。
+    /// Returns the stable wire value for this delivery mode.
+    /// 返回该投递模式的稳定线协议值。
     ///
     /// # Returns
     /// 返回值
-    /// The stable core subagent tool name.
-    /// 稳定的核心子代理工具名称。
-    const fn tool_name(self) -> &'static str {
+    /// The model-visible delivery_mode value.
+    /// 模型可见的 delivery_mode 值。
+    const fn as_str(self) -> &'static str {
         match self {
-            Self::QueueOnly => SEND_MESSAGE_TOOL,
-            Self::TriggerTurn => FOLLOWUP_TASK_TOOL,
+            Self::Queue => "queue",
+            Self::Interrupt => "interrupt",
         }
     }
 }
 
 impl TaskRuntime {
-    /// Sends one queue-only message to a known child agent.
-    /// 向一个已知子代理发送一条仅入队消息。
+    /// Sends one message to a known child agent.
+    /// 向一个已知子代理发送一条消息。
     pub async fn invoke_send_message(
         self: &Arc<Self>,
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
-        self.invoke_inter_agent_message(current_session_id, args, InterAgentDeliveryMode::QueueOnly)
+        self.invoke_inter_agent_message(current_session_id, args)
             .await
-    }
-
-    /// Sends one follow-up message and wakes the target child agent when it is idle.
-    /// 发送一条后续消息，并在目标子代理空闲时唤醒它。
-    pub async fn invoke_followup_task(
-        self: &Arc<Self>,
-        current_session_id: SessionId,
-        args: Value,
-    ) -> Result<VulcanToolInvocationResult, String> {
-        self.invoke_inter_agent_message(
-            current_session_id,
-            args,
-            InterAgentDeliveryMode::TriggerTurn,
-        )
-        .await
     }
 
     /// Handles the shared inter-agent message submission flow.
@@ -76,8 +61,6 @@ impl TaskRuntime {
     /// `current_session_id` 是发起工具调用的会话。
     /// `args` contains the strict `target` and `message` payload.
     /// `args` 包含严格的 `target` 与 `message` 载荷。
-    /// `mode` selects queue-only or trigger-turn delivery.
-    /// `mode` 选择仅入队或触发回合投递。
     ///
     /// # Returns
     /// 返回值
@@ -87,36 +70,42 @@ impl TaskRuntime {
         self: &Arc<Self>,
         current_session_id: SessionId,
         args: Value,
-        mode: InterAgentDeliveryMode,
     ) -> Result<VulcanToolInvocationResult, String> {
-        let parsed = parse_inter_agent_message_args(&args, mode.tool_name())?;
+        let parsed = parse_inter_agent_message_args(&args, SEND_MESSAGE_TOOL)?;
         if is_root_agent_target(&parsed.target) {
-            if mode.trigger_turn() {
-                return Err(String::from("followup_task cannot target the root agent."));
+            if parsed.delivery_mode.interrupts_current_task() {
+                return Err(String::from(
+                    "send_message delivery_mode `interrupt` cannot target the root agent.",
+                ));
             }
             return self.deliver_root_inter_agent_message(current_session_id, &parsed.message);
         }
+        self.restore_persisted_subagent_registry_for_parent_tree(current_session_id)?;
         let target = self.resolve_inter_agent_message_target(current_session_id, &parsed.target)?;
+        let target_session_id = SessionId::from(target.session_id);
+        let stopped_task_ids = if parsed.delivery_mode.interrupts_current_task() {
+            self.stop_task_tree(target_session_id)?
+        } else {
+            Vec::new()
+        };
         self.enqueue_inter_agent_message(
             current_session_id,
-            SessionId::from(target.session_id),
+            target_session_id,
             parsed.message.clone(),
-            mode.trigger_turn(),
         )?;
 
-        if mode.trigger_turn()
-            && !self.task_has_active_or_starting_run(SessionId::from(target.session_id))?
-        {
+        if !self.task_has_active_or_starting_run(target_session_id)? {
             self.resume_idle_agent_from_inbox(current_session_id, &target)
                 .await?;
         }
 
         Ok(build_inter_agent_message_tool_result(
-            mode.tool_name(),
+            SEND_MESSAGE_TOOL,
             current_session_id,
             &target,
             &parsed.message,
-            mode.trigger_turn(),
+            parsed.delivery_mode,
+            &stopped_task_ids,
         ))
     }
 
@@ -233,20 +222,16 @@ impl TaskRuntime {
     /// `target_task_id` 是目标子任务标识。
     /// `content` is the message body.
     /// `content` 是消息正文。
-    /// `trigger_turn` marks followup_task-style wake requests.
-    /// `trigger_turn` 标记 `followup_task` 风格唤醒请求。
     fn enqueue_inter_agent_message(
         &self,
         author_session_id: SessionId,
         target_task_id: SessionId,
         content: String,
-        trigger_turn: bool,
     ) -> Result<(), String> {
         let message = QueuedInterAgentMessage {
             author_session_id,
             target_task_id,
             content,
-            trigger_turn,
             created_at_ms: current_unix_millis_u64(),
         };
         self.agent_inboxes
@@ -313,16 +298,144 @@ impl TaskRuntime {
         Ok(())
     }
 
+    /// Restores drained inter-agent messages after a failed resume stage and returns a combined error.
+    /// 在续跑阶段失败后恢复已取出的代理间消息，并返回合并后的错误。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `target_task_id` identifies the child-agent inbox that must receive the messages again.
+    /// `target_task_id` 标识必须重新接收消息的子代理 inbox。
+    /// `messages` are the drained messages that must not be lost.
+    /// `messages` 是已经取出且不能丢失的消息集合。
+    /// `stage` names the failed resume stage for diagnostics.
+    /// `stage` 是用于诊断的失败续跑阶段名称。
+    /// `error` is the original failure that triggered restoration.
+    /// `error` 是触发恢复动作的原始失败信息。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The original error, or a combined error when restoration also fails.
+    /// 原始错误；如果恢复也失败，则返回合并错误。
+    fn restore_inter_agent_messages_front_after_failure(
+        &self,
+        target_task_id: SessionId,
+        messages: Vec<QueuedInterAgentMessage>,
+        stage: &str,
+        error: String,
+    ) -> String {
+        let message_count = messages.len();
+        match self.requeue_inter_agent_messages_front(target_task_id, messages) {
+            Ok(()) => {
+                task_runtime_trace(
+                    "subagent_message_requeue_after_failure",
+                    format!("target={target_task_id} stage={stage} message_count={message_count}"),
+                );
+                error
+            }
+            Err(restore_error) => {
+                let combined_error = format!(
+                    "{error} Additionally, failed to restore {message_count} queued inter-agent message(s) for child agent `{target_task_id}` after `{stage}`: {restore_error}"
+                );
+                eprintln!("[subagent-agent-control] {combined_error}");
+                task_runtime_trace(
+                    "subagent_message_requeue_failed",
+                    format!(
+                        "target={target_task_id} stage={stage} message_count={message_count} error={restore_error}"
+                    ),
+                );
+                combined_error
+            }
+        }
+    }
+
+    /// Counts queued inter-agent messages for one target task.
+    /// 统计一个目标任务当前排队的代理间消息数量。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `target_task_id` identifies the target child-agent inbox.
+    /// `target_task_id` 标识目标子代理 inbox。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Number of queued messages currently waiting for delivery.
+    /// 当前等待投递的消息数量。
+    pub(super) fn inter_agent_message_count_for_task(
+        &self,
+        target_task_id: SessionId,
+    ) -> Result<usize, String> {
+        let inboxes = self
+            .agent_inboxes
+            .read()
+            .map_err(|_| String::from("The subagent agent-control inbox is locked."))?;
+        Ok(inboxes.get(&target_task_id).map(VecDeque::len).unwrap_or(0))
+    }
+
+    /// Clears queued inter-agent messages for closed child agents.
+    /// 清理已关闭子代理的排队代理间消息。
+    pub(super) fn clear_inter_agent_messages_for_tasks(
+        &self,
+        // Target child task ids whose inboxes should be removed.
+        // 需要移除 inbox 的目标子任务标识。
+        target_task_ids: &[SessionId],
+    ) -> Result<usize, String> {
+        if target_task_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut inboxes = self
+            .agent_inboxes
+            .write()
+            .map_err(|_| String::from("The subagent agent-control inbox is locked."))?;
+        let mut cleared_count = 0;
+        for task_id in target_task_ids {
+            cleared_count += inboxes
+                .remove(task_id)
+                .map(|queue| queue.len())
+                .unwrap_or(0);
+        }
+        Ok(cleared_count)
+    }
+
+    /// Counts queued inter-agent messages for direct children of one parent session.
+    /// 统计单个父会话直接子代理的待处理代理间消息数量。
+    pub(super) fn queued_inter_agent_message_count_for_parent(
+        &self,
+        parent_session_id: SessionId,
+    ) -> Result<usize, String> {
+        let child_task_ids = self
+            .sessions
+            .read()
+            .map_err(|_| String::from("The task-session registry is locked."))?
+            .values()
+            .filter(|record| {
+                record
+                    .parent_task_id
+                    .map(|value| value == parent_session_id)
+                    .unwrap_or(record.origin_session_id == parent_session_id)
+            })
+            .map(|record| record.task_id)
+            .collect::<BTreeSet<_>>();
+        let inboxes = self
+            .agent_inboxes
+            .read()
+            .map_err(|_| String::from("The subagent agent-control inbox is locked."))?;
+        Ok(child_task_ids
+            .iter()
+            .filter_map(|task_id| inboxes.get(task_id))
+            .map(VecDeque::len)
+            .sum())
+    }
+
     /// Resumes one idle child agent by converting queued inbox messages into the next user turn.
     /// 将排队 inbox 消息转换成下一条用户回合以续跑一个空闲子代理。
     ///
     /// # Parameters
     /// 参数
-    /// `current_session_id` is the direct parent that invoked followup_task.
-    /// `current_session_id` 是调用 `followup_task` 的直接父级。
+    /// `current_session_id` is the direct parent that invoked send_message.
+    /// `current_session_id` 是调用 `send_message` 的直接父级。
     /// `target` is the known target child-agent entry.
     /// `target` 是已知目标子代理条目。
-    async fn resume_idle_agent_from_inbox(
+    pub(super) async fn resume_idle_agent_from_inbox(
         self: &Arc<Self>,
         current_session_id: SessionId,
         target: &SubagentRegistryEntry,
@@ -338,23 +451,65 @@ impl TaskRuntime {
         let target_task_id = SessionId::from(target.session_id);
         let messages = self.take_inter_agent_messages(target_task_id)?;
         let prompt = format_inter_agent_messages(&messages);
-        let parsed_args = parse_task_tool_arguments(json!({
+        let parsed_args = match parse_task_tool_arguments(json!({
             "task_id": target.agent_id,
             "prompt": prompt,
-        }))?;
-        let resolved_identifier = resolve_task_session_id(self, current_session_id, &parsed_args)?;
-        let invocation = prepare_task_execution_request(
+        })) {
+            Ok(parsed_args) => parsed_args,
+            Err(error) => {
+                return Err(self.restore_inter_agent_messages_front_after_failure(
+                    target_task_id,
+                    messages,
+                    "parse_task_tool_arguments",
+                    error,
+                ));
+            }
+        };
+        let resolved_identifier =
+            match resolve_task_session_id(self, current_session_id, &parsed_args) {
+                Ok(resolved_identifier) => resolved_identifier,
+                Err(error) => {
+                    return Err(self.restore_inter_agent_messages_front_after_failure(
+                        target_task_id,
+                        messages,
+                        "resolve_task_session_id",
+                        error,
+                    ));
+                }
+            };
+        let invocation = match prepare_task_execution_request(
             self,
             current_session_id,
             resolved_identifier,
             parsed_args,
-        )?;
+        ) {
+            Ok(invocation) => invocation,
+            Err(error) => {
+                return Err(self.restore_inter_agent_messages_front_after_failure(
+                    target_task_id,
+                    messages,
+                    "prepare_task_execution_request",
+                    error,
+                ));
+            }
+        };
         let outcome = match backend(invocation.clone()).await {
             Ok(outcome) => outcome,
             Err(error) => {
-                let _ = self.requeue_inter_agent_messages_front(target_task_id, messages);
-                self.mark_task_failure(current_session_id, &invocation, &error)?;
-                return Err(error);
+                let restored_error = self.restore_inter_agent_messages_front_after_failure(
+                    target_task_id,
+                    messages,
+                    "backend_invocation",
+                    error,
+                );
+                if let Err(mark_error) =
+                    self.mark_task_failure(current_session_id, &invocation, &restored_error)
+                {
+                    return Err(format!(
+                        "{restored_error} Additionally, failed to mark the child agent failure: {mark_error}"
+                    ));
+                }
+                return Err(restored_error);
             }
         };
         if outcome.execution_status == TaskExecutionStatus::Running {
@@ -363,6 +518,53 @@ impl TaskRuntime {
             self.store_task_outcome(current_session_id, &invocation, &outcome)?;
         }
         Ok(())
+    }
+
+    /// Resumes a just-settled child agent when queue-mode messages arrived too late for in-turn injection.
+    /// 当 queue 模式消息来得太晚、无法在当前 turn 内注入时，续跑刚结束的子代理。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the direct parent that owns the target child agent.
+    /// `current_session_id` 是持有目标子代理的直接父级。
+    /// `target_task_id` identifies the child agent whose active turn has just settled.
+    /// `target_task_id` 标识活动 turn 刚刚结束的子代理。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when queued messages were converted into a new child-agent run.
+    /// 当排队消息已经转换成新的子代理运行时返回 `true`。
+    pub(super) async fn resume_agent_from_inbox_after_task_settled(
+        self: &Arc<Self>,
+        current_session_id: SessionId,
+        target_task_id: SessionId,
+    ) -> Result<bool, String> {
+        if self.task_has_active_or_starting_run(target_task_id)? {
+            return Ok(false);
+        }
+        if self.inter_agent_message_count_for_task(target_task_id)? == 0 {
+            return Ok(false);
+        }
+        let target = self
+            .subagent_registry
+            .read()
+            .map_err(|_| String::from("The subagent registry is locked."))?
+            .list_for_parent(SessionNodeId::from(current_session_id))
+            .into_iter()
+            .find(|entry| entry.session_id == SessionNodeId::from(target_task_id))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "The child agent `{}` is no longer registered and cannot resume queued messages.",
+                    target_task_id
+                )
+            })?;
+        if matches!(target.status, SubagentStatus::Archived) {
+            return Ok(false);
+        }
+        self.resume_idle_agent_from_inbox(current_session_id, &target)
+            .await?;
+        Ok(true)
     }
 }
 
@@ -396,12 +598,21 @@ pub(super) fn build_child_agent_prompt_intervention(
             return false;
         }
         let prompt = format_inter_agent_messages(&messages);
-        controller.append_interjected_user_turn(&prompt).is_some()
+        if controller.append_interjected_user_turn(&prompt).is_some() {
+            return true;
+        }
+        task_runtime.restore_inter_agent_messages_front_after_failure(
+            task_id,
+            messages,
+            "prompt_intervention",
+            String::from("The child-agent stream could not accept an injected user turn."),
+        );
+        false
     })
 }
 
-/// Strict parsed arguments shared by send_message and followup_task.
-/// `send_message` 与 `followup_task` 共享的严格参数。
+/// Strict parsed arguments for send_message.
+/// `send_message` 的严格参数。
 struct InterAgentMessageArgs {
     /// Target public child-agent id.
     /// 目标公开子代理标识。
@@ -409,6 +620,9 @@ struct InterAgentMessageArgs {
     /// Message body.
     /// 消息正文。
     message: String,
+    /// Delivery mode requested by the caller.
+    /// 调用方请求的投递模式。
+    delivery_mode: InterAgentDeliveryMode,
 }
 
 /// Parses strict inter-agent message arguments.
@@ -434,7 +648,7 @@ fn parse_inter_agent_message_args(
     };
     let unsupported_keys = map
         .keys()
-        .filter(|key| !matches!(key.as_str(), "target" | "message"))
+        .filter(|key| !matches!(key.as_str(), "target" | "message" | "delivery_mode"))
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
@@ -447,7 +661,29 @@ fn parse_inter_agent_message_args(
         .ok_or_else(|| format!("{tool_name} requires target with the child-agent task name."))?;
     let message = string_field(map, &["message"])
         .ok_or_else(|| format!("{tool_name} requires a non-empty message."))?;
-    Ok(InterAgentMessageArgs { target, message })
+    let delivery_mode = parse_inter_agent_delivery_mode(string_field(map, &["delivery_mode"]))?;
+    Ok(InterAgentMessageArgs {
+        target,
+        message,
+        delivery_mode,
+    })
+}
+
+/// Parses one send_message delivery mode.
+/// 解析一个 send_message 投递模式。
+fn parse_inter_agent_delivery_mode(
+    value: Option<String>,
+) -> Result<InterAgentDeliveryMode, String> {
+    let Some(value) = value else {
+        return Ok(InterAgentDeliveryMode::Queue);
+    };
+    match value.as_str() {
+        "queue" => Ok(InterAgentDeliveryMode::Queue),
+        "interrupt" => Ok(InterAgentDeliveryMode::Interrupt),
+        other => Err(format!(
+            "send_message delivery_mode must be `queue` or `interrupt`; received `{other}`."
+        )),
+    }
 }
 
 /// Returns whether a model target names the root agent.
@@ -481,17 +717,11 @@ pub(super) fn is_root_agent_target(target: &str) -> bool {
 fn format_inter_agent_messages(messages: &[QueuedInterAgentMessage]) -> String {
     let mut prompt = String::from("[Inter-agent messages]\n");
     for (index, message) in messages.iter().enumerate() {
-        let delivery = if message.trigger_turn {
-            "followup_task"
-        } else {
-            "send_message"
-        };
         prompt.push_str(&format!(
-            "\nMessage {} from {} to {} via {} at {}:\n{}\n",
+            "\nMessage {} from {} to {} via send_message at {}:\n{}\n",
             index + 1,
             message.author_session_id,
             message.target_task_id,
-            delivery,
             message.created_at_ms,
             message.content
         ));
@@ -512,8 +742,10 @@ fn format_inter_agent_messages(messages: &[QueuedInterAgentMessage]) -> String {
 /// `target` 是解析出的目标子代理条目。
 /// `message` is the delivered message body.
 /// `message` 是已投递消息正文。
-/// `trigger_turn` records whether this delivery wakes the target.
-/// `trigger_turn` 记录本次投递是否唤醒目标。
+/// `delivery_mode` records whether this delivery queued or interrupted.
+/// `delivery_mode` 记录本次投递是排队还是插队。
+/// `stopped_task_ids` lists active tasks stopped before interrupt delivery.
+/// `stopped_task_ids` 列出插队投递前停止的活动任务。
 ///
 /// # Returns
 /// 返回值
@@ -524,14 +756,16 @@ fn build_inter_agent_message_tool_result(
     current_session_id: SessionId,
     target: &SubagentRegistryEntry,
     message: &str,
-    trigger_turn: bool,
+    delivery_mode: InterAgentDeliveryMode,
+    stopped_task_ids: &[SessionId],
 ) -> VulcanToolInvocationResult {
     let model_payload = json!({
         "ok": true,
         "target": target.agent_id,
         (SUBAGENT_TASK_ID_KEY): target.session_id.to_string(),
         "queued": true,
-        "trigger_turn": trigger_turn,
+        "delivery_mode": delivery_mode.as_str(),
+        "interrupted": delivery_mode.interrupts_current_task(),
         "status": target.status,
     });
     let host_payload = json!({
@@ -541,7 +775,9 @@ fn build_inter_agent_message_tool_result(
         (SUBAGENT_TASK_ID_KEY): target.session_id.to_string(),
         "message": message,
         "queued": true,
-        "trigger_turn": trigger_turn,
+        "delivery_mode": delivery_mode.as_str(),
+        "interrupted": delivery_mode.interrupts_current_task(),
+        (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "status": target.status,
     });
     VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
@@ -579,7 +815,8 @@ fn build_root_inter_agent_message_tool_result(
         "sender_session_id": current_session_id.to_string(),
         "parent_session_id": parent_session_id.to_string(),
         "queued": true,
-        "trigger_turn": false,
+        "delivery_mode": InterAgentDeliveryMode::Queue.as_str(),
+        "interrupted": false,
     });
     let host_payload = json!({
         "tool": SEND_MESSAGE_TOOL,
@@ -588,7 +825,8 @@ fn build_root_inter_agent_message_tool_result(
         "target": "root",
         "message": message,
         "queued": true,
-        "trigger_turn": false,
+        "delivery_mode": InterAgentDeliveryMode::Queue.as_str(),
+        "interrupted": false,
     });
     VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
         VulcanToolHostResult {

@@ -1,7 +1,8 @@
 import * as React from "react"
-import { Bot, ExternalLink, FolderOpen, Github, Maximize2, Minimize2, Pencil, Plus, RefreshCw, Save, Trash2, X } from "lucide-react"
+import { Bot, ExternalLink, FolderOpen, Github, Maximize2, Minimize2, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
+import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
 import { formatSkillText } from "@/components/features/featureText"
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
 import { Badge } from "@/components/ui/badge"
@@ -66,6 +67,18 @@ interface AgentEditorDraft {
   // Appended system prompt text.
   // 追加系统提示词文本。
   systemPromptAppend: string
+  // Fixed provider id; empty means follow the parent session model.
+  // 固定供应商标识；为空表示跟随父会话模型。
+  fixedModelProviderId: string
+  // Fixed model id; empty means follow the parent session model.
+  // 固定模型标识；为空表示跟随父会话模型。
+  fixedModelId: string
+  // Current backend availability diagnostic for the fixed model.
+  // 当前固定模型的后端可用性诊断。
+  fixedModelAvailable: boolean | null
+  // Current backend unavailable reason for the fixed model.
+  // 当前固定模型的后端不可用原因。
+  fixedModelUnavailableReason: string
   // Unified tool policy mode.
   // 统一工具策略模式。
   toolPolicyMode: CapabilityPolicyMode
@@ -347,6 +360,7 @@ export function AgentsArea(props: {
           onCancel={() => setEditorDraft(null)}
           onDraftChange={setEditorDraft}
           promptSkillOptions={editorPromptSkillOptions}
+          providers={props.workbench.providers}
           onSubmit={submitEditorDraft}
           toolOptions={editorToolOptions}
         />
@@ -503,6 +517,9 @@ function AgentEditorForm(props: {
   // Selectable prompt skill rows available to the three-state policy table.
   // 三态策略表可选择的提示词技能行。
   promptSkillOptions: AgentCapabilityPolicyOption[]
+  // Enabled provider/model rows available to the model picker.
+  // 模型选择器可用的已启用供应商/模型行。
+  providers: WorkbenchSnapshot["providers"]
   // Submits the current draft.
   // 提交当前草稿。
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
@@ -518,6 +535,10 @@ function AgentEditorForm(props: {
   const selectedMetadataLocale = draft?.metadataLocale ?? defaultAgentMetadataLocale(locale)
   const selectedMetadataName = draft?.localizedNames[selectedMetadataLocale] ?? ""
   const selectedMetadataDescription = draft?.localizedDescriptions[selectedMetadataLocale] ?? ""
+  const fixedModelValue = draft?.fixedModelProviderId && draft.fixedModelId ? `${draft.fixedModelProviderId}/${draft.fixedModelId}` : ""
+  const fixedModelMissingFromChoices = Boolean(fixedModelValue && !modelPickerChoiceExists(props.providers, fixedModelValue))
+  const fixedModelUnavailable = Boolean(fixedModelValue && (draft?.fixedModelAvailable === false || fixedModelMissingFromChoices))
+  const fixedModelUnavailableReason = draft?.fixedModelUnavailableReason || text("当前固定模型不在可用模型列表中，运行时会回退到会话模型。", "This fixed model is not in the available model list; runtime will fall back to the session model.")
   // updateDraftField applies one field update while preserving the rest of the draft.
   // updateDraftField 在保留其余草稿字段的同时应用单字段更新。
   const updateDraftField = React.useCallback(<Key extends keyof AgentEditorDraft>(key: Key, value: AgentEditorDraft[Key]) => {
@@ -624,6 +645,43 @@ function AgentEditorForm(props: {
                 <span>{text("追加提示词", "Prompt append")}</span>
                 <textarea autoFocus={readOnlySystemMetadata} disabled={props.busy} rows={5} value={draft.systemPromptAppend} onChange={(event) => updateDraftField("systemPromptAppend", event.target.value)} />
               </label>
+              <div className="wide agent-editor-model-field">
+                <span>{text("模型", "Model")}</span>
+                <div className="settings-card-actions">
+                  <ModelPickerControl
+                    ariaLabel={text("选择智能体固定模型", "Choose fixed agent model")}
+                    fallbackLabel={text("选择模型", "Select model")}
+                    filterPlaceholder={text("输入模型名称、ID 或 Provider 过滤", "Filter by model name, id, or provider")}
+                    noMatchesLabel={text("当前过滤条件下没有匹配模型。", "No models match the current filter.")}
+                    providers={props.providers}
+                    value={fixedModelValue}
+                    unavailableValueLabel={fixedModelValue ? `${text("不可用", "Unavailable")}: ${fixedModelValue}` : undefined}
+                    disabled={props.busy}
+                    onValueChange={(choice) => props.onDraftChange({
+                      ...draft,
+                      fixedModelProviderId: choice.providerId,
+                      fixedModelId: choice.modelId,
+                      fixedModelAvailable: true,
+                      fixedModelUnavailableReason: "",
+                    })}
+                  />
+                  <button
+                    className="skill-action-button secondary"
+                    disabled={props.busy || !fixedModelValue}
+                    onClick={() => props.onDraftChange({ ...draft, fixedModelProviderId: "", fixedModelId: "", fixedModelAvailable: null, fixedModelUnavailableReason: "" })}
+                    type="button"
+                  >
+                    <RotateCcw size={14} />
+                    <span>{text("跟随会话", "Follow session")}</span>
+                  </button>
+                </div>
+                <small className="settings-muted-line">
+                  {fixedModelValue ? `${text("固定模型", "Fixed model")}: ${draft.fixedModelProviderId}/${draft.fixedModelId}` : text("当前跟随会话模型。", "Currently follows the session model.")}
+                </small>
+                {fixedModelUnavailable ? (
+                  <small className="settings-muted-line">{fixedModelUnavailableReason}</small>
+                ) : null}
+              </div>
               <div className="wide">
                 <AgentCapabilityPolicyTable
                   disabled={props.busy}
@@ -1023,6 +1081,9 @@ function AgentDefinitionCard(props: {
   const userOwnedDefinition = (definition.scopeKey === "user" || definition.scopeKey === "package") && !definition.overrideOf
   const editableDefinition = userOwnedDefinition || definition.scopeKey === "system" || Boolean(definition.overrideOf)
   const toolAccessLabel = agentDefinitionToolAccessLabel(definition, locale)
+  const fixedModelSelector = agentDefinitionFixedModelSelector(definition)
+  const fixedModelUnavailable = agentDefinitionFixedModelUnavailable(definition)
+  const fixedModelTitle = agentDefinitionFixedModelTitle(definition, locale)
   return (
     <article className="agent-definition-row">
       <button className="agent-definition-row-icon" onClick={() => props.onOpenDetail(definition)} title={t("skills.action.details")} type="button">
@@ -1038,6 +1099,11 @@ function AgentDefinitionCard(props: {
             {definition.categoryId ? <Badge variant="outline" title={definition.categoryId}>{categoryLabel}</Badge> : null}
             {definition.packageId ? <Badge variant="outline">{definition.packageId}</Badge> : null}
             {definition.remoteUrl ? <Badge variant="outline">Remote</Badge> : null}
+            {fixedModelSelector ? (
+              <Badge variant={fixedModelUnavailable ? "destructive" : "outline"} title={fixedModelTitle}>
+                {fixedModelUnavailable ? text("固定模型不可用", "Fixed model unavailable") : text("固定模型", "Fixed model")}
+              </Badge>
+            ) : null}
             <AgentSourceOriginLink origin={definition.sourceOrigin} />
           </div>
         </div>
@@ -1095,6 +1161,7 @@ function AgentDefinitionDetailDialog(props: {
   const text = React.useCallback((zh: string, en: string) => localizedAgentLiteral(locale, zh, en), [locale])
   const definition = props.definition
   const displayName = definition ? localizedDefinitionName(definition, locale) : null
+  const modelDetail = definition ? agentDefinitionProviderModelDetail(definition, locale) : null
   return (
     <Dialog open={props.open && definition !== null} onOpenChange={props.onOpenChange}>
       <DialogContent className="agent-skill-detail-dialog">
@@ -1120,6 +1187,10 @@ function AgentDefinitionDetailDialog(props: {
               <div>
                 <span>Prompt Skills</span>
                 <strong>{definition.enabledPromptSkillCount} allow / {definition.disabledPromptSkillCount} deny</strong>
+              </div>
+              <div className="wide">
+                <span>{text("模型", "Model")}</span>
+                <strong title={modelDetail?.title}>{modelDetail?.label}</strong>
               </div>
               <div className="wide">
                 <span>{text("定义文件", "Definition file")}</span>
@@ -1189,6 +1260,10 @@ function emptyAgentDraft(metadataLocale: AgentMetadataLocale): AgentEditorDraft 
     enabled: true,
     systemPrompt: "",
     systemPromptAppend: "",
+    fixedModelProviderId: "",
+    fixedModelId: "",
+    fixedModelAvailable: null,
+    fixedModelUnavailableReason: "",
     toolPolicyMode: "all",
     toolPolicyTools: "",
     promptSkillPolicyMode: "all",
@@ -1221,6 +1296,10 @@ function draftFromDefinition(definition: SubagentDefinitionSummary, metadataLoca
     enabled: definition.enabled,
     systemPrompt: definition.systemPrompt ?? "",
     systemPromptAppend: definition.systemPromptAppend ?? "",
+    fixedModelProviderId: definition.providerModel?.providerId ?? "",
+    fixedModelId: definition.providerModel?.modelId ?? "",
+    fixedModelAvailable: definition.providerModel?.available ?? null,
+    fixedModelUnavailableReason: definition.providerModel?.unavailableReason ?? "",
     toolPolicyMode: normalizedCapabilityPolicyMode(definition.toolPolicyMode, definition.allowedTools, definition.disabledTools),
     toolPolicyTools: listText(definition.toolPolicyTools?.length ? definition.toolPolicyTools : legacyPolicyTools(definition.allowedTools, definition.disabledTools)),
     promptSkillPolicyMode: normalizedCapabilityPolicyMode(definition.promptSkillPolicyMode, definition.enabledPromptSkills, definition.disabledPromptSkills),
@@ -1253,6 +1332,10 @@ function saveRequestFromDraft(draft: AgentEditorDraft): SubagentDefinitionSaveRe
     enabled: draft.enabled,
     systemPrompt: nonEmptyText(draft.systemPrompt),
     systemPromptAppend: nonEmptyText(draft.systemPromptAppend),
+    providerModel: {
+      providerId: nonEmptyText(draft.fixedModelProviderId),
+      modelId: nonEmptyText(draft.fixedModelId),
+    },
     allowedTools: [],
     disabledTools: [],
     toolPolicyMode: draft.toolPolicyMode,
@@ -1277,6 +1360,18 @@ function normalizedAgentEditorDraftFileIdentity(draft: AgentEditorDraft): AgentE
     originalAgentId: normalizeAgentFileNameInput(draft.originalAgentId),
     packageId: normalizeAgentPackageIdInput(draft.packageId),
   }
+}
+
+// modelPickerChoiceExists returns whether a provider/model key is currently selectable.
+// modelPickerChoiceExists 返回某个供应商/模型键当前是否可被选择。
+function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], value: string): boolean {
+  return providers.some((provider) => (provider.models ?? []).some((model) => modelPickerChoiceKey({
+    providerId: provider.id,
+    providerName: provider.name,
+    modelId: model.id,
+    modelName: model.name,
+    active: Boolean(model.active),
+  }) === value))
 }
 
 // normalizeAgentFileNameInput keeps the editable value as a file stem without a trailing extension.
@@ -1681,6 +1776,55 @@ function agentDefinitionSearchableText(definition: SubagentDefinitionSummary): s
 // agentDefinitionToolAccessLabel 返回单行使用的紧凑工具暴露摘要。
 function agentDefinitionToolAccessLabel(definition: SubagentDefinitionSummary, locale: string): string {
   return localizedAgentToolPolicyLabel(definition.toolPolicyMode, definition.toolPolicyTools.length, locale)
+}
+
+// agentDefinitionFixedModelSelector returns the fixed provider/model selector for one definition.
+// agentDefinitionFixedModelSelector 返回单个定义的固定供应商/模型选择器。
+function agentDefinitionFixedModelSelector(definition: SubagentDefinitionSummary): string | null {
+  const selector = definition.providerModel?.selector?.trim()
+  if (selector) {
+    return selector
+  }
+  const providerId = definition.providerModel?.providerId?.trim()
+  const modelId = definition.providerModel?.modelId?.trim()
+  return providerId && modelId ? `${providerId}/${modelId}` : null
+}
+
+// agentDefinitionFixedModelUnavailable returns whether the configured fixed model is unavailable.
+// agentDefinitionFixedModelUnavailable 返回已配置固定模型当前是否不可用。
+function agentDefinitionFixedModelUnavailable(definition: SubagentDefinitionSummary): boolean {
+  return Boolean(agentDefinitionFixedModelSelector(definition) && definition.providerModel?.available === false)
+}
+
+// agentDefinitionFixedModelTitle returns the tooltip text for a fixed-model badge.
+// agentDefinitionFixedModelTitle 返回固定模型徽标的悬停提示文本。
+function agentDefinitionFixedModelTitle(definition: SubagentDefinitionSummary, locale: string): string {
+  const selector = agentDefinitionFixedModelSelector(definition)
+  if (!selector) {
+    return localizedAgentLiteral(locale, "跟随会话模型", "Follow session model")
+  }
+  const unavailableReason = definition.providerModel?.unavailableReason?.trim()
+  if (definition.providerModel?.available === false && unavailableReason) {
+    return `${selector} - ${unavailableReason}`
+  }
+  return selector
+}
+
+// agentDefinitionProviderModelDetail returns detail-dialog copy for one definition's model binding.
+// agentDefinitionProviderModelDetail 返回详情弹窗中单个定义的模型绑定文案。
+function agentDefinitionProviderModelDetail(definition: SubagentDefinitionSummary, locale: string): { label: string; title: string } {
+  const selector = agentDefinitionFixedModelSelector(definition)
+  if (!selector) {
+    const label = localizedAgentLiteral(locale, "跟随会话模型", "Follow session model")
+    return { label, title: label }
+  }
+  const unavailableReason = definition.providerModel?.unavailableReason?.trim()
+  if (definition.providerModel?.available === false) {
+    const label = localizedAgentLiteral(locale, `固定模型不可用：${selector}`, `Fixed model unavailable: ${selector}`)
+    return { label, title: unavailableReason ? `${selector} - ${unavailableReason}` : selector }
+  }
+  const label = localizedAgentLiteral(locale, `固定模型：${selector}`, `Fixed model: ${selector}`)
+  return { label, title: selector }
 }
 
 // localizedAgentToolPolicyLabel returns the compact row badge for tool policy.

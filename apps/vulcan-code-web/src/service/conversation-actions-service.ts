@@ -440,6 +440,15 @@ export async function stopSubagentTask(parentConversationId: string, taskId: str
   return serviceClient.request<SubagentPanelRouteResponse>("service_stop_subagent_task", { parentConversationId, taskId });
 }
 
+// closeSubagentTask asks the backend to close one child agent lifecycle through the direct service runtime path.
+// closeSubagentTask 请求后端通过独立服务运行时路径关闭单个子智能体生命周期。
+export async function closeSubagentTask(parentConversationId: string, taskId: string): Promise<SubagentPanelRouteResponse | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<SubagentPanelRouteResponse>("service_close_subagent_task", { parentConversationId, taskId });
+}
+
 // editPendingPrompt restores one queued prompt from the selected conversation queue.
 // editPendingPrompt 从当前选中会话队列恢复单条排队提示词。
 export async function editPendingPrompt(entryId: string): Promise<PendingPromptSummary | null> {

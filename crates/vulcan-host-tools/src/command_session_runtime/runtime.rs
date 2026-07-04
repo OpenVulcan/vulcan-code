@@ -45,6 +45,7 @@ impl CommandSessionRuntime {
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         command.kill_on_drop(true);
+        apply_windows_release_no_window(&mut command);
 
         let mut child = command.spawn().map_err(|error| {
             format!(

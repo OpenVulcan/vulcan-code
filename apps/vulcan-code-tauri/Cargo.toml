@@ -12,6 +12,7 @@ tauri-build = { version = "=2.6.2", features = [] }
 [dependencies]
 tauri = { version = "=2.11.2", features = [] }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+vulcan-host-tools.workspace = true
 vulcan-service-api.workspace = true
 vulcan-service-host.workspace = true
 vulcan-service-kernel.workspace = true

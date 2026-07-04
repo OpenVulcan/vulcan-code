@@ -126,7 +126,7 @@ pub(crate) async fn refresh_workbench_snapshot(
         );
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
-            subagent_navigation_snapshot_from_state(&mut guard, &refreshed_snapshot),
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot),
             guard.session_goal_summaries.clone(),
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
@@ -751,7 +751,7 @@ pub(crate) fn workbench_from_runtime(
         plugins: plugins_from_luaskills(luaskills_catalog),
         lua_skills: lua_skills_catalog_summary(luaskills_catalog, provider_configuration),
         agent_skills: agent_skills_catalog_summary(provider_configuration),
-        subagent_catalog: subagent_catalog_summary(),
+        subagent_catalog: subagent_catalog_summary(provider_configuration),
         settings: settings(),
         providers: providers(provider_configuration),
         mcp_servers: mcp_servers(provider_configuration),

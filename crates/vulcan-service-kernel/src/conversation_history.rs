@@ -16,12 +16,14 @@ use vulcan_workspace_store::workspace_store::{SessionHistoryPage, WorkspaceSnaps
 use super::{
     SELECTED_SESSION_TURN_LOAD_LIMIT, SharedServiceBridgeState, active_kernel_session_ids,
     active_surface_messages_from_workspace_and_state, append_hydrated_workspace_messages,
-    apply_hydration_to_selected_workspace_snapshot, cached_luaskills_catalog_from_state,
+    apply_hydration_to_selected_workspace_snapshot, apply_webui_unclosed_subagent_metadata_preload,
+    cached_luaskills_catalog_from_state,
     cached_mcp_catalog_from_state, capture_preserved_workspace_run_state,
     conversation_messages_from_session, emit_workbench_event,
-    load_selected_session_display_hydration, native_tool_summaries_from_agent_runtime,
-    pending_question_snapshots_from_agent_runtime, preserve_active_session_run_state,
-    subagent_navigation_snapshot_from_state, sync_selected_session_goal_summary_from_store,
+    load_selected_session_display_hydration, load_webui_unclosed_subagent_metadata_preload,
+    native_tool_summaries_from_agent_runtime, pending_question_snapshots_from_agent_runtime,
+    preserve_active_session_run_state, subagent_navigation_snapshot_from_cached_state,
+    sync_selected_session_goal_summary_from_store,
     workbench_from_runtime, workspace_surface_allows_user_prompt_editing,
 };
 
@@ -185,7 +187,7 @@ fn retained_hydrated_session_messages_response(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let (window, session_messages, allow_user_prompt_editing) = {
+    let (session_messages, allow_user_prompt_editing) = {
         let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
             return Ok(None);
         };
@@ -195,13 +197,6 @@ fn retained_hydrated_session_messages_response(
         {
             return Ok(None);
         }
-        let Some(window) = guard
-            .hydrated_conversation_windows
-            .get(&parsed_session_id)
-            .copied()
-        else {
-            return Ok(None);
-        };
         let Some(session_messages) = workspace_snapshot
             .session_messages
             .get(&parsed_session_id)
@@ -214,8 +209,15 @@ fn retained_hydrated_session_messages_response(
             parsed_session_id,
             None,
         );
-        (window, session_messages, allow_user_prompt_editing)
+        (session_messages, allow_user_prompt_editing)
     };
+    let window = *guard
+        .hydrated_conversation_windows
+        .entry(parsed_session_id)
+        .or_insert(HydratedConversationWindowState {
+            earliest_ordinal: None,
+            has_more_history: false,
+        });
     if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
         workspace_snapshot.selected_session = parsed_session_id;
     }
@@ -225,9 +227,16 @@ fn retained_hydrated_session_messages_response(
         &session_messages,
         allow_user_prompt_editing,
     );
-    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() {
+    let workspace_snapshot_for_projection = guard.workspace_snapshot.as_ref().cloned();
+    if let Some(workspace_snapshot) = workspace_snapshot_for_projection.as_ref() {
         append_hydrated_workspace_messages(&mut messages, workspace_snapshot);
     }
+    let subagent_navigation =
+        workspace_snapshot_for_projection
+            .as_ref()
+            .and_then(|workspace_snapshot| {
+                subagent_navigation_snapshot_from_cached_state(&mut guard, workspace_snapshot)
+            });
     let progress = conversation_hydration_progress(
         session_id,
         ConversationHydrationStatus::Ready,
@@ -240,7 +249,7 @@ fn retained_hydrated_session_messages_response(
     guard.workbench.hydrated_conversation_windows =
         hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
     guard.workbench.conversation_hydration = Some(progress.clone());
-    guard.workbench.subagent_navigation = None;
+    guard.workbench.subagent_navigation = subagent_navigation;
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     let workbench = guard.workbench.clone();
@@ -491,6 +500,30 @@ pub(super) async fn load_hydrated_session_workbench(
         parsed_session_id,
     )
     .await?;
+    emit_conversation_hydration_progress(
+        app,
+        state,
+        conversation_hydration_progress(
+            session_id,
+            ConversationHydrationStatus::Loading,
+            "loadingSubagents",
+            88,
+            "正在恢复未关闭智能体索引。",
+        ),
+    )?;
+    let subagent_metadata_preload =
+        load_webui_unclosed_subagent_metadata_preload(&refreshed_snapshot, parsed_session_id);
+    emit_conversation_hydration_progress(
+        app,
+        state,
+        conversation_hydration_progress(
+            session_id,
+            ConversationHydrationStatus::Loading,
+            "projecting",
+            95,
+            "正在整理显示数据。",
+        ),
+    )?;
     let (surface_messages, subagent_navigation, session_goal_summaries, hydrated_windows) = {
         let mut guard = state
             .lock()
@@ -505,6 +538,7 @@ pub(super) async fn load_hydrated_session_workbench(
             preserved_workspace_run_state.as_ref(),
             &mut refreshed_snapshot,
         );
+        apply_webui_unclosed_subagent_metadata_preload(&mut guard, subagent_metadata_preload);
         let mut hydrated_windows = guard.hydrated_conversation_windows.clone();
         remember_hydrated_conversation_window(
             &mut hydrated_windows,
@@ -518,7 +552,7 @@ pub(super) async fn load_hydrated_session_workbench(
         );
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
-            subagent_navigation_snapshot_from_state(&mut guard, &refreshed_snapshot),
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot),
             guard.session_goal_summaries.clone(),
             hydrated_windows,
         )

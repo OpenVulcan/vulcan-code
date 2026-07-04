@@ -76,9 +76,16 @@ pub(crate) fn replace_display_messages_with_runtime_state_records(
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) {
-    let messages = filter_display_session_messages(conversation_state_to_session_messages(
+    let mut messages = filter_display_session_messages(conversation_state_to_session_messages(
         &runtime_state.conversation_state,
     ));
+    if let Some(existing_messages) = workspace_snapshot.session_messages.get(&session_id) {
+        for existing_message in existing_messages {
+            if session_message_is_display_only_agent_message(existing_message) {
+                push_display_session_message_once(&mut messages, existing_message.clone());
+            }
+        }
+    }
     if messages.is_empty() {
         workspace_snapshot.session_messages.remove(&session_id);
     } else {
@@ -88,17 +95,156 @@ pub(crate) fn replace_display_messages_with_runtime_state_records(
     }
 }
 
+const INTER_AGENT_MESSAGES_HEADER: &str = "[Inter-agent messages]";
+
 /// Keeps only transcript entries intended for normal user-facing display.
 /// 仅保留用于常规用户可见显示的转录条目。
 pub(crate) fn filter_display_session_messages(
     messages: Vec<SessionMessageEntry>,
 ) -> Vec<SessionMessageEntry> {
-    messages
+    let mut display_messages = Vec::new();
+    for message in messages {
+        for projected_message in project_display_session_message(message) {
+            push_display_session_message_once(&mut display_messages, projected_message);
+        }
+    }
+    display_messages
+}
+
+/// Returns whether one session transcript entry belongs in user-facing display projections.
+/// 返回单条会话转录项是否应进入面向用户的显示投影。
+pub(crate) fn session_message_is_display_visible(message: &SessionMessageEntry) -> bool {
+    message.is_visible_to_user()
+        && !session_message_is_legacy_goal_internal_user_prompt(message)
+        && !session_message_is_internal_agent_message_injection(message)
+}
+
+/// Projects one transcript row into zero or more user-facing display rows.
+/// 将单条转录行投影为零条或多条面向用户的显示行。
+fn project_display_session_message(message: SessionMessageEntry) -> Vec<SessionMessageEntry> {
+    if let Some(messages) = project_internal_inter_agent_message_injection(&message) {
+        return messages;
+    }
+    session_message_is_display_visible(&message)
+        .then_some(message)
         .into_iter()
-        .filter(SessionMessageEntry::is_visible_to_user)
-        .filter(|message| !session_message_is_legacy_goal_internal_user_prompt(message))
-        .filter(|message| !session_message_is_internal_agent_message_injection(message))
         .collect()
+}
+
+/// Appends one display row while suppressing duplicate display-only agent messages.
+/// 追加一条显示行，同时抑制重复的仅显示智能体消息。
+fn push_display_session_message_once(
+    display_messages: &mut Vec<SessionMessageEntry>,
+    message: SessionMessageEntry,
+) {
+    if display_messages.iter().any(|existing| {
+        existing.id == message.id
+            || (session_message_is_display_only_agent_message(existing)
+                && session_message_is_display_only_agent_message(&message)
+                && existing.body.trim() == message.body.trim())
+    }) {
+        return;
+    }
+    display_messages.push(message);
+}
+
+/// Returns whether one display row is the UI-only form of a parent-to-child agent message.
+/// 返回单条显示行是否为父级发给子智能体消息的仅 UI 形态。
+fn session_message_is_display_only_agent_message(message: &SessionMessageEntry) -> bool {
+    message.record_kind == SessionMessageRecordKind::DisplayNote
+        && message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("kind"))
+            .and_then(Value::as_str)
+            == Some("subagent_message")
+        && message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool"))
+            .and_then(Value::as_str)
+            == Some("send_message")
+}
+
+/// Projects one internal parent-to-child injection prompt into friendly display rows.
+/// 将一条内部父到子注入提示词投影成友好的显示行。
+fn project_internal_inter_agent_message_injection(
+    message: &SessionMessageEntry,
+) -> Option<Vec<SessionMessageEntry>> {
+    let payloads = parse_inter_agent_message_payloads(message.body.trim_start())?;
+    let source_id = if message.id.trim().is_empty() {
+        format!("inter-agent-message-{}", message.created_at)
+    } else {
+        message.id.clone()
+    };
+    let created_at = message.created_at.clone();
+    let messages = payloads
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, payload)| {
+            let payload = payload.trim();
+            if payload.is_empty() {
+                return None;
+            }
+            let mut entry = SessionMessageEntry::new(
+                SessionMessageKind::User,
+                "智能体消息",
+                payload.to_string(),
+            )
+            .with_runtime_metadata(
+                format!("{source_id}-display-message-{}", index + 1),
+                created_at.clone(),
+            );
+            entry.record_kind = SessionMessageRecordKind::DisplayNote;
+            entry.metadata = Some(json!({
+                "display_note": true,
+                "kind": "subagent_message",
+                "tool": "send_message",
+                "source": "inter_agent_messages",
+                "message_index": index + 1,
+            }));
+            Some(entry)
+        })
+        .collect::<Vec<_>>();
+    Some(messages)
+}
+
+/// Parses the child-agent inbox prompt generated by the runtime into message payloads.
+/// 将运行时生成的子智能体 inbox 提示词解析为消息正文集合。
+fn parse_inter_agent_message_payloads(body: &str) -> Option<Vec<String>> {
+    let body = body.trim_start();
+    if !body.starts_with(INTER_AGENT_MESSAGES_HEADER) {
+        return None;
+    }
+    let normalized = body.replace("\r\n", "\n");
+    let mut payloads = Vec::new();
+    let mut current_payload: Option<Vec<String>> = None;
+    for line in normalized.lines().skip(1) {
+        if inter_agent_message_header_line(line) {
+            if let Some(lines) = current_payload.take() {
+                payloads.push(lines.join("\n"));
+            }
+            current_payload = Some(Vec::new());
+            continue;
+        }
+        if let Some(lines) = current_payload.as_mut() {
+            lines.push(line.to_string());
+        }
+    }
+    if let Some(lines) = current_payload {
+        payloads.push(lines.join("\n"));
+    }
+    Some(payloads)
+}
+
+/// Returns whether one line is the generated delimiter before an inter-agent message payload.
+/// 返回单行文本是否为代理间消息正文前的生成分隔行。
+fn inter_agent_message_header_line(line: &str) -> bool {
+    line.starts_with("Message ")
+        && line.contains(" from ")
+        && line.contains(" to ")
+        && line.contains(" via send_message at ")
+        && line.ends_with(':')
 }
 
 /// Removes legacy persisted Goal internal prompts that were incorrectly stored as user messages.
@@ -142,8 +288,11 @@ pub(crate) fn session_message_is_legacy_goal_internal_user_prompt(
         || body.starts_with("The active thread goal objective was edited by the user.")
 }
 
-/// Returns whether one message is an internal inter-agent XML injection row.
-/// 返回单条消息是否为内部代理间 XML 注入行。
-fn session_message_is_internal_agent_message_injection(message: &SessionMessageEntry) -> bool {
-    message.body.trim_start().starts_with("<agent_message>")
+/// Returns whether one message is an internal inter-agent injection row.
+/// 返回单条消息是否为内部代理间注入行。
+pub(crate) fn session_message_is_internal_agent_message_injection(
+    message: &SessionMessageEntry,
+) -> bool {
+    let body = message.body.trim_start();
+    body.starts_with("<agent_message>") || body.starts_with(INTER_AGENT_MESSAGES_HEADER)
 }

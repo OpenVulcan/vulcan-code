@@ -7,13 +7,13 @@ use serde::{Deserialize, Serialize};
 /// 子代理创建工具的稳定公开名称。
 pub const SPAWN_AGENT_TOOL: &str = "spawn_agent";
 
-/// Stable public name for the child-agent queue-only message tool.
-/// 子代理仅入队消息工具的稳定公开名称。
+/// Stable public name for the child-agent message tool.
+/// 子代理消息工具的稳定公开名称。
 pub const SEND_MESSAGE_TOOL: &str = "send_message";
 
-/// Stable public name for the child-agent follow-up task tool.
-/// 子代理后续任务工具的稳定公开名称。
-pub const FOLLOWUP_TASK_TOOL: &str = "followup_task";
+/// Stable public name for the child-agent orchestration information tool.
+/// 子代理调度信息查询工具的稳定公开名称。
+pub const AGENT_ORCHESTRATION_INFO_TOOL: &str = "agent_orchestration_info";
 
 /// Stable public name for the child-agent wait tool.
 /// 子代理等待工具的稳定公开名称。
@@ -26,6 +26,10 @@ pub const LIST_AGENTS_TOOL: &str = "list_agents";
 /// Stable public name for the child-agent interrupt tool.
 /// 子代理中断工具的稳定公开名称。
 pub const INTERRUPT_AGENT_TOOL: &str = "interrupt_agent";
+
+/// Stable public name for the child-agent close tool.
+/// 子代理关闭工具的稳定公开名称。
+pub const CLOSE_AGENT_TOOL: &str = "close_agent";
 
 /// Canonical host-result kind for one Vulcan child-agent task.
 /// Vulcan 子代理任务的规范宿主结果类型。
@@ -49,12 +53,13 @@ pub const STOPPED_SUBAGENT_TASK_IDS_KEY: &str = "stopped_subagent_task_ids";
 
 /// Implemented core subagent tool names exposed to the model.
 /// 已实现并暴露给模型的规范核心子代理工具名称。
-pub const CORE_SUBAGENT_TOOLS: [&str; 6] = [
+pub const CORE_SUBAGENT_TOOLS: [&str; 7] = [
     SPAWN_AGENT_TOOL,
+    AGENT_ORCHESTRATION_INFO_TOOL,
     SEND_MESSAGE_TOOL,
-    FOLLOWUP_TASK_TOOL,
     WAIT_AGENT_TOOL,
     INTERRUPT_AGENT_TOOL,
+    CLOSE_AGENT_TOOL,
     LIST_AGENTS_TOOL,
 ];
 

@@ -20,6 +20,7 @@ impl TaskRuntime {
             subagent_registry: RwLock::new(SubagentRegistry::new()),
             subagent_catalog: RwLock::new(SubagentCatalog::default()),
             task_session_store_roots: RwLock::new(HashMap::new()),
+            restored_task_session_registry_roots: RwLock::new(BTreeSet::new()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
         }
     }
@@ -209,6 +210,14 @@ impl TaskRuntime {
                 String::from("The task-session store root registry is locked and cannot update.")
             })?
             .insert(root_session_id, root_session_dir);
+        self.restored_task_session_registry_roots
+            .write()
+            .map_err(|_| {
+                String::from(
+                    "The restored task-session registry marker is locked and cannot update.",
+                )
+            })?
+            .remove(&root_session_id);
         Ok(())
     }
 

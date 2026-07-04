@@ -1,4 +1,5 @@
 use super::*;
+use crate::process_creation::apply_windows_release_no_window_to_std_command;
 
 pub(super) async fn write_command_session_stdin(
     child_stdin: &mut ChildStdin,
@@ -24,9 +25,10 @@ pub(super) fn request_command_session_child_stop(child: &mut Child) -> Result<()
     #[cfg(windows)]
     {
         if let Some(process_id) = child.id() {
-            let taskkill_status = StdCommand::new("taskkill")
-                .args(["/PID", &process_id.to_string(), "/T", "/F"])
-                .status();
+            let mut taskkill = StdCommand::new("taskkill");
+            taskkill.args(["/PID", &process_id.to_string(), "/T", "/F"]);
+            apply_windows_release_no_window_to_std_command(&mut taskkill);
+            let taskkill_status = taskkill.status();
             if let Ok(status) = taskkill_status {
                 if status.success() {
                     return Ok(());

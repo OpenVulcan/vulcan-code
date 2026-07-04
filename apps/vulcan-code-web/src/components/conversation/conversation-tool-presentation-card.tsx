@@ -256,8 +256,6 @@ function SubagentOrchestrationDetail(props: {
               <SubagentOrchestrationAgentRow agent={agent} key={agent.id} t={t} />
             ))}
           </div>
-        ) : !presentation.note && !presentation.result ? (
-          <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.noAgents")}</div>
         ) : null}
       </div>
     );
@@ -268,6 +266,10 @@ function SubagentOrchestrationDetail(props: {
   // showResult controls whether model-facing dispatch acknowledgements are visible.
   // showResult 控制是否展示面向模型的调度确认内容。
   const showResult = Boolean(resultText);
+  // showStoppedCount records whether the stop count adds useful information to the control row.
+  // showStoppedCount 记录停止数量是否为控制行补充了有效信息。
+  const showStoppedCount = presentation.operation === "control"
+    && presentation.stoppedCount > 0;
   // hasVisibleBody records whether the expanded area has user-facing content.
   // hasVisibleBody 记录展开区是否存在面向用户的内容。
   const hasVisibleBody = Boolean(presentation.prompt || presentation.effectivePrompt || presentation.debugSummary || showResult || presentation.operation === "control");
@@ -296,10 +298,26 @@ function SubagentOrchestrationDetail(props: {
         <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={resultText} />
       ) : null}
       {presentation.operation === "control" ? (
-        <div className="subagent-orchestration-meta">
-          <span>{t("conversation.subagent.detail.stoppedCount")}</span>
-          <strong>{presentation.stoppedCount}</strong>
-        </div>
+        <>
+          {presentation.closedCount > 0 || presentation.closedAgents.length > 0 ? (
+            <div className="subagent-orchestration-meta">
+              <span>{t("conversation.subagent.detail.closedCount")}</span>
+              <strong>{presentation.closedCount}</strong>
+            </div>
+          ) : null}
+          {showStoppedCount ? (
+            <div className="subagent-orchestration-meta">
+              <span>{t("conversation.subagent.detail.stoppedCount")}</span>
+              <strong>{presentation.stoppedCount}</strong>
+            </div>
+          ) : null}
+          {presentation.clearedMessageCount !== null && presentation.clearedMessageCount !== undefined ? (
+            <div className="subagent-orchestration-meta">
+              <span>{t("conversation.subagent.detail.clearedMessages")}</span>
+              <strong>{presentation.clearedMessageCount}</strong>
+            </div>
+          ) : null}
+        </>
       ) : null}
       {!hasVisibleBody ? (
         <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.empty")}</div>
@@ -405,13 +423,25 @@ function subagentSummaryText(
       : t("conversation.subagent.detail.waitCompleted");
   }
   if (presentation.operation === "collect") {
+    if (!presentation.agentsKnown) {
+      return t("conversation.subagent.detail.collection");
+    }
+    if (presentation.agents.length === 0) {
+      return t("conversation.subagent.detail.collection");
+    }
     return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
   }
   if (presentation.operation === "message") {
     return presentation.target ?? presentation.title;
   }
   if (presentation.operation === "control") {
-    return presentation.target ?? `${presentation.stoppedCount}`;
+    if (presentation.closedCount > 0) {
+      return `${presentation.closedCount} ${t("conversation.subagent.detail.closedAgents")}`;
+    }
+    if (presentation.stoppedCount > 0) {
+      return presentation.target ?? `${presentation.stoppedCount}`;
+    }
+    return presentation.target ?? t("conversation.subagent.detail.control");
   }
   return presentation.title;
 }

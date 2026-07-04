@@ -390,11 +390,13 @@
   cursor: default;
 }
 
-.conversation-session-terminal-tooltip {
+.conversation-session-terminal-tooltip,
+.conversation-session-subagent-tooltip {
   max-width: min(560px, calc(100vw - 48px));
 }
 
-.conversation-session-terminal-tooltip pre {
+.conversation-session-terminal-tooltip pre,
+.conversation-session-subagent-tooltip pre {
   margin: 0;
   color: inherit;
   font-family: var(--font-mono);
@@ -573,10 +575,7 @@
 }
 
 .conversation-session-subagent-state {
-  max-width: 84px;
-  overflow: hidden;
   color: var(--muted-foreground);
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
   font-weight: 600;

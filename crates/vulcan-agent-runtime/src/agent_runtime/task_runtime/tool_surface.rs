@@ -17,10 +17,11 @@ pub(super) const WAIT_AGENT_MAX_TIMEOUT_MS: u64 = 3_600_000;
 pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<VulcanToolCandidate> {
     vec![
         build_spawn_agent_tool_candidate(Arc::clone(&task_runtime)),
+        build_agent_orchestration_info_tool_candidate(Arc::clone(&task_runtime)),
         build_send_message_tool_candidate(Arc::clone(&task_runtime)),
-        build_followup_task_tool_candidate(Arc::clone(&task_runtime)),
         build_wait_agent_tool_candidate(Arc::clone(&task_runtime)),
         build_interrupt_agent_tool_candidate(Arc::clone(&task_runtime)),
+        build_close_agent_tool_candidate(Arc::clone(&task_runtime)),
         build_list_agents_tool_candidate(task_runtime),
     ]
 }
@@ -30,12 +31,11 @@ pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<Vul
 pub(super) fn build_spawn_agent_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
-    let description = spawn_agent_tool_description(&task_runtime);
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: String::from(SPAWN_AGENT_TOOL),
             name: String::from(SPAWN_AGENT_TOOL),
-            description,
+            description: spawn_agent_tool_description(),
             help_text: None,
             source: VulcanToolSourceKind::Native,
         },
@@ -73,59 +73,49 @@ pub(super) fn build_spawn_agent_tool_candidate(
     }
 }
 
-/// Builds the spawn_agent description with currently enabled expert catalog hints.
-/// 使用当前已启用专家目录提示构建 spawn_agent 描述。
-fn spawn_agent_tool_description(task_runtime: &TaskRuntime) -> String {
-    let base = "Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name \"task_3\" the agent will have canonical task name `/root/task1/task_3`. You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally. Ordinary Vulcan child agents do not receive subagent orchestration tools by default.";
-    match enabled_expert_catalog_hint(task_runtime) {
-        Some(hint) => format!("{base}\n\n{hint}"),
-        None => base.to_string(),
+/// Builds the stable spawn_agent description.
+/// 构建稳定的 spawn_agent 描述。
+fn spawn_agent_tool_description() -> String {
+    String::from(
+        "Create an open child agent for one concrete bounded subtask. Use creation_mode `agent` with an agent_id returned by agent_orchestration_info, `mirror` only when the child must inherit the current conversation context, `custom` with a one-off system_prompt, or `default` for a plain child agent. Do not guess agent_id or model selectors; query agent_orchestration_info first when you need them.",
+    )
+}
+
+/// Builds the model-visible child-agent orchestration information tool.
+/// 构建模型可见的子代理调度信息查询工具。
+pub(super) fn build_agent_orchestration_info_tool_candidate(
+    task_runtime: Arc<TaskRuntime>,
+) -> VulcanToolCandidate {
+    VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from(AGENT_ORCHESTRATION_INFO_TOOL),
+            name: String::from(AGENT_ORCHESTRATION_INFO_TOOL),
+            description: String::from(
+                "Return read-only child-agent orchestration information: enabled agent ids, creation modes, model selectors when available, and runtime counts. This tool never changes agents, models, or runtime state.",
+            ),
+            help_text: None,
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: agent_orchestration_info_args_schema(),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Hidden,
+        invoke: Arc::new(move |args, session_id| {
+            let task_runtime = Arc::clone(&task_runtime);
+            Box::pin(async move {
+                let session_id = parse_subagent_tool_session_id(
+                    session_id.as_deref(),
+                    AGENT_ORCHESTRATION_INFO_TOOL,
+                )?;
+                task_runtime
+                    .invoke_agent_orchestration_info(session_id, args)
+                    .await
+            })
+        }),
     }
 }
 
-/// Builds a compact model-visible list of enabled expert agent ids.
-/// 构建模型可见的紧凑已启用专家智能体标识列表。
-fn enabled_expert_catalog_hint(task_runtime: &TaskRuntime) -> Option<String> {
-    let catalog = task_runtime.subagent_catalog_snapshot().ok()?;
-    let mut enabled_experts = catalog
-        .definitions
-        .iter()
-        .filter(|definition| {
-            definition.enabled
-                && definition.mode == vulcan_task_session::SubagentDefinitionMode::Expert
-        })
-        .map(|definition| {
-            let description = definition
-                .description
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("No description provided.");
-            format!(
-                "- `{}`: {} - {}",
-                definition.id, definition.name, description
-            )
-        })
-        .collect::<Vec<_>>();
-    if enabled_experts.is_empty() {
-        return None;
-    }
-    let total_count = enabled_experts.len();
-    enabled_experts.truncate(24);
-    if total_count > enabled_experts.len() {
-        enabled_experts.push(format!(
-            "- ... {} additional enabled experts omitted from the tool description.",
-            total_count - enabled_experts.len()
-        ));
-    }
-    Some(format!(
-        "Enabled catalog-backed experts for `agent_mode: \"expert\"` and `agent_id`:\n{}",
-        enabled_experts.join("\n")
-    ))
-}
-
-/// Builds the model-visible child-agent queue-only message tool.
-/// 构建模型可见的子代理仅入队消息工具。
+/// Builds the model-visible child-agent message tool.
+/// 构建模型可见的子代理消息工具。
 pub(super) fn build_send_message_tool_candidate(
     task_runtime: Arc<TaskRuntime>,
 ) -> VulcanToolCandidate {
@@ -134,12 +124,12 @@ pub(super) fn build_send_message_tool_candidate(
             id: String::from(SEND_MESSAGE_TOOL),
             name: String::from(SEND_MESSAGE_TOOL),
             description: String::from(
-                "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn.",
+                "Send a message to an open child agent. Use delivery_mode `queue` to run after the current task, or `interrupt` to stop the current task and make this message the next task immediately. If the target is idle, either mode starts a new turn.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
         },
-        parameters_schema: inter_agent_message_args_schema(),
+        parameters_schema: send_message_args_schema(),
         ai_visible: true,
         plan_policy: VulcanPlanToolPolicy::Hidden,
         invoke: Arc::new(move |args, session_id| {
@@ -148,35 +138,6 @@ pub(super) fn build_send_message_tool_candidate(
                 let session_id =
                     parse_subagent_tool_session_id(session_id.as_deref(), SEND_MESSAGE_TOOL)?;
                 task_runtime.invoke_send_message(session_id, args).await
-            })
-        }),
-    }
-}
-
-/// Builds the model-visible child-agent follow-up message tool.
-/// 构建模型可见的子代理后续消息工具。
-pub(super) fn build_followup_task_tool_candidate(
-    task_runtime: Arc<TaskRuntime>,
-) -> VulcanToolCandidate {
-    VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from(FOLLOWUP_TASK_TOOL),
-            name: String::from(FOLLOWUP_TASK_TOOL),
-            description: String::from(
-                "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes.",
-            ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
-        parameters_schema: inter_agent_message_args_schema(),
-        ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::Hidden,
-        invoke: Arc::new(move |args, session_id| {
-            let task_runtime = Arc::clone(&task_runtime);
-            Box::pin(async move {
-                let session_id =
-                    parse_subagent_tool_session_id(session_id.as_deref(), FOLLOWUP_TASK_TOOL)?;
-                task_runtime.invoke_followup_task(session_id, args).await
             })
         }),
     }
@@ -221,7 +182,7 @@ pub(super) fn build_list_agents_tool_candidate(
             id: String::from(LIST_AGENTS_TOOL),
             name: String::from(LIST_AGENTS_TOOL),
             description: String::from(
-                "List known child agents and their current status. This tool does not collect child-agent results and does not consume mailbox updates; use wait_agent to wait for activity, then continue normally so pending inter-agent messages can enter the next model request.",
+                "List known open child agents and their current status, including completed agents that have not been closed. This tool does not collect child-agent results and does not consume mailbox updates; use wait_agent to wait for activity, then continue normally so pending inter-agent messages can enter the next model request.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -250,7 +211,7 @@ pub(super) fn build_interrupt_agent_tool_candidate(
             id: String::from(INTERRUPT_AGENT_TOOL),
             name: String::from(INTERRUPT_AGENT_TOOL),
             description: String::from(
-                "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.",
+                "Interrupt an open child agent's current turn, if any, and return its previous status. The agent remains open and available for future send_message calls.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -269,6 +230,35 @@ pub(super) fn build_interrupt_agent_tool_candidate(
     }
 }
 
+/// Builds the model-visible child-agent close tool.
+/// 构建模型可见的子代理关闭工具。
+pub(super) fn build_close_agent_tool_candidate(
+    task_runtime: Arc<TaskRuntime>,
+) -> VulcanToolCandidate {
+    VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from(CLOSE_AGENT_TOOL),
+            name: String::from(CLOSE_AGENT_TOOL),
+            description: String::from(
+                "Close an open child agent and stop any active work it owns. A closed agent is no longer returned by default list_agents and cannot receive send_message calls.",
+            ),
+            help_text: None,
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: close_agent_args_schema(),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Hidden,
+        invoke: Arc::new(move |args, session_id| {
+            let task_runtime = Arc::clone(&task_runtime);
+            Box::pin(async move {
+                let session_id =
+                    parse_subagent_tool_session_id(session_id.as_deref(), CLOSE_AGENT_TOOL)?;
+                task_runtime.invoke_close_agent(session_id, args).await
+            })
+        }),
+    }
+}
+
 /// Builds the JSON Schema advertised to the model for `spawn_agent`.
 /// 为模型端 `spawn_agent` 工具构建对外声明的 JSON Schema。
 pub(super) fn spawn_agent_args_schema() -> Value {
@@ -279,30 +269,22 @@ pub(super) fn spawn_agent_args_schema() -> Value {
                 "type": "string",
                 "description": "Initial plain-text task for the new agent."
             },
-            "agent_type": {
+            "creation_mode": {
                 "type": "string",
-                "description": "Optional agent type or role hint for the new agent."
-            },
-            "agent_mode": {
-                "type": "string",
-                "enum": ["default", "mirror", "expert"],
-                "description": "Optional explicit child-agent mode. Use `expert` with agent_id for a catalog-backed expert, `mirror` for a mirror child agent, or `default` for an ordinary child agent."
+                "enum": ["default", "mirror", "agent", "custom"],
+                "description": "How to create the child agent. Use `agent` with agent_id from agent_orchestration_info, `mirror` only to inherit the current conversation context, `custom` with system_prompt, or `default` for a plain child agent."
             },
             "agent_id": {
                 "type": "string",
-                "description": "Optional string id of a catalog-backed subagent definition. Prefer the canonical category path such as `engineering/code-reviewer`; an unambiguous legacy file stem such as `code-reviewer` may also resolve. This is not a numeric id."
+                "description": "Enabled agent id returned by agent_orchestration_info. Required only when creation_mode is `agent`."
             },
-            "fork_turns": {
+            "system_prompt": {
                 "type": "string",
-                "description": "Optional number of turns to fork. Defaults to `all` for default and mirror agents. Expert agents always start from `none` so catalog roles do not inherit parent conversation turns. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
+                "description": "One-off custom system prompt. Required only when creation_mode is `custom`."
             },
             "model": {
                 "type": "string",
-                "description": "Model override for the new agent. Omit unless an explicit override is needed."
-            },
-            "reasoning_effort": {
-                "type": "string",
-                "description": "Reasoning effort override for the new agent. Omit to inherit the parent effort."
+                "description": "Optional model selector returned by agent_orchestration_info. Invalid or unavailable selectors fail the spawn call."
             },
             "task_name": {
                 "type": "string",
@@ -314,9 +296,36 @@ pub(super) fn spawn_agent_args_schema() -> Value {
     })
 }
 
-/// Builds the JSON Schema advertised to the model for inter-agent message tools.
-/// 为模型端代理间消息工具构建对外声明的 JSON Schema。
-pub(super) fn inter_agent_message_args_schema() -> Value {
+/// Builds the JSON Schema advertised to the model for `agent_orchestration_info`.
+/// 为模型端 `agent_orchestration_info` 工具构建对外声明的 JSON Schema。
+pub(super) fn agent_orchestration_info_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["agents", "models", "modes", "runtime"]
+                },
+                "description": "Optional sections to include. Omit to include all sections."
+            },
+            "agent_id": {
+                "type": "string",
+                "description": "Optional enabled agent id to focus model diagnostics on."
+            },
+            "query": {
+                "type": "string",
+                "description": "Optional case-insensitive text filter for agent id, name, description, or category."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+/// Builds the JSON Schema advertised to the model for `send_message`.
+/// 为模型端 `send_message` 工具构建对外声明的 JSON Schema。
+pub(super) fn send_message_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
@@ -327,6 +336,11 @@ pub(super) fn inter_agent_message_args_schema() -> Value {
             "message": {
                 "type": "string",
                 "description": "Message text to send to the target agent."
+            },
+            "delivery_mode": {
+                "type": "string",
+                "enum": ["queue", "interrupt"],
+                "description": "Use `queue` to run after the target's current task, or `interrupt` to stop the current task and run this message next. Defaults to `queue`."
             }
         },
         "required": ["target", "message"],
@@ -361,13 +375,152 @@ pub(super) fn list_agents_args_schema() -> Value {
                 "type": "string",
                 "description": "Optional Vulcan task-path prefix filter without a trailing slash."
             },
-            "include_all": {
+            "include_closed": {
                 "type": "boolean",
-                "description": "Deprecated compatibility flag. It is accepted but ignored; list_agents always returns status only and never consumes mailbox updates."
+                "description": "Include closed agents for diagnostics. Omit or false for the default open-agent view."
             }
         },
         "additionalProperties": false
     })
+}
+
+/// Builds the JSON Schema advertised to the model for `close_agent`.
+/// 为模型端 `close_agent` 工具构建对外声明的 JSON Schema。
+pub(super) fn close_agent_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "Agent id or canonical task name to close (from spawn_agent)."
+            },
+            "cascade": {
+                "type": "boolean",
+                "description": "Whether to close descendants as well. Defaults to true."
+            }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+    })
+}
+
+/// Reads the required close target from a close_agent request.
+/// 从 close_agent 请求中读取必填关闭目标。
+pub(super) fn close_agent_target(args: &Value) -> Result<String, String> {
+    let Value::Object(map) = args else {
+        return Err(String::from("close_agent arguments must be a JSON object."));
+    };
+    let unsupported_keys = map
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "target" | "cascade"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported_keys.is_empty() {
+        return Err(format!(
+            "close_agent received unsupported keys: {}",
+            unsupported_keys.join(", ")
+        ));
+    }
+    string_field(map, &["target"])
+        .ok_or_else(|| String::from("close_agent requires target with the child-agent task name."))
+}
+
+/// Reads the optional close cascade flag from a close_agent request.
+/// 从 close_agent 请求中读取可选级联关闭标记。
+pub(super) fn close_agent_cascade(args: &Value) -> Result<bool, String> {
+    let Value::Object(map) = args else {
+        return Err(String::from("close_agent arguments must be a JSON object."));
+    };
+    Ok(map.get("cascade").and_then(Value::as_bool).unwrap_or(true))
+}
+
+/// Parsed request for agent_orchestration_info.
+/// agent_orchestration_info 的已解析请求。
+#[derive(Debug, Clone)]
+pub(super) struct AgentOrchestrationInfoRequest {
+    /// Sections requested by the caller.
+    /// 调用方请求的分区。
+    sections: Option<BTreeSet<String>>,
+    /// Optional focused agent id.
+    /// 可选聚焦智能体标识。
+    pub agent_id: Option<String>,
+    /// Optional text query for agent metadata.
+    /// 可选智能体元数据文本查询。
+    pub query: Option<String>,
+}
+
+impl AgentOrchestrationInfoRequest {
+    /// Returns whether one section should be included.
+    /// 返回是否应包含某个分区。
+    pub(super) fn includes(&self, section: &str) -> bool {
+        self.sections
+            .as_ref()
+            .is_none_or(|sections| sections.contains(section))
+    }
+}
+
+/// Parses one agent_orchestration_info request.
+/// 解析一次 agent_orchestration_info 请求。
+pub(super) fn agent_orchestration_info_request(
+    args: &Value,
+) -> Result<AgentOrchestrationInfoRequest, String> {
+    let Value::Object(map) = args else {
+        return Err(String::from(
+            "agent_orchestration_info arguments must be a JSON object.",
+        ));
+    };
+    let unsupported_keys = map
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "sections" | "agent_id" | "query"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported_keys.is_empty() {
+        return Err(format!(
+            "agent_orchestration_info received unsupported keys: {}",
+            unsupported_keys.join(", ")
+        ));
+    }
+    let sections = map
+        .get("sections")
+        .map(agent_orchestration_info_sections)
+        .transpose()?;
+    Ok(AgentOrchestrationInfoRequest {
+        sections,
+        agent_id: string_field(map, &["agent_id"]),
+        query: string_field(map, &["query"]),
+    })
+}
+
+/// Parses the optional agent_orchestration_info sections list.
+/// 解析可选的 agent_orchestration_info 分区列表。
+fn agent_orchestration_info_sections(value: &Value) -> Result<BTreeSet<String>, String> {
+    let Value::Array(items) = value else {
+        return Err(String::from(
+            "agent_orchestration_info.sections must be an array.",
+        ));
+    };
+    let mut sections = BTreeSet::new();
+    for item in items {
+        let Some(section) = item
+            .as_str()
+            .and_then(|value| normalize_optional_task_label(Some(value)))
+        else {
+            return Err(String::from(
+                "agent_orchestration_info.sections only accepts non-empty strings.",
+            ));
+        };
+        match section.as_str() {
+            "agents" | "models" | "modes" | "runtime" => {
+                sections.insert(section);
+            }
+            other => {
+                return Err(format!(
+                    "agent_orchestration_info.sections contains unsupported section `{other}`."
+                ));
+            }
+        }
+    }
+    Ok(sections)
 }
 
 /// Builds the JSON Schema advertised to the model for `interrupt_agent`.
@@ -445,126 +598,98 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
         .filter(|key| {
             !matches!(
                 key.as_str(),
-                "message"
-                    | "task_name"
-                    | "agent_type"
-                    | "agent_mode"
-                    | "agent_id"
-                    | "fork_turns"
-                    | "model"
-                    | "reasoning_effort"
+                "message" | "task_name" | "creation_mode" | "agent_id" | "system_prompt" | "model"
             )
         })
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
         return Err(format!(
-            "`spawn_agent` only accepts message, task_name, agent_type, agent_mode, agent_id, fork_turns, model, and reasoning_effort; unsupported keys: {}",
+            "`spawn_agent` only accepts message, task_name, creation_mode, agent_id, system_prompt, and model; unsupported keys: {}",
             unsupported_keys.join(", ")
         ));
     }
-    let agent_type = string_field(&map, &["agent_type"]);
-    let agent_mode = normalize_subagent_mode(string_field(&map, &["agent_mode"]).as_deref())?;
+    let creation_mode =
+        normalize_subagent_creation_mode(string_field(&map, &["creation_mode"]).as_deref())?;
     let agent_id = string_field(&map, &["agent_id"]);
-    if agent_mode.as_deref() == Some(SUBAGENT_MODE_EXPERT) && agent_id.is_none() {
+    let system_prompt = string_field(&map, &["system_prompt"]);
+    if creation_mode == "agent" && agent_id.is_none() {
         return Err(String::from(
-            "`spawn_agent` requires `agent_id` when agent_mode is `expert`.",
+            "`spawn_agent` requires `agent_id` when creation_mode is `agent`.",
+        ));
+    }
+    if creation_mode != "agent" && agent_id.is_some() {
+        return Err(String::from(
+            "`spawn_agent.agent_id` is only valid when creation_mode is `agent`.",
+        ));
+    }
+    if creation_mode == "custom" && system_prompt.is_none() {
+        return Err(String::from(
+            "`spawn_agent` requires `system_prompt` when creation_mode is `custom`.",
+        ));
+    }
+    if creation_mode != "custom" && system_prompt.is_some() {
+        return Err(String::from(
+            "`spawn_agent.system_prompt` is only valid when creation_mode is `custom`.",
         ));
     }
     let model = string_field(&map, &["model"]);
-    let reasoning_effort = string_field(&map, &["reasoning_effort"]);
-    let fork_turns = effective_spawn_agent_fork_turns(
-        agent_mode.as_deref(),
-        agent_id.as_deref(),
-        string_field(&map, &["fork_turns"]).as_deref(),
-    )?;
+    let (agent_mode, fork_turns) = spawn_agent_internal_mode_and_fork(&creation_mode);
     let mut task_args = serde_json::Map::new();
     task_args.insert(String::from("prompt"), Value::String(prompt));
     task_args.insert(String::from("task_id"), Value::String(task_id.clone()));
     task_args.insert(String::from("description"), Value::String(task_id));
-    if let Some(agent_type) = agent_type {
-        task_args.insert(String::from("subagent"), Value::String(agent_type));
-    }
-    if let Some(agent_mode) = agent_mode {
-        task_args.insert(String::from("agent_mode"), Value::String(agent_mode));
-    }
+    task_args.insert(String::from("agent_mode"), Value::String(agent_mode));
     if let Some(agent_id) = agent_id {
         task_args.insert(String::from("subagent_profile_id"), Value::String(agent_id));
     }
-    if let Some(model) = model {
-        task_args.insert(String::from("model"), Value::String(model));
+    if let Some(system_prompt) = system_prompt {
+        task_args.insert(String::from("system_prompt"), Value::String(system_prompt));
     }
-    if let Some(reasoning_effort) = reasoning_effort {
+    if let Some(model) = model {
+        let (provider_id, model_id) = split_provider_model_selector(&model)?;
         task_args.insert(
-            String::from("reasoning_effort"),
-            Value::String(reasoning_effort),
+            String::from("provider_model"),
+            json!({
+                "provider_id": provider_id,
+                "model_id": model_id,
+            }),
         );
     }
     task_args.insert(String::from("fork_turns"), Value::String(fork_turns));
     Ok(Value::Object(task_args))
 }
 
-/// Resolves the effective fork selector for a model-visible spawn request.
-/// 解析模型可见 spawn 请求的有效上下文派生选择器。
+/// Resolves the internal TaskSession mode and fork selector for one creation mode.
+/// 为单个创建模式解析内部 TaskSession 模式与上下文派生选择器。
 ///
 /// # Parameters
 /// 参数
-/// `agent_mode` is the normalized optional child-agent mode.
-/// `agent_mode` 是已规范化的可选子代理模式。
-/// `fork_turns` is the caller supplied optional fork selector.
-/// `fork_turns` 是调用方提供的可选派生选择器。
+/// `creation_mode` is the model-visible child-agent creation mode.
+/// `creation_mode` 是模型可见的子代理创建模式。
 ///
 /// # Returns
 /// 返回值
-/// The enforced fork selector used by the TaskSession runtime.
-/// TaskSession 运行时使用的强制派生选择器。
-pub(super) fn effective_spawn_agent_fork_turns(
-    agent_mode: Option<&str>,
-    agent_id: Option<&str>,
-    fork_turns: Option<&str>,
-) -> Result<String, String> {
-    if agent_mode == Some(SUBAGENT_MODE_EXPERT)
-        || agent_id.is_some_and(|value| !value.trim().is_empty())
-    {
-        return Ok(String::from("none"));
+/// A pair of internal mode and fork selector strings.
+/// 内部模式与派生选择器字符串对。
+pub(super) fn spawn_agent_internal_mode_and_fork(creation_mode: &str) -> (String, String) {
+    match creation_mode {
+        "mirror" => (String::from(SUBAGENT_MODE_MIRROR), String::from("all")),
+        "agent" => (String::from(SUBAGENT_MODE_EXPERT), String::from("none")),
+        "custom" | "default" => (String::from(SUBAGENT_MODE_DEFAULT), String::from("none")),
+        _ => (String::from(SUBAGENT_MODE_DEFAULT), String::from("none")),
     }
-    Ok(normalize_spawn_agent_fork_turns(fork_turns)?.unwrap_or_else(|| String::from("all")))
 }
 
-/// Normalizes the Vulcan fork_turns selector before it reaches execution.
-/// 在进入执行层之前规范化 Vulcan 的 fork_turns 选择器。
-pub(super) fn normalize_spawn_agent_fork_turns(
-    fork_turns: Option<&str>,
-) -> Result<Option<String>, String> {
-    let Some(fork_turns) = fork_turns.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    if fork_turns.eq_ignore_ascii_case("none") {
-        return Ok(Some(String::from("none")));
-    }
-    if fork_turns.eq_ignore_ascii_case("all") {
-        return Ok(Some(String::from("all")));
-    }
-    let turn_count = fork_turns.parse::<usize>().map_err(|_| {
-        String::from("fork_turns must be `none`, `all`, or a positive integer string")
-    })?;
-    if turn_count == 0 {
-        return Err(String::from(
-            "fork_turns must be `none`, `all`, or a positive integer string",
-        ));
-    }
-    Ok(Some(turn_count.to_string()))
-}
-
-/// Parses list_agents arguments using path_prefix plus deprecated include_all compatibility.
-/// 按 path_prefix 加废弃 include_all 兼容参数的契约解析 list_agents 参数。
+/// Parses list_agents arguments using path_prefix plus include_closed.
+/// 按 path_prefix 加 include_closed 解析 list_agents 参数。
 pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, String> {
     let Some(object) = args.as_object() else {
         return Err(String::from("list_agents arguments must be a JSON object."));
     };
     let unsupported_keys = object
         .keys()
-        .filter(|key| !matches!(key.as_str(), "path_prefix" | "include_all"))
+        .filter(|key| !matches!(key.as_str(), "path_prefix" | "include_closed"))
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
@@ -576,8 +701,8 @@ pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, St
     Ok(string_field(object, &["path_prefix"]))
 }
 
-/// Parses the deprecated include_all compatibility flag for list_agents.
-/// 解析 list_agents 的废弃 include_all 兼容标记。
+/// Parses the include_closed diagnostics flag for list_agents.
+/// 解析 list_agents 的 include_closed 诊断标记。
 ///
 /// # Parameters
 /// 参数
@@ -586,14 +711,14 @@ pub(super) fn list_agents_path_prefix(args: &Value) -> Result<Option<String>, St
 ///
 /// # Returns
 /// 返回值
-/// `Ok(true)` when the caller supplied the compatibility flag as true.
-/// 调用方以 true 提供兼容标记时返回 `Ok(true)`。
-pub(super) fn list_agents_include_all(args: &Value) -> Result<bool, String> {
+/// `Ok(true)` when the caller requested closed agents as diagnostics.
+/// 调用方请求关闭代理诊断信息时返回 `Ok(true)`。
+pub(super) fn list_agents_include_closed(args: &Value) -> Result<bool, String> {
     let Some(object) = args.as_object() else {
         return Err(String::from("list_agents arguments must be a JSON object."));
     };
     Ok(object
-        .get("include_all")
+        .get("include_closed")
         .and_then(Value::as_bool)
         .unwrap_or(false))
 }
@@ -694,11 +819,27 @@ pub(super) fn wait_agent_timeout_ms(args: &Value) -> Result<Option<u64>, String>
 /// 返回值
 /// A model-visible JSON status payload.
 /// 模型可见的 JSON 状态载荷。
-pub(super) fn subagent_registry_entry_status_payload(entry: &SubagentRegistryEntry) -> Value {
+pub(super) fn subagent_registry_entry_status_payload(
+    entry: &SubagentRegistryEntry,
+    queued_message_count: usize,
+) -> Value {
     json!({
         "agent_name": &entry.agent_id,
+        "agent_id": &entry.agent_id,
         "agent_status": subagent_registry_agent_status_payload(entry),
+        "lifecycle_state": subagent_registry_lifecycle_state(entry.status),
+        "run_state": subagent_registry_run_state(entry.status, queued_message_count),
+        "status": subagent_registry_status_name(entry.status),
+        "stop_reason": entry.stop_reason.clone(),
         "last_task_message": entry.last_task_message.clone(),
+        "last_result_summary": entry.result_summary.clone(),
+        "has_final_result": subagent_registry_has_final_result(entry),
+        "queued_message_count": queued_message_count,
+        "can_send": entry.status != SubagentStatus::Archived,
+        "can_interrupt": entry.status != SubagentStatus::Archived && entry.status.is_running(),
+        "can_close": entry.status != SubagentStatus::Archived,
+        "can_wait": entry.status != SubagentStatus::Archived,
+        "updated_at": entry.updated_at_ms.to_string(),
     })
 }
 
@@ -714,11 +855,26 @@ pub(super) fn subagent_registry_entry_status_payload(entry: &SubagentRegistryEnt
 /// 返回值
 /// A host-visible JSON status payload with stable model fields and runtime diagnostics.
 /// 带稳定模型字段与运行时诊断信息的宿主可见 JSON 状态载荷。
-pub(super) fn subagent_registry_entry_host_status_payload(entry: &SubagentRegistryEntry) -> Value {
+pub(super) fn subagent_registry_entry_host_status_payload(
+    entry: &SubagentRegistryEntry,
+    queued_message_count: usize,
+) -> Value {
     json!({
         "agent_name": &entry.agent_id,
+        "agent_id": &entry.agent_id,
         "agent_status": subagent_registry_agent_status_payload(entry),
+        "lifecycle_state": subagent_registry_lifecycle_state(entry.status),
+        "run_state": subagent_registry_run_state(entry.status, queued_message_count),
+        "status": subagent_registry_status_name(entry.status),
+        "stop_reason": entry.stop_reason.clone(),
         "last_task_message": entry.last_task_message.clone(),
+        "last_result_summary": entry.result_summary.clone(),
+        "has_final_result": subagent_registry_has_final_result(entry),
+        "queued_message_count": queued_message_count,
+        "can_send": entry.status != SubagentStatus::Archived,
+        "can_interrupt": entry.status != SubagentStatus::Archived && entry.status.is_running(),
+        "can_close": entry.status != SubagentStatus::Archived,
+        "can_wait": entry.status != SubagentStatus::Archived,
         (SUBAGENT_TASK_ID_KEY): entry.session_id.to_string(),
         "display_title": &entry.agent_id,
         "agent_kind": entry.agent_kind,
@@ -726,6 +882,63 @@ pub(super) fn subagent_registry_entry_host_status_payload(entry: &SubagentRegist
         "updated_at": entry.updated_at_ms.to_string(),
         "segments": entry.segments.clone(),
     })
+}
+
+/// Returns the management lifecycle state for one registry status.
+/// 返回单个注册表状态对应的管理生命周期状态。
+fn subagent_registry_lifecycle_state(status: SubagentStatus) -> &'static str {
+    match status {
+        SubagentStatus::Archived => "closed",
+        _ => "open",
+    }
+}
+
+/// Returns the execution run state for one registry status.
+/// 返回单个注册表状态对应的执行状态。
+fn subagent_registry_run_state(
+    status: SubagentStatus,
+    queued_message_count: usize,
+) -> &'static str {
+    if status != SubagentStatus::Archived && queued_message_count > 0 {
+        return "queued";
+    }
+    match status {
+        SubagentStatus::Created => "idle",
+        SubagentStatus::Running
+        | SubagentStatus::WaitingChildren
+        | SubagentStatus::WaitingFollowup
+        | SubagentStatus::Compacting => "running",
+        SubagentStatus::Completed => "completed",
+        SubagentStatus::Failed => "failed",
+        SubagentStatus::Stopped => "stopped",
+        SubagentStatus::Archived => "closed",
+    }
+}
+
+/// Returns the stable status label for one registry status.
+/// 返回单个注册表状态的稳定状态标签。
+fn subagent_registry_status_name(status: SubagentStatus) -> &'static str {
+    match status {
+        SubagentStatus::Created => "created",
+        SubagentStatus::Running => "running",
+        SubagentStatus::WaitingChildren => "waiting_children",
+        SubagentStatus::WaitingFollowup => "waiting_followup",
+        SubagentStatus::Completed => "completed",
+        SubagentStatus::Failed => "failed",
+        SubagentStatus::Stopped => "stopped",
+        SubagentStatus::Compacting => "compacting",
+        SubagentStatus::Archived => "archived",
+    }
+}
+
+/// Returns whether a registry entry has a completed final result summary.
+/// 返回注册表条目是否具有已完成的最终结果摘要。
+fn subagent_registry_has_final_result(entry: &SubagentRegistryEntry) -> bool {
+    entry.status == SubagentStatus::Completed
+        && entry
+            .result_summary
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 /// Converts a registry status into the Codex-style `agent_status` payload.
@@ -783,16 +996,29 @@ pub(super) fn build_subagent_registry_status_tool_result(
     tool_name: &str,
     current_session_id: SessionId,
     entries: Vec<SubagentRegistryEntry>,
+    queued_message_counts: &BTreeMap<String, usize>,
     timeout_ms: u64,
     completed: bool,
 ) -> VulcanToolInvocationResult {
     let model_agents = entries
         .iter()
-        .map(subagent_registry_entry_status_payload)
+        .map(|entry| {
+            let queued_message_count = queued_message_counts
+                .get(entry.agent_id.as_str())
+                .copied()
+                .unwrap_or(0);
+            subagent_registry_entry_status_payload(entry, queued_message_count)
+        })
         .collect::<Vec<_>>();
     let host_agents = entries
         .iter()
-        .map(subagent_registry_entry_host_status_payload)
+        .map(|entry| {
+            let queued_message_count = queued_message_counts
+                .get(entry.agent_id.as_str())
+                .copied()
+                .unwrap_or(0);
+            subagent_registry_entry_host_status_payload(entry, queued_message_count)
+        })
         .collect::<Vec<_>>();
     let model_payload = json!({
         "tool": tool_name,

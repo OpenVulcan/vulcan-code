@@ -82,6 +82,7 @@ fn session_record_to_core_role(record: &SessionConversationRecord) -> CoreTransc
             CoreTranscriptRole::Summary
         }
         SessionMessageRecordKind::CompactionStatus => CoreTranscriptRole::System,
+        SessionMessageRecordKind::DisplayNote => CoreTranscriptRole::Explore,
         SessionMessageRecordKind::ExploreOutput | SessionMessageRecordKind::ToolDetailOutput => {
             CoreTranscriptRole::Explore
         }
@@ -109,9 +110,9 @@ fn session_record_to_core_record_kind(
         | SessionMessageRecordKind::SummaryOutput
         | SessionMessageRecordKind::CompactionStatus
         | SessionMessageRecordKind::TurnTerminated => CoreTranscriptRecordKind::Hidden,
-        SessionMessageRecordKind::ExploreOutput | SessionMessageRecordKind::ToolDetailOutput => {
-            CoreTranscriptRecordKind::ProjectionOnly
-        }
+        SessionMessageRecordKind::DisplayNote
+        | SessionMessageRecordKind::ExploreOutput
+        | SessionMessageRecordKind::ToolDetailOutput => CoreTranscriptRecordKind::ProjectionOnly,
         SessionMessageRecordKind::CompactionSummary => CoreTranscriptRecordKind::Checkpoint,
     }
 }
@@ -136,6 +137,14 @@ fn core_record_to_session_record_kind(record: &CoreConversationRecord) -> Sessio
             .is_some_and(|object| object.contains_key("context_compaction_status")) =>
         {
             SessionMessageRecordKind::CompactionStatus
+        }
+        _ if record
+            .metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|object| object.contains_key("display_note")) =>
+        {
+            SessionMessageRecordKind::DisplayNote
         }
         _ if record
             .metadata

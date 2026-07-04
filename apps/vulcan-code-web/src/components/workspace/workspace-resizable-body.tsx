@@ -135,6 +135,9 @@ export function WorkspaceResizableBody(props: {
   // Stops one backend subagent task.
   // 停止单个后端子代理任务。
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
+  // Closes one backend subagent lifecycle.
+  // 关闭单个后端子智能体生命周期。
+  onCloseSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   // Force-stops one live command session.
   // 强制停止单条实时命令会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
@@ -385,6 +388,7 @@ export function WorkspaceResizableBody(props: {
               onFileTabTitleChange={props.onFileContextTabTitleChange}
               onOpenContextTab={props.onOpenContextTab}
               onOpenSubagentPanel={props.onOpenSubagentPanel}
+              onCloseSubagentTask={props.onCloseSubagentTask}
               onStopCommandSession={props.onStopCommandSession}
               onStopSubagentTask={props.onStopSubagentTask}
               onRunVmmAction={props.onRunVmmAction}

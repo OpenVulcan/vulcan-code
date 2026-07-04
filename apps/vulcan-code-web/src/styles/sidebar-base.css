@@ -241,6 +241,13 @@
   transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
+.sidebar-brand-logo {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
+}
+
 .sidebar-user-avatar {
   background: color-mix(in oklch, var(--sidebar-accent) 82%, var(--foreground) 12%);
   color: var(--sidebar-accent-foreground);
@@ -346,6 +353,7 @@
 }
 
 .vcn-sidebar[data-collapsible="icon"] .sidebar-brand-button .sidebar-brand-mark,
+.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-logo,
 .vcn-sidebar[data-collapsible="icon"] .sidebar-user-avatar {
   width: 30px;
   height: 30px;

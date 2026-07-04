@@ -1,5 +1,6 @@
 import type { StartupSnapshot, StartupStepSnapshot } from "@/types";
 import { CircleAlert } from "lucide-react";
+import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
 import { useI18n } from "@/i18n";
 
 // LoadingScreen renders the earliest frontend loading state.
@@ -50,9 +51,7 @@ function StartupProgressPanel(props: {
   const message = activeStep?.message ?? (props.startup ? t("startup.loadingProjectIndex") : t("startup.connectingService"));
   return (
     <section className="startup-progress-panel" aria-live="polite" aria-busy={!props.startup?.ready}>
-      <div className="startup-logo-stage" aria-hidden="true">
-        <span className="startup-logo-mark">V</span>
-      </div>
+      <StartupLogoMark />
       <div className="startup-progress-content">
         <div className="conversation-loading-heading startup-progress-heading">
           <strong>{activeStep ? t("startup.loadingStep").replace("{step}", activeStep.label) : t("startup.loadingWorkspace")}</strong>

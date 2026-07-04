@@ -89,8 +89,8 @@ pub fn subagent_task_panel_is_openable(
 /// 参数
 /// `has_visible_round` reports whether the parent session still owns a recorded navigation round.
 /// `has_visible_round` 表示父会话是否仍拥有已记录的导航轮次。
-/// `has_running_subagents` reports whether any direct or nested child task is still running.
-/// `has_running_subagents` 表示是否仍有任意直接或嵌套子任务处于运行中。
+/// `has_unclosed_subagents` reports whether any child task still belongs to the open agent registry.
+/// `has_unclosed_subagents` 表示是否仍有任意子任务属于未关闭代理注册表。
 /// `has_active_subagent_panel` reports whether the UI is currently rendering one child task surface.
 /// `has_active_subagent_panel` 表示界面当前是否正在渲染某个子任务界面。
 ///
@@ -100,10 +100,10 @@ pub fn subagent_task_panel_is_openable(
 /// 当界面应显示子代理切换器或保留返回父会话路径时返回 `true`。
 pub fn subagent_navigation_surface_is_visible(
     has_visible_round: bool,
-    has_running_subagents: bool,
+    has_unclosed_subagents: bool,
     has_active_subagent_panel: bool,
 ) -> bool {
-    has_visible_round || has_running_subagents || has_active_subagent_panel
+    has_visible_round || has_unclosed_subagents || has_active_subagent_panel
 }
 
 /// Returns whether a parent coordination round should keep its subagent navigation state alive after one child event settles.
@@ -139,8 +139,8 @@ pub fn subagent_navigation_round_should_remain_visible(
 /// `normalized_states` 是已经刷新并归一化的子面板状态列表。
 /// `requested_active_task_id` is the task that is currently opened, when any.
 /// `requested_active_task_id` 是当前已打开的任务标识；没有打开项时为空。
-/// `has_recoverable_detail` reports whether a non-running active task can still be reviewed.
-/// `has_recoverable_detail` 表示非运行中的活动任务是否仍可复看。
+/// `has_recoverable_detail` is retained for callers that still need openability checks outside list selection.
+/// `has_recoverable_detail` 保留给仍需在列表选择外检查可打开性的调用方。
 ///
 /// # Returns
 /// 返回值
@@ -149,28 +149,12 @@ pub fn subagent_navigation_round_should_remain_visible(
 pub fn select_subagent_navigation_panel_states<F>(
     normalized_states: &[SubagentTaskPanelState],
     requested_active_task_id: Option<SessionId>,
-    mut has_recoverable_detail: F,
+    _has_recoverable_detail: F,
 ) -> (Vec<SubagentTaskPanelState>, Option<SessionId>)
 where
     F: FnMut(&SubagentTaskPanelState) -> bool,
 {
-    let mut navigation_states = normalized_states
-        .iter()
-        .filter(|state| state.run_state.is_running())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if let Some(active_task_id) = requested_active_task_id
-        && !navigation_states
-            .iter()
-            .any(|state| state.task_id == active_task_id)
-        && let Some(active_state) = normalized_states.iter().find(|state| {
-            state.task_id == active_task_id
-                && subagent_task_panel_is_openable(state, has_recoverable_detail(state))
-        })
-    {
-        navigation_states.push(active_state.clone());
-    }
+    let navigation_states = normalized_states.to_vec();
 
     let active_task_id = requested_active_task_id.filter(|task_id| {
         navigation_states

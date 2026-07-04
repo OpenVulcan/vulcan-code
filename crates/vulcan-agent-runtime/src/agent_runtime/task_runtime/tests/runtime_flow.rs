@@ -42,7 +42,7 @@ async fn build_task_execution_handler_rejects_missing_shared_context() {
 /// 验证停止单个任务会中止其活动后代任务树，并且不会影响旁支任务。
 #[tokio::test]
 async fn stop_task_tree_aborts_active_descendants_without_siblings() {
-    let task_runtime = TaskRuntime::new();
+    let task_runtime = Arc::new(TaskRuntime::new());
     let root_session_id = Uuid::new_v4();
     let parent_task_id = Uuid::new_v4();
     let child_task_id = Uuid::new_v4();
@@ -132,16 +132,14 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
     let child_join = tokio::spawn(async { std::future::pending::<()>().await });
     let grandchild_join = tokio::spawn(async { std::future::pending::<()>().await });
     let sibling_join = tokio::spawn(async { std::future::pending::<()>().await });
-    {
-        let mut active_runs = task_runtime
-            .active_task_runs
-            .write()
-            .expect("active task registry should be writable");
-        active_runs.insert(parent_task_id, parent_join.abort_handle());
-        active_runs.insert(child_task_id, child_join.abort_handle());
-        active_runs.insert(grandchild_task_id, grandchild_join.abort_handle());
-        active_runs.insert(sibling_task_id, sibling_join.abort_handle());
-    }
+    let _parent_guard =
+        task_runtime.install_active_task_run(parent_task_id, parent_join.abort_handle());
+    let _child_guard =
+        task_runtime.install_active_task_run(child_task_id, child_join.abort_handle());
+    let _grandchild_guard =
+        task_runtime.install_active_task_run(grandchild_task_id, grandchild_join.abort_handle());
+    let _sibling_guard =
+        task_runtime.install_active_task_run(sibling_task_id, sibling_join.abort_handle());
 
     let stopped_task_ids = task_runtime
         .stop_task_tree(parent_task_id)
@@ -214,6 +212,36 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
     );
     assert!(!sibling_join.is_finished());
     sibling_join.abort();
+}
+
+/// Verifies an older active-run guard cannot unregister a newer run for the same child task.
+/// 验证旧活动运行守卫不能注销同一子任务的新运行。
+#[tokio::test]
+async fn active_task_run_guard_preserves_newer_same_task_run() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let task_id = Uuid::new_v4();
+    let first_join = tokio::spawn(async { std::future::pending::<()>().await });
+    let second_join = tokio::spawn(async { std::future::pending::<()>().await });
+    let first_guard = task_runtime.install_active_task_run(task_id, first_join.abort_handle());
+    let second_guard = task_runtime.install_active_task_run(task_id, second_join.abort_handle());
+
+    drop(first_guard);
+    assert!(
+        task_runtime
+            .is_task_running(task_id)
+            .expect("active task lookup should succeed"),
+        "dropping the older guard must not remove the newer active run"
+    );
+
+    drop(second_guard);
+    assert!(
+        !task_runtime
+            .is_task_running(task_id)
+            .expect("active task lookup should succeed"),
+        "dropping the current guard should remove the active run"
+    );
+    first_join.abort();
+    second_join.abort();
 }
 
 /// Verifies that caller-facing task identifiers are normalized consistently before being stored or looked up.
@@ -387,37 +415,27 @@ async fn invoke_task_returns_cached_completed_record_without_backend_restart() {
     );
 }
 
-/// Verifies spawn_agent creates a fresh run instead of returning a cached completed task with the same public label.
-/// 验证 spawn_agent 会创建全新运行，而不是返回同名已完成任务的缓存结果。
+/// Verifies spawn_agent rejects duplicate public labels instead of generating suffixes.
+/// 验证 spawn_agent 会拒绝重复公开标识，而不是自动生成后缀。
 #[tokio::test]
-async fn invoke_spawn_agent_allocates_fresh_task_when_public_id_exists() {
+async fn invoke_spawn_agent_rejects_duplicate_public_id() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let completed_task_id = Uuid::new_v4();
     let backend_calls = Arc::new(AtomicUsize::new(0));
-    let captured_task_id = Arc::new(std::sync::Mutex::new(None));
-    let captured_public_task_id = Arc::new(std::sync::Mutex::new(None));
     let backend_calls_for_handler = Arc::clone(&backend_calls);
-    let captured_task_id_for_handler = Arc::clone(&captured_task_id);
-    let captured_public_task_id_for_handler = Arc::clone(&captured_public_task_id);
     let _guard = task_runtime.install_backend(
         parent_session_id,
-        Arc::new(move |request: TaskExecutionRequest| {
+        Arc::new(move |_request: TaskExecutionRequest| {
             backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-            *captured_task_id_for_handler
-                .lock()
-                .expect("captured task id lock") = Some(request.task_id);
-            *captured_public_task_id_for_handler
-                .lock()
-                .expect("captured public task id lock") = Some(request.public_task_id.clone());
             Box::pin(async move {
                 let controller_config = build_test_controller_config("Fresh spawn prompt");
                 Ok(TaskExecutionOutcome {
-                    task_id: request.task_id,
+                    task_id: Uuid::new_v4(),
                     controller_config: controller_config.clone(),
                     resolved_config: test_resolved_config(
                         &controller_config,
-                        &request.invocation_config,
+                        &TaskInvocationConfig::main("unused"),
                     ),
                     snapshot: CoreConversationSnapshot::default(),
                     provider_turns_executed: 1,
@@ -452,7 +470,7 @@ async fn invoke_spawn_agent_allocates_fresh_task_when_public_id_exists() {
         .expect("task session registry should be writable")
         .insert(completed_task_id, completed_record);
 
-    let result = task_runtime
+    let error = task_runtime
         .invoke_spawn_agent(
             parent_session_id,
             json!({
@@ -461,30 +479,125 @@ async fn invoke_spawn_agent_allocates_fresh_task_when_public_id_exists() {
             }),
         )
         .await
-        .expect("spawn_agent should start a fresh task");
+        .expect_err("spawn_agent should reject duplicate child-agent names");
 
-    assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
-    let new_task_id = captured_task_id
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 0);
+    assert!(error.contains("already exists"));
+}
+
+/// Verifies close_agent releases a public child-agent id for a new spawn.
+/// 验证 close_agent 会释放公开子代理标识，允许后续重新创建。
+#[tokio::test]
+async fn invoke_spawn_agent_reuses_public_id_after_close_agent() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let closed_task_id = Uuid::new_v4();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let captured_task_id = Arc::new(std::sync::Mutex::new(None));
+    let backend_calls_for_handler = Arc::clone(&backend_calls);
+    let captured_task_id_for_handler = Arc::clone(&captured_task_id);
+    let _guard = task_runtime.install_backend(
+        parent_session_id,
+        Arc::new(move |request: TaskExecutionRequest| {
+            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+            *captured_task_id_for_handler
+                .lock()
+                .expect("captured task id lock") = Some(request.task_id);
+            Box::pin(async move {
+                let controller_config = build_test_controller_config("Fresh spawn prompt");
+                Ok(TaskExecutionOutcome {
+                    task_id: request.task_id,
+                    controller_config: controller_config.clone(),
+                    resolved_config: test_resolved_config(
+                        &controller_config,
+                        &request.invocation_config,
+                    ),
+                    snapshot: CoreConversationSnapshot::default(),
+                    provider_turns_executed: 1,
+                    tool_calls_processed: 0,
+                    final_assistant_message_id: Some(String::from("assistant-reused")),
+                    final_output_text: String::from("new reusable result"),
+                    execution_status: TaskExecutionStatus::Completed,
+                    usage_segments: Vec::new(),
+                })
+            })
+        }),
+    );
+    let closed_record = build_task_session_record(
+        closed_task_id,
+        String::from("reusable-agent"),
+        parent_session_id,
+        None,
+        1,
+        Some(String::from("Reusable agent")),
+        None,
+        TaskInvocationConfig::main("old work"),
+        String::from("Reusable agent"),
+        None,
+        CoreConversationSnapshot::default(),
+        String::from("old work"),
+        String::from("completed"),
+    );
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(closed_task_id, closed_record.clone());
+    task_runtime
+        .upsert_subagent_registry_entry(
+            &closed_record,
+            TaskSessionStatus::Completed,
+            Some("old result"),
+        )
+        .expect("closed candidate should be registered");
+
+    task_runtime
+        .invoke_close_agent(parent_session_id, json!({ "target": "reusable-agent" }))
+        .await
+        .expect("close_agent should close the original agent");
+    assert_eq!(
+        task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should read")
+            .get(&closed_task_id)
+            .expect("closed record should remain for history")
+            .last_status,
+        "archived"
+    );
+
+    let result = task_runtime
+        .invoke_spawn_agent(
+            parent_session_id,
+            json!({
+                "prompt": "run fresh reusable work",
+                "task_id": "reusable-agent"
+            }),
+        )
+        .await
+        .expect("spawn_agent should reuse a closed public id");
+    let fresh_task_id = captured_task_id
         .lock()
         .expect("captured task id lock")
         .expect("backend should capture the fresh task id");
-    assert_ne!(new_task_id, completed_task_id);
-    let new_public_task_id = captured_public_task_id
-        .lock()
-        .expect("captured public task id lock")
-        .clone()
-        .expect("backend should capture the fresh public task id");
-    assert_eq!(new_public_task_id, "image-generator-2-2");
-    assert_eq!(result.model_output["cached"], Value::Null);
-    assert_eq!(result.model_output["task_name"], "image-generator-2-2");
-    assert_eq!(result.model_output["message"], "Subagent scheduled.");
-    assert!(result.model_output.get("result").is_none());
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+    assert_ne!(fresh_task_id, closed_task_id);
+    assert_eq!(result.model_output["task_name"], "reusable-agent");
+
+    let parsed_args = parse_task_tool_arguments(json!({
+        "prompt": "continue reusable work",
+        "task_id": "reusable-agent"
+    }))
+    .expect("follow-up task args should parse");
+    let resolved = resolve_task_session_id(&task_runtime, parent_session_id, &parsed_args)
+        .expect("public lookup should resolve the fresh reusable agent");
+    assert_eq!(resolved.task_id, fresh_task_id);
 }
 
-/// Verifies send_message queues while followup_task resumes the same idle child agent.
-/// 验证 send_message 只入队，而 followup_task 会续跑同一个空闲子代理。
+/// Verifies send_message queues and resumes the same idle child agent.
+/// 验证 send_message 会排队并续跑同一个空闲子代理。
 #[tokio::test]
-async fn inter_agent_message_queue_only_then_followup_resumes_idle_agent() {
+async fn inter_agent_message_queue_resumes_idle_agent() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
@@ -570,7 +683,8 @@ async fn inter_agent_message_queue_only_then_followup_resumes_idle_agent() {
         task_id.to_string()
     );
     assert_eq!(send_result.model_output["queued"], true);
-    assert_eq!(send_result.model_output["trigger_turn"], false);
+    assert_eq!(send_result.model_output["delivery_mode"], "queue");
+    assert_eq!(send_result.model_output["interrupted"], false);
     assert_eq!(send_result.model_output["status"], "completed");
     assert_eq!(
         send_result
@@ -580,35 +694,6 @@ async fn inter_agent_message_queue_only_then_followup_resumes_idle_agent() {
             .payload["message"],
         "queue this context"
     );
-    assert_eq!(backend_calls.load(Ordering::SeqCst), 0);
-
-    let followup_result = task_runtime
-        .invoke_followup_task(
-            parent_session_id,
-            json!({
-                "target": "worker-a",
-                "message": "now continue"
-            }),
-        )
-        .await
-        .expect("followup_task should resume idle task");
-    assert_eq!(followup_result.model_output["ok"], true);
-    assert_eq!(followup_result.model_output["target"], "worker-a");
-    assert_eq!(
-        followup_result.model_output[SUBAGENT_TASK_ID_KEY],
-        task_id.to_string()
-    );
-    assert_eq!(followup_result.model_output["queued"], true);
-    assert_eq!(followup_result.model_output["trigger_turn"], true);
-    assert_eq!(followup_result.model_output["status"], "completed");
-    assert_eq!(
-        followup_result
-            .host_result
-            .as_ref()
-            .expect("followup_task host result")
-            .payload["message"],
-        "now continue"
-    );
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
     let prompt = captured_prompt
         .lock()
@@ -616,9 +701,7 @@ async fn inter_agent_message_queue_only_then_followup_resumes_idle_agent() {
         .clone()
         .expect("backend should capture prompt");
     assert!(prompt.contains("queue this context"));
-    assert!(prompt.contains("now continue"));
     assert!(prompt.contains("send_message"));
-    assert!(prompt.contains("followup_task"));
     let resumed_registry = task_runtime
         .subagent_registry_snapshot()
         .expect("registry should read after followup");
@@ -628,10 +711,112 @@ async fn inter_agent_message_queue_only_then_followup_resumes_idle_agent() {
     assert_eq!(resumed_entry.status, SubagentStatus::Running);
 }
 
-/// Verifies child agents can send queue-only messages to root while followup_task rejects root.
-/// 验证子代理可以向 root 发送仅入队消息，而 followup_task 会拒绝 root。
+/// Verifies queued messages resume after a running child agent settles.
+/// 验证运行中子代理结束后会续跑排队消息。
 #[tokio::test]
-async fn send_message_to_root_enters_parent_mailbox_and_followup_rejects_root() {
+async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let running_record = build_task_session_record(
+        task_id,
+        String::from("worker-a"),
+        parent_session_id,
+        None,
+        1,
+        Some(String::from("Worker A")),
+        None,
+        TaskInvocationConfig::main("initial work"),
+        String::from("Worker A"),
+        None,
+        CoreConversationSnapshot::default(),
+        String::from("initial work"),
+        String::from("running"),
+    );
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(task_id, running_record.clone());
+    task_runtime
+        .upsert_subagent_registry_entry(&running_record, TaskSessionStatus::Running, None)
+        .expect("running child should be visible in the native registry");
+
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let captured_prompt = Arc::new(std::sync::Mutex::new(None::<String>));
+    let backend_calls_for_handler = Arc::clone(&backend_calls);
+    let captured_prompt_for_handler = Arc::clone(&captured_prompt);
+    let _guard = task_runtime.install_backend(
+        parent_session_id,
+        Arc::new(move |request: TaskExecutionRequest| {
+            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+            *captured_prompt_for_handler
+                .lock()
+                .expect("captured prompt lock") = Some(request.prompt.clone());
+            Box::pin(async move {
+                let controller_config = build_test_controller_config("Followup prompt");
+                Ok(TaskExecutionOutcome {
+                    task_id: request.task_id,
+                    controller_config: controller_config.clone(),
+                    resolved_config: test_resolved_config(
+                        &controller_config,
+                        &request.invocation_config,
+                    ),
+                    snapshot: CoreConversationSnapshot::default(),
+                    provider_turns_executed: 0,
+                    tool_calls_processed: 0,
+                    final_assistant_message_id: None,
+                    final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+                    execution_status: TaskExecutionStatus::Running,
+                    usage_segments: Vec::new(),
+                })
+            })
+        }),
+    );
+
+    let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
+    let active_guard = task_runtime.install_active_task_run(task_id, pending_join.abort_handle());
+    let send_result = task_runtime
+        .invoke_send_message(
+            parent_session_id,
+            json!({
+                "target": "worker-a",
+                "message": "continue after current work",
+                "delivery_mode": "queue"
+            }),
+        )
+        .await
+        .expect("send_message should enqueue while the child is running");
+    assert_eq!(send_result.model_output["queued"], true);
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 0);
+
+    drop(active_guard);
+    pending_join.abort();
+    let resumed = task_runtime
+        .resume_agent_from_inbox_after_task_settled(parent_session_id, task_id)
+        .await
+        .expect("settled child should resume queued messages");
+    assert!(resumed);
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+    let prompt = captured_prompt
+        .lock()
+        .expect("captured prompt lock")
+        .clone()
+        .expect("backend should capture prompt");
+    assert!(prompt.contains("continue after current work"));
+    assert!(prompt.contains("send_message"));
+
+    let resumed_again = task_runtime
+        .resume_agent_from_inbox_after_task_settled(parent_session_id, task_id)
+        .await
+        .expect("empty inbox should be a no-op");
+    assert!(!resumed_again);
+}
+
+/// Verifies child agents can send queue messages to root while interrupt delivery rejects root.
+/// 验证子代理可以向 root 发送排队消息，而 interrupt 投递会拒绝 root。
+#[tokio::test]
+async fn send_message_to_root_enters_parent_mailbox_and_interrupt_rejects_root() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let child_session_id = Uuid::new_v4();
@@ -677,7 +862,8 @@ async fn send_message_to_root_enters_parent_mailbox_and_followup_rejects_root() 
         parent_session_id.to_string()
     );
     assert_eq!(result.model_output["queued"], true);
-    assert_eq!(result.model_output["trigger_turn"], false);
+    assert_eq!(result.model_output["delivery_mode"], "queue");
+    assert_eq!(result.model_output["interrupted"], false);
     assert_eq!(
         result.host_result.as_ref().expect("host result").kind,
         "subagent_message"
@@ -691,15 +877,16 @@ async fn send_message_to_root_enters_parent_mailbox_and_followup_rejects_root() 
     assert_eq!(events[0].payload["result_text"], "child progress");
 
     let error = task_runtime
-        .invoke_followup_task(
+        .invoke_send_message(
             child_session_id,
             json!({
                 "target": "root",
-                "message": "continue root"
+                "message": "continue root",
+                "delivery_mode": "interrupt"
             }),
         )
         .await
-        .expect_err("followup_task should reject root");
+        .expect_err("interrupt delivery should reject root");
     assert!(error.contains("root"));
 }
 
@@ -858,4 +1045,66 @@ async fn detached_task_event_stream_closes_for_terminal_record_without_buffer() 
         .await
         .expect("terminal record stream should close immediately");
     assert!(event.is_none());
+}
+
+/// Verifies a resumed child-agent run can reopen its detached stream even when the previous run completed.
+/// 验证子代理续跑时即使上一轮已经完成，也能重新打开分离事件流。
+#[tokio::test]
+async fn detached_task_event_stream_reopens_for_resumed_run_with_terminal_record() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(
+            task_id,
+            build_task_session_record(
+                task_id,
+                String::from("review-worker-a"),
+                root_session_id,
+                None,
+                1,
+                Some(String::from("review code")),
+                Some(String::from("code-reviewer")),
+                TaskInvocationConfig::main("review code"),
+                String::from("review code (code-reviewer)"),
+                None,
+                CoreConversationSnapshot::default(),
+                String::from("review code"),
+                String::from("completed"),
+            ),
+        );
+
+    task_runtime.open_detached_task_event_stream_for_run(task_id);
+    let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id));
+    let closed_event =
+        tokio::time::timeout(std::time::Duration::from_millis(50), stream.next()).await;
+    assert!(
+        closed_event.is_err(),
+        "reopened stream should wait for new run events instead of closing from the previous terminal record"
+    );
+
+    let started_event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateStarted,
+        "Subagent started",
+        "resumed run",
+    );
+    task_runtime.publish_detached_task_event(
+        task_id,
+        DetachedTaskRuntimeEvent::ParentRuntime {
+            parent_session_id: root_session_id,
+            event: started_event,
+        },
+    );
+
+    let received_event = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
+        .await
+        .expect("reopened stream should receive fresh run events")
+        .expect("fresh run event should exist");
+    let DetachedTaskRuntimeEvent::ParentRuntime { event, .. } = received_event else {
+        panic!("expected parent delegate-started runtime event");
+    };
+    assert_eq!(event.kind, RuntimeEventKind::DelegateStarted);
 }

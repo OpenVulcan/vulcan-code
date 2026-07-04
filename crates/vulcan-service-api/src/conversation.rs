@@ -314,6 +314,10 @@ pub struct SubagentNavigationChangedDelta {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentPanelRouteResponse {
+    /// Parent conversation id that owns this route response.
+    /// 拥有本次路由响应的父会话标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_conversation_id: Option<String>,
     /// Conversation id that owns the returned message window.
     /// 拥有返回消息窗口的会话标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]

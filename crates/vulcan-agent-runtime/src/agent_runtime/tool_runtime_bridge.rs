@@ -237,6 +237,36 @@ pub(crate) fn build_tool_failure_invocation_result(
     }
 }
 
+/// Builds one controller-visible policy rejection result without failing the provider turn.
+/// 构建一条控制器可见的策略拒绝结果，同时不使 Provider 回合失败。
+pub(crate) fn build_tool_rejection_invocation_result(
+    request: &CoreToolInvocationRequest,
+    message: impl Into<String>,
+) -> CoreToolInvocationResult {
+    let message = message.into();
+    let model_output = format!(
+        "Tool request rejected by runtime policy.\nTool: `{}`\nReason: {}\nUse another available tool or report this limitation to the parent agent.",
+        request.tool_name, message
+    );
+    CoreToolInvocationResult {
+        tool_call_id: request.tool_call_id.clone(),
+        tool_name: request.tool_name.clone(),
+        model_output,
+        host_result: Some(json!({
+            "kind": "tool_result",
+            "payload": {
+                "tool_call_id": request.tool_call_id,
+                "tool_name": request.tool_name,
+                "status": "rejected",
+                "rejected": true,
+                "reason": message,
+                "arguments": request.arguments,
+            }
+        })),
+        is_error: false,
+    }
+}
+
 #[async_trait::async_trait]
 impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
     /// Executes one controller-owned tool request through the shared host-managed tool bridge.

@@ -42,6 +42,21 @@ impl SegmentedTaskSessionStore {
         Ok(metadata)
     }
 
+    /// Loads every task-session metadata record with one metadata-only directory scan.
+    /// 通过一次仅元数据目录扫描加载所有子任务会话元数据记录。
+    pub fn load_all_task_session_metadata(
+        &self,
+    ) -> Result<Vec<TaskSessionMetadata>, SessionStoreError> {
+        let mut metadata = self
+            .load_all_task_documents()?
+            .into_iter()
+            .map(|(_, document)| document.task_session)
+            .collect::<Vec<_>>();
+        metadata.sort_by_key(|metadata| metadata.task_session_id);
+        metadata.dedup_by_key(|metadata| metadata.task_session_id);
+        Ok(metadata)
+    }
+
     /// Loads the newest task-local event payload by reverse-scanning segmented JSONL files.
     /// 通过反向扫描分段 JSONL 文件加载最新的子任务本地事件载荷。
     pub fn load_latest_event_payload(

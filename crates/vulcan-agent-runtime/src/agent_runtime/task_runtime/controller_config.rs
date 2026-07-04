@@ -111,24 +111,16 @@ pub(super) fn apply_resolved_provider_model_to_controller(
     resolved_config: &TaskSessionResolvedConfig,
 ) {
     let provider_model = &resolved_config.effective_config.provider_model;
-    if provider_model
-        .provider_id
-        .as_deref()
-        .is_some_and(|provider_id| provider_id == base.provider_id)
+    let session_config = ProviderConfigurationFile {
+        model: Some(format!("{}/{}", base.provider_id, base.model_id)),
+        ..ProviderConfigurationFile::default()
+    };
+    if let Some((provider_id, model_id)) =
+        provider_model_selector_from_snapshot(provider_model, &session_config)
+        && provider_id == base.provider_id
     {
-        config.provider_id = base.provider_id.clone();
-    }
-    if provider_model.provider_id.is_none()
-        || provider_model.provider_id.as_deref() == Some(base.provider_id.as_str())
-    {
-        if let Some(model_id) = provider_model
-            .model_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            config.model_id = model_id.to_string();
-        }
+        config.provider_id = provider_id;
+        config.model_id = model_id;
     }
 }
 

@@ -295,9 +295,11 @@ pub(crate) async fn service_select_conversation(
     state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
+    let select_started_at = current_unix_millis_value();
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    let retained_read_started_at = current_unix_millis_value();
     let (
         controller_runtime,
         luaskills_catalog,
@@ -351,6 +353,11 @@ pub(crate) async fn service_select_conversation(
             workspace_snapshot,
         )
     };
+    webui_trace_if_slow(
+        "select_conversation_retained_read",
+        retained_read_started_at,
+        format!("session={session_id}"),
+    );
     let exists = workspace_snapshot
         .sessions
         .iter()
@@ -359,18 +366,10 @@ pub(crate) async fn service_select_conversation(
         return refresh_workbench_snapshot(state).await;
     }
     workspace_snapshot.selected_session = session_id;
-    hydrate_selected_session_runtime_if_needed(
-        controller_runtime.clone(),
-        &mut workspace_snapshot,
-        session_id,
-    )
-    .await?;
     restore_webui_runtime_controls_for_session(
         &mut provider_configuration,
         workspace_snapshot.session_runtime_state.get(&session_id),
     );
-    sync_selected_session_goal_summary_from_store(&state, controller_runtime.clone(), session_id)
-        .await?;
     let (
         surface_messages,
         subagent_navigation,
@@ -379,6 +378,7 @@ pub(crate) async fn service_select_conversation(
         native_tools,
         hydrated_window_summaries,
     ) = {
+        let projection_started_at = current_unix_millis_value();
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -395,15 +395,22 @@ pub(crate) async fn service_select_conversation(
             .as_ref()
             .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
         let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
-        (
+        let result = (
             active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
-            subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot),
             guard.session_goal_summaries.clone(),
             command_session_runtime,
             native_tools,
             hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
-        )
+        );
+        webui_trace_if_slow(
+            "select_conversation_surface_projection",
+            projection_started_at,
+            format!("session={session_id}"),
+        );
+        result
     };
+    let workbench_build_started_at = current_unix_millis_value();
     let mut workbench = workbench_from_runtime(
         &controller_runtime,
         command_session_runtime.as_deref(),
@@ -422,7 +429,13 @@ pub(crate) async fn service_select_conversation(
         &hydrated_window_summaries,
         native_tools,
     );
+    webui_trace_if_slow(
+        "select_conversation_workbench_build",
+        workbench_build_started_at,
+        format!("session={session_id}"),
+    );
     {
+        let commit_started_at = current_unix_millis_value();
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -430,6 +443,16 @@ pub(crate) async fn service_select_conversation(
         workbench.revision = guard.workbench_generation;
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.workbench = workbench.clone();
+        webui_trace_if_slow(
+            "select_conversation_commit",
+            commit_started_at,
+            format!("session={session_id}"),
+        );
     }
+    webui_trace_if_slow(
+        "select_conversation_total",
+        select_started_at,
+        format!("session={session_id}"),
+    );
     Ok(workbench)
 }

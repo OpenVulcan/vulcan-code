@@ -245,6 +245,12 @@ pub(crate) async fn service_save_subagent_definition(
                 .find(|definition| definition.id == original_agent_id)
                 .cloned()
         });
+    let provider_configuration = provider_configuration_from_state(&state)?;
+    let requested_provider_model = validate_subagent_provider_model_request_with_existing(
+        &request,
+        existing.as_ref(),
+        &provider_configuration,
+    )?;
     if let Some(existing_definition) = existing
         .as_ref()
         .filter(|definition| subagent_definition_is_system_backed(definition))
@@ -258,6 +264,7 @@ pub(crate) async fn service_save_subagent_definition(
         let mut metadata_override = existing_definition.clone();
         apply_request_tool_policy(&mut metadata_override.tool_exposure, &request);
         apply_request_prompt_skill_policy(&mut metadata_override.prompt_skills, &request);
+        metadata_override.provider_model = requested_provider_model;
         metadata_override.system_prompt_append = request
             .system_prompt_append
             .as_deref()
@@ -365,6 +372,7 @@ pub(crate) async fn service_save_subagent_definition(
         .system_prompt_append
         .as_deref()
         .and_then(non_empty_request_text);
+    definition.provider_model = requested_provider_model;
     definition.tool_exposure.luaskills_overrides = request.luaskills_overrides;
     definition.tool_exposure.mcp_server_overrides = request.mcp_server_overrides;
     definition.source.scope = vulcan_task_session::SubagentDefinitionScope::User;
@@ -597,7 +605,13 @@ fn refresh_subagent_catalog_local_state_with_errors(
     }
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
-    guard.workbench.subagent_catalog = subagent_catalog_summary_from_catalog(&catalog);
+    let provider_configuration = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.provider_configuration.clone())
+        .unwrap_or_default();
+    guard.workbench.subagent_catalog =
+        subagent_catalog_summary_from_catalog(&catalog, &provider_configuration);
     Ok(guard.workbench.clone())
 }
 
@@ -721,6 +735,72 @@ fn apply_optional_text_patch(patch: OptionalTextPatch, value: &mut Option<String
             *value = non_empty_request_text(&next_value);
         }
     }
+}
+
+/// Validates a fixed provider/model request against existing metadata and effective model choices.
+/// 根据既有元数据与有效模型列表校验固定供应商/模型请求。
+pub(crate) fn validate_subagent_provider_model_request_with_existing(
+    request: &SubagentDefinitionSaveRequest,
+    existing: Option<&vulcan_task_session::SubagentDefinition>,
+    provider_configuration: &ProviderConfigurationFile,
+) -> Result<vulcan_session_core::ProviderModelSnapshot, String> {
+    let provider_id = request
+        .provider_model
+        .provider_id
+        .as_deref()
+        .and_then(non_empty_request_text);
+    let model_id = request
+        .provider_model
+        .model_id
+        .as_deref()
+        .and_then(non_empty_request_text);
+    let snapshot = match (provider_id, model_id) {
+        (None, None) => vulcan_session_core::ProviderModelSnapshot::default(),
+        (Some(provider_id), Some(model_id)) => vulcan_session_core::ProviderModelSnapshot {
+            provider_id: Some(provider_id),
+            model_id: Some(model_id),
+            reasoning_effort: None,
+            execution_mode: None,
+        },
+        _ => {
+            return Err(String::from(
+                "固定模型需要同时提供 Provider 和模型；如需不固定模型，请清空两者以跟随会话模型。",
+            ));
+        }
+    };
+    let Some(provider_id) = snapshot.provider_id.as_deref() else {
+        return Ok(snapshot);
+    };
+    let Some(model_id) = snapshot.model_id.as_deref() else {
+        return Ok(snapshot);
+    };
+    if existing
+        .map(|definition| subagent_provider_model_pair_matches(definition, provider_id, model_id))
+        .unwrap_or(false)
+    {
+        return Ok(snapshot);
+    }
+    let available = provider_config::effective_model_choices(provider_id, provider_configuration)
+        .into_iter()
+        .any(|choice| choice.id == model_id);
+    if available {
+        Ok(snapshot)
+    } else {
+        Err(format!(
+            "固定模型 `{provider_id}/{model_id}` 不在当前已启用模型列表中，请选择可用模型或恢复跟随会话模型。"
+        ))
+    }
+}
+
+/// Returns whether one existing definition already carries the same provider/model pair.
+/// 返回既有定义是否已经携带同一组供应商/模型。
+fn subagent_provider_model_pair_matches(
+    definition: &vulcan_task_session::SubagentDefinition,
+    provider_id: &str,
+    model_id: &str,
+) -> bool {
+    definition.provider_model.provider_id.as_deref() == Some(provider_id)
+        && definition.provider_model.model_id.as_deref() == Some(model_id)
 }
 
 /// Applies the save request's unified tool policy to one exposure snapshot.

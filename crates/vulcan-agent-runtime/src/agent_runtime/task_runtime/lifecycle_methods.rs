@@ -59,7 +59,7 @@ impl TaskRuntime {
                 )
             })?
             .get(&task_id)
-            .cloned();
+            .map(|entry| entry.abort_handle.clone());
         if let Some(handle) = handle {
             handle.abort();
             Ok(true)
@@ -84,7 +84,7 @@ impl TaskRuntime {
                 .filter_map(|candidate_task_id| {
                     active_task_runs
                         .get(&candidate_task_id)
-                        .cloned()
+                        .map(|entry| entry.abort_handle.clone())
                         .map(|handle| (candidate_task_id, handle))
                 })
                 .collect::<Vec<_>>()
@@ -97,7 +97,91 @@ impl TaskRuntime {
             .map(|(stopped_task_id, _)| stopped_task_id)
             .collect::<Vec<_>>();
         self.mark_stopped_tasks_in_registry(&stopped_task_ids)?;
+        self.set_subagent_stop_reason_for_tasks(&stopped_task_ids, "user_interrupt")?;
         Ok(stopped_task_ids)
+    }
+
+    /// Stops every active child-agent run during application shutdown and persists stopped metadata.
+    /// 在应用关闭期间停止所有活动子代理运行，并持久化停止元数据。
+    pub fn stop_active_tasks_for_app_shutdown(&self) -> Result<Vec<SessionId>, String> {
+        let handles = {
+            let active_task_runs = self.active_task_runs.read().map_err(|_| {
+                String::from(
+                    "The active task registry is locked and cannot stop active subagent tasks.",
+                )
+            })?;
+            active_task_runs
+                .iter()
+                .map(|(task_id, entry)| (*task_id, entry.abort_handle.clone()))
+                .collect::<Vec<_>>()
+        };
+        for (_, handle) in &handles {
+            handle.abort();
+        }
+        let stopped_task_ids = handles
+            .into_iter()
+            .map(|(stopped_task_id, _)| stopped_task_id)
+            .collect::<Vec<_>>();
+        self.mark_stopped_tasks_in_registry(&stopped_task_ids)?;
+        self.set_subagent_stop_reason_for_tasks(&stopped_task_ids, "app_shutdown")?;
+        self.persist_app_shutdown_stopped_task_records(&stopped_task_ids)?;
+        Ok(stopped_task_ids)
+    }
+
+    /// Sets one stop reason on registry entries matching task session ids.
+    /// 为匹配任务会话标识的注册表条目设置停止原因。
+    fn set_subagent_stop_reason_for_tasks(
+        &self,
+        task_ids: &[SessionId],
+        reason: &str,
+    ) -> Result<(), String> {
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+        let task_ids = task_ids
+            .iter()
+            .copied()
+            .map(SessionNodeId::from)
+            .collect::<BTreeSet<_>>();
+        let mut registry = self.subagent_registry.write().map_err(|_| {
+            String::from("The subagent registry is locked and cannot set stop reasons.")
+        })?;
+        let agent_ids = registry
+            .list_all()
+            .into_iter()
+            .filter(|entry| task_ids.contains(&entry.session_id))
+            .map(|entry| entry.agent_id.clone())
+            .collect::<Vec<_>>();
+        for agent_id in agent_ids {
+            if let Some(entry) = registry.get_mut(&agent_id) {
+                entry.stop_reason = Some(reason.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// Marks closed tasks as archived in the in-memory TaskSession records.
+    /// 将已关闭任务在内存 TaskSession 记录中标记为已归档。
+    pub(super) fn mark_archived_tasks_in_sessions(
+        &self,
+        task_ids: &[SessionId],
+    ) -> Result<(), String> {
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+        let task_ids = task_ids.iter().copied().collect::<BTreeSet<_>>();
+        let archived_status = status_name_for_task_session_status(TaskSessionStatus::Archived);
+        let updated_at = current_unix_millis_text();
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from("The task-session registry is locked and cannot archive closed agents.")
+        })?;
+        for record in sessions.values_mut() {
+            if task_ids.contains(&record.task_id) {
+                record.last_status = archived_status.to_string();
+                record.updated_at = updated_at.clone();
+            }
+        }
+        Ok(())
     }
 
     /// Marks stopped tasks in the in-memory record and Vulcan registry before background joins settle.
@@ -229,6 +313,20 @@ impl TaskRuntime {
         }
     }
 
+    /// Opens one detached child-task event stream for a fresh run before the parent announces DelegateStarted.
+    /// 在父级发布 DelegateStarted 之前，为新一轮子任务运行打开一条分离事件流。
+    pub(super) fn open_detached_task_event_stream_for_run(&self, task_id: SessionId) {
+        let mut streams = self
+            .detached_task_event_streams
+            .write()
+            .expect("task detached stream registry lock");
+        let state = streams.entry(task_id).or_default();
+        state.closed = false;
+        // A resumed run reuses the same task id, so stale terminal output must not replay into the new live panel.
+        // 续跑会复用同一任务标识，因此旧终态输出不能回放到新的实时面板。
+        state.buffered_events.clear();
+    }
+
     /// Returns whether the task registry already knows this child task reached a terminal status.
     /// 返回任务注册表是否已经确认该子任务到达终态。
     fn task_has_terminal_record(&self, task_id: SessionId) -> bool {
@@ -274,23 +372,37 @@ impl TaskRuntime {
         task_id: SessionId,
         handle: AbortHandle,
     ) -> ActiveTaskRunGuard {
+        let run_id = Uuid::new_v4();
         self.active_task_runs
             .write()
             .expect("task active run registry lock")
-            .insert(task_id, handle);
+            .insert(
+                task_id,
+                ActiveTaskRunEntry {
+                    run_id,
+                    abort_handle: handle,
+                },
+            );
         ActiveTaskRunGuard {
             runtime: Arc::clone(self),
             task_id,
+            run_id,
         }
     }
 
     /// Removes one active child-task abort handle from the registry.
     /// 从注册表中移除一条活动子任务中止句柄。
-    pub(super) fn remove_active_task_run(&self, task_id: SessionId) {
-        self.active_task_runs
+    pub(super) fn remove_active_task_run(&self, task_id: SessionId, run_id: Uuid) {
+        let mut active_task_runs = self
+            .active_task_runs
             .write()
-            .expect("task active run registry lock")
-            .remove(&task_id);
+            .expect("task active run registry lock");
+        let should_remove = active_task_runs
+            .get(&task_id)
+            .is_some_and(|entry| entry.run_id == run_id);
+        if should_remove {
+            active_task_runs.remove(&task_id);
+        }
     }
 
     /// Returns whether any known descendant task still has an active provider run.

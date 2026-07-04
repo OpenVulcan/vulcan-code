@@ -19,10 +19,19 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             request.current_session_id, request.task_id, request.public_task_id, request.depth
         ),
     );
-    let resolved_config = task_runtime.resolve_task_session_config_for_execution(
+    if provider_model_has_override(&request.invocation_config.provider_model) {
+        validate_explicit_spawn_model_selector(
+            &context.config,
+            &request.invocation_config.provider_model,
+        )?;
+    }
+    let mut resolved_config = task_runtime.resolve_task_session_config_for_execution(
         &base_controller_config,
         &request.invocation_config,
     )?;
+    if !provider_model_has_override(&request.invocation_config.provider_model) {
+        clear_unavailable_profile_model_override(&context.config, &mut resolved_config);
+    }
     task_runtime_trace(
         "shared_task_config_resolved",
         format!(
@@ -50,6 +59,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         &[],
         current_unix_millis_text(),
     );
+    task_runtime.open_detached_task_event_stream_for_run(task_id);
     let (delegate_started_event, projection_barrier) =
         attach_runtime_event_projection_barrier(build_task_delegate_runtime_event(
             RuntimeEventKind::DelegateStarted,
@@ -174,12 +184,18 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         let mut active_task_run_guard = Some(active_task_run_guard);
         let _child_run_abort_guard = child_run_abort_guard;
         let child_run_result = child_run_task.await;
-        match child_run_result {
+        let resumed_queued_messages = match child_run_result {
             Ok(Ok(completion)) => {
                 let outcome = completion.outcome;
                 let _ =
                     task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
                 drop(active_task_run_guard.take());
+                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
+                    &task_runtime,
+                    request.current_session_id,
+                    task_id,
+                )
+                .await;
                 publish_task_finished_to_parent(
                     &task_runtime,
                     &request,
@@ -194,6 +210,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                         outcome.resolved_config.clone(),
                     );
                 }
+                resumed_queued_messages
             }
             Ok(Err(error)) if task_execution_error_is_stopped(error.as_str()) => {
                 let stopped_snapshot = current_task_snapshot_from_store(
@@ -211,18 +228,32 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 let _ =
                     task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
                 drop(active_task_run_guard.take());
+                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
+                    &task_runtime,
+                    request.current_session_id,
+                    task_id,
+                )
+                .await;
                 publish_task_finished_to_parent(
                     &task_runtime,
                     &request,
                     &outcome,
                     outcome.final_output_text.as_str(),
                 );
+                resumed_queued_messages
             }
             Ok(Err(error)) => {
                 let _ =
                     task_runtime.mark_task_failure(request.current_session_id, &request, &error);
                 drop(active_task_run_guard.take());
+                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
+                    &task_runtime,
+                    request.current_session_id,
+                    task_id,
+                )
+                .await;
                 publish_task_failure_to_parent(&task_runtime, &request, &error);
+                resumed_queued_messages
             }
             Err(join_error) if join_error.is_cancelled() => {
                 let stopped_snapshot = current_task_snapshot_from_store(
@@ -240,12 +271,19 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 let _ =
                     task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
                 drop(active_task_run_guard.take());
+                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
+                    &task_runtime,
+                    request.current_session_id,
+                    task_id,
+                )
+                .await;
                 publish_task_finished_to_parent(
                     &task_runtime,
                     &request,
                     &outcome,
                     outcome.final_output_text.as_str(),
                 );
+                resumed_queued_messages
             }
             Err(join_error) => {
                 let error = format!(
@@ -256,11 +294,18 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 let _ =
                     task_runtime.mark_task_failure(request.current_session_id, &request, &error);
                 drop(active_task_run_guard.take());
+                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
+                    &task_runtime,
+                    request.current_session_id,
+                    task_id,
+                )
+                .await;
                 publish_task_failure_to_parent(&task_runtime, &request, &error);
+                resumed_queued_messages
             }
-        }
+        };
         drop(active_task_run_guard.take());
-        if !task_runtime.task_has_active_descendant_runs(task_id) {
+        if !resumed_queued_messages && !task_runtime.task_has_active_descendant_runs(task_id) {
             task_runtime.close_detached_task_event_stream(task_id);
         }
         task_runtime_trace(
@@ -281,6 +326,41 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         ),
     );
     Ok(running_outcome)
+}
+
+/// Resumes queued child-agent messages after the current active-run guard has been dropped.
+/// 在当前活动运行守卫释放后续跑排队的子代理消息。
+///
+/// # Parameters
+/// 参数
+/// `task_runtime` owns the active-run registry and inter-agent inbox.
+/// `task_runtime` 持有活动运行注册表与代理间 inbox。
+/// `current_session_id` is the direct parent that owns the child agent.
+/// `current_session_id` 是拥有该子代理的直接父级。
+/// `task_id` identifies the child agent whose turn just settled.
+/// `task_id` 标识刚刚收敛的子代理。
+///
+/// # Returns
+/// 返回值
+/// `true` when a queued message started another child-agent turn.
+/// 当排队消息已启动另一轮子代理 turn 时返回 `true`。
+async fn resume_queued_messages_after_active_run_dropped(
+    task_runtime: &Arc<TaskRuntime>,
+    current_session_id: SessionId,
+    task_id: SessionId,
+) -> bool {
+    match task_runtime
+        .resume_agent_from_inbox_after_task_settled(current_session_id, task_id)
+        .await
+    {
+        Ok(resumed) => resumed,
+        Err(error) => {
+            eprintln!(
+                "[subagent-agent-control] failed to resume queued messages after task settled: {error}"
+            );
+            false
+        }
+    }
 }
 
 /// Loads the latest persisted TaskSession context as a core snapshot when it is available.

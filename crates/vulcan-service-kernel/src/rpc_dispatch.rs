@@ -341,6 +341,15 @@ pub(super) async fn dispatch_service_rpc(
             )
             .await,
         ),
+        "service_close_subagent_task" => rpc_json_result(
+            service_close_subagent_task(
+                app,
+                state,
+                rpc_required_param(&params, "parentConversationId")?,
+                rpc_required_param(&params, "taskId")?,
+            )
+            .await,
+        ),
         "service_edit_pending_prompt" => rpc_json_result(
             service_edit_pending_prompt(app, state, rpc_required_param(&params, "entryId")?).await,
         ),

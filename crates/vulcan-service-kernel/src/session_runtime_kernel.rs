@@ -32,10 +32,71 @@ pub(crate) fn session_runtime_kernel_mut(
     state: &mut ServiceBridgeState,
     session_id: SessionId,
 ) -> &mut SessionRuntimeKernel {
+    if !state.session_runtime_kernels.contains_key(&session_id) {
+        let restored_kernel = restored_webui_session_runtime_kernel(state, session_id);
+        state
+            .session_runtime_kernels
+            .insert(session_id, restored_kernel);
+    }
     state
         .session_runtime_kernels
+        .get_mut(&session_id)
+        .expect("session runtime kernel should exist after insertion")
+}
+
+/// Restores one session runtime kernel from persisted runtime state or creates an empty kernel.
+/// 从持久化运行态恢复单个会话运行时内核，缺失时创建空内核。
+fn restored_webui_session_runtime_kernel(
+    state: &ServiceBridgeState,
+    session_id: SessionId,
+) -> SessionRuntimeKernel {
+    let restored = state
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&session_id)
+                .or_else(|| workspace.archived_session_runtime_state.get(&session_id))
+        })
+        .and_then(|runtime_state| runtime_state.session_runtime_kernel.clone());
+    let Some(mut kernel) = restored else {
+        return SessionRuntimeKernel::new(SessionNodeId::from(session_id));
+    };
+    let cleared_active_turn = kernel.restore_idle_after_process_restart(current_unix_millis_u64());
+    webui_trace(
+        "session_kernel_restored",
+        format!(
+            "session={session_id} cleared_active_turn={cleared_active_turn} mailbox_inputs={} consumed_inputs={}",
+            kernel.input_queue().mailbox_len(),
+            kernel.input_queue().consumed_input_count()
+        ),
+    );
+    kernel
+}
+
+/// Mirrors the in-memory runtime kernel into the retained workspace runtime-state document.
+/// 将内存运行时内核镜像到保留工作区运行态文档中。
+pub(crate) fn sync_webui_session_runtime_kernel_to_workspace_state(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+) {
+    let Some(kernel) = state.session_runtime_kernels.get(&session_id).cloned() else {
+        return;
+    };
+    let Some(workspace) = state.workspace_snapshot.as_mut() else {
+        return;
+    };
+    let now = current_unix_millis_text();
+    let runtime_state = workspace
+        .session_runtime_state
         .entry(session_id)
-        .or_insert_with(|| SessionRuntimeKernel::new(SessionNodeId::from(session_id)))
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    runtime_state.session_runtime_kernel = Some(kernel);
+    runtime_state.updated_at = now;
 }
 
 /// Captures the parent session turn binding for a detached WebUI subagent task.
@@ -174,6 +235,7 @@ pub(crate) fn start_webui_session_kernel_turn(
             turn.turn_id, turn.generation
         ),
     );
+    sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
     Ok(())
 }
 
@@ -206,6 +268,7 @@ pub(crate) fn finish_webui_session_kernel_turn(
             ),
         );
     }
+    sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
 }
 
 /// Stops the current WebUI session kernel generation if one exists.
@@ -244,6 +307,7 @@ pub(crate) fn stop_webui_session_kernel_generation(
                 .task_runtime
                 .notify_parent_input_activity(SessionNodeId::from(session_id));
         }
+        sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
         true
     } else {
         clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation_idle");
@@ -252,6 +316,7 @@ pub(crate) fn stop_webui_session_kernel_generation(
                 .task_runtime
                 .notify_parent_input_activity(SessionNodeId::from(session_id));
         }
+        sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
         false
     }
 }
@@ -574,6 +639,7 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         input = input.with_parent_turn_id(parent_turn_id);
     }
     let accepted = kernel.enqueue_mailbox_input_for_generation(input, source_generation);
+    sync_webui_session_runtime_kernel_to_workspace_state(state, parent_session_id);
     webui_trace(
         "subagent_mailbox_input_enqueued",
         format!(

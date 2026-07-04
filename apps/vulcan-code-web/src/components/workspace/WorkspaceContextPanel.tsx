@@ -212,6 +212,9 @@ export interface WorkspaceContextPanelProps {
   // Stops one running subagent task.
   // 停止单个正在运行的子代理任务。
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
+  // Closes one open subagent lifecycle.
+  // 关闭单个未关闭子智能体生命周期。
+  onCloseSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   // Loads one hidden tool detail record for transcript rows.
   // 为转录行加载单条隐藏工具详情记录。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -749,6 +752,12 @@ function WorkspaceSubagentPanel(args: {
   // stopSubmitting stores whether the stop request is currently in flight.
   // stopSubmitting 保存停止请求是否正在提交。
   const [stopSubmitting, setStopSubmitting] = React.useState(false);
+  // closeConfirmOpen stores the lifecycle close confirmation dialog state.
+  // closeConfirmOpen 保存生命周期关闭确认弹窗状态。
+  const [closeConfirmOpen, setCloseConfirmOpen] = React.useState(false);
+  // closeSubmitting stores whether the close request is currently in flight.
+  // closeSubmitting 保存关闭请求是否正在提交。
+  const [closeSubmitting, setCloseSubmitting] = React.useState(false);
   // scrollRef owns the read-only transcript viewport inside this tab.
   // scrollRef 持有该页签内只读转录视口。
   const scrollRef = React.useRef<HTMLElement | null>(null);
@@ -798,6 +807,9 @@ function WorkspaceSubagentPanel(args: {
   // taskRunning records whether the backend still allows stopping this task.
   // taskRunning 记录后端是否仍允许停止该任务。
   const taskRunning = Boolean(task?.isRunning && parentConversationId && taskId);
+  // taskOpen records whether the backend still exposes this task as an unclosed agent.
+  // taskOpen 记录后端是否仍将该任务暴露为未关闭智能体。
+  const taskOpen = Boolean(task && parentConversationId && taskId);
   // handleStopConfirmed executes the single-task stop after confirmation.
   // handleStopConfirmed 在确认后执行单任务停止。
   const handleStopConfirmed = React.useCallback(async () => {
@@ -812,6 +824,21 @@ function WorkspaceSubagentPanel(args: {
       setStopSubmitting(false);
     }
   }, [args.props, parentConversationId, stopSubmitting, taskId]);
+  // handleCloseConfirmed closes the child-agent lifecycle after confirmation.
+  // handleCloseConfirmed 在确认后关闭子智能体生命周期。
+  const handleCloseConfirmed = React.useCallback(async () => {
+    if (!parentConversationId || !taskId || closeSubmitting) {
+      return;
+    }
+    setCloseSubmitting(true);
+    try {
+      await args.props.onCloseSubagentTask(parentConversationId, taskId);
+      setCloseConfirmOpen(false);
+      args.props.onCloseContextTab(args.tab.id);
+    } finally {
+      setCloseSubmitting(false);
+    }
+  }, [args.props, args.tab.id, closeSubmitting, parentConversationId, taskId]);
   // handleNoopScrollStateChange satisfies the read-only transcript contract without persisting layout state.
   // handleNoopScrollStateChange 满足只读转录契约，但不持久化布局状态。
   const handleNoopScrollStateChange = React.useCallback(() => undefined, []);
@@ -827,6 +854,24 @@ function WorkspaceSubagentPanel(args: {
   // handleLoadMoreHistory keeps the side transcript display-only until backend exposes child pagination here.
   // handleLoadMoreHistory 在此处暴露子会话分页前保持侧栏转录仅展示。
   const handleLoadMoreHistory = React.useCallback(async () => false, []);
+  // autoLoadRouteRef remembers the last empty child transcript that already asked the backend for detail.
+  // autoLoadRouteRef 记录已经向后端请求过详情的空子会话转录。
+  const autoLoadRouteRef = React.useRef<string | null>(null);
+  // onOpenSubagentPanel loads a focused persisted child transcript when this tab was restored without message cache.
+  // onOpenSubagentPanel 在页签恢复但消息缓存缺失时加载聚焦的持久化子会话转录。
+  const onOpenSubagentPanel = args.props.onOpenSubagentPanel;
+
+  React.useEffect(() => {
+    if (!parentConversationId || !taskId || messages.length > 0) {
+      return;
+    }
+    const routeKey = `${parentConversationId}:${taskId}`;
+    if (autoLoadRouteRef.current === routeKey) {
+      return;
+    }
+    autoLoadRouteRef.current = routeKey;
+    void onOpenSubagentPanel(parentConversationId, taskId).catch(() => undefined);
+  }, [messages.length, onOpenSubagentPanel, parentConversationId, taskId]);
 
   if (!parentConversationId || !taskId) {
     return <WorkspaceSubagentEmptyState title={workspaceContextTabDefaultTitle("subagent", t)} />;
@@ -868,17 +913,32 @@ function WorkspaceSubagentPanel(args: {
         onUserScrollStart={handleNoopUserScrollStart}
         onVirtualizerStateChange={handleNoopVirtualizerStateChange}
       />
-      {taskRunning ? (
+      {taskRunning || taskOpen ? (
         <div className="workspace-subagent-footer">
-          <Button
-            className="workspace-subagent-stop-button"
-            onClick={() => setStopConfirmOpen(true)}
-            type="button"
-            variant="outline"
-          >
-            <Square fill="currentColor" size={12} strokeWidth={0} />
-            <span>{t("conversation.subagent.stopTask").replace("{task}", task?.label ?? args.tab.title)}</span>
-          </Button>
+          {taskRunning ? (
+            <Button
+              className="workspace-subagent-stop-button"
+              disabled={closeSubmitting}
+              onClick={() => setStopConfirmOpen(true)}
+              type="button"
+              variant="outline"
+            >
+              <Square fill="currentColor" size={12} strokeWidth={0} />
+              <span>{t("conversation.subagent.stopTask")}</span>
+            </Button>
+          ) : null}
+          {taskOpen ? (
+            <Button
+              className="workspace-subagent-stop-button"
+              disabled={stopSubmitting}
+              onClick={() => setCloseConfirmOpen(true)}
+              type="button"
+              variant="outline"
+            >
+              <X size={13} />
+              <span>{t("conversation.subagent.closeTask")}</span>
+            </Button>
+          ) : null}
         </div>
       ) : null}
       <Dialog open={stopConfirmOpen} onOpenChange={(open) => !stopSubmitting && setStopConfirmOpen(open)}>
@@ -896,6 +956,25 @@ function WorkspaceSubagentPanel(args: {
             <Button disabled={stopSubmitting} onClick={() => void handleStopConfirmed()} type="button" variant="destructive">
               <Square fill="currentColor" size={12} strokeWidth={0} />
               <span>{stopSubmitting ? t("conversation.subagent.stopping") : t("conversation.subagent.stopConfirm")}</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={closeConfirmOpen} onOpenChange={(open) => !closeSubmitting && setCloseConfirmOpen(open)}>
+        <DialogContent className="workspace-subagent-stop-dialog" showCloseButton={!closeSubmitting}>
+          <DialogHeader>
+            <DialogTitle>{t("conversation.subagent.closeConfirmTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("conversation.subagent.closeConfirmDescription").replace("{task}", task?.label ?? args.tab.title)}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button disabled={closeSubmitting} onClick={() => setCloseConfirmOpen(false)} type="button" variant="outline">
+              {t("conversation.action.cancel")}
+            </Button>
+            <Button disabled={closeSubmitting} onClick={() => void handleCloseConfirmed()} type="button" variant="destructive">
+              <X size={13} />
+              <span>{closeSubmitting ? t("conversation.subagent.closing") : t("conversation.subagent.closeConfirm")}</span>
             </Button>
           </DialogFooter>
         </DialogContent>

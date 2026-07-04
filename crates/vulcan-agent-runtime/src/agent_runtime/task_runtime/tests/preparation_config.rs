@@ -114,10 +114,10 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
     );
 }
 
-/// Verifies ordinary child-agent execution hides subagent orchestration tools by default.
-/// 验证普通子代理执行默认隐藏子代理调度工具。
+/// Verifies ordinary child-agent execution keeps subagent tool schemas but rejects calls by default.
+/// 验证普通子智能体默认保留子智能体工具 Schema，但拒绝调用。
 #[test]
-fn task_runtime_preparation_request_hides_subagent_tools_by_default() {
+fn task_runtime_preparation_request_rejects_subagent_tools_by_default() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
@@ -159,21 +159,41 @@ fn task_runtime_preparation_request_hides_subagent_tools_by_default() {
 
     for tool_id in [
         SPAWN_AGENT_TOOL,
+        AGENT_ORCHESTRATION_INFO_TOOL,
         SEND_MESSAGE_TOOL,
-        FOLLOWUP_TASK_TOOL,
         WAIT_AGENT_TOOL,
         INTERRUPT_AGENT_TOOL,
+        CLOSE_AGENT_TOOL,
         LIST_AGENTS_TOOL,
+        TODOLIST_TOOL_ID,
     ] {
         assert!(
-            child_request
+            !child_request
                 .tool_exposure_override
                 .disabled_tools
                 .iter()
                 .any(|disabled_tool| disabled_tool == tool_id),
-            "{tool_id} should be disabled for ordinary child agents"
+            "{tool_id} should stay registered for ordinary child agents"
         );
     }
+    assert_eq!(
+        child_request.tool_request_rejection_reason.as_deref(),
+        Some(SUBAGENT_REJECTED_TOOL_REASON)
+    );
+    assert!(!child_request.tool_request_rejection_all_tools);
+    assert_eq!(
+        child_request.tool_request_rejection_tool_ids,
+        vec![
+            SPAWN_AGENT_TOOL.to_string(),
+            AGENT_ORCHESTRATION_INFO_TOOL.to_string(),
+            SEND_MESSAGE_TOOL.to_string(),
+            WAIT_AGENT_TOOL.to_string(),
+            INTERRUPT_AGENT_TOOL.to_string(),
+            CLOSE_AGENT_TOOL.to_string(),
+            LIST_AGENTS_TOOL.to_string(),
+            TODOLIST_TOOL_ID.to_string(),
+        ]
+    );
 }
 
 /// Verifies clone-style contexts can explicitly retain the subagent tool family for future modes.
@@ -227,6 +247,22 @@ fn task_runtime_preparation_request_can_preserve_subagent_tools_when_allowed() {
             .iter()
             .any(|disabled_tool| disabled_tool == SPAWN_AGENT_TOOL)
     );
+    assert!(
+        !child_request
+            .tool_exposure_override
+            .disabled_tools
+            .iter()
+            .any(|disabled_tool| disabled_tool == TODOLIST_TOOL_ID),
+        "todolist must stay registered for child-agent cache stability"
+    );
+    assert_eq!(
+        child_request.tool_request_rejection_reason.as_deref(),
+        Some(SUBAGENT_REJECTED_TOOL_REASON)
+    );
+    assert_eq!(
+        child_request.tool_request_rejection_tool_ids,
+        vec![TODOLIST_TOOL_ID.to_string()]
+    );
 }
 
 /// Verifies mirror child agents preserve tool schemas but reject subagent orchestration calls.
@@ -276,11 +312,13 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
 
     for tool_id in [
         SPAWN_AGENT_TOOL,
+        AGENT_ORCHESTRATION_INFO_TOOL,
         SEND_MESSAGE_TOOL,
-        FOLLOWUP_TASK_TOOL,
         WAIT_AGENT_TOOL,
         INTERRUPT_AGENT_TOOL,
+        CLOSE_AGENT_TOOL,
         LIST_AGENTS_TOOL,
+        TODOLIST_TOOL_ID,
     ] {
         assert!(
             !child_request
@@ -293,20 +331,20 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
     }
     assert_eq!(
         child_request.tool_request_rejection_reason.as_deref(),
-        Some(
-            "当前为子代理镜像，不允许使用子代理调度相关工具。请使用其他可用工具完成分析，并将结果交回父代理。"
-        )
+        Some(SUBAGENT_REJECTED_TOOL_REASON)
     );
     assert!(!child_request.tool_request_rejection_all_tools);
     assert_eq!(
         child_request.tool_request_rejection_tool_ids,
         vec![
             SPAWN_AGENT_TOOL.to_string(),
+            AGENT_ORCHESTRATION_INFO_TOOL.to_string(),
             SEND_MESSAGE_TOOL.to_string(),
-            FOLLOWUP_TASK_TOOL.to_string(),
             WAIT_AGENT_TOOL.to_string(),
             INTERRUPT_AGENT_TOOL.to_string(),
+            CLOSE_AGENT_TOOL.to_string(),
             LIST_AGENTS_TOOL.to_string(),
+            TODOLIST_TOOL_ID.to_string(),
         ]
     );
 }
@@ -786,10 +824,7 @@ fn task_invocation_config_ignores_profile_and_keeps_supported_overrides() {
         config.provider_model.model_id.as_deref(),
         Some("deepseek-v4")
     );
-    assert_eq!(
-        config.provider_model.reasoning_effort.as_deref(),
-        Some("high")
-    );
+    assert_eq!(config.provider_model.reasoning_effort.as_deref(), None);
     assert_eq!(
         config.provider_model.execution_mode.as_deref(),
         Some("Plan")

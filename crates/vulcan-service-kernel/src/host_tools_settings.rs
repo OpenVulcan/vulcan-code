@@ -9,6 +9,7 @@ use std::{
 use serde::Deserialize;
 use tokio::{process::Command as TokioCommand, time::timeout};
 use vulcan_agent_runtime::provider_config::{self, ProviderConfigurationFile};
+use vulcan_host_tools::process_creation::apply_windows_release_no_window;
 use vulcan_provider_config::config::{PersistedRtkRouteMode, PersistedRtkToolConfiguration};
 use vulcan_runtime_assets::resolve_bundled_rtk_executable_path;
 use vulcan_service_api::{
@@ -98,6 +99,7 @@ pub(crate) async fn service_get_rtk_gain_stats() -> Result<RtkGainStatsResponse,
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    apply_windows_release_no_window(&mut command);
 
     let output = match timeout(Duration::from_secs(5), command.output()).await {
         Ok(Ok(output)) => output,
@@ -267,6 +269,7 @@ async fn load_rtk_gain_command_stats(rtk_path: &std::path::Path) -> Vec<RtkGainC
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    apply_windows_release_no_window(&mut command);
 
     let output = match timeout(Duration::from_secs(5), command.output()).await {
         Ok(Ok(output)) if output.status.success() => output,

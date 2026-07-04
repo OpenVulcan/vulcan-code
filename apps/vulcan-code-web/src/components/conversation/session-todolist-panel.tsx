@@ -34,6 +34,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary, WorkbenchSnapshot } from "@/types";
@@ -163,10 +164,10 @@ export function ConversationSessionTodolistPanel(props: {
     [props.terminalSessions],
   );
   const hasTerminalSessions = terminalSessions.length > 0;
-  // subagentTasks keeps only actively scheduled child agents in the floating panel.
-  // subagentTasks 在浮动面板中只保留正在调度的子代理。
+  // subagentTasks mirrors the backend unclosed-agent navigation list.
+  // subagentTasks 镜像后端未关闭代理导航列表。
   const subagentTasks = React.useMemo(
-    () => (props.subagentNavigation?.tasks ?? []).filter((task) => task.isRunning || task.runState === "running"),
+    () => props.subagentNavigation?.tasks ?? [],
     [props.subagentNavigation?.tasks],
   );
   const hasSubagentTasks = subagentTasks.length > 0;
@@ -927,24 +928,47 @@ function ConversationSessionSubagentSection(props: {
       </div>
       <div className="workspace-tool-panel-menu-list conversation-session-subagent-list">
         {props.tasks.map((task) => (
-          <button
-            className={cn("workspace-tool-panel-menu-row conversation-session-subagent-row", task.isRunning && "running")}
-            key={task.taskId}
-            onClick={() => void props.onOpenSubagentPanel(props.parentConversationId, task.taskId)}
-            style={conversationSessionSubagentAccentStyle(task)}
-            title={task.description ?? task.label}
-            type="button"
-          >
-            <Boxes size={15} />
-            <span className="conversation-session-subagent-label">{task.label}</span>
-            <span className={cn("conversation-session-subagent-state", task.runState)}>
-              {conversationSessionSubagentRunStateLabel(task.runState, t)}
-            </span>
-          </button>
+          <Tooltip key={task.taskId}>
+            <TooltipTrigger asChild>
+              <button
+                className={cn("workspace-tool-panel-menu-row conversation-session-subagent-row", task.isRunning && "running")}
+                onClick={() => void props.onOpenSubagentPanel(props.parentConversationId, task.taskId)}
+                style={conversationSessionSubagentAccentStyle(task)}
+                type="button"
+              >
+                <Boxes size={15} />
+                <span className="conversation-session-subagent-label">{task.label}</span>
+                <span className={cn("conversation-session-subagent-state", task.runState)}>
+                  {conversationSessionSubagentRunStateLabel(task.runState, t)}
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="conversation-session-subagent-tooltip" side="left" sideOffset={8}>
+              <pre>{conversationSessionSubagentTooltip(task, t)}</pre>
+            </TooltipContent>
+          </Tooltip>
         ))}
       </div>
     </section>
   );
+}
+
+// conversationSessionSubagentTooltip builds a detailed hover summary for one unclosed agent row.
+// conversationSessionSubagentTooltip 为单条未关闭智能体行构建详细悬浮摘要。
+function conversationSessionSubagentTooltip(
+  // Task row from the backend navigation snapshot.
+  // 后端导航快照中的任务行。
+  task: ConversationSessionSubagentTask,
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string {
+  return [
+    task.label,
+    `${t("conversation.subagent.detail.status")}: ${conversationSessionSubagentRunStateLabel(task.runState, t)}`,
+    `${t("conversation.subagent.detail.name")}: ${task.publicTaskId}`,
+    task.description ? `${t("conversation.subagent.detail.description")}: ${task.description}` : null,
+  ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
 // conversationSessionSubagentAccentStyle returns a stable colorful accent for active subagent rows.

@@ -1,5 +1,113 @@
 use super::*;
 
+/// Builds one minimal catalog definition for orchestration-info tests.
+/// 为调度信息测试构建一个最小目录定义。
+fn test_subagent_catalog_definition(
+    // Stable model-visible definition id.
+    // 稳定的模型可见定义标识。
+    id: &str,
+    // Whether the definition should be exposed to spawn_agent.
+    // 该定义是否应暴露给 spawn_agent。
+    enabled: bool,
+) -> SubagentDefinition {
+    SubagentDefinition {
+        id: id.to_string(),
+        name: format!("{id} name"),
+        description: Some(format!("{id} description")),
+        locales: BTreeMap::new(),
+        origin: None,
+        emoji: String::from("AI"),
+        color: String::from("#64748b"),
+        vibe: None,
+        mode: vulcan_task_session::SubagentDefinitionMode::Expert,
+        system_prompt: Some(format!("{id} prompt")),
+        system_prompt_append: None,
+        provider_model: ProviderModelSnapshot::default(),
+        tool_exposure: ToolExposureSnapshot::default(),
+        prompt_skills: PromptSkillSnapshot::default(),
+        context_compaction: ContextCompactionPolicyRequest::default(),
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
+        max_depth: None,
+        enabled,
+        source: vulcan_task_session::SubagentDefinitionSource {
+            scope: vulcan_task_session::SubagentDefinitionScope::System,
+            file: PathBuf::from(format!("{id}.md")),
+            sidecar_file: None,
+            source_key: String::from("system"),
+            category_id: Some(String::from("engineering")),
+            package_id: None,
+            remote_url: None,
+            override_of: None,
+            source_hash: None,
+            version: None,
+            etag: None,
+            last_modified: None,
+            updated_at: None,
+        },
+        extra: Value::Null,
+    }
+}
+
+/// Installs a small catalog with one enabled and one disabled subagent definition.
+/// 安装一个包含启用和禁用定义的小型子代理目录。
+fn install_test_subagent_catalog(task_runtime: &TaskRuntime) {
+    task_runtime
+        .replace_subagent_catalog(SubagentCatalog {
+            definitions: vec![
+                test_subagent_catalog_definition("engineering/enabled-reviewer", true),
+                test_subagent_catalog_definition("engineering/disabled-reviewer", false),
+            ],
+            ..SubagentCatalog::default()
+        })
+        .expect("test catalog should install");
+}
+
+/// Verifies agent_orchestration_info exposes enabled agents by default.
+/// 验证 agent_orchestration_info 默认只暴露已启用智能体。
+#[tokio::test]
+async fn agent_orchestration_info_lists_enabled_agents_by_default() {
+    let task_runtime = TaskRuntime::new();
+    install_test_subagent_catalog(&task_runtime);
+
+    let result = task_runtime
+        .invoke_agent_orchestration_info(
+            Uuid::new_v4(),
+            json!({
+                "sections": ["agents"]
+            }),
+        )
+        .await
+        .expect("orchestration info should query enabled catalog agents");
+
+    let agents = result.model_output["agents"]
+        .as_array()
+        .expect("agents should be an array");
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["agent_id"], "engineering/enabled-reviewer");
+    assert_eq!(agents[0]["enabled"], true);
+}
+
+/// Verifies agent_orchestration_info rejects disabled-agent diagnostic exposure.
+/// 验证 agent_orchestration_info 会拒绝暴露禁用智能体的诊断参数。
+#[tokio::test]
+async fn agent_orchestration_info_rejects_include_disabled() {
+    let task_runtime = TaskRuntime::new();
+    install_test_subagent_catalog(&task_runtime);
+
+    let error = task_runtime
+        .invoke_agent_orchestration_info(
+            Uuid::new_v4(),
+            json!({
+                "sections": ["agents"],
+                "include_disabled": true,
+                "query": "reviewer"
+            }),
+        )
+        .await
+        .expect_err("include_disabled should not be model-visible");
+    assert!(error.contains("unsupported keys"));
+}
+
 /// Verifies TaskRuntime publishes subagent mailbox lifecycle events on real status transitions.
 /// 验证 TaskRuntime 会在真实状态变化时发布 subagent mailbox 生命周期事件。
 #[test]
@@ -332,7 +440,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         .expect("nested running task outcome should store");
 
     let result = task_runtime
-        .invoke_list_agents(root_session_id, json!({ "include_all": true }))
+        .invoke_list_agents(root_session_id, json!({ "include_closed": true }))
         .await
         .expect("list_agents should succeed");
 
@@ -352,6 +460,15 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         result.model_output["agents"][0]["last_task_message"],
         "review this change"
     );
+    assert_eq!(result.model_output["agents"][0]["agent_id"], "agent-review");
+    assert_eq!(result.model_output["agents"][0]["lifecycle_state"], "open");
+    assert_eq!(result.model_output["agents"][0]["run_state"], "running");
+    assert_eq!(result.model_output["agents"][0]["status"], "running");
+    assert_eq!(result.model_output["agents"][0]["queued_message_count"], 0);
+    assert_eq!(result.model_output["agents"][0]["can_send"], true);
+    assert_eq!(result.model_output["agents"][0]["can_interrupt"], true);
+    assert_eq!(result.model_output["agents"][0]["can_close"], true);
+    assert_eq!(result.model_output["agents"][0]["can_wait"], true);
     assert!(result.model_output["agents"][0].get("agent_kind").is_none());
     assert!(
         result.model_output["agents"][0]
@@ -373,7 +490,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     let filtered = task_runtime
         .invoke_list_agents(
             root_session_id,
-            json!({ "include_all": true, "path_prefix": "/root/agent-review" }),
+            json!({ "include_closed": true, "path_prefix": "/root/agent-review" }),
         )
         .await
         .expect("list_agents path_prefix filter should succeed");
@@ -389,7 +506,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     let nested_only = task_runtime
         .invoke_list_agents(
             root_session_id,
-            json!({ "include_all": true, "path_prefix": "/root/agent-review/nested-check" }),
+            json!({ "include_closed": true, "path_prefix": "/root/agent-review/nested-check" }),
         )
         .await
         .expect("list_agents nested path_prefix filter should succeed");
@@ -408,7 +525,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     let empty = task_runtime
         .invoke_list_agents(
             root_session_id,
-            json!({ "include_all": true, "path_prefix": "/root/other" }),
+            json!({ "include_closed": true, "path_prefix": "/root/other" }),
         )
         .await
         .expect("list_agents non-matching path_prefix should succeed");
@@ -463,7 +580,7 @@ async fn list_agents_keeps_completed_registry_entries_visible() {
         .expect("completed task outcome should store");
 
     let result = task_runtime
-        .invoke_list_agents(root_session_id, json!({ "include_all": true }))
+        .invoke_list_agents(root_session_id, json!({ "include_closed": true }))
         .await
         .expect("list_agents should succeed");
 
@@ -579,7 +696,7 @@ async fn list_agents_hides_registry_only_non_resident_entries() {
         .upsert(entry);
 
     let result = task_runtime
-        .invoke_list_agents(root_session_id, json!({ "include_all": true }))
+        .invoke_list_agents(root_session_id, json!({ "include_closed": true }))
         .await
         .expect("list_agents should succeed");
 
@@ -590,6 +707,196 @@ async fn list_agents_hides_registry_only_non_resident_entries() {
             .len(),
         0
     );
+}
+
+/// Verifies close_agent archives the selected child-agent subtree by default.
+/// 验证 close_agent 默认会归档选中的子代理子树。
+#[tokio::test]
+async fn close_agent_archives_target_and_descendants_by_default() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let parent_task_id = Uuid::new_v4();
+    let child_task_id = Uuid::new_v4();
+    let mut parent_entry = SubagentRegistryEntry::new(
+        "parent-review",
+        SessionNodeId::from(parent_task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    parent_entry.status = SubagentStatus::Completed;
+    let mut child_entry = SubagentRegistryEntry::new(
+        "child-review",
+        SessionNodeId::from(child_task_id),
+        SessionNodeId::from(parent_task_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    child_entry.status = SubagentStatus::Completed;
+    {
+        let mut registry = task_runtime
+            .subagent_registry
+            .write()
+            .expect("registry should write");
+        registry.upsert(parent_entry);
+        registry.upsert(child_entry);
+    }
+    {
+        let mut inboxes = task_runtime
+            .agent_inboxes
+            .write()
+            .expect("inboxes should write");
+        inboxes.insert(
+            parent_task_id,
+            VecDeque::from([QueuedInterAgentMessage {
+                author_session_id: root_session_id,
+                target_task_id: parent_task_id,
+                content: String::from("queued parent work"),
+                created_at_ms: current_unix_millis_u64(),
+            }]),
+        );
+        inboxes.insert(
+            child_task_id,
+            VecDeque::from([QueuedInterAgentMessage {
+                author_session_id: parent_task_id,
+                target_task_id: child_task_id,
+                content: String::from("queued child work"),
+                created_at_ms: current_unix_millis_u64(),
+            }]),
+        );
+    }
+
+    let close_result = task_runtime
+        .invoke_close_agent(root_session_id, json!({ "target": "parent-review" }))
+        .await
+        .expect("close_agent should close the selected subtree");
+    assert_eq!(close_result.model_output["cleared_message_count"], 2);
+    let closed_agents = close_result.model_output["closed_agents"]
+        .as_array()
+        .expect("closed agents should be an array")
+        .iter()
+        .map(|value| value.as_str().unwrap_or_default().to_string())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        closed_agents,
+        BTreeSet::from([String::from("child-review"), String::from("parent-review")])
+    );
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read after close");
+    assert_eq!(
+        registry
+            .get("parent-review")
+            .expect("parent should exist")
+            .status,
+        SubagentStatus::Archived
+    );
+    assert_eq!(
+        registry
+            .get("parent-review")
+            .expect("parent should exist")
+            .stop_reason
+            .as_deref(),
+        Some("close_agent")
+    );
+    assert_eq!(
+        registry
+            .get("child-review")
+            .expect("child should exist")
+            .status,
+        SubagentStatus::Archived
+    );
+    assert!(
+        task_runtime
+            .agent_inboxes
+            .read()
+            .expect("inboxes should read")
+            .is_empty()
+    );
+    let closed_list = task_runtime
+        .invoke_list_agents(root_session_id, json!({ "include_closed": true }))
+        .await
+        .expect("closed agents should be visible for diagnostics");
+    assert_eq!(
+        closed_list.model_output["agents"][0]["lifecycle_state"],
+        "closed"
+    );
+    assert_eq!(closed_list.model_output["agents"][0]["run_state"], "closed");
+    assert_eq!(
+        closed_list.model_output["agents"][0]["stop_reason"],
+        "close_agent"
+    );
+    assert_eq!(closed_list.model_output["agents"][0]["can_send"], false);
+    assert_eq!(
+        closed_list.model_output["agents"][0]["can_interrupt"],
+        false
+    );
+    assert_eq!(closed_list.model_output["agents"][0]["can_close"], false);
+    assert_eq!(closed_list.model_output["agents"][0]["can_wait"], false);
+
+    let late_invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id: parent_task_id,
+        public_task_id: String::from("parent-review"),
+        prompt: String::from("late completed work"),
+        description: Some(String::from("Parent review")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("late completed work"),
+        display_title: String::from("Parent review"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let late_outcome = TaskExecutionOutcome {
+        task_id: parent_task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(
+            &controller_config,
+            &late_invocation.invocation_config,
+        ),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-late")),
+        final_output_text: String::from("late result"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &late_invocation, &late_outcome)
+        .expect("late outcome should not reopen archived agents");
+    let registry_after_late_outcome = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read after late outcome");
+    assert_eq!(
+        registry_after_late_outcome
+            .get("parent-review")
+            .expect("parent should still exist")
+            .status,
+        SubagentStatus::Archived
+    );
+    let default_list_after_late_outcome = task_runtime
+        .invoke_list_agents(root_session_id, json!({}))
+        .await
+        .expect("default list should remain closed-filtered");
+    assert_eq!(
+        default_list_after_late_outcome.model_output["agents"]
+            .as_array()
+            .expect("agents should be an array")
+            .len(),
+        0
+    );
+
+    let repeat_error = task_runtime
+        .invoke_close_agent(root_session_id, json!({ "target": "parent-review" }))
+        .await
+        .expect_err("closing an archived agent should fail");
+    assert!(repeat_error.contains("already closed"));
 }
 
 /// Verifies interrupt_agent reports the last known status for completed agents.

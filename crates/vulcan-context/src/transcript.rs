@@ -68,6 +68,9 @@ pub enum SessionMessageRecordKind {
     /// Visible context-compaction status row kept outside future model context.
     /// 展示给用户但不纳入后续模型上下文的上下文压缩状态行。
     CompactionStatus,
+    /// Visible display-only note kept outside future model context.
+    /// 展示给用户但不纳入后续模型上下文的显示备注。
+    DisplayNote,
     /// Hidden terminated-turn marker used to close one interrupted or failed turn without a summary.
     /// 用于闭合一轮被中断或失败且没有 summary 的隐藏终止标记。
     TurnTerminated,
@@ -92,6 +95,7 @@ impl SessionMessageRecordKind {
             Self::ToolDetailOutput => "tool-detail-output",
             Self::CompactionSummary => "compaction-summary",
             Self::CompactionStatus => "compaction-status",
+            Self::DisplayNote => "display-note",
             Self::TurnTerminated => "turn-terminated",
             Self::TurnStats => "turn-stats",
         }
@@ -108,6 +112,7 @@ impl SessionMessageRecordKind {
                 | Self::ExploreOutput
                 | Self::ToolDetailOutput
                 | Self::CompactionStatus
+                | Self::DisplayNote
                 | Self::TurnTerminated
                 | Self::TurnStats
         )
@@ -127,6 +132,7 @@ impl SessionMessageRecordKind {
             "tool-detail-output" => Self::ToolDetailOutput,
             "compaction-summary" => Self::CompactionSummary,
             "compaction-status" => Self::CompactionStatus,
+            "display-note" => Self::DisplayNote,
             "turn-terminated" => Self::TurnTerminated,
             "turn-stats" => Self::TurnStats,
             _ => Self::Transcript,

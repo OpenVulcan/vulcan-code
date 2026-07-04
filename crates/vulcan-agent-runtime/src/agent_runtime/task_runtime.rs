@@ -25,6 +25,7 @@ use crate::conversation_protocol::SessionConversationState;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::model::{SessionId, SessionTurnUsageSegment, SessionTurnUsageSegmentKind};
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
+use crate::tooling::native::TODOLIST_TOOL_ID;
 use async_stream::stream;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -68,9 +69,9 @@ use vulcan_session_core::{
     SubagentRegistry, SubagentRegistryEntry, SubagentStatus, ToolExposureSnapshot,
 };
 use vulcan_subagent_core::{
-    FOLLOWUP_TASK_TOOL, INTERRUPT_AGENT_TOOL, LIST_AGENTS_TOOL, SEND_MESSAGE_TOOL,
-    SPAWN_AGENT_TOOL, STOPPED_SUBAGENT_TASK_IDS_KEY, SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND,
-    WAIT_AGENT_TOOL, WaitAgentActivityResult,
+    AGENT_ORCHESTRATION_INFO_TOOL, CLOSE_AGENT_TOOL, INTERRUPT_AGENT_TOOL, LIST_AGENTS_TOOL,
+    SEND_MESSAGE_TOOL, SPAWN_AGENT_TOOL, STOPPED_SUBAGENT_TASK_IDS_KEY, SUBAGENT_TASK_ID_KEY,
+    SUBAGENT_TASK_KIND, WAIT_AGENT_TOOL, WaitAgentActivityResult,
 };
 use vulcan_task_session::{
     SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR, SegmentedTaskSessionStore,
@@ -180,9 +181,6 @@ struct TaskToolInvocationArgs {
     /// Optional model identifier override for this subagent.
     /// 子代理的可选模型标识覆盖。
     model: Option<String>,
-    /// Optional reasoning effort override for this subagent.
-    /// 子代理的可选推理等级覆盖。
-    reasoning_effort: Option<String>,
     /// Optional execution-mode override for this subagent.
     /// 子代理的可选执行模式覆盖。
     execution_mode: Option<String>,
@@ -444,6 +442,18 @@ struct DetachedTaskEventStreamState {
     closed: bool,
 }
 
+/// Active child-task run entry protected by a generation token.
+/// 带运行世代令牌保护的活动子任务运行条目。
+#[derive(Debug, Clone)]
+struct ActiveTaskRunEntry {
+    /// Unique generation for one concrete provider run.
+    /// 单次具体 Provider 运行的唯一世代标识。
+    run_id: Uuid,
+    /// Abort handle owned by this concrete provider run.
+    /// 该次具体 Provider 运行持有的中止句柄。
+    abort_handle: AbortHandle,
+}
+
 /// One queued inter-agent message waiting for a child-agent safe boundary.
 /// 等待子代理安全边界消费的一条代理间消息。
 #[derive(Debug, Clone)]
@@ -457,9 +467,6 @@ struct QueuedInterAgentMessage {
     /// Human-readable message content.
     /// 人类可读消息正文。
     content: String,
-    /// Whether this message should start a new child-agent turn when the target is idle.
-    /// 当目标空闲时该消息是否应启动新的子代理回合。
-    trigger_turn: bool,
     /// Unix-millis enqueue timestamp.
     /// 入队时的 Unix 毫秒时间戳。
     created_at_ms: u64,
@@ -493,13 +500,17 @@ pub struct ActiveTaskRunGuard {
     /// Child task identifier whose running entry should be removed on drop.
     /// 在 Drop 时应移除其运行条目的子任务标识。
     task_id: SessionId,
+    /// Run generation that this guard installed.
+    /// 该守卫安装的运行世代标识。
+    run_id: Uuid,
 }
 
 impl Drop for ActiveTaskRunGuard {
     /// Removes the installed active child-task run entry as soon as the guard leaves scope.
     /// 在守卫离开作用域时立即移除已安装的活动子任务运行条目。
     fn drop(&mut self) {
-        self.runtime.remove_active_task_run(self.task_id);
+        self.runtime
+            .remove_active_task_run(self.task_id, self.run_id);
     }
 }
 
@@ -633,7 +644,7 @@ pub struct TaskRuntime {
     execution_contexts: RwLock<HashMap<SessionId, TaskExecutionRuntimeContext>>,
     /// Active child-task abort handles keyed by stable task identifier.
     /// 按稳定任务标识索引存储的活动子任务中止句柄。
-    active_task_runs: RwLock<HashMap<SessionId, AbortHandle>>,
+    active_task_runs: RwLock<HashMap<SessionId, ActiveTaskRunEntry>>,
     /// Detached child-task event streams keyed by stable task identifier for non-blocking WebUI mirroring.
     /// 为无阻塞WebUI镜像保留的按稳定任务标识索引的分离子任务事件流。
     detached_task_event_streams: RwLock<HashMap<SessionId, DetachedTaskEventStreamState>>,
@@ -649,8 +660,8 @@ pub struct TaskRuntime {
     /// Parent sessions that have pending user steering activity for wait_agent.
     /// 对 wait_agent 存在待处理用户插话活动的父会话集合。
     parent_input_activity_sessions: RwLock<BTreeSet<SessionThreadId>>,
-    /// Per-child-agent inbox used by send_message and followup_task.
-    /// `send_message` 与 `followup_task` 使用的按子代理划分 inbox。
+    /// Per-child-agent inbox used by send_message.
+    /// `send_message` 使用的按子代理划分 inbox。
     agent_inboxes: RwLock<HashMap<SessionId, VecDeque<QueuedInterAgentMessage>>>,
     /// Vulcan-native child-agent registry used as the future single source for subagent state.
     /// Vulcan 原生子代理注册表，用作未来子代理状态的单一事实源。
@@ -661,6 +672,9 @@ pub struct TaskRuntime {
     /// Segmented task-session roots keyed by root main-session identifier.
     /// 按根主会话标识索引的分段子代理会话根目录。
     task_session_store_roots: RwLock<HashMap<SessionId, PathBuf>>,
+    /// Root sessions whose persisted child-agent registry has already been restored in this runtime.
+    /// 当前运行时内已经完成持久化子代理注册表恢复的根会话集合。
+    restored_task_session_registry_roots: RwLock<BTreeSet<SessionId>>,
     /// Maximum supported nested task depth.
     /// 支持的最大嵌套任务深度。
     max_depth: usize,

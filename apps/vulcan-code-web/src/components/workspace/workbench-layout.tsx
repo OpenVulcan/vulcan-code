@@ -606,6 +606,7 @@ export function WorkbenchLayout(props: {
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
     handleStopSubagentTask,
+    handleCloseSubagentTask,
     handleRemovePendingPrompt,
     handleReorderPendingPrompts,
     handleSelectWorkbenchModel,
@@ -967,6 +968,7 @@ export function WorkbenchLayout(props: {
             onStopConversationRun={handleStopConversationRun}
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onStopSubagentTask={handleStopSubagentTask}
+            onCloseSubagentTask={handleCloseSubagentTask}
             onStopCommandSession={handleStopCommandSession}
             onEditPendingPrompt={handleEditPendingPrompt}
             onInsertPendingPrompt={handleInsertPendingPrompt}

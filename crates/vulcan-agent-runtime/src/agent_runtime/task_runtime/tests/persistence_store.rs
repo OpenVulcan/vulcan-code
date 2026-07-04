@@ -77,6 +77,326 @@ fn prepare_task_execution_request_restores_persisted_context_for_resume() {
     assert!(request.is_resumed);
 }
 
+/// Verifies list_agents restores persisted active task sessions as open stopped agents.
+/// 验证 list_agents 会将持久化的活动子任务恢复为 open/stopped 子代理。
+#[tokio::test]
+async fn list_agents_restores_persisted_active_agent_as_stopped_without_runtime_handle() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let resolved_config = TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
+        global_default_config: SessionEffectiveConfig::default(),
+        parent_config: None,
+        profile: None,
+        invocation: TaskInvocationConfig::main("persisted running prompt"),
+    });
+    let mut metadata = TaskSessionMetadata::new(
+        SessionNodeId::from(root_session_id),
+        SessionNodeId::from(task_id),
+        ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        "persisted-review",
+        "Persisted review",
+        resolved_config.requested_config,
+        resolved_config.effective_config,
+        1,
+        100,
+    );
+    metadata.status = TaskSessionStatus::Running;
+    store
+        .create_task_session(metadata)
+        .expect("running task metadata should store");
+
+    let result = task_runtime
+        .invoke_list_agents(root_session_id, json!({}))
+        .await
+        .expect("list_agents should restore persisted subagents");
+    assert_eq!(
+        result.model_output["agents"][0]["agent_name"],
+        "persisted-review"
+    );
+    assert_eq!(result.model_output["agents"][0]["lifecycle_state"], "open");
+    assert_eq!(result.model_output["agents"][0]["run_state"], "stopped");
+    assert_eq!(
+        result.model_output["agents"][0]["stop_reason"],
+        "runtime_lost"
+    );
+    assert_eq!(result.model_output["agents"][0]["can_send"], true);
+    assert_eq!(result.model_output["agents"][0]["can_close"], true);
+    assert_eq!(result.model_output["agents"][0]["can_interrupt"], false);
+    let restored_metadata = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load")
+        .expect("metadata should exist");
+    assert_eq!(restored_metadata.status, TaskSessionStatus::Stopped);
+    assert_eq!(
+        restored_metadata.stop_reason.as_deref(),
+        Some("runtime_lost")
+    );
+    let sessions = task_runtime
+        .sessions
+        .read()
+        .expect("task session registry lock");
+    assert_eq!(
+        sessions
+            .get(&task_id)
+            .expect("restored task record should exist")
+            .last_status,
+        "stopped"
+    );
+}
+
+/// Verifies list_agents restores persisted completed agents as still-open manageable agents.
+/// 验证 list_agents 会将持久化的已完成子代理恢复为仍未关闭且可管理的代理。
+#[tokio::test]
+async fn list_agents_restores_persisted_completed_agent_as_open() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let resolved_config = TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
+        global_default_config: SessionEffectiveConfig::default(),
+        parent_config: None,
+        profile: None,
+        invocation: TaskInvocationConfig::main("persisted completed prompt"),
+    });
+    let mut metadata = TaskSessionMetadata::new(
+        SessionNodeId::from(root_session_id),
+        SessionNodeId::from(task_id),
+        ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        "completed-review",
+        "Completed review",
+        resolved_config.requested_config,
+        resolved_config.effective_config,
+        1,
+        100,
+    );
+    metadata.status = TaskSessionStatus::Completed;
+    metadata.last_result_summary = Some(String::from("persisted completed result"));
+    store
+        .create_task_session(metadata)
+        .expect("completed task metadata should store");
+
+    let result = task_runtime
+        .invoke_list_agents(root_session_id, json!({}))
+        .await
+        .expect("list_agents should restore persisted completed subagents");
+
+    assert_eq!(
+        result.model_output["agents"][0]["agent_name"],
+        "completed-review"
+    );
+    assert_eq!(result.model_output["agents"][0]["lifecycle_state"], "open");
+    assert_eq!(result.model_output["agents"][0]["run_state"], "completed");
+    assert_eq!(
+        result.model_output["agents"][0]["agent_status"]["completed"],
+        "persisted completed result"
+    );
+    assert_eq!(result.model_output["agents"][0]["can_send"], true);
+}
+
+/// Verifies close_agent writes archived status back to persisted TaskSession metadata.
+/// 验证 close_agent 会把归档状态写回持久化 TaskSession 元数据。
+#[tokio::test]
+async fn close_agent_persists_archived_status_for_restored_agent() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let resolved_config = TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
+        global_default_config: SessionEffectiveConfig::default(),
+        parent_config: None,
+        profile: None,
+        invocation: TaskInvocationConfig::main("persisted work"),
+    });
+    let mut metadata = TaskSessionMetadata::new(
+        SessionNodeId::from(root_session_id),
+        SessionNodeId::from(task_id),
+        ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        "persisted-worker",
+        "Persisted worker",
+        resolved_config.requested_config,
+        resolved_config.effective_config,
+        1,
+        100,
+    );
+    metadata.status = TaskSessionStatus::Running;
+    store
+        .create_task_session(metadata)
+        .expect("running task metadata should store");
+
+    let close_result = task_runtime
+        .invoke_close_agent(root_session_id, json!({ "target": "persisted-worker" }))
+        .await
+        .expect("close_agent should close restored persisted agent");
+    assert_eq!(close_result.model_output["closed"], true);
+    let archived_metadata = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load")
+        .expect("metadata should exist");
+    assert_eq!(archived_metadata.status, TaskSessionStatus::Archived);
+    assert_eq!(
+        archived_metadata.stop_reason.as_deref(),
+        Some("close_agent")
+    );
+
+    let late_invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("persisted-worker"),
+        prompt: String::from("late completed work"),
+        description: Some(String::from("Persisted worker")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("late completed work"),
+        display_title: String::from("Persisted worker"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let late_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(
+            &controller_config,
+            &late_invocation.invocation_config,
+        ),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-late")),
+        final_output_text: String::from("late result"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &late_invocation, &late_outcome)
+        .expect("late outcome should not reopen archived metadata");
+    let metadata_after_late_outcome = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load after late outcome")
+        .expect("metadata should exist after late outcome");
+    assert_eq!(
+        metadata_after_late_outcome.status,
+        TaskSessionStatus::Archived
+    );
+    assert_eq!(
+        metadata_after_late_outcome.stop_reason.as_deref(),
+        Some("close_agent")
+    );
+
+    let fresh_runtime = Arc::new(TaskRuntime::new());
+    fresh_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("fresh store root should configure");
+    let default_list = fresh_runtime
+        .invoke_list_agents(root_session_id, json!({}))
+        .await
+        .expect("default list should succeed");
+    assert_eq!(
+        default_list.model_output["agents"]
+            .as_array()
+            .expect("agents should be an array")
+            .len(),
+        0
+    );
+    let diagnostic_list = fresh_runtime
+        .invoke_list_agents(root_session_id, json!({ "include_closed": true }))
+        .await
+        .expect("diagnostic list should succeed");
+    assert_eq!(
+        diagnostic_list.model_output["agents"][0]["lifecycle_state"],
+        "closed"
+    );
+
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let captured_task_id = Arc::new(std::sync::Mutex::new(None));
+    let backend_calls_for_handler = Arc::clone(&backend_calls);
+    let captured_task_id_for_handler = Arc::clone(&captured_task_id);
+    let _guard = fresh_runtime.install_backend(
+        root_session_id,
+        Arc::new(move |request: TaskExecutionRequest| {
+            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+            *captured_task_id_for_handler
+                .lock()
+                .expect("captured task id lock") = Some(request.task_id);
+            Box::pin(async move {
+                let controller_config = build_test_controller_config("Fresh persisted prompt");
+                Ok(TaskExecutionOutcome {
+                    task_id: request.task_id,
+                    controller_config: controller_config.clone(),
+                    resolved_config: test_resolved_config(
+                        &controller_config,
+                        &request.invocation_config,
+                    ),
+                    snapshot: CoreConversationSnapshot::default(),
+                    provider_turns_executed: 1,
+                    tool_calls_processed: 0,
+                    final_assistant_message_id: Some(String::from("assistant-fresh-persisted")),
+                    final_output_text: String::from("fresh persisted result"),
+                    execution_status: TaskExecutionStatus::Completed,
+                    usage_segments: Vec::new(),
+                })
+            })
+        }),
+    );
+    fresh_runtime
+        .invoke_spawn_agent(
+            root_session_id,
+            json!({
+                "prompt": "fresh persisted work",
+                "task_id": "persisted-worker"
+            }),
+        )
+        .await
+        .expect("spawn_agent should reuse an archived persisted public id");
+    let fresh_task_id = captured_task_id
+        .lock()
+        .expect("captured task id lock")
+        .expect("backend should capture the fresh persisted task id");
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+    assert_ne!(fresh_task_id, task_id);
+    let selected_metadata = fresh_runtime
+        .persisted_task_metadata_for_public_id(
+            root_session_id,
+            ParentSessionRef::MainSession {
+                root_session_id: SessionNodeId::from(root_session_id),
+            },
+            "persisted-worker",
+        )
+        .expect("public-id metadata lookup should succeed")
+        .expect("fresh metadata should be selected");
+    assert_eq!(
+        selected_metadata.task_session_id,
+        SessionNodeId::from(fresh_task_id)
+    );
+    assert_eq!(selected_metadata.status, TaskSessionStatus::Completed);
+}
+
 /// Verifies persisted completed metadata is returned directly when memory has no record.
 /// 验证内存没有记录时会直接返回持久化的已完成元数据。
 #[tokio::test]
@@ -477,4 +797,166 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
     assert_eq!(entry.segments.len(), 1);
     assert_eq!(entry.segments[0].line_count, 2);
     assert!(entry.result_summary.is_none());
+}
+
+/// Verifies persistence restore never downgrades an already resident running registry entry.
+/// 验证持久化恢复不会降级已经常驻内存的运行中注册表条目。
+#[tokio::test]
+async fn list_agents_restore_preserves_resident_running_registry_entry() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("live-reviewer"),
+        prompt: String::from("review live changes"),
+        description: Some(String::from("Review live changes")),
+        subagent: Some(String::from("code-reviewer")),
+        invocation_config: TaskInvocationConfig::main("review live changes"),
+        display_title: String::from("Review live changes (code-reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let running_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
+    };
+
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+        .expect("running task should store");
+    let result = task_runtime
+        .invoke_list_agents(root_session_id, json!({}))
+        .await
+        .expect("list_agents should not downgrade resident running agents");
+    assert_eq!(
+        result.model_output["agents"][0]["agent_name"],
+        "live-reviewer"
+    );
+    assert_eq!(result.model_output["agents"][0]["run_state"], "running");
+
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read");
+    let entry = registry
+        .get("live-reviewer")
+        .expect("running registry entry should remain resident");
+    assert_eq!(entry.status, SubagentStatus::Running);
+
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let metadata = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load")
+        .expect("metadata should exist");
+    assert_eq!(metadata.status, TaskSessionStatus::Running);
+}
+
+/// Verifies application shutdown stops active subagents and persists stopped metadata.
+/// 验证应用关闭会停止活动子代理并持久化 stopped 元数据。
+#[tokio::test]
+async fn app_shutdown_stops_active_subagents_and_persists_metadata() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("shutdown-worker"),
+        prompt: String::from("long running work"),
+        description: Some(String::from("Shutdown worker")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("long running work"),
+        display_title: String::from("Shutdown worker"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let running_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+        .expect("running task should store");
+    let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
+    let _active_guard = task_runtime.install_active_task_run(task_id, pending_join.abort_handle());
+
+    let stopped_task_ids = task_runtime
+        .stop_active_tasks_for_app_shutdown()
+        .expect("app shutdown should stop active tasks");
+
+    assert_eq!(stopped_task_ids, vec![task_id]);
+    assert!(
+        pending_join
+            .await
+            .expect_err("shutdown-aborted task should cancel")
+            .is_cancelled()
+    );
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read");
+    assert_eq!(
+        registry
+            .get("shutdown-worker")
+            .expect("shutdown worker should remain registered")
+            .status,
+        SubagentStatus::Stopped
+    );
+    assert_eq!(
+        registry
+            .get("shutdown-worker")
+            .expect("shutdown worker should remain registered")
+            .stop_reason
+            .as_deref(),
+        Some("app_shutdown")
+    );
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let metadata = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load")
+        .expect("metadata should exist");
+    assert_eq!(metadata.status, TaskSessionStatus::Stopped);
+    assert_eq!(metadata.stop_reason.as_deref(), Some("app_shutdown"));
+    assert_eq!(
+        metadata.last_result_summary.as_deref(),
+        Some(STOPPED_TASK_RESULT_SUMMARY)
+    );
 }

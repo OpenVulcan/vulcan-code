@@ -85,6 +85,7 @@ pub(super) fn test_service_state_with_parent_session(
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
+        subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),

@@ -256,6 +256,7 @@ pub(super) fn stored_runtime_state_row_to_entry(
         last_successful_provider_usage: provider_usage,
         last_safe_provider_request_count: None,
         active_precheck_turn_id: None,
+        session_runtime_kernel: None,
         updated_at: row.updated_at,
     }
 }

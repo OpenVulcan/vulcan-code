@@ -7,10 +7,11 @@ use super::*;
 /// 构建真实启动完成前或失败后的回退工作台快照。
 pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
     let workspace_root = workspace_root();
+    let provider_configuration = ProviderConfigurationFile::default();
     WorkbenchSnapshot {
         revision: 0,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
-        ui_locale: ProviderConfigurationFile::default().ui_locale,
+        ui_locale: provider_configuration.ui_locale.clone(),
         modules: vec![
             runtime_module(
                 "core",
@@ -69,34 +70,24 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
         plugins: Vec::new(),
-        lua_skills: lua_skills_catalog_summary(
-            &empty_luaskills_catalog(),
-            &ProviderConfigurationFile::default(),
-        ),
-        agent_skills: agent_skills_catalog_summary(&ProviderConfigurationFile::default()),
-        subagent_catalog: subagent_catalog_summary(),
+        lua_skills: lua_skills_catalog_summary(&empty_luaskills_catalog(), &provider_configuration),
+        agent_skills: agent_skills_catalog_summary(&provider_configuration),
+        subagent_catalog: subagent_catalog_summary(&provider_configuration),
         settings: settings(),
-        providers: providers(&ProviderConfigurationFile::default()),
-        mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
+        providers: providers(&provider_configuration),
+        mcp_servers: mcp_servers(&provider_configuration),
         mcp_tools: Vec::new(),
-        reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
-        thinking_display_mode: workbench_thinking_display_mode(
-            &ProviderConfigurationFile::default(),
-        ),
-        git_commit: git_commit_settings(&ProviderConfigurationFile::default()),
-        host_tools: host_tools_settings(&ProviderConfigurationFile::default()),
-        ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),
-        default_ai_capabilities: ai_capabilities(
-            &ProviderConfigurationFile::default().ai_tools,
-            None,
-        ),
-        ai_capability_vendors: ai_capability_vendors(
-            &ProviderConfigurationFile::default().ai_tools,
-        ),
+        reasoning_selection: reasoning_selection(&provider_configuration),
+        thinking_display_mode: workbench_thinking_display_mode(&provider_configuration),
+        git_commit: git_commit_settings(&provider_configuration),
+        host_tools: host_tools_settings(&provider_configuration),
+        ai_capabilities: ai_capabilities(&provider_configuration.ai_tools, None),
+        default_ai_capabilities: ai_capabilities(&provider_configuration.ai_tools, None),
+        ai_capability_vendors: ai_capability_vendors(&provider_configuration.ai_tools),
         ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
-            &ProviderConfigurationFile::default(),
-            &ProviderConfigurationFile::default().ai_tools,
+            &provider_configuration,
+            &provider_configuration.ai_tools,
         ),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),

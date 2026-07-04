@@ -203,6 +203,7 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
         disabledPromptSkillCount: definition.promptSkillPolicyMode === "deny_only" ? (definition.promptSkillPolicySkills?.length ?? 0) : definition.disabledPromptSkills.length,
         promptSkillPolicyMode: definition.promptSkillPolicyMode ?? "all",
         promptSkillPolicySkills: definition.promptSkillPolicySkills ?? [],
+        providerModel: definition.providerModel ?? {},
         systemPrompt: definition.systemPrompt ?? null,
         systemPromptAppend: definition.systemPromptAppend ?? null,
         allowedTools: definition.allowedTools,

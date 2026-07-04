@@ -119,6 +119,55 @@ fn loads_panel_states_from_segmented_task_session_store() {
     ));
 }
 
+/// Verifies archived TaskSessions are omitted from the unclosed subagent list restored at startup.
+/// 验证启动恢复未关闭子代理列表时会跳过已归档的 TaskSession。
+#[test]
+fn segmented_task_session_store_omits_archived_panel_states() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
+    let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let open_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let archived_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let mut open_metadata = TaskSessionMetadata::new(
+        root_session_id,
+        open_task_session_id,
+        ParentSessionRef::MainSession { root_session_id },
+        "open-task",
+        "未关闭智能体",
+        vulcan_session_core::SessionRequestedConfig::default(),
+        vulcan_session_core::SessionEffectiveConfig::default(),
+        1,
+        10,
+    );
+    open_metadata.status = TaskSessionStatus::Completed;
+    let mut archived_metadata = TaskSessionMetadata::new(
+        root_session_id,
+        archived_task_session_id,
+        ParentSessionRef::MainSession { root_session_id },
+        "closed-task",
+        "已关闭智能体",
+        vulcan_session_core::SessionRequestedConfig::default(),
+        vulcan_session_core::SessionEffectiveConfig::default(),
+        1,
+        11,
+    );
+    archived_metadata.status = TaskSessionStatus::Archived;
+    store
+        .create_task_session(open_metadata)
+        .expect("create open task session");
+    store
+        .create_task_session(archived_metadata)
+        .expect("create archived task session");
+
+    let states = subagent_task_panel_states_from_segmented_task_session_store(
+        &store,
+        root_session_id.as_uuid(),
+    );
+
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].task_id, open_task_session_id.as_uuid());
+}
+
 /// Verifies shared running-task collection walks nested child trees and skips terminal children.
 /// 验证共享运行任务收集逻辑会遍历嵌套子树，并跳过已进入终态的子任务。
 #[test]

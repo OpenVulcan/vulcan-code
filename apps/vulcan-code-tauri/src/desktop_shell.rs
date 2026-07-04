@@ -5,12 +5,13 @@ use std::{path::Path, process::Command, sync::Arc};
 
 use tauri::Emitter;
 use tokio::sync::broadcast;
+use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
 use vulcan_service_api::{ServiceEvent, ServiceEventEmitter, ServiceEventSink};
 use vulcan_service_host::webui_service_event_bus_sink;
 
 use vulcan_service_kernel::{
     ServiceShellHost, create_service_bridge_state, emit_initial_service_events,
-    spawn_service_bootstrap, spawn_webui_service_http_bridge,
+    service_prepare_for_app_shutdown, spawn_service_bootstrap, spawn_webui_service_http_bridge,
 };
 
 /// Tauri desktop event sink used only by the desktop shell.
@@ -77,8 +78,16 @@ pub fn run() {
     let (service_event_bus, _) = broadcast::channel(256);
     let state = create_service_bridge_state(Arc::new(DesktopServiceShellHost));
     let managed_state = Arc::clone(&state);
+    let shutdown_state = Arc::clone(&state);
     tauri::Builder::default()
         .manage(state)
+        .on_window_event(move |_window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                if let Err(error) = service_prepare_for_app_shutdown(&shutdown_state) {
+                    eprintln!("[vulcan-code-tauri] app shutdown preparation failed: {error}");
+                }
+            }
+        })
         .setup(move |app| {
             let event_emitter = service_event_emitter_from_tauri_app(
                 app.handle().clone(),
@@ -147,6 +156,7 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
         command
     };
 
+    apply_windows_release_no_window_to_std_command(&mut command);
     command
         .spawn()
         .map(|_| ())
@@ -187,6 +197,7 @@ fn open_url_in_system_browser(url: &str) -> Result<(), String> {
         command
     };
 
+    apply_windows_release_no_window_to_std_command(&mut command);
     command
         .spawn()
         .map(|_| ())

@@ -3,6 +3,22 @@
 
 use super::*;
 
+/// Captures emitted service events for projection tests.
+/// 为投影测试捕获已发出的服务事件。
+struct CapturingServiceEventSink {
+    /// Shared event buffer populated by the sink.
+    /// sink 写入的共享事件缓冲区。
+    events: Arc<Mutex<Vec<ServiceEvent>>>,
+}
+
+impl vulcan_service_api::ServiceEventSink for CapturingServiceEventSink {
+    /// Appends one emitted service event to the shared test buffer.
+    /// 将单个已发出的服务事件追加到共享测试缓冲区。
+    fn emit_service_event(&self, event: ServiceEvent) {
+        self.events.lock().expect("event sink lock").push(event);
+    }
+}
+
 /// Verifies TaskSession terminal reports use the memory-only fast path without completed-turn hooks.
 /// 验证 TaskSession 终态报告使用仅内存快路径且不会生成完成回合 hook。
 #[test]
@@ -59,6 +75,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
+        subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
@@ -341,6 +358,93 @@ fn subagent_surface_conversation_state_replaces_seeded_prompt_without_preserving
     );
 }
 
+/// Verifies subagent hydration keeps display-only inter-agent prompts while dropping stale records.
+/// 验证子智能体水合会保留仅显示的智能体消息，同时丢弃陈旧记录。
+#[test]
+fn subagent_surface_conversation_state_preserves_display_only_agent_messages() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot should exist");
+    let mut display_note = SessionMessageEntry::new(
+        SessionMessageKind::User,
+        "智能体消息",
+        "请用中文重新输出结论。",
+    )
+    .with_runtime_metadata("display-note-send-message", "1780000000000");
+    display_note.record_kind = SessionMessageRecordKind::DisplayNote;
+    display_note.metadata = Some(json!({
+        "display_note": true,
+        "kind": "subagent_message",
+        "tool": "send_message",
+    }));
+    let stale_record =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "输出", "stale output")
+            .with_runtime_metadata("stale-output", "1780000000001");
+    workspace_snapshot
+        .session_messages
+        .insert(task_session_id, vec![display_note.clone(), stale_record]);
+    let canonical_state = SessionConversationState {
+        messages: Vec::new(),
+        records: vec![
+            SessionConversationRecord {
+                id: String::from("internal-inbox"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: format!(
+                    "[Inter-agent messages]\n\nMessage 1 from parent to {task_session_id} via send_message at 1780000000000:\n请用中文重新输出结论。\n"
+                ),
+                metadata: Some(json!({
+                    "source": "user_interrupt",
+                    "starts_user_turn": false,
+                    "turn_process": true,
+                    "editable": false,
+                })),
+                created_at: String::from("1780000000002"),
+            },
+            SessionConversationRecord {
+                id: String::from("canonical-assistant-output"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("已按中文重新输出。"),
+                metadata: None,
+                created_at: String::from("1780000000003"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+
+    replace_webui_subagent_task_conversation_state(
+        workspace_snapshot,
+        task_session_id,
+        canonical_state,
+    );
+
+    let messages = workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("hydrated child messages should exist");
+    assert_eq!(messages.len(), 2);
+    assert!(messages.iter().any(|message| {
+        message.record_kind == SessionMessageRecordKind::DisplayNote
+            && message.body == "请用中文重新输出结论。"
+    }));
+    assert!(messages.iter().any(|message| {
+        message.record_kind == SessionMessageRecordKind::AssistantOutput
+            && message.body == "已按中文重新输出。"
+    }));
+    assert!(!messages.iter().any(|message| {
+        message.body.contains("[Inter-agent messages]") || message.body == "stale output"
+    }));
+}
+
 /// Verifies a live detached listener keeps the parent subagent navigation visible after the parent stream finishes.
 /// 验证父级流结束后，实时分离监听器仍会让父级子代理导航保持可见。
 #[test]
@@ -387,6 +491,7 @@ fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeSet::from([task_session_id]),
         subagent_parent_turn_bindings: BTreeMap::new(),
+        subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
@@ -439,6 +544,164 @@ fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
         &mut guard,
         &workspace_snapshot,
         parent_session_id
+    ));
+}
+
+/// Verifies terminal listener cleanup immediately emits a non-running subagent navigation delta.
+/// 验证终态监听器清理后会立即发出非运行中的子代理导航增量。
+#[test]
+fn terminal_listener_cleanup_emits_non_running_subagent_navigation_delta() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    {
+        let mut guard = state.lock().unwrap();
+        guard
+            .session_subagent_tasks
+            .entry(parent_session_id)
+            .or_default()
+            .insert(
+                task_session_id,
+                SubagentTaskPanelState {
+                    task_id: task_session_id,
+                    public_task_id: String::from("image-worker"),
+                    parent_session_id,
+                    subagent_label: String::from("图片子代理"),
+                    description: Some(String::from("生成图片")),
+                    run_state: SubagentTaskRunState::Running,
+                    result_text: String::from("图片生成完成"),
+                    conversation_state: Some(SessionConversationState {
+                        messages: vec![SessionConversationMessage {
+                            id: String::from("child-assistant-1"),
+                            payload: SessionConversationPayload::Assistant {
+                                text: String::from("图片生成完成"),
+                                reasoning: String::new(),
+                                provider_message_id: None,
+                                provider_message_state: None,
+                                usage: None,
+                                tool_calls: Vec::new(),
+                            },
+                        }],
+                        ..SessionConversationState::default()
+                    }),
+                },
+            );
+        guard
+            .session_subagent_navigation_rounds
+            .insert(parent_session_id);
+        guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
+            parent_session_id,
+            task_id: task_session_id,
+        });
+        guard
+            .detached_subagent_task_listeners
+            .insert(task_session_id);
+    }
+    let emitted_events = Arc::new(Mutex::new(Vec::<ServiceEvent>::new()));
+    let app = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
+        events: Arc::clone(&emitted_events),
+    })]);
+
+    {
+        let mut guard = state.lock().unwrap();
+        guard
+            .detached_subagent_task_listeners
+            .remove(&task_session_id);
+    }
+    refresh_webui_subagent_navigation_round_visibility(&state, parent_session_id)
+        .expect("terminal cleanup should refresh navigation visibility");
+    let navigation = emit_webui_subagent_navigation_changed_delta(&app, &state)
+        .expect("terminal cleanup should emit navigation")
+        .expect("active subagent panel should keep navigation mounted");
+
+    assert_eq!(navigation.tasks.len(), 1);
+    assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
+    assert_eq!(navigation.tasks[0].run_state, "completed");
+    assert!(!navigation.tasks[0].is_running);
+    let events = emitted_events.lock().expect("event sink lock");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ServiceEvent::WorkbenchDelta(envelope)
+            if matches!(
+                &envelope.delta,
+                WorkbenchDelta::SubagentNavigationChanged(delta)
+                    if delta
+                        .subagent_navigation
+                        .as_ref()
+                        .and_then(|navigation| navigation.tasks.first())
+                        .is_some_and(|task| !task.is_running && task.run_state == "completed")
+            )
+    )));
+}
+
+/// Verifies empty subagent navigation deltas still identify the parent conversation to clear stale UI cache.
+/// 验证空子智能体导航增量仍携带父会话标识，以清理前端旧缓存。
+#[test]
+fn empty_subagent_navigation_delta_preserves_parent_conversation_id() {
+    let parent_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let emitted_events = Arc::new(Mutex::new(Vec::<ServiceEvent>::new()));
+    let app = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
+        events: Arc::clone(&emitted_events),
+    })]);
+
+    let navigation = emit_webui_subagent_navigation_changed_delta(&app, &state)
+        .expect("empty navigation should emit");
+
+    assert!(navigation.is_none());
+    let expected_parent_conversation_id = parent_session_id.to_string();
+    let events = emitted_events.lock().expect("event sink lock");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ServiceEvent::WorkbenchDelta(envelope)
+            if matches!(
+                &envelope.delta,
+                WorkbenchDelta::SubagentNavigationChanged(delta)
+                    if delta.parent_conversation_id.as_deref()
+                        == Some(expected_parent_conversation_id.as_str())
+                        && delta.subagent_navigation.is_none()
+            )
+    )));
+}
+
+/// Verifies child task tool events can patch known subagent transcripts even when the parent is active.
+/// 验证即使父会话处于活动界面，子任务工具事件也允许修补已知子代理转录。
+#[test]
+fn child_runtime_tool_event_patch_gate_accepts_known_subagent_transcript() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    guard
+        .session_subagent_tasks
+        .entry(parent_session_id)
+        .or_default()
+        .insert(
+            task_session_id,
+            SubagentTaskPanelState {
+                task_id: task_session_id,
+                public_task_id: String::from("code-review"),
+                parent_session_id,
+                subagent_label: String::from("代码审核"),
+                description: Some(String::from("审核代码")),
+                run_state: SubagentTaskRunState::Running,
+                result_text: String::new(),
+                conversation_state: None,
+            },
+        );
+
+    assert!(workbench_should_emit_runtime_event_message_patch(
+        &guard,
+        &task_session_id.to_string(),
+        task_session_id
+    ));
+    assert!(!workbench_should_emit_runtime_event_message_patch(
+        &guard,
+        &SessionId::new_v4().to_string(),
+        SessionId::new_v4()
     ));
 }
 
@@ -507,6 +770,7 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
             second_task_session_id,
         ]),
         subagent_parent_turn_bindings: BTreeMap::new(),
+        subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
@@ -643,6 +907,82 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
     );
 }
 
+/// Verifies close-agent cleanup removes closed tasks while preserving other unclosed agents.
+/// 验证关闭代理清理会移除已关闭任务，同时保留其他未关闭代理。
+#[test]
+fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
+    let parent_session_id = SessionId::new_v4();
+    let closed_task_id = SessionId::new_v4();
+    let retained_task_id = SessionId::new_v4();
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    let closed_state = test_completed_subagent_panel_state(parent_session_id, closed_task_id);
+    let retained_state = test_completed_subagent_panel_state(parent_session_id, retained_task_id);
+    guard.session_subagent_tasks.insert(
+        parent_session_id,
+        BTreeMap::from([
+            (closed_task_id, closed_state.clone()),
+            (retained_task_id, retained_state),
+        ]),
+    );
+    guard.subagent_surface_detail_cache.insert(
+        closed_task_id,
+        WebuiSubagentSurfaceDetailCacheEntry {
+            parent_session_id,
+            task_state: closed_state,
+            messages: Vec::new(),
+            last_access_ms: current_unix_millis_value(),
+        },
+    );
+    guard
+        .detached_subagent_task_listeners
+        .insert(closed_task_id);
+    guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
+        parent_session_id,
+        task_id: closed_task_id,
+    });
+
+    assert!(remove_webui_closed_subagent_tasks_in_state(
+        &mut guard,
+        &[closed_task_id]
+    ));
+
+    let tasks = guard
+        .session_subagent_tasks
+        .get(&parent_session_id)
+        .expect("retained task bucket should remain");
+    assert!(!tasks.contains_key(&closed_task_id));
+    assert!(tasks.contains_key(&retained_task_id));
+    assert!(
+        !guard
+            .subagent_surface_detail_cache
+            .contains_key(&closed_task_id)
+    );
+    assert!(
+        !guard
+            .detached_subagent_task_listeners
+            .contains(&closed_task_id)
+    );
+    assert!(guard.active_subagent_panel.is_none());
+}
+
+/// Builds one completed subagent panel state for cache mutation tests.
+/// 为缓存变更测试构建一条已完成子代理面板状态。
+fn test_completed_subagent_panel_state(
+    parent_session_id: SessionId,
+    task_id: SessionId,
+) -> SubagentTaskPanelState {
+    SubagentTaskPanelState {
+        task_id,
+        public_task_id: task_id.to_string(),
+        parent_session_id,
+        subagent_label: String::from("Review Worker"),
+        description: Some(String::from("审核代码")),
+        run_state: SubagentTaskRunState::Completed,
+        result_text: String::from("审核完成"),
+        conversation_state: None,
+    }
+}
+
 /// Verifies the final child completion closes a parent hook turn that was awaiting subagents.
 /// 验证最后一个子代理完成后会闭合等待子代理的父级 hook 回合。
 #[test]
@@ -742,6 +1082,53 @@ fn stopped_detached_parent_event_skips_pending_prompt_dispatch() {
     assert!(webui_detached_parent_event_should_persist_terminal_projection(true, true, false));
     assert!(!webui_detached_parent_event_should_persist_terminal_projection(true, true, true));
     assert!(!webui_detached_parent_event_should_persist_terminal_projection(false, true, false));
+}
+
+/// Verifies send_message-resumed child work no longer blocks the parent completion gate.
+/// 验证由 send_message 续跑的子任务不会继续阻塞父级完成闸门。
+#[test]
+fn completion_gate_ignores_send_message_resumed_child_task() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let runtime = test_agent_runtime_bridge();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    {
+        let mut guard = state.lock().expect("state lock");
+        guard
+            .detached_subagent_task_listeners
+            .insert(task_session_id);
+        guard.session_subagent_tasks.insert(
+            parent_session_id,
+            BTreeMap::from([(
+                task_session_id,
+                SubagentTaskPanelState {
+                    task_id: task_session_id,
+                    public_task_id: String::from("reviewer"),
+                    parent_session_id,
+                    subagent_label: String::from("Reviewer"),
+                    description: Some(String::from("Review code")),
+                    run_state: SubagentTaskRunState::Running,
+                    result_text: String::new(),
+                    conversation_state: None,
+                },
+            )]),
+        );
+    }
+
+    let default_gate = webui_turn_completion_gate_from_state(&state, &runtime, parent_session_id)
+        .expect("default gate should read");
+    assert_eq!(default_gate.pending_subagent_count, 1);
+
+    {
+        let mut guard = state.lock().expect("state lock");
+        mark_webui_subagent_completion_gate_ignored(&mut guard, task_session_id);
+    }
+
+    let ignored_gate = webui_turn_completion_gate_from_state(&state, &runtime, parent_session_id)
+        .expect("ignored gate should read");
+    assert_eq!(ignored_gate.pending_subagent_count, 0);
 }
 
 /// Verifies live transcript persistence versioning does not invalidate session persistence.

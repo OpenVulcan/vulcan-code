@@ -44,6 +44,7 @@ export function resolveSubagentOrchestrationPresentation(
   const title = subagentPresentationTitle(operation, args, payload, toolName);
   return {
     agents: operation === "collect" ? subagentAgents(payload, blocks) : [],
+    agentsKnown: operation === "collect" ? subagentAgentsKnown(payload) : true,
     debugSummary: subagentDebugSummary(payload?.debug),
     detailRef,
     effectivePrompt: stringValue(payload?.prompt),
@@ -53,14 +54,17 @@ export function resolveSubagentOrchestrationPresentation(
     operation,
     prompt: subagentPrompt(operation, args, payload),
     queued: booleanValue(payload?.queued),
+    deliveryMode: stringValue(payload?.delivery_mode ?? payload?.deliveryMode),
     result: operation === "create" ? null : stringValue(payload?.result),
     state: displayState,
+    closedAgents: operation === "control" ? closedAgents(payload) : [],
+    closedCount: operation === "control" ? closedAgentCount(payload) : 0,
+    clearedMessageCount: operation === "control" ? clearedMessageCount(payload) : null,
     stoppedCount: operation === "control" ? stoppedTaskCount(payload) : 0,
     stoppedTaskIds: operation === "control" ? stoppedTaskIds(payload) : [],
     target: subagentTarget(args, payload),
     timedOut: operation === "wait" ? booleanValue(payload?.timed_out ?? payload?.timedOut) : null,
     title,
-    triggerTurn: booleanValue(payload?.trigger_turn ?? payload?.triggerTurn),
   };
 }
 
@@ -97,19 +101,23 @@ function mergeSubagentPayload(
   return {
     ...presentation,
     agents: presentation.operation === "collect" ? subagentAgents(payload, []) : presentation.agents,
+    agentsKnown: presentation.operation === "collect" ? subagentAgentsKnown(payload) : presentation.agentsKnown,
     debugSummary: subagentDebugSummary(payload.debug) ?? presentation.debugSummary,
     effectivePrompt: stringValue(payload.prompt) ?? presentation.effectivePrompt,
     note: stringValue(payload.note) ?? presentation.note,
     prompt: presentation.prompt ?? stringValue(payload.prompt),
     queued: booleanValue(payload.queued) ?? presentation.queued,
+    deliveryMode: stringValue(payload.delivery_mode ?? payload.deliveryMode) ?? presentation.deliveryMode,
     result: presentation.operation === "create" ? null : stringValue(payload.result) ?? presentation.result,
+    closedAgents: presentation.operation === "control" ? closedAgents(payload) : presentation.closedAgents,
+    closedCount: presentation.operation === "control" ? closedAgentCount(payload) : presentation.closedCount,
+    clearedMessageCount: presentation.operation === "control" ? clearedMessageCount(payload) : presentation.clearedMessageCount,
     stoppedCount: presentation.operation === "control" ? stoppedTaskCount(payload) : presentation.stoppedCount,
     stoppedTaskIds: presentation.operation === "control" ? stoppedTaskIds(payload) : presentation.stoppedTaskIds,
     target: presentation.target ?? stringValue(payload.target),
     timedOut: presentation.operation === "wait"
       ? booleanValue(payload.timed_out ?? payload.timedOut) ?? presentation.timedOut
       : presentation.timedOut,
-    triggerTurn: booleanValue(payload.trigger_turn ?? payload.triggerTurn) ?? presentation.triggerTurn,
   };
 }
 
@@ -152,10 +160,18 @@ function subagentPayloadMatchesOperation(
     return "stopped_count" in payload
       || "stoppedCount" in payload
       || "stopped_subagent_task_ids" in payload
-      || "stoppedSubagentTaskIds" in payload;
+      || "stoppedSubagentTaskIds" in payload
+      || "closed" in payload
+      || "closed_count" in payload
+      || "closedCount" in payload
+      || "closed_agents" in payload
+      || "closedAgents" in payload;
   }
   if (operation === "message") {
-    return "message" in payload || "target" in payload || "trigger_turn" in payload || "triggerTurn" in payload;
+    return "message" in payload
+      || "target" in payload
+      || "delivery_mode" in payload
+      || "deliveryMode" in payload;
   }
   return "subagent_task_id" in payload
     || "subagentTaskId" in payload
@@ -179,10 +195,10 @@ function subagentOperation(
 ): SubagentOrchestrationPresentation["operation"] | null {
   const normalized = toolName ? normalizeToolName(toolName) : null;
   if (normalized === "spawn_agent") return "create";
-  if (normalized === "send_message" || normalized === "followup_task" || hostKind === "subagent_message") return "message";
+  if (normalized === "send_message" || hostKind === "subagent_message") return "message";
   if (normalized === "wait_agent" || hostKind === "subagent_wait") return "wait";
-  if (normalized === "list_agents" || hostKind === "subagent_status") return "collect";
-  if (normalized === "interrupt_agent" || hostKind === "subagent_control") return "control";
+  if (normalized === "list_agents" || normalized === "agent_orchestration_info" || hostKind === "subagent_status") return "collect";
+  if (normalized === "interrupt_agent" || normalized === "close_agent" || hostKind === "subagent_control") return "control";
   if (hostKind === "subagent_task" || hasSubagentTaskId) return "create";
   return null;
 }
@@ -326,6 +342,16 @@ function subagentTarget(
     ?? stringValue(payload?.task_id ?? payload?.taskId);
 }
 
+// subagentAgentsKnown returns whether a collect payload definitively carries an agents array.
+// subagentAgentsKnown 返回 collect 载荷是否明确携带 agents 数组。
+function subagentAgentsKnown(
+  // Host or body payload.
+  // 宿主或正文载荷。
+  payload: Record<string, unknown> | null,
+): boolean {
+  return Array.isArray(payload?.agents);
+}
+
 // subagentAgents converts status payload agents into compact rows.
 // subagentAgents 将状态载荷中的 agents 转换为紧凑行。
 function subagentAgents(
@@ -342,10 +368,12 @@ function subagentAgents(
     const name = stringValue(agent?.display_title ?? agent?.displayTitle)
       ?? stringValue(agent?.agent_name ?? agent?.agentName)
       ?? stringValue(agent?.task_name ?? agent?.taskName)
+      ?? stringValue(agent?.agent_id ?? agent?.agentId)
       ?? `agent-${index + 1}`;
     return {
       id: stringValue(agent?.subagent_task_id ?? agent?.subagentTaskId)
         ?? stringValue(agent?.agent_name ?? agent?.agentName)
+        ?? stringValue(agent?.agent_id ?? agent?.agentId)
         ?? `${index}:${compactHash(JSON.stringify(rawAgent))}`,
       name,
       result: subagentAgentStatusResult(agent) ?? stringValue(agent?.result) ?? fallbackResultFromBlocks(blocks),
@@ -403,9 +431,7 @@ function subagentDebugSummary(
   }
   const parts = [
     stringValue(debug.agent_kind ?? debug.agentKind),
-    stringValue(debug.agent_mode ?? debug.agentMode),
     stringValue(debug.prompt_source ?? debug.promptSource),
-    subagentDebugPart("fork", stringValue(debug.fork_turns ?? debug.forkTurns)),
     subagentDebugPart("messages", numberValue(debug.initial_snapshot_messages ?? debug.initialSnapshotMessages)?.toString() ?? null),
   ].filter((part): part is string => Boolean(part));
   return parts.length ? parts.join(" · ") : null;
@@ -438,6 +464,38 @@ function fallbackResultFromBlocks(
     }
   }
   return null;
+}
+
+// closedAgents reads closed public child-agent ids from control payloads.
+// closedAgents 从控制载荷读取已关闭子智能体公开标识。
+function closedAgents(
+  // Host or body payload.
+  // 宿主或正文载荷。
+  payload: Record<string, unknown> | null,
+): string[] {
+  return arrayValue(payload?.closed_agents ?? payload?.closedAgents)
+    .map(stringValue)
+    .filter((value): value is string => Boolean(value));
+}
+
+// closedAgentCount reads the explicit closed count or falls back to the closed-agent list length.
+// closedAgentCount 读取显式关闭数量，缺失时回退为已关闭智能体列表长度。
+function closedAgentCount(
+  // Host or body payload.
+  // 宿主或正文载荷。
+  payload: Record<string, unknown> | null,
+): number {
+  return numberValue(payload?.closed_count ?? payload?.closedCount) ?? closedAgents(payload).length;
+}
+
+// clearedMessageCount reads the number of queued inter-agent messages cleared by close_agent.
+// clearedMessageCount 读取 close_agent 清理的代理间排队消息数量。
+function clearedMessageCount(
+  // Host or body payload.
+  // 宿主或正文载荷。
+  payload: Record<string, unknown> | null,
+): number | null {
+  return numberValue(payload?.cleared_message_count ?? payload?.clearedMessageCount);
 }
 
 // stoppedTaskIds reads stopped task ids from control payloads.

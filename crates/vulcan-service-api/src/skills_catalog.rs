@@ -298,6 +298,10 @@ pub struct SubagentDefinitionSummary {
     /// Unified prompt-skill policy selectors.
     /// 统一提示词技能策略选择器。
     pub prompt_skill_policy_skills: Vec<String>,
+    /// Optional fixed provider/model selection for this agent.
+    /// 当前智能体可选的固定供应商/模型选择。
+    #[serde(default)]
+    pub provider_model: SubagentProviderModelSummary,
     /// Editable base system prompt restored into the agent editor.
     /// 恢复到智能体编辑器中的可编辑基础系统提示词。
     pub system_prompt: Option<String>,
@@ -331,6 +335,37 @@ pub struct SubagentDefinitionSummary {
     /// Human-readable effective capability diagnostics.
     /// 人类可读的最终能力诊断信息。
     pub capability_diagnostics: Vec<String>,
+}
+
+/// Provider/model selection projected for one subagent definition.
+/// 投影给单个子代理定义的供应商/模型选择。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentProviderModelSummary {
+    /// Optional provider identifier.
+    /// 可选供应商标识。
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Optional model identifier.
+    /// 可选模型标识。
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Effective display mode for this agent's model selection.
+    /// 当前智能体模型选择的有效展示模式。
+    #[serde(default)]
+    pub mode: String,
+    /// Stable provider/model selector when a fixed model is configured.
+    /// 配置固定模型时使用的稳定 provider/model 选择器。
+    #[serde(default)]
+    pub selector: Option<String>,
+    /// Whether the fixed model is currently selectable.
+    /// 固定模型当前是否可被选择。
+    #[serde(default)]
+    pub available: Option<bool>,
+    /// Human-readable reason when the fixed model is unavailable.
+    /// 固定模型不可用时的人类可读原因。
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
 }
 
 /// Localized WebUI metadata for one agent definition.
@@ -507,6 +542,10 @@ pub struct SubagentDefinitionSaveRequest {
     /// 统一提示词技能策略选择器。
     #[serde(default)]
     pub prompt_skill_policy_skills: Vec<String>,
+    /// Optional fixed provider/model selection for this agent.
+    /// 当前智能体可选的固定供应商/模型选择。
+    #[serde(default)]
+    pub provider_model: SubagentProviderModelSummary,
 }
 
 /// One agent catalog loading issue projected for diagnostics.

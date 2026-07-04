@@ -12,9 +12,9 @@ export function ConversationLoadingCenter(props: {
   progress: ConversationHydrationProgress | null;
 }) {
   const { t } = useI18n();
-  const percent = Math.max(0, Math.min(100, props.progress?.percent ?? 8));
+  const percent = Math.max(0, Math.min(100, props.progress?.percent ?? 0));
   const phaseKey = conversationHydrationPhaseTranslationKey(props.progress?.phase);
-  const phaseText = phaseKey ? t(phaseKey) : props.progress?.message ?? t("conversation.loading.locating");
+  const phaseText = phaseKey ? t(phaseKey) : props.progress?.message ?? t("conversation.loading.requesting");
   return (
     <section className="conversation-loading-center" aria-live="polite" aria-busy="true">
       <div className="conversation-loading-card">
@@ -40,6 +40,8 @@ function conversationHydrationPhaseTranslationKey(phase: string | null | undefin
       return "conversation.loading.index";
     case "readingMessages":
       return "conversation.loading.reading";
+    case "loadingSubagents":
+      return "conversation.loading.subagents";
     case "projecting":
       return "conversation.loading.projecting";
     case "done":

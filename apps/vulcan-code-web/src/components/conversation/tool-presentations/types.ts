@@ -254,23 +254,23 @@ export interface SubagentOrchestrationPresentation {
   // Original prompt or message text for this one call.
   // 本次调用的原始提示词或消息文本。
   prompt?: string | null;
-  // Effective prompt used by a resumed/follow-up task.
-  // 续跑或跟进任务实际执行的提示词。
+  // Effective prompt used by a resumed message task.
+  // 消息续跑任务实际执行的提示词。
   effectivePrompt?: string | null;
   // Final result text for this one call when available.
   // 本次调用可用时的最终返回文本。
   result?: string | null;
-  // Optional queue flag for message/follow-up tools.
-  // 消息或跟进工具的可选排队标记。
+  // Optional queue flag for message tools.
+  // 消息工具的可选排队标记。
   queued?: boolean | null;
-  // Optional trigger-turn flag for follow-up tools.
-  // 跟进工具的可选触发继续执行标记。
-  triggerTurn?: boolean | null;
+  // Delivery mode used by send_message.
+  // send_message 使用的投递模式。
+  deliveryMode?: string | null;
   // Optional note returned by the runtime.
   // 运行时返回的可选说明。
   note?: string | null;
-  // Optional runtime debug summary for subagent source and fork diagnostics.
-  // 可选的子代理来源与派生诊断运行时调试摘要。
+  // Optional runtime debug summary for subagent source diagnostics.
+  // 可选的子代理来源诊断运行时调试摘要。
   debugSummary?: string | null;
   // Whether a wait_agent call ended by timeout.
   // wait_agent 调用是否因超时结束。
@@ -278,12 +278,24 @@ export interface SubagentOrchestrationPresentation {
   // Listed child-agent status rows.
   // 已列出的子代理状态行。
   agents: SubagentOrchestrationAgent[];
+  // Whether the listed child-agent rows came from a known runtime payload.
+  // 已列出的子代理状态行是否来自明确的运行时载荷。
+  agentsKnown: boolean;
   // Stopped subagent task ids from control calls.
   // 控制调用返回的已停止任务会话标识。
   stoppedTaskIds: string[];
   // Stopped task count reported by control calls.
   // 控制调用返回的已停止任务数量。
   stoppedCount: number;
+  // Closed child-agent public ids from close calls.
+  // 关闭调用返回的已关闭子智能体公开标识。
+  closedAgents: string[];
+  // Closed child-agent count reported by close calls.
+  // 关闭调用返回的已关闭子智能体数量。
+  closedCount: number;
+  // Cleared queued inter-agent message count reported by close calls.
+  // 关闭调用返回的已清理代理间排队消息数量。
+  clearedMessageCount?: number | null;
 }
 
 // SubagentOrchestrationAgent describes one listed child-agent status row.

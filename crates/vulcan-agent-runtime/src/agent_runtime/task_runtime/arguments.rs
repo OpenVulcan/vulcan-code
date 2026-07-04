@@ -13,6 +13,11 @@ pub(super) fn parse_task_tool_arguments(args: Value) -> Result<TaskToolInvocatio
             "agent_mode `expert` requires subagent_profile_id.",
         ));
     }
+    if parsed.agent_mode.as_deref() == Some(SUBAGENT_MODE_EXPERT)
+        && parsed.fork_turns.as_deref() != Some("none")
+    {
+        parsed.fork_turns = Some(String::from("none"));
+    }
     Ok(parsed)
 }
 
@@ -45,7 +50,8 @@ pub(super) fn resolve_task_session_id(
 
     if let Some(task_id_text) = args.task_id.as_ref() {
         let public_task_id = normalize_public_task_identifier(task_id_text)?;
-        let resumed_record = task_runtime
+        let archived_task_ids = archived_subagent_task_ids_for_public_lookup(task_runtime)?;
+        let mut matching_records = task_runtime
             .sessions
             .read()
             .map_err(|_| {
@@ -54,11 +60,23 @@ pub(super) fn resolve_task_session_id(
                 )
             })?
             .values()
-            .find(|record| {
+            .filter(|record| {
                 record.public_task_id == public_task_id
                     && task_record_belongs_to_direct_parent(record, current_session_id)
+                    && !task_record_is_archived_for_public_lookup(record, &archived_task_ids)
             })
-            .cloned();
+            .cloned()
+            .collect::<Vec<_>>();
+        matching_records.sort_by(|left, right| {
+            // Prefer the newest open replacement when a closed public id was recreated.
+            // 已关闭公开标识被重建时，优先恢复最新的未关闭替代记录。
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.created_at.cmp(&left.created_at))
+                .then_with(|| right.task_id.cmp(&left.task_id))
+        });
+        let resumed_record = matching_records.into_iter().next();
         if let Some(record) = resumed_record {
             return Ok(ResolvedTaskSessionIdentifier {
                 task_id: record.task_id,
@@ -73,12 +91,14 @@ pub(super) fn resolve_task_session_id(
             direct_parent.clone(),
             &public_task_id,
         )? {
-            return Ok(ResolvedTaskSessionIdentifier {
-                task_id: Uuid::from(metadata.task_session_id),
-                public_task_id,
-                is_resumed: true,
-                persisted_metadata: Some(metadata),
-            });
+            if metadata.status != TaskSessionStatus::Archived {
+                return Ok(ResolvedTaskSessionIdentifier {
+                    task_id: Uuid::from(metadata.task_session_id),
+                    public_task_id,
+                    is_resumed: true,
+                    persisted_metadata: Some(metadata),
+                });
+            }
         }
 
         return Ok(ResolvedTaskSessionIdentifier {
@@ -142,7 +162,7 @@ pub(super) fn resolve_new_spawn_task_session_id(
     let task_id = Uuid::new_v4();
     let public_task_id = if let Some(task_id_text) = args.task_id.as_ref() {
         let requested_public_task_id = normalize_public_task_identifier(task_id_text)?;
-        unique_spawn_public_task_identifier(
+        reject_existing_spawn_public_task_identifier(
             task_runtime,
             root_session_id,
             direct_parent,
@@ -173,39 +193,52 @@ pub(super) fn task_record_belongs_to_direct_parent(
         .unwrap_or(record.origin_session_id == current_session_id)
 }
 
-/// Builds a collision-free public child-agent id for repeated spawn_agent labels.
-/// 为重复的 spawn_agent 标签生成不冲突的公开子代理标识。
-pub(super) fn unique_spawn_public_task_identifier(
+/// Returns archived task ids known by the native subagent registry.
+/// 返回原生子代理注册表已知的已归档任务标识集合。
+pub(super) fn archived_subagent_task_ids_for_public_lookup(
+    task_runtime: &Arc<TaskRuntime>,
+) -> Result<BTreeSet<SessionId>, String> {
+    Ok(task_runtime
+        .subagent_registry_snapshot()?
+        .list_all()
+        .into_iter()
+        .filter(|entry| entry.status == SubagentStatus::Archived)
+        .map(|entry| SessionId::from(entry.session_id))
+        .collect())
+}
+
+/// Returns whether a task record should be ignored by public-id lookup because it is closed.
+/// 返回任务记录是否因已关闭而应被公开标识查找忽略。
+pub(super) fn task_record_is_archived_for_public_lookup(
+    record: &TaskSessionRecord,
+    archived_task_ids: &BTreeSet<SessionId>,
+) -> bool {
+    record.last_status == status_name_for_task_session_status(TaskSessionStatus::Archived)
+        || archived_task_ids.contains(&record.task_id)
+}
+
+/// Rejects duplicate public child-agent ids for spawn_agent.
+/// 拒绝 spawn_agent 使用重复的公开子代理标识。
+pub(super) fn reject_existing_spawn_public_task_identifier(
     task_runtime: &Arc<TaskRuntime>,
     root_session_id: SessionId,
     direct_parent: ParentSessionRef,
     current_session_id: SessionId,
     requested_public_task_id: &str,
 ) -> Result<String, String> {
-    if !public_task_identifier_exists_for_parent(
+    if public_task_identifier_exists_for_parent(
         task_runtime,
         root_session_id,
         direct_parent.clone(),
         current_session_id,
         requested_public_task_id,
     )? {
-        return Ok(requested_public_task_id.to_string());
+        return Err(format!(
+            "Child agent `{requested_public_task_id}` already exists for this parent. Use send_message for an existing open agent or close_agent before reusing the name."
+        ));
     }
 
-    for suffix in 2..=999 {
-        let candidate = format!("{requested_public_task_id}-{suffix}");
-        if !public_task_identifier_exists_for_parent(
-            task_runtime,
-            root_session_id,
-            direct_parent.clone(),
-            current_session_id,
-            &candidate,
-        )? {
-            return Ok(candidate);
-        }
-    }
-
-    Ok(format!("{requested_public_task_id}-{}", Uuid::new_v4()))
+    Ok(requested_public_task_id.to_string())
 }
 
 /// Checks whether a public child-agent id already belongs to the direct parent.
@@ -217,6 +250,7 @@ pub(super) fn public_task_identifier_exists_for_parent(
     current_session_id: SessionId,
     public_task_id: &str,
 ) -> Result<bool, String> {
+    let archived_task_ids = archived_subagent_task_ids_for_public_lookup(task_runtime)?;
     let exists_in_memory = task_runtime
         .sessions
         .read()
@@ -227,14 +261,15 @@ pub(super) fn public_task_identifier_exists_for_parent(
         .any(|record| {
             record.public_task_id == public_task_id
                 && task_record_belongs_to_direct_parent(record, current_session_id)
+                && !task_record_is_archived_for_public_lookup(record, &archived_task_ids)
         });
     if exists_in_memory {
         return Ok(true);
     }
 
-    task_runtime
-        .persisted_task_metadata_for_public_id(root_session_id, direct_parent, public_task_id)
-        .map(|metadata| metadata.is_some())
+    Ok(task_runtime
+        .persisted_task_metadata_for_public_id(root_session_id, direct_parent, public_task_id)?
+        .is_some_and(|metadata| metadata.status != TaskSessionStatus::Archived))
 }
 
 /// Normalizes one caller-facing task identifier while preserving the original textual identity used for future resume lookups.
@@ -291,11 +326,12 @@ pub(super) fn provider_model_snapshot_from_args(
         snapshot.provider_id = Some(provider);
     }
     if let Some(model) = normalize_optional_task_label(args.model.as_deref()) {
-        snapshot.model_id = Some(model);
-    }
-    if let Some(reasoning_effort) = normalize_optional_task_label(args.reasoning_effort.as_deref())
-    {
-        snapshot.reasoning_effort = Some(reasoning_effort);
+        if let Ok((provider_id, model_id)) = split_provider_model_selector(&model) {
+            snapshot.provider_id = Some(provider_id);
+            snapshot.model_id = Some(model_id);
+        } else {
+            snapshot.model_id = Some(model);
+        }
     }
     if let Some(execution_mode) = normalize_optional_task_label(args.execution_mode.as_deref()) {
         snapshot.execution_mode = Some(execution_mode);
@@ -312,9 +348,9 @@ pub(super) fn apply_provider_model_value(snapshot: &mut ProviderModelSnapshot, v
             if text.is_empty() {
                 return;
             }
-            if let Some((provider, model)) = text.split_once('/') {
-                snapshot.provider_id = normalize_optional_task_label(Some(provider));
-                snapshot.model_id = normalize_optional_task_label(Some(model));
+            if let Ok((provider_id, model_id)) = split_provider_model_selector(text) {
+                snapshot.provider_id = Some(provider_id);
+                snapshot.model_id = Some(model_id);
             } else {
                 snapshot.model_id = Some(text.to_string());
             }
@@ -324,14 +360,167 @@ pub(super) fn apply_provider_model_value(snapshot: &mut ProviderModelSnapshot, v
                 .or_else(|| snapshot.provider_id.clone());
             snapshot.model_id =
                 string_field(map, &["model_id", "model"]).or_else(|| snapshot.model_id.clone());
-            snapshot.reasoning_effort =
-                string_field(map, &["reasoning_effort", "reasoning", "effort"])
-                    .or_else(|| snapshot.reasoning_effort.clone());
             snapshot.execution_mode = string_field(map, &["execution_mode", "mode"])
                 .or_else(|| snapshot.execution_mode.clone());
         }
         _ => {}
     }
+}
+
+/// Splits one canonical provider/model selector into provider and model identifiers.
+/// 将一个规范 provider/model 选择器拆分为供应商与模型标识。
+///
+/// # Parameters
+/// 参数
+/// `selector` is the model-visible selector returned by agent_orchestration_info.
+/// `selector` 是 agent_orchestration_info 返回给模型使用的选择器。
+///
+/// # Returns
+/// 返回值
+/// The provider id and model id pair when the selector is valid.
+/// 选择器有效时返回供应商标识与模型标识。
+pub(super) fn split_provider_model_selector(selector: &str) -> Result<(String, String), String> {
+    let selector = selector.trim();
+    let Some((provider_id, model_id)) = selector.split_once('/') else {
+        return Err(String::from(
+            "model must use a provider/model selector returned by agent_orchestration_info.",
+        ));
+    };
+    let provider_id = normalize_optional_task_label(Some(provider_id)).ok_or_else(|| {
+        String::from("model selector must include a non-empty provider id before `/`.")
+    })?;
+    let model_id = normalize_optional_task_label(Some(model_id)).ok_or_else(|| {
+        String::from("model selector must include a non-empty model id after `/`.")
+    })?;
+    Ok((provider_id, model_id))
+}
+
+/// Resolves a provider/model snapshot into a canonical selector.
+/// 将供应商与模型快照解析为规范选择器。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the provider/model snapshot to inspect.
+/// `snapshot` 是需要检查的供应商与模型快照。
+/// `session_config` carries the active session model fallback.
+/// `session_config` 携带当前会话模型回退值。
+///
+/// # Returns
+/// 返回值
+/// A provider/model pair when the snapshot selects a concrete model.
+/// 快照选择了具体模型时返回供应商与模型标识。
+pub(super) fn provider_model_selector_from_snapshot(
+    snapshot: &ProviderModelSnapshot,
+    session_config: &ProviderConfigurationFile,
+) -> Option<(String, String)> {
+    let model_id = snapshot.model_id.as_deref()?.trim();
+    if model_id.is_empty() {
+        return None;
+    }
+    if let Ok((provider_id, model_id)) = split_provider_model_selector(model_id) {
+        return Some((provider_id, model_id));
+    }
+    let provider_id = snapshot
+        .provider_id
+        .as_deref()
+        .and_then(|value| normalize_optional_task_label(Some(value)))
+        .or_else(|| {
+            session_config
+                .model
+                .as_deref()
+                .and_then(crate::provider_config::parse_active_model_reference)
+                .map(|(provider_id, _)| provider_id.to_string())
+        })?;
+    Some((provider_id, model_id.to_string()))
+}
+
+/// Returns whether a provider/model pair is currently selectable for execution.
+/// 返回供应商与模型组合当前是否可被执行选择。
+///
+/// # Parameters
+/// 参数
+/// `session_config` is the current provider configuration snapshot.
+/// `session_config` 是当前供应商配置快照。
+/// `provider_id` is the provider identifier.
+/// `provider_id` 是供应商标识。
+/// `model_id` is the model identifier.
+/// `model_id` 是模型标识。
+///
+/// # Returns
+/// 返回值
+/// `true` when the model exists in the current effective enabled model choices.
+/// 当模型存在于当前有效启用模型列表中时返回 `true`。
+pub(super) fn provider_model_selector_is_available(
+    session_config: &ProviderConfigurationFile,
+    provider_id: &str,
+    model_id: &str,
+) -> bool {
+    crate::provider_config::effective_model_choices(provider_id, session_config)
+        .into_iter()
+        .any(|choice| choice.id == model_id)
+}
+
+/// Validates an explicit model override selected by a spawn_agent call.
+/// 校验 spawn_agent 调用显式选择的模型覆盖。
+///
+/// # Parameters
+/// 参数
+/// `session_config` is the current provider configuration snapshot.
+/// `session_config` 是当前供应商配置快照。
+/// `provider_model` is the invocation-level provider/model override.
+/// `provider_model` 是调用级供应商与模型覆盖。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when no explicit model was selected or the selector is available.
+/// 未显式选择模型或选择器可用时返回 `Ok(())`。
+pub(super) fn validate_explicit_spawn_model_selector(
+    session_config: &ProviderConfigurationFile,
+    provider_model: &ProviderModelSnapshot,
+) -> Result<(), String> {
+    let Some((provider_id, model_id)) =
+        provider_model_selector_from_snapshot(provider_model, session_config)
+    else {
+        return Ok(());
+    };
+    if provider_model_selector_is_available(session_config, &provider_id, &model_id) {
+        return Ok(());
+    }
+    Err(format!(
+        "model selector `{provider_id}/{model_id}` is not available. Call agent_orchestration_info and use one of the returned model selectors."
+    ))
+}
+
+/// Clears unavailable profile-level fixed model overrides so execution falls back to the session model.
+/// 清除不可用的配置级固定模型覆盖，使执行回退到会话模型。
+///
+/// # Parameters
+/// 参数
+/// `session_config` is the current provider configuration snapshot.
+/// `session_config` 是当前供应商配置快照。
+/// `resolved_config` is the resolved TaskSession configuration to adjust.
+/// `resolved_config` 是需要调整的已解析 TaskSession 配置。
+///
+/// # Returns
+/// 返回值
+/// `true` when an unavailable fixed model was removed.
+/// 当不可用固定模型被移除时返回 `true`。
+pub(super) fn clear_unavailable_profile_model_override(
+    session_config: &ProviderConfigurationFile,
+    resolved_config: &mut TaskSessionResolvedConfig,
+) -> bool {
+    let Some((provider_id, model_id)) = provider_model_selector_from_snapshot(
+        &resolved_config.effective_config.provider_model,
+        session_config,
+    ) else {
+        return false;
+    };
+    if provider_model_selector_is_available(session_config, &provider_id, &model_id) {
+        return false;
+    }
+    resolved_config.effective_config.provider_model.provider_id = None;
+    resolved_config.effective_config.provider_model.model_id = None;
+    true
 }
 
 /// Builds the tool exposure override snapshot from child-agent TaskSession arguments.
@@ -608,7 +797,6 @@ pub(super) fn merge_task_invocation_config_for_resume(
 pub(super) fn provider_model_has_override(snapshot: &ProviderModelSnapshot) -> bool {
     snapshot.provider_id.is_some()
         || snapshot.model_id.is_some()
-        || snapshot.reasoning_effort.is_some()
         || snapshot.execution_mode.is_some()
 }
 
@@ -650,6 +838,63 @@ pub(super) fn task_invocation_changes_controller_config(config: &TaskInvocationC
         || provider_model_has_override(&config.provider_model)
         || config.runtime_policy.has_override()
         || !config.extra.is_null()
+}
+
+/// Normalizes and validates one model-visible subagent creation mode.
+/// 规范化并校验一个模型可见的子代理创建模式。
+pub(super) fn normalize_subagent_creation_mode(value: Option<&str>) -> Result<String, String> {
+    let Some(mode) = normalize_optional_task_label(value) else {
+        return Ok(String::from("default"));
+    };
+    match mode.as_str() {
+        "default" | "mirror" | "agent" | "custom" => Ok(mode),
+        other => Err(format!(
+            "creation_mode must be `default`, `mirror`, `agent`, or `custom`; received `{other}`."
+        )),
+    }
+}
+
+/// Resolves the effective internal fork selector for a subagent run.
+/// 解析子代理运行使用的内部上下文派生选择器。
+pub(super) fn effective_spawn_agent_fork_turns(
+    agent_mode: Option<&str>,
+    agent_id: Option<&str>,
+    fork_turns: Option<&str>,
+) -> Result<String, String> {
+    if agent_mode == Some(SUBAGENT_MODE_MIRROR) {
+        return Ok(String::from("all"));
+    }
+    if agent_mode == Some(SUBAGENT_MODE_EXPERT)
+        || agent_id.is_some_and(|value| !value.trim().is_empty())
+    {
+        return Ok(String::from("none"));
+    }
+    Ok(normalize_spawn_agent_fork_turns(fork_turns)?.unwrap_or_else(|| String::from("none")))
+}
+
+/// Normalizes an internal fork selector before it reaches execution.
+/// 在进入执行层前规范化内部上下文派生选择器。
+pub(super) fn normalize_spawn_agent_fork_turns(
+    fork_turns: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(fork_turns) = fork_turns.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if fork_turns.eq_ignore_ascii_case("none") {
+        return Ok(Some(String::from("none")));
+    }
+    if fork_turns.eq_ignore_ascii_case("all") {
+        return Ok(Some(String::from("all")));
+    }
+    let turn_count = fork_turns.parse::<usize>().map_err(|_| {
+        String::from("internal fork_turns must be `none`, `all`, or a positive integer string")
+    })?;
+    if turn_count == 0 {
+        return Err(String::from(
+            "internal fork_turns must be `none`, `all`, or a positive integer string",
+        ));
+    }
+    Ok(Some(turn_count.to_string()))
 }
 
 /// Builds one compact prompt preview that can serve as a last-resort task title fallback.

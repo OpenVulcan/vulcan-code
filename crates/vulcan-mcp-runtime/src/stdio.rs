@@ -12,6 +12,7 @@ use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::broadcast;
+use vulcan_host_tools::process_creation::apply_windows_release_no_window;
 
 use crate::error::McpRuntimeError;
 use crate::rmcp_support::{
@@ -92,6 +93,7 @@ fn build_child_command(
     if !env.is_empty() {
         command.envs(env);
     }
+    apply_windows_release_no_window(&mut command);
     command
 }
 

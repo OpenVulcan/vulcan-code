@@ -10,7 +10,8 @@ use crate::agent_runtime::provider_protocol_bridge::{
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::tool_runtime_bridge::{
     VulcanManagedToolRuntimeBridge, attach_runtime_event_projection_barrier,
-    build_tool_failure_invocation_result, wait_runtime_event_projection_barrier,
+    build_tool_failure_invocation_result, build_tool_rejection_invocation_result,
+    wait_runtime_event_projection_barrier,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -65,6 +66,31 @@ impl StreamingRuntimeToolExecutor {
             tool_request_rejection_tool_ids,
         }
     }
+
+    /// Returns the runtime-policy rejection reason for one tool request when it is scoped out.
+    /// 当单次工具请求被运行时策略排除时返回对应拒绝原因。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request` is the provider-requested tool invocation.
+    /// `request` 是 Provider 请求的工具调用。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Some(reason)` when the request should return a policy-rejected tool result.
+    /// 当请求应返回策略拒绝工具结果时返回 `Some(reason)`。
+    fn tool_request_rejection_message(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Option<String> {
+        let reason = self.tool_request_rejection_reason.as_ref()?;
+        let should_reject = self.tool_request_rejection_all_tools
+            || self
+                .tool_request_rejection_tool_ids
+                .iter()
+                .any(|tool_id| tool_id == &request.tool_name);
+        should_reject.then(|| reason.clone())
+    }
 }
 
 #[async_trait]
@@ -75,18 +101,6 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
-        if let Some(reason) = self.tool_request_rejection_reason.as_ref()
-            && (self.tool_request_rejection_all_tools
-                || self
-                    .tool_request_rejection_tool_ids
-                    .iter()
-                    .any(|tool_id| tool_id == &request.tool_name))
-        {
-            return Err(VulcanCoreError::ToolFailure {
-                tool_name: request.tool_name.clone(),
-                message: reason.clone(),
-            });
-        }
         let (tool_started_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolStarted,
@@ -113,25 +127,32 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
             tokio::task::yield_now().await;
         }
         let (result, display_state) =
-            match AssertUnwindSafe(self.runtime_bridge.execute_tool(request))
-                .catch_unwind()
-                .await
-            {
-                Ok(Ok(result)) => (result, "completed"),
-                Ok(Err(error)) => (
-                    build_tool_failure_invocation_result(request, error.to_string()),
-                    "failed",
-                ),
-                Err(payload) => (
-                    build_tool_failure_invocation_result(
-                        request,
-                        format!(
-                            "Tool runtime panicked before returning a normal result: {}",
-                            panic_payload_message(payload.as_ref())
-                        ),
+            if let Some(reason) = self.tool_request_rejection_message(request) {
+                (
+                    build_tool_rejection_invocation_result(request, reason),
+                    "completed",
+                )
+            } else {
+                match AssertUnwindSafe(self.runtime_bridge.execute_tool(request))
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(Ok(result)) => (result, "completed"),
+                    Ok(Err(error)) => (
+                        build_tool_failure_invocation_result(request, error.to_string()),
+                        "failed",
                     ),
-                    "failed",
-                ),
+                    Err(payload) => (
+                        build_tool_failure_invocation_result(
+                            request,
+                            format!(
+                                "Tool runtime panicked before returning a normal result: {}",
+                                panic_payload_message(payload.as_ref())
+                            ),
+                        ),
+                        "failed",
+                    ),
+                }
             };
         let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
         let event_metadata = attach_tool_name_to_runtime_metadata(

@@ -2,6 +2,7 @@ use super::*;
 use crate::provider_config::{PersistedRtkRouteMode, PersistedRtkToolConfiguration};
 use crate::runtime_assets;
 use std::collections::BTreeSet;
+use vulcan_host_tools::process_creation::apply_windows_release_no_window;
 
 /// Hard timeout for the lightweight RTK rewrite probe.
 /// 轻量 RTK rewrite 探测使用的硬超时。
@@ -423,6 +424,8 @@ fn apply_shell_command_process_options(
     command: &mut TokioCommand,
     process_options: &ShellCommandProcessOptions,
 ) {
+    apply_windows_release_no_window(command);
+
     if let Some(path_prefix) = process_options.path_prefix.as_deref() {
         let mut paths = vec![path_prefix.to_path_buf()];
         if let Some(existing_path) = std::env::var_os("PATH") {
@@ -510,6 +513,7 @@ async fn rewrite_shell_command_with_rtk(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     command.kill_on_drop(true);
+    apply_windows_release_no_window(&mut command);
     if rtk_support.configuration.telemetry_disabled {
         command.env("RTK_TELEMETRY_DISABLED", "1");
     }

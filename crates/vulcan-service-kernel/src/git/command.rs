@@ -6,6 +6,7 @@ use std::{
     path::Path,
     process::{Command, Stdio},
 };
+use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
 
 /// Runs one bounded Git command with filters and pagers disabled.
 /// 在禁用过滤器与分页器的情况下运行单个有界 Git 命令。
@@ -28,6 +29,7 @@ pub(crate) fn run_webui_git_command(
         .arg("-c")
         .arg(format!("core.hooksPath={hooks_path}"));
     command.args(args);
+    apply_windows_release_no_window_to_std_command(&mut command);
     command
         .output()
         .map_err(|error| format!("failed to run git command `{}`: {error}", args.join(" ")))
@@ -58,6 +60,7 @@ pub(crate) fn run_webui_git_command_with_stdin(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_windows_release_no_window_to_std_command(&mut command);
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run git command `{}` with stdin: {error}",
@@ -93,6 +96,7 @@ pub(crate) fn run_webui_git_mutating_command(
         .arg("-c")
         .arg("core.fsmonitor=false")
         .args(args);
+    apply_windows_release_no_window_to_std_command(&mut command);
     command.output().map_err(|error| {
         format!(
             "failed to run git action command `{}`: {error}",
@@ -118,6 +122,7 @@ pub(crate) fn run_webui_git_mutating_command_with_stdin(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_windows_release_no_window_to_std_command(&mut command);
     let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run git action command `{}` with stdin: {error}",

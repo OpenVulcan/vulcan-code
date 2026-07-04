@@ -1,21 +1,13 @@
 use super::*;
 
-/// Builds the compact label used by one subagent dispatch row from its agent name and optional task description.
-/// 根据代理名称与可选任务简介构建单条子代理调度行使用的紧凑标签。
+/// Builds the compact label used by one subagent dispatch row from its agent name only.
+/// 仅根据代理名称构建单条子代理调度行使用的紧凑标签。
 pub fn subagent_navigation_task_label(state: &SubagentTaskPanelState) -> String {
     let label = state.subagent_label.trim();
-    let description = state
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    match description {
-        Some(description) if !label.contains(description) => {
-            format!("{label}（{description}）")
-        }
-        _ if !label.is_empty() => label.to_string(),
-        _ => String::from("子代理"),
+    if !label.is_empty() {
+        return label.to_string();
     }
+    String::from("智能体")
 }
 
 /// Converts one persisted execution-status string into the canonical subagent run state.
@@ -124,6 +116,7 @@ pub fn subagent_task_panel_states_from_segmented_task_session_store(
         .list_child_task_sessions(parent)
         .unwrap_or_default()
         .into_iter()
+        .filter(|metadata| metadata.status != TaskSessionStatus::Archived)
         .filter_map(|metadata| subagent_task_panel_state_from_task_session(&metadata, None, None))
         .filter(|state| state.parent_session_id == parent_session_id)
         .collect()

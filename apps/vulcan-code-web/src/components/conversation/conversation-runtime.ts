@@ -128,9 +128,10 @@ function sessionRunPhaseCue(
 function blockLooksLikeSubagentTool(block: ConversationBlock): boolean {
   const toolName = block.toolName?.trim().toLowerCase();
   return toolName === "spawn_agent"
+    || toolName === "agent_orchestration_info"
     || toolName === "send_message"
-    || toolName === "followup_task"
     || toolName === "wait_agent"
     || toolName === "list_agents"
-    || toolName === "interrupt_agent";
+    || toolName === "interrupt_agent"
+    || toolName === "close_agent";
 }

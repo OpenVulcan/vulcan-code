@@ -31,6 +31,13 @@ pub(crate) fn build_subagent_panel_route_response_locked(
             (workspace_snapshot.selected_session != SessionId::nil())
                 .then(|| workspace_snapshot.selected_session.to_string())
         });
+    let parent_conversation_id = subagent_navigation
+        .as_ref()
+        .map(|navigation| navigation.parent_conversation_id.clone())
+        .or_else(|| {
+            (workspace_snapshot.selected_session != SessionId::nil())
+                .then(|| workspace_snapshot.selected_session.to_string())
+        });
     let messages = active_conversation_id
         .as_deref()
         .map(|conversation_id| {
@@ -43,6 +50,7 @@ pub(crate) fn build_subagent_panel_route_response_locked(
     guard.workbench.messages = messages.clone();
     guard.workbench.subagent_navigation = subagent_navigation.clone();
     SubagentPanelRouteResponse {
+        parent_conversation_id,
         active_conversation_id,
         subagent_navigation,
         messages,

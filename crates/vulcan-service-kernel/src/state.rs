@@ -246,6 +246,9 @@ pub struct ServiceBridgeState {
     /// Parent-turn bindings keyed by detached child task id.
     /// 按分离子任务标识索引的父回合绑定。
     pub(crate) subagent_parent_turn_bindings: BTreeMap<SessionId, WebuiSubagentParentTurnBinding>,
+    /// Child tasks whose current run should not block the parent turn completion gate.
+    /// 当前运行不应阻塞父回合完成闸门的子任务集合。
+    pub(crate) subagent_completion_gate_ignored_tasks: BTreeSet<SessionId>,
     /// Parent sessions currently blocked inside a model-requested wait_agent call.
     /// 当前正阻塞在模型请求的 wait_agent 调用中的父会话集合。
     pub(crate) parent_sessions_waiting_for_subagents: BTreeSet<SessionId>,

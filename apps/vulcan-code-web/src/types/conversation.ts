@@ -217,6 +217,9 @@ export interface SubagentNavigationChangedDelta {
 // SubagentPanelRouteResponse carries the focused route state after a subagent panel action.
 // SubagentPanelRouteResponse 携带子代理面板动作后的聚焦路由状态。
 export interface SubagentPanelRouteResponse {
+  // Parent conversation id that owns this route response.
+  // 拥有本次路由响应的父会话标识。
+  parentConversationId?: string | null;
   // Conversation id that owns the returned message window.
   // 拥有返回消息窗口的会话标识。
   activeConversationId?: string | null;

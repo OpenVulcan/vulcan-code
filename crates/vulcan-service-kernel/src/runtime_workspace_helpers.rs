@@ -232,7 +232,23 @@ pub(crate) fn webui_turn_completion_gate_from_state(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, session_id).len()
+        let running_tasks =
+            running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, session_id);
+        let running_task_ids = running_tasks
+            .iter()
+            .map(|(_, state)| state.task_id)
+            .collect::<BTreeSet<_>>();
+        guard
+            .subagent_completion_gate_ignored_tasks
+            .retain(|task_id| running_task_ids.contains(task_id));
+        running_tasks
+            .iter()
+            .filter(|(_, state)| {
+                !guard
+                    .subagent_completion_gate_ignored_tasks
+                    .contains(&state.task_id)
+            })
+            .count()
     };
     let has_active_hook_turn = agent_runtime
         .conversation_hook_runtime
@@ -306,6 +322,51 @@ pub(crate) fn running_webui_subagent_task_states_for_tree_from_live_cache(
     })
 }
 
+/// Marks one child task run as non-blocking for the parent turn completion gate.
+/// 将单个子任务运行标记为不阻塞父级回合完成闸门。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the in-memory service state.
+/// `guard` 持有内存中的服务状态。
+/// `task_id` identifies the child task whose current run is asynchronous to the parent turn.
+/// `task_id` 标识当前运行相对父回合为异步的子任务。
+pub(crate) fn mark_webui_subagent_completion_gate_ignored(
+    guard: &mut ServiceBridgeState,
+    task_id: SessionId,
+) {
+    if guard.subagent_completion_gate_ignored_tasks.insert(task_id) {
+        webui_trace(
+            "subagent_completion_gate_ignored",
+            format!("task={task_id}"),
+        );
+    }
+}
+
+/// Clears the non-blocking parent completion-gate marker for one child task.
+/// 清理单个子任务的非阻塞父级完成闸门标记。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the in-memory service state.
+/// `guard` 持有内存中的服务状态。
+/// `task_id` identifies the child task whose marker should be removed.
+/// `task_id` 标识需要移除标记的子任务。
+pub(crate) fn clear_webui_subagent_completion_gate_ignored(
+    guard: &mut ServiceBridgeState,
+    task_id: SessionId,
+) {
+    if guard
+        .subagent_completion_gate_ignored_tasks
+        .remove(&task_id)
+    {
+        webui_trace(
+            "subagent_completion_gate_ignore_cleared",
+            format!("task={task_id}"),
+        );
+    }
+}
+
 /// Marks the provided running WebUI subagent tasks as stopped and clears their live listener routes.
 /// 将给定的 WebUI 运行中子代理标记为已停止，并清理它们的实时监听路由。
 pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
@@ -324,6 +385,7 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
             }
         }
         guard.detached_subagent_task_listeners.remove(task_id);
+        clear_webui_subagent_completion_gate_ignored(guard, *task_id);
         clear_webui_subagent_parent_turn_binding(guard, *task_id);
         guard
             .session_subagent_navigation_rounds
@@ -335,6 +397,58 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
             guard.active_subagent_panel = None;
         }
     }
+}
+
+/// Removes closed WebUI subagent tasks from every unclosed-agent surface cache.
+/// 从所有未关闭代理界面缓存中移除已关闭的 WebUI 子代理任务。
+pub(crate) fn remove_webui_closed_subagent_tasks_in_state(
+    guard: &mut ServiceBridgeState,
+    task_ids: &[SessionId],
+) -> bool {
+    if task_ids.is_empty() {
+        return false;
+    }
+    let task_ids = task_ids.iter().copied().collect::<BTreeSet<_>>();
+    let mut changed = false;
+    let parent_session_ids = guard
+        .session_subagent_tasks
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+    for parent_session_id in parent_session_ids {
+        let remove_empty_parent =
+            if let Some(tasks) = guard.session_subagent_tasks.get_mut(&parent_session_id) {
+                for task_id in &task_ids {
+                    changed |= tasks.remove(task_id).is_some();
+                }
+                tasks.is_empty()
+            } else {
+                false
+            };
+        if remove_empty_parent {
+            guard.session_subagent_tasks.remove(&parent_session_id);
+            guard
+                .session_subagent_navigation_rounds
+                .remove(&parent_session_id);
+        }
+    }
+    for task_id in &task_ids {
+        changed |= guard.detached_subagent_task_listeners.remove(task_id);
+        clear_webui_subagent_completion_gate_ignored(guard, *task_id);
+        changed |= guard
+            .subagent_surface_detail_cache
+            .remove(task_id)
+            .is_some();
+        clear_webui_subagent_parent_turn_binding(guard, *task_id);
+    }
+    if guard
+        .active_subagent_panel
+        .is_some_and(|selection| task_ids.contains(&selection.task_id))
+    {
+        guard.active_subagent_panel = None;
+        changed = true;
+    }
+    changed
 }
 
 /// Stops WebUI-visible session work and restores queue state to the service stopped semantics.

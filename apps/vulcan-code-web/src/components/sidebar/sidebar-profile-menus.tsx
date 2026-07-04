@@ -53,7 +53,7 @@ export function SidebarBrandMenu(props: {
             data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
             onDoubleClick={props.onTitlebarDoubleClick}
           >
-            <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
+            <img alt="" aria-hidden="true" className="brand-logo sidebar-brand-logo" src="/vulcan-logo.svg" />
             <span className="vcn-sidebar-label sidebar-profile-label">
               <strong>Vulcan Code</strong>
               <small>{props.currentLabel}</small>

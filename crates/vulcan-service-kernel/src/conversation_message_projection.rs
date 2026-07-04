@@ -10,14 +10,15 @@ pub(crate) fn conversation_messages_from_session(
     messages: &[SessionMessageEntry],
     allow_user_prompt_editing: bool,
 ) -> Vec<ConversationMessage> {
+    let display_messages = filter_display_session_messages(messages.to_vec());
     let editable_user_prompt_ids = if allow_user_prompt_editing {
-        editable_user_prompt_message_ids_from_entries(messages)
+        editable_user_prompt_message_ids_from_entries(&display_messages)
     } else {
         BTreeSet::new()
     };
-    messages
+    display_messages
         .iter()
-        .filter(|message| message.is_visible_to_user())
+        .filter(|message| session_message_is_display_visible(message))
         .filter(|message| {
             !message.body.trim().is_empty()
                 || matches!(
@@ -182,4 +183,74 @@ pub(crate) fn conversation_fork_source_summary_from_session(
 pub(crate) fn non_empty_string(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies internal subagent mailbox injections never reach the WebUI message projection.
+    /// 验证内部子代理邮箱注入永远不会进入 WebUI 消息投影。
+    #[test]
+    fn conversation_messages_filter_internal_agent_message_injections() {
+        let conversation_id = SessionId::new_v4().to_string();
+        let mut internal_message = SessionMessageEntry::new(
+            SessionMessageKind::User,
+            "",
+            "<agent_message><payload>hidden</payload></agent_message>",
+        );
+        internal_message.id = String::from("internal-agent-message");
+        let mut visible_message =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "", "visible answer");
+        visible_message.id = String::from("visible-answer");
+
+        let messages = conversation_messages_from_session(
+            &conversation_id,
+            &[internal_message, visible_message],
+            false,
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].body, "visible answer");
+    }
+
+    /// Verifies internal inter-agent prompts render as friendly display-only messages.
+    /// 验证内部智能体间提示词会渲染成友好的仅显示消息。
+    #[test]
+    fn conversation_messages_project_inter_agent_injection_as_display_note() {
+        let conversation_id = SessionId::new_v4().to_string();
+        let task_id = SessionId::new_v4();
+        let mut internal_message = SessionMessageEntry::new(
+            SessionMessageKind::User,
+            "用户指令",
+            format!(
+                "[Inter-agent messages]\n\nMessage 1 from parent to {task_id} via send_message at 1780000000000:\n请用中文重新输出结论。\n"
+            ),
+        )
+        .with_runtime_metadata("internal-message", "1780000000001");
+        internal_message.metadata = Some(json!({
+            "source": "user_interrupt",
+            "starts_user_turn": false,
+            "turn_process": true,
+            "editable": false,
+        }));
+
+        let messages =
+            conversation_messages_from_session(&conversation_id, &[internal_message], false);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].body, "请用中文重新输出结论。");
+        assert_eq!(
+            messages[0].record_kind.as_deref(),
+            Some(SessionMessageRecordKind::DisplayNote.as_persisted_key())
+        );
+        assert_eq!(
+            messages[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool"))
+                .and_then(Value::as_str),
+            Some("send_message")
+        );
+    }
 }

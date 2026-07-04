@@ -4,6 +4,7 @@
 use super::*;
 use vulcan_service_api::{
     SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary, SubagentOriginSummary,
+    SubagentProviderModelSummary,
 };
 
 /// Converts LuaSkills catalog rows into plugin summaries.
@@ -132,18 +133,21 @@ pub(crate) fn agent_skills_catalog_summary(
 
 /// Projects agent and expert definitions into the WebUI service API shape.
 /// 将智能体与专家定义投影为 WebUI service API 结构。
-pub(crate) fn subagent_catalog_summary() -> SubagentCatalogSummary {
+pub(crate) fn subagent_catalog_summary(
+    provider_configuration: &ProviderConfigurationFile,
+) -> SubagentCatalogSummary {
     let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
     let user_root = vulcan_workspace_store::data_plane::application_data_root().join("agents");
     let catalog =
         vulcan_task_session::load_subagent_catalog_from_roots(system_root.clone(), user_root);
-    subagent_catalog_summary_from_catalog(&catalog)
+    subagent_catalog_summary_from_catalog(&catalog, provider_configuration)
 }
 
 /// Projects one already loaded agent catalog into the WebUI service API shape.
 /// 将一个已加载的智能体目录投影为 WebUI service API 结构。
 pub(crate) fn subagent_catalog_summary_from_catalog(
     catalog: &vulcan_task_session::SubagentCatalog,
+    provider_configuration: &ProviderConfigurationFile,
 ) -> SubagentCatalogSummary {
     let system_definition_ids = system_subagent_definition_ids_for_summary();
     let enabled_count = catalog
@@ -163,7 +167,13 @@ pub(crate) fn subagent_catalog_summary_from_catalog(
         definitions: catalog
             .definitions
             .iter()
-            .map(|definition| subagent_definition_summary(definition, &system_definition_ids))
+            .map(|definition| {
+                subagent_definition_summary(
+                    definition,
+                    &system_definition_ids,
+                    provider_configuration,
+                )
+            })
             .collect(),
         categories: catalog
             .categories
@@ -206,6 +216,7 @@ pub(crate) fn subagent_catalog_summary_from_catalog(
 fn subagent_definition_summary(
     definition: &vulcan_task_session::SubagentDefinition,
     system_definition_ids: &std::collections::BTreeSet<String>,
+    provider_configuration: &ProviderConfigurationFile,
 ) -> SubagentDefinitionSummary {
     SubagentDefinitionSummary {
         agent_id: definition.id.clone(),
@@ -267,6 +278,7 @@ fn subagent_definition_summary(
         prompt_skill_policy_mode: capability_policy_mode_key(definition.prompt_skills.policy.mode)
             .to_string(),
         prompt_skill_policy_skills: definition.prompt_skills.policy.selectors.clone(),
+        provider_model: subagent_provider_model_summary(definition, provider_configuration),
         system_prompt: definition.system_prompt.clone(),
         system_prompt_append: definition.system_prompt_append.clone(),
         allowed_tools: definition.tool_exposure.allowed_tools.clone(),
@@ -278,6 +290,70 @@ fn subagent_definition_summary(
         enabled_prompt_skills: definition.prompt_skills.enabled.clone(),
         disabled_prompt_skills: definition.prompt_skills.disabled.clone(),
         capability_diagnostics: subagent_capability_diagnostics(definition),
+    }
+}
+
+/// Builds the WebUI fixed-model diagnostic projection for one subagent definition.
+/// 为单个子代理定义构建 WebUI 固定模型诊断投影。
+fn subagent_provider_model_summary(
+    definition: &vulcan_task_session::SubagentDefinition,
+    provider_configuration: &ProviderConfigurationFile,
+) -> SubagentProviderModelSummary {
+    let provider_id = definition.provider_model.provider_id.clone();
+    let model_id = definition.provider_model.model_id.clone();
+    let provider_id_text = provider_id.as_deref().filter(|value| !value.is_empty());
+    let model_id_text = model_id.as_deref().filter(|value| !value.is_empty());
+    let (Some(provider_id_text), Some(model_id_text)) = (provider_id_text, model_id_text) else {
+        if provider_id_text.is_none() && model_id_text.is_none() {
+            return SubagentProviderModelSummary {
+                mode: String::from("session"),
+                ..SubagentProviderModelSummary::default()
+            };
+        }
+        let selector = subagent_provider_model_selector(provider_id_text, model_id_text);
+        return SubagentProviderModelSummary {
+            provider_id,
+            model_id,
+            mode: String::from("fixed"),
+            selector,
+            available: Some(false),
+            unavailable_reason: Some(String::from(
+                "固定模型配置不完整，请重新选择模型或恢复跟随会话模型。",
+            )),
+        };
+    };
+    let available =
+        provider_config::effective_model_choices(provider_id_text, provider_configuration)
+            .into_iter()
+            .any(|choice| choice.id == model_id_text);
+    let selector = format!("{provider_id_text}/{model_id_text}");
+    SubagentProviderModelSummary {
+        provider_id,
+        model_id,
+        mode: String::from("fixed"),
+        selector: Some(selector),
+        available: Some(available),
+        unavailable_reason: if available {
+            None
+        } else {
+            Some(String::from(
+                "当前固定模型不在已启用模型列表中；未显式指定模型时 spawn_agent 会回退到会话模型。",
+            ))
+        },
+    }
+}
+
+/// Builds a partial provider/model selector for diagnostics without inventing missing fields.
+/// 构建用于诊断的部分供应商/模型选择器，且不臆造缺失字段。
+fn subagent_provider_model_selector(
+    provider_id: Option<&str>,
+    model_id: Option<&str>,
+) -> Option<String> {
+    match (provider_id, model_id) {
+        (Some(provider_id), Some(model_id)) => Some(format!("{provider_id}/{model_id}")),
+        (Some(provider_id), None) => Some(format!("{provider_id}/")),
+        (None, Some(model_id)) => Some(format!("/{model_id}")),
+        (None, None) => None,
     }
 }
 

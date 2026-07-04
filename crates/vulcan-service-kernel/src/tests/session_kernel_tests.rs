@@ -170,3 +170,84 @@ fn webui_stream_event_generation_gate_rejects_stopped_generation() {
         Some(expected_generation)
     ));
 }
+
+/// Builds one minimal subagent-completed metadata payload for kernel restore tests.
+/// 为内核恢复测试构建一个最小子代理完成元数据载荷。
+fn restored_kernel_subagent_metadata(result: &str) -> serde_json::Value {
+    serde_json::json!({
+        "payload": {
+            "subagent_mailbox_event": {
+                "kind": "completed",
+                "payload": {
+                    "task_name": "agent-review",
+                    "result_text": result
+                }
+            }
+        }
+    })
+}
+
+/// Restores a service state from the current workspace snapshot but without live kernels.
+/// 从当前工作区快照恢复服务状态，但不携带实时内核。
+fn service_state_restored_from_workspace_snapshot(
+    source: &ServiceBridgeState,
+    session_id: SessionId,
+) -> ServiceBridgeState {
+    let mut restored = test_service_state_with_parent_session(session_id);
+    restored.workspace_snapshot = source.workspace_snapshot.clone();
+    restored
+}
+
+/// Verifies unconsumed persisted mailbox input restores as a triggerable kernel mailbox item.
+/// 验证未消费的持久化 mailbox 输入会恢复为可触发的内核 mailbox 项。
+#[test]
+fn persisted_session_kernel_restores_unconsumed_mailbox_input() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+
+    assert!(enqueue_webui_subagent_mailbox_input(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        &restored_kernel_subagent_metadata("done"),
+    ));
+    let mut restored = service_state_restored_from_workspace_snapshot(&state, parent_session_id);
+    let kernel = session_runtime_kernel_mut(&mut restored, parent_session_id);
+
+    assert_eq!(kernel.input_queue().mailbox_len(), 1);
+    assert_eq!(kernel.input_queue().unconsumed_mailbox_len(), 1);
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+}
+
+/// Verifies consumed persisted mailbox input does not trigger another restored parent turn.
+/// 验证已消费的持久化 mailbox 输入不会再次触发恢复后的父级回合。
+#[test]
+fn persisted_session_kernel_restores_consumed_mailbox_cursor() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+    let input_id = format!("subagent-mailbox-{parent_session_id}-{task_session_id}");
+
+    assert!(enqueue_webui_subagent_mailbox_input(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        &restored_kernel_subagent_metadata("waited"),
+    ));
+    {
+        let kernel = session_runtime_kernel_mut(&mut state, parent_session_id);
+        kernel
+            .register_wait_scope("wait-agent-1", [task_session_id.to_string()], 10)
+            .expect("wait scope should register");
+        assert!(kernel.consume_mailbox_input_for_wait_scope("wait-agent-1", &input_id));
+    }
+    sync_webui_session_runtime_kernel_to_workspace_state(&mut state, parent_session_id);
+
+    let mut restored = service_state_restored_from_workspace_snapshot(&state, parent_session_id);
+    let kernel = session_runtime_kernel_mut(&mut restored, parent_session_id);
+
+    assert_eq!(kernel.input_queue().mailbox_len(), 1);
+    assert_eq!(kernel.input_queue().unconsumed_mailbox_len(), 0);
+    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
+}

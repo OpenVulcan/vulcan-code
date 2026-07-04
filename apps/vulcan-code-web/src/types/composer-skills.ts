@@ -334,6 +334,9 @@ export interface SubagentDefinitionSummary {
   // Unified prompt skill policy selectors.
   // 统一提示词技能策略选择器。
   promptSkillPolicySkills: string[];
+  // Optional fixed provider/model selection for this agent.
+  // 当前智能体可选的固定供应商/模型选择。
+  providerModel: SubagentProviderModelSummary;
   // Optional base system prompt.
   // 可选基础系统提示词。
   systemPrompt?: string | null;
@@ -399,6 +402,29 @@ export interface SubagentOriginSummary {
   // Optional source URL.
   // 可选来源链接。
   url?: string | null;
+}
+
+// SubagentProviderModelSummary describes one optional fixed provider/model selection.
+// SubagentProviderModelSummary 描述单个可选固定供应商/模型选择。
+export interface SubagentProviderModelSummary {
+  // Optional provider identifier.
+  // 可选供应商标识。
+  providerId?: string | null;
+  // Optional model identifier.
+  // 可选模型标识。
+  modelId?: string | null;
+  // Effective display mode for this agent's model selection.
+  // 当前智能体模型选择的有效展示模式。
+  mode?: string;
+  // Stable provider/model selector when a fixed model is configured.
+  // 配置固定模型时使用的稳定 provider/model 选择器。
+  selector?: string | null;
+  // Whether the fixed model is currently selectable.
+  // 固定模型当前是否可被选择。
+  available?: boolean | null;
+  // Human-readable reason when the fixed model is unavailable.
+  // 固定模型不可用时的人类可读原因。
+  unavailableReason?: string | null;
 }
 
 // SubagentDefinitionEnabledUpdate describes one lightweight enabled-state update.
@@ -490,6 +516,9 @@ export interface SubagentDefinitionSaveRequest {
   // Unified prompt skill policy selectors.
   // 统一提示词技能策略选择器。
   promptSkillPolicySkills?: string[];
+  // Optional fixed provider/model selection for this agent.
+  // 当前智能体可选的固定供应商/模型选择。
+  providerModel?: SubagentProviderModelSummary;
 }
 
 // SubagentCategorySummary describes one parsed agent catalog category.

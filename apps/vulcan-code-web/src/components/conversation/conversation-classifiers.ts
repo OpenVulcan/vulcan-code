@@ -1,5 +1,6 @@
 import type { ConversationBlock, ConversationBlockKind } from "@/components/conversation/conversation-model";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
+import { isSubagentHostKind } from "@/components/conversation/conversation-tool-metadata";
 import type { TranslationKey } from "@/i18n-messages";
 
 // isContextCompactionBlock detects host-provided context-compaction status rows.
@@ -42,7 +43,10 @@ function blockHasToolExecutionEvidence(block: ConversationBlock): boolean {
     "hostResult.kind",
     "kind",
   ]);
-  return Boolean(hostKind && ["tool_error", "tool_result", "tool_call", "subagent_task", "command_session", "command_run", "change_set"].includes(hostKind));
+  return Boolean(hostKind && (
+    isSubagentHostKind(hostKind)
+    || ["tool_error", "tool_result", "tool_call", "command_session", "command_run", "change_set"].includes(hostKind)
+  ));
 }
 
 // metadataString reads a dotted path string from unknown JSON metadata.

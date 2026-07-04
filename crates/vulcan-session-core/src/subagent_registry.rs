@@ -148,6 +148,10 @@ pub struct SubagentRegistryEntry {
     /// Current child-agent status.
     /// 当前子代理状态。
     pub status: SubagentStatus,
+    /// Optional reason for the most recent stopped or closed state.
+    /// 最近一次停止或关闭状态的可选原因。
+    #[serde(default)]
+    pub stop_reason: Option<String>,
     /// Creation timestamp in Unix milliseconds.
     /// 创建时间戳，单位为 Unix 毫秒。
     pub created_at_ms: u64,
@@ -202,6 +206,7 @@ impl SubagentRegistryEntry {
             agent_kind,
             prompt_source: None,
             status: SubagentStatus::Created,
+            stop_reason: None,
             created_at_ms: timestamp_ms,
             updated_at_ms: timestamp_ms,
             segments: Vec::new(),

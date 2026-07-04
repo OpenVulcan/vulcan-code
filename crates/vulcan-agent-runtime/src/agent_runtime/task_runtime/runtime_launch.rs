@@ -1,15 +1,24 @@
 use super::*;
 
-/// Native subagent orchestration tools hidden from ordinary child agents by default.
-/// 普通子代理默认隐藏的原生子代理调度工具集合。
-const SUBAGENT_ORCHESTRATION_TOOL_IDS: [&str; 6] = [
+/// Native subagent orchestration tools reserved from child-agent execution by default.
+/// 普通子智能体默认禁止执行的原生子智能体调度工具集合。
+const SUBAGENT_ORCHESTRATION_TOOL_IDS: [&str; 7] = [
     SPAWN_AGENT_TOOL,
+    AGENT_ORCHESTRATION_INFO_TOOL,
     SEND_MESSAGE_TOOL,
-    FOLLOWUP_TASK_TOOL,
     WAIT_AGENT_TOOL,
     INTERRUPT_AGENT_TOOL,
+    CLOSE_AGENT_TOOL,
     LIST_AGENTS_TOOL,
 ];
+
+/// Runtime tools that remain registered for child agents but are rejected when invoked.
+/// 子智能体中保持注册但执行时拒绝调用的运行时工具集合。
+const SUBAGENT_EXECUTION_REJECTED_TOOL_IDS: [&str; 1] = [TODOLIST_TOOL_ID];
+
+/// Message returned when a child agent invokes a session-level or parent-reserved tool.
+/// 子智能体调用会话级或父级保留工具时返回的提示信息。
+pub(super) const SUBAGENT_REJECTED_TOOL_REASON: &str = "This child agent cannot execute parent-reserved session tools such as todolist or child-agent orchestration tools. Use the other available tools to complete the delegated task and return the result to the parent agent.";
 
 /// Builds one task-session execution request and provider configuration from a shared parent runtime context.
 /// 从共享父级运行时上下文构建一份子代理会话执行请求与供应商配置。
@@ -43,19 +52,10 @@ pub(super) fn build_task_runtime_preparation_request(
     request.tool_exposure_override = resolved_config.effective_config.tool_exposure.clone();
     let mirror_subagent =
         resolved_config.effective_config.subagent_mode.as_deref() == Some(SUBAGENT_MODE_MIRROR);
-    if mirror_subagent {
-        request.tool_request_rejection_reason = Some(String::from(
-            "当前为子代理镜像，不允许使用子代理调度相关工具。请使用其他可用工具完成分析，并将结果交回父代理。",
-        ));
-        request.tool_request_rejection_all_tools = false;
-        request.tool_request_rejection_tool_ids = SUBAGENT_ORCHESTRATION_TOOL_IDS
-            .iter()
-            .map(|tool_id| (*tool_id).to_string())
-            .collect();
+    if mirror_subagent || !context.allow_subagent_tools {
+        reject_registered_child_tools(&mut request, &SUBAGENT_ORCHESTRATION_TOOL_IDS);
     }
-    if !context.allow_subagent_tools && !mirror_subagent {
-        disable_subagent_orchestration_tools(&mut request.tool_exposure_override);
-    }
+    reject_registered_child_tools(&mut request, &SUBAGENT_EXECUTION_REJECTED_TOOL_IDS);
     if let Some(execution_mode) = resolved_config
         .effective_config
         .provider_model
@@ -81,21 +81,27 @@ pub(super) fn build_task_runtime_preparation_request(
     (config, request)
 }
 
-/// Adds subagent orchestration tools to the request-scoped deny list without duplicating selectors.
-/// 将子代理调度工具加入请求级禁用列表，并避免重复选择器。
+/// Adds child-forbidden tool ids to the request rejection list without hiding their schemas.
+/// 将子智能体禁止执行的工具加入请求拒绝列表，同时不隐藏它们的 Schema。
 ///
 /// # Parameters
 /// 参数
-/// `tool_exposure` is the mutable request tool exposure snapshot.
-/// `tool_exposure` 是可变的请求工具可见性快照。
-fn disable_subagent_orchestration_tools(tool_exposure: &mut ToolExposureSnapshot) {
-    for tool_id in SUBAGENT_ORCHESTRATION_TOOL_IDS {
-        if !tool_exposure
-            .disabled_tools
+/// `request` is the mutable child execution preparation request.
+/// `request` 是可变的子智能体执行准备请求。
+/// `tool_ids` are model-visible tool ids that should fail when invoked by the child.
+/// `tool_ids` 是对子智能体可见但调用时应失败的工具标识。
+fn reject_registered_child_tools(request: &mut ExecutionPreparationRequest, tool_ids: &[&str]) {
+    request.tool_request_rejection_reason = Some(SUBAGENT_REJECTED_TOOL_REASON.to_string());
+    request.tool_request_rejection_all_tools = false;
+    for tool_id in tool_ids {
+        if !request
+            .tool_request_rejection_tool_ids
             .iter()
             .any(|existing| existing == tool_id)
         {
-            tool_exposure.disabled_tools.push(tool_id.to_string());
+            request
+                .tool_request_rejection_tool_ids
+                .push((*tool_id).to_string());
         }
     }
 }
@@ -106,32 +112,10 @@ pub(super) fn apply_task_provider_model_override(
     config: &mut ProviderConfigurationFile,
     provider_model: &ProviderModelSnapshot,
 ) {
-    let provider_id = provider_model
-        .provider_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            config
-                .model
-                .as_deref()
-                .and_then(|model| model.split_once('/'))
-                .map(|(provider, _)| provider.to_string())
-        });
-    let model_id = provider_model
-        .model_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-
-    if let Some(model_id) = model_id {
-        if let Some((provider, model)) = model_id.split_once('/') {
-            config.model = Some(format!("{provider}/{model}"));
-        } else if let Some(provider_id) = provider_id {
-            config.model = Some(format!("{provider_id}/{model_id}"));
-        }
+    if let Some((provider_id, model_id)) =
+        provider_model_selector_from_snapshot(provider_model, config)
+    {
+        config.model = Some(format!("{provider_id}/{model_id}"));
     }
 }
 

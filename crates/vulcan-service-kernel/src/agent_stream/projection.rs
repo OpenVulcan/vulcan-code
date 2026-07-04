@@ -587,8 +587,9 @@ pub(crate) fn append_runtime_event_projection(
     let mut changed_todolist: Option<SessionTodolistState> = None;
     let mut changed_plan_mode: Option<SessionPlanModeState> = None;
     let mut changed_addon_session_id: Option<SessionId> = None;
+    let mut subagent_navigation_changed = false;
     let mut transcript_changed = false;
-    let (workspace_snapshot, message_window_delta) = {
+    let (workspace_snapshot, message_window_deltas) = {
         let conversation_id = session_id.to_string();
         let mut guard = state
             .lock()
@@ -617,6 +618,8 @@ pub(crate) fn append_runtime_event_projection(
             .cloned()
             .collect();
         let mut projected_messages = Vec::new();
+        let mut child_message_projection: Option<(SessionId, Vec<ConversationMessage>)> = None;
+        let mut child_completion_gate_ignored_task_id: Option<SessionId> = None;
         let workspace_snapshot = {
             let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
                 String::from("service is still starting; workspace snapshot is not ready")
@@ -675,14 +678,41 @@ pub(crate) fn append_runtime_event_projection(
                     }
                 }
             }
+            if let Some(child_task_id) =
+                append_webui_subagent_send_message_from_event_if_needed(workspace, event)
+            {
+                child_completion_gate_ignored_task_id = Some(child_task_id);
+                let child_conversation_id = child_task_id.to_string();
+                let child_messages = workspace
+                    .session_messages
+                    .get(&child_task_id)
+                    .cloned()
+                    .unwrap_or_default();
+                child_message_projection = Some((
+                    child_task_id,
+                    conversation_messages_from_session(
+                        &child_conversation_id,
+                        child_messages.as_slice(),
+                        false,
+                    ),
+                ));
+            }
             if marker_sync_required {
                 sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
             }
             workspace.clone()
         };
+        if let Some(child_task_id) = child_completion_gate_ignored_task_id {
+            mark_webui_subagent_completion_gate_ignored(&mut guard, child_task_id);
+        }
+        let closed_subagent_task_ids = close_agent_closed_subagent_task_ids_from_event(event);
+        if remove_webui_closed_subagent_tasks_in_state(&mut guard, &closed_subagent_task_ids) {
+            subagent_navigation_changed = true;
+        }
         let surface_matches =
-            workbench_surface_matches_conversation(&guard.workbench, &conversation_id);
-        let message_window_delta = if surface_matches && transcript_changed {
+            workbench_should_emit_runtime_event_message_patch(&guard, &conversation_id, session_id);
+        let mut message_window_deltas = Vec::new();
+        if surface_matches && transcript_changed {
             let message_patch = build_runtime_event_conversation_messages_patched_delta(
                 &conversation_id,
                 before_visible_messages.as_slice(),
@@ -698,24 +728,51 @@ pub(crate) fn append_runtime_event_projection(
                     &conversation_id,
                     projected_messages.clone(),
                 );
-                Some(WorkbenchDeltaEnvelope {
+                message_window_deltas.push(WorkbenchDeltaEnvelope {
                     generation,
                     delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
-                })
-            } else {
-                None
+                });
             }
-        } else {
-            None
-        };
-        (workspace_snapshot, message_window_delta)
+        }
+        if let Some((child_task_id, child_projected_messages)) = child_message_projection {
+            let child_conversation_id = child_task_id.to_string();
+            let before_child_visible_messages = guard
+                .workbench
+                .messages
+                .iter()
+                .filter(|message| message.conversation_id == child_conversation_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            if let Some(message_patch) = build_conversation_messages_patched_delta(
+                &child_conversation_id,
+                before_child_visible_messages.as_slice(),
+                child_projected_messages.as_slice(),
+            ) {
+                guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+                let generation = guard.workbench_generation;
+                guard.workbench.revision = generation;
+                replace_conversation_messages_in_workbench_window(
+                    &mut guard.workbench.messages,
+                    &child_conversation_id,
+                    child_projected_messages,
+                );
+                message_window_deltas.push(WorkbenchDeltaEnvelope {
+                    generation,
+                    delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+                });
+            }
+        }
+        (workspace_snapshot, message_window_deltas)
     };
-    if let Some(event) = message_window_delta {
+    for event in message_window_deltas {
         emit_service_event_with_trace(
             app,
             "workbench_runtime_event_messages_delta_emit",
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
+    }
+    if subagent_navigation_changed {
+        emit_webui_subagent_navigation_changed_delta(app, state)?;
     }
     if let Some(addon_session_id) = changed_addon_session_id {
         emit_session_addons_changed_delta(app, state, addon_session_id)?;
@@ -778,6 +835,68 @@ pub(crate) fn append_runtime_event_projection(
     Ok(())
 }
 
+/// Returns whether one runtime-event transcript patch should be emitted to the WebUI message window.
+/// 返回单个运行时事件转录补丁是否应该发送到 WebUI 消息窗口。
+pub(crate) fn workbench_should_emit_runtime_event_message_patch(
+    guard: &ServiceBridgeState,
+    conversation_id: &str,
+    session_id: SessionId,
+) -> bool {
+    workbench_surface_matches_conversation(&guard.workbench, conversation_id)
+        || guard
+            .subagent_surface_detail_cache
+            .contains_key(&session_id)
+        || guard.detached_subagent_task_listeners.contains(&session_id)
+        || guard
+            .session_subagent_tasks
+            .values()
+            .any(|tasks| tasks.contains_key(&session_id))
+}
+
+/// Extracts closed subagent task ids from a structured `close_agent` host result.
+/// 从结构化 `close_agent` 宿主结果中提取已关闭的子代理任务标识。
+fn close_agent_closed_subagent_task_ids_from_event(event: &RuntimeEvent) -> Vec<SessionId> {
+    if event.kind != RuntimeEventKind::ToolFinished {
+        return Vec::new();
+    }
+    let Some(payload) = event
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("host_result"))
+        .filter(|host_result| {
+            host_result.get("kind").and_then(Value::as_str) == Some("subagent_control")
+        })
+        .and_then(|host_result| host_result.get("payload"))
+        .filter(|payload| payload.get("tool").and_then(Value::as_str) == Some("close_agent"))
+    else {
+        return Vec::new();
+    };
+    let mut closed_task_ids = BTreeSet::new();
+    if let Some(matched_agents) = payload.get("matched_agents").and_then(Value::as_array) {
+        closed_task_ids.extend(
+            matched_agents
+                .iter()
+                .filter_map(|agent| agent.get(SUBAGENT_TASK_ID_KEY))
+                .filter_map(Value::as_str)
+                .filter_map(|task_id| task_id.parse::<SessionId>().ok()),
+        );
+    }
+    closed_task_ids.extend(
+        payload
+            .get(STOPPED_SUBAGENT_TASK_IDS_KEY)
+            .and_then(Value::as_array)
+            .map(|task_ids| {
+                task_ids
+                    .iter()
+                    .filter_map(|task_id| task_id.as_str())
+                    .filter_map(|task_id| task_id.parse::<SessionId>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    );
+    closed_task_ids.into_iter().collect()
+}
+
 /// Returns the UI run phase that must advance together with one runtime-event message patch.
 /// 返回必须与单条运行时事件消息补丁一起推进的界面运行阶段。
 fn runtime_event_projection_run_phase(event: &RuntimeEvent) -> Option<SessionRunPhase> {
@@ -835,6 +954,36 @@ pub(crate) fn apply_observed_usage_to_context_budget(
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+
+    /// Verifies close-agent UI cleanup reads only the structured host result task ids.
+    /// 验证关闭代理的界面清理只读取结构化宿主结果中的任务标识。
+    #[test]
+    fn close_agent_closed_task_ids_are_extracted_from_matched_agents() {
+        let task_id = SessionId::new_v4();
+        let event = RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "工具返回 · close_agent",
+            "closed",
+        )
+        .with_metadata(Some(json!({
+            "host_result": {
+                "kind": "subagent_control",
+                "payload": {
+                    "tool": "close_agent",
+                    "matched_agents": [{
+                        (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
+                        "agent_id": "code-review"
+                    }],
+                    (STOPPED_SUBAGENT_TASK_IDS_KEY): [],
+                }
+            }
+        })));
+
+        assert_eq!(
+            close_agent_closed_subagent_task_ids_from_event(&event),
+            vec![task_id]
+        );
+    }
 
     /// Verifies runtime tool patches use the same visible transcript projection as final hydration.
     /// 验证运行时工具补丁使用与最终水合一致的可见转录投影。

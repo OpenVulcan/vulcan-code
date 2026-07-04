@@ -477,6 +477,35 @@ impl SessionRuntimeKernel {
     pub fn mailbox_delivery_phase(&self) -> MailboxDeliveryPhase {
         self.input_queue.delivery_phase()
     }
+
+    /// Converts a persisted kernel into a safe idle state after process restart.
+    /// 进程重启后将持久化内核转换为安全的空闲状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `timestamp_ms` is the Unix millisecond timestamp used for terminal activity bookkeeping.
+    /// `timestamp_ms` 是用于终态活动记录的 Unix 毫秒时间戳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when an active turn was cleared during restore.
+    /// 恢复期间清理了活动回合时返回 `true`。
+    pub fn restore_idle_after_process_restart(&mut self, timestamp_ms: u64) -> bool {
+        let had_active_turn = self.active_turn.is_some();
+        if let Some(turn) = self.active_turn.as_mut() {
+            turn.touch(timestamp_ms);
+        }
+        self.input_queue.close_current_turn_mailbox_delivery();
+        self.input_queue
+            .defer_unconsumed_current_turn_inputs_to_mailbox();
+        self.input_queue.defer_mailbox_delivery_to_next_turn();
+        self.active_turn = None;
+        self.wait_scopes.clear();
+        if had_active_turn {
+            self.stopped = true;
+        }
+        had_active_turn
+    }
 }
 
 #[cfg(test)]

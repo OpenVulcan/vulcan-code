@@ -5,6 +5,7 @@ import type { ThinkingDisplayMode } from "@/components/conversation/thinking-dis
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import {
   compactSelectedConversationContext,
+  closeSubagentTask,
   forkConversation,
   getUserPromptEditDraft,
   insertPendingPrompt,
@@ -288,6 +289,25 @@ const handleStopSubagentTask = React.useCallback(async (parentConversationId: st
   }
 }, []);
 
+// handleCloseSubagentTask asks the backend to close one open child agent lifecycle.
+// handleCloseSubagentTask 请求后端关闭单个未关闭子智能体生命周期。
+const handleCloseSubagentTask = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
+  webuiClickTrace("subagent.close.invoke", { parentConversationId, taskId });
+  try {
+    const response = await closeSubagentTask(parentConversationId, taskId);
+    if (response) {
+      setWorkbenchState((current) => applySubagentPanelRouteResponse(
+        current,
+        response,
+        subagentSurfaceMessageCacheRef.current,
+      ));
+    }
+  } catch (nextError) {
+    toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    throw nextError;
+  }
+}, []);
+
 // handleRemovePendingPrompt removes one queued prompt through the shared service queue.
 // handleRemovePendingPrompt 通过共享服务队列移除单条排队提示词。
 const handleRemovePendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
@@ -482,6 +502,7 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleCompactSelectedConversationContext,
     handleOpenSubagentPanel,
     handleStopSubagentTask,
+    handleCloseSubagentTask,
     handleRemovePendingPrompt,
     handleReorderPendingPrompts,
     handleSelectWorkbenchModel,

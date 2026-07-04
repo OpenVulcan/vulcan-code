@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn selects_subagent_navigation_states_with_active_recoverable_terminal_task() {
+fn selects_all_unclosed_subagent_navigation_states() {
     let parent_session_id = SessionId::new_v4();
     let running_task_id = SessionId::new_v4();
     let completed_task_id = SessionId::new_v4();
@@ -30,7 +30,7 @@ fn selects_subagent_navigation_states_with_active_recoverable_terminal_task() {
         });
 
     assert_eq!(active_task_id, Some(completed_task_id));
-    assert_eq!(navigation_states.len(), 2);
+    assert_eq!(navigation_states.len(), 3);
     assert!(
         navigation_states
             .iter()
@@ -42,14 +42,14 @@ fn selects_subagent_navigation_states_with_active_recoverable_terminal_task() {
             .any(|state| state.task_id == completed_task_id)
     );
     assert!(
-        !navigation_states
+        navigation_states
             .iter()
             .any(|state| state.task_id == hidden_task_id)
     );
 }
 
-/// Verifies the shared navigation visibility gate preserves the active child return route without keeping stale inactive history visible.
-/// 验证共享导航可见性门禁会保留活动子界面的返回路径，同时不会让无活动历史常驻显示。
+/// Verifies the shared navigation visibility gate preserves every unclosed child route.
+/// 验证共享导航可见性门禁会保留每个未关闭子代理入口。
 #[test]
 fn subagent_navigation_surface_visibility_matches_current_round() {
     assert!(!subagent_navigation_surface_is_visible(false, false, false));

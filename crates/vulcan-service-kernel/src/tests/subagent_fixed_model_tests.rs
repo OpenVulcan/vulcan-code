@@ -1,0 +1,232 @@
+//! subagent fixed model validation tests.
+//! 子代理固定模型校验测试。
+
+use super::*;
+use std::path::PathBuf;
+
+/// Builds one request carrying the provided fixed-model fields.
+/// 构建一个携带指定固定模型字段的保存请求。
+fn fixed_model_save_request(
+    // Optional provider identifier.
+    // 可选供应商标识。
+    provider_id: Option<String>,
+    // Optional model identifier.
+    // 可选模型标识。
+    model_id: Option<String>,
+) -> SubagentDefinitionSaveRequest {
+    SubagentDefinitionSaveRequest {
+        agent_id: String::from("engineering/test-agent"),
+        name: String::from("Test Agent"),
+        enabled: true,
+        provider_model: vulcan_service_api::SubagentProviderModelSummary {
+            provider_id,
+            model_id,
+            ..vulcan_service_api::SubagentProviderModelSummary::default()
+        },
+        ..SubagentDefinitionSaveRequest::default()
+    }
+}
+
+/// Builds a provider configuration with exactly one enabled model for one catalog provider.
+/// 为目录中的一个供应商构建只启用一个模型的供应商配置。
+fn single_enabled_model_provider_configuration() -> (ProviderConfigurationFile, String, String) {
+    let provider = provider_config::supported_providers()
+        .iter()
+        .find(|provider| provider.models.len() >= 2)
+        .or_else(|| {
+            provider_config::supported_providers()
+                .iter()
+                .find(|provider| !provider.models.is_empty())
+        })
+        .expect("provider catalog should contain at least one model");
+    let model_id = provider
+        .models
+        .first()
+        .expect("selected provider should have a model")
+        .id
+        .clone();
+    let mut provider_entry = vulcan_provider_config::config::PersistedProviderEntry::default();
+    provider_entry.set_enabled_models(vec![model_id.clone()]);
+    let mut configuration = ProviderConfigurationFile::default();
+    configuration
+        .provider
+        .insert(provider.id.clone(), provider_entry);
+    (configuration, provider.id.clone(), model_id)
+}
+
+/// Builds one loaded definition with a saved fixed-model pair.
+/// 构建一个带已保存固定模型组合的已加载定义。
+fn loaded_definition_with_fixed_model(
+    // Saved provider identifier.
+    // 已保存供应商标识。
+    provider_id: String,
+    // Saved model identifier.
+    // 已保存模型标识。
+    model_id: String,
+) -> vulcan_task_session::SubagentDefinition {
+    loaded_definition_with_provider_model(Some(provider_id), Some(model_id))
+}
+
+/// Builds one loaded definition with a provider/model snapshot.
+/// 构建一个带供应商/模型快照的已加载定义。
+fn loaded_definition_with_provider_model(
+    // Saved provider identifier.
+    // 已保存供应商标识。
+    provider_id: Option<String>,
+    // Saved model identifier.
+    // 已保存模型标识。
+    model_id: Option<String>,
+) -> vulcan_task_session::SubagentDefinition {
+    vulcan_task_session::SubagentDefinition {
+        id: String::from("engineering/test-agent"),
+        name: String::from("Test Agent"),
+        description: None,
+        locales: BTreeMap::new(),
+        origin: None,
+        emoji: String::from("AI"),
+        color: String::from("#64748b"),
+        vibe: None,
+        mode: vulcan_task_session::SubagentDefinitionMode::Expert,
+        system_prompt: None,
+        system_prompt_append: None,
+        provider_model: vulcan_session_core::ProviderModelSnapshot {
+            provider_id,
+            model_id,
+            reasoning_effort: None,
+            execution_mode: None,
+        },
+        tool_exposure: vulcan_session_core::ToolExposureSnapshot::default(),
+        prompt_skills: vulcan_session_core::PromptSkillSnapshot::default(),
+        context_compaction: vulcan_session_core::ContextCompactionPolicyRequest::default(),
+        runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
+        max_depth: None,
+        enabled: true,
+        source: vulcan_task_session::SubagentDefinitionSource {
+            scope: vulcan_task_session::SubagentDefinitionScope::User,
+            file: PathBuf::from("engineering/test-agent.md"),
+            sidecar_file: None,
+            source_key: String::from("user:engineering/test-agent"),
+            category_id: Some(String::from("engineering")),
+            package_id: None,
+            remote_url: None,
+            override_of: None,
+            source_hash: None,
+            version: None,
+            etag: None,
+            last_modified: None,
+            updated_at: None,
+        },
+        extra: serde_json::Value::Null,
+    }
+}
+
+/// Verifies a newly selected fixed model must be one of the effective enabled model choices.
+/// 验证新选择的固定模型必须来自当前生效启用模型列表。
+#[test]
+fn validates_new_fixed_model_against_enabled_choices() {
+    let (provider_configuration, provider_id, model_id) =
+        single_enabled_model_provider_configuration();
+    let request = fixed_model_save_request(Some(provider_id.clone()), Some(model_id.clone()));
+
+    let snapshot = validate_subagent_provider_model_request_with_existing(
+        &request,
+        None,
+        &provider_configuration,
+    )
+    .expect("enabled model should be accepted");
+
+    assert_eq!(snapshot.provider_id.as_deref(), Some(provider_id.as_str()));
+    assert_eq!(snapshot.model_id.as_deref(), Some(model_id.as_str()));
+}
+
+/// Verifies invalid new fixed model pairs are rejected before being persisted.
+/// 验证无效的新固定模型组合在持久化前会被拒绝。
+#[test]
+fn rejects_new_fixed_model_outside_enabled_choices() {
+    let (provider_configuration, provider_id, _) = single_enabled_model_provider_configuration();
+    let request = fixed_model_save_request(
+        Some(provider_id),
+        Some(String::from("__missing_subagent_model__")),
+    );
+
+    let error = validate_subagent_provider_model_request_with_existing(
+        &request,
+        None,
+        &provider_configuration,
+    )
+    .expect_err("missing model should be rejected");
+
+    assert!(error.contains("不在当前已启用模型列表中"));
+}
+
+/// Verifies partial fixed-model requests are rejected instead of becoming ambiguous snapshots.
+/// 验证半缺失固定模型请求会被拒绝，而不是写入歧义快照。
+#[test]
+fn rejects_partial_fixed_model_request() {
+    let request = fixed_model_save_request(Some(String::from("openai")), None);
+
+    let error = validate_subagent_provider_model_request_with_existing(
+        &request,
+        None,
+        &ProviderConfigurationFile::default(),
+    )
+    .expect_err("partial fixed model should be rejected");
+
+    assert!(error.contains("同时提供 Provider 和模型"));
+}
+
+/// Verifies an existing invalid pair can be preserved while editing unrelated metadata.
+/// 验证编辑无关元数据时可以保留历史中已经存在的无效固定模型组合。
+#[test]
+fn preserves_existing_invalid_fixed_model_pair() {
+    let (provider_configuration, provider_id, _) = single_enabled_model_provider_configuration();
+    let stale_model_id = String::from("__removed_subagent_model__");
+    let existing = loaded_definition_with_fixed_model(provider_id.clone(), stale_model_id.clone());
+    let request = fixed_model_save_request(Some(provider_id.clone()), Some(stale_model_id.clone()));
+
+    let snapshot = validate_subagent_provider_model_request_with_existing(
+        &request,
+        Some(&existing),
+        &provider_configuration,
+    )
+    .expect("unchanged historical fixed model should be preserved");
+
+    assert_eq!(snapshot.provider_id.as_deref(), Some(provider_id.as_str()));
+    assert_eq!(snapshot.model_id.as_deref(), Some(stale_model_id.as_str()));
+}
+
+/// Verifies partial historical fixed-model metadata remains visible as an unavailable model diagnostic.
+/// 验证历史半缺失固定模型元数据会继续以不可用模型诊断形式展示。
+#[test]
+fn projects_partial_fixed_model_as_unavailable_diagnostic() {
+    let (provider_configuration, _, _) = single_enabled_model_provider_configuration();
+    let definition = loaded_definition_with_provider_model(
+        None,
+        Some(String::from("__orphaned_subagent_model__")),
+    );
+    let catalog = vulcan_task_session::SubagentCatalog {
+        definitions: vec![definition],
+        ..vulcan_task_session::SubagentCatalog::default()
+    };
+
+    let summary = subagent_catalog_summary_from_catalog(&catalog, &provider_configuration);
+
+    let provider_model = &summary
+        .definitions
+        .first()
+        .expect("summary should contain the test definition")
+        .provider_model;
+    assert_eq!(provider_model.mode, "fixed");
+    assert_eq!(provider_model.available, Some(false));
+    assert_eq!(
+        provider_model.selector.as_deref(),
+        Some("/__orphaned_subagent_model__")
+    );
+    assert!(
+        provider_model
+            .unavailable_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("固定模型配置不完整")
+    );
+}

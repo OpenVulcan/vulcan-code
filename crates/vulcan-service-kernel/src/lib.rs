@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
+use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
 #[cfg(test)]
 use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
@@ -118,7 +119,9 @@ use vulcan_session_core::{
     ActiveTurnKind, SessionNodeId, SessionRuntimeKernel, TurnInput, TurnInputKind,
     TurnTerminalStatus,
 };
-use vulcan_subagent_core::{SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND};
+use vulcan_subagent_core::{
+    STOPPED_SUBAGENT_TASK_IDS_KEY, SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND,
+};
 use vulcan_task_session::SegmentedTaskSessionStore;
 use vulcan_workbench_model::{
     PendingSessionPromptEntry, PendingSessionPromptSource, SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
@@ -137,6 +140,7 @@ use vulcan_workbench_model::{
     subagent_navigation_surface_is_visible, subagent_navigation_task_label,
     subagent_task_panel_is_openable,
     subagent_task_panel_state_detail_from_segmented_task_session_store,
+    subagent_task_panel_state_from_task_session,
     subagent_task_panel_state_has_recoverable_conversation,
     task_session_execution_status_from_tool_metadata, task_session_message_match_score,
     task_session_payload_from_tool_metadata,
@@ -426,6 +430,7 @@ pub fn create_service_bridge_state(
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeSet::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
+        subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
@@ -434,6 +439,33 @@ pub fn create_service_bridge_state(
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     }))
+}
+
+/// Stops active child-agent work before the host application exits.
+/// 在宿主应用退出前停止活动子代理工作。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service bridge state created during desktop startup.
+/// `state` 是桌面启动期间创建的共享服务桥状态。
+///
+/// # Returns
+/// 返回值
+/// Task session ids stopped by the shutdown coordinator.
+/// 关闭协调器停止的任务会话标识。
+pub fn service_prepare_for_app_shutdown(
+    state: &SharedServiceBridgeState,
+) -> Result<Vec<Uuid>, String> {
+    let task_runtime = state
+        .lock()
+        .map_err(|_| String::from("The service bridge state is locked during shutdown."))?
+        .agent_runtime
+        .as_ref()
+        .map(|agent_runtime| Arc::clone(&agent_runtime.task_runtime));
+    let Some(task_runtime) = task_runtime else {
+        return Ok(Vec::new());
+    };
+    task_runtime.stop_active_tasks_for_app_shutdown()
 }
 
 /// Loads parent task mirrors with a project-scoped lookup when the project is already known.

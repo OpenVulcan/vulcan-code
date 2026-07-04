@@ -192,13 +192,26 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         if normalized_public_task_id.is_empty() {
             return Ok(None);
         }
-        Ok(self
+        let mut matches = self
             .load_all_task_documents()?
             .into_iter()
             .map(|(_, document)| document.task_session)
-            .find(|metadata| {
+            .filter(|metadata| {
                 metadata.parent == parent && metadata.public_task_id == normalized_public_task_id
-            }))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|left, right| {
+            // Prefer open replacements over closed history when a public id was reused.
+            // 公开标识复用时，优先选择未关闭的新记录，而不是已关闭历史记录。
+            let left_archived = left.status == TaskSessionStatus::Archived;
+            let right_archived = right.status == TaskSessionStatus::Archived;
+            left_archived
+                .cmp(&right_archived)
+                .then_with(|| right.updated_at.cmp(&left.updated_at))
+                .then_with(|| right.created_at.cmp(&left.created_at))
+                .then_with(|| right.task_session_id.cmp(&left.task_session_id))
+        });
+        Ok(matches.into_iter().next())
     }
 
     /// Appends a task invocation event to the direct parent segmented stream.

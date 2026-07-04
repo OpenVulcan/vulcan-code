@@ -14,6 +14,7 @@ use vulcan_agent_runtime::{
     stream_runtime_run_with_intervention,
 };
 use vulcan_context::estimate_mixed_language_text_tokens;
+use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
 use vulcan_runtime_assets::resolve_bundled_rtk_executable_path;
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, SessionNodeId};
 use vulcan_workbench_model::SessionId;
@@ -282,6 +283,7 @@ fn load_rtk_git_commit_summary_command_section(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    apply_windows_release_no_window_to_std_command(&mut command);
     if telemetry_disabled {
         command.env("RTK_TELEMETRY_DISABLED", "1");
     }

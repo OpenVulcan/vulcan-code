@@ -444,10 +444,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     && props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
     : null;
-  // visibleSessionSubagentTaskCount includes only actively scheduled subagents in the session tool panel summary.
-  // visibleSessionSubagentTaskCount 在会话工具面板摘要中只统计正在调度的子代理。
+  // visibleSessionSubagentTaskCount mirrors the backend unclosed-agent navigation count.
+  // visibleSessionSubagentTaskCount 镜像后端未关闭代理导航数量。
   const visibleSessionSubagentTaskCount = React.useMemo(
-    () => (sessionSubagentNavigation?.tasks ?? []).filter((task) => task.isRunning || task.runState === "running").length,
+    () => (sessionSubagentNavigation?.tasks ?? []).length,
     [sessionSubagentNavigation?.tasks],
   );
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
@@ -985,6 +985,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onOpenContextTab={openContextTab}
           onOpenSubagentPanel={handleOpenSubagentPanel}
           onStopSubagentTask={props.onStopSubagentTask}
+          onCloseSubagentTask={props.onCloseSubagentTask}
           onStopCommandSession={props.onStopCommandSession}
           onCopyRawDiff={(rawDiff) => void props.onCopyText(rawDiff)}
           onCopyText={(text) => void props.onCopyText(text)}

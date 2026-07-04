@@ -29,4 +29,5 @@ mod prompt_runtime_state_tests;
 mod rpc_diff_tests;
 mod session_kernel_tests;
 mod stop_task_mirror_tests;
+mod subagent_fixed_model_tests;
 mod subagent_navigation_tests;

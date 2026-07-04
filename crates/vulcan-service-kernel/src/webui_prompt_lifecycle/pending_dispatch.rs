@@ -226,6 +226,7 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
                 format!("session={session_id} consumed={consumed}"),
             );
         }
+        sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
     }
     apply_webui_prompt_begin_outer_steps(
         controller_runtime,

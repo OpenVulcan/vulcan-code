@@ -8,9 +8,19 @@ import {
 import type { ConversationBlockKind } from "@/components/conversation/conversation-model";
 import type { TranslationKey } from "@/i18n";
 
-// SUBAGENT_HOST_KINDS lists canonical host kinds that describe a child subagent task.
-// SUBAGENT_HOST_KINDS 列出描述子代理任务的规范宿主类型。
-const SUBAGENT_HOST_KINDS = new Set(["subagent_task"]);
+// SUBAGENT_HOST_KIND_VALUES lists every host kind emitted by built-in subagent orchestration tools.
+// SUBAGENT_HOST_KIND_VALUES 列出内置子智能体编排工具会产生的全部宿主类型。
+const SUBAGENT_HOST_KIND_VALUES = [
+  "subagent_task",
+  "subagent_message",
+  "subagent_control",
+  "subagent_status",
+  "subagent_wait",
+] as const;
+
+// SUBAGENT_HOST_KINDS provides constant-time lookup for subagent host kinds.
+// SUBAGENT_HOST_KINDS 为子智能体宿主类型提供常量时间查询。
+const SUBAGENT_HOST_KINDS = new Set<string>(SUBAGENT_HOST_KIND_VALUES);
 
 // SUBAGENT_TOOL_HOST_KINDS lists host kinds that should render as tool evidence.
 // SUBAGENT_TOOL_HOST_KINDS 列出应渲染为工具证据的宿主类型。
@@ -18,17 +28,24 @@ const TOOL_EVIDENCE_HOST_KINDS = new Set([
   "tool_error",
   "tool_result",
   "tool_call",
-  "subagent_task",
+  ...SUBAGENT_HOST_KIND_VALUES,
   "command_session",
   "command_run",
   "change_set",
 ]);
 
+// isSubagentHostKind returns whether one host result kind belongs to subagent orchestration.
+// isSubagentHostKind 判断单个宿主结果类型是否属于子智能体编排。
+export function isSubagentHostKind(hostKind?: string | null): boolean {
+  const normalized = hostKind?.trim().toLowerCase();
+  return Boolean(normalized && SUBAGENT_HOST_KINDS.has(normalized));
+}
+
 // subagentTaskIdFromToolMetadata extracts the stable child subagent task id from host task metadata.
 // subagentTaskIdFromToolMetadata 从宿主任务元数据中提取稳定的子代理任务标识。
 export function subagentTaskIdFromToolMetadata(metadata: unknown): string | null {
   const hostKind = metadataString(metadata, ["host_result.kind", "hostResult.kind", "kind"]);
-  if (hostKind && SUBAGENT_HOST_KINDS.has(hostKind)) {
+  if (isSubagentHostKind(hostKind)) {
     return metadataString(metadata, [
       "host_result.payload.subagent_task_id",
       "hostResult.payload.subagentTaskId",
@@ -111,11 +128,12 @@ export function turnStatsSummary(
 export function isSubagentToolName(toolName?: string | null): boolean {
   const normalized = toolName?.trim().toLowerCase();
   return normalized === "spawn_agent"
+    || normalized === "agent_orchestration_info"
     || normalized === "send_message"
-    || normalized === "followup_task"
     || normalized === "wait_agent"
     || normalized === "list_agents"
-    || normalized === "interrupt_agent";
+    || normalized === "interrupt_agent"
+    || normalized === "close_agent";
 }
 
 // subagentToolDisplayName extracts the visible child-agent name from tool metadata.

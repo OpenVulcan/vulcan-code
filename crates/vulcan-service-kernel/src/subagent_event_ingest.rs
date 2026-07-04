@@ -236,6 +236,100 @@ pub(crate) fn seed_webui_subagent_task_prompt_if_needed(
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
 }
 
+/// Appends a parent-to-child send_message prompt to the child transcript from one tool event.
+/// 根据单条工具事件把父级发给子智能体的 send_message 提示词追加到子会话转录。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the mutable display snapshot that owns child transcript rows.
+/// `workspace_snapshot` 是持有子会话转录行的可变显示快照。
+/// `event` is the runtime tool-finished event being projected.
+/// `event` 是正在投影的运行时工具完成事件。
+///
+/// # Returns
+/// 返回值
+/// The child task id when one visible message was appended.
+/// 当成功追加一条可见消息时返回子任务标识。
+pub(crate) fn append_webui_subagent_send_message_from_event_if_needed(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    event: &RuntimeEvent,
+) -> Option<SessionId> {
+    if event.kind != RuntimeEventKind::ToolFinished {
+        return None;
+    }
+    let metadata = event.metadata.as_ref()?;
+    let payload = metadata
+        .get("host_result")
+        .filter(|host_result| {
+            host_result.get("kind").and_then(Value::as_str) == Some("subagent_message")
+        })
+        .and_then(|host_result| host_result.get("payload"))?;
+    if payload.get("tool").and_then(Value::as_str) != Some("send_message") {
+        return None;
+    }
+    if payload.get("target").and_then(Value::as_str) == Some("root") {
+        return None;
+    }
+    let task_id = payload
+        .get(SUBAGENT_TASK_ID_KEY)
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<SessionId>().ok())?;
+    let message = payload
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let tool_call_id = subagent_send_message_tool_call_id(event, metadata)?;
+    let message_id = format!("session-{task_id}-subagent-send-message-{tool_call_id}");
+    let messages = workspace_snapshot
+        .session_messages
+        .entry(task_id)
+        .or_default();
+    if messages.iter().any(|entry| entry.id == message_id) {
+        return None;
+    }
+    let now = current_unix_millis_text();
+    let mut entry = SessionMessageEntry::new(SessionMessageKind::User, "智能体消息", message)
+        .with_runtime_metadata(message_id, now);
+    entry.record_kind = SessionMessageRecordKind::DisplayNote;
+    entry.metadata = Some(json!({
+        "display_note": true,
+        "kind": "subagent_message",
+        "tool": "send_message",
+        "parent_session_id": payload.get("parent_session_id").cloned(),
+        "target": payload.get("target").cloned(),
+        (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
+        "delivery_mode": payload.get("delivery_mode").cloned(),
+        "queued": payload.get("queued").cloned(),
+        "interrupted": payload.get("interrupted").cloned(),
+    }));
+    messages.push(entry);
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
+    Some(task_id)
+}
+
+/// Resolves the stable tool-call id used to de-duplicate a projected send_message prompt.
+/// 解析用于去重投影 send_message 提示词的稳定工具调用标识。
+fn subagent_send_message_tool_call_id(event: &RuntimeEvent, metadata: &Value) -> Option<String> {
+    metadata
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| parse_tool_finished_event_title_call_id(&event.title))
+}
+
+/// Parses the standard runtime tool-finished title into a tool-call id.
+/// 将标准运行时工具完成标题解析为工具调用标识。
+fn parse_tool_finished_event_title_call_id(title: &str) -> Option<String> {
+    let mut segments = title.split(" · ");
+    match (segments.next(), segments.next()) {
+        (Some("工具返回"), Some(tool_call_id)) if !tool_call_id.trim().is_empty() => {
+            Some(tool_call_id.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Appends the canonical stopped notice to a child task transcript when it is missing.
 /// 当子任务转录缺少停止提示时追加规范停止提示。
 pub(crate) fn append_webui_subagent_stop_notice_if_needed(

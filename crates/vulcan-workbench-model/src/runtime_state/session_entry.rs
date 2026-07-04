@@ -124,6 +124,10 @@ pub struct SessionRuntimeStateEntry {
     /// 当前允许继续进入 Provider 请求的活跃 precheck 回合标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_precheck_turn_id: Option<String>,
+    /// Persisted single-source session runtime kernel used to restore mailbox delivery state.
+    /// 用于恢复 mailbox 投递状态的持久化单一事实会话运行时内核。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_runtime_kernel: Option<SessionRuntimeKernel>,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,

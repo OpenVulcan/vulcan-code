@@ -670,8 +670,8 @@ fn streaming_tool_executor_marks_normal_error_results_completed() {
     )));
 }
 
-/// Verifies rejected tool requests do not emit a start event or enter the tool body.
-/// 验证被拒绝的工具请求不会发出开始事件，也不会进入工具主体。
+/// Verifies rejected tool requests return a friendly tool result without entering the tool body.
+/// 验证被拒绝的工具请求会返回友好工具结果，且不会进入工具主体。
 #[test]
 fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
     let entered_tool_body = Arc::new(AtomicBool::new(false));
@@ -709,22 +709,59 @@ fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
         .build()
         .expect("runtime should build");
 
-    let result = runtime.block_on(executor.execute_tool(&request));
+    let result = runtime
+        .block_on(executor.execute_tool(&request))
+        .expect("policy rejection should be returned as a normal tool result");
+    let events = drain_live_events(&mut receiver);
 
-    assert!(matches!(
-        result,
-        Err(VulcanCoreError::ToolFailure { ref tool_name, ref message })
-            if tool_name == "gated_tool"
-                && message.contains("Tool calls are not allowed during context compaction")
-    ));
+    assert!(!result.is_error);
+    assert!(
+        result
+            .model_output
+            .contains("Tool request rejected by runtime policy")
+    );
+    assert!(
+        result
+            .model_output
+            .contains("Tool calls are not allowed during context compaction")
+    );
+    assert_eq!(
+        result
+            .host_result
+            .as_ref()
+            .and_then(|value| value.get("kind"))
+            .and_then(serde_json::Value::as_str),
+        Some("tool_result")
+    );
+    assert_eq!(
+        result
+            .host_result
+            .as_ref()
+            .and_then(|value| value.get("payload"))
+            .and_then(|payload| payload.get("status"))
+            .and_then(serde_json::Value::as_str),
+        Some("rejected")
+    );
     assert!(
         !entered_tool_body.load(Ordering::SeqCst),
         "rejected tool request must not enter the host tool body"
     );
-    assert!(
-        receiver.try_recv().is_err(),
-        "rejected tool request must not emit a tool-start event"
-    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ProviderStreamDelta::RuntimeEvent(runtime_event)
+            if runtime_event.kind == RuntimeEventKind::ToolStarted
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ProviderStreamDelta::RuntimeEvent(runtime_event)
+            if runtime_event.kind == RuntimeEventKind::ToolFinished
+                && runtime_event
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("display_state"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("completed")
+    )));
 }
 
 /// Verifies a rejection reason without an all-tools flag or scoped tool ids does not block normal tool calls.

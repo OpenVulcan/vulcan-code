@@ -2,6 +2,7 @@
 //! 子代理面板 WebUI 服务处理器。
 
 use super::*;
+use vulcan_tools_manager::VulcanToolInvocationResult;
 
 /// Emits the navigation part of one subagent panel route response.
 /// 发出单个子代理面板路由响应中的导航部分。
@@ -15,10 +16,12 @@ fn emit_subagent_navigation_delta_from_route_response(
         ServiceEvent::WorkbenchDelta(Box::new(WorkbenchDeltaEnvelope {
             generation: response.revision,
             delta: WorkbenchDelta::SubagentNavigationChanged(SubagentNavigationChangedDelta {
-                parent_conversation_id: response
-                    .subagent_navigation
-                    .as_ref()
-                    .map(|navigation| navigation.parent_conversation_id.clone()),
+                parent_conversation_id: response.parent_conversation_id.clone().or_else(|| {
+                    response
+                        .subagent_navigation
+                        .as_ref()
+                        .map(|navigation| navigation.parent_conversation_id.clone())
+                }),
                 subagent_navigation: response.subagent_navigation.clone(),
             }),
         })),
@@ -53,16 +56,28 @@ pub(super) async fn service_open_subagent_panel(
         let mut workspace_snapshot = guard.workspace_snapshot.take().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
+        let mut resolved_parent_session_id = webui_subagent_task_parent_session_id_by_task_id(
+            &guard,
+            parent_session_id,
+            task_session_id,
+        )
+        .unwrap_or(parent_session_id);
         restore_webui_subagent_surface_detail_cache_for_task(
             &mut guard,
             &mut workspace_snapshot,
-            parent_session_id,
+            resolved_parent_session_id,
             task_session_id,
         );
+        resolved_parent_session_id = webui_subagent_task_parent_session_id_by_task_id(
+            &guard,
+            resolved_parent_session_id,
+            task_session_id,
+        )
+        .unwrap_or(resolved_parent_session_id);
         let opened_from_cache = match open_webui_subagent_panel_from_cached_state(
             &mut guard,
             &workspace_snapshot,
-            parent_session_id,
+            resolved_parent_session_id,
             task_session_id,
         ) {
             Ok(opened_from_cache) => opened_from_cache,
@@ -75,7 +90,7 @@ pub(super) async fn service_open_subagent_panel(
             build_subagent_panel_route_response_for_task_locked(
                 &mut guard,
                 &workspace_snapshot,
-                parent_session_id,
+                resolved_parent_session_id,
                 task_session_id,
             )
         });
@@ -109,12 +124,23 @@ pub(super) async fn service_open_subagent_panel(
         &workspace_snapshot,
         parent_session_id,
         task_session_id,
-    );
+    )
+    .or_else(|| {
+        segmented_webui_subagent_task_panel_state_for_root_tree_task(
+            &workspace_snapshot,
+            parent_session_id,
+            task_session_id,
+        )
+    });
+    let resolved_parent_session_id = detailed_state
+        .as_ref()
+        .map(|state| state.parent_session_id)
+        .unwrap_or(parent_session_id);
     webui_trace_if_slow(
         "open_subagent_panel_detail_load_slow",
         detail_load_started_at,
         format!(
-            "parent={parent_session_id} task={task_session_id} found={}",
+            "parent={parent_session_id} resolved_parent={resolved_parent_session_id} task={task_session_id} found={}",
             detailed_state.is_some()
         ),
     );
@@ -127,31 +153,35 @@ pub(super) async fn service_open_subagent_panel(
             cache_webui_subagent_surface_detail_for_task(
                 &mut guard,
                 &mut workspace_snapshot,
-                parent_session_id,
+                resolved_parent_session_id,
                 detailed_state.clone(),
             );
             merge_webui_subagent_task_cache_for_session(
                 &mut guard,
-                parent_session_id,
+                resolved_parent_session_id,
                 vec![detailed_state],
             );
         }
         if !open_webui_subagent_panel_from_cached_state(
             &mut guard,
             &workspace_snapshot,
-            parent_session_id,
+            resolved_parent_session_id,
             task_session_id,
         )? {
             webui_trace(
                 "open_subagent_panel_missing",
-                format!("parent={parent_session_id} task={task_session_id}"),
+                format!(
+                    "parent={parent_session_id} resolved_parent={resolved_parent_session_id} task={task_session_id}"
+                ),
             );
             return Err(String::from("没有找到可打开的子代理任务。"));
         }
         webui_trace_if_slow(
             "open_subagent_panel_cache_merge_slow",
             cache_merge_started_at,
-            format!("parent={parent_session_id} task={task_session_id}"),
+            format!(
+                "parent={parent_session_id} resolved_parent={resolved_parent_session_id} task={task_session_id}"
+            ),
         );
     }
     let emit_started_at = current_unix_millis_value();
@@ -162,7 +192,7 @@ pub(super) async fn service_open_subagent_panel(
         let response = build_subagent_panel_route_response_for_task_locked(
             &mut guard,
             &workspace_snapshot,
-            parent_session_id,
+            resolved_parent_session_id,
             task_session_id,
         );
         guard.workspace_snapshot = Some(workspace_snapshot);
@@ -286,6 +316,7 @@ pub(super) async fn service_close_subagent_panel(
         String::from("scope=client"),
     );
     Ok(SubagentPanelRouteResponse {
+        parent_conversation_id: guard.workbench.selected_conversation_id.clone(),
         active_conversation_id: guard.workbench.selected_conversation_id.clone(),
         subagent_navigation: None,
         messages: Vec::new(),
@@ -314,19 +345,26 @@ pub(super) async fn service_stop_subagent_task(
         "stop_subagent_requested",
         format!("parent={parent_session_id} task={task_session_id}"),
     );
-    let task_states_to_mark = {
+    let (resolved_parent_session_id, task_states_to_mark) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let workspace_snapshot = guard.workspace_snapshot.take().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
+        let resolved_parent_session_id = webui_subagent_task_parent_session_id_by_task_id(
+            &guard,
+            parent_session_id,
+            task_session_id,
+        )
+        .unwrap_or(parent_session_id);
         let root_state = guard
             .session_subagent_tasks
-            .get(&parent_session_id)
+            .get(&resolved_parent_session_id)
             .and_then(|tasks| tasks.get(&task_session_id))
             .cloned();
-        let mut task_states_to_mark = vec![(parent_session_id, task_session_id, root_state)];
+        let mut task_states_to_mark =
+            vec![(resolved_parent_session_id, task_session_id, root_state)];
         task_states_to_mark.extend(
             running_webui_subagent_task_states_for_tree_from_cache(
                 &mut guard,
@@ -343,13 +381,13 @@ pub(super) async fn service_stop_subagent_task(
             }),
         );
         guard.workspace_snapshot = Some(workspace_snapshot);
-        task_states_to_mark
+        (resolved_parent_session_id, task_states_to_mark)
     };
     let stopped_task_ids = agent_runtime.task_runtime.stop_task_tree(task_session_id)?;
     webui_trace(
         "stop_subagent_result",
         format!(
-            "parent={parent_session_id} task={task_session_id} stopped_count={}",
+            "parent={parent_session_id} resolved_parent={resolved_parent_session_id} task={task_session_id} stopped_count={}",
             stopped_task_ids.len()
         ),
     );
@@ -413,7 +451,7 @@ pub(super) async fn service_stop_subagent_task(
         build_subagent_panel_route_response_for_task_locked(
             &mut guard,
             &workspace_snapshot,
-            parent_session_id,
+            resolved_parent_session_id,
             task_session_id,
         )
     };
@@ -454,6 +492,127 @@ pub(super) async fn service_stop_subagent_task(
         });
     }
     Ok(response)
+}
+
+/// Closes one open subagent task through the canonical runtime close_agent path.
+/// 通过规范运行时 close_agent 路径关闭一个未关闭的子智能体任务。
+pub(super) async fn service_close_subagent_task(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    parent_conversation_id: String,
+    task_id: String,
+) -> Result<SubagentPanelRouteResponse, String> {
+    let (_, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let parent_session_id = parent_conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| {
+            format!("invalid parent conversation id '{parent_conversation_id}': {error}")
+        })?;
+    let task_session_id = task_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid subagent task id '{task_id}': {error}"))?;
+    let (resolved_parent_session_id, public_task_id) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let resolved_parent_session_id = webui_subagent_task_parent_session_id_by_task_id(
+            &guard,
+            parent_session_id,
+            task_session_id,
+        )
+        .unwrap_or(parent_session_id);
+        let public_task_id = guard
+            .session_subagent_tasks
+            .get(&resolved_parent_session_id)
+            .and_then(|tasks| tasks.get(&task_session_id))
+            .map(|task| task.public_task_id.clone())
+            .ok_or_else(|| {
+                format!(
+                    "subagent task `{task_session_id}` is not available under parent `{resolved_parent_session_id}`"
+                )
+            })?;
+        (resolved_parent_session_id, public_task_id)
+    };
+    webui_trace(
+        "close_subagent_task_requested",
+        format!(
+            "parent={parent_session_id} resolved_parent={resolved_parent_session_id} task={task_session_id} public_task_id={public_task_id}"
+        ),
+    );
+    let close_result = agent_runtime
+        .task_runtime
+        .invoke_close_agent(
+            resolved_parent_session_id,
+            json!({
+                "target": public_task_id,
+                "cascade": true,
+            }),
+        )
+        .await?;
+    let closed_task_ids = closed_subagent_task_ids_from_close_result(&close_result)?;
+    webui_trace(
+        "close_subagent_task_result",
+        format!(
+            "parent={parent_session_id} resolved_parent={resolved_parent_session_id} task={task_session_id} closed_count={}",
+            closed_task_ids.len()
+        ),
+    );
+    let response = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        remove_webui_closed_subagent_tasks_in_state(&mut guard, &closed_task_ids);
+        let workspace_snapshot = guard
+            .workspace_snapshot
+            .clone()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        build_subagent_panel_route_response_locked(&mut guard, &workspace_snapshot)
+    };
+    emit_subagent_navigation_delta_from_route_response(&app, &response);
+    Ok(response)
+}
+
+/// Extracts closed task session ids from the close_agent host result contract.
+/// 从 close_agent 宿主结果契约中提取已关闭任务会话标识。
+fn closed_subagent_task_ids_from_close_result(
+    // Runtime close_agent invocation result.
+    // 运行时 close_agent 调用结果。
+    result: &VulcanToolInvocationResult,
+) -> Result<Vec<SessionId>, String> {
+    let payload = result
+        .host_result
+        .as_ref()
+        .filter(|host_result| host_result.kind == "subagent_control")
+        .map(|host_result| &host_result.payload)
+        .ok_or_else(|| String::from("close_agent did not return a subagent_control host result"))?;
+    let matched_agents = payload
+        .get("matched_agents")
+        .and_then(Value::as_array)
+        .ok_or_else(|| String::from("close_agent host result is missing matched_agents"))?;
+    let closed_task_ids = matched_agents
+        .iter()
+        .map(|agent| {
+            agent
+                .get(SUBAGENT_TASK_ID_KEY)
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    String::from("close_agent matched agent is missing subagent_task_id")
+                })
+                .and_then(|task_id| {
+                    task_id.parse::<SessionId>().map_err(|error| {
+                        format!(
+                            "close_agent returned invalid subagent_task_id `{task_id}`: {error}"
+                        )
+                    })
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if closed_task_ids.is_empty() {
+        return Err(String::from(
+            "close_agent did not report any closed subagent tasks",
+        ));
+    }
+    Ok(closed_task_ids)
 }
 
 /// Enqueues stopped child-agent notifications into each owning parent mailbox once.

@@ -42,6 +42,9 @@ export function ModelPickerControl(props: {
   // Fallback label when no model is available.
   // 没有可用模型时显示的回退标签。
   fallbackLabel: string;
+  // Optional label shown when the requested value is no longer in the choice list.
+  // 请求值不再位于选择列表中时显示的可选标签。
+  unavailableValueLabel?: string;
   // Placeholder shown in the filter input.
   // 过滤输入框中显示的占位文案。
   filterPlaceholder: string;
@@ -60,6 +63,9 @@ export function ModelPickerControl(props: {
   // Optional signal that opens the picker from an external slash-command route.
   // 可选信号，用于从外部 slash 指令路由打开筛选器。
   openSignal?: number;
+  // Whether the picker trigger is temporarily disabled by the host flow.
+  // 筛选器触发器是否被宿主流程临时禁用。
+  disabled?: boolean;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -67,10 +73,10 @@ export function ModelPickerControl(props: {
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState("");
   const choices = React.useMemo(() => modelPickerChoicesFromProviders(props.providers), [props.providers]);
-  const selectedChoice =
-    choices.find((choice) => modelPickerChoiceKey(choice) === props.value)
-    ?? choices.find((choice) => choice.active)
-    ?? choices[0];
+  const exactChoice = choices.find((choice) => modelPickerChoiceKey(choice) === props.value);
+  const selectedChoice = props.value ? exactChoice : choices.find((choice) => choice.active) ?? choices[0];
+  const selectedModelLabel = selectedChoice?.modelName ?? props.unavailableValueLabel ?? props.fallbackLabel;
+  const selectedProviderLabel = selectedChoice?.providerName ?? (props.value ? props.value.split("/")[0] : "-");
   const filteredChoices = React.useMemo(
     () => filterModelPickerChoices(choices, filter),
     [choices, filter],
@@ -97,21 +103,21 @@ export function ModelPickerControl(props: {
             <Button
               aria-label={props.ariaLabel}
               className="composer-select-trigger model"
-              disabled={choices.length === 0}
+              disabled={props.disabled || choices.length === 0}
               type="button"
               variant="outline"
             >
               <span className="composer-select-icon"><Cpu size={15} /></span>
               <span className="composer-select-copy">
-                <span className="composer-select-label">{selectedChoice?.modelName ?? props.fallbackLabel}</span>
+                <span className="composer-select-label">{selectedModelLabel}</span>
               </span>
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent className="composer-control-tooltip" side="top">
           <strong>{t("composer.modelPicker.tooltipTitle")}</strong>
-          <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentModel", { model: selectedChoice?.modelName ?? props.fallbackLabel })}</span>
-          <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentProvider", { provider: selectedChoice?.providerName ?? "-" })}</span>
+          <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentModel", { model: selectedModelLabel })}</span>
+          <span>{formatModelPickerTranslation(t, "composer.modelPicker.currentProvider", { provider: selectedProviderLabel || "-" })}</span>
         </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="start" className="model-picker-content" sideOffset={8}>

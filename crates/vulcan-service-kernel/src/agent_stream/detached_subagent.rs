@@ -192,8 +192,11 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     let mut guard = state
                         .lock()
                         .map_err(|error| format!("failed to lock service state: {error}"))?;
+                    clear_webui_subagent_completion_gate_ignored(&mut guard, task_id);
                     clear_webui_subagent_parent_turn_binding(&mut guard, task_id);
                 }
+                refresh_webui_subagent_navigation_round_visibility(state, parent_session_id)?;
+                emit_webui_subagent_navigation_changed_delta(app, state)?;
                 if parent_is_regular_session
                     && !parent_is_stopped
                     && let Some(completion_request) =
@@ -254,7 +257,6 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 parent_is_regular_session,
                 parent_is_stopped,
             ) {
-                refresh_webui_subagent_navigation_round_visibility(state, parent_session_id)?;
                 webui_trace(
                     "detached_parent_event_persist_spawn",
                     format!("parent={parent_session_id} task={task_id}"),

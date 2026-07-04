@@ -3,13 +3,10 @@ import type { ConversationDetailRef } from "@/components/conversation/conversati
 import type { TranslationKey } from "@/i18n-messages";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
 import {
+  isSubagentHostKind,
   isSubagentToolName,
   subagentToolDisplayName,
 } from "./conversation-tool-metadata";
-
-// SUBAGENT_HOST_KINDS lists canonical and legacy host kinds for built-in subagent rows.
-// SUBAGENT_HOST_KINDS 列出内置子代理行的规范与历史宿主类型。
-const SUBAGENT_HOST_KINDS = new Set(["subagent_task"]);
 
 // buildToolExecutionDetailBody builds the expensive modal body only when the user opens details.
 // buildToolExecutionDetailBody 仅在用户打开详情时构建成本较高的弹窗正文。
@@ -75,26 +72,26 @@ export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], s
 function buildSubagentToolExecutionDetailBody(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string | null {
   const toolName = toolExecutionName(blocks);
   const hostKind = firstMetadataString(blocks, ["host_result.kind", "hostResult.kind", "kind"]);
-  if (!isSubagentToolName(toolName) && !SUBAGENT_HOST_KINDS.has(hostKind ?? "") && hostKind !== "subagent_status" && hostKind !== "subagent_wait" && hostKind !== "subagent_control" && hostKind !== "subagent_message") {
+  if (!isSubagentToolName(toolName) && !isSubagentHostKind(hostKind)) {
     return null;
   }
-  if (toolName === "send_message" || toolName === "followup_task" || hostKind === "subagent_message") {
+  if (toolName === "send_message" || hostKind === "subagent_message") {
     return buildSubagentMessageDetailBody(blocks, t);
   }
   if (toolName === "wait_agent" || hostKind === "subagent_wait") {
     return buildSubagentWaitDetailBody(blocks, t);
   }
-  if (toolName === "list_agents" || hostKind === "subagent_status") {
+  if (toolName === "list_agents" || toolName === "agent_orchestration_info" || hostKind === "subagent_status") {
     return buildSubagentCollectionDetailBody(blocks, t);
   }
-  if (toolName === "interrupt_agent" || hostKind === "subagent_control") {
+  if (toolName === "interrupt_agent" || toolName === "close_agent" || hostKind === "subagent_control") {
     return buildSubagentControlDetailBody(blocks, t);
   }
   return buildSubagentSpawnDetailBody(blocks, t);
 }
 
-// buildSubagentMessageDetailBody renders send_message/followup_task as a compact inline record.
-// buildSubagentMessageDetailBody 将 send_message/followup_task 渲染为紧凑内联记录。
+// buildSubagentMessageDetailBody renders send_message as a compact inline record.
+// buildSubagentMessageDetailBody 将 send_message 渲染为紧凑内联记录。
 //
 // Parameters:
 // blocks is the merged tool execution row.
@@ -121,11 +118,18 @@ function buildSubagentMessageDetailBody(blocks: ToolExecutionConversationBlock[]
     "hostResult.payload.message",
     "payload.message",
   ]) ?? "";
-  const triggerTurn = booleanMetadata(payload?.trigger_turn ?? payload?.triggerTurn);
+  const deliveryMode = firstMetadataString(blocks, [
+    "arguments.delivery_mode",
+    "arguments.deliveryMode",
+    "host_result.payload.delivery_mode",
+    "hostResult.payload.deliveryMode",
+    "payload.delivery_mode",
+    "payload.deliveryMode",
+  ]);
   return [
     `## ${text(t, "conversation.subagent.detail.message", "Subagent message")}`,
     target ? detailLine(text(t, "conversation.subagent.detail.target", "Target"), target) : null,
-    triggerTurn !== null ? detailLine(text(t, "conversation.subagent.detail.triggerTurn", "Trigger turn"), booleanText(triggerTurn, t)) : null,
+    deliveryMode ? detailLine(text(t, "conversation.subagent.detail.deliveryMode", "Delivery mode"), deliveryMode) : null,
     message
       ? detailLine(text(t, "conversation.subagent.detail.message", "Subagent message"), message)
       : detailLine(text(t, "conversation.subagent.detail.message", "Subagent message"), text(t, "conversation.subagent.detail.empty", "No content.")),
@@ -203,9 +207,13 @@ function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBloc
     ].filter(Boolean).join("\n\n");
   }
   const agentSections = agents.map((agent, index) => {
-    const name = stringMetadata(agent.agent_name ?? agent.agentName ?? agent.display_title ?? agent.displayTitle ?? agent.task_name ?? agent.taskName)
+    const name = stringMetadata(agent.agent_name ?? agent.agentName ?? agent.display_title ?? agent.displayTitle ?? agent.task_name ?? agent.taskName ?? agent.agent_id ?? agent.agentId)
       ?? `${text(t, "conversation.subagent.detail.agent", "Agent")} ${index + 1}`;
-    const status = subagentAgentStatusText(agent) ?? stringMetadata(agent.status) ?? text(t, "conversation.subagent.detail.unknown", "Unknown");
+    const enabled = booleanMetadata(agent.enabled);
+    const status = subagentAgentStatusText(agent)
+      ?? stringMetadata(agent.status)
+      ?? (enabled !== null ? (enabled ? text(t, "conversation.subagent.enabled", "Enabled") : text(t, "conversation.subagent.disabled", "Disabled")) : null)
+      ?? text(t, "conversation.subagent.detail.unknown", "Unknown");
     const result = subagentAgentStatusResult(agent) ?? stringMetadata(agent.result) ?? stringMetadata(agent.error) ?? "";
     const description = stringMetadata(agent.description);
     return [
@@ -254,12 +262,18 @@ function buildSubagentControlDetailBody(blocks: ToolExecutionConversationBlock[]
   const stoppedIds = [
     ...arrayMetadata(payload, "stopped_subagent_task_ids"),
   ].map(stringMetadata).filter((value): value is string => Boolean(value));
+  const closedAgents = arrayMetadata(payload, "closed_agents").map(stringMetadata).filter((value): value is string => Boolean(value));
+  const closedCount = numberMetadata(payload?.closed_count ?? payload?.closedCount) ?? closedAgents.length;
   const stoppedCount = numberMetadata(payload?.stopped_count ?? payload?.stoppedCount) ?? stoppedIds.length;
+  const clearedMessageCount = numberMetadata(payload?.cleared_message_count ?? payload?.clearedMessageCount);
   return [
     `## ${text(t, "conversation.subagent.detail.control", "Subagent control")}`,
     target ? detailLine(text(t, "conversation.subagent.detail.target", "Target"), target) : null,
-    detailLine(text(t, "conversation.subagent.detail.stoppedCount", "Stopped count"), String(stoppedCount)),
+    closedCount > 0 ? detailLine(text(t, "conversation.subagent.detail.closedCount", "Closed count"), String(closedCount)) : null,
+    stoppedCount > 0 ? detailLine(text(t, "conversation.subagent.detail.stoppedCount", "Stopped count"), String(stoppedCount)) : null,
     stoppedIds.length ? `${detailLine(text(t, "conversation.subagent.detail.stoppedSessions", "Stopped sessions"), "")}\n${stoppedIds.map((id) => `- ${id}`).join("\n")}` : null,
+    closedAgents.length ? `${detailLine(text(t, "conversation.subagent.detail.closedAgents", "Closed agents"), "")}\n${closedAgents.map((id) => `- ${id}`).join("\n")}` : null,
+    clearedMessageCount !== null ? detailLine(text(t, "conversation.subagent.detail.clearedMessages", "Cleared messages"), String(clearedMessageCount)) : null,
   ].filter(Boolean).join("\n\n");
 }
 

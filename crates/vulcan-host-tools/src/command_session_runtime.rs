@@ -3,6 +3,7 @@
 
 use crate::model::SessionId;
 use crate::output_decode::ShellOutputStreamDecoder;
+use crate::process_creation::{WINDOWS_CREATE_NO_WINDOW, apply_windows_release_no_window};
 use portable_pty::{CommandBuilder as PtyCommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -42,11 +43,6 @@ const COMMAND_SESSION_CONTROL_ACK_TIMEOUT_MS: u64 = 250;
 /// Maximum time allowed for one stdin pipe write before the runtime treats the child as incompatible with pipe input.
 /// 单次标准输入管道写入的最长等待时间，超过后运行时会认为子进程与管道输入不兼容。
 const COMMAND_SESSION_STDIN_WRITE_TIMEOUT_MS: u64 = 1_000;
-
-/// Windows process creation flag that prevents helper console windows from being shown.
-/// 防止 helper 控制台窗口显示的 Windows 进程创建标志。
-#[cfg(windows)]
-const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Default PTY screen rows mirrored into WebUI terminal frames.
 /// 镜像到 WebUI 终端帧的默认 PTY 屏幕行数。

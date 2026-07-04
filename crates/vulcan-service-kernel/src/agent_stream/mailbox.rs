@@ -117,6 +117,7 @@ pub(crate) fn append_webui_mailbox_intervention_messages(
         );
         appended = appended.saturating_add(1);
     }
+    sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
     webui_trace(
         "mailbox_agent_messages_appended",
         format!("session={session_id} appended={appended}"),
@@ -282,6 +283,7 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
             kernel
                 .input_queue_mut()
                 .accept_mailbox_delivery_for_current_turn();
+            sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
         }
         ("wait_agent", RuntimeEventKind::ToolFinished) => {
             guard
@@ -291,6 +293,7 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
                 let scope_id = wait_agent_scope_id(event);
                 let _ = kernel.clear_wait_scope(&scope_id);
             }
+            sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
         }
         _ => {}
     }

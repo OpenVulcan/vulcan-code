@@ -1,0 +1,161 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--background);
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.loading-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: var(--muted-foreground);
+  padding: 24px;
+}
+
+.loading-screen.error {
+  color: var(--destructive);
+}
+
+.startup-progress-panel {
+  width: min(420px, calc(100vw - 48px));
+  display: grid;
+  justify-items: center;
+  gap: 72px;
+  transform: translateY(-4vh);
+}
+
+.startup-logo-stage {
+  position: relative;
+  width: 176px;
+  height: 176px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-10px);
+  isolation: isolate;
+  overflow: visible;
+}
+
+.startup-logo-mark {
+  width: 144px;
+  height: 144px;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 18px 38px color-mix(in oklch, var(--foreground) 13%, transparent));
+}
+
+.startup-logo-shine-canvas {
+  position: absolute;
+  width: 144px;
+  height: 144px;
+  z-index: 1;
+  display: block;
+  pointer-events: none;
+  opacity: 0.95;
+  mix-blend-mode: screen;
+}
+
+.startup-progress-content {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  transform: translateY(24px);
+}
+
+.conversation-loading-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--foreground);
+  font-size: 0.92rem;
+}
+
+.conversation-loading-heading span {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.startup-progress-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.92rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-loading-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 76%, var(--background));
+}
+
+.conversation-loading-bar-value {
+  height: 100%;
+  min-width: 8px;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 180ms ease;
+}
+
+.startup-progress-message {
+  min-height: 18px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-ring {
+  display: inline-block;
+  flex: none;
+  overflow: visible;
+}
+
+.progress-ring-track {
+  stroke: color-mix(in oklch, currentColor 18%, transparent);
+}
+
+.progress-ring-value {
+  stroke: currentColor;
+  transition: stroke-dashoffset 180ms ease;
+}

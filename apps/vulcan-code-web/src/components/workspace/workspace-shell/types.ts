@@ -217,6 +217,9 @@ export interface WorkspaceShellProps {
   // Stops one subagent task.
   // 停止一个子代理任务。
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
+  // Closes one subagent lifecycle.
+  // 关闭一个子智能体生命周期。
+  onCloseSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   // Force-stops one live command session.
   // 强制停止单条实时命令会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;

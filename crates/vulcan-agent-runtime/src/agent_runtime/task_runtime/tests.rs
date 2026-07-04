@@ -111,7 +111,6 @@ fn test_task_args(prompt: &str, task_id: Option<&str>) -> TaskToolInvocationArgs
         system_prompt_append: None,
         provider: None,
         model: None,
-        reasoning_effort: None,
         execution_mode: None,
         provider_model: None,
         tools: None,

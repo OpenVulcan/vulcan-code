@@ -125,6 +125,10 @@ pub struct TaskSessionMetadata {
     /// Current task-session status.
     /// 当前子代理会话状态。
     pub status: TaskSessionStatus,
+    /// Optional reason for the most recent stopped or archived state.
+    /// 最近一次停止或归档状态的可选原因。
+    #[serde(default)]
+    pub stop_reason: Option<String>,
     /// Runtime policy frozen for this task session.
     /// 为该子代理会话固化的运行时策略。
     pub runtime_policy: ExecutionRuntimePolicy,
@@ -174,6 +178,7 @@ impl TaskSessionMetadata {
             subagent_profile_id: effective_config.subagent_profile_id.clone(),
             inherit_parent_config: effective_config.inherit_parent_config,
             status: TaskSessionStatus::Created,
+            stop_reason: None,
             runtime_policy: ExecutionRuntimePolicy::task_session(),
             requested_config,
             effective_config,

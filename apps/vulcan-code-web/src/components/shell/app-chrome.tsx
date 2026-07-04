@@ -57,6 +57,7 @@ export function BrandHeader(props: {
 }) {
   return (
     <div className="brand" data-tauri-drag-region={props.dragRegion ? "" : undefined}>
+      <img alt="" aria-hidden="true" className="brand-logo app-brand-logo" src="/vulcan-logo.svg" />
       <div>
         <strong>Vulcan Code</strong>
       </div>

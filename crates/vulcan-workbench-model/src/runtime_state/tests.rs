@@ -64,6 +64,26 @@ fn runtime_state_deserializes_without_conversation_state() {
     ));
 }
 
+/// Verifies the persisted runtime state can carry the session kernel mailbox cursor.
+/// 验证持久化运行态可以携带会话内核 mailbox 游标。
+#[test]
+fn runtime_state_serializes_session_runtime_kernel() {
+    let session_id = uuid::Uuid::new_v4();
+    let runtime_state = SessionRuntimeStateEntry {
+        session_runtime_kernel: Some(SessionRuntimeKernel::new(
+            vulcan_session_core::SessionNodeId::from(session_id),
+        )),
+        ..SessionRuntimeStateEntry::default()
+    };
+
+    let value =
+        serde_json::to_value(&runtime_state).expect("runtime state with kernel should serialize");
+    let restored: SessionRuntimeStateEntry =
+        serde_json::from_value(value).expect("runtime state with kernel should deserialize");
+
+    assert!(restored.session_runtime_kernel.is_some());
+}
+
 /// Initializes a missing session AI configuration from the default template.
 /// 从默认模板初始化缺失的会话 AI 配置。
 #[test]

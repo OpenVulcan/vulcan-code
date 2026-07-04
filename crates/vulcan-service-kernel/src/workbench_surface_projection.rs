@@ -1,13 +1,16 @@
 //! Workbench surface and subagent navigation projection helpers.
 //! 工作台界面与子代理导航投影辅助逻辑。
 
+use std::collections::{BTreeSet, VecDeque};
+
 use super::{
     ServiceBridgeState, conversation_state_to_session_messages,
     display_session_messages_from_workspace, filter_display_session_messages,
-    normalize_webui_subagent_task_state, select_subagent_navigation_panel_states,
-    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
-    subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
-    webui_subagent_task_state_by_task_id,
+    apply_webui_unclosed_subagent_metadata_preload, load_webui_unclosed_subagent_metadata_preload,
+    normalize_webui_subagent_task_state,
+    select_subagent_navigation_panel_states, subagent_navigation_surface_is_visible,
+    subagent_navigation_task_label, subagent_task_panel_is_openable,
+    subagent_task_panel_state_has_recoverable_conversation, webui_subagent_task_state_by_task_id,
 };
 use vulcan_service_api::{SubagentNavigationSnapshot, SubagentTaskSummary};
 use vulcan_workbench_model::{
@@ -22,26 +25,21 @@ pub(super) fn active_surface_session_id_from_state(
     workspace_snapshot: &WorkspaceSnapshot,
 ) -> SessionId {
     let root_session_id = workspace_snapshot.selected_session;
-    if guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id != root_session_id)
-    {
-        guard.active_subagent_panel = None;
-    }
     let has_visible_round = guard
         .session_subagent_navigation_rounds
         .contains(&root_session_id);
-    let has_active_panel = guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id == root_session_id);
+    let has_active_panel = guard.active_subagent_panel.is_some_and(|selection| {
+        cached_subagent_tree_contains_task(guard, root_session_id, selection.task_id)
+    });
+    if guard.active_subagent_panel.is_some() && !has_active_panel {
+        guard.active_subagent_panel = None;
+    }
     if !has_visible_round && !has_active_panel {
         return root_session_id;
     }
     if let Some(selection) = guard.active_subagent_panel
-        && let Some(state) = guard
-            .session_subagent_tasks
-            .get(&selection.parent_session_id)
-            .and_then(|tasks| tasks.get(&selection.task_id))
+        && cached_subagent_tree_contains_task(guard, root_session_id, selection.task_id)
+        && let Some(state) = webui_subagent_task_state_by_task_id(guard, selection.task_id)
     {
         let task_runtime = guard
             .agent_runtime
@@ -151,53 +149,27 @@ pub(super) fn subagent_navigation_snapshot_from_state(
     if root_session_id == SessionId::nil() {
         return None;
     }
-    if guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id != root_session_id)
-    {
-        guard.active_subagent_panel = None;
-    }
     let parent_session_id = root_session_id;
     let has_visible_round = guard
         .session_subagent_navigation_rounds
         .contains(&parent_session_id);
-    let has_active_panel = guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id == parent_session_id);
-    if !has_visible_round && !has_active_panel {
-        return None;
+    refresh_webui_subagent_tree_task_cache_from_segmented_store(
+        guard,
+        workspace_snapshot,
+        parent_session_id,
+    );
+    let normalized_states =
+        normalized_subagent_tree_states_from_cache(guard, workspace_snapshot, parent_session_id);
+    let requested_active_task_id =
+        valid_active_subagent_task_id_for_states(guard, &normalized_states);
+    if guard.active_subagent_panel.is_some() && requested_active_task_id.is_none() {
+        guard.active_subagent_panel = None;
     }
-    let requested_active_task_id = guard.active_subagent_panel.and_then(|selection| {
-        (selection.parent_session_id == parent_session_id).then_some(selection.task_id)
-    });
-    let task_runtime = guard
-        .agent_runtime
-        .as_ref()
-        .map(|runtime| &runtime.task_runtime);
-    let live_listener_task_ids = guard.detached_subagent_task_listeners.clone();
-    let normalized_states = guard
-        .session_subagent_tasks
-        .get(&parent_session_id)
-        .map(|entries| {
-            entries
-                .values()
-                .map(|state| {
-                    normalize_webui_subagent_task_state(
-                        Some(workspace_snapshot),
-                        state,
-                        task_runtime,
-                        live_listener_task_ids.contains(&state.task_id),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let has_running_subagents = normalized_states
-        .iter()
-        .any(|state| state.run_state.is_running());
+    let has_active_panel = requested_active_task_id.is_some();
+    let has_unclosed_subagents = !normalized_states.is_empty();
     if !subagent_navigation_surface_is_visible(
         has_visible_round,
-        has_running_subagents,
+        has_unclosed_subagents,
         has_active_panel,
     ) {
         return None;
@@ -223,6 +195,18 @@ pub(super) fn subagent_navigation_snapshot_from_state(
     })
 }
 
+/// Refreshes the selected root's subagent tree cache from persisted TaskSession metadata.
+/// 从持久化 TaskSession 元数据刷新当前根会话的整棵子代理缓存。
+fn refresh_webui_subagent_tree_task_cache_from_segmented_store(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+    root_parent_session_id: SessionId,
+) {
+    let preload =
+        load_webui_unclosed_subagent_metadata_preload(workspace_snapshot, root_parent_session_id);
+    apply_webui_unclosed_subagent_metadata_preload(guard, preload);
+}
+
 /// Builds the subagent navigation snapshot from the current cache without refreshing segmented storage.
 /// 仅从当前缓存构建子代理导航快照，不刷新分段存储。
 pub(super) fn subagent_navigation_snapshot_from_cached_state(
@@ -233,52 +217,21 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
     if parent_session_id == SessionId::nil() {
         return None;
     }
-    if guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id != parent_session_id)
-    {
-        guard.active_subagent_panel = None;
-    }
     let has_visible_round = guard
         .session_subagent_navigation_rounds
         .contains(&parent_session_id);
-    let has_active_panel = guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id == parent_session_id);
-    if !has_visible_round && !has_active_panel {
-        return None;
+    let normalized_states =
+        normalized_subagent_tree_states_from_cache(guard, workspace_snapshot, parent_session_id);
+    let requested_active_task_id =
+        valid_active_subagent_task_id_for_states(guard, &normalized_states);
+    if guard.active_subagent_panel.is_some() && requested_active_task_id.is_none() {
+        guard.active_subagent_panel = None;
     }
-    let requested_active_task_id = guard.active_subagent_panel.and_then(|selection| {
-        (selection.parent_session_id == parent_session_id).then_some(selection.task_id)
-    });
-    let task_runtime = guard
-        .agent_runtime
-        .as_ref()
-        .map(|runtime| &runtime.task_runtime);
-    let live_listener_task_ids = guard.detached_subagent_task_listeners.clone();
-    let normalized_states = guard
-        .session_subagent_tasks
-        .get(&parent_session_id)
-        .map(|entries| {
-            entries
-                .values()
-                .map(|state| {
-                    normalize_webui_subagent_task_state(
-                        Some(workspace_snapshot),
-                        state,
-                        task_runtime,
-                        live_listener_task_ids.contains(&state.task_id),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let has_running_subagents = normalized_states
-        .iter()
-        .any(|state| state.run_state.is_running());
+    let has_active_panel = requested_active_task_id.is_some();
+    let has_unclosed_subagents = !normalized_states.is_empty();
     if !subagent_navigation_surface_is_visible(
         has_visible_round,
-        has_running_subagents,
+        has_unclosed_subagents,
         has_active_panel,
     ) {
         return None;
@@ -300,6 +253,85 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
         active_conversation_id: active_task_id.unwrap_or(parent_session_id).to_string(),
         active_task_id: active_task_id.map(|task_id| task_id.to_string()),
         tasks,
+    })
+}
+
+/// Returns whether a cached task id belongs to the selected root's unclosed child-agent tree.
+/// 返回缓存中的任务标识是否属于当前根会话的未关闭子智能体树。
+fn cached_subagent_tree_contains_task(
+    guard: &ServiceBridgeState,
+    root_parent_session_id: SessionId,
+    task_id: SessionId,
+) -> bool {
+    let mut visited_parent_ids = BTreeSet::new();
+    let mut pending_parent_ids = VecDeque::from([root_parent_session_id]);
+    while let Some(parent_session_id) = pending_parent_ids.pop_front() {
+        if !visited_parent_ids.insert(parent_session_id) {
+            continue;
+        }
+        let Some(tasks) = guard.session_subagent_tasks.get(&parent_session_id) else {
+            continue;
+        };
+        for child_task_id in tasks.keys() {
+            if *child_task_id == task_id {
+                return true;
+            }
+            pending_parent_ids.push_back(*child_task_id);
+        }
+    }
+    false
+}
+
+/// Builds normalized subagent states for every unclosed task in the selected root tree.
+/// 为当前根会话树中每个未关闭任务构建归一化子智能体状态。
+fn normalized_subagent_tree_states_from_cache(
+    guard: &ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+    root_parent_session_id: SessionId,
+) -> Vec<SubagentTaskPanelState> {
+    let task_runtime = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| &runtime.task_runtime);
+    let live_listener_task_ids = guard.detached_subagent_task_listeners.clone();
+    let mut normalized_states = Vec::new();
+    let mut visited_parent_ids = BTreeSet::new();
+    let mut visited_task_ids = BTreeSet::new();
+    let mut pending_parent_ids = VecDeque::from([root_parent_session_id]);
+    while let Some(parent_session_id) = pending_parent_ids.pop_front() {
+        if !visited_parent_ids.insert(parent_session_id) {
+            continue;
+        }
+        let Some(tasks) = guard.session_subagent_tasks.get(&parent_session_id) else {
+            continue;
+        };
+        for state in tasks.values() {
+            pending_parent_ids.push_back(state.task_id);
+            if !visited_task_ids.insert(state.task_id) {
+                continue;
+            }
+            normalized_states.push(normalize_webui_subagent_task_state(
+                Some(workspace_snapshot),
+                state,
+                task_runtime,
+                live_listener_task_ids.contains(&state.task_id),
+            ));
+        }
+    }
+    normalized_states
+}
+
+/// Returns the active task id only when it remains present in the projected tree states.
+/// 仅当活动任务仍存在于已投影树状态中时返回其标识。
+fn valid_active_subagent_task_id_for_states(
+    guard: &ServiceBridgeState,
+    normalized_states: &[SubagentTaskPanelState],
+) -> Option<SessionId> {
+    guard.active_subagent_panel.and_then(|selection| {
+        normalized_states
+            .iter()
+            .any(|state| state.task_id == selection.task_id)
+            .then_some(selection.task_id)
     })
 }
 

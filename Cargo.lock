@@ -5959,6 +5959,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+ "vulcan-host-tools",
  "vulcan-service-api",
  "vulcan-service-host",
  "vulcan-service-kernel",
@@ -6068,6 +6069,7 @@ dependencies = [
  "sse-stream",
  "tokio",
  "tokio-util",
+ "vulcan-host-tools",
 ]
 
 [[package]]
@@ -6146,6 +6148,7 @@ dependencies = [
  "vulcan-context-compaction",
  "vulcan-context-injection",
  "vulcan-core",
+ "vulcan-host-tools",
  "vulcan-prompt-skills",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
@@ -6156,6 +6159,7 @@ dependencies = [
  "vulcan-session-core",
  "vulcan-subagent-core",
  "vulcan-task-session",
+ "vulcan-tools-manager",
  "vulcan-vmm",
  "vulcan-workbench-model",
  "vulcan-workspace-store",

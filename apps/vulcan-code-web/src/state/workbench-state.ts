@@ -647,7 +647,7 @@ export function applySubagentPanelRouteResponse(
     revision: response.revision,
     subagentNavigationByConversation: upsertSubagentNavigationForConversation(
       workbench.subagentNavigationByConversation ?? [],
-      response.subagentNavigation?.parentConversationId ?? null,
+      response.parentConversationId ?? response.subagentNavigation?.parentConversationId ?? null,
       response.subagentNavigation ?? null,
     ),
     messages: activeConversationId

@@ -65,6 +65,110 @@ fn webui_subagent_mailbox_rejects_child_result_from_stale_parent_generation() {
     assert_eq!(kernel.input_queue().mailbox_len(), 0);
 }
 
+/// Verifies send_message tool completion is mirrored into the child transcript exactly once.
+/// 验证 send_message 工具完成会且只会一次镜像到子会话转录。
+#[test]
+fn send_message_tool_finished_appends_child_transcript_prompt_once() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+    let workspace = state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot should exist");
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · send_message",
+        "queued",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "tool_name": "send_message",
+        "tool_call_id": "send-followup-1",
+        "host_result": {
+            "kind": "subagent_message",
+            "payload": {
+                "tool": "send_message",
+                "parent_session_id": parent_session_id.to_string(),
+                "target": "code-review",
+                (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+                "message": "请用中文重新输出结论。",
+                "queued": true,
+                "delivery_mode": "queue",
+                "interrupted": false
+            }
+        }
+    })));
+
+    assert_eq!(
+        append_webui_subagent_send_message_from_event_if_needed(workspace, &event),
+        Some(task_session_id)
+    );
+    assert_eq!(
+        append_webui_subagent_send_message_from_event_if_needed(workspace, &event),
+        None
+    );
+    let messages = workspace
+        .session_messages
+        .get(&task_session_id)
+        .expect("child transcript should exist");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].title, "智能体消息");
+    assert_eq!(messages[0].body, "请用中文重新输出结论。");
+    assert_eq!(
+        messages[0].record_kind,
+        SessionMessageRecordKind::DisplayNote
+    );
+}
+
+/// Verifies send_message projection can use the standard tool-finished title id when metadata omits it.
+/// 验证 send_message 投影在元数据缺少工具调用标识时可使用标准工具完成标题标识。
+#[test]
+fn send_message_projection_uses_tool_finished_title_id_when_metadata_omits_call_id() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+    let workspace = state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot should exist");
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-send-title-1",
+        "queued",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "tool_name": "send_message",
+        "host_result": {
+            "kind": "subagent_message",
+            "payload": {
+                "tool": "send_message",
+                "parent_session_id": parent_session_id.to_string(),
+                "target": "code-review",
+                (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+                "message": "追加一条没有 metadata call id 的消息。",
+                "queued": true,
+                "delivery_mode": "queue",
+                "interrupted": false
+            }
+        }
+    })));
+
+    assert_eq!(
+        append_webui_subagent_send_message_from_event_if_needed(workspace, &event),
+        Some(task_session_id)
+    );
+    assert_eq!(
+        append_webui_subagent_send_message_from_event_if_needed(workspace, &event),
+        None
+    );
+    let messages = workspace
+        .session_messages
+        .get(&task_session_id)
+        .expect("child transcript should exist");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].body, "追加一条没有 metadata call id 的消息。");
+}
+
 /// Verifies a mailbox-triggered kernel turn accepts queued subagent mailbox input.
 /// 验证 mailbox 触发的内核回合会接收已排队的子代理 mailbox 输入。
 #[test]

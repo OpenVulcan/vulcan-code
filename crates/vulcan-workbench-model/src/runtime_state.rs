@@ -10,6 +10,7 @@ use vulcan_provider_config::config::{
     AiToolKind, OpenRouterEndpointRouteSelection, PersistedAiToolConfiguration,
     PersistedPromptSkillState, ReasoningEffortLevel,
 };
+use vulcan_session_core::SessionRuntimeKernel;
 use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
 
 /// Returns whether the canonical conversation state has no durable payload.
