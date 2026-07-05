@@ -45,6 +45,44 @@ pub(crate) struct PreservedWorkspaceRunState {
     sessions: Vec<PreservedSessionRunState>,
 }
 
+/// Controls which retained transcript windows are copied into a refreshed workspace.
+/// 控制哪些已保留转录窗口会复制进刷新后的工作区。
+#[derive(Debug, Clone, Copy)]
+enum PreservedSessionMessageScope {
+    /// Preserve every already-hydrated transcript window.
+    /// 保留全部已经水合的转录窗口。
+    AllHydrated,
+    /// Preserve only the transcript window for the session currently being hydrated.
+    /// 仅保留当前正在水合的会话转录窗口。
+    HydratingSessionOnly(SessionId),
+}
+
+impl PreservedSessionMessageScope {
+    /// Returns whether a session should stay marked as hydrated under this scope.
+    /// 返回该范围下某个会话是否应该继续标记为已水合。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the candidate session row.
+    /// `session_id` 标识候选会话行。
+    /// `had_hydrated_window` reports whether the previous workspace held a hydrated window.
+    /// `had_hydrated_window` 表示旧工作区是否持有已水合窗口。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the refreshed workspace should preserve the hydrated-window marker.
+    /// 当刷新后的工作区应该保留已水合窗口标记时返回 `true`。
+    fn preserves_hydrated_window(self, session_id: SessionId, had_hydrated_window: bool) -> bool {
+        if !had_hydrated_window {
+            return false;
+        }
+        match self {
+            Self::AllHydrated => true,
+            Self::HydratingSessionOnly(hydrating_session_id) => session_id == hydrating_session_id,
+        }
+    }
+}
+
 impl PreservedWorkspaceRunState {
     /// Returns the number of preserved session rows carried by this snapshot repair state.
     /// 返回该快照修复状态携带的保留会话行数量。
@@ -60,9 +98,68 @@ pub(crate) fn capture_preserved_workspace_run_state(
     active_kernel_session_ids: &BTreeSet<SessionId>,
     submitted_session_id: Option<SessionId>,
 ) -> Option<PreservedWorkspaceRunState> {
-    let Some(previous_snapshot) = previous_snapshot else {
-        return None;
-    };
+    capture_preserved_workspace_run_state_with_message_scope(
+        previous_snapshot,
+        active_kernel_session_ids,
+        submitted_session_id,
+        PreservedSessionMessageScope::AllHydrated,
+    )
+}
+
+/// Captures retained state for display hydration without copying unrelated hydrated transcripts.
+/// 为显示水合捕获保留状态，但不复制无关的已水合转录正文。
+///
+/// # Parameters
+/// 参数
+/// `previous_snapshot` is the in-memory workspace snapshot before the display refresh.
+/// `previous_snapshot` 是显示刷新前的内存工作区快照。
+/// `active_kernel_session_ids` identifies sessions that still have live kernel work.
+/// `active_kernel_session_ids` 标识仍有实时内核任务的会话。
+/// `hydrating_session_id` identifies the session whose transcript window is being opened.
+/// `hydrating_session_id` 标识正在打开转录窗口的会话。
+///
+/// # Returns
+/// 返回值
+/// The minimal retained state needed to repair the refreshed workspace.
+/// 返回修复刷新后工作区所需的最小保留状态。
+pub(crate) fn capture_preserved_workspace_run_state_for_session_hydration(
+    previous_snapshot: Option<&WorkspaceSnapshot>,
+    active_kernel_session_ids: &BTreeSet<SessionId>,
+    hydrating_session_id: SessionId,
+) -> Option<PreservedWorkspaceRunState> {
+    capture_preserved_workspace_run_state_with_message_scope(
+        previous_snapshot,
+        active_kernel_session_ids,
+        None,
+        PreservedSessionMessageScope::HydratingSessionOnly(hydrating_session_id),
+    )
+}
+
+/// Captures retained in-memory state using an explicit transcript retention scope.
+/// 使用显式转录保留范围捕获内存保留状态。
+///
+/// # Parameters
+/// 参数
+/// `previous_snapshot` is the workspace snapshot that may contain live-only state.
+/// `previous_snapshot` 是可能包含仅内存状态的工作区快照。
+/// `active_kernel_session_ids` identifies sessions that still have active runtime work.
+/// `active_kernel_session_ids` 标识仍有活动运行时工作的会话。
+/// `submitted_session_id` optionally forces one recently submitted session to be preserved.
+/// `submitted_session_id` 可选地强制保留一个刚提交的会话。
+/// `message_scope` defines which hydrated transcript messages may be cloned.
+/// `message_scope` 定义允许克隆哪些已水合转录正文。
+///
+/// # Returns
+/// 返回值
+/// The retained workspace repair state, or `None` when no state needs preservation.
+/// 返回工作区修复保留状态；没有需要保留的状态时返回 `None`。
+fn capture_preserved_workspace_run_state_with_message_scope(
+    previous_snapshot: Option<&WorkspaceSnapshot>,
+    active_kernel_session_ids: &BTreeSet<SessionId>,
+    submitted_session_id: Option<SessionId>,
+    message_scope: PreservedSessionMessageScope,
+) -> Option<PreservedWorkspaceRunState> {
+    let previous_snapshot = previous_snapshot?;
     let mut sessions = Vec::new();
     for (previous_index, previous_session) in previous_snapshot.sessions.iter().enumerate() {
         let runtime_state = previous_snapshot
@@ -74,9 +171,11 @@ pub(crate) fn capture_preserved_workspace_run_state(
             runtime_state.is_some_and(runtime_state_has_concrete_conversation_context);
         let is_submitted_session = submitted_session_id == Some(previous_session.id);
         let had_active_run = active_kernel_session_ids.contains(&previous_session.id);
-        let had_hydrated_window = previous_snapshot
+        let had_hydrated_window_before_scope = previous_snapshot
             .hydrated_session_ids
             .contains(&previous_session.id);
+        let had_hydrated_window = message_scope
+            .preserves_hydrated_window(previous_session.id, had_hydrated_window_before_scope);
         if !had_active_run
             && !has_pending_prompt
             && !is_submitted_session
@@ -113,10 +212,14 @@ pub(crate) fn capture_preserved_workspace_run_state(
             had_active_run,
             had_hydrated_window,
             runtime_state: runtime_state.cloned(),
-            messages: previous_snapshot
-                .session_messages
-                .get(&previous_session.id)
-                .cloned(),
+            messages: had_hydrated_window
+                .then(|| {
+                    previous_snapshot
+                        .session_messages
+                        .get(&previous_session.id)
+                        .cloned()
+                })
+                .flatten(),
         });
     }
     let selected_session = (previous_snapshot.selected_session != SessionId::nil())

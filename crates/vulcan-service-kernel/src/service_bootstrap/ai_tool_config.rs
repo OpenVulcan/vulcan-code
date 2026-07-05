@@ -11,16 +11,15 @@ pub(crate) fn load_service_ai_tool_configuration(
         provider_configuration,
     ) {
         Ok(loaded) => {
-            if loaded.normalized {
-                if let Err(error) =
+            if loaded.normalized
+                && let Err(error) =
                     vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
                         &loaded.configuration,
                     )
-                {
-                    logs.push(format!(
-                        "[webui-service] ai capability configuration normalization save failed: {error}"
-                    ));
-                }
+            {
+                logs.push(format!(
+                    "[webui-service] ai capability configuration normalization save failed: {error}"
+                ));
             }
             match loaded.source {
                 vulcan_agent_runtime::ai_tool_configuration::AiToolConfigurationLoadSource::DedicatedFile => logs.push(String::from(

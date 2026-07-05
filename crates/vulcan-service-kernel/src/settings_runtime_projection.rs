@@ -371,7 +371,7 @@ pub(crate) fn restore_webui_runtime_controls_for_session(
 pub(crate) fn store_provider_and_mcp_configuration_after_change(
     state: &SharedServiceBridgeState,
     provider_configuration: ProviderConfigurationFile,
-    next_mcp_runtime: Option<McpRuntimeAccess>,
+    next_mcp_runtime: McpRuntimeAccess,
 ) -> Result<WorkbenchSnapshot, String> {
     let mut guard = state
         .lock()
@@ -386,7 +386,7 @@ pub(crate) fn store_provider_and_mcp_configuration_after_change(
             previous_mcp_runtime.shutdown();
         }
         agent_runtime.provider_configuration = provider_configuration.clone();
-        agent_runtime.mcp_runtime = next_mcp_runtime;
+        agent_runtime.mcp_runtime = Some(next_mcp_runtime);
     }
     refresh_settings_projection_locked(
         &mut guard,

@@ -103,18 +103,20 @@ pub(crate) async fn service_compact_selected_conversation_context(
             ActiveTurnKind::ContextCompaction,
         )?;
     }
-    let workbench = store_and_emit_full_workbench_snapshot_for_cold_refresh(
-        &app,
-        &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        workspace_snapshot,
-        &logs,
-    )?;
+    let workbench =
+        store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {
+            app: &app,
+            state: &state,
+            controller_runtime: &controller_runtime,
+            luaskills_catalog: &luaskills_catalog,
+            token_budget_runtime: &token_budget_runtime,
+            mcp_catalog: &mcp_catalog,
+            provider_configuration: &agent_runtime.provider_configuration,
+            ai_tool_configuration: &agent_runtime.ai_tool_configuration,
+            workspace_snapshot,
+            logs: &logs,
+            subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
+        })?;
 
     spawn_webui_context_compaction_task(
         app.clone(),
@@ -231,18 +233,20 @@ pub(crate) async fn service_stop_conversation_run(
     {
         cache_session_goal_summary(&state, selected_session_id, Some(goal))?;
     }
-    let workbench = store_and_emit_full_workbench_snapshot_for_cold_refresh(
-        &app,
-        &state,
-        &controller_runtime,
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &agent_runtime.provider_configuration,
-        &agent_runtime.ai_tool_configuration,
-        workspace_snapshot,
-        &logs,
-    )?;
+    let workbench =
+        store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {
+            app: &app,
+            state: &state,
+            controller_runtime: &controller_runtime,
+            luaskills_catalog: &luaskills_catalog,
+            token_budget_runtime: &token_budget_runtime,
+            mcp_catalog: &mcp_catalog,
+            provider_configuration: &agent_runtime.provider_configuration,
+            ai_tool_configuration: &agent_runtime.ai_tool_configuration,
+            workspace_snapshot,
+            logs: &logs,
+            subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
+        })?;
     if did_stop_work {
         let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();

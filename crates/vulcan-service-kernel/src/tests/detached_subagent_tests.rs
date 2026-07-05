@@ -69,7 +69,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
-        session_subagent_tasks: BTreeMap::new(),
+        webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,
@@ -100,7 +100,8 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         controller_events: Vec::new(),
     };
 
-    let applied = apply_task_session_execution_report_to_memory(&state, report).unwrap();
+    let applied = apply_task_session_execution_report_to_memory(&state, report)
+        .expect("terminal task-session report should apply to memory");
 
     assert!(applied.completion_request.is_none());
     assert!(!workspace_snapshot_contains_regular_session(
@@ -124,7 +125,9 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
             .iter()
             .any(|message| message.body.contains("子代理完成"))
     );
-    let guard = state.lock().unwrap();
+    let guard = state
+        .lock()
+        .expect("service state lock should be available after report apply");
     assert!(
         guard
             .workspace_snapshot
@@ -178,7 +181,8 @@ fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() 
         controller_events: Vec::new(),
     };
 
-    let applied = apply_task_session_execution_report_to_memory(&state, report).unwrap();
+    let applied = apply_task_session_execution_report_to_memory(&state, report)
+        .expect("terminal task-session report should replace provisional prompt");
     let messages = applied
         .workspace_snapshot
         .session_messages
@@ -451,80 +455,34 @@ fn subagent_surface_conversation_state_preserves_display_only_agent_messages() {
 fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
-    let mut guard = ServiceBridgeState {
-        shell_host: test_service_shell_host(),
-        startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
-        workbench: fallback_workbench_snapshot(&[]),
-        workbench_generation: 0,
-        workspace_snapshot: None,
-        hydrated_conversation_windows: BTreeMap::new(),
-        agent_runtime: None,
-        service_runtime: None,
-        webui_service_discovery: None,
-        controller_runtime: None,
-        luaskills_runtime: None,
-        cached_luaskills_catalog: None,
-        token_budget_runtime: None,
-        mcp_runtime: None,
-        cached_mcp_catalog: None,
-        live_context_budgets: BTreeMap::new(),
-        session_goal_summaries: BTreeMap::new(),
-        budget_limit_reported_goal_ids: BTreeSet::new(),
-        subagent_surface_detail_cache: BTreeMap::new(),
-        session_subagent_tasks: BTreeMap::from([(
-            parent_session_id,
-            BTreeMap::from([(
-                task_session_id,
-                SubagentTaskPanelState {
-                    task_id: task_session_id,
-                    public_task_id: String::from("image-worker"),
-                    parent_session_id,
-                    subagent_label: String::from("图片子代理"),
-                    description: Some(String::from("生成图片")),
-                    run_state: SubagentTaskRunState::Running,
-                    result_text: String::new(),
-                    conversation_state: None,
-                },
-            )]),
-        )]),
-        session_subagent_navigation_rounds: BTreeSet::from([parent_session_id]),
-        active_subagent_panel: None,
-        detached_subagent_task_listeners: BTreeSet::from([task_session_id]),
-        subagent_parent_turn_bindings: BTreeMap::new(),
-        subagent_completion_gate_ignored_tasks: BTreeSet::new(),
-        parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
-        active_stream_tasks: BTreeMap::new(),
-        session_runtime_kernels: BTreeMap::new(),
-        session_persist_versions: BTreeMap::new(),
-        session_transcript_persist_versions: BTreeMap::new(),
-        session_addon_persist_versions: BTreeMap::new(),
-    };
-    let workspace_snapshot = WorkspaceSnapshot {
-        task_projects: Vec::new(),
-        archived_task_projects: Vec::new(),
-        sessions: vec![SessionSummary::new(
-            parent_session_id,
-            Some(String::from("project-a")),
-            "父会话",
-            "",
-            SessionState::Completed,
-            0,
-            0,
-            "刚刚",
-        )],
-        archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::new(),
-        archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::from([(parent_session_id, SessionRunPhase::Ready)]),
-        expanded_task_projects: BTreeSet::new(),
-        selected_session: parent_session_id,
-        hydrated_session_ids: BTreeSet::new(),
-    };
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    let task_states = vec![SubagentTaskPanelState {
+        task_id: task_session_id,
+        public_task_id: String::from("image-worker"),
+        parent_session_id,
+        subagent_label: String::from("图片子代理"),
+        description: Some(String::from("生成图片")),
+        run_state: SubagentTaskRunState::Running,
+        result_text: String::new(),
+        conversation_state: None,
+    }];
+    cache_test_subagent_surface_detail_states(&mut guard, &task_states);
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        &task_states,
+    );
+    guard
+        .session_subagent_navigation_rounds
+        .insert(parent_session_id);
+    guard
+        .detached_subagent_task_listeners
+        .insert(task_session_id);
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .clone();
 
     let navigation = subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)
         .expect("running subagent navigation should stay visible");
@@ -557,37 +515,38 @@ fn terminal_listener_cleanup_emits_non_running_subagent_navigation_delta() {
         parent_session_id,
     )));
     {
-        let mut guard = state.lock().unwrap();
-        guard
-            .session_subagent_tasks
-            .entry(parent_session_id)
-            .or_default()
-            .insert(
-                task_session_id,
-                SubagentTaskPanelState {
-                    task_id: task_session_id,
-                    public_task_id: String::from("image-worker"),
-                    parent_session_id,
-                    subagent_label: String::from("图片子代理"),
-                    description: Some(String::from("生成图片")),
-                    run_state: SubagentTaskRunState::Running,
-                    result_text: String::from("图片生成完成"),
-                    conversation_state: Some(SessionConversationState {
-                        messages: vec![SessionConversationMessage {
-                            id: String::from("child-assistant-1"),
-                            payload: SessionConversationPayload::Assistant {
-                                text: String::from("图片生成完成"),
-                                reasoning: String::new(),
-                                provider_message_id: None,
-                                provider_message_state: None,
-                                usage: None,
-                                tool_calls: Vec::new(),
-                            },
-                        }],
-                        ..SessionConversationState::default()
-                    }),
-                },
-            );
+        let mut guard = state
+            .lock()
+            .expect("service state lock should be available for terminal cleanup setup");
+        let task_states = vec![SubagentTaskPanelState {
+            task_id: task_session_id,
+            public_task_id: String::from("image-worker"),
+            parent_session_id,
+            subagent_label: String::from("图片子代理"),
+            description: Some(String::from("生成图片")),
+            run_state: SubagentTaskRunState::Completed,
+            result_text: String::from("图片生成完成"),
+            conversation_state: Some(SessionConversationState {
+                messages: vec![SessionConversationMessage {
+                    id: String::from("child-assistant-1"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("图片生成完成"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                }],
+                ..SessionConversationState::default()
+            }),
+        }];
+        cache_test_subagent_surface_detail_states(&mut guard, &task_states);
+        seed_test_live_subagent_registry_from_panel_states(
+            &mut guard,
+            parent_session_id,
+            &task_states,
+        );
         guard
             .session_subagent_navigation_rounds
             .insert(parent_session_id);
@@ -605,7 +564,9 @@ fn terminal_listener_cleanup_emits_non_running_subagent_navigation_delta() {
     })]);
 
     {
-        let mut guard = state.lock().unwrap();
+        let mut guard = state
+            .lock()
+            .expect("service state lock should be available for listener cleanup");
         guard
             .detached_subagent_task_listeners
             .remove(&task_session_id);
@@ -675,23 +636,19 @@ fn child_runtime_tool_event_patch_gate_accepts_known_subagent_transcript() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut guard = test_service_state_with_parent_session(parent_session_id);
-    guard
-        .session_subagent_tasks
-        .entry(parent_session_id)
-        .or_default()
-        .insert(
-            task_session_id,
-            SubagentTaskPanelState {
-                task_id: task_session_id,
-                public_task_id: String::from("code-review"),
-                parent_session_id,
-                subagent_label: String::from("代码审核"),
-                description: Some(String::from("审核代码")),
-                run_state: SubagentTaskRunState::Running,
-                result_text: String::new(),
-                conversation_state: None,
-            },
-        );
+    cache_test_subagent_surface_detail_states(
+        &mut guard,
+        &[SubagentTaskPanelState {
+            task_id: task_session_id,
+            public_task_id: String::from("code-review"),
+            parent_session_id,
+            subagent_label: String::from("代码审核"),
+            description: Some(String::from("审核代码")),
+            run_state: SubagentTaskRunState::Running,
+            result_text: String::new(),
+            conversation_state: None,
+        }],
+    );
 
     assert!(workbench_should_emit_runtime_event_message_patch(
         &guard,
@@ -712,98 +669,46 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
     let parent_session_id = SessionId::new_v4();
     let first_task_session_id = SessionId::new_v4();
     let second_task_session_id = SessionId::new_v4();
-    let mut guard = ServiceBridgeState {
-        shell_host: test_service_shell_host(),
-        startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
-        workbench: fallback_workbench_snapshot(&[]),
-        workbench_generation: 0,
-        workspace_snapshot: None,
-        hydrated_conversation_windows: BTreeMap::new(),
-        agent_runtime: None,
-        service_runtime: None,
-        webui_service_discovery: None,
-        controller_runtime: None,
-        luaskills_runtime: None,
-        cached_luaskills_catalog: None,
-        token_budget_runtime: None,
-        mcp_runtime: None,
-        cached_mcp_catalog: None,
-        live_context_budgets: BTreeMap::new(),
-        session_goal_summaries: BTreeMap::new(),
-        budget_limit_reported_goal_ids: BTreeSet::new(),
-        subagent_surface_detail_cache: BTreeMap::new(),
-        session_subagent_tasks: BTreeMap::from([(
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    let mut task_states = vec![
+        SubagentTaskPanelState {
+            task_id: first_task_session_id,
+            public_task_id: String::from("image-worker-a"),
             parent_session_id,
-            BTreeMap::from([
-                (
-                    first_task_session_id,
-                    SubagentTaskPanelState {
-                        task_id: first_task_session_id,
-                        public_task_id: String::from("image-worker-a"),
-                        parent_session_id,
-                        subagent_label: String::from("图片子代理 A"),
-                        description: Some(String::from("生成第一张图片")),
-                        run_state: SubagentTaskRunState::Running,
-                        result_text: String::new(),
-                        conversation_state: None,
-                    },
-                ),
-                (
-                    second_task_session_id,
-                    SubagentTaskPanelState {
-                        task_id: second_task_session_id,
-                        public_task_id: String::from("image-worker-b"),
-                        parent_session_id,
-                        subagent_label: String::from("图片子代理 B"),
-                        description: Some(String::from("生成第二张图片")),
-                        run_state: SubagentTaskRunState::Running,
-                        result_text: String::new(),
-                        conversation_state: None,
-                    },
-                ),
-            ]),
-        )]),
-        session_subagent_navigation_rounds: BTreeSet::from([parent_session_id]),
-        active_subagent_panel: None,
-        detached_subagent_task_listeners: BTreeSet::from([
-            first_task_session_id,
-            second_task_session_id,
-        ]),
-        subagent_parent_turn_bindings: BTreeMap::new(),
-        subagent_completion_gate_ignored_tasks: BTreeSet::new(),
-        parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
-        active_stream_tasks: BTreeMap::new(),
-        session_runtime_kernels: BTreeMap::new(),
-        session_persist_versions: BTreeMap::new(),
-        session_transcript_persist_versions: BTreeMap::new(),
-        session_addon_persist_versions: BTreeMap::new(),
-    };
-    let workspace_snapshot = WorkspaceSnapshot {
-        task_projects: Vec::new(),
-        archived_task_projects: Vec::new(),
-        sessions: vec![SessionSummary::new(
+            subagent_label: String::from("图片子代理 A"),
+            description: Some(String::from("生成第一张图片")),
+            run_state: SubagentTaskRunState::Running,
+            result_text: String::new(),
+            conversation_state: None,
+        },
+        SubagentTaskPanelState {
+            task_id: second_task_session_id,
+            public_task_id: String::from("image-worker-b"),
             parent_session_id,
-            Some(String::from("project-a")),
-            "父会话",
-            "",
-            SessionState::Completed,
-            0,
-            0,
-            "刚刚",
-        )],
-        archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::new(),
-        archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::from([(parent_session_id, SessionRunPhase::Ready)]),
-        expanded_task_projects: BTreeSet::new(),
-        selected_session: parent_session_id,
-        hydrated_session_ids: BTreeSet::new(),
-    };
+            subagent_label: String::from("图片子代理 B"),
+            description: Some(String::from("生成第二张图片")),
+            run_state: SubagentTaskRunState::Running,
+            result_text: String::new(),
+            conversation_state: None,
+        },
+    ];
+    cache_test_subagent_surface_detail_states(&mut guard, &task_states);
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        &task_states,
+    );
+    guard
+        .session_subagent_navigation_rounds
+        .insert(parent_session_id);
+    guard
+        .detached_subagent_task_listeners
+        .extend([first_task_session_id, second_task_session_id]);
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .clone();
 
     let running_tasks = running_webui_subagent_task_states_for_tree_from_cache(
         &mut guard,
@@ -820,18 +725,19 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
         ConversationTurnCompletionStatus::AwaitingSubagents
     ));
 
-    for task_session_id in [first_task_session_id, second_task_session_id] {
-        let task_state = guard
-            .session_subagent_tasks
-            .get_mut(&parent_session_id)
-            .and_then(|tasks| tasks.get_mut(&task_session_id))
-            .expect("test subagent state should exist");
+    for task_state in &mut task_states {
         task_state.run_state = SubagentTaskRunState::Completed;
-        task_state.result_text = format!("任务 {task_session_id} 已完成");
+        task_state.result_text = format!("任务 {} 已完成", task_state.task_id);
         guard
             .detached_subagent_task_listeners
-            .remove(&task_session_id);
+            .remove(&task_state.task_id);
     }
+    cache_test_subagent_surface_detail_states(&mut guard, &task_states);
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        &task_states,
+    );
 
     let finished_tasks = running_webui_subagent_task_states_for_tree_from_cache(
         &mut guard,
@@ -864,7 +770,9 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
         parent_session_id,
     )));
     {
-        let mut guard = state.lock().unwrap();
+        let mut guard = state
+            .lock()
+            .expect("service state lock should be available for stale payload setup");
         guard
             .detached_subagent_task_listeners
             .insert(task_session_id);
@@ -893,13 +801,9 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
             .expect("delegate finished should ingest");
 
     assert!(consumed);
-    let guard = state.lock().unwrap();
-    let task_state = guard
-        .session_subagent_tasks
-        .get(&parent_session_id)
-        .and_then(|tasks| tasks.get(&task_session_id))
-        .expect("terminal task state should be cached");
-    assert_eq!(task_state.run_state, SubagentTaskRunState::Completed);
+    let guard = state
+        .lock()
+        .expect("service state lock should be available after stale payload ingest");
     assert!(
         !guard
             .detached_subagent_task_listeners
@@ -917,21 +821,14 @@ fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
     let mut guard = test_service_state_with_parent_session(parent_session_id);
     let closed_state = test_completed_subagent_panel_state(parent_session_id, closed_task_id);
     let retained_state = test_completed_subagent_panel_state(parent_session_id, retained_task_id);
-    guard.session_subagent_tasks.insert(
-        parent_session_id,
-        BTreeMap::from([
-            (closed_task_id, closed_state.clone()),
-            (retained_task_id, retained_state),
-        ]),
+    cache_test_subagent_surface_detail_states(
+        &mut guard,
+        &[closed_state.clone(), retained_state.clone()],
     );
-    guard.subagent_surface_detail_cache.insert(
-        closed_task_id,
-        WebuiSubagentSurfaceDetailCacheEntry {
-            parent_session_id,
-            task_state: closed_state,
-            messages: Vec::new(),
-            last_access_ms: current_unix_millis_value(),
-        },
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        &[retained_state],
     );
     guard
         .detached_subagent_task_listeners
@@ -946,16 +843,15 @@ fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
         &[closed_task_id]
     ));
 
-    let tasks = guard
-        .session_subagent_tasks
-        .get(&parent_session_id)
-        .expect("retained task bucket should remain");
-    assert!(!tasks.contains_key(&closed_task_id));
-    assert!(tasks.contains_key(&retained_task_id));
     assert!(
         !guard
             .subagent_surface_detail_cache
             .contains_key(&closed_task_id)
+    );
+    assert!(
+        guard
+            .subagent_surface_detail_cache
+            .contains_key(&retained_task_id)
     );
     assert!(
         !guard
@@ -994,24 +890,25 @@ fn final_subagent_completion_closes_parent_awaiting_hook_turn() {
     )));
     let runtime = test_agent_runtime_bridge();
     {
-        let mut guard = state.lock().unwrap();
-        guard
-            .session_subagent_tasks
-            .entry(parent_session_id)
-            .or_default()
-            .insert(
-                task_session_id,
-                SubagentTaskPanelState {
-                    task_id: task_session_id,
-                    public_task_id: String::from("review-worker"),
-                    parent_session_id,
-                    subagent_label: String::from("Review Worker"),
-                    description: Some(String::from("审核代码")),
-                    run_state: SubagentTaskRunState::Completed,
-                    result_text: String::from("审核完成"),
-                    conversation_state: None,
-                },
-            );
+        let mut guard = state
+            .lock()
+            .expect("service state lock should be available for awaiting hook setup");
+        let task_states = vec![SubagentTaskPanelState {
+            task_id: task_session_id,
+            public_task_id: String::from("review-worker"),
+            parent_session_id,
+            subagent_label: String::from("Review Worker"),
+            description: Some(String::from("审核代码")),
+            run_state: SubagentTaskRunState::Completed,
+            result_text: String::from("审核完成"),
+            conversation_state: None,
+        }];
+        cache_test_subagent_surface_detail_states(&mut guard, &task_states);
+        seed_test_live_subagent_registry_from_panel_states(
+            &mut guard,
+            parent_session_id,
+            &task_states,
+        );
         let workspace = guard
             .workspace_snapshot
             .as_mut()
@@ -1019,7 +916,7 @@ fn final_subagent_completion_closes_parent_awaiting_hook_turn() {
         let runtime_state = workspace
             .session_runtime_state
             .entry(parent_session_id)
-            .or_insert_with(SessionRuntimeStateEntry::default);
+            .or_default();
         runtime_state.last_safe_provider_request_count = Some(2);
         runtime_state
             .conversation_state
@@ -1037,7 +934,10 @@ fn final_subagent_completion_closes_parent_awaiting_hook_turn() {
             });
     }
     {
-        let mut hook_runtime = runtime.conversation_hook_runtime.lock().unwrap();
+        let mut hook_runtime = runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("conversation hook runtime lock should be available for setup");
         hook_runtime.record_queued_user_prompt(
             parent_session_id,
             "prompt-1",
@@ -1061,7 +961,7 @@ fn final_subagent_completion_closes_parent_awaiting_hook_turn() {
         !runtime
             .conversation_hook_runtime
             .lock()
-            .unwrap()
+            .expect("conversation hook runtime lock should be available after completion")
             .has_active_turn(parent_session_id)
     );
 }
@@ -1099,21 +999,21 @@ fn completion_gate_ignores_send_message_resumed_child_task() {
         guard
             .detached_subagent_task_listeners
             .insert(task_session_id);
-        guard.session_subagent_tasks.insert(
+        let task_states = vec![SubagentTaskPanelState {
+            task_id: task_session_id,
+            public_task_id: String::from("reviewer"),
             parent_session_id,
-            BTreeMap::from([(
-                task_session_id,
-                SubagentTaskPanelState {
-                    task_id: task_session_id,
-                    public_task_id: String::from("reviewer"),
-                    parent_session_id,
-                    subagent_label: String::from("Reviewer"),
-                    description: Some(String::from("Review code")),
-                    run_state: SubagentTaskRunState::Running,
-                    result_text: String::new(),
-                    conversation_state: None,
-                },
-            )]),
+            subagent_label: String::from("Reviewer"),
+            description: Some(String::from("Review code")),
+            run_state: SubagentTaskRunState::Running,
+            result_text: String::new(),
+            conversation_state: None,
+        }];
+        cache_test_subagent_surface_detail_states(&mut guard, &task_states);
+        seed_test_live_subagent_registry_from_panel_states(
+            &mut guard,
+            parent_session_id,
+            &task_states,
         );
     }
 

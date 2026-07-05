@@ -193,12 +193,11 @@ pub(super) async fn service_save_provider_enabled_models(
             .into_iter()
             .map(|model| model.id)
             .collect::<BTreeSet<_>>();
-        let next_ids = request
-            .enabled_model_ids
-            .into_iter()
-            .map(|model_id| model_id.trim().to_string())
-            .filter(|model_id| !model_id.is_empty() && catalog_ids.contains(model_id))
-            .collect::<Vec<_>>();
+        let next_ids = normalize_provider_enabled_model_ids_for_save(
+            &provider_id,
+            request.enabled_model_ids,
+            &catalog_ids,
+        )?;
         let entry = next_configuration
             .provider
             .get_mut(&provider_id)
@@ -314,6 +313,49 @@ fn reconcile_active_model_after_enabled_models_change(
     configuration.model = next_models
         .first()
         .map(|model| format!("{provider_id}/{}", model.id));
+}
+
+/// Normalizes one enabled-model save request and rejects non-empty model ids missing from the catalog.
+/// 归一化单次启用模型保存请求，并拒绝目录中不存在的非空模型标识。
+///
+/// # Parameters
+/// 参数
+/// `provider_id` identifies the provider being edited.
+/// `provider_id` 标识正在编辑的供应商。
+/// `requested_model_ids` contains the raw WebUI/RPC model identifiers.
+/// `requested_model_ids` 包含 WebUI/RPC 传入的原始模型标识。
+/// `catalog_ids` contains every model currently known for the provider.
+/// `catalog_ids` 包含当前供应商目录中已知的全部模型。
+///
+/// # Returns
+/// 返回值
+/// A stable deduplicated model list, or an error listing the rejected identifiers.
+/// 返回稳定去重后的模型列表；存在被拒绝标识时返回错误。
+pub(crate) fn normalize_provider_enabled_model_ids_for_save(
+    provider_id: &str,
+    requested_model_ids: Vec<String>,
+    catalog_ids: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    let mut accepted = BTreeSet::new();
+    let mut rejected = BTreeSet::new();
+    for model_id in requested_model_ids {
+        let normalized = model_id.trim().to_string();
+        if normalized.is_empty() {
+            continue;
+        }
+        if catalog_ids.contains(&normalized) {
+            accepted.insert(normalized);
+        } else {
+            rejected.insert(normalized);
+        }
+    }
+    if !rejected.is_empty() {
+        let rejected = rejected.into_iter().collect::<Vec<_>>().join("、");
+        return Err(format!(
+            "供应商 `{provider_id}` 的启用模型列表包含未知模型：{rejected}。"
+        ));
+    }
+    Ok(accepted.into_iter().collect())
 }
 
 /// Returns a legacy-compatible request key for one provider field.

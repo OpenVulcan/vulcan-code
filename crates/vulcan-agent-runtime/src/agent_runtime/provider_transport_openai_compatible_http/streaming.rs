@@ -300,10 +300,9 @@ pub(super) fn build_openai_compatible_chat_completions_endpoint(base_url: Option
     if let Some(base_url) = base_url
         .filter(|value| !value.trim().is_empty())
         .map(|value| value.trim().trim_end_matches('/'))
+        && base_url.ends_with("/chat/completions")
     {
-        if base_url.ends_with("/chat/completions") {
-            return base_url.to_string();
-        }
+        return base_url.to_string();
     }
 
     build_rest_endpoint(base_url, "https://api.openai.com/v1", "chat/completions")

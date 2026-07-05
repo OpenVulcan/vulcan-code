@@ -2,7 +2,8 @@
 //! 分段子任务会话存储布局测试。
 
 use super::*;
-use serde_json::json;
+use crate::TaskSessionMetadataInit;
+use serde_json::{Value, json};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_session_core::{SessionEffectiveConfig, SessionEventKind, SessionRequestedConfig};
@@ -83,19 +84,21 @@ fn segmented_store_round_trips_task_session_artifacts() {
     let task_session_id = SessionNodeId::new_v4();
     create_root_session_metadata(&root, root_session_id);
     let parent = ParentSessionRef::MainSession { root_session_id };
-    let mut effective_config = SessionEffectiveConfig::default();
-    effective_config.subagent_profile_id = Some("reviewer".to_string());
-    let mut metadata = TaskSessionMetadata::new(
+    let effective_config = SessionEffectiveConfig {
+        subagent_profile_id: Some("reviewer".to_string()),
+        ..Default::default()
+    };
+    let mut metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
         root_session_id,
         task_session_id,
-        parent.clone(),
-        "review-task",
-        "Review task",
-        SessionRequestedConfig::default(),
+        parent: parent.clone(),
+        public_task_id: String::from("review-task"),
+        display_title: String::from("Review task"),
+        requested_config: SessionRequestedConfig::default(),
         effective_config,
-        1,
-        200,
-    );
+        depth: 1,
+        timestamp_ms: 200,
+    });
     metadata.description = Some("Inspect persistence".to_string());
 
     store
@@ -200,10 +203,17 @@ fn segmented_store_round_trips_task_session_artifacts() {
         format!("task/{}/metadata.json", task_session_id)
     );
     assert_eq!(task_mirror["display_title"], "Review task");
+    assert_eq!(task_mirror["public_task_id"], "review-task");
+    assert_eq!(task_mirror["root_session_id"], root_session_id.to_string());
+    assert_eq!(
+        task_mirror["parent"],
+        serde_json::to_value(&parent).expect("serialize parent")
+    );
     assert_eq!(task_mirror["description"], "Inspect persistence");
     assert_eq!(task_mirror["subagent"]["profile_id"], "reviewer");
     assert_eq!(task_mirror["agent_kind"], "agent_md");
     assert_eq!(task_mirror["agent_profile"]["prompt_source"], "agent_md");
+    assert_eq!(task_mirror["status"], "running");
     assert_eq!(task_mirror["line_count"], 1);
     assert_eq!(
         task_mirror["active_segment"],
@@ -245,6 +255,240 @@ fn segmented_store_round_trips_task_session_artifacts() {
     assert_eq!(root_lines[1].payload["line_count"], 1);
 }
 
+/// Verifies saving child metadata refreshes the root task mirror without appending parent events.
+/// 验证保存子任务元数据会刷新根任务镜像，且不会追加父级事件。
+#[test]
+fn save_task_session_refreshes_root_task_mirror_without_parent_event() {
+    let root = test_root("save_task_session_refreshes_root_task_mirror_without_parent_event");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    let parent = ParentSessionRef::MainSession { root_session_id };
+    let mut metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent,
+        public_task_id: String::from("closable-task"),
+        display_title: String::from("Closable task"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 200,
+    });
+    store
+        .create_task_session(metadata.clone())
+        .expect("create task session");
+    let root_lines_before =
+        read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl")).expect("read root before");
+
+    metadata.status = TaskSessionStatus::Archived;
+    metadata.stop_reason = Some(String::from("close_agent"));
+    metadata.updated_at = 300;
+    store
+        .save_task_session(metadata)
+        .expect("save archived task session");
+
+    let root_metadata =
+        read_required_json::<Value>(&root.join(SEGMENTED_METADATA_FILE)).expect("root metadata");
+    let task_mirror = root_metadata["tasks"]
+        .as_array()
+        .and_then(|tasks| tasks.first())
+        .expect("task mirror");
+    let root_lines_after =
+        read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl")).expect("read root after");
+
+    assert_eq!(task_mirror["session_id"], task_session_id.to_string());
+    assert_eq!(task_mirror["status"], "archived");
+    assert_eq!(task_mirror["updated_at"], "300");
+    assert_eq!(root_lines_after.len(), root_lines_before.len());
+}
+
+/// Verifies root task mirrors restore child summaries without reading child metadata files.
+/// 验证根任务镜像能在不读取子元数据文件的情况下恢复子任务摘要。
+#[test]
+fn root_task_mirror_summaries_do_not_require_child_metadata_files() {
+    let root = test_root("root_task_mirror_summaries_do_not_require_child_metadata_files");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    let parent = ParentSessionRef::MainSession { root_session_id };
+    let mut metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent: parent.clone(),
+        public_task_id: String::from("review-task"),
+        display_title: String::from("Review task"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 100,
+    });
+    metadata.description = Some("Inspect persistence".to_string());
+
+    store
+        .create_task_session(metadata)
+        .expect("create task session");
+    let task_metadata_path = root
+        .join(SEGMENTED_TASK_DIR)
+        .join(task_session_id.to_string())
+        .join(SEGMENTED_METADATA_FILE);
+    std::fs::remove_file(task_metadata_path).expect("remove child metadata");
+
+    let mirrors = store
+        .load_task_session_mirror_summaries_by_parent()
+        .expect("load task mirrors");
+    let parent_mirrors = mirrors.get(&parent).expect("parent mirrors");
+
+    assert_eq!(parent_mirrors.len(), 1);
+    assert_eq!(parent_mirrors[0].task_session_id, task_session_id);
+    assert_eq!(parent_mirrors[0].public_task_id, "review-task");
+    assert_eq!(parent_mirrors[0].display_title, "Review task");
+}
+
+/// Verifies focused root-tree mirror loading ignores unrelated roots and includes nested children.
+/// 验证聚焦根树镜像读取会忽略无关根会话并包含嵌套子任务。
+#[test]
+fn focused_root_task_mirror_summaries_include_only_reachable_tree() {
+    let root = test_root("focused_root_task_mirror_summaries_include_only_reachable_tree");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let direct_task_session_id = SessionNodeId::new_v4();
+    let nested_task_session_id = SessionNodeId::new_v4();
+    let unrelated_root_session_id = SessionNodeId::new_v4();
+    let unrelated_task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    let root_parent = ParentSessionRef::MainSession { root_session_id };
+    let nested_parent = ParentSessionRef::TaskSession {
+        root_session_id,
+        parent_task_session_id: direct_task_session_id,
+    };
+    let unrelated_parent = ParentSessionRef::MainSession {
+        root_session_id: unrelated_root_session_id,
+    };
+    for (task_session_id, parent, task_root_session_id, title) in [
+        (
+            direct_task_session_id,
+            root_parent.clone(),
+            root_session_id,
+            "Direct task",
+        ),
+        (
+            nested_task_session_id,
+            nested_parent.clone(),
+            root_session_id,
+            "Nested task",
+        ),
+        (
+            unrelated_task_session_id,
+            unrelated_parent,
+            unrelated_root_session_id,
+            "Unrelated task",
+        ),
+    ] {
+        store
+            .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+                root_session_id: task_root_session_id,
+                task_session_id,
+                parent,
+                public_task_id: title.to_lowercase().replace(' ', "-"),
+                display_title: title.to_string(),
+                requested_config: SessionRequestedConfig::default(),
+                effective_config: SessionEffectiveConfig::default(),
+                depth: 1,
+                timestamp_ms: 100,
+            }))
+            .expect("create task session");
+    }
+
+    let mirrors = store
+        .load_task_session_mirror_summaries_by_parent_for_root_tree(root_session_id)
+        .expect("load focused mirrors");
+
+    assert_eq!(mirrors.len(), 2);
+    assert_eq!(
+        mirrors
+            .get(&root_parent)
+            .expect("root parent mirrors")
+            .iter()
+            .map(|mirror| mirror.task_session_id)
+            .collect::<Vec<_>>(),
+        vec![direct_task_session_id]
+    );
+    assert_eq!(
+        mirrors
+            .get(&nested_parent)
+            .expect("nested parent mirrors")
+            .iter()
+            .map(|mirror| mirror.task_session_id)
+            .collect::<Vec<_>>(),
+        vec![nested_task_session_id]
+    );
+}
+
+/// Verifies legacy root task mirrors backfill missing parent fields from root invocation events.
+/// 验证旧根任务镜像能从根调用事件补齐缺失的父级字段。
+#[test]
+fn legacy_root_task_mirror_backfills_parent_from_root_invocation_events() {
+    let root = test_root("legacy_root_task_mirror_backfills_parent_from_root_invocation_events");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    let parent = ParentSessionRef::MainSession { root_session_id };
+    let metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent: parent.clone(),
+        public_task_id: String::from("legacy-review-task"),
+        display_title: String::from("Legacy review task"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 100,
+    });
+
+    store
+        .create_task_session(metadata)
+        .expect("create task session");
+    let metadata_path = root.join(SEGMENTED_METADATA_FILE);
+    let mut root_metadata =
+        read_required_json::<Value>(&metadata_path).expect("read root metadata");
+    let task_mirror = root_metadata["tasks"]
+        .as_array_mut()
+        .and_then(|tasks| tasks.first_mut())
+        .expect("task mirror");
+    task_mirror
+        .as_object_mut()
+        .expect("task mirror object")
+        .remove("parent");
+    task_mirror
+        .as_object_mut()
+        .expect("task mirror object")
+        .remove("public_task_id");
+    task_mirror
+        .as_object_mut()
+        .expect("task mirror object")
+        .remove("root_session_id");
+    write_json_file(&metadata_path, &root_metadata).expect("write legacy root metadata");
+    let task_metadata_path = root
+        .join(SEGMENTED_TASK_DIR)
+        .join(task_session_id.to_string())
+        .join(SEGMENTED_METADATA_FILE);
+    std::fs::remove_file(task_metadata_path).expect("remove child metadata");
+
+    let mirrors = store
+        .load_task_session_mirror_summaries_by_parent()
+        .expect("load legacy task mirrors");
+    let parent_mirrors = mirrors.get(&parent).expect("parent mirrors");
+
+    assert_eq!(parent_mirrors.len(), 1);
+    assert_eq!(parent_mirrors[0].task_session_id, task_session_id);
+    assert_eq!(parent_mirrors[0].public_task_id, "legacy-review-task");
+    assert_eq!(parent_mirrors[0].root_session_id, root_session_id);
+}
+
 /// Verifies task metadata writes every required agent field without relying on read repair.
 /// 验证子任务元数据会直接写出所有必需代理字段，而不依赖读取修复。
 #[test]
@@ -255,19 +499,21 @@ fn task_metadata_write_includes_required_agent_fields() {
     let task_session_id = SessionNodeId::new_v4();
     create_root_session_metadata(&root, root_session_id);
     let parent = ParentSessionRef::MainSession { root_session_id };
-    let mut effective_config = SessionEffectiveConfig::default();
-    effective_config.subagent_profile_id = Some("reviewer".to_string());
-    let metadata = TaskSessionMetadata::new(
+    let effective_config = SessionEffectiveConfig {
+        subagent_profile_id: Some("reviewer".to_string()),
+        ..Default::default()
+    };
+    let metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
         root_session_id,
         task_session_id,
         parent,
-        "review-task",
-        "Review task",
-        SessionRequestedConfig::default(),
+        public_task_id: String::from("review-task"),
+        display_title: String::from("Review task"),
+        requested_config: SessionRequestedConfig::default(),
         effective_config,
-        1,
-        200,
-    );
+        depth: 1,
+        timestamp_ms: 200,
+    });
     store.create_task_session(metadata).expect("create task");
 
     let task_dir = root
@@ -299,17 +545,17 @@ fn nested_task_session_uses_flat_root_task_directory() {
 
     let parent_ref = ParentSessionRef::MainSession { root_session_id };
     store
-        .create_task_session(TaskSessionMetadata::new(
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
             root_session_id,
-            parent_task_id,
-            parent_ref,
-            "parent-task",
-            "Parent task",
-            SessionRequestedConfig::default(),
-            SessionEffectiveConfig::default(),
-            1,
-            200,
-        ))
+            task_session_id: parent_task_id,
+            parent: parent_ref,
+            public_task_id: String::from("parent-task"),
+            display_title: String::from("Parent task"),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 1,
+            timestamp_ms: 200,
+        }))
         .expect("create parent task");
 
     let child_parent = ParentSessionRef::TaskSession {
@@ -317,17 +563,17 @@ fn nested_task_session_uses_flat_root_task_directory() {
         parent_task_session_id: parent_task_id,
     };
     store
-        .create_task_session(TaskSessionMetadata::new(
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
             root_session_id,
-            child_task_id,
-            child_parent.clone(),
-            "child-task",
-            "Child task",
-            SessionRequestedConfig::default(),
-            SessionEffectiveConfig::default(),
-            2,
-            220,
-        ))
+            task_session_id: child_task_id,
+            parent: child_parent.clone(),
+            public_task_id: String::from("child-task"),
+            display_title: String::from("Child task"),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 2,
+            timestamp_ms: 220,
+        }))
         .expect("create child task");
 
     let flat_child_dir = root
@@ -378,6 +624,127 @@ fn nested_task_session_uses_flat_root_task_directory() {
     );
 }
 
+/// Verifies parent-grouped metadata loads direct and nested task sessions with one indexed shape.
+/// 验证按父级分组的元数据会以一份索引结构加载直属与嵌套子任务会话。
+#[test]
+fn load_task_session_metadata_by_parent_groups_direct_and_nested_children() {
+    let root = test_root("load_task_session_metadata_by_parent_groups_direct_and_nested_children");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let parent_task_id = SessionNodeId::new_v4();
+    let sibling_task_id = SessionNodeId::new_v4();
+    let child_task_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+
+    let direct_parent = ParentSessionRef::MainSession { root_session_id };
+    let nested_parent = ParentSessionRef::TaskSession {
+        root_session_id,
+        parent_task_session_id: parent_task_id,
+    };
+    for (task_session_id, parent, public_task_id) in [
+        (parent_task_id, direct_parent.clone(), "parent-task"),
+        (sibling_task_id, direct_parent.clone(), "sibling-task"),
+        (child_task_id, nested_parent.clone(), "child-task"),
+    ] {
+        store
+            .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+                root_session_id,
+                task_session_id,
+                parent,
+                public_task_id: public_task_id.to_string(),
+                display_title: public_task_id.to_string(),
+                requested_config: SessionRequestedConfig::default(),
+                effective_config: SessionEffectiveConfig::default(),
+                depth: 1,
+                timestamp_ms: 200,
+            }))
+            .expect("create grouped task metadata");
+    }
+
+    let metadata_by_parent = store
+        .load_task_session_metadata_by_parent()
+        .expect("load grouped metadata");
+    let mut expected_direct_ids = vec![parent_task_id, sibling_task_id];
+    expected_direct_ids.sort();
+
+    assert_eq!(
+        metadata_by_parent
+            .get(&direct_parent)
+            .expect("direct parent group")
+            .iter()
+            .map(|metadata| metadata.task_session_id)
+            .collect::<Vec<_>>(),
+        expected_direct_ids
+    );
+    assert_eq!(
+        metadata_by_parent
+            .get(&nested_parent)
+            .expect("nested parent group")
+            .iter()
+            .map(|metadata| metadata.task_session_id)
+            .collect::<Vec<_>>(),
+        vec![child_task_id]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies direct-parent metadata loading does not allocate an all-parent grouping table.
+/// 验证直属父级元数据加载不需要构建全父级分组表。
+#[test]
+fn load_task_session_metadata_for_parent_returns_only_direct_children() {
+    let root = test_root("load_task_session_metadata_for_parent_returns_only_direct_children");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let parent_task_id = SessionNodeId::new_v4();
+    let sibling_task_id = SessionNodeId::new_v4();
+    let child_task_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+
+    let direct_parent = ParentSessionRef::MainSession { root_session_id };
+    let nested_parent = ParentSessionRef::TaskSession {
+        root_session_id,
+        parent_task_session_id: parent_task_id,
+    };
+    for (task_session_id, parent, public_task_id) in [
+        (parent_task_id, direct_parent.clone(), "parent-task"),
+        (sibling_task_id, direct_parent.clone(), "sibling-task"),
+        (child_task_id, nested_parent.clone(), "child-task"),
+    ] {
+        store
+            .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+                root_session_id,
+                task_session_id,
+                parent,
+                public_task_id: public_task_id.to_string(),
+                display_title: public_task_id.to_string(),
+                requested_config: SessionRequestedConfig::default(),
+                effective_config: SessionEffectiveConfig::default(),
+                depth: 1,
+                timestamp_ms: 200,
+            }))
+            .expect("create parent-filtered task metadata");
+    }
+
+    let mut expected_direct_ids = vec![parent_task_id, sibling_task_id];
+    expected_direct_ids.sort();
+    let direct_ids = store
+        .load_task_session_metadata_for_parent(direct_parent)
+        .expect("load direct parent metadata")
+        .into_iter()
+        .map(|metadata| metadata.task_session_id)
+        .collect::<Vec<_>>();
+    let nested_ids = store
+        .load_task_session_metadata_for_parent(nested_parent)
+        .expect("load nested parent metadata")
+        .into_iter()
+        .map(|metadata| metadata.task_session_id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(direct_ids, expected_direct_ids);
+    assert_eq!(nested_ids, vec![child_task_id]);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies parent task links point at the child task's current active segment after rollover.
 /// 验证子任务滚动分段后父级任务关联会指向子任务当前活动分段。
 #[test]
@@ -388,17 +755,17 @@ fn parent_task_link_uses_current_child_active_segment_after_rollover() {
     let task_session_id = SessionNodeId::new_v4();
     create_root_session_metadata(&root, root_session_id);
     let parent = ParentSessionRef::MainSession { root_session_id };
-    let metadata = TaskSessionMetadata::new(
+    let metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
         root_session_id,
         task_session_id,
-        parent.clone(),
-        "long-task",
-        "Long task",
-        SessionRequestedConfig::default(),
-        SessionEffectiveConfig::default(),
-        1,
-        200,
-    );
+        parent: parent.clone(),
+        public_task_id: String::from("long-task"),
+        display_title: String::from("Long task"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 200,
+    });
 
     store
         .create_task_session(metadata)

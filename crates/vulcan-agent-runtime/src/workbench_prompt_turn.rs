@@ -425,11 +425,10 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
     runtime_state.ui_state.unread = false;
     if runtime_state.conversation_state.messages.is_empty()
         && runtime_state.conversation_state.records.is_empty()
+        && let Some(messages) = input.prior_session_messages
     {
-        if let Some(messages) = input.prior_session_messages {
-            runtime_state.conversation_state =
-                crate::conversation_protocol::conversation_state_from_session_messages(messages);
-        }
+        runtime_state.conversation_state =
+            crate::conversation_protocol::conversation_state_from_session_messages(messages);
     }
     let append_canonical_user_message =
         input.append_canonical_user_message && input.source.persists_canonical_user_message();

@@ -2,6 +2,7 @@
 //! WebUI 会话运行时内核辅助函数。
 
 use super::*;
+use std::collections::btree_map::Entry;
 
 /// Converts the local millisecond clock into the session-core timestamp domain.
 /// 将本地毫秒时钟转换到 session-core 使用的时间戳域。
@@ -32,16 +33,21 @@ pub(crate) fn session_runtime_kernel_mut(
     state: &mut ServiceBridgeState,
     session_id: SessionId,
 ) -> &mut SessionRuntimeKernel {
-    if !state.session_runtime_kernels.contains_key(&session_id) {
-        let restored_kernel = restored_webui_session_runtime_kernel(state, session_id);
-        state
-            .session_runtime_kernels
-            .insert(session_id, restored_kernel);
+    let restored_kernel = (!state.session_runtime_kernels.contains_key(&session_id))
+        .then(|| restored_webui_session_runtime_kernel(state, session_id));
+    match state.session_runtime_kernels.entry(session_id) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => {
+            let Some(restored_kernel) = restored_kernel else {
+                webui_trace(
+                    "session_kernel_entry_invariant_repaired",
+                    format!("session={session_id} missing live kernel after preflight hit"),
+                );
+                return entry.insert(SessionRuntimeKernel::new(SessionNodeId::from(session_id)));
+            };
+            entry.insert(restored_kernel)
+        }
     }
-    state
-        .session_runtime_kernels
-        .get_mut(&session_id)
-        .expect("session runtime kernel should exist after insertion")
 }
 
 /// Restores one session runtime kernel from persisted runtime state or creates an empty kernel.
@@ -562,6 +568,98 @@ pub(crate) fn webui_stream_event_matches_kernel_generation(
     kernel.generation() == expected_generation && !kernel.is_stopped()
 }
 
+/// Outcome returned after attempting to enqueue one subagent mailbox input.
+/// 尝试加入一条子代理 mailbox 输入后的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubagentMailboxEnqueueOutcome {
+    /// The input was accepted into the parent mailbox.
+    /// 输入已进入父级 mailbox。
+    Queued,
+    /// The same input was already queued or consumed by an earlier delivery path.
+    /// 相同输入已经由更早的投递路径入队或消费。
+    AlreadyPresentOrConsumed {
+        /// Stable mailbox input identifier that caused the idempotent skip.
+        /// 导致幂等跳过的稳定 mailbox 输入标识。
+        input_id: String,
+    },
+    /// The input was rejected because it cannot safely belong to this parent turn.
+    /// 输入被拒绝，因为它无法安全归属到当前父级回合。
+    Rejected(SubagentMailboxEnqueueRejection),
+}
+
+impl SubagentMailboxEnqueueOutcome {
+    /// Returns whether the input was newly queued.
+    /// 返回输入是否新进入队列。
+    #[cfg(test)]
+    pub(crate) fn is_queued(&self) -> bool {
+        matches!(self, Self::Queued)
+    }
+
+    /// Returns a stable short label for diagnostics and trace output.
+    /// 返回用于诊断和 trace 输出的稳定短标签。
+    pub(crate) fn trace_label(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::AlreadyPresentOrConsumed { .. } => "already_present_or_consumed",
+            Self::Rejected(rejection) => rejection.reason_code(),
+        }
+    }
+}
+
+/// Hard rejection reason for a subagent mailbox input.
+/// 子代理 mailbox 输入的硬拒绝原因。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubagentMailboxEnqueueRejection {
+    /// The task is bound to a different parent session.
+    /// 该任务绑定到了不同的父会话。
+    ParentMismatch {
+        /// Parent session captured when the child task was spawned.
+        /// 子任务创建时捕获到的父会话。
+        bound_parent_session_id: SessionId,
+    },
+    /// The captured parent generation is no longer open for delivery.
+    /// 捕获的父级代际已经不再接受投递。
+    GenerationClosed {
+        /// Parent generation captured when the child task was spawned.
+        /// 子任务创建时捕获的父级代际。
+        source_generation: u64,
+        /// Current parent runtime generation.
+        /// 当前父级运行时代际。
+        current_generation: u64,
+        /// Whether the current generation is explicitly stopped.
+        /// 当前代际是否已经显式停止。
+        stopped: bool,
+    },
+}
+
+impl SubagentMailboxEnqueueRejection {
+    /// Returns a stable machine-readable reason code.
+    /// 返回稳定的机器可读原因码。
+    pub(crate) fn reason_code(&self) -> &'static str {
+        match self {
+            Self::ParentMismatch { .. } => "parent_mismatch",
+            Self::GenerationClosed { .. } => "generation_closed",
+        }
+    }
+
+    /// Returns a compact human-readable diagnostic string.
+    /// 返回紧凑的人类可读诊断字符串。
+    pub(crate) fn diagnostic(&self) -> String {
+        match self {
+            Self::ParentMismatch {
+                bound_parent_session_id,
+            } => format!("parent_mismatch bound_parent={bound_parent_session_id}"),
+            Self::GenerationClosed {
+                source_generation,
+                current_generation,
+                stopped,
+            } => format!(
+                "generation_closed source_generation={source_generation} current_generation={current_generation} stopped={stopped}"
+            ),
+        }
+    }
+}
+
 /// Enqueues one subagent completion event into the parent session kernel mailbox.
 /// 将一条子代理完成事件加入父会话内核 mailbox。
 ///
@@ -578,14 +676,14 @@ pub(crate) fn webui_stream_event_matches_kernel_generation(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the mailbox accepted the event.
-/// mailbox 接受事件时返回 `true`。
+/// Structured enqueue outcome that distinguishes queued, idempotent skip, and hard rejection.
+/// 区分已入队、幂等跳过和硬拒绝的结构化入队结果。
 pub(crate) fn enqueue_webui_subagent_mailbox_input(
     state: &mut ServiceBridgeState,
     parent_session_id: SessionId,
     task_id: SessionId,
     metadata: &Value,
-) -> bool {
+) -> SubagentMailboxEnqueueOutcome {
     let timestamp_ms = current_unix_millis_u64();
     let binding = state.subagent_parent_turn_bindings.get(&task_id).cloned();
     if let Some(binding) = binding.as_ref()
@@ -598,7 +696,11 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
                 binding.parent_session_id
             ),
         );
-        return false;
+        return SubagentMailboxEnqueueOutcome::Rejected(
+            SubagentMailboxEnqueueRejection::ParentMismatch {
+                bound_parent_session_id: binding.parent_session_id,
+            },
+        );
     }
     let parent_is_waiting_for_subagents = state
         .parent_sessions_waiting_for_subagents
@@ -614,14 +716,30 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
     let parent_turn_id = binding
         .and_then(|binding| binding.parent_turn_id)
         .or_else(|| kernel.active_turn().map(|turn| turn.turn_id.clone()));
+    if source_generation != kernel.generation() || kernel.is_stopped() {
+        let rejection = SubagentMailboxEnqueueRejection::GenerationClosed {
+            source_generation,
+            current_generation: kernel.generation(),
+            stopped: kernel.is_stopped(),
+        };
+        webui_trace(
+            "subagent_mailbox_input_rejected_generation",
+            format!(
+                "parent={parent_session_id} task={task_id} {}",
+                rejection.diagnostic()
+            ),
+        );
+        return SubagentMailboxEnqueueOutcome::Rejected(rejection);
+    }
     let mailbox_event = metadata
         .get("payload")
         .and_then(|payload| payload.get("subagent_mailbox_event"))
         .cloned()
         .unwrap_or_else(|| metadata.clone());
     let parent_turn_id_for_payload = parent_turn_id.clone();
+    let input_id = format!("subagent-mailbox-{parent_session_id}-{task_id}");
     let mut input = TurnInput::new(
-        format!("subagent-mailbox-{parent_session_id}-{task_id}"),
+        input_id.clone(),
         SessionNodeId::from(parent_session_id),
         TurnInputKind::SubagentMessage,
         trigger_parent_turn,
@@ -640,11 +758,17 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
     }
     let accepted = kernel.enqueue_mailbox_input_for_generation(input, source_generation);
     sync_webui_session_runtime_kernel_to_workspace_state(state, parent_session_id);
+    let outcome = if accepted {
+        SubagentMailboxEnqueueOutcome::Queued
+    } else {
+        SubagentMailboxEnqueueOutcome::AlreadyPresentOrConsumed { input_id }
+    };
     webui_trace(
         "subagent_mailbox_input_enqueued",
         format!(
-            "parent={parent_session_id} task={task_id} accepted={accepted} generation={source_generation} trigger_parent_turn={trigger_parent_turn}"
+            "parent={parent_session_id} task={task_id} outcome={} generation={source_generation} trigger_parent_turn={trigger_parent_turn}",
+            outcome.trace_label()
         ),
     );
-    accepted
+    outcome
 }

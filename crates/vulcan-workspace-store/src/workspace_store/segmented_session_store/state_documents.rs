@@ -13,12 +13,11 @@ pub(in crate::workspace_store) fn write_state(
         .lock()
         .map_err(|error| format!("锁定分段 state.json 失败：{error}"))?;
     let mut next_state = state.clone();
-    if next_state.session_boundary_state.is_null() {
-        if let Some(existing_state) = read_state_unlocked(session_dir)? {
-            if !existing_state.session_boundary_state.is_null() {
-                next_state.session_boundary_state = existing_state.session_boundary_state;
-            }
-        }
+    if next_state.session_boundary_state.is_null()
+        && let Some(existing_state) = read_state_unlocked(session_dir)?
+        && !existing_state.session_boundary_state.is_null()
+    {
+        next_state.session_boundary_state = existing_state.session_boundary_state;
     }
     write_state_unlocked(session_dir, &next_state)
 }

@@ -106,14 +106,20 @@ where
                     tool_request_rejection_all_tools,
                     tool_request_rejection_tool_ids.clone(),
                 );
-                let task_backend_guard = task_runtime.install_backend(
+                let task_backend_guard = match task_runtime.install_backend(
                     session_id,
                     build_task_execution_handler(
                         Arc::clone(&task_runtime),
                         controller_config.clone(),
                         attempt_sender.clone(),
                     ),
-                );
+                ) {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        let _ = task_sender.send(Err(error));
+                        break;
+                    }
+                };
                 let tool_policy = AllowAllToolPolicy;
                 let mut unsafe_delta_seen = false;
                 let attempt_result = {

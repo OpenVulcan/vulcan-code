@@ -88,6 +88,63 @@ pub struct TaskSessionSummary {
     pub last_result_summary: Option<String>,
 }
 
+/// Compact task-session mirror loaded from the root main session metadata index.
+/// 从根主会话元数据索引加载的紧凑子代理会话镜像。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskSessionMirrorSummary {
+    /// Root main session identifier.
+    /// 根主会话标识符。
+    pub root_session_id: RootSessionId,
+    /// Task session identifier.
+    /// 子代理会话标识符。
+    pub task_session_id: TaskSessionId,
+    /// Public task identifier used by parent-facing orchestration tools.
+    /// 父级编排工具使用的公开任务标识符。
+    pub public_task_id: String,
+    /// Direct parent reference for this task session.
+    /// 当前子代理会话的直接父级引用。
+    pub parent: ParentSessionRef,
+    /// Display title for the task session.
+    /// 子代理会话显示标题。
+    pub display_title: String,
+    /// Optional human-readable task description.
+    /// 可选的面向人的任务描述。
+    pub description: Option<String>,
+    /// Subagent profile payload preserved for display and audit.
+    /// 为显示与审计保留的子代理配置载荷。
+    pub subagent: Value,
+    /// Current task-session status.
+    /// 当前子代理会话状态。
+    pub status: TaskSessionStatus,
+    /// Agent source kind recorded by the task metadata mirror.
+    /// 子任务元数据镜像记录的代理来源类型。
+    pub agent_kind: String,
+    /// Agent profile audit payload recorded by the task metadata mirror.
+    /// 子任务元数据镜像记录的代理画像审计载荷。
+    pub agent_profile: Value,
+    /// Task metadata file path relative to the root session directory.
+    /// 相对根会话目录的子任务元数据文件路径。
+    pub metadata_file: Option<String>,
+    /// Active task segment path relative to the root session directory.
+    /// 相对根会话目录的活动子任务分段路径。
+    pub active_segment: Option<String>,
+    /// Total child task JSONL line count recorded in the mirror.
+    /// 镜像中记录的子任务 JSONL 总行数。
+    pub line_count: u64,
+    /// Creation timestamp in milliseconds.
+    /// 创建时间毫秒值。
+    pub created_at: u64,
+    /// Last update timestamp in milliseconds.
+    /// 最近更新时间毫秒值。
+    pub updated_at: u64,
+    /// Optional last result summary.
+    /// 可选的最近结果摘要。
+    pub last_result_summary: Option<String>,
+    /// Optional last error message.
+    /// 可选的最近错误信息。
+    pub last_error: Option<String>,
+}
+
 /// Persistent metadata stored in the segmented task session metadata.json file.
 /// 保存在分段子代理会话 metadata.json 文件中的持久元数据。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,28 +209,61 @@ pub struct TaskSessionMetadata {
     pub last_error: Option<String>,
 }
 
+/// Initialization payload for a newly created task session metadata document.
+/// 新建子代理会话元数据文档的初始化载荷。
+pub struct TaskSessionMetadataInit {
+    /// Root conversation session identifier.
+    /// 根对话会话标识。
+    pub root_session_id: RootSessionId,
+    /// Durable task session identifier.
+    /// 持久化子任务会话标识。
+    pub task_session_id: TaskSessionId,
+    /// Parent session reference.
+    /// 父级会话引用。
+    pub parent: ParentSessionRef,
+    /// Public model-visible task identifier.
+    /// 模型可见的公开任务标识。
+    pub public_task_id: String,
+    /// User-facing display title.
+    /// 面向用户的显示标题。
+    pub display_title: String,
+    /// Requested configuration stored for audit.
+    /// 为审计保存的请求配置。
+    pub requested_config: SessionRequestedConfig,
+    /// Effective configuration stored for replay and recovery.
+    /// 为重放和恢复保存的有效配置。
+    pub effective_config: SessionEffectiveConfig,
+    /// Depth from root session.
+    /// 相对根会话的深度。
+    pub depth: u16,
+    /// Creation timestamp in milliseconds.
+    /// 创建时间毫秒值。
+    pub timestamp_ms: u64,
+}
+
 impl TaskSessionMetadata {
     /// Builds metadata for a newly created task session.
     /// 构建新建子代理会话的元数据。
-    pub fn new(
-        root_session_id: RootSessionId,
-        task_session_id: TaskSessionId,
-        parent: ParentSessionRef,
-        public_task_id: impl Into<String>,
-        display_title: impl Into<String>,
-        requested_config: SessionRequestedConfig,
-        effective_config: SessionEffectiveConfig,
-        depth: u16,
-        timestamp_ms: u64,
-    ) -> Self {
+    pub fn new(init: TaskSessionMetadataInit) -> Self {
+        let TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent,
+            public_task_id,
+            display_title,
+            requested_config,
+            effective_config,
+            depth,
+            timestamp_ms,
+        } = init;
         Self {
             schema_version: 1,
             root_session_id,
             task_session_id,
-            public_task_id: public_task_id.into(),
+            public_task_id,
             parent,
             depth,
-            display_title: display_title.into(),
+            display_title,
             description: None,
             subagent_profile_id: effective_config.subagent_profile_id.clone(),
             inherit_parent_config: effective_config.inherit_parent_config,

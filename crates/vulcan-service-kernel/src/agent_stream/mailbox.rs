@@ -106,15 +106,15 @@ pub(crate) fn append_webui_mailbox_intervention_messages(
     let mut appended = 0usize;
     for input in inputs {
         let message = webui_agent_message_from_turn_input(session_id, &input);
-        controller.append_agent_message(
-            message.message_type,
-            message.task_name,
-            message.sender,
-            message.recipient,
-            message.payload,
-            message.trigger_turn,
-            message.metadata,
-        );
+        controller.append_agent_message(vulcan_core::controller::AgentMessageAppendRequest {
+            message_type: message.message_type,
+            task_name: message.task_name,
+            sender: message.sender,
+            recipient: message.recipient,
+            payload: message.payload,
+            trigger_turn: message.trigger_turn,
+            metadata: message.metadata,
+        });
         appended = appended.saturating_add(1);
     }
     sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);

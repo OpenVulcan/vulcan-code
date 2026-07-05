@@ -8,8 +8,10 @@ use super::*;
 #[test]
 fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     let session_id = SessionId::new_v4();
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.last_safe_provider_request_count = Some(2);
+    let mut runtime_state = SessionRuntimeStateEntry {
+        last_safe_provider_request_count: Some(2),
+        ..SessionRuntimeStateEntry::default()
+    };
     let user_entry =
         SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "运行一个长任务")
             .with_runtime_metadata("user-1", "1000");
@@ -56,8 +58,8 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let did_stop =
-        stop_webui_session_work(&mut workspace_snapshot, session_id, true, true).unwrap();
+    let did_stop = stop_webui_session_work(&mut workspace_snapshot, session_id, true, true)
+        .expect("active stop should append stopped projection");
 
     assert!(did_stop);
     assert_eq!(
@@ -90,8 +92,8 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     assert!(turn_stats.body.contains("Provider 调用：2"));
     let stopped_message_count = messages.len();
 
-    let did_stop_again =
-        stop_webui_session_work(&mut workspace_snapshot, session_id, false, false).unwrap();
+    let did_stop_again = stop_webui_session_work(&mut workspace_snapshot, session_id, false, false)
+        .expect("repeated stop should remain idempotent");
 
     assert!(!did_stop_again);
     let messages_after_second_stop = workspace_snapshot
@@ -136,8 +138,8 @@ fn webui_stop_session_work_uses_kernel_active_state_without_stream_handle() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let did_stop =
-        stop_webui_session_work(&mut workspace_snapshot, session_id, true, false).unwrap();
+    let did_stop = stop_webui_session_work(&mut workspace_snapshot, session_id, true, false)
+        .expect("kernel-active stop should append stopped projection");
 
     assert!(did_stop);
     assert_eq!(
@@ -248,7 +250,7 @@ fn task_mirror_gate_ignores_non_task_tool_rows() {
         "tool_name": "shell_command",
         "display_state": "completed"
     }));
-    let messages = vec![message];
+    let messages = [message];
 
     assert!(!surface_contains_task_session_tool_card(
         messages.iter(),
@@ -260,7 +262,7 @@ fn task_mirror_gate_ignores_non_task_tool_rows() {
 /// 验证 task-session 工具行会通过持久化镜像修复门禁。
 #[test]
 fn task_mirror_gate_accepts_task_session_tool_rows() {
-    let messages = vec![test_spawn_agent_tool_message(
+    let messages = [test_spawn_agent_tool_message(
         SessionId::new_v4(),
         "running",
         SessionMessageRecordKind::ToolCallOutput,

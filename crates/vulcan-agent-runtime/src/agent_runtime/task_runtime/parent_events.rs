@@ -189,6 +189,33 @@ pub(super) fn task_execution_error_is_stopped(error: &str) -> bool {
         || normalized.contains("stopped")
 }
 
+/// Prefix marking a child-task backend error that happened before a task session actually started.
+/// 标记子任务后端错误发生在任务会话真正启动前的前缀。
+const TASK_EXECUTION_PRESTART_CANCELLED_PREFIX: &str = "[task-prestart-cancelled]";
+
+/// Builds a pre-start cancellation error for a child task whose parent live stream is gone.
+/// 为父级实时流已经消失的子任务构建启动前取消错误。
+pub(super) fn task_start_parent_stream_closed_error(public_task_id: &str) -> String {
+    format!(
+        "{TASK_EXECUTION_PRESTART_CANCELLED_PREFIX} Task `{public_task_id}` cannot start because the parent live stream closed before DelegateStarted could be delivered."
+    )
+}
+
+/// Returns whether one backend error represents a pre-start cancellation that must not be persisted as a failed child agent.
+/// 返回某条后端错误是否表示不应持久化为失败子代理的启动前取消。
+pub(super) fn task_execution_error_is_prestart_cancelled(error: &str) -> bool {
+    error.starts_with(TASK_EXECUTION_PRESTART_CANCELLED_PREFIX)
+}
+
+/// Removes the internal pre-start cancellation marker from a backend error before surfacing it.
+/// 在向外暴露后端错误前移除内部启动前取消标记。
+pub(super) fn task_execution_visible_error(error: &str) -> &str {
+    error
+        .strip_prefix(TASK_EXECUTION_PRESTART_CANCELLED_PREFIX)
+        .map(str::trim_start)
+        .unwrap_or(error)
+}
+
 /// Builds one host-only payload for task-session UI metadata without leaking large child snapshots into the model-visible tool result.
 /// 构建一份仅供宿主界面使用的任务会话载荷，避免把庞大的子会话快照泄漏到模型可见工具结果中。
 pub(super) fn build_task_host_payload(

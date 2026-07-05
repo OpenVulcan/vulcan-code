@@ -91,6 +91,10 @@ pub struct SessionSummary {
 impl SessionSummary {
     /// Creates a new session summary with explicit metadata.
     /// 使用明确元数据创建新的会话摘要。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The constructor mirrors the persisted session summary shape used by seed and store callers."
+    )]
     pub fn new(
         id: impl Into<SessionId>,
         project_id: Option<String>,

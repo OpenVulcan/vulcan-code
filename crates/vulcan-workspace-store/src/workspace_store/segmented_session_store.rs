@@ -264,17 +264,42 @@ pub(super) fn find_segmented_session_directory(
     Ok(None)
 }
 
-/// Finds one segmented session directory for task-session store registration.
-/// 查找一个用于注册子任务会话存储的分段会话目录。
-pub fn find_segmented_session_directory_for_task_store(
+/// Finds an existing segmented session directory by its deterministic project/created-at/session locator.
+/// 通过确定性的项目、创建时间与会话标识定位既有分段会话目录。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the application data root that owns active and archived session roots.
+/// `data_root` 是拥有活动与归档会话根目录的应用数据根。
+/// `project_tag` is the persisted project scope.
+/// `project_tag` 是持久化项目作用域。
+/// `created_at` is the raw Unix-milliseconds creation timestamp used to derive the directory date.
+/// `created_at` 是用于推导目录日期的原始 Unix 毫秒创建时间戳。
+/// `session_id` is the stable session identifier.
+/// `session_id` 是稳定会话标识。
+///
+/// # Returns
+/// 返回值
+/// The active or archived deterministic path when it exists; otherwise `None`.
+/// 若活动或归档确定路径存在则返回该路径，否则返回 `None`。
+pub fn find_segmented_session_directory_for_task_store_created_at(
     data_root: &Path,
     project_tag: &str,
+    created_at: &str,
     session_id: &str,
-) -> Result<Option<PathBuf>, String> {
-    match find_segmented_session_directory(data_root, false, project_tag, session_id)? {
-        Some(session_dir) => Ok(Some(session_dir)),
-        None => find_segmented_session_directory(data_root, true, project_tag, session_id),
+) -> Option<PathBuf> {
+    if created_at.trim().is_empty() {
+        return None;
     }
+    let created_date = super::segmented_session_date_from_unix_millis_text(created_at);
+    let active_dir =
+        segmented_session_directory(data_root, false, project_tag, &created_date, session_id);
+    if active_dir.is_dir() {
+        return Some(active_dir);
+    }
+    let archived_dir =
+        segmented_session_directory(data_root, true, project_tag, &created_date, session_id);
+    archived_dir.is_dir().then_some(archived_dir)
 }
 
 /// Lists active and archived segmented sessions from text metadata.

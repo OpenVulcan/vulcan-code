@@ -386,15 +386,15 @@ fn append_agent_message_keeps_transcript_record_hidden() {
     let mut controller =
         VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
 
-    controller.append_agent_message(
-        "FINAL_ANSWER",
-        "code-review",
-        "code-review",
-        "parent",
-        "review complete",
-        true,
-        Some(json!({ "source": "test" })),
-    );
+    controller.append_agent_message(AgentMessageAppendRequest {
+        message_type: String::from("FINAL_ANSWER"),
+        task_name: String::from("code-review"),
+        sender: String::from("code-review"),
+        recipient: String::from("parent"),
+        payload: String::from("review complete"),
+        trigger_turn: true,
+        metadata: Some(json!({ "source": "test" })),
+    });
 
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.messages.len(), 1);

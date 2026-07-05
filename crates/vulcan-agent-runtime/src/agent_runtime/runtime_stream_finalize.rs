@@ -8,7 +8,9 @@ use crate::agent_runtime::provider_stream_projection::{
     normalize_assistant_output, normalize_optional_stream_output,
 };
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
-use crate::context_budget::build_request_context_compaction_budget_snapshot_with_estimator;
+use crate::context_budget::{
+    RequestContextCompactionBudgetSnapshotInput, build_request_context_compaction_budget_snapshot,
+};
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
@@ -35,18 +37,18 @@ pub(crate) fn apply_latest_request_snapshot(
         .context_budget
         .as_ref()
         .and_then(|budget| budget.observed_usage.as_ref());
-    preparation.context_budget = Some(
-        build_request_context_compaction_budget_snapshot_with_estimator(
-            &preparation.model_blueprint.provider_id,
-            &preparation.model_blueprint.model_id,
-            preparation.model_blueprint.api_family(),
-            &preparation.model_blueprint.capabilities,
-            &preparation.model_blueprint.reasoning,
+    preparation.context_budget = Some(build_request_context_compaction_budget_snapshot(
+        RequestContextCompactionBudgetSnapshotInput {
+            provider_id: &preparation.model_blueprint.provider_id,
+            model_id: &preparation.model_blueprint.model_id,
+            api_family: preparation.model_blueprint.api_family(),
+            capabilities: &preparation.model_blueprint.capabilities,
+            reasoning: &preparation.model_blueprint.reasoning,
             request_snapshot,
             observed_usage,
-            token_estimator,
-        ),
-    );
+            estimator: token_estimator,
+        },
+    ));
     let context_assembly = build_provider_request_context_assembly(request_snapshot);
     preparation.context_baseline = Some(ContextBaseline::from_assembly(&context_assembly));
     preparation.context_assembly = Some(context_assembly);

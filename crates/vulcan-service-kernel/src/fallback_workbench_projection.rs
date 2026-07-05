@@ -116,33 +116,6 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
     }
 }
 
-/// Appends retained hydrated conversation bodies that are not already present in one WebUI snapshot.
-/// 追加尚未出现在 WebUI 快照中的已保留水合会话正文。
-pub(crate) fn append_hydrated_workspace_messages(
-    messages: &mut Vec<ConversationMessage>,
-    workspace: &WorkspaceSnapshot,
-) {
-    let mut projected_conversation_ids = messages
-        .iter()
-        .map(|message| message.conversation_id.as_str().to_string())
-        .collect::<BTreeSet<_>>();
-    for session_id in &workspace.hydrated_session_ids {
-        let conversation_id = session_id.to_string();
-        if projected_conversation_ids.contains(&conversation_id) {
-            continue;
-        }
-        let Some(session_messages) = workspace.session_messages.get(session_id) else {
-            continue;
-        };
-        messages.extend(conversation_messages_from_session(
-            &conversation_id,
-            session_messages,
-            false,
-        ));
-        projected_conversation_ids.insert(conversation_id);
-    }
-}
-
 /// Creates feature areas matching the WebUI navigation surface.
 /// 创建与 WebUI 导航面相匹配的功能区域。
 pub(crate) fn feature_areas() -> Vec<FeatureAreaSummary> {

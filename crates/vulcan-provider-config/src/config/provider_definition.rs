@@ -375,7 +375,7 @@ impl SupportedProviderDefinition {
                     self.base_url
                         .template
                         .clone()
-                        .map(|template| template.replace('{', "").replace('}', ""))
+                        .map(|template| template.replace(['{', '}'], ""))
                 })
                 .unwrap_or_else(|| ProviderFieldKey::BaseUrl.placeholder().to_string()),
             _ => key.placeholder().to_string(),

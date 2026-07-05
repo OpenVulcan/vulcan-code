@@ -19,7 +19,8 @@ use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_driver_loop::drive_runtime_stream_provider_loop;
 use crate::agent_runtime::runtime_stream_launch_payload::build_runtime_stream_launch_payload;
 use crate::agent_runtime::tool_runtime_bridge::{
-    attach_runtime_event_projection_barrier, wait_runtime_event_projection_barrier,
+    attach_runtime_event_projection_barrier, cancel_runtime_event_projection_barrier,
+    wait_runtime_event_projection_barrier,
 };
 use crate::conversation_protocol::SessionConversationState;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;

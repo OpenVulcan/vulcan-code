@@ -106,6 +106,52 @@ impl TaskRuntime {
             .map(|registry| registry.clone())
     }
 
+    /// Seeds one debug-only TaskRuntime resident subagent entry for service-layer tests.
+    /// 为服务层测试播种一条仅调试构建可用的 TaskRuntime 常驻子代理条目。
+    #[cfg(debug_assertions)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn seed_debug_subagent_registry_entry(
+        &self,
+        root_session_id: SessionId,
+        parent_session_id: SessionId,
+        task_id: SessionId,
+        public_task_id: String,
+        display_title: String,
+        description: Option<String>,
+        subagent: Option<String>,
+        status: TaskSessionStatus,
+        result_summary: Option<String>,
+    ) -> Result<(), String> {
+        let prompt = result_summary.clone().unwrap_or_else(|| display_title.clone());
+        let mut record = build_task_session_record(
+            task_id,
+            public_task_id,
+            root_session_id,
+            (parent_session_id != root_session_id).then_some(parent_session_id),
+            if parent_session_id == root_session_id { 1 } else { 2 },
+            description,
+            subagent,
+            TaskInvocationConfig::main(prompt.clone()),
+            display_title,
+            None,
+            CoreConversationSnapshot::default(),
+            prompt,
+            status_name_for_task_session_status(status).to_string(),
+        );
+        record.last_result_text = result_summary.unwrap_or_default();
+        self.sessions
+            .write()
+            .map_err(|_| {
+                String::from(
+                    "The task-session registry is locked and cannot seed debug subagent state.",
+                )
+            })?
+            .insert(task_id, record.clone());
+        let registry_summary = (!record.last_result_text.trim().is_empty())
+            .then_some(record.last_result_text.as_str());
+        self.upsert_subagent_registry_entry(&record, status, registry_summary)
+    }
+
     /// Replaces the merged subagent catalog used by future spawn_agent calls.
     /// 替换后续 spawn_agent 调用使用的合并子代理目录。
     ///
@@ -221,21 +267,67 @@ impl TaskRuntime {
         Ok(())
     }
 
+    /// Ensures the task-session store root exists without invalidating an unchanged restore marker.
+    /// 确保任务会话存储根目录存在，并且在目录未变化时不使已恢复标记失效。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `root_session_id` is the root conversation session id that owns the subagent task store.
+    /// `root_session_id` 是拥有子代理任务存储的根对话会话标识。
+    /// `root_session_dir` is the filesystem directory that stores segmented task-session artifacts.
+    /// `root_session_dir` 是保存分段任务会话产物的文件系统目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` when the root is registered or already matches the requested directory.
+    /// 当根目录已注册或已经与请求目录一致时返回 `Ok(())`。
+    pub fn ensure_task_session_store_root(
+        &self,
+        root_session_id: SessionId,
+        root_session_dir: PathBuf,
+    ) -> Result<(), String> {
+        let root_changed = {
+            let mut roots = self.task_session_store_roots.write().map_err(|_| {
+                String::from("The task-session store root registry is locked and cannot update.")
+            })?;
+            match roots.get(&root_session_id) {
+                Some(existing_root) if existing_root == &root_session_dir => false,
+                _ => {
+                    roots.insert(root_session_id, root_session_dir);
+                    true
+                }
+            }
+        };
+        if root_changed {
+            self.restored_task_session_registry_roots
+                .write()
+                .map_err(|_| {
+                    String::from(
+                        "The restored task-session registry marker is locked and cannot update.",
+                    )
+                })?
+                .remove(&root_session_id);
+        }
+        Ok(())
+    }
+
     /// Installs one backend handler for the given controller session and returns a guard that unregisters it on drop.
     /// 为给定控制器会话安装一个后端处理器，并返回一个在 Drop 时自动注销它的守卫。
     pub fn install_backend(
         self: &Arc<Self>,
         session_id: SessionId,
         handler: TaskExecutionHandler,
-    ) -> TaskBackendGuard {
+    ) -> Result<TaskBackendGuard, String> {
         self.backends
             .write()
-            .expect("task backend registry lock")
+            .map_err(|_| {
+                String::from("The task backend registry is locked and cannot install a backend.")
+            })?
             .insert(session_id, handler);
-        TaskBackendGuard {
+        Ok(TaskBackendGuard {
             runtime: Arc::clone(self),
             session_id,
-        }
+        })
     }
 
     /// Installs one shared execution context for the given controller session and returns a guard that unregisters it on drop.
@@ -244,15 +336,19 @@ impl TaskRuntime {
         self: &Arc<Self>,
         session_id: SessionId,
         context: TaskExecutionRuntimeContext,
-    ) -> TaskExecutionRuntimeContextGuard {
+    ) -> Result<TaskExecutionRuntimeContextGuard, String> {
         self.execution_contexts
             .write()
-            .expect("task execution context registry lock")
+            .map_err(|_| {
+                String::from(
+                    "The task execution context registry is locked and cannot install context.",
+                )
+            })?
             .insert(session_id, context);
-        TaskExecutionRuntimeContextGuard {
+        Ok(TaskExecutionRuntimeContextGuard {
             runtime: Arc::clone(self),
             session_id,
-        }
+        })
     }
 
     /// Returns one shared execution context for the given controller session when the normal runtime bridge registered it.
@@ -261,19 +357,24 @@ impl TaskRuntime {
         &self,
         session_id: SessionId,
     ) -> Option<TaskExecutionRuntimeContext> {
-        self.execution_contexts
-            .read()
-            .expect("task execution context registry lock")
-            .get(&session_id)
-            .cloned()
+        let Ok(execution_contexts) = self.execution_contexts.read() else {
+            eprintln!(
+                "Task execution context registry is locked; context lookup for session {session_id} was skipped."
+            );
+            return None;
+        };
+        execution_contexts.get(&session_id).cloned()
     }
 
     /// Removes one shared execution context from the registry.
     /// 从注册表中移除一份共享执行上下文。
     pub(super) fn remove_execution_context(&self, session_id: SessionId) {
-        self.execution_contexts
-            .write()
-            .expect("task execution context registry lock")
-            .remove(&session_id);
+        let Ok(mut execution_contexts) = self.execution_contexts.write() else {
+            eprintln!(
+                "Task execution context registry is locked; context removal for session {session_id} was skipped."
+            );
+            return;
+        };
+        execution_contexts.remove(&session_id);
     }
 }

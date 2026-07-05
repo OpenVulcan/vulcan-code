@@ -142,20 +142,20 @@ pub(crate) fn build_terminal_session_host_payload(
         "screen_text": screen_text,
         "controls_hint": terminal_controls_hint(output_mode),
     });
-    if let Some(transaction) = transaction {
-        if let Some(payload_object) = payload.as_object_mut() {
-            payload_object.insert(
-                String::from("transaction"),
-                json!({
-                    "id": transaction.id,
-                    "command": transaction.command,
-                    "exit_code": transaction.exit_code,
-                    "status": transaction.status,
-                    "started_seq": transaction.started_seq,
-                    "ended_seq": transaction.ended_seq,
-                }),
-            );
-        }
+    if let Some(transaction) = transaction
+        && let Some(payload_object) = payload.as_object_mut()
+    {
+        payload_object.insert(
+            String::from("transaction"),
+            json!({
+                "id": transaction.id,
+                "command": transaction.command,
+                "exit_code": transaction.exit_code,
+                "status": transaction.status,
+                "started_seq": transaction.started_seq,
+                "ended_seq": transaction.ended_seq,
+            }),
+        );
     }
     if let (Some(payload_object), Value::Object(extra_object)) =
         (payload.as_object_mut(), extra_fields)

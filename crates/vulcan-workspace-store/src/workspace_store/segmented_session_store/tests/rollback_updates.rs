@@ -463,8 +463,10 @@ fn append_after_rollback_ignores_removed_pre_rollback_messages() {
 #[test]
 fn display_maintenance_rewrites_bloated_rollback_segments_with_backup() {
     let root = test_root("display_maintenance_rewrites_bloated_rollback_segments_with_backup");
-    let mut policy = SegmentPolicy::default();
-    policy.max_bytes = 700;
+    let policy = SegmentPolicy {
+        max_bytes: 700,
+        ..Default::default()
+    };
     let session_dir =
         create_segmented_session(&root, test_session_request(policy)).expect("create session");
     let mut messages = vec![

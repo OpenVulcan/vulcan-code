@@ -290,11 +290,10 @@ pub(crate) fn workbench_with_live_pending_question(
     guard: &ServiceBridgeState,
 ) -> WorkbenchSnapshot {
     let mut workbench = guard.workbench.clone();
-    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() {
-        workbench.hydrated_conversation_windows =
-            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
-        append_hydrated_workspace_messages(&mut workbench.messages, workspace_snapshot);
-    }
+    workbench.hydrated_conversation_windows = hydrated_conversation_window_summaries(
+        &guard.hydrated_conversation_windows,
+        &guard.webui_preloaded_unclosed_subagent_roots,
+    );
     workbench.pending_questions =
         pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
     workbench.pending_question =

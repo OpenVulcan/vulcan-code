@@ -1,18 +1,15 @@
 //! Workbench surface and subagent navigation projection helpers.
 //! 工作台界面与子代理导航投影辅助逻辑。
 
-use std::collections::{BTreeSet, VecDeque};
-
 use super::{
     ServiceBridgeState, conversation_state_to_session_messages,
     display_session_messages_from_workspace, filter_display_session_messages,
-    apply_webui_unclosed_subagent_metadata_preload, load_webui_unclosed_subagent_metadata_preload,
-    normalize_webui_subagent_task_state,
     select_subagent_navigation_panel_states, subagent_navigation_surface_is_visible,
     subagent_navigation_task_label, subagent_task_panel_is_openable,
-    subagent_task_panel_state_has_recoverable_conversation, webui_subagent_task_state_by_task_id,
+    subagent_task_panel_state_has_recoverable_conversation, webui_trace,
 };
 use vulcan_service_api::{SubagentNavigationSnapshot, SubagentTaskSummary};
+use vulcan_session_core::{SubagentRegistryEntry, SubagentStatus};
 use vulcan_workbench_model::{
     SessionId, SessionMessageEntry, SubagentTaskPanelState, SubagentTaskRunState,
 };
@@ -28,35 +25,28 @@ pub(super) fn active_surface_session_id_from_state(
     let has_visible_round = guard
         .session_subagent_navigation_rounds
         .contains(&root_session_id);
-    let has_active_panel = guard.active_subagent_panel.is_some_and(|selection| {
-        cached_subagent_tree_contains_task(guard, root_session_id, selection.task_id)
+    let normalized_states =
+        authoritative_subagent_tree_states_from_registry(guard, root_session_id);
+    let active_panel_belongs_to_root = guard.active_subagent_panel.is_some_and(|selection| {
+        normalized_states
+            .iter()
+            .any(|state| state.task_id == selection.task_id)
     });
-    if guard.active_subagent_panel.is_some() && !has_active_panel {
+    if guard.active_subagent_panel.is_some() && !active_panel_belongs_to_root {
         guard.active_subagent_panel = None;
     }
-    if !has_visible_round && !has_active_panel {
+    if !has_visible_round && !active_panel_belongs_to_root {
         return root_session_id;
     }
     if let Some(selection) = guard.active_subagent_panel
-        && cached_subagent_tree_contains_task(guard, root_session_id, selection.task_id)
-        && let Some(state) = webui_subagent_task_state_by_task_id(guard, selection.task_id)
+        && active_panel_belongs_to_root
+        && let Some(normalized) = normalized_states
+            .iter()
+            .find(|state| state.task_id == selection.task_id)
     {
-        let task_runtime = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| &runtime.task_runtime);
-        let has_live_listener = guard
-            .detached_subagent_task_listeners
-            .contains(&state.task_id);
-        let normalized = normalize_webui_subagent_task_state(
-            Some(workspace_snapshot),
-            state,
-            task_runtime,
-            has_live_listener,
-        );
         if subagent_task_panel_is_openable(
-            &normalized,
-            webui_subagent_panel_has_recoverable_detail(workspace_snapshot, &normalized),
+            normalized,
+            webui_subagent_panel_has_recoverable_detail(workspace_snapshot, normalized),
         ) {
             return selection.task_id;
         }
@@ -80,7 +70,7 @@ pub(super) fn active_surface_messages_from_workspace_and_state(
         return messages;
     }
     if active_session_id != workspace_snapshot.selected_session
-        && let Some(state) = webui_subagent_task_state_by_task_id(guard, active_session_id)
+        && let Some(state) = webui_subagent_detail_state_by_task_id(guard, active_session_id)
         && let Some(conversation_state) = state.conversation_state.as_ref()
     {
         return filter_display_session_messages(conversation_state_to_session_messages(
@@ -117,7 +107,7 @@ pub(super) fn surface_messages_for_session_without_subagent_navigation_refresh(
         return messages;
     }
     if active_session_id != workspace_snapshot.selected_session
-        && let Some(state) = webui_subagent_task_state_by_task_id(guard, active_session_id)
+        && let Some(state) = webui_subagent_detail_state_by_task_id(guard, active_session_id)
         && let Some(conversation_state) = state.conversation_state.as_ref()
     {
         return filter_display_session_messages(conversation_state_to_session_messages(
@@ -126,6 +116,18 @@ pub(super) fn surface_messages_for_session_without_subagent_navigation_refresh(
     }
     display_session_messages_from_workspace(workspace_snapshot, active_session_id)
         .unwrap_or_default()
+}
+
+/// Returns cached render detail for one subagent task without affecting membership.
+/// 返回单个子代理任务的渲染详情缓存，不影响成员关系判断。
+fn webui_subagent_detail_state_by_task_id(
+    guard: &ServiceBridgeState,
+    task_id: SessionId,
+) -> Option<&SubagentTaskPanelState> {
+    guard
+        .subagent_surface_detail_cache
+        .get(&task_id)
+        .map(|entry| &entry.task_state)
 }
 
 /// Returns whether one WebUI subagent panel has enough persisted transcript detail for review.
@@ -141,70 +143,14 @@ pub(super) fn webui_subagent_panel_has_recoverable_detail(
 
 /// Builds the subagent navigation snapshot for the selected parent conversation.
 /// 为当前选中父会话构建子代理导航快照。
+///
+/// This projection reads only the runtime registry for task membership; detail caches are render-only.
+/// 该投影只从运行时注册表读取任务成员关系；详情缓存仅用于渲染。
 pub(super) fn subagent_navigation_snapshot_from_state(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
 ) -> Option<SubagentNavigationSnapshot> {
-    let root_session_id = workspace_snapshot.selected_session;
-    if root_session_id == SessionId::nil() {
-        return None;
-    }
-    let parent_session_id = root_session_id;
-    let has_visible_round = guard
-        .session_subagent_navigation_rounds
-        .contains(&parent_session_id);
-    refresh_webui_subagent_tree_task_cache_from_segmented_store(
-        guard,
-        workspace_snapshot,
-        parent_session_id,
-    );
-    let normalized_states =
-        normalized_subagent_tree_states_from_cache(guard, workspace_snapshot, parent_session_id);
-    let requested_active_task_id =
-        valid_active_subagent_task_id_for_states(guard, &normalized_states);
-    if guard.active_subagent_panel.is_some() && requested_active_task_id.is_none() {
-        guard.active_subagent_panel = None;
-    }
-    let has_active_panel = requested_active_task_id.is_some();
-    let has_unclosed_subagents = !normalized_states.is_empty();
-    if !subagent_navigation_surface_is_visible(
-        has_visible_round,
-        has_unclosed_subagents,
-        has_active_panel,
-    ) {
-        return None;
-    }
-    let (navigation_states, active_task_id) = select_subagent_navigation_panel_states(
-        &normalized_states,
-        requested_active_task_id,
-        |state| webui_subagent_panel_has_recoverable_detail(workspace_snapshot, state),
-    );
-    if navigation_states.is_empty() {
-        return None;
-    }
-    let tasks = navigation_states
-        .iter()
-        .map(|state| subagent_task_summary_from_state(state, active_task_id))
-        .collect::<Vec<_>>();
-    let active_conversation_id = active_task_id.unwrap_or(parent_session_id).to_string();
-    Some(SubagentNavigationSnapshot {
-        parent_conversation_id: parent_session_id.to_string(),
-        active_conversation_id,
-        active_task_id: active_task_id.map(|task_id| task_id.to_string()),
-        tasks,
-    })
-}
-
-/// Refreshes the selected root's subagent tree cache from persisted TaskSession metadata.
-/// 从持久化 TaskSession 元数据刷新当前根会话的整棵子代理缓存。
-fn refresh_webui_subagent_tree_task_cache_from_segmented_store(
-    guard: &mut ServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-    root_parent_session_id: SessionId,
-) {
-    let preload =
-        load_webui_unclosed_subagent_metadata_preload(workspace_snapshot, root_parent_session_id);
-    apply_webui_unclosed_subagent_metadata_preload(guard, preload);
+    subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot)
 }
 
 /// Builds the subagent navigation snapshot from the current cache without refreshing segmented storage.
@@ -221,7 +167,7 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
         .session_subagent_navigation_rounds
         .contains(&parent_session_id);
     let normalized_states =
-        normalized_subagent_tree_states_from_cache(guard, workspace_snapshot, parent_session_id);
+        authoritative_subagent_tree_states_from_registry(guard, parent_session_id);
     let requested_active_task_id =
         valid_active_subagent_task_id_for_states(guard, &normalized_states);
     if guard.active_subagent_panel.is_some() && requested_active_task_id.is_none() {
@@ -236,11 +182,8 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
     ) {
         return None;
     }
-    let (navigation_states, active_task_id) = select_subagent_navigation_panel_states(
-        &normalized_states,
-        requested_active_task_id,
-        |state| webui_subagent_panel_has_recoverable_detail(workspace_snapshot, state),
-    );
+    let (navigation_states, active_task_id) =
+        select_subagent_navigation_panel_states(normalized_states, requested_active_task_id);
     if navigation_states.is_empty() {
         return None;
     }
@@ -256,69 +199,114 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
     })
 }
 
-/// Returns whether a cached task id belongs to the selected root's unclosed child-agent tree.
-/// 返回缓存中的任务标识是否属于当前根会话的未关闭子智能体树。
-fn cached_subagent_tree_contains_task(
+/// Returns one authoritative open registry entry for a child task in the selected tree.
+/// 返回当前选中树中单个子任务的权威未关闭注册表条目。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the shared agent runtime handle.
+/// `guard` 持有共享代理运行时句柄。
+/// `root_parent_session_id` is the selected root or direct parent session.
+/// `root_parent_session_id` 是选中根会话或直接父会话。
+/// `task_id` is the child task session id requested by WebUI.
+/// `task_id` 是 WebUI 请求的子任务会话标识。
+///
+/// # Returns
+/// 返回值
+/// `Some` when the runtime registry says the task is still open and visible; otherwise `None`.
+/// 当运行时注册表确认该任务仍未关闭且可见时返回 `Some`；否则返回 `None`。
+pub(super) fn open_subagent_registry_entry_for_task(
     guard: &ServiceBridgeState,
     root_parent_session_id: SessionId,
     task_id: SessionId,
-) -> bool {
-    let mut visited_parent_ids = BTreeSet::new();
-    let mut pending_parent_ids = VecDeque::from([root_parent_session_id]);
-    while let Some(parent_session_id) = pending_parent_ids.pop_front() {
-        if !visited_parent_ids.insert(parent_session_id) {
-            continue;
-        }
-        let Some(tasks) = guard.session_subagent_tasks.get(&parent_session_id) else {
-            continue;
-        };
-        for child_task_id in tasks.keys() {
-            if *child_task_id == task_id {
-                return true;
-            }
-            pending_parent_ids.push_back(*child_task_id);
-        }
-    }
-    false
-}
-
-/// Builds normalized subagent states for every unclosed task in the selected root tree.
-/// 为当前根会话树中每个未关闭任务构建归一化子智能体状态。
-fn normalized_subagent_tree_states_from_cache(
-    guard: &ServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
-    root_parent_session_id: SessionId,
-) -> Vec<SubagentTaskPanelState> {
-    let task_runtime = guard
+) -> Result<Option<SubagentRegistryEntry>, String> {
+    let Some(task_runtime) = guard
         .agent_runtime
         .as_ref()
-        .map(|runtime| &runtime.task_runtime);
-    let live_listener_task_ids = guard.detached_subagent_task_listeners.clone();
-    let mut normalized_states = Vec::new();
-    let mut visited_parent_ids = BTreeSet::new();
-    let mut visited_task_ids = BTreeSet::new();
-    let mut pending_parent_ids = VecDeque::from([root_parent_session_id]);
-    while let Some(parent_session_id) = pending_parent_ids.pop_front() {
-        if !visited_parent_ids.insert(parent_session_id) {
-            continue;
-        }
-        let Some(tasks) = guard.session_subagent_tasks.get(&parent_session_id) else {
-            continue;
-        };
-        for state in tasks.values() {
-            pending_parent_ids.push_back(state.task_id);
-            if !visited_task_ids.insert(state.task_id) {
-                continue;
+        .map(|runtime| &runtime.task_runtime)
+    else {
+        return Ok(None);
+    };
+    let entries =
+        task_runtime.open_subagent_registry_entries_for_parent_tree(root_parent_session_id)?;
+    Ok(entries
+        .into_iter()
+        .find(|entry| entry.session_id.as_uuid() == task_id))
+}
+
+/// Builds panel states from the authoritative runtime registry for every open task in the selected tree.
+/// 从权威运行时注册表为当前选中树中的每个未关闭任务构建面板状态。
+fn authoritative_subagent_tree_states_from_registry(
+    guard: &ServiceBridgeState,
+    root_parent_session_id: SessionId,
+) -> Vec<SubagentTaskPanelState> {
+    let Some(task_runtime) = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| &runtime.task_runtime)
+    else {
+        return Vec::new();
+    };
+    let entries =
+        match task_runtime.open_subagent_registry_entries_for_parent_tree(root_parent_session_id) {
+            Ok(entries) => entries,
+            Err(error) => {
+                webui_trace(
+                    "subagent_navigation_registry_unavailable",
+                    format!("parent={root_parent_session_id} error={error}"),
+                );
+                Vec::new()
             }
-            normalized_states.push(normalize_webui_subagent_task_state(
-                Some(workspace_snapshot),
-                state,
-                task_runtime,
-                live_listener_task_ids.contains(&state.task_id),
-            ));
-        }
+        };
+    entries
+        .iter()
+        .map(|entry| subagent_task_panel_state_from_registry_entry(guard, entry))
+        .collect()
+}
+
+/// Converts one authoritative registry entry into a renderable WebUI panel state.
+/// 将单个权威注册表条目转换为可渲染的 WebUI 面板状态。
+fn subagent_task_panel_state_from_registry_entry(
+    guard: &ServiceBridgeState,
+    entry: &SubagentRegistryEntry,
+) -> SubagentTaskPanelState {
+    let task_id = entry.session_id.as_uuid();
+    let cached_state = guard
+        .subagent_surface_detail_cache
+        .get(&task_id)
+        .map(|cached| &cached.task_state);
+    SubagentTaskPanelState {
+        task_id,
+        public_task_id: entry.agent_id.clone(),
+        parent_session_id: entry.parent_session_id.as_uuid(),
+        subagent_label: entry.agent_id.clone(),
+        description: entry
+            .last_task_message
+            .clone()
+            .or_else(|| cached_state.and_then(|state| state.description.clone())),
+        run_state: subagent_run_state_from_registry_status(entry.status),
+        result_text: entry
+            .result_summary
+            .clone()
+            .or_else(|| cached_state.map(|state| state.result_text.clone()))
+            .unwrap_or_default(),
+        conversation_state: cached_state.and_then(|state| state.conversation_state.clone()),
     }
-    normalized_states
+}
+
+/// Converts the authoritative registry status into the WebUI panel run state.
+/// 将权威注册表状态转换为 WebUI 面板运行状态。
+fn subagent_run_state_from_registry_status(status: SubagentStatus) -> SubagentTaskRunState {
+    match status {
+        SubagentStatus::Created
+        | SubagentStatus::Running
+        | SubagentStatus::WaitingChildren
+        | SubagentStatus::WaitingFollowup
+        | SubagentStatus::Compacting => SubagentTaskRunState::Running,
+        SubagentStatus::Completed => SubagentTaskRunState::Completed,
+        SubagentStatus::Failed => SubagentTaskRunState::Failed,
+        SubagentStatus::Stopped | SubagentStatus::Archived => SubagentTaskRunState::Stopped,
+    }
 }
 
 /// Returns the active task id only when it remains present in the projected tree states.

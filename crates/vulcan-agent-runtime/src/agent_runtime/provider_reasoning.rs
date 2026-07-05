@@ -173,9 +173,7 @@ fn build_reasoning_profile_note(
     profile: Option<&ReasoningProfileConfig>,
     requested_effort: ReasoningEffortLevel,
 ) -> Option<String> {
-    let Some(profile) = profile else {
-        return None;
-    };
+    let profile = profile?;
 
     match profile.kind {
         Some(crate::provider_config::ReasoningCapabilityKind::Binary)

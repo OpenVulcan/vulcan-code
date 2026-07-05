@@ -124,34 +124,48 @@ impl PromptComposerEngine {
             if custom_segment.trim().is_empty() {
                 continue;
             }
-            let segment = build_cached_custom_segment(
-                &self.cache,
-                &mut output.diagnostics,
-                "custom_developer",
-                index,
-                crate::types::PromptNodeKind::Developer,
-                PromptTarget::Developer,
-                format!("Custom Developer Segment {index}"),
-                custom_segment,
-                format!("Runtime custom developer segment {index}"),
-            );
+            let segment = {
+                let mut custom_segment_context = CachedCustomSegmentContext {
+                    cache: &self.cache,
+                    diagnostics: &mut output.diagnostics,
+                };
+                build_cached_custom_segment(
+                    &mut custom_segment_context,
+                    CachedCustomSegmentDescriptor::new(
+                        "custom_developer",
+                        index,
+                        crate::types::PromptNodeKind::Developer,
+                        PromptTarget::Developer,
+                        format!("Custom Developer Segment {index}"),
+                        custom_segment,
+                        format!("Runtime custom developer segment {index}"),
+                    ),
+                )
+            };
             push_segment(&mut output, segment);
         }
         for (index, custom_segment) in input.custom_user_segments.iter().enumerate() {
             if custom_segment.trim().is_empty() {
                 continue;
             }
-            let segment = build_cached_custom_segment(
-                &self.cache,
-                &mut output.diagnostics,
-                "custom_user",
-                index,
-                crate::types::PromptNodeKind::User,
-                PromptTarget::User,
-                format!("Custom User Segment {index}"),
-                custom_segment,
-                format!("Runtime custom user segment {index}"),
-            );
+            let segment = {
+                let mut custom_segment_context = CachedCustomSegmentContext {
+                    cache: &self.cache,
+                    diagnostics: &mut output.diagnostics,
+                };
+                build_cached_custom_segment(
+                    &mut custom_segment_context,
+                    CachedCustomSegmentDescriptor::new(
+                        "custom_user",
+                        index,
+                        crate::types::PromptNodeKind::User,
+                        PromptTarget::User,
+                        format!("Custom User Segment {index}"),
+                        custom_segment,
+                        format!("Runtime custom user segment {index}"),
+                    ),
+                )
+            };
             push_segment(&mut output, segment);
         }
 
@@ -193,33 +207,86 @@ fn push_segment(output: &mut PromptAssemblyOutput, segment: PromptSegment) {
 /// Build one cached runtime-provided custom segment.
 /// 构建一个带缓存的运行时自定义片段。
 fn build_cached_custom_segment(
-    cache: &MemoryPromptCache,
-    diagnostics: &mut crate::composer::diagnostics::PromptComposerDiagnostics,
-    namespace: &str,
-    index: usize,
-    kind: crate::types::PromptNodeKind,
-    target: PromptTarget,
-    title: impl Into<String>,
-    body: &str,
-    source_label: impl Into<String>,
+    context: &mut CachedCustomSegmentContext<'_>,
+    descriptor: CachedCustomSegmentDescriptor,
 ) -> PromptSegment {
-    let fingerprint = stable_text_hash(body);
-    let cache_key = node_cache_key(namespace, fingerprint);
-    let source_label = source_label.into();
-    if let Some(segment) = cache.get_node(&cache_key) {
-        diagnostics.record_node_cache(&cache_key, true);
-        return segment.with_source_label(source_label);
+    let fingerprint = stable_text_hash(&descriptor.body);
+    let cache_key = node_cache_key(descriptor.namespace, fingerprint);
+    if let Some(segment) = context.cache.get_node(&cache_key) {
+        context.diagnostics.record_node_cache(&cache_key, true);
+        return segment.with_source_label(descriptor.source_label);
     }
-    diagnostics.record_node_cache(&cache_key, false);
+    context.diagnostics.record_node_cache(&cache_key, false);
     let segment = PromptSegment::new(
-        format!("{namespace}_{index}"),
+        format!("{}_{}", descriptor.namespace, descriptor.index),
         cache_key,
-        kind,
-        target,
-        title,
-        body.to_string(),
+        descriptor.kind,
+        descriptor.target,
+        descriptor.title,
+        descriptor.body,
     )
-    .with_source_label(source_label);
-    cache.put_node(segment.clone());
+    .with_source_label(descriptor.source_label);
+    context.cache.put_node(segment.clone());
     segment
+}
+
+/// Runtime dependencies required to build cached custom segments.
+/// 构建缓存自定义片段所需的运行时依赖。
+struct CachedCustomSegmentContext<'a> {
+    /// Shared prompt node cache.
+    /// 共享提示词节点缓存。
+    cache: &'a MemoryPromptCache,
+    /// Prompt composer diagnostics accumulator.
+    /// 提示词组合诊断累加器。
+    diagnostics: &'a mut crate::composer::diagnostics::PromptComposerDiagnostics,
+}
+
+/// Immutable description of one runtime-provided custom segment.
+/// 单个运行时自定义片段的不可变描述。
+struct CachedCustomSegmentDescriptor {
+    /// Cache namespace and segment identifier prefix.
+    /// 缓存命名空间与片段标识前缀。
+    namespace: &'static str,
+    /// Position in the runtime-provided segment list.
+    /// 运行时片段列表中的位置。
+    index: usize,
+    /// Prompt node kind.
+    /// 提示词节点类型。
+    kind: crate::types::PromptNodeKind,
+    /// Prompt target bucket.
+    /// 提示词目标桶。
+    target: PromptTarget,
+    /// Human-readable segment title.
+    /// 人类可读的片段标题。
+    title: String,
+    /// Segment body text.
+    /// 片段正文文本。
+    body: String,
+    /// Diagnostics source label.
+    /// 诊断来源标签。
+    source_label: String,
+}
+
+impl CachedCustomSegmentDescriptor {
+    /// Build one cached custom segment descriptor from primitive segment fields.
+    /// 根据基础片段字段构建缓存自定义片段描述。
+    fn new(
+        namespace: &'static str,
+        index: usize,
+        kind: crate::types::PromptNodeKind,
+        target: PromptTarget,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        source_label: impl Into<String>,
+    ) -> Self {
+        Self {
+            namespace,
+            index,
+            kind,
+            target,
+            title: title.into(),
+            body: body.into(),
+            source_label: source_label.into(),
+        }
+    }
 }

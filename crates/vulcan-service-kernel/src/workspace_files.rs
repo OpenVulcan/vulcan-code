@@ -208,8 +208,5 @@ pub(super) async fn service_workspace_files_read(
     }
 }
 
-/// Returns a workspace-relative path using forward slashes.
-/// 返回使用正斜杠的工作区相对路径。
-
 #[cfg(test)]
 mod tests;

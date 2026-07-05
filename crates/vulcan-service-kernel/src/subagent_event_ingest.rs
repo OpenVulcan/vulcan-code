@@ -69,11 +69,6 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
                     .extend(usage_segments);
             }
         }
-        guard
-            .session_subagent_tasks
-            .entry(parent_session_id)
-            .or_default()
-            .insert(normalized.task_id, normalized.clone());
         normalized
     };
     webui_trace(
@@ -372,34 +367,55 @@ pub(crate) fn attach_webui_task_session_metadata_to_parent_tool_message(
         parent_session_id,
         payload,
     );
-    if message_ids.is_empty() {
-        return;
-    }
     let execution_status =
         task_session_execution_status_from_tool_metadata(metadata).unwrap_or("running");
+    if message_ids.is_empty() {
+        let task_id = payload
+            .get(SUBAGENT_TASK_ID_KEY)
+            .or_else(|| payload.get("task_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        webui_trace(
+            "subagent_parent_tool_metadata_target_missing",
+            format!("parent={parent_session_id} task={task_id} status={execution_status}"),
+        );
+        return;
+    }
     let metadata_update =
         attach_tool_display_state_to_metadata(Some(metadata.clone()), execution_status)
             .unwrap_or_else(|| metadata.clone());
     for message_id in message_ids {
-        let _ = merge_webui_task_session_tool_message_metadata(
+        if let Err(error) = merge_webui_task_session_tool_message_metadata(
             workspace_snapshot,
             parent_session_id,
             &message_id,
             metadata_update.clone(),
             execution_status,
-        );
+        ) {
+            webui_trace(
+                "subagent_parent_tool_metadata_merge_failed",
+                format!(
+                    "parent={parent_session_id} message_id={message_id} status={execution_status} error={error}"
+                ),
+            );
+        }
     }
 }
 
 /// Shallow-merges task-session metadata into one WebUI parent tool-card record and projection.
 /// 将 task-session 元数据浅合并进一条 WebUI 父级工具卡片记录与投影。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when a canonical record or visible message is updated.
+/// 规范记录或可见消息被更新时返回 `Ok(())`。
 pub(crate) fn merge_webui_task_session_tool_message_metadata(
     workspace_snapshot: &mut WorkspaceSnapshot,
     parent_session_id: SessionId,
     message_id: &str,
     metadata_update: Value,
     execution_status: &str,
-) -> bool {
+) -> Result<(), String> {
     let current_metadata =
         webui_task_session_tool_message_metadata(workspace_snapshot, parent_session_id, message_id);
     let Some(updated_metadata) = merge_task_mirror_tool_display_metadata(
@@ -407,7 +423,9 @@ pub(crate) fn merge_webui_task_session_tool_message_metadata(
         task_session_display_metadata_update(metadata_update, execution_status),
         execution_status == "running",
     ) else {
-        return false;
+        return Err(format!(
+            "task-session metadata merge produced no metadata for parent `{parent_session_id}` message `{message_id}`"
+        ));
     };
     let mut updated = false;
     let updated_at = current_unix_millis_text();
@@ -436,5 +454,10 @@ pub(crate) fn merge_webui_task_session_tool_message_metadata(
             }
         }
     }
-    updated
+    if !updated {
+        return Err(format!(
+            "task-session metadata target message `{message_id}` was not found in parent `{parent_session_id}`"
+        ));
+    }
+    Ok(())
 }

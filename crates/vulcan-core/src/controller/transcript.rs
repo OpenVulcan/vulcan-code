@@ -1,5 +1,32 @@
 use super::*;
 
+/// Request object used to append one provider-visible inter-agent message.
+/// 用于追加单条 Provider 可见代理间消息的请求对象。
+#[derive(Debug, Clone)]
+pub struct AgentMessageAppendRequest {
+    /// Stable model-visible inter-agent message type.
+    /// 模型可见的稳定代理间消息类型。
+    pub message_type: String,
+    /// Logical task or agent path associated with the message.
+    /// 该消息关联的逻辑任务或代理路径。
+    pub task_name: String,
+    /// Logical sender name or path.
+    /// 逻辑发送方名称或路径。
+    pub sender: String,
+    /// Logical recipient name or path.
+    /// 逻辑接收方名称或路径。
+    pub recipient: String,
+    /// Model-visible child-agent result text.
+    /// 模型可见的子代理结果文本。
+    pub payload: String,
+    /// Whether the message may wake an idle parent turn.
+    /// 该消息是否可以唤醒空闲父级回合。
+    pub trigger_turn: bool,
+    /// Host-only structured audit data.
+    /// 仅供宿主侧使用的结构化审计数据。
+    pub metadata: Option<Value>,
+}
+
 impl VulcanCoreController {
     /// Appends one user-authored prompt into the canonical message window and durable record stream.
     /// 将一条用户输入追加到规范消息窗口与持久化记录流中。
@@ -105,43 +132,26 @@ impl VulcanCoreController {
     ///
     /// # Parameters
     /// 参数
-    /// `message_type` is the stable model-visible inter-agent message type.
-    /// `message_type` 是模型可见的稳定代理间消息类型。
-    /// `task_name` is the logical task or agent path associated with the message.
-    /// `task_name` 是该消息关联的逻辑任务或代理路径。
-    /// `sender` is the logical sender name or path.
-    /// `sender` 是逻辑发送方名称或路径。
-    /// `recipient` is the logical recipient name or path.
-    /// `recipient` 是逻辑接收方名称或路径。
-    /// `payload` is the model-visible child-agent result text.
-    /// `payload` 是模型可见的子代理结果文本。
-    /// `trigger_turn` indicates whether the message may wake an idle parent turn.
-    /// `trigger_turn` 表示该消息是否可以唤醒空闲父级回合。
-    /// `metadata` is host-only structured audit data.
-    /// `metadata` 是仅供宿主侧使用的结构化审计数据。
+    /// `request` carries the complete inter-agent message protocol payload.
+    /// `request` 携带完整的代理间消息协议载荷。
     ///
     /// # Returns
     /// 返回值
     /// The generated provider-visible message id.
     /// 返回生成的 Provider 可见消息标识。
-    pub fn append_agent_message(
-        &mut self,
-        message_type: impl Into<String>,
-        task_name: impl Into<String>,
-        sender: impl Into<String>,
-        recipient: impl Into<String>,
-        payload: impl Into<String>,
-        trigger_turn: bool,
-        metadata: Option<Value>,
-    ) -> String {
+    pub fn append_agent_message(&mut self, request: AgentMessageAppendRequest) -> String {
         let message_id = self.next_local_id("agent-message");
         let record_id = self.next_local_id("agent-record");
         let timestamp = current_unix_millis_text();
-        let message_type = message_type.into();
-        let task_name = task_name.into();
-        let sender = sender.into();
-        let recipient = recipient.into();
-        let payload = payload.into();
+        let AgentMessageAppendRequest {
+            message_type,
+            task_name,
+            sender,
+            recipient,
+            payload,
+            trigger_turn,
+            metadata,
+        } = request;
         let model_text = ConversationPayload::render_agent_message_text(
             &message_type,
             &task_name,

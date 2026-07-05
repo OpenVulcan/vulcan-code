@@ -27,6 +27,52 @@ fn create_session_writes_metadata_state_and_first_segment() {
     assert_eq!(lines[0].kind, SegmentedSessionEventKind::SessionMeta);
 }
 
+/// Verifies deterministic task-store directory lookup derives the date from raw creation time.
+/// 验证确定性任务存储目录查找会从原始创建时间推导日期。
+#[test]
+fn task_store_locator_finds_session_directory_by_created_at() {
+    let root = test_root("task_store_locator_finds_session_directory_by_created_at");
+    let mut request = test_session_request(SegmentPolicy::default());
+    request.created_date = String::from("1970-01-02");
+    request.created_at = String::from("86400000");
+    let session_id = request.session_id.clone();
+    let project_tag = request.project_tag.clone();
+    let created_at = request.created_at.clone();
+    let session_dir = create_segmented_session(&root, request).expect("create segmented session");
+
+    let located = find_segmented_session_directory_for_task_store_created_at(
+        &root,
+        &project_tag,
+        &created_at,
+        &session_id,
+    )
+    .expect("deterministic locator should find session");
+
+    assert_eq!(located, session_dir);
+}
+
+/// Verifies task mirror rows load from an already resolved segmented session directory.
+/// 验证任务镜像行可以从已解析的分段会话目录加载。
+#[test]
+fn task_mirror_rows_load_from_resolved_session_directory() {
+    let root = test_root("task_mirror_rows_load_from_resolved_session_directory");
+    let session_dir =
+        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+            .expect("create segmented session");
+    let task_session_id = Uuid::new_v4();
+    let mut task_request = test_task_session_request();
+    task_request.task_session_id = task_session_id.to_string();
+    create_segmented_task_session(&session_dir, task_request).expect("create task session");
+
+    let mirrors =
+        crate::workspace_store::load_segmented_session_task_mirrors_from_directory(&session_dir)
+            .expect("load task mirrors from resolved directory");
+
+    assert_eq!(mirrors.len(), 1);
+    assert_eq!(mirrors[0].status, "running");
+    assert_eq!(mirrors[0].task_session_id, task_session_id);
+}
+
 /// Verifies a forked session rewrites only structural ownership fields.
 /// 验证分叉会话只改写结构化归属字段。
 #[test]

@@ -57,8 +57,6 @@ pub(super) struct SessionGoalStatusUpdateRequest {
     status: String,
 }
 
-/// Session Plan mode update request sent by the WebUI composer controls.
-
 /// Saves one session goal and emits an addon-state delta.
 /// 保存单个会话目标并发出附属状态增量。
 pub(super) async fn service_save_session_goal(

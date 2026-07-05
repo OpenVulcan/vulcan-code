@@ -3,19 +3,36 @@
 
 use super::*;
 
+/// Converts one service route-selection payload into a persisted OpenRouter endpoint route.
+/// 将单个 service 路由选择载荷转换为持久化 OpenRouter 端点路由。
+///
+/// # Parameters
+/// 参数
+/// `selection` is the WebUI/API route object that must carry a usable route id or tag.
+/// `selection` 是 WebUI/API 路由对象，必须携带可用 route id 或 tag。
+///
+/// # Returns
+/// 返回值
+/// A validated persisted selection, or a user-facing error for malformed payloads.
+/// 返回已校验的持久化选择；载荷无效时返回面向用户的错误。
 pub(crate) fn openrouter_route_selection_from_service(
     selection: ProviderModelSecondaryRouteSelection,
-) -> provider_config::OpenRouterEndpointRouteSelection {
+) -> Result<provider_config::OpenRouterEndpointRouteSelection, String> {
     let tag = if selection.tag.trim().is_empty() {
         selection.route_id.trim().to_string()
     } else {
         selection.tag.trim().to_string()
     };
-    provider_config::OpenRouterEndpointRouteSelection {
+    if tag.is_empty() {
+        return Err(String::from(
+            "OpenRouter 二级供应商选择缺少 routeId 或 tag。",
+        ));
+    }
+    Ok(provider_config::OpenRouterEndpointRouteSelection {
         tag,
         provider_name: selection.provider_name.trim().to_string(),
         endpoint_name: selection.endpoint_name.trim().to_string(),
-    }
+    })
 }
 
 /// Projects a persisted OpenRouter route into the service secondary-route summary.

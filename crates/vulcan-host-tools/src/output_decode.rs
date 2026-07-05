@@ -249,10 +249,8 @@ impl Utf16StreamDecoder {
         let mut decoded_text = decode_utf16(code_units)
             .map(|result| result.unwrap_or(char::REPLACEMENT_CHARACTER))
             .collect::<String>();
-        if is_last {
-            if self.pending_byte.take().is_some() {
-                decoded_text.push(char::REPLACEMENT_CHARACTER);
-            }
+        if is_last && self.pending_byte.take().is_some() {
+            decoded_text.push(char::REPLACEMENT_CHARACTER);
         }
         decoded_text
     }

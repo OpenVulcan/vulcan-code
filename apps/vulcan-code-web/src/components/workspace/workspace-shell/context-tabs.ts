@@ -272,7 +272,7 @@ function createWorkspaceContextTab(
 
 // workspaceSubagentTabId builds the stable right-panel tab id for one subagent task.
 // workspaceSubagentTabId 为单个子代理任务构建稳定右侧页签标识。
-function workspaceSubagentTabId(parentConversationId: string, taskId: string): string {
+export function workspaceSubagentTabId(parentConversationId: string, taskId: string): string {
   return `subagent-${encodeURIComponent(parentConversationId)}-${encodeURIComponent(taskId)}`;
 }
 

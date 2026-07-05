@@ -117,11 +117,12 @@ pub struct PersistedToolPolicyEntry {
 
 /// Persisted registration mode for one LuaSkills runtime tool.
 /// 单个 LuaSkills 运行时工具的持久化注册模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PersistedLuaSkillToolRegistrationState {
     /// The tool is enabled and registered as an ordinary provider-visible function tool.
     /// 工具已启用，并作为普通 Provider 可见函数工具注册。
+    #[default]
     Explicit,
     /// The tool is enabled for host-side dispatch but hidden from provider-visible function schemas.
     /// 工具已启用供宿主侧调度，但不暴露到 Provider 可见函数 Schema。
@@ -129,12 +130,6 @@ pub enum PersistedLuaSkillToolRegistrationState {
     /// The tool is disabled for both direct provider registration and host-side dispatch.
     /// 工具对直接 Provider 注册与宿主侧调度均禁用。
     Disabled,
-}
-
-impl Default for PersistedLuaSkillToolRegistrationState {
-    fn default() -> Self {
-        Self::Explicit
-    }
 }
 
 impl fmt::Display for PersistedLuaSkillToolRegistrationState {

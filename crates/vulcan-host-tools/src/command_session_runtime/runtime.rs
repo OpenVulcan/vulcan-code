@@ -1,5 +1,31 @@
 use super::*;
 
+/// AI-facing command-session read request shared by read and peek paths.
+/// 由读取与窥视路径共享的面向 AI 命令会话读取请求。
+struct CommandSessionAiReadRequest {
+    /// Session that owns the command session.
+    /// 拥有该命令会话的父会话。
+    owner_session_id: SessionId,
+    /// Command session to read.
+    /// 需要读取的命令会话。
+    command_session_id: SessionId,
+    /// Optional caller-provided output cursor.
+    /// 调用方提供的可选输出游标。
+    after_seq: Option<u64>,
+    /// Whether reading starts from the beginning when no cursor is provided.
+    /// 未提供游标时是否从开头读取。
+    read_from_start: bool,
+    /// Optional wait duration for new output.
+    /// 等待新输出的可选时长。
+    wait_for_output_ms: Option<u64>,
+    /// Optional maximum number of chunks to return.
+    /// 返回输出分片数量上限的可选值。
+    max_chunks: Option<usize>,
+    /// Whether the AI delivery cursor should advance after returning chunks.
+    /// 返回分片后是否推进面向 AI 的交付游标。
+    advance_ai_cursor: bool,
+}
+
 impl Default for CommandSessionRuntime {
     /// Builds one empty command-session runtime.
     /// 构建一份空的命令会话运行时。
@@ -88,14 +114,16 @@ impl CommandSessionRuntime {
             .insert(command_session_id, Arc::clone(&record));
 
         tokio::spawn(run_command_session_supervisor(
-            Arc::clone(&record),
-            child,
-            stdin,
-            stdout,
-            stderr,
-            control_receiver,
-            request.initial_stdin,
-            request.initial_stdin_append_newline,
+            CommandSessionSupervisorInput {
+                record: Arc::clone(&record),
+                child,
+                stdin,
+                stdout,
+                stderr,
+                control_receiver,
+                initial_stdin: request.initial_stdin,
+                initial_stdin_append_newline: request.initial_stdin_append_newline,
+            },
         ));
 
         Ok(record.snapshot().await)
@@ -160,14 +188,16 @@ impl CommandSessionRuntime {
             .insert(command_session_id, Arc::clone(&record));
 
         tokio::spawn(run_pty_command_session_supervisor(
-            Arc::clone(&record),
-            pair.master,
-            child,
-            reader,
-            writer,
-            control_receiver,
-            request.initial_stdin,
-            request.initial_stdin_append_newline,
+            PtyCommandSessionSupervisorInput {
+                record: Arc::clone(&record),
+                master: pair.master,
+                child,
+                reader,
+                writer,
+                control_receiver,
+                initial_stdin: request.initial_stdin,
+                initial_stdin_append_newline: request.initial_stdin_append_newline,
+            },
         ));
 
         Ok(record.snapshot().await)
@@ -548,38 +578,36 @@ impl CommandSessionRuntime {
     /// 按需读取缓冲输出，并可选推进面向 AI 的读取游标。
     async fn read_session_for_ai_with_cursor_mode(
         &self,
-        owner_session_id: SessionId,
-        command_session_id: SessionId,
-        after_seq: Option<u64>,
-        read_from_start: bool,
-        wait_for_output_ms: Option<u64>,
-        max_chunks: Option<usize>,
-        advance_ai_cursor: bool,
+        request: CommandSessionAiReadRequest,
     ) -> Result<CommandSessionReadOutcome, String> {
-        let record = self.session_for_owner(owner_session_id, command_session_id)?;
-        let after_seq = if read_from_start {
-            after_seq.unwrap_or(0)
-        } else if let Some(after_seq) = after_seq {
+        let record =
+            self.session_for_owner(request.owner_session_id, request.command_session_id)?;
+        let after_seq = if request.read_from_start {
+            request.after_seq.unwrap_or(0)
+        } else if let Some(after_seq) = request.after_seq {
             after_seq
         } else {
             record.ai_delivered_seq().await
         };
-        let max_chunks = max_chunks
+        let max_chunks = request
+            .max_chunks
             .unwrap_or(DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS)
             .max(1);
-        let wait_for_output_ms = wait_for_output_ms.unwrap_or(DEFAULT_COMMAND_SESSION_READ_WAIT_MS);
+        let wait_for_output_ms = request
+            .wait_for_output_ms
+            .unwrap_or(DEFAULT_COMMAND_SESSION_READ_WAIT_MS);
         let wait_started_at = Instant::now();
 
         loop {
             let notified = record.shared_state.change_notify.notified();
             let outcome = record
-                .read_since(after_seq, max_chunks, advance_ai_cursor)
+                .read_since(after_seq, max_chunks, request.advance_ai_cursor)
                 .await;
             if !outcome.returned_chunks.is_empty()
                 || outcome.snapshot.status != CommandSessionStatus::Running
                 || wait_for_output_ms == 0
             {
-                if advance_ai_cursor {
+                if request.advance_ai_cursor {
                     record.mark_ai_delivered(&outcome.returned_chunks).await;
                 }
                 return Ok(outcome);
@@ -604,15 +632,15 @@ impl CommandSessionRuntime {
         wait_for_output_ms: Option<u64>,
         max_chunks: Option<usize>,
     ) -> Result<CommandSessionReadOutcome, String> {
-        self.read_session_for_ai_with_cursor_mode(
+        self.read_session_for_ai_with_cursor_mode(CommandSessionAiReadRequest {
             owner_session_id,
             command_session_id,
             after_seq,
             read_from_start,
             wait_for_output_ms,
             max_chunks,
-            true,
-        )
+            advance_ai_cursor: true,
+        })
         .await
     }
 
@@ -627,15 +655,15 @@ impl CommandSessionRuntime {
         wait_for_output_ms: Option<u64>,
         max_chunks: Option<usize>,
     ) -> Result<CommandSessionReadOutcome, String> {
-        self.read_session_for_ai_with_cursor_mode(
+        self.read_session_for_ai_with_cursor_mode(CommandSessionAiReadRequest {
             owner_session_id,
             command_session_id,
             after_seq,
             read_from_start,
             wait_for_output_ms,
             max_chunks,
-            false,
-        )
+            advance_ai_cursor: false,
+        })
         .await
     }
 

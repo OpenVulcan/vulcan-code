@@ -44,14 +44,12 @@ pub fn load_attachment_asset_record_for_attachment(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        if let Some(record) = document
+        && let Some(record) = document
             .assets
             .iter()
             .find(|record| record.asset_id == asset_id)
-        {
-            return Some(record.clone());
-        }
+    {
+        return Some(record.clone());
     }
     let managed_path = attachment.local_path.trim();
     document

@@ -5,8 +5,7 @@ pub(super) fn normalize_ai_capability_vendor_id(vendor_id: impl Into<String>) ->
         .into()
         .trim()
         .to_ascii_lowercase()
-        .replace('-', "_")
-        .replace(' ', "_")
+        .replace(['-', ' '], "_")
 }
 
 /// Returns the default vendor display name shown before the user customizes it.

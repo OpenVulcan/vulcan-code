@@ -144,10 +144,12 @@ fn runtime_state_from_segmented_replay(
 pub(super) fn runtime_state_entry_from_segmented_replay(
     replay: SegmentedSessionReplayResult,
 ) -> SessionRuntimeStateEntry {
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.conversation_state = replay.conversation_state;
-    runtime_state.last_compaction_id = replay.last_compaction_id;
-    runtime_state.context_start_message_id = replay.context_start_message_id;
+    let mut runtime_state = SessionRuntimeStateEntry {
+        conversation_state: replay.conversation_state,
+        last_compaction_id: replay.last_compaction_id,
+        context_start_message_id: replay.context_start_message_id,
+        ..Default::default()
+    };
     if let Some(updated_at) = replay.updated_at {
         runtime_state.updated_at = updated_at;
     }
@@ -269,9 +271,11 @@ pub(super) async fn hydrate_session_runtime_state(
         if full_messages.is_empty() {
             return Ok(None);
         }
-        let mut runtime_state = SessionRuntimeStateEntry::default();
-        runtime_state.conversation_state = conversation_state_from_session_messages(full_messages);
-        runtime_state.updated_at = current_unix_millis_text();
+        let mut runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(full_messages),
+            updated_at: current_unix_millis_text(),
+            ..Default::default()
+        };
         let _ = repair_duplicate_conversation_record_ids(
             session_id,
             &mut runtime_state.conversation_state,

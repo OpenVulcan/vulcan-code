@@ -86,7 +86,7 @@ pub(crate) fn session_entry_allows_user_prompt_edit(message: &SessionMessageEntr
     message
         .metadata
         .as_ref()
-        .is_none_or(|metadata| metadata_allows_user_prompt_edit(metadata))
+        .is_none_or(metadata_allows_user_prompt_edit)
 }
 
 /// Returns whether transcript metadata permits destructive user-prompt editing.
@@ -143,16 +143,10 @@ pub(crate) fn metadata_has_applied_change_set(metadata: &Value) -> bool {
 pub(crate) fn session_segmented_metadata_exists(
     session: &vulcan_workbench_model::SessionSummary,
 ) -> bool {
-    let Some(project_id) = session.project_id.as_deref() else {
-        return false;
-    };
-    vulcan_workspace_store::workspace_store::find_segmented_session_directory_for_task_store(
+    segmented_session_directory_for_summary(
         &vulcan_workspace_store::data_plane::application_data_root(),
-        project_id,
-        &session.id.to_string(),
+        session,
     )
-    .ok()
-    .flatten()
     .is_some_and(|session_dir| session_dir.join("metadata.json").is_file())
 }
 
@@ -161,14 +155,16 @@ pub(crate) fn session_segmented_metadata_exists(
 pub(crate) fn conversation_fork_source_summary_from_session(
     session: &vulcan_workbench_model::SessionSummary,
 ) -> Option<ConversationForkSourceSummary> {
-    let project_id = session.project_id.as_deref()?;
-    let source = load_segmented_session_fork_source_for_project(
+    let session_dir = segmented_session_directory_for_summary(
         &vulcan_workspace_store::data_plane::application_data_root(),
-        project_id,
-        session.id,
-    )
-    .ok()
-    .flatten()?;
+        session,
+    )?;
+    let source =
+        vulcan_workspace_store::workspace_store::load_segmented_session_fork_source_from_directory(
+            &session_dir,
+        )
+        .ok()
+        .flatten()?;
     Some(ConversationForkSourceSummary {
         source_project_tag: source.source_project_tag,
         source_conversation_id: source.source_session_id,

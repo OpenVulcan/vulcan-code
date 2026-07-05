@@ -12,9 +12,7 @@ impl TaskRuntime {
         if self
             .restored_task_session_registry_roots
             .read()
-            .map_err(|_| {
-                String::from("The restored task-session registry marker is locked.")
-            })?
+            .map_err(|_| String::from("The restored task-session registry marker is locked."))?
             .contains(&root_session_uuid)
         {
             return Ok(());
@@ -22,14 +20,12 @@ impl TaskRuntime {
         let Some(store) = self.task_session_store_for_root(Uuid::from(root_session_id))? else {
             self.restored_task_session_registry_roots
                 .write()
-                .map_err(|_| {
-                    String::from("The restored task-session registry marker is locked.")
-                })?
+                .map_err(|_| String::from("The restored task-session registry marker is locked."))?
                 .insert(root_session_uuid);
             return Ok(());
         };
-        let metadata_records = store
-            .load_all_task_session_metadata()
+        let mut metadata_by_parent = store
+            .load_task_session_metadata_by_parent()
             .map_err(|error| error.message)?;
         let mut visited_parent_ids = BTreeSet::new();
         let mut parents = vec![subagent_restore_start_parent_ref(
@@ -41,22 +37,20 @@ impl TaskRuntime {
             if !visited_parent_ids.insert(parent_node_id) {
                 continue;
             }
-            for metadata in metadata_records
-                .iter()
-                .filter(|metadata| metadata.parent == parent)
-            {
+            let Some(metadata_records) = metadata_by_parent.remove(&parent) else {
+                continue;
+            };
+            for metadata in metadata_records {
                 parents.push(ParentSessionRef::TaskSession {
                     root_session_id,
                     parent_task_session_id: metadata.task_session_id,
                 });
-                self.upsert_subagent_registry_entry_from_metadata(metadata)?;
+                self.upsert_subagent_registry_entry_from_metadata(&metadata)?;
             }
         }
         self.restored_task_session_registry_roots
             .write()
-            .map_err(|_| {
-                String::from("The restored task-session registry marker is locked.")
-            })?
+            .map_err(|_| String::from("The restored task-session registry marker is locked."))?
             .insert(root_session_uuid);
         Ok(())
     }
@@ -268,7 +262,14 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
-        let record = self.upsert_task_outcome_record(current_session_id, invocation, outcome)?;
+        let record = self.build_task_outcome_record(current_session_id, invocation, outcome)?;
+        let persisted_status = self.persist_task_record_outcome(&record, invocation, outcome)?;
+        self.commit_task_session_record(record.clone())?;
+        self.upsert_subagent_registry_entry(
+            &record,
+            persisted_status,
+            task_record_registry_result_summary(&record, persisted_status),
+        )?;
         self.publish_subagent_mailbox_event(
             invocation,
             task_session_status_from_execution_status(outcome.execution_status),
@@ -276,7 +277,6 @@ impl TaskRuntime {
             None,
             Some(outcome),
         );
-        self.persist_task_record_outcome(&record, invocation, outcome);
         Ok(())
     }
 
@@ -289,8 +289,8 @@ impl TaskRuntime {
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
         debug_assert_eq!(outcome.execution_status, TaskExecutionStatus::Running);
-        let record = self.upsert_task_outcome_record(current_session_id, invocation, outcome)?;
-        if let Err(error) = self.persist_task_record_state(
+        let record = self.build_task_outcome_record(current_session_id, invocation, outcome)?;
+        let persisted_status = self.persist_task_record_state(
             &record,
             invocation,
             TaskSessionStatus::Running,
@@ -299,48 +299,52 @@ impl TaskRuntime {
             Some(&outcome.snapshot),
             Some(&outcome.controller_config),
             Some(outcome),
-        ) {
-            eprintln!(
-                "[task-session-store] persist running state failed for task {}: {error}",
-                record.task_id
-            );
-        }
+        )?;
+        self.commit_task_session_record(record.clone())?;
+        self.upsert_subagent_registry_entry(
+            &record,
+            persisted_status,
+            task_record_registry_result_summary(&record, persisted_status),
+        )?;
         Ok(())
     }
 
-    /// Upserts one task outcome into the in-memory registry and returns the updated record.
-    /// 将任务结果写入内存注册表，并返回更新后的记录。
-    fn upsert_task_outcome_record(
+    /// Builds the next task-session record without mutating the in-memory session map.
+    /// 构建下一条任务会话记录，但不修改内存会话表。
+    fn build_task_outcome_record(
         &self,
         _current_session_id: SessionId,
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
     ) -> Result<TaskSessionRecord, String> {
-        let mut sessions = self.sessions.write().map_err(|_| {
+        let sessions = self.sessions.read().map_err(|_| {
             String::from("The task session registry is locked and cannot store the result.")
         })?;
         let now = current_unix_millis_text();
         let status = outcome.execution_status.as_str().to_string();
-        let record = sessions.entry(invocation.task_id).or_insert_with(|| {
-            build_task_session_record(
-                invocation.task_id,
-                invocation.public_task_id.clone(),
-                invocation.root_session_id,
-                invocation.parent_task_id,
-                invocation.depth,
-                invocation.description.clone(),
-                invocation.subagent.clone(),
-                invocation.invocation_config.clone(),
-                invocation.display_title.clone(),
-                invocation
-                    .controller_config
-                    .clone()
-                    .or_else(|| Some(outcome.controller_config.clone())),
-                invocation.snapshot.clone(),
-                invocation.prompt.clone(),
-                String::from("created"),
-            )
-        });
+        let mut record = sessions
+            .get(&invocation.task_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                build_task_session_record(
+                    invocation.task_id,
+                    invocation.public_task_id.clone(),
+                    invocation.root_session_id,
+                    invocation.parent_task_id,
+                    invocation.depth,
+                    invocation.description.clone(),
+                    invocation.subagent.clone(),
+                    invocation.invocation_config.clone(),
+                    invocation.display_title.clone(),
+                    invocation
+                        .controller_config
+                        .clone()
+                        .or_else(|| Some(outcome.controller_config.clone())),
+                    invocation.snapshot.clone(),
+                    invocation.prompt.clone(),
+                    String::from("created"),
+                )
+            });
         debug_assert_eq!(record.task_id, invocation.task_id);
         let _ = &record.created_at;
         record.controller_config = Some(outcome.controller_config.clone());
@@ -357,12 +361,60 @@ impl TaskRuntime {
         if record.subagent.is_none() {
             record.subagent = invocation.subagent.clone();
         }
-        let task_status = task_session_status_from_execution_status(outcome.execution_status);
-        let result_summary = (!task_status.is_active()
-            && !record.last_result_text.trim().is_empty())
-        .then_some(record.last_result_text.as_str());
-        self.upsert_subagent_registry_entry(record, task_status, result_summary)?;
-        Ok(record.clone())
+        Ok(record)
+    }
+
+    /// Commits one already-persisted task-session record into the in-memory session map.
+    /// 将一条已持久化成功的任务会话记录提交到内存会话表。
+    fn commit_task_session_record(&self, record: TaskSessionRecord) -> Result<(), String> {
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from("The task session registry is locked and cannot commit the result.")
+        })?;
+        sessions.insert(record.task_id, record);
+        Ok(())
+    }
+
+    /// Builds the next failed task-session record without mutating the in-memory session map.
+    /// 构建下一条失败任务会话记录，但不修改内存会话表。
+    fn build_failed_task_record(
+        &self,
+        invocation: &TaskExecutionRequest,
+        error: &str,
+    ) -> Result<TaskSessionRecord, String> {
+        let sessions = self.sessions.read().map_err(|_| {
+            String::from("The task session registry is locked and cannot store the failure state.")
+        })?;
+        let mut record = sessions
+            .get(&invocation.task_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                build_task_session_record(
+                    invocation.task_id,
+                    invocation.public_task_id.clone(),
+                    invocation.root_session_id,
+                    invocation.parent_task_id,
+                    invocation.depth,
+                    invocation.description.clone(),
+                    invocation.subagent.clone(),
+                    invocation.invocation_config.clone(),
+                    invocation.display_title.clone(),
+                    invocation.controller_config.clone(),
+                    invocation.snapshot.clone(),
+                    invocation.prompt.clone(),
+                    String::from("created"),
+                )
+            });
+        debug_assert_eq!(record.task_id, invocation.task_id);
+        let _ = &record.created_at;
+        record.last_result_text = error.to_string();
+        record.updated_at = current_unix_millis_text();
+        record.last_status = String::from("failed");
+        record.display_title = invocation.display_title.clone();
+        record.invocation_config = invocation.invocation_config.clone();
+        if record.controller_config.is_none() {
+            record.controller_config = invocation.controller_config.clone();
+        }
+        Ok(record)
     }
 
     /// Upserts one Vulcan-native subagent registry entry from a task-session record.
@@ -454,42 +506,14 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         error: &str,
     ) -> Result<(), String> {
-        let record = {
-            let mut sessions = self.sessions.write().map_err(|_| {
-                String::from(
-                    "The task session registry is locked and cannot store the failure state.",
-                )
-            })?;
-            let record = sessions.entry(invocation.task_id).or_insert_with(|| {
-                build_task_session_record(
-                    invocation.task_id,
-                    invocation.public_task_id.clone(),
-                    invocation.root_session_id,
-                    invocation.parent_task_id,
-                    invocation.depth,
-                    invocation.description.clone(),
-                    invocation.subagent.clone(),
-                    invocation.invocation_config.clone(),
-                    invocation.display_title.clone(),
-                    invocation.controller_config.clone(),
-                    invocation.snapshot.clone(),
-                    invocation.prompt.clone(),
-                    String::from("created"),
-                )
-            });
-            debug_assert_eq!(record.task_id, invocation.task_id);
-            let _ = &record.created_at;
-            record.last_result_text = error.to_string();
-            record.updated_at = current_unix_millis_text();
-            record.last_status = String::from("failed");
-            record.display_title = invocation.display_title.clone();
-            record.invocation_config = invocation.invocation_config.clone();
-            if record.controller_config.is_none() {
-                record.controller_config = invocation.controller_config.clone();
-            }
-            record.clone()
-        };
-        self.upsert_subagent_registry_entry(&record, TaskSessionStatus::Failed, Some(error))?;
+        let record = self.build_failed_task_record(invocation, error)?;
+        let persisted_status = self.persist_task_record_failure(&record, invocation, error)?;
+        self.commit_task_session_record(record.clone())?;
+        self.upsert_subagent_registry_entry(
+            &record,
+            persisted_status,
+            task_record_registry_result_summary(&record, persisted_status),
+        )?;
         self.publish_subagent_mailbox_event(
             invocation,
             TaskSessionStatus::Failed,
@@ -497,7 +521,30 @@ impl TaskRuntime {
             Some(error),
             None,
         );
-        self.persist_task_record_failure(&record, invocation, error);
+        Ok(())
+    }
+
+    /// Discards one in-memory child-task placeholder that never reached the start event.
+    /// 丢弃一条尚未到达启动事件的内存子任务占位记录。
+    pub(super) fn discard_prestarted_task_record(
+        &self,
+        invocation: &TaskExecutionRequest,
+    ) -> Result<(), String> {
+        let created_status = status_name_for_task_session_status(TaskSessionStatus::Created);
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from(
+                "The task session registry is locked and cannot discard the pre-start child agent.",
+            )
+        })?;
+        let should_remove = sessions.get(&invocation.task_id).is_some_and(|record| {
+            record.public_task_id == invocation.public_task_id
+                && record.origin_session_id == invocation.root_session_id
+                && record.parent_task_id == invocation.parent_task_id
+                && record.last_status == created_status
+        });
+        if should_remove {
+            sessions.remove(&invocation.task_id);
+        }
         Ok(())
     }
 
@@ -536,9 +583,9 @@ impl TaskRuntime {
         record: &TaskSessionRecord,
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
-    ) {
+    ) -> Result<TaskSessionStatus, String> {
         let status = task_session_status_from_execution_status(outcome.execution_status);
-        if let Err(error) = self.persist_task_record_state(
+        self.persist_task_record_state(
             record,
             invocation,
             status,
@@ -547,12 +594,7 @@ impl TaskRuntime {
             Some(&outcome.snapshot),
             Some(&outcome.controller_config),
             Some(outcome),
-        ) {
-            eprintln!(
-                "[task-session-store] persist outcome failed for task {}: {error}",
-                record.task_id
-            );
-        }
+        )
     }
 
     /// Persists one failed task state into the segmented TaskSession store when configured.
@@ -562,8 +604,8 @@ impl TaskRuntime {
         record: &TaskSessionRecord,
         invocation: &TaskExecutionRequest,
         error: &str,
-    ) {
-        if let Err(persist_error) = self.persist_task_record_state(
+    ) -> Result<TaskSessionStatus, String> {
+        self.persist_task_record_state(
             record,
             invocation,
             TaskSessionStatus::Failed,
@@ -575,12 +617,7 @@ impl TaskRuntime {
                 .map(|_| &invocation.snapshot),
             invocation.controller_config.as_ref(),
             None,
-        ) {
-            eprintln!(
-                "[task-session-store] persist failure failed for task {}: {persist_error}",
-                record.task_id
-            );
-        }
+        )
     }
 
     /// Persists one task state snapshot and append-only lifecycle event.
@@ -595,10 +632,7 @@ impl TaskRuntime {
         snapshot: Option<&CoreConversationSnapshot>,
         controller_config: Option<&CoreControllerConfig>,
         outcome: Option<&TaskExecutionOutcome>,
-    ) -> Result<(), String> {
-        let Some(store) = self.task_session_store_for_root(record.origin_session_id)? else {
-            return Ok(());
-        };
+    ) -> Result<TaskSessionStatus, String> {
         let now_ms = current_unix_millis_u64();
         let parent = parent_ref_for_task_record(record);
         let resolved_config = outcome
@@ -608,93 +642,68 @@ impl TaskRuntime {
             });
         let task_session_id = SessionNodeId::from(record.task_id);
         let root_session_id = SessionNodeId::from(record.origin_session_id);
-        let mut metadata = match store
-            .load_task_session(task_session_id)
-            .map_err(|error| error.message)?
-        {
-            Some(metadata) => metadata,
-            None => {
-                let mut metadata = TaskSessionMetadata::new(
-                    root_session_id,
-                    task_session_id,
-                    parent.clone(),
-                    record.public_task_id.clone(),
-                    record.display_title.clone(),
-                    resolved_config.requested_config.clone(),
-                    resolved_config.effective_config.clone(),
-                    record.depth as u16,
-                    now_ms,
-                );
-                metadata.description = record.description.clone();
-                store
-                    .create_task_session(metadata.clone())
-                    .map_err(|error| error.message)?;
-                metadata
-            }
-        };
-        let persisted_status = if metadata.status == TaskSessionStatus::Archived
-            && status != TaskSessionStatus::Archived
-        {
-            TaskSessionStatus::Archived
-        } else {
-            status
-        };
-        metadata.display_title = record.display_title.clone();
-        metadata.description = record.description.clone();
-        metadata.subagent_profile_id = resolved_config.effective_config.subagent_profile_id.clone();
-        metadata.inherit_parent_config = resolved_config.effective_config.inherit_parent_config;
-        metadata.status = persisted_status;
-        metadata.runtime_policy = resolved_config.runtime_policy;
-        metadata.requested_config = resolved_config.requested_config.clone();
-        metadata.effective_config = resolved_config.effective_config.clone();
-        metadata.updated_at = now_ms;
-        metadata.last_result_summary = result_text.and_then(task_result_summary);
-        metadata.last_error = error_text.map(str::to_string);
-        store
-            .save_task_session(metadata)
-            .map_err(|error| error.message)?;
+        let mut persisted_status = status;
+        if let Some(store) = self.task_session_store_for_root(record.origin_session_id)? {
+            let mut metadata = match store
+                .load_task_session(task_session_id)
+                .map_err(|error| error.message)?
+            {
+                Some(metadata) => metadata,
+                None => {
+                    let mut metadata =
+                        TaskSessionMetadata::new(vulcan_task_session::TaskSessionMetadataInit {
+                            root_session_id,
+                            task_session_id,
+                            parent: parent.clone(),
+                            public_task_id: record.public_task_id.clone(),
+                            display_title: record.display_title.clone(),
+                            requested_config: resolved_config.requested_config.clone(),
+                            effective_config: resolved_config.effective_config.clone(),
+                            depth: record.depth as u16,
+                            timestamp_ms: now_ms,
+                        });
+                    metadata.description = record.description.clone();
+                    store
+                        .create_task_session(metadata.clone())
+                        .map_err(|error| error.message)?;
+                    metadata
+                }
+            };
+            persisted_status = if metadata.status == TaskSessionStatus::Archived
+                && status != TaskSessionStatus::Archived
+            {
+                TaskSessionStatus::Archived
+            } else {
+                status
+            };
+            metadata.display_title = record.display_title.clone();
+            metadata.description = record.description.clone();
+            metadata.subagent_profile_id =
+                resolved_config.effective_config.subagent_profile_id.clone();
+            metadata.inherit_parent_config = resolved_config.effective_config.inherit_parent_config;
+            metadata.status = persisted_status;
+            metadata.runtime_policy = resolved_config.runtime_policy;
+            metadata.requested_config = resolved_config.requested_config.clone();
+            metadata.effective_config = resolved_config.effective_config.clone();
+            metadata.updated_at = now_ms;
+            metadata.last_result_summary = result_text.and_then(task_result_summary);
+            metadata.last_error = error_text.map(str::to_string);
+            store
+                .save_task_session(metadata)
+                .map_err(|error| error.message)?;
 
-        let event_sequence = now_ms;
-        store
-            .append_event(SessionEventRecord::new(
-                format!(
-                    "task-node-state-{}-{persisted_status:?}-{event_sequence}",
-                    record.task_id
-                ),
-                task_session_id,
-                event_sequence,
-                task_session_event_kind_for_status(persisted_status),
-                now_ms,
-                task_state_event_payload(
-                    record,
-                    invocation,
-                    result_text,
-                    error_text,
-                    persisted_status,
-                    now_ms,
-                    outcome,
-                ),
-            ))
-            .map_err(|error| error.message)?;
-
-        let parent_sequence = now_ms;
-        store
-            .append_task_invocation_event(
-                parent,
-                TaskInvocationEvent {
-                    event_id: format!(
-                        "task-state-{}-{persisted_status:?}-{parent_sequence}",
+            let event_sequence = now_ms;
+            store
+                .append_event(SessionEventRecord::new(
+                    format!(
+                        "task-node-state-{}-{persisted_status:?}-{event_sequence}",
                         record.task_id
                     ),
-                    root_session_id,
-                    parent: parent_ref_for_task_record(record),
                     task_session_id,
-                    sequence: parent_sequence,
-                    kind: task_invocation_event_kind_for_status(persisted_status),
-                    status: persisted_status,
-                    prompt: Some(invocation.prompt.clone()),
-                    timestamp_ms: now_ms,
-                    payload: task_state_event_payload(
+                    event_sequence,
+                    task_session_event_kind_for_status(persisted_status),
+                    now_ms,
+                    task_state_event_payload(
                         record,
                         invocation,
                         result_text,
@@ -703,60 +712,82 @@ impl TaskRuntime {
                         now_ms,
                         outcome,
                     ),
-                },
-            )
-            .map_err(|error| error.message)?;
-
-        if let (Some(snapshot), Some(controller_config)) = (snapshot, controller_config) {
-            let previous_context = store
-                .load_context(task_session_id)
+                ))
                 .map_err(|error| error.message)?;
+
+            let parent_sequence = now_ms;
             store
-                .save_context(SessionContextDocument {
-                    schema_version: 1,
+                .append_task_invocation_event(
+                    parent,
+                    TaskInvocationEvent {
+                        event_id: format!(
+                            "task-state-{}-{persisted_status:?}-{parent_sequence}",
+                            record.task_id
+                        ),
+                        root_session_id,
+                        parent: parent_ref_for_task_record(record),
+                        task_session_id,
+                        sequence: parent_sequence,
+                        kind: task_invocation_event_kind_for_status(persisted_status),
+                        status: persisted_status,
+                        prompt: Some(invocation.prompt.clone()),
+                        timestamp_ms: now_ms,
+                        payload: task_state_event_payload(
+                            record,
+                            invocation,
+                            result_text,
+                            error_text,
+                            persisted_status,
+                            now_ms,
+                            outcome,
+                        ),
+                    },
+                )
+                .map_err(|error| error.message)?;
+
+            if let (Some(snapshot), Some(controller_config)) = (snapshot, controller_config) {
+                let previous_context = store
+                    .load_context(task_session_id)
+                    .map_err(|error| error.message)?;
+                store
+                    .save_context(SessionContextDocument {
+                        schema_version: 1,
+                        node_id: task_session_id,
+                        provider_id: Some(controller_config.provider_id.clone()),
+                        model_id: Some(controller_config.model_id.clone()),
+                        reasoning_effort: None,
+                        system_prompt_layers: vec![controller_config.system_prompt.clone()],
+                        conversation_state: serde_json::to_value(
+                            core_snapshot_to_session_conversation_state(snapshot),
+                        )
+                        .unwrap_or(Value::Null),
+                        compaction_anchor: previous_context
+                            .as_ref()
+                            .and_then(|context| context.compaction_anchor.clone()),
+                        context_budget_fingerprint: previous_context
+                            .as_ref()
+                            .and_then(|context| context.context_budget_fingerprint.clone()),
+                        tool_catalog_snapshot: Value::Null,
+                        provider_request_preview: None,
+                    })
+                    .map_err(|error| error.message)?;
+            }
+
+            store
+                .save_runtime_checkpoint(SessionRuntimeCheckpoint {
                     node_id: task_session_id,
-                    provider_id: Some(controller_config.provider_id.clone()),
-                    model_id: Some(controller_config.model_id.clone()),
-                    reasoning_effort: None,
-                    system_prompt_layers: vec![controller_config.system_prompt.clone()],
-                    conversation_state: serde_json::to_value(
-                        core_snapshot_to_session_conversation_state(snapshot),
-                    )
-                    .unwrap_or(Value::Null),
-                    compaction_anchor: previous_context
-                        .as_ref()
-                        .and_then(|context| context.compaction_anchor.clone()),
-                    context_budget_fingerprint: previous_context
-                        .as_ref()
-                        .and_then(|context| context.context_budget_fingerprint.clone()),
-                    tool_catalog_snapshot: Value::Null,
-                    provider_request_preview: None,
+                    status: status_name_for_task_session_status(persisted_status).to_string(),
+                    last_sequence: event_sequence,
+                    payload: json!({
+                        "task_id": record.public_task_id,
+                        "display_title": record.display_title,
+                        "updated_at": now_ms,
+                    }),
                 })
                 .map_err(|error| error.message)?;
         }
 
-        store
-            .save_runtime_checkpoint(SessionRuntimeCheckpoint {
-                node_id: task_session_id,
-                status: status_name_for_task_session_status(persisted_status).to_string(),
-                last_sequence: event_sequence,
-                payload: json!({
-                    "task_id": record.public_task_id,
-                    "display_title": record.display_title,
-                    "updated_at": now_ms,
-                }),
-            })
-            .map_err(|error| error.message)?;
-
-        let registry_result_summary = (!persisted_status.is_active())
-            .then(|| result_text.filter(|text| !text.trim().is_empty()));
-        self.upsert_subagent_registry_entry(
-            record,
-            persisted_status,
-            registry_result_summary.flatten(),
-        )?;
-
-        Ok(())
+        Ok(persisted_status)
     }
 
     /// Builds one segmented TaskSession store for the given root session when a host configured it.
@@ -951,6 +982,16 @@ fn subagent_restore_status_from_metadata(status: TaskSessionStatus) -> SubagentS
         return SubagentStatus::Stopped;
     }
     subagent_status_from_task_session_status(status)
+}
+
+/// Returns the compact registry result summary for a persisted task-session record.
+/// 返回已持久化任务会话记录用于注册表投影的紧凑结果摘要。
+fn task_record_registry_result_summary(
+    record: &TaskSessionRecord,
+    status: TaskSessionStatus,
+) -> Option<&str> {
+    (!status.is_active() && !record.last_result_text.trim().is_empty())
+        .then_some(record.last_result_text.as_str())
 }
 
 /// Reads the latest task message from a persisted task event payload.

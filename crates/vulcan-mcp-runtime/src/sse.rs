@@ -107,17 +107,17 @@ impl SseTransport {
         let shutdown_token = CancellationToken::new();
         let (event_sender, _) = broadcast::channel(32);
 
-        spawn_sse_listener(
-            http_client.clone(),
-            sse_url.clone(),
-            bearer_token.clone(),
-            custom_headers.clone(),
+        spawn_sse_listener(SseListenerInput {
+            http_client: http_client.clone(),
+            sse_url: sse_url.clone(),
+            bearer_token: bearer_token.clone(),
+            custom_headers: custom_headers.clone(),
             message_endpoint_tx,
-            pending_responses.clone(),
-            shutdown_token.clone(),
-            event_sender.clone(),
-            auth_session.clone(),
-        );
+            pending_responses: pending_responses.clone(),
+            shutdown_token: shutdown_token.clone(),
+            event_sender: event_sender.clone(),
+            auth_session: auth_session.clone(),
+        });
 
         let mut transport = Self {
             endpoint: endpoint.into(),
@@ -526,17 +526,50 @@ impl McpTransport for SseTransport {
 
 /// Spawn the background SSE listener loop.
 /// 启动后台 SSE 监听循环。
-fn spawn_sse_listener(
+struct SseListenerInput {
+    /// HTTP client reused for reconnecting the SSE stream.
+    /// 用于重连 SSE 流的复用 HTTP 客户端。
     http_client: Client,
+    /// Legacy SSE endpoint URL.
+    /// 旧式 SSE 端点地址。
     sse_url: Url,
+    /// Optional configured static bearer token.
+    /// 可选的静态 bearer token 配置。
     bearer_token: Option<String>,
+    /// Custom HTTP headers applied to stream requests.
+    /// 应用于流请求的自定义 HTTP 头。
     custom_headers: HeaderMap,
+    /// Channel used to publish the discovered message endpoint.
+    /// 用于发布已发现消息端点的通道。
     message_endpoint_tx: watch::Sender<Option<Url>>,
+    /// Shared map of JSON-RPC responses waiting for request ids.
+    /// 按请求标识等待 JSON-RPC 响应的共享映射。
     pending_responses: PendingResponseMap,
+    /// Shutdown token observed by the listener loop.
+    /// 监听循环观察的关闭令牌。
     shutdown_token: CancellationToken,
+    /// Transport event broadcaster.
+    /// 传输事件广播器。
     event_sender: broadcast::Sender<McpTransportEvent>,
+    /// Optional OAuth session that can refresh live bearer tokens.
+    /// 可刷新实时 bearer token 的可选 OAuth 会话。
     auth_session: Option<Arc<McpOAuthSession>>,
-) {
+}
+
+/// Spawn the background SSE listener loop.
+/// 启动后台 SSE 监听循环。
+fn spawn_sse_listener(input: SseListenerInput) {
+    let SseListenerInput {
+        http_client,
+        sse_url,
+        bearer_token,
+        custom_headers,
+        message_endpoint_tx,
+        pending_responses,
+        shutdown_token,
+        event_sender,
+        auth_session,
+    } = input;
     tokio::spawn(async move {
         let mut observed_connection = false;
         loop {
@@ -825,10 +858,10 @@ async fn resolve_effective_bearer_token(
     bearer_token: &Option<String>,
     auth_session: Option<&Arc<McpOAuthSession>>,
 ) -> Result<Option<String>, McpRuntimeError> {
-    if let Some(auth_session) = auth_session {
-        if let Some(token) = auth_session.access_token().await? {
-            return Ok(Some(token));
-        }
+    if let Some(auth_session) = auth_session
+        && let Some(token) = auth_session.access_token().await?
+    {
+        return Ok(Some(token));
     }
 
     Ok(bearer_token

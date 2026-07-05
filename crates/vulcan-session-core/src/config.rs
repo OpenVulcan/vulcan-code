@@ -4,11 +4,12 @@ use serde_json::Value;
 
 /// Capability policy mode used by tool and prompt-skill selectors.
 /// 工具与提示词技能选择器使用的能力策略模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityPolicyMode {
     /// Expose every capability allowed by the lower runtime layers.
     /// 暴露下层运行时允许的全部能力。
+    #[default]
     All,
     /// Expose only selectors listed by the policy.
     /// 仅暴露策略列表中声明的选择器。
@@ -16,12 +17,6 @@ pub enum CapabilityPolicyMode {
     /// Expose every lower-layer capability except selectors listed by the policy.
     /// 暴露除策略列表声明项以外的下层能力。
     DenyOnly,
-}
-
-impl Default for CapabilityPolicyMode {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 /// Selector policy snapshot shared by tools and prompt skills.

@@ -154,20 +154,19 @@ fn build_git_commit_summary_input(
     use_rtk_summary: bool,
     rtk_telemetry_disabled: bool,
 ) -> Result<GitCommitSummaryInput, String> {
-    if use_rtk_summary {
-        if let Some(rtk_content) = build_git_commit_summary_rtk_input(
+    if use_rtk_summary
+        && let Some(rtk_content) = build_git_commit_summary_rtk_input(
             repository_root,
             include_unstaged,
             rtk_telemetry_disabled,
-        ) {
-            let token_estimate =
-                estimate_git_commit_prompt_tokens(model_id, &rtk_content, estimator);
-            if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
-                return Ok(GitCommitSummaryInput {
-                    content: rtk_content,
-                    truncated: false,
-                });
-            }
+        )
+    {
+        let token_estimate = estimate_git_commit_prompt_tokens(model_id, &rtk_content, estimator);
+        if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
+            return Ok(GitCommitSummaryInput {
+                content: rtk_content,
+                truncated: false,
+            });
         }
     }
 

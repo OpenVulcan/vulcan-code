@@ -28,15 +28,28 @@ pub(super) fn load_segmented_window_messages(
     if matches!(
         source_preference,
         SegmentedWindowSourcePreference::SessionBoundaryFirst
-    ) {
-        if let Some(window) =
-            load_segmented_boundary_window_messages(&session_dir, before_seq, requested_limit)?
+    ) && let Some(mut window) =
+        load_segmented_boundary_window_messages(&session_dir, before_seq, requested_limit)?
+    {
+        if let Some(raw_window) =
+            load_segmented_raw_window_messages(&session_dir, before_seq, requested_limit)?
         {
-            return Ok(Some(window));
+            window.tool_detail_messages = raw_window.tool_detail_messages;
+            window.has_more_history = window.has_more_history || raw_window.has_more_history;
         }
+        return Ok(Some(window));
     }
-    let turn_window =
-        read_segmented_session_turn_window(&session_dir, before_seq, requested_limit)?;
+    load_segmented_raw_window_messages(&session_dir, before_seq, requested_limit)
+}
+
+/// Loads one raw segmented display window from message-bearing event lines.
+/// 从携带消息的分段事件行加载一个原始展示窗口。
+fn load_segmented_raw_window_messages(
+    session_dir: &std::path::Path,
+    before_seq: Option<u64>,
+    requested_limit: usize,
+) -> Result<Option<SegmentedWindowMessages>, String> {
+    let turn_window = read_segmented_session_turn_window(session_dir, before_seq, requested_limit)?;
     if turn_window.lines.is_empty() {
         return Ok(None);
     }
@@ -76,19 +89,67 @@ fn load_segmented_boundary_window_messages(
     before_seq: Option<u64>,
     requested_limit: usize,
 ) -> Result<Option<SegmentedWindowMessages>, String> {
-    let raw_limit = requested_limit
+    let (boundary_lines, has_more_history) =
+        read_segmented_session_boundary_turn_window(session_dir, before_seq, requested_limit)?;
+    session_boundary_lines_to_window_messages(&boundary_lines, has_more_history)
+}
+
+/// Reads session-boundary lines by complete boundary turns instead of raw row count.
+/// 按完整会话边界轮次而不是原始行数读取会话边界行。
+pub(super) fn read_segmented_session_boundary_turn_window(
+    session_dir: &std::path::Path,
+    before_seq: Option<u64>,
+    requested_limit: usize,
+) -> Result<
+    (
+        Vec<self::segmented_session_store::SegmentedSessionEventLine>,
+        bool,
+    ),
+    String,
+> {
+    let turn_limit = requested_limit.max(1);
+    let raw_batch_limit = requested_limit
         .saturating_mul(SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT)
         .max(SESSION_TRANSCRIPT_MIN_ROW_LIMIT);
-    let raw_lines = read_segmented_session_event_window(session_dir, before_seq, raw_limit)?;
-    let has_more_history = raw_lines.len() >= raw_limit
-        && raw_lines
-            .first()
-            .is_some_and(|line| line.seq > 0 || before_seq.is_some());
-    let boundary_lines = raw_lines
-        .into_iter()
-        .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
-        .collect::<Vec<_>>();
-    session_boundary_lines_to_window_messages(&boundary_lines, has_more_history)
+    let mut cursor = before_seq;
+    let mut boundary_lines_reversed = Vec::new();
+    let mut seen_turn_ids = std::collections::BTreeSet::new();
+    let mut has_more_history = false;
+
+    'read_batches: loop {
+        let raw_lines = read_segmented_session_event_window(session_dir, cursor, raw_batch_limit)?;
+        if raw_lines.is_empty() {
+            break;
+        }
+        let first_seq = raw_lines.first().map(|line| line.seq);
+        for line in raw_lines.into_iter().rev() {
+            if line.kind != SegmentedSessionEventKind::SessionBoundary {
+                continue;
+            }
+            let turn_id = line
+                .payload
+                .get("turn_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            if let Some(turn_id) = turn_id.as_ref() {
+                if seen_turn_ids.len() >= turn_limit && !seen_turn_ids.contains(turn_id) {
+                    has_more_history = true;
+                    break 'read_batches;
+                }
+                seen_turn_ids.insert(turn_id.clone());
+            }
+            boundary_lines_reversed.push(line);
+        }
+        match first_seq {
+            Some(0) | None => break,
+            Some(seq) => cursor = Some(seq),
+        }
+    }
+
+    boundary_lines_reversed.reverse();
+    Ok((boundary_lines_reversed, has_more_history))
 }
 
 /// Projects session boundary JSONL lines into the existing segmented transcript window shape.

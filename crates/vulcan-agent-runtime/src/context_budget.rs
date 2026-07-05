@@ -6,7 +6,8 @@ use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::{ProviderApiFamily, ReasoningEffortLevel};
 use vulcan_context::budget::{
     ContextBudgetAiToolCapability, ContextBudgetCapabilities, ContextProviderApiFamily,
-    ContextReasoningEffort, ContextTokenEstimator,
+    ContextReasoningEffort, ContextTokenEstimator, RequestContextBudgetSnapshotInput,
+    RequestContextBudgetSnapshotOptions, build_request_context_budget_snapshot_with_options,
 };
 #[allow(unused_imports)]
 pub use vulcan_context::{
@@ -18,28 +19,54 @@ use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot, ProviderUsageSnapshot,
 };
 
+/// Runtime input payload for compaction-aware request budget snapshots.
+/// 面向运行时压缩预算快照的输入载荷。
+pub struct RequestContextCompactionBudgetSnapshotInput<'a> {
+    /// Stable provider identifier used by diagnostics and fingerprints.
+    /// 诊断与指纹使用的稳定 Provider 标识。
+    pub provider_id: &'a str,
+    /// Stable model identifier used by token estimation.
+    /// Token 估算使用的稳定模型标识。
+    pub model_id: &'a str,
+    /// Runtime provider API family.
+    /// 运行时 Provider 接口族。
+    pub api_family: ProviderApiFamily,
+    /// Resolved provider/model capabilities.
+    /// 已解析的 Provider/Model 能力。
+    pub capabilities: &'a ResolvedModelCapabilities,
+    /// Resolved reasoning controls.
+    /// 已解析的推理控制。
+    pub reasoning: &'a ProviderRuntimeReasoningResolution,
+    /// Final provider request snapshot.
+    /// 最终 Provider 请求快照。
+    pub request_snapshot: &'a CoreProviderRequestSnapshot,
+    /// Optional provider-observed usage used to calibrate estimates.
+    /// 用于校准估算值的可选 Provider 实测用量。
+    pub observed_usage: Option<&'a ProviderUsageSnapshot>,
+    /// Optional host token estimator.
+    /// 可选宿主 Token 估算器。
+    pub estimator: Option<&'a dyn ContextTokenEstimator>,
+}
+
 /// Builds one request-facing compaction budget snapshot with an initialized token estimator.
 /// 使用已初始化的 Token 估算器构建一份面向真实请求的压缩预算快照。
-pub fn build_request_context_compaction_budget_snapshot_with_estimator(
-    provider_id: &str,
-    model_id: &str,
-    api_family: ProviderApiFamily,
-    capabilities: &ResolvedModelCapabilities,
-    reasoning: &ProviderRuntimeReasoningResolution,
-    request_snapshot: &CoreProviderRequestSnapshot,
-    observed_usage: Option<&ProviderUsageSnapshot>,
-    estimator: Option<&dyn ContextTokenEstimator>,
+pub fn build_request_context_compaction_budget_snapshot(
+    input: RequestContextCompactionBudgetSnapshotInput<'_>,
 ) -> ContextBudgetSnapshot {
-    vulcan_context::budget::build_request_context_budget_snapshot_with_policy_and_estimator(
-        provider_id,
-        model_id,
-        map_provider_api_family(api_family),
-        &map_capabilities(capabilities),
-        map_reasoning_effort(reasoning.requested_effort),
-        request_snapshot,
-        observed_usage,
-        Some(ContextCompactionPolicy::default()),
-        estimator,
+    build_request_context_budget_snapshot_with_options(
+        RequestContextBudgetSnapshotInput {
+            provider_id: input.provider_id,
+            model_id: input.model_id,
+            api_family: map_provider_api_family(input.api_family),
+            capabilities: &map_capabilities(input.capabilities),
+            reasoning: map_reasoning_effort(input.reasoning.requested_effort),
+            request_snapshot: input.request_snapshot,
+            observed_usage: input.observed_usage,
+        },
+        RequestContextBudgetSnapshotOptions {
+            compaction_policy: Some(ContextCompactionPolicy::default()),
+            estimator: input.estimator,
+        },
     )
 }
 

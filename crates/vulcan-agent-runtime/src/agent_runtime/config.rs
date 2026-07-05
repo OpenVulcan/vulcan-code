@@ -757,10 +757,10 @@ fn load_default_agent_prompt(file_name: &str, fallback_prompt: &str) -> String {
     let source_prompt_path = runtime_assets::source_resource_directory()
         .join(AGENT_PROMPTS_DIR_NAME)
         .join(file_name);
-    if source_prompt_path != packaged_prompt_path {
-        if let Some(prompt) = read_non_empty_prompt_file(&source_prompt_path) {
-            return prompt;
-        }
+    if source_prompt_path != packaged_prompt_path
+        && let Some(prompt) = read_non_empty_prompt_file(&source_prompt_path)
+    {
+        return prompt;
     }
 
     fallback_prompt.to_string()

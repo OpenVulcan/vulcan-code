@@ -73,25 +73,37 @@ pub(super) struct KeyValueInput {
     value: String,
 }
 
-/// No-op session lifecycle hook used by the WebUI external stream lifecycle runner.
-
+/// Saves one MCP server configuration from the WebUI settings page.
 /// 从 WebUI 设置页保存单个 MCP 服务器配置。
 pub(super) async fn service_save_mcp_server_configuration(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: McpServerSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
+    let create_new_server = request
+        .server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none();
     let (server_id, entry) = mcp_server_entry_from_request(request)?;
     let next_configuration = {
         let mut configuration = provider_configuration_from_state(&state)?;
-        configuration.mcp.servers.insert(server_id.clone(), entry);
-        provider_config::save_configuration_file(&configuration)
-            .map_err(|error| format!("保存 MCP 服务器失败：{error}"))?;
+        apply_mcp_server_entry_to_configuration(
+            &mut configuration,
+            server_id,
+            entry,
+            create_new_server,
+        )?;
         configuration
     };
     let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
         .await
-        .ok();
+        .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
+    if let Err(error) = provider_config::save_configuration_file(&next_configuration) {
+        next_mcp_runtime.shutdown();
+        return Err(format!("保存 MCP 服务器失败：{error}"));
+    }
     let workbench = store_provider_and_mcp_configuration_after_change(
         &state,
         next_configuration,
@@ -114,11 +126,13 @@ pub(super) async fn service_remove_mcp_server_configuration(
         .servers
         .remove(server_id.trim())
         .ok_or_else(|| format!("未找到 MCP 服务器 `{}`。", server_id.trim()))?;
-    provider_config::save_configuration_file(&next_configuration)
-        .map_err(|error| format!("移除 MCP 服务器失败：{error}"))?;
     let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
         .await
-        .ok();
+        .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
+    if let Err(error) = provider_config::save_configuration_file(&next_configuration) {
+        next_mcp_runtime.shutdown();
+        return Err(format!("移除 MCP 服务器失败：{error}"));
+    }
     let workbench = store_provider_and_mcp_configuration_after_change(
         &state,
         next_configuration,
@@ -128,8 +142,44 @@ pub(super) async fn service_remove_mcp_server_configuration(
     Ok(workbench)
 }
 
-/// Opens one project folder in the host system file manager.
+/// Applies one parsed MCP server entry to the provider configuration without silent overwrites.
+/// 将单个已解析 MCP 服务器条目应用到 Provider 配置，并禁止静默覆盖。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the mutable provider configuration being prepared for persistence.
+/// `configuration` 是准备持久化的可变 Provider 配置。
+/// `server_id` is the stable MCP server identifier derived from the request.
+/// `server_id` 是从请求解析出的稳定 MCP 服务器标识。
+/// `entry` is the validated persisted MCP server entry.
+/// `entry` 是已经校验过的持久化 MCP 服务器条目。
+/// `create_new_server` is true when the request came from the create flow.
+/// `create_new_server` 在请求来自新增流程时为 true。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after insertion or replacement is legal; otherwise a user-facing error.
+/// 插入或替换合法时返回 `Ok(())`；否则返回面向用户的错误。
+pub(super) fn apply_mcp_server_entry_to_configuration(
+    configuration: &mut ProviderConfigurationFile,
+    server_id: String,
+    entry: PersistedMcpServerEntry,
+    create_new_server: bool,
+) -> Result<(), String> {
+    let existing = configuration.mcp.servers.contains_key(&server_id);
+    if create_new_server && existing {
+        return Err(format!(
+            "MCP 服务器 `{server_id}` 已存在。请更换名称，或编辑现有服务器。"
+        ));
+    }
+    if !create_new_server && !existing {
+        return Err(format!("未找到 MCP 服务器 `{server_id}`，无法保存修改。"));
+    }
+    configuration.mcp.servers.insert(server_id, entry);
+    Ok(())
+}
 
+/// Parses one MCP transport key from the WebUI request payload.
 /// 从 WebUI 请求载荷解析单个 MCP 传输键。
 pub(super) fn parse_mcp_transport(value: &str) -> Result<PersistedMcpTransportKind, String> {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -140,8 +190,7 @@ pub(super) fn parse_mcp_transport(value: &str) -> Result<PersistedMcpTransportKi
     }
 }
 
-/// Parses one AI tool kind key from the WebUI request payload.
-
+/// Converts WebUI key/value inputs into a validated map.
 /// 将 WebUI 键值列表转换为经过校验的映射。
 pub(super) fn key_value_inputs_to_map(
     inputs: Vec<KeyValueInput>,

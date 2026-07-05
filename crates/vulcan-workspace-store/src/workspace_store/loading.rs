@@ -84,18 +84,16 @@ async fn load_workspace_snapshot_with_runtime_state(
     let mut session_updated_at = BTreeMap::new();
     for row in &session_rows {
         let session_id = parse_session_id(&row.id)?;
-        let project_id = row
-            .project_id
-            .trim()
-            .is_empty()
-            .then(|| row.project_tag.clone())
-            .unwrap_or_else(|| row.project_id.clone());
-        let project_tag = row
-            .project_tag
-            .trim()
-            .is_empty()
-            .then(|| project_id.clone())
-            .unwrap_or_else(|| row.project_tag.clone());
+        let project_id = if row.project_id.trim().is_empty() {
+            row.project_tag.clone()
+        } else {
+            row.project_id.clone()
+        };
+        let project_tag = if row.project_tag.trim().is_empty() {
+            project_id.clone()
+        } else {
+            row.project_tag.clone()
+        };
         let archived = row.archived != 0;
         let session_dir = segmented_session_directory(
             &controller.data_root,
@@ -233,11 +231,11 @@ async fn load_workspace_snapshot_with_runtime_state(
         .collect::<BTreeSet<_>>();
     let selected_session = visible_sessions
         .first()
-        .map(|session| session.id.clone())
+        .map(|session| session.id)
         .unwrap_or_default();
     let session_run_phases = visible_sessions
         .iter()
-        .map(|session| (session.id.clone(), SessionRunPhase::Idle))
+        .map(|session| (session.id, SessionRunPhase::Idle))
         .collect::<BTreeMap<_, _>>();
 
     Ok(WorkspaceSnapshot {

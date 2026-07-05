@@ -151,7 +151,7 @@ pub(super) fn load_supported_providers() -> Vec<SupportedProviderDefinition> {
         })
         .collect::<Vec<_>>();
 
-    definitions.sort_by(|left, right| provider_sort_key(left).cmp(&provider_sort_key(right)));
+    definitions.sort_by_key(provider_sort_key);
     definitions
 }
 

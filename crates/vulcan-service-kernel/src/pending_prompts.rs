@@ -561,6 +561,7 @@ pub(super) fn insert_webui_pending_prompt_into_internal_queue(
     let PendingPromptQueueRouteOutcome::Inserted(internal_entry) = route_outcome else {
         return Ok(());
     };
+    let internal_entry = *internal_entry;
     if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
         hook_runtime.record_queued_user_prompt(
             session_id,

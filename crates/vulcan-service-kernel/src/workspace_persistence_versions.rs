@@ -413,33 +413,42 @@ pub(crate) fn prompt_to_session_title(prompt: &str) -> String {
     title.chars().take(48).collect()
 }
 
-/// Stores and emits one rebuilt workbench snapshot after a workspace mutation.
-/// 在工作区发生变更后存储并发出一份重建后的工作台快照。
-pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    luaskills_catalog: &TauriLuaSkillsCatalog,
-    token_budget_runtime: &TauriTokenBudgetRuntime,
-    mcp_catalog: &TauriMcpRuntimeCatalog,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
-    workspace_snapshot: WorkspaceSnapshot,
-    logs: &[String],
-) -> Result<WorkbenchSnapshot, String> {
-    store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subagent_navigation_mode(
-        app,
-        &state,
-        controller_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        provider_configuration,
-        ai_tool_configuration,
-        workspace_snapshot,
-        logs,
-        SubagentNavigationRefreshMode::Rebuild,
-    )
+/// Describes one cold-path full workbench snapshot refresh request.
+/// 描述一次冷路径全量工作台快照刷新请求。
+pub(crate) struct FullWorkbenchColdRefreshRequest<'a> {
+    /// Emits the rebuilt workbench snapshot to WebUI subscribers.
+    /// 负责向 WebUI 订阅者发送重建后的工作台快照。
+    pub(crate) app: &'a ServiceEventEmitter,
+    /// Owns the cached runtime state used while rebuilding the surface.
+    /// 持有重建界面时需要读取的运行时缓存状态。
+    pub(crate) state: &'a SharedServiceBridgeState,
+    /// Provides controller-level persistence and filesystem services.
+    /// 提供控制器级持久化与文件系统服务。
+    pub(crate) controller_runtime: &'a ControllerRuntimeHandle,
+    /// Provides the LuaSkills catalog projected into the workbench snapshot.
+    /// 提供需要投影到工作台快照中的 LuaSkills 目录。
+    pub(crate) luaskills_catalog: &'a TauriLuaSkillsCatalog,
+    /// Provides token-budget runtime data for model context displays.
+    /// 提供模型上下文显示需要的 token 预算运行时数据。
+    pub(crate) token_budget_runtime: &'a TauriTokenBudgetRuntime,
+    /// Provides MCP server and tool summaries for the workbench snapshot.
+    /// 提供工作台快照需要的 MCP 服务与工具摘要。
+    pub(crate) mcp_catalog: &'a TauriMcpRuntimeCatalog,
+    /// Provides configured provider and model choices.
+    /// 提供已配置的供应商与模型选项。
+    pub(crate) provider_configuration: &'a ProviderConfigurationFile,
+    /// Provides persisted AI tool visibility configuration.
+    /// 提供已持久化的 AI 工具可见性配置。
+    pub(crate) ai_tool_configuration: &'a PersistedAiToolConfiguration,
+    /// Carries the canonical workspace state being committed.
+    /// 携带即将提交的规范工作区状态。
+    pub(crate) workspace_snapshot: WorkspaceSnapshot,
+    /// Carries service logs to project into the rebuilt workbench.
+    /// 携带需要投影到重建工作台中的服务日志。
+    pub(crate) logs: &'a [String],
+    /// Selects whether subagent navigation should be rebuilt from state or preserved from cache.
+    /// 选择子代理导航应从状态重建还是从缓存保留。
+    pub(crate) subagent_navigation_mode: SubagentNavigationRefreshMode,
 }
 
 /// Stores the canonical workspace snapshot without rebuilding or emitting a full workbench snapshot.
@@ -479,21 +488,34 @@ pub(crate) fn store_workspace_snapshot_without_workbench_rebuild(
     Ok(())
 }
 
-/// Stores and emits one rebuilt workbench snapshot with an explicit subagent navigation refresh mode.
-/// 使用显式子代理导航刷新模式存储并发出一份重建后的工作台快照。
-pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subagent_navigation_mode(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
-    luaskills_catalog: &TauriLuaSkillsCatalog,
-    token_budget_runtime: &TauriTokenBudgetRuntime,
-    mcp_catalog: &TauriMcpRuntimeCatalog,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
-    workspace_snapshot: WorkspaceSnapshot,
-    logs: &[String],
-    subagent_navigation_mode: SubagentNavigationRefreshMode,
+/// Stores and emits one rebuilt workbench snapshot after a cold-path workspace mutation.
+/// 在冷路径工作区变更后存储并发送一份重建后的工作台快照。
+///
+/// # Parameters
+/// 参数
+/// `request` groups the runtime handles, workspace snapshot, logs, and subagent navigation mode for this refresh.
+/// `request` 聚合本次刷新需要的运行时句柄、工作区快照、日志与子代理导航模式。
+///
+/// # Returns
+/// 返回值
+/// The rebuilt workbench snapshot after it has been stored and emitted.
+/// 返回已存储并发送后的重建工作台快照。
+pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
+    request: FullWorkbenchColdRefreshRequest<'_>,
 ) -> Result<WorkbenchSnapshot, String> {
+    let FullWorkbenchColdRefreshRequest {
+        app,
+        state,
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        provider_configuration,
+        ai_tool_configuration,
+        workspace_snapshot,
+        logs,
+        subagent_navigation_mode,
+    } = request;
     let trace_started_at = current_unix_millis_value();
     let trace_lock_wait_started_at = current_unix_millis_value();
     let (
@@ -585,28 +607,31 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subag
             session_goal_summaries,
             command_session_runtime,
             native_tools,
-            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
+            hydrated_conversation_window_summaries(
+                &guard.hydrated_conversation_windows,
+                &guard.webui_preloaded_unclosed_subagent_roots,
+            ),
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
-    let mut workbench = workbench_from_runtime(
-        controller_runtime,
-        command_session_runtime.as_deref(),
+    let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
+        controller: controller_runtime,
+        command_session_runtime: command_session_runtime.as_deref(),
         luaskills_catalog,
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
         ai_tool_configuration,
-        &workspace_snapshot,
-        surface_messages.as_slice(),
+        workspace: &workspace_snapshot,
+        surface_messages: surface_messages.as_slice(),
         subagent_navigation,
         pending_questions,
         logs,
-        &live_context_budgets,
-        &session_goal_summaries,
-        &hydrated_window_summaries,
+        live_context_budgets: &live_context_budgets,
+        session_goal_summaries: &session_goal_summaries,
+        hydrated_conversation_windows: &hydrated_window_summaries,
         native_tools,
-    );
+    });
     webui_trace(
         "store_workbench_built",
         format!(
@@ -662,7 +687,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh_with_subag
         );
     }
     let trace_emit_started_at = current_unix_millis_value();
-    emit_workbench_event(&app, &workbench);
+    emit_workbench_event(app, &workbench);
     webui_trace(
         "store_workbench_emitted",
         format!(

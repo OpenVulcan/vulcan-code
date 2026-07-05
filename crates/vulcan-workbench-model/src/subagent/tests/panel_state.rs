@@ -1,18 +1,36 @@
 use super::*;
 
+/// Builds one main-parent task metadata document for panel-state tests.
+/// 为面板状态测试构建单个主会话父级任务元数据文档。
+fn panel_test_metadata(
+    root_session_id: vulcan_session_core::SessionNodeId,
+    task_session_id: vulcan_session_core::SessionNodeId,
+    public_task_id: &str,
+    display_title: &str,
+    timestamp_ms: u64,
+) -> TaskSessionMetadata {
+    TaskSessionMetadata::new(vulcan_task_session::TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent: ParentSessionRef::MainSession { root_session_id },
+        public_task_id: public_task_id.to_string(),
+        display_title: display_title.to_string(),
+        requested_config: vulcan_session_core::SessionRequestedConfig::default(),
+        effective_config: vulcan_session_core::SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms,
+    })
+}
+
 #[test]
 fn builds_panel_state_from_task_session_metadata() {
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
-    let mut metadata = TaskSessionMetadata::new(
+    let mut metadata = panel_test_metadata(
         root_session_id,
         task_session_id,
-        ParentSessionRef::MainSession { root_session_id },
         "audit-task",
         "代码审核",
-        vulcan_session_core::SessionRequestedConfig::default(),
-        vulcan_session_core::SessionEffectiveConfig::default(),
-        1,
         10,
     );
     metadata.status = TaskSessionStatus::Completed;
@@ -51,15 +69,11 @@ fn loads_panel_states_from_segmented_task_session_store() {
     let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
-    let mut metadata = TaskSessionMetadata::new(
+    let mut metadata = panel_test_metadata(
         root_session_id,
         task_session_id,
-        ParentSessionRef::MainSession { root_session_id },
         "audit-task",
         "代码审核",
-        vulcan_session_core::SessionRequestedConfig::default(),
-        vulcan_session_core::SessionEffectiveConfig::default(),
-        1,
         10,
     );
     metadata.status = TaskSessionStatus::Completed;
@@ -128,27 +142,19 @@ fn segmented_task_session_store_omits_archived_panel_states() {
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let open_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let archived_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
-    let mut open_metadata = TaskSessionMetadata::new(
+    let mut open_metadata = panel_test_metadata(
         root_session_id,
         open_task_session_id,
-        ParentSessionRef::MainSession { root_session_id },
         "open-task",
         "未关闭智能体",
-        vulcan_session_core::SessionRequestedConfig::default(),
-        vulcan_session_core::SessionEffectiveConfig::default(),
-        1,
         10,
     );
     open_metadata.status = TaskSessionStatus::Completed;
-    let mut archived_metadata = TaskSessionMetadata::new(
+    let mut archived_metadata = panel_test_metadata(
         root_session_id,
         archived_task_session_id,
-        ParentSessionRef::MainSession { root_session_id },
         "closed-task",
         "已关闭智能体",
-        vulcan_session_core::SessionRequestedConfig::default(),
-        vulcan_session_core::SessionEffectiveConfig::default(),
-        1,
         11,
     );
     archived_metadata.status = TaskSessionStatus::Archived;

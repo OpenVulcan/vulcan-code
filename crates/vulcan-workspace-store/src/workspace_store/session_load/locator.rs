@@ -2,23 +2,9 @@
 //! 分段会话定位解析辅助逻辑。
 
 use super::*;
-/// Finds the lightweight session locator needed to open one segmented session directory.
-/// 查找打开单个分段会话目录所需的轻量会话定位信息。
-pub(super) async fn query_session_locator(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<Option<StoredSessionLocatorRow>, String> {
-    Ok(
-        find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
-            .map(|session_dir| StoredSessionLocatorRow {
-                session_dir,
-                latest_turn_index: -1,
-            }),
-    )
-}
 
-/// Resolves one segmented session locator by checking only the known owning project.
-/// 仅检查已知所属项目来解析单个分段会话定位信息。
+/// Resolves one segmented session locator by its deterministic project, created-at, and session id.
+/// 通过确定性的项目、创建时间与会话标识解析单个分段会话定位信息。
 ///
 /// # Parameters
 /// 参数
@@ -26,35 +12,30 @@ pub(super) async fn query_session_locator(
 /// `controller` 持有工作区存储运行时桥。
 /// `project_id` is the known segmented project tag for this session.
 /// `project_id` 是该会话已知的分段项目标签。
-/// `session_id` selects the session directory suffix.
-/// `session_id` 选择会话目录后缀。
+/// `created_at` is the raw Unix-milliseconds creation timestamp from the session summary.
+/// `created_at` 是会话摘要中的原始 Unix 毫秒创建时间戳。
+/// `session_id` selects the session directory.
+/// `session_id` 选择会话目录。
 ///
 /// # Returns
 /// 返回值
-/// The locator when a matching active or archived segmented session directory exists.
-/// 当活动或归档分段会话目录存在匹配项时返回定位信息。
-pub(super) async fn query_session_locator_for_project(
+/// The locator when the deterministic active or archived directory exists.
+/// 当确定性的活动或归档目录存在时返回定位信息。
+pub(super) async fn query_session_locator_for_project_created_at(
     controller: &ControllerRuntimeHandle,
     project_id: &str,
+    created_at: &str,
     session_id: SessionId,
 ) -> Result<Option<StoredSessionLocatorRow>, String> {
-    let session_id_text = session_id.to_string();
-    let active_dir = find_segmented_session_directory(
+    let Some(session_dir) = find_segmented_session_directory_for_task_store_created_at(
         &controller.data_root,
-        false,
         project_id,
-        &session_id_text,
-    )?;
-    let session_dir = match active_dir {
-        Some(session_dir) => Some(session_dir),
-        None => find_segmented_session_directory(
-            &controller.data_root,
-            true,
-            project_id,
-            &session_id_text,
-        )?,
+        created_at,
+        &session_id.to_string(),
+    ) else {
+        return Ok(None);
     };
-    Ok(session_dir.map(|session_dir| StoredSessionLocatorRow {
+    Ok(Some(StoredSessionLocatorRow {
         session_dir,
         latest_turn_index: -1,
     }))

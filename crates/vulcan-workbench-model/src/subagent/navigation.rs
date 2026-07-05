@@ -115,17 +115,14 @@ pub fn subagent_navigation_surface_is_visible(
 /// `has_active_parent_run` 表示父会话是否仍在执行或准备运行。
 /// `has_running_subagents` reports whether any direct or nested child task is still running.
 /// `has_running_subagents` 表示是否仍有任意直接或嵌套子任务处于运行中。
-/// `_has_queued_parent_work` is ignored because parent queued prompts are tracked separately.
-/// `_has_queued_parent_work` 会被忽略，因为父级排队提示词已单独跟踪。
 ///
 /// # Returns
 /// 返回值
-/// `true` when the current round still owns blocking coordination work and should remain visible.
-/// 当当前轮次仍拥有阻塞协调工作并应继续显示时返回 `true`。
+/// `true` when a parent run or running child task should keep the current round visible.
+/// 当父级运行或运行中的子任务应保持当前轮次可见时返回 `true`。
 pub fn subagent_navigation_round_should_remain_visible(
     has_active_parent_run: bool,
     has_running_subagents: bool,
-    _has_queued_parent_work: bool,
 ) -> bool {
     has_active_parent_run || has_running_subagents
 }
@@ -135,26 +132,19 @@ pub fn subagent_navigation_round_should_remain_visible(
 ///
 /// # Parameters
 /// 参数
-/// `normalized_states` is the already refreshed and normalized child panel state list.
-/// `normalized_states` 是已经刷新并归一化的子面板状态列表。
+/// `normalized_states` is the already refreshed and normalized child panel state list consumed by selection.
+/// `normalized_states` 是已经刷新并归一化、并由选择过程消费的子面板状态列表。
 /// `requested_active_task_id` is the task that is currently opened, when any.
 /// `requested_active_task_id` 是当前已打开的任务标识；没有打开项时为空。
-/// `has_recoverable_detail` is retained for callers that still need openability checks outside list selection.
-/// `has_recoverable_detail` 保留给仍需在列表选择外检查可打开性的调用方。
-///
 /// # Returns
 /// 返回值
 /// The visible navigation states plus the still-valid active task id.
 /// 返回可见导航状态列表，以及仍然有效的活动任务标识。
-pub fn select_subagent_navigation_panel_states<F>(
-    normalized_states: &[SubagentTaskPanelState],
+pub fn select_subagent_navigation_panel_states(
+    normalized_states: Vec<SubagentTaskPanelState>,
     requested_active_task_id: Option<SessionId>,
-    _has_recoverable_detail: F,
-) -> (Vec<SubagentTaskPanelState>, Option<SessionId>)
-where
-    F: FnMut(&SubagentTaskPanelState) -> bool,
-{
-    let navigation_states = normalized_states.to_vec();
+) -> (Vec<SubagentTaskPanelState>, Option<SessionId>) {
+    let navigation_states = normalized_states;
 
     let active_task_id = requested_active_task_id.filter(|task_id| {
         navigation_states

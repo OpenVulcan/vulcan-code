@@ -33,6 +33,7 @@ import {
   reorderPendingPromptSummaries,
   type InflightSubagentOpenRequest,
   type SubagentSurfaceMessageCache,
+  type WorkbenchMergeOptions,
 } from "@/state/workbench-state";
 import type {
   ComposerAttachmentSummary,
@@ -66,7 +67,11 @@ interface WorkbenchConversationActionsOptions {
   setWorkbenchState: React.Dispatch<React.SetStateAction<WorkbenchSnapshot>>;
   // Merges a service snapshot with local caches.
   // 将服务快照与本地缓存合并。
-  mergeWorkbenchWithLocalCaches: (current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => WorkbenchSnapshot;
+  mergeWorkbenchWithLocalCaches: (
+    current: WorkbenchSnapshot,
+    incoming: WorkbenchSnapshot,
+    options?: WorkbenchMergeOptions,
+  ) => WorkbenchSnapshot;
   // Clears the active local draft after a persisted send succeeds.
   // 持久化发送成功后清理当前本地草稿。
   setDraftConversation: React.Dispatch<React.SetStateAction<DraftConversationSelection | null>>;
@@ -219,14 +224,47 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
   if (existingRequest?.key === routeKey) {
     webuiClickTrace("subagent.open.coalesced", { parentConversationId, taskId, routeKey });
     setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
-    return true;
+    try {
+      // Coalesced opens must wait for the original route load so empty child surfaces are not shown as loaded.
+      // 合并打开必须等待原始路由加载完成，避免空子界面被误显示为已载入。
+      const response = await existingRequest.promise;
+      if (response) {
+        if (subagentNavigationRequestSeqRef.current !== existingRequest.requestSeq) {
+          webuiClickTrace("subagent.open.coalesced_stale_result", {
+            parentConversationId,
+            taskId,
+            requestSeq: existingRequest.requestSeq,
+            latestRequestSeq: subagentNavigationRequestSeqRef.current,
+          });
+          return false;
+        }
+        setWorkbenchState((current) => applySubagentPanelRouteResponse(
+          current,
+          response,
+          subagentSurfaceMessageCacheRef.current,
+        ));
+      }
+      webuiClickTrace("subagent.open.coalesced_result", {
+        parentConversationId,
+        taskId,
+        routeKey,
+        opened: Boolean(response),
+        activeConversationId: response?.activeConversationId ?? null,
+        activeTaskId: response?.subagentNavigation?.activeTaskId ?? null,
+      });
+      return Boolean(response);
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : String(nextError);
+      webuiClickTrace("subagent.open.coalesced_error", { parentConversationId, taskId, message });
+      return false;
+    }
   }
   const requestSeq = subagentNavigationRequestSeqRef.current + 1;
   subagentNavigationRequestSeqRef.current = requestSeq;
   webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq, routeKey });
   setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
   const requestPromise = openSubagentPanel(parentConversationId, taskId);
-  inflightSubagentOpenRequestRef.current = { key: routeKey, promise: requestPromise };
+  inflightSubagentOpenRequestRef.current = { key: routeKey, requestSeq, promise: requestPromise };
   try {
     const response = await requestPromise;
     if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
@@ -454,7 +492,21 @@ const handleForkConversation = React.useCallback(async (conversationId: string, 
       beforeMessageId: beforeMessageId ?? null,
     });
     if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      // Validate the service-selected fork before mirroring it into local sidebar state.
+      // 写入本地侧栏状态前校验服务端选中的分叉会话仍在会话列表中。
+      const forkedConversationId = snapshot.conversations.some((conversation) => (
+        conversation.id === snapshot.selectedConversationId
+      ))
+        ? snapshot.selectedConversationId
+        : null;
+      if (forkedConversationId) {
+        setSelectedConversationId(forkedConversationId);
+      }
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
+        current,
+        snapshot,
+        { selectedConversationSource: "incoming" },
+      ));
       toast.success(translate("conversation.action.forkSucceeded"));
     }
     return true;
@@ -462,7 +514,7 @@ const handleForkConversation = React.useCallback(async (conversationId: string, 
     toast.error(translate("conversation.action.forkFailed"));
     return false;
   }
-}, [translate]);
+}, [mergeWorkbenchWithLocalCaches, setSelectedConversationId, setWorkbenchState, translate, workbenchStateRef]);
 
 // handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
 // handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。

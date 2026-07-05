@@ -272,7 +272,7 @@ pub(in crate::workspace_store) fn append_line_to_active_segment(
     let line_text = serde_json::to_string(line).map_err(to_store_error)?;
     // Account for the newline byte appended by JSONL.
     // 计入 JSONL 追加的换行字节。
-    let line_byte_len = line_text.as_bytes().len() as u64 + 1;
+    let line_byte_len = line_text.len() as u64 + 1;
     if active_segment_needs_rollover(segments, segment_policy, line_byte_len) {
         // Create the next segment with a start sequence matching the line about to be written.
         // 创建下一个分段，其起始序号匹配即将写入的事件行。
@@ -343,7 +343,7 @@ pub(in crate::workspace_store) fn rebuild_segment_metadata(
     let mut segment = SegmentMetadata::empty(file.to_string(), start_seq);
     for line in lines {
         let line_text = serde_json::to_string(line).map_err(to_store_error)?;
-        let line_byte_len = line_text.as_bytes().len() as u64 + 1;
+        let line_byte_len = line_text.len() as u64 + 1;
         update_segment_metadata(
             &mut segment,
             line,

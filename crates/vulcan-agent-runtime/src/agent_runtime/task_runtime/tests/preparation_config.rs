@@ -54,6 +54,43 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
     }
 }
 
+/// Verifies execution-context registration returns a diagnostic instead of panicking on lock poisoning.
+/// 验证执行上下文注册表锁污染时会返回诊断错误而不是 panic。
+#[test]
+fn install_execution_context_reports_poisoned_registry() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = task_runtime
+            .execution_contexts
+            .write()
+            .expect("task execution context registry should lock before poisoning");
+        panic!("poison task execution context registry for test");
+    }));
+    assert!(poison_result.is_err());
+
+    let session_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(session_id),
+    );
+    let install_result = task_runtime.install_execution_context(session_id, context);
+
+    let error = match install_result {
+        Ok(_) => panic!("poisoned task execution context registry should reject installation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("task execution context registry is locked"));
+}
+
 /// Verifies child execution requests use the resolved TaskSession runtime policy exactly.
 /// 验证子代理执行请求精确使用已解析的 TaskSession 运行时策略。
 #[test]
@@ -385,7 +422,9 @@ fn spawn_agent_default_fork_clears_parent_continuation() {
         test_parent_execution_request(parent_session_id),
     )
     .with_parent_snapshot(parent_snapshot);
-    let _guard = task_runtime.install_execution_context(parent_session_id, context);
+    let _guard = task_runtime
+        .install_execution_context(parent_session_id, context)
+        .expect("execution context should install");
 
     let child_snapshot =
         initial_spawn_snapshot_for_fork_turns(&task_runtime, parent_session_id, Some("all"))
@@ -434,7 +473,9 @@ fn spawn_agent_mirror_fork_appends_status_user_prompt() {
         test_parent_execution_request(parent_session_id),
     )
     .with_parent_snapshot(parent_snapshot);
-    let _guard = task_runtime.install_execution_context(parent_session_id, context);
+    let _guard = task_runtime
+        .install_execution_context(parent_session_id, context)
+        .expect("execution context should install");
     let args = parse_task_tool_arguments(json!({
         "prompt": "review this change",
         "task_id": "mirror-review",
@@ -501,7 +542,9 @@ fn spawn_agent_expert_forces_empty_initial_snapshot() {
         test_parent_execution_request(parent_session_id),
     )
     .with_parent_snapshot(parent_snapshot);
-    let _guard = task_runtime.install_execution_context(parent_session_id, context);
+    let _guard = task_runtime
+        .install_execution_context(parent_session_id, context)
+        .expect("execution context should install");
     let args = parse_task_tool_arguments(json!({
         "prompt": "review this change",
         "task_id": "expert-review",
@@ -858,8 +901,10 @@ fn task_invocation_config_ignores_profile_and_keeps_supported_overrides() {
 /// 验证 TaskSession 压缩规划会跟随已解析的自动压缩开关。
 #[test]
 fn task_context_compaction_policy_follows_resolved_toggle() {
-    let mut snapshot = ContextCompactionPolicySnapshot::default();
-    snapshot.auto_compaction_enabled = false;
+    let mut snapshot = ContextCompactionPolicySnapshot {
+        auto_compaction_enabled: false,
+        ..Default::default()
+    };
 
     let disabled_policy = task_context_compaction_policy_from_snapshot(&snapshot);
 

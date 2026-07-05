@@ -434,7 +434,7 @@ fn build_cohere_request_payload(
                 provider_tool_definitions
                     .iter()
                     .map(provider_tool_definition_to_cohere_tool_definition)
-                    .map(|tool| serde_json::to_value(tool).unwrap_or_else(|_| Value::Null))
+                    .map(|tool| serde_json::to_value(tool).unwrap_or(Value::Null))
                     .collect(),
             ),
         );

@@ -33,6 +33,19 @@ fn segmented_session_date_uses_unix_millis_text() {
     );
 }
 
+/// Verifies segmented locators keep creation time stable when a session is updated later.
+/// 验证分段定位信息在会话后续更新时仍保持创建时间稳定。
+#[test]
+fn segmented_session_locator_uses_created_at_not_updated_at() {
+    let session = test_session_summary(SessionId::from_u128(410), "project-a", "Stable")
+        .with_created_at("0")
+        .with_updated_at("86400000");
+
+    let locator = segmented_session_locator_from_summary(&session, "project-a", false);
+
+    assert_eq!(locator.created_at, "0");
+}
+
 /// Verifies bulk snapshot mirroring only touches sessions with a loaded transcript window.
 /// 验证批量快照镜像只会处理已有已加载转录窗口的会话。
 #[test]
@@ -89,13 +102,14 @@ fn effective_session_messages_for_persistence_preserves_display_history() {
     }));
     // runtime_state simulates a compacted provider context containing only the summary.
     // runtime_state 模拟只包含摘要的压缩后 Provider 上下文。
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.conversation_state =
-        conversation_state_from_session_messages(&[SessionMessageEntry::new(
+    let runtime_state = SessionRuntimeStateEntry {
+        conversation_state: conversation_state_from_session_messages(&[SessionMessageEntry::new(
             SessionMessageKind::Assistant,
             "上下文摘要",
             "已总结旧过程",
-        )]);
+        )]),
+        ..Default::default()
+    };
     // stored_messages is the full visible transcript retained by the service layer.
     // stored_messages 是 service 层保留的完整可见转录。
     let stored_messages = vec![

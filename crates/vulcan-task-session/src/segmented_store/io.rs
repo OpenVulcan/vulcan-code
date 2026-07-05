@@ -1,16 +1,59 @@
 use super::*;
 
+/// Mutable segment append target owned by one metadata document.
+/// 由单个元数据文档持有的可变分段追加目标。
+pub(super) struct SegmentEventAppendTarget<'a> {
+    /// Directory containing segment JSONL files.
+    /// 包含分段 JSONL 文件的目录。
+    pub(super) dir: &'a Path,
+    /// Mutable segment metadata list.
+    /// 可变分段元数据列表。
+    pub(super) segments: &'a mut Vec<SegmentMetadata>,
+    /// Active segment file name.
+    /// 当前活跃分段文件名。
+    pub(super) active_segment: &'a mut String,
+    /// Next event sequence number.
+    /// 下一条事件序号。
+    pub(super) next_seq: &'a mut u64,
+    /// Segment rollover policy.
+    /// 分段滚动策略。
+    pub(super) segment_policy: &'a SegmentPolicy,
+}
+
+/// Event payload appended into one segment.
+/// 追加到单个分段中的事件载荷。
+pub(super) struct SegmentEventAppendRequest {
+    /// Stable event kind.
+    /// 稳定事件类型。
+    pub(super) kind: String,
+    /// Event timestamp text.
+    /// 事件时间戳文本。
+    pub(super) timestamp: String,
+    /// Event JSON payload.
+    /// 事件 JSON 载荷。
+    pub(super) payload: Value,
+    /// Optional turn index associated with the event.
+    /// 与事件关联的可选回合索引。
+    pub(super) turn_index: Option<i64>,
+}
+
 pub(super) fn append_segment_event(
-    dir: &Path,
-    segments: &mut Vec<SegmentMetadata>,
-    active_segment: &mut String,
-    next_seq: &mut u64,
-    segment_policy: &SegmentPolicy,
-    kind: String,
-    timestamp: String,
-    payload: Value,
-    turn_index: Option<i64>,
+    target: SegmentEventAppendTarget<'_>,
+    request: SegmentEventAppendRequest,
 ) -> Result<SegmentedEventLine, SessionStoreError> {
+    let SegmentEventAppendTarget {
+        dir,
+        segments,
+        active_segment,
+        next_seq,
+        segment_policy,
+    } = target;
+    let SegmentEventAppendRequest {
+        kind,
+        timestamp,
+        payload,
+        turn_index,
+    } = request;
     if segments.is_empty() {
         segments.push(SegmentMetadata::empty("s001.jsonl", *next_seq));
         *active_segment = "s001.jsonl".to_string();
@@ -23,7 +66,7 @@ pub(super) fn append_segment_event(
         turn_index,
     };
     let encoded = serde_json::to_string(&line).map_err(to_store_error)?;
-    let encoded_len = encoded.as_bytes().len() as u64 + 1;
+    let encoded_len = encoded.len() as u64 + 1;
     if should_roll_segment(
         segments.last().expect("segment exists"),
         segment_policy,
@@ -69,7 +112,6 @@ pub(super) fn should_roll_segment(
 
 /// Appends a task-link event to the main session JSONL stream when metadata exists.
 /// 当主会话元数据存在时向主会话 JSONL 流追加一条子任务关联事件。
-
 pub(super) fn segment_file_name(index: usize) -> String {
     format!("s{index:03}.jsonl")
 }
@@ -133,7 +175,7 @@ pub(super) fn append_encoded_json_line(
         .map_err(to_store_error)?;
     file.write_all(encoded.as_bytes()).map_err(to_store_error)?;
     file.write_all(b"\n").map_err(to_store_error)?;
-    Ok(encoded.as_bytes().len() as u64 + 1)
+    Ok(encoded.len() as u64 + 1)
 }
 
 /// Reads one optional JSON document.

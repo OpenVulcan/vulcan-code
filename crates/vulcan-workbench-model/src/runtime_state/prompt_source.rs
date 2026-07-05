@@ -241,7 +241,6 @@ pub fn pending_prompt_lane_is_busy(
     context.dispatch.has_active_run
         || provider_session_run_phase_is_active(context.dispatch.run_phase)
         || (context.dispatch.run_phase == Some(crate::SessionRunPhase::Preparing)
-            && !context.dispatch.has_active_run
             && context.has_precheck_progress)
         || context.dispatch.run_phase == Some(crate::SessionRunPhase::MemoryRecall)
         || context.dispatch.has_active_compaction

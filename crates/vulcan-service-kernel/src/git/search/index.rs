@@ -409,9 +409,9 @@ pub(crate) fn webui_diff_search_path_preview(old_path: &str, new_path: &str) -> 
 /// Builds a compact preview for one raw diff line search candidate.
 /// 为单条原始 diff 行搜索候选项构建紧凑预览。
 pub(crate) fn webui_diff_search_line_preview(line: &str) -> String {
-    let body = if line.starts_with('+') && !line.starts_with("+++") {
-        &line[1..]
-    } else if line.starts_with('-') && !line.starts_with("---") {
+    let body = if (line.starts_with('+') && !line.starts_with("+++"))
+        || (line.starts_with('-') && !line.starts_with("---"))
+    {
         &line[1..]
     } else if let Some(body) = line.strip_prefix(' ') {
         body

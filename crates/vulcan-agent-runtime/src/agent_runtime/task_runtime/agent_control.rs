@@ -80,7 +80,6 @@ impl TaskRuntime {
             }
             return self.deliver_root_inter_agent_message(current_session_id, &parsed.message);
         }
-        self.restore_persisted_subagent_registry_for_parent_tree(current_session_id)?;
         let target = self.resolve_inter_agent_message_target(current_session_id, &parsed.target)?;
         let target_session_id = SessionId::from(target.session_id);
         let stopped_task_ids = if parsed.delivery_mode.interrupts_current_task() {
@@ -601,12 +600,13 @@ pub(super) fn build_child_agent_prompt_intervention(
         if controller.append_interjected_user_turn(&prompt).is_some() {
             return true;
         }
-        task_runtime.restore_inter_agent_messages_front_after_failure(
+        let restored_error = task_runtime.restore_inter_agent_messages_front_after_failure(
             task_id,
             messages,
             "prompt_intervention",
             String::from("The child-agent stream could not accept an injected user turn."),
         );
+        eprintln!("[subagent-agent-control] {restored_error}");
         false
     })
 }

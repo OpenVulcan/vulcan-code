@@ -37,7 +37,7 @@ pub enum PendingPromptInternalQueueEnqueueOutcome {
     Inserted {
         /// Internal entry removed to keep the queue within its capacity.
         /// 为保持队列容量而移除的内部条目。
-        removed_for_capacity: Option<PendingSessionPromptEntry>,
+        removed_for_capacity: Box<Option<PendingSessionPromptEntry>>,
     },
 }
 
@@ -104,7 +104,7 @@ pub fn apply_pending_prompt_internal_queue_enqueue_plan(
         ui_state.pending_prompt_queue.push(entry);
     }
     PendingPromptInternalQueueEnqueueOutcome::Inserted {
-        removed_for_capacity,
+        removed_for_capacity: Box::new(removed_for_capacity),
     }
 }
 
@@ -159,7 +159,7 @@ pub enum PendingPromptQueueRouteError {
 pub enum PendingPromptQueueRouteOutcome {
     /// A fresh internal queue entry was created and inserted.
     /// 已创建并插入新的内部队列项。
-    Inserted(PendingSessionPromptEntry),
+    Inserted(Box<PendingSessionPromptEntry>),
     /// The visible row had already been inserted earlier.
     /// 该可见行此前已经插入过。
     AlreadyInserted,

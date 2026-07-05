@@ -358,7 +358,7 @@ fn parse_vmm_turn_details_arguments(
             "Failed to parse vmm_turn_details arguments: {error}"
         ))
     })?;
-    if parsed.turn_ids.is_empty() || parsed.turn_ids.iter().any(|turn_id| *turn_id == 0) {
+    if parsed.turn_ids.is_empty() || parsed.turn_ids.contains(&0) {
         return Err(NativeToolError::new(
             "The `turnIds` argument for vmm_turn_details must contain positive turn ids.",
         ));

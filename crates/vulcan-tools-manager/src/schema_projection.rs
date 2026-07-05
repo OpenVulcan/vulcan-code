@@ -306,13 +306,13 @@ fn inherit_parent_object_shape_into_combinator_branch(
     if let Some(parent_properties) = parent_properties {
         branch_object.insert(String::from("properties"), parent_properties.clone());
     }
-    if !branch_object.contains_key("additionalProperties") {
-        if let Some(additional_properties) = parent_additional_properties {
-            branch_object.insert(
-                String::from("additionalProperties"),
-                additional_properties.clone(),
-            );
-        }
+    if !branch_object.contains_key("additionalProperties")
+        && let Some(additional_properties) = parent_additional_properties
+    {
+        branch_object.insert(
+            String::from("additionalProperties"),
+            additional_properties.clone(),
+        );
     }
 }
 
@@ -342,19 +342,19 @@ fn sanitize_gemini_node(schema: &Value) -> Value {
 fn sanitize_gemini_object(object: &Map<String, Value>) -> Value {
     let mut sanitized = Map::new();
     for (key, value) in object {
-        if key == "enum" {
-            if let Value::Array(items) = value {
-                sanitized.insert(
-                    key.clone(),
-                    Value::Array(
-                        items
-                            .iter()
-                            .map(|item| Value::String(enum_value_to_string(item)))
-                            .collect(),
-                    ),
-                );
-                continue;
-            }
+        if key == "enum"
+            && let Value::Array(items) = value
+        {
+            sanitized.insert(
+                key.clone(),
+                Value::Array(
+                    items
+                        .iter()
+                        .map(|item| Value::String(enum_value_to_string(item)))
+                        .collect(),
+                ),
+            );
+            continue;
         }
         sanitized.insert(key.clone(), sanitize_gemini_node(value));
     }

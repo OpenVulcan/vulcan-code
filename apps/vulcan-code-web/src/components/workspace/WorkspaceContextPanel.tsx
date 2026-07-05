@@ -758,6 +758,9 @@ function WorkspaceSubagentPanel(args: {
   // closeSubmitting stores whether the close request is currently in flight.
   // closeSubmitting 保存关闭请求是否正在提交。
   const [closeSubmitting, setCloseSubmitting] = React.useState(false);
+  // transcriptLoading stores whether an empty child transcript is currently being restored.
+  // transcriptLoading 保存空子转录当前是否正在恢复。
+  const [transcriptLoading, setTranscriptLoading] = React.useState(false);
   // scrollRef owns the read-only transcript viewport inside this tab.
   // scrollRef 持有该页签内只读转录视口。
   const scrollRef = React.useRef<HTMLElement | null>(null);
@@ -862,7 +865,12 @@ function WorkspaceSubagentPanel(args: {
   const onOpenSubagentPanel = args.props.onOpenSubagentPanel;
 
   React.useEffect(() => {
-    if (!parentConversationId || !taskId || messages.length > 0) {
+    if (!parentConversationId || !taskId) {
+      setTranscriptLoading(false);
+      return;
+    }
+    if (messages.length > 0) {
+      setTranscriptLoading(false);
       return;
     }
     const routeKey = `${parentConversationId}:${taskId}`;
@@ -870,7 +878,18 @@ function WorkspaceSubagentPanel(args: {
       return;
     }
     autoLoadRouteRef.current = routeKey;
-    void onOpenSubagentPanel(parentConversationId, taskId).catch(() => undefined);
+    let active = true;
+    setTranscriptLoading(true);
+    void onOpenSubagentPanel(parentConversationId, taskId)
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) {
+          setTranscriptLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, [messages.length, onOpenSubagentPanel, parentConversationId, taskId]);
 
   if (!parentConversationId || !taskId) {
@@ -900,7 +919,7 @@ function WorkspaceSubagentPanel(args: {
         resolveMediaSourceUrl={args.props.resolveMediaSourceUrl}
         scrollRef={scrollRef}
         sessionRunning={Boolean(task?.isRunning)}
-        suppressEmptyPlaceholder={false}
+        suppressEmptyPlaceholder={transcriptLoading && messages.length === 0}
         suppressInitialDistanceRestore={false}
         workspacePath={workspacePath}
         onCopyText={args.props.onCopyText}
@@ -913,6 +932,12 @@ function WorkspaceSubagentPanel(args: {
         onUserScrollStart={handleNoopUserScrollStart}
         onVirtualizerStateChange={handleNoopVirtualizerStateChange}
       />
+      {transcriptLoading && messages.length === 0 ? (
+        <div className="workspace-subagent-loading" role="status" aria-live="polite">
+          <Bot size={18} />
+          <span>{t("conversation.subagent.loadingTranscript")}</span>
+        </div>
+      ) : null}
       {taskRunning || taskOpen ? (
         <div className="workspace-subagent-footer">
           {taskRunning ? (

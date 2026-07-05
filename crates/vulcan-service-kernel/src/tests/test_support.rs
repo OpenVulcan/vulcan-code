@@ -3,6 +3,250 @@
 
 use super::*;
 
+/// Owns one temporary segmented-session project directory created under the service data root.
+/// 持有一个创建在服务数据根目录下的临时分段会话项目目录。
+pub(super) struct TestSegmentedProjectRoot {
+    /// Project id used by workspace session summaries and segmented session lookup.
+    /// 工作区会话摘要与分段会话定位使用的项目标识。
+    project_id: String,
+    /// Absolute project root path inside the session storage tree.
+    /// 会话存储树中的绝对项目根路径。
+    path: std::path::PathBuf,
+}
+
+impl TestSegmentedProjectRoot {
+    /// Creates one test-owned project directory handle without eagerly creating the directory.
+    /// 创建一个测试拥有的项目目录句柄，但不立即创建目录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` is the unique project id that production lookup code will receive.
+    /// `project_id` 是生产定位代码将接收到的唯一项目标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A project-root guard that removes the directory when the test scope exits.
+    /// 返回一个会在测试作用域退出时移除目录的项目根守卫。
+    pub(super) fn new(project_id: impl Into<String>) -> Self {
+        let project_id = project_id.into();
+        let data_root = vulcan_workspace_store::data_plane::application_data_root();
+        let path = data_root.join("sessions").join(&project_id);
+        Self { project_id, path }
+    }
+
+    /// Returns the project id used by retained workspace session summaries.
+    /// 返回保留工作区会话摘要使用的项目标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The test project id as a borrowed string.
+    /// 以借用字符串形式返回测试项目标识。
+    pub(super) fn project_id(&self) -> &str {
+        &self.project_id
+    }
+
+    /// Returns the filesystem path for this test project root.
+    /// 返回该测试项目根目录的文件系统路径。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The absolute project root path.
+    /// 返回绝对项目根路径。
+    pub(super) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TestSegmentedProjectRoot {
+    /// Removes the test project directory on scope exit.
+    /// 在作用域退出时移除测试项目目录。
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Seeds the authoritative task-runtime registry from test panel states via persisted TaskSession metadata.
+/// 通过持久化 TaskSession 元数据，从测试面板状态播种权威任务运行时注册表。
+///
+/// # Parameters
+/// 参数
+/// `guard` is the service state whose agent runtime should receive the task-session store root.
+/// `guard` 是需要接收子任务会话存储根的服务状态。
+/// `root_session_id` is the root parent session for the seeded child-agent tree.
+/// `root_session_id` 是待播种子智能体树的根父会话。
+/// `states` are the display states used only as test fixtures for persisted metadata.
+/// `states` 是仅作为持久化元数据测试夹具使用的展示状态。
+///
+/// # Returns
+/// 返回值
+/// A temporary project-root guard that keeps the persisted registry metadata alive for the test.
+/// 返回一个临时项目根守卫，用于在测试期间保留持久化注册表元数据。
+pub(super) fn seed_test_subagent_registry_from_panel_states(
+    guard: &mut ServiceBridgeState,
+    root_session_id: SessionId,
+    states: &[SubagentTaskPanelState],
+) -> TestSegmentedProjectRoot {
+    use vulcan_task_session::TaskSessionStore as _;
+
+    if guard.agent_runtime.is_none() {
+        guard.agent_runtime = Some(test_agent_runtime_bridge());
+    }
+    let project_root =
+        TestSegmentedProjectRoot::new(format!("registry-fixture-{root_session_id}"));
+    let session_dir = project_root.path().join(format!(
+        "{NAVIGATION_TEST_ROOT_CREATED_DATE_FOR_SUPPORT}-{root_session_id}"
+    ));
+    std::fs::create_dir_all(&session_dir).expect("create registry fixture session dir");
+    let task_store = vulcan_task_session::SegmentedTaskSessionStore::new(&session_dir);
+    let root_session_node = SessionNodeId::from(root_session_id);
+    for state in states {
+        let parent = if state.parent_session_id == root_session_id {
+            vulcan_session_core::ParentSessionRef::MainSession {
+                root_session_id: root_session_node,
+            }
+        } else {
+            vulcan_session_core::ParentSessionRef::TaskSession {
+                root_session_id: root_session_node,
+                parent_task_session_id: SessionNodeId::from(state.parent_session_id),
+            }
+        };
+        let mut metadata = vulcan_task_session::TaskSessionMetadata::new(
+            vulcan_task_session::TaskSessionMetadataInit {
+                root_session_id: root_session_node,
+                task_session_id: SessionNodeId::from(state.task_id),
+                parent,
+                public_task_id: state.public_task_id.clone(),
+                display_title: state.subagent_label.clone(),
+                requested_config: vulcan_session_core::SessionRequestedConfig::default(),
+                effective_config: vulcan_session_core::SessionEffectiveConfig::default(),
+                depth: 1,
+                timestamp_ms: 100,
+            },
+        );
+        metadata.status = test_task_session_status_from_panel_state(state.run_state);
+        if !state.result_text.trim().is_empty() {
+            metadata.last_result_summary = Some(state.result_text.clone());
+        }
+        task_store
+            .create_task_session(metadata)
+            .expect("create registry fixture task session");
+    }
+    guard
+        .agent_runtime
+        .as_ref()
+        .expect("agent runtime")
+        .task_runtime
+        .configure_task_session_store_root(root_session_id, session_dir)
+        .expect("configure registry fixture store root");
+    guard
+        .agent_runtime
+        .as_ref()
+        .expect("agent runtime")
+        .task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
+        .expect("restore registry fixture during test hydration");
+    project_root
+}
+
+/// Seeds the authoritative in-memory TaskRuntime registry from test panel states.
+/// 从测试面板状态播种权威的内存 TaskRuntime 注册表。
+///
+/// # Parameters
+/// 参数
+/// `guard` is the service state whose agent runtime receives resident task records.
+/// `guard` 是接收常驻任务记录的服务状态。
+/// `root_session_id` is the root parent session for the child-agent tree.
+/// `root_session_id` 是子代理树的根父会话。
+/// `states` are fixture states converted into resident TaskRuntime entries.
+/// `states` 是转换为常驻 TaskRuntime 条目的夹具状态。
+#[cfg(debug_assertions)]
+pub(super) fn seed_test_live_subagent_registry_from_panel_states(
+    guard: &mut ServiceBridgeState,
+    root_session_id: SessionId,
+    states: &[SubagentTaskPanelState],
+) {
+    if guard.agent_runtime.is_none() {
+        guard.agent_runtime = Some(test_agent_runtime_bridge());
+    }
+    let task_runtime = &guard
+        .agent_runtime
+        .as_ref()
+        .expect("agent runtime")
+        .task_runtime;
+    for state in states {
+        task_runtime
+            .seed_debug_subagent_registry_entry(
+                root_session_id,
+                state.parent_session_id,
+                state.task_id,
+                state.public_task_id.clone(),
+                state.subagent_label.clone(),
+                state.description.clone(),
+                Some(state.subagent_label.clone()),
+                test_task_session_status_from_panel_state(state.run_state),
+                (!state.result_text.trim().is_empty()).then_some(state.result_text.clone()),
+            )
+            .expect("seed debug subagent registry entry");
+    }
+}
+
+/// Caches render-only subagent surface details without creating membership.
+/// 只缓存用于渲染的子智能体界面详情，不创建成员关系。
+///
+/// # Parameters
+/// 参数
+/// `guard` is the service state receiving render-only detail entries.
+/// `guard` 是接收渲染详情条目的服务状态。
+/// `states` are panel states whose transcripts may be reused by navigation rendering.
+/// `states` 是可被导航渲染复用转录内容的面板状态。
+pub(super) fn cache_test_subagent_surface_detail_states(
+    guard: &mut ServiceBridgeState,
+    states: &[SubagentTaskPanelState],
+) {
+    for state in states {
+        let messages = state
+            .conversation_state
+            .as_ref()
+            .map(conversation_state_to_session_messages)
+            .unwrap_or_default();
+        guard.subagent_surface_detail_cache.insert(
+            state.task_id,
+            WebuiSubagentSurfaceDetailCacheEntry {
+                task_state: state.clone(),
+                messages,
+                last_access_ms: 0,
+            },
+        );
+    }
+}
+
+/// Converts a WebUI test panel state into persisted TaskSession status.
+/// 将 WebUI 测试面板状态转换为持久化 TaskSession 状态。
+///
+/// # Parameters
+/// 参数
+/// `run_state` is the WebUI panel state from the fixture.
+/// `run_state` 是测试夹具中的 WebUI 面板状态。
+///
+/// # Returns
+/// 返回值
+/// The equivalent persisted task-session status.
+/// 返回等价的持久化子任务会话状态。
+fn test_task_session_status_from_panel_state(
+    run_state: SubagentTaskRunState,
+) -> vulcan_task_session::TaskSessionStatus {
+    match run_state {
+        SubagentTaskRunState::Running => vulcan_task_session::TaskSessionStatus::Running,
+        SubagentTaskRunState::Stopped => vulcan_task_session::TaskSessionStatus::Stopped,
+        SubagentTaskRunState::Completed => vulcan_task_session::TaskSessionStatus::Completed,
+        SubagentTaskRunState::Failed => vulcan_task_session::TaskSessionStatus::Failed,
+    }
+}
+
+/// Fixed directory date used by shared registry fixture roots.
+/// 共享注册表测试夹具根目录使用的固定日期。
+const NAVIGATION_TEST_ROOT_CREATED_DATE_FOR_SUPPORT: &str = "1970-01-01";
+
 /// Test shell host that rejects interactive shell operations.
 /// 拒绝交互式 shell 操作的测试宿主壳。
 struct TestServiceShellHost;
@@ -79,7 +323,7 @@ pub(super) fn test_service_state_with_parent_session(
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
-        session_subagent_tasks: BTreeMap::new(),
+        webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,

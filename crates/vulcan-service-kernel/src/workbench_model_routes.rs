@@ -219,7 +219,10 @@ pub(super) async fn service_select_workbench_model_secondary_route(
     if provider_id != "openrouter" {
         return Err(String::from("当前只有 OpenRouter 支持二级供应商选择。"));
     }
-    let selection = request.route.map(openrouter_route_selection_from_service);
+    let selection = request
+        .route
+        .map(openrouter_route_selection_from_service)
+        .transpose()?;
     let (
         controller_runtime,
         persist_session_id,
@@ -321,9 +324,6 @@ fn ensure_provider_model_enabled(
         ))
     }
 }
-
-/// Converts a service secondary-route selection into the persisted OpenRouter route type.
-/// 将 service 二级路由选择转换为持久化 OpenRouter 路由类型。
 
 /// Persists the active workbench reasoning effort through the shared provider configuration.
 /// 通过共享 Provider 配置持久化当前工作台思考档位。

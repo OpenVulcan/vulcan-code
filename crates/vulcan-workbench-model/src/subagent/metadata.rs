@@ -171,10 +171,10 @@ pub fn task_session_tool_display_label(
         _ => {}
     }
 
-    if let Some(public_task_id) = public_task_id {
-        if SessionId::parse_str(public_task_id).is_err() {
-            return public_task_id.to_string();
-        }
+    if let Some(public_task_id) = public_task_id
+        && SessionId::parse_str(public_task_id).is_err()
+    {
+        return public_task_id.to_string();
     }
     if let Some(prompt_preview) = prompt_preview
         .map(str::trim)

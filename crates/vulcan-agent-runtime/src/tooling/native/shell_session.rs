@@ -172,9 +172,6 @@ pub(crate) fn shell_session_args_schema(shell_support: &HostCommandShellSupport)
     })
 }
 
-/// Builds the English AI-facing description for the native persistent terminal tool.
-/// 构建原生持久终端工具面向 AI 的英文描述。
-
 /// Parses one raw model payload into the typed shell-session argument structure.
 /// 将一份原始模型载荷解析为强类型 shell 会话参数结构。
 #[cfg(test)]
@@ -185,9 +182,6 @@ pub(crate) fn parse_shell_session_tool_arguments(
         NativeToolError::new(format!("Failed to parse shell_session arguments: {error}"))
     })
 }
-
-/// Parses one raw model payload into the typed terminal-session argument structure.
-/// 将一份原始模型载荷解析为强类型终端会话参数结构。
 
 /// Resolves the controller session that owns the current shell-session tool invocation.
 /// 解析拥有当前 shell 会话工具调用的控制器会话。
@@ -201,9 +195,6 @@ pub(crate) fn require_shell_session_owner_session_id(
         )
     })
 }
-
-/// Resolves the controller session that owns the current terminal-session tool invocation.
-/// 解析拥有当前终端会话工具调用的控制器会话。
 
 /// Builds one model-visible text render input for shell-session actions that do not need to include buffered output chunks.
 /// 为不需要包含缓冲输出分片的 shell 会话动作构建一份模型可见文本渲染输入。
@@ -334,9 +325,6 @@ pub(crate) fn build_shell_session_host_payload(
     }
     payload
 }
-
-/// Converts command-session chunks into terminal-session event metadata.
-/// 将命令会话分片转换为终端会话事件元数据。
 
 /// Executes one shell-session start action and returns the unified tool invocation result.
 /// 执行一次 shell 会话 start 动作并返回统一工具调用结果。

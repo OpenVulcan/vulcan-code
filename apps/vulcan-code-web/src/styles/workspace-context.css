@@ -320,6 +320,18 @@
   transform: none;
 }
 
+.workspace-subagent-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  text-align: center;
+  pointer-events: none;
+}
+
 .workspace-subagent-footer {
   position: absolute;
   right: 12px;

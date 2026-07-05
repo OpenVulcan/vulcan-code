@@ -36,7 +36,7 @@ mod segmented_session_store;
 mod session_addon_store;
 mod session_load;
 
-pub use self::segmented_session_store::find_segmented_session_directory_for_task_store;
+pub use self::segmented_session_store::find_segmented_session_directory_for_task_store_created_at;
 use self::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,
     SegmentedSessionEventKind, SegmentedSessionMetadataPatch, append_segmented_boundary_events,
@@ -68,9 +68,10 @@ pub use persistence::{
     restore_single_session, rollback_persisted_session_before_user_prompt, toggle_project_pinned,
 };
 pub use session_load::{
-    load_session_display_hydration_snapshot, load_session_display_hydration_snapshot_for_project,
-    load_session_history_page, load_session_hydration_snapshot,
-    load_session_hydration_snapshot_for_project, load_session_transcript_window,
+    load_session_display_hydration_snapshot_for_project_created_at,
+    load_session_history_page_for_project_created_at,
+    load_session_hydration_snapshot_for_project_created_at,
+    load_session_transcript_window_for_project_created_at,
 };
 
 /// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.

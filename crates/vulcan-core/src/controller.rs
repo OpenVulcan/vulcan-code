@@ -87,6 +87,8 @@ mod run_loop;
 mod tool_execution;
 mod transcript;
 
+pub use transcript::AgentMessageAppendRequest;
+
 use metadata::*;
 
 #[cfg(test)]

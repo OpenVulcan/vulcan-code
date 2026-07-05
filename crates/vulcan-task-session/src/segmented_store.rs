@@ -1,18 +1,19 @@
 use crate::compaction::TaskSessionCompactionStore;
 use crate::model::{
     TaskInvocationEvent, TaskInvocationEventKind, TaskSessionId, TaskSessionMetadata,
-    TaskSessionStatus,
+    TaskSessionMirrorSummary, TaskSessionStatus,
 };
 use crate::store::TaskSessionStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use vulcan_session_core::{
-    ParentSessionRef, SessionCompactionCheckpoint, SessionContextDocument, SessionEventRecord,
-    SessionNodeId, SessionNodeStore, SessionRuntimeCheckpoint, SessionSegmentSummary,
-    SessionStoreError,
+    ParentSessionRef, RootSessionId, SessionCompactionCheckpoint, SessionContextDocument,
+    SessionEventRecord, SessionNodeId, SessionNodeStore, SessionRuntimeCheckpoint,
+    SessionSegmentSummary, SessionStoreError,
 };
 
 mod helpers;

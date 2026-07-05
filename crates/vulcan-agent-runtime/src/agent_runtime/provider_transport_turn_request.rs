@@ -163,7 +163,7 @@ fn append_persistent_injection_to_system_prompt(
 /// Applies the provider-facing injection overlay to the outgoing request view without mutating canonical history.
 /// 将 Provider 可见注入覆盖层应用到出站请求视图，同时不修改规范历史。
 fn apply_context_injection_overlay(
-    current_history: &mut Vec<CoreConversationMessage>,
+    current_history: &mut [CoreConversationMessage],
     current_prompt: &mut CoreConversationMessage,
     injection: Option<&CoreProviderContextInjection>,
 ) {

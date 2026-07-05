@@ -25,15 +25,16 @@ use vulcan_service_api::{
     ServiceEvent, ServiceEventEmitter, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
     WorkbenchSnapshot,
 };
-use vulcan_workbench_model::SessionId;
 
 use super::{
-    AgentRuntimeBridge, SharedServiceBridgeState, build_vmm_hook_config_snapshot,
+    AgentRuntimeBridge, SharedServiceBridgeState, WorkbenchRuntimeProjection,
+    active_surface_messages_from_workspace_and_state, build_vmm_hook_config_snapshot,
     emit_service_event_with_trace, fallback_workbench_snapshot,
-    hydrate_selected_session_runtime_if_needed, install_webui_question_runtime_event_bridge,
-    mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
-    native_tool_summaries_from_agent_runtime, normalized_workspace_path_text_from_path,
-    pending_question_snapshots_from_agent_runtime, token_budget_status, workbench_from_runtime,
+    hydrated_conversation_window_summaries, install_webui_question_runtime_event_bridge,
+    mark_webui_service_discovery_failed,
+    mark_webui_service_discovery_ready, native_tool_summaries_from_agent_runtime,
+    normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
+    subagent_navigation_snapshot_from_cached_state, token_budget_status, workbench_from_runtime,
     workspace_root,
 };
 
@@ -434,7 +435,7 @@ fn run_service_bootstrap(
         )
     });
 
-    let mut workspace_snapshot = bootstrap_step(
+    let workspace_snapshot = bootstrap_step(
         runtime.block_on(
             vulcan_workspace_store::workspace_store::load_or_seed_workspace_index(
                 controller_runtime.clone(),
@@ -444,17 +445,6 @@ fn run_service_bootstrap(
         "Workspace",
     )?;
     let selected_session_id = workspace_snapshot.selected_session;
-    if selected_session_id != SessionId::nil() {
-        bootstrap_step(
-            runtime.block_on(hydrate_selected_session_runtime_if_needed(
-                controller_runtime.clone(),
-                &mut workspace_snapshot,
-                selected_session_id,
-            )),
-            "workspace",
-            "Workspace",
-        )?;
-    }
     let vmm_hook_snapshot =
         build_vmm_hook_config_snapshot(&provider_configuration, &workspace_snapshot);
     agent_runtime
@@ -505,30 +495,40 @@ fn run_service_bootstrap(
         ),
         &logs,
     );
-    let mut workbench = workbench_from_runtime(
-        &controller_runtime,
-        Some(agent_runtime.command_session_runtime.as_ref()),
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &provider_configuration,
-        &ai_tool_configuration,
-        &workspace_snapshot,
-        &[],
-        None,
-        pending_question_snapshots_from_agent_runtime(Some(&agent_runtime)),
-        &logs,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &[],
-        native_tool_summaries_from_agent_runtime(Some(&agent_runtime)),
-    );
-
+    let mut emitted_workbench = fallback_workbench_snapshot(&logs);
     if let Ok(mut guard) = state.lock() {
         guard.startup = startup.clone();
+        guard.agent_runtime = Some(agent_runtime.clone());
+        let surface_messages =
+            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot);
+        let subagent_navigation =
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+        let hydrated_conversation_windows = hydrated_conversation_window_summaries(
+            &guard.hydrated_conversation_windows,
+            &guard.webui_preloaded_unclosed_subagent_roots,
+        );
+        let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
+            controller: &controller_runtime,
+            command_session_runtime: Some(agent_runtime.command_session_runtime.as_ref()),
+            luaskills_catalog: &luaskills_catalog,
+            token_budget_runtime: &token_budget_runtime,
+            mcp_catalog: &mcp_catalog,
+            provider_configuration: &provider_configuration,
+            ai_tool_configuration: &ai_tool_configuration,
+            workspace: &workspace_snapshot,
+            surface_messages: surface_messages.as_slice(),
+            subagent_navigation,
+            pending_questions: pending_question_snapshots_from_agent_runtime(Some(&agent_runtime)),
+            logs: &logs,
+            live_context_budgets: &BTreeMap::new(),
+            session_goal_summaries: &BTreeMap::new(),
+            hydrated_conversation_windows: &hydrated_conversation_windows,
+            native_tools: native_tool_summaries_from_agent_runtime(Some(&agent_runtime)),
+        });
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
+        emitted_workbench = workbench;
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);
         guard.service_runtime = Some(runtime);
@@ -540,6 +540,6 @@ fn run_service_bootstrap(
         guard.cached_mcp_catalog = Some(mcp_catalog);
     }
     mark_webui_service_discovery_ready(state);
-    emit_service_snapshots(event_emitter, &startup, &workbench);
+    emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
     Ok(())
 }

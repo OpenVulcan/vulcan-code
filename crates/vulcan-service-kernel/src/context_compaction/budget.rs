@@ -68,13 +68,12 @@ pub(crate) fn context_compaction_budget_snapshot_from_state(
     });
     live_budget
         .map(|mut live_budget| {
-            if live_budget.observed_usage.is_none() {
-                if let Some(usage) = historical_budget
+            if live_budget.observed_usage.is_none()
+                && let Some(usage) = historical_budget
                     .as_ref()
                     .and_then(|budget| budget.observed_usage.as_ref())
-                {
-                    apply_observed_usage_to_context_budget(&mut live_budget, usage);
-                }
+            {
+                apply_observed_usage_to_context_budget(&mut live_budget, usage);
             }
             live_budget
         })

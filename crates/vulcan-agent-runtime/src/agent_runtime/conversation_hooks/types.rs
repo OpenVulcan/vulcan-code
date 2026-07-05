@@ -120,7 +120,7 @@ pub fn vmm_profile_sync_effect_from_report(
         .into_iter()
         .flat_map(|values| values.iter())
         .filter_map(|value| serde_json::from_value(value.clone()).ok())
-        .last()
+        .next_back()
 }
 
 /// In-memory state for one logical user-to-assistant turn.

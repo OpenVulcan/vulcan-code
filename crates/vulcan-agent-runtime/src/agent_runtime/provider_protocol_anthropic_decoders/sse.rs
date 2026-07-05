@@ -83,10 +83,10 @@ where
             }
         }
 
-        if !sse_decoder.data.is_empty() || sse_decoder.event.is_some() {
-            if let Some(event) = sse_decoder.decode("") {
-                yield Ok(event);
-            }
+        if (!sse_decoder.data.is_empty() || sse_decoder.event.is_some())
+            && let Some(event) = sse_decoder.decode("")
+        {
+            yield Ok(event);
         }
     }
 }

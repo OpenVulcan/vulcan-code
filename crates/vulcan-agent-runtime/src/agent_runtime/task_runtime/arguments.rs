@@ -90,15 +90,14 @@ pub(super) fn resolve_task_session_id(
             root_session_id,
             direct_parent.clone(),
             &public_task_id,
-        )? {
-            if metadata.status != TaskSessionStatus::Archived {
-                return Ok(ResolvedTaskSessionIdentifier {
-                    task_id: Uuid::from(metadata.task_session_id),
-                    public_task_id,
-                    is_resumed: true,
-                    persisted_metadata: Some(metadata),
-                });
-            }
+        )? && metadata.status != TaskSessionStatus::Archived
+        {
+            return Ok(ResolvedTaskSessionIdentifier {
+                task_id: Uuid::from(metadata.task_session_id),
+                public_task_id,
+                is_resumed: true,
+                persisted_metadata: Some(metadata),
+            });
         }
 
         return Ok(ResolvedTaskSessionIdentifier {

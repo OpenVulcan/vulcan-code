@@ -338,35 +338,31 @@ pub(super) fn build_vmm_hook_config_snapshot(
         .session_runtime_state
         .iter()
         .chain(workspace_snapshot.archived_session_runtime_state.iter())
-        .filter_map(|(session_id, runtime_state)| {
-            (!runtime_state.vmm.is_empty())
-                .then(|| (session_id.to_string(), runtime_state.vmm.clone()))
-        })
+        .filter(|(_, runtime_state)| !runtime_state.vmm.is_empty())
+        .map(|(session_id, runtime_state)| (session_id.to_string(), runtime_state.vmm.clone()))
         .collect();
     let outboxes = workspace_snapshot
         .session_runtime_state
         .iter()
         .chain(workspace_snapshot.archived_session_runtime_state.iter())
-        .filter_map(|(session_id, runtime_state)| {
-            (!runtime_state.vmm_writeback_outbox.is_empty()).then(|| {
-                (
-                    session_id.to_string(),
-                    runtime_state.vmm_writeback_outbox.clone(),
-                )
-            })
+        .filter(|(_, runtime_state)| !runtime_state.vmm_writeback_outbox.is_empty())
+        .map(|(session_id, runtime_state)| {
+            (
+                session_id.to_string(),
+                runtime_state.vmm_writeback_outbox.clone(),
+            )
         })
         .collect();
     let profile_sync = workspace_snapshot
         .session_runtime_state
         .iter()
         .chain(workspace_snapshot.archived_session_runtime_state.iter())
-        .filter_map(|(session_id, runtime_state)| {
-            (!runtime_state.vmm_profile_sync.is_empty()).then(|| {
-                (
-                    session_id.to_string(),
-                    runtime_state.vmm_profile_sync.clone(),
-                )
-            })
+        .filter(|(_, runtime_state)| !runtime_state.vmm_profile_sync.is_empty())
+        .map(|(session_id, runtime_state)| {
+            (
+                session_id.to_string(),
+                runtime_state.vmm_profile_sync.clone(),
+            )
         })
         .collect();
     let last_compaction_ids = workspace_snapshot

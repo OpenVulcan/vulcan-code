@@ -71,7 +71,7 @@ pub enum SessionNodeKind {
 
 /// Parent reference for a main session or nested task session.
 /// 主会话或嵌套子代理会话的父级引用。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParentSessionRef {
     /// Root main sessions do not have a parent node.

@@ -223,7 +223,7 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
                     ..SessionRuntimeStateEntry::default()
                 });
             let apply_result =
-                apply_terminal_execution_report_to_state(runtime_state, session_id, &now, &report);
+                apply_terminal_execution_report_to_state(runtime_state, session_id, &now, report);
             (
                 apply_result.is_success,
                 runtime_state.conversation_state.clone(),

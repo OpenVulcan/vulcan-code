@@ -37,6 +37,10 @@ pub struct TaskProjectSummary {
 impl TaskProjectSummary {
     /// Creates one project node with explicit metadata and child-session bindings.
     /// 使用明确元数据与子会话绑定创建一个项目节点。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The constructor mirrors the persisted project summary shape used by seed and store callers."
+    )]
     pub fn new(
         id: impl Into<String>,
         title: impl Into<String>,

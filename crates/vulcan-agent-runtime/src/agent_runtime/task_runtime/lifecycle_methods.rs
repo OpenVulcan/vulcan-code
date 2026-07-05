@@ -280,22 +280,28 @@ impl TaskRuntime {
         let (sender, mut receiver) = unbounded_channel::<DetachedTaskRuntimeEvent>();
         let terminal_task_without_stream = self.task_has_terminal_record(task_id);
         let (buffered_events, closed) = {
-            let mut streams = self
-                .detached_task_event_streams
-                .write()
-                .expect("task detached stream registry lock");
-            if !streams.contains_key(&task_id) && terminal_task_without_stream {
-                (Vec::new(), true)
-            } else {
-                let state = streams.entry(task_id).or_default();
-                let buffered_events = std::mem::take(&mut state.buffered_events);
-                let closed = state.closed;
-                if !closed {
-                    state.subscribers.push(sender.clone());
-                } else {
-                    streams.remove(&task_id);
+            match self.detached_task_event_streams.write() {
+                Ok(mut streams) => {
+                    if !streams.contains_key(&task_id) && terminal_task_without_stream {
+                        (Vec::new(), true)
+                    } else {
+                        let state = streams.entry(task_id).or_default();
+                        let buffered_events = std::mem::take(&mut state.buffered_events);
+                        let closed = state.closed;
+                        if !closed {
+                            state.subscribers.push(sender.clone());
+                        } else {
+                            streams.remove(&task_id);
+                        }
+                        (buffered_events, closed)
+                    }
                 }
-                (buffered_events, closed)
+                Err(_) => {
+                    eprintln!(
+                        "[task-runtime] detached task stream registry is locked; returning an empty stream for task {task_id}"
+                    );
+                    (Vec::new(), true)
+                }
             }
         };
 
@@ -315,16 +321,21 @@ impl TaskRuntime {
 
     /// Opens one detached child-task event stream for a fresh run before the parent announces DelegateStarted.
     /// 在父级发布 DelegateStarted 之前，为新一轮子任务运行打开一条分离事件流。
-    pub(super) fn open_detached_task_event_stream_for_run(&self, task_id: SessionId) {
-        let mut streams = self
-            .detached_task_event_streams
-            .write()
-            .expect("task detached stream registry lock");
+    pub(super) fn open_detached_task_event_stream_for_run(
+        &self,
+        task_id: SessionId,
+    ) -> Result<(), String> {
+        let mut streams = self.detached_task_event_streams.write().map_err(|_| {
+            String::from(
+                "The detached task stream registry is locked and cannot open the subagent stream.",
+            )
+        })?;
         let state = streams.entry(task_id).or_default();
         state.closed = false;
         // A resumed run reuses the same task id, so stale terminal output must not replay into the new live panel.
         // 续跑会复用同一任务标识，因此旧终态输出不能回放到新的实时面板。
         state.buffered_events.clear();
+        Ok(())
     }
 
     /// Returns whether the task registry already knows this child task reached a terminal status.
@@ -351,7 +362,12 @@ impl TaskRuntime {
     ) -> Option<TaskExecutionHandler> {
         self.backends
             .read()
-            .expect("task backend registry lock")
+            .map_err(|_| {
+                eprintln!(
+                    "[task-runtime] task backend registry is locked; backend lookup failed for session {session_id}"
+                );
+            })
+            .ok()?
             .get(&session_id)
             .cloned()
     }
@@ -359,10 +375,16 @@ impl TaskRuntime {
     /// Removes one backend handler from the registry.
     /// 从注册表中移除一个后端处理器。
     pub(super) fn remove_backend(&self, session_id: SessionId) {
-        self.backends
-            .write()
-            .expect("task backend registry lock")
-            .remove(&session_id);
+        match self.backends.write() {
+            Ok(mut backends) => {
+                backends.remove(&session_id);
+            }
+            Err(_) => {
+                eprintln!(
+                    "[task-runtime] task backend registry is locked; backend removal failed for session {session_id}"
+                );
+            }
+        }
     }
 
     /// Installs one active child-task abort handle and returns a guard that unregisters it on drop.
@@ -371,11 +393,15 @@ impl TaskRuntime {
         self: &Arc<Self>,
         task_id: SessionId,
         handle: AbortHandle,
-    ) -> ActiveTaskRunGuard {
+    ) -> Result<ActiveTaskRunGuard, String> {
         let run_id = Uuid::new_v4();
         self.active_task_runs
             .write()
-            .expect("task active run registry lock")
+            .map_err(|_| {
+                String::from(
+                    "The active task registry is locked and cannot register the subagent run.",
+                )
+            })?
             .insert(
                 task_id,
                 ActiveTaskRunEntry {
@@ -383,20 +409,22 @@ impl TaskRuntime {
                     abort_handle: handle,
                 },
             );
-        ActiveTaskRunGuard {
+        Ok(ActiveTaskRunGuard {
             runtime: Arc::clone(self),
             task_id,
             run_id,
-        }
+        })
     }
 
     /// Removes one active child-task abort handle from the registry.
     /// 从注册表中移除一条活动子任务中止句柄。
     pub(super) fn remove_active_task_run(&self, task_id: SessionId, run_id: Uuid) {
-        let mut active_task_runs = self
-            .active_task_runs
-            .write()
-            .expect("task active run registry lock");
+        let Ok(mut active_task_runs) = self.active_task_runs.write() else {
+            eprintln!(
+                "[task-runtime] active task registry is locked; active-run removal failed for task {task_id}"
+            );
+            return;
+        };
         let should_remove = active_task_runs
             .get(&task_id)
             .is_some_and(|entry| entry.run_id == run_id);
@@ -427,10 +455,12 @@ impl TaskRuntime {
         task_id: SessionId,
         event: DetachedTaskRuntimeEvent,
     ) {
-        let mut streams = self
-            .detached_task_event_streams
-            .write()
-            .expect("task detached stream registry lock");
+        let Ok(mut streams) = self.detached_task_event_streams.write() else {
+            eprintln!(
+                "[task-runtime] detached task stream registry is locked; dropping detached event for task {task_id}"
+            );
+            return;
+        };
         let state = streams.entry(task_id).or_default();
         if state.closed {
             return;
@@ -456,10 +486,12 @@ impl TaskRuntime {
     /// Marks one detached child-task event stream as terminal and drops active senders so WebUI listener streams can close naturally.
     /// 将某条分离子任务事件流标记为终态，并释放活动发送端，让WebUI监听流自然关闭。
     pub(super) fn close_detached_task_event_stream(&self, task_id: SessionId) {
-        let mut streams = self
-            .detached_task_event_streams
-            .write()
-            .expect("task detached stream registry lock");
+        let Ok(mut streams) = self.detached_task_event_streams.write() else {
+            eprintln!(
+                "[task-runtime] detached task stream registry is locked; stream close failed for task {task_id}"
+            );
+            return;
+        };
         let should_remove = if let Some(state) = streams.get_mut(&task_id) {
             state.closed = true;
             !state.subscribers.is_empty() || state.buffered_events.is_empty()

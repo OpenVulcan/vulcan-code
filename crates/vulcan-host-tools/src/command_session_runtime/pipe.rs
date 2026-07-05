@@ -29,10 +29,10 @@ pub(super) fn request_command_session_child_stop(child: &mut Child) -> Result<()
             taskkill.args(["/PID", &process_id.to_string(), "/T", "/F"]);
             apply_windows_release_no_window_to_std_command(&mut taskkill);
             let taskkill_status = taskkill.status();
-            if let Ok(status) = taskkill_status {
-                if status.success() {
-                    return Ok(());
-                }
+            if let Ok(status) = taskkill_status
+                && status.success()
+            {
+                return Ok(());
             }
         }
     }
@@ -83,16 +83,46 @@ pub(super) async fn pump_command_session_output<R>(
 
 /// Runs the background process supervisor that owns the child process lifecycle and stdin control channel.
 /// 运行后台进程监管器，持有子进程生命周期与标准输入控制通道。
-pub(super) async fn run_command_session_supervisor(
-    record: Arc<CommandSessionRecord>,
-    mut child: Child,
-    mut stdin: Option<ChildStdin>,
-    stdout: ChildStdout,
-    stderr: ChildStderr,
-    mut control_receiver: UnboundedReceiver<CommandSessionControlMessage>,
-    initial_stdin: Option<String>,
-    initial_stdin_append_newline: bool,
-) {
+pub(super) struct CommandSessionSupervisorInput {
+    /// Runtime record that owns status, output buffers, and control metadata.
+    /// 持有状态、输出缓冲与控制元数据的运行时记录。
+    pub record: Arc<CommandSessionRecord>,
+    /// Spawned child process owned by the supervisor.
+    /// 由监管器持有的已启动子进程。
+    pub child: Child,
+    /// Optional writable stdin channel captured from the child process.
+    /// 从子进程捕获的可选标准输入写入通道。
+    pub stdin: Option<ChildStdin>,
+    /// Captured stdout reader.
+    /// 已捕获的标准输出读取器。
+    pub stdout: ChildStdout,
+    /// Captured stderr reader.
+    /// 已捕获的标准错误读取器。
+    pub stderr: ChildStderr,
+    /// Control channel used by runtime API calls to write or stop the session.
+    /// 运行时 API 写入或停止会话时使用的控制通道。
+    pub control_receiver: UnboundedReceiver<CommandSessionControlMessage>,
+    /// Optional initial stdin payload submitted immediately after start.
+    /// 启动后立即提交的可选初始标准输入内容。
+    pub initial_stdin: Option<String>,
+    /// Whether the supervisor appends the interactive newline to initial stdin.
+    /// 监管器是否为初始标准输入追加交互式换行。
+    pub initial_stdin_append_newline: bool,
+}
+
+/// Runs the background process supervisor that owns the child process lifecycle and stdin control channel.
+/// 运行后台进程监管器，持有子进程生命周期与标准输入控制通道。
+pub(super) async fn run_command_session_supervisor(input: CommandSessionSupervisorInput) {
+    let CommandSessionSupervisorInput {
+        record,
+        mut child,
+        mut stdin,
+        stdout,
+        stderr,
+        mut control_receiver,
+        initial_stdin,
+        initial_stdin_append_newline,
+    } = input;
     let stdout_task = tokio::spawn(pump_command_session_output(
         stdout,
         CommandSessionOutputStream::Stdout,

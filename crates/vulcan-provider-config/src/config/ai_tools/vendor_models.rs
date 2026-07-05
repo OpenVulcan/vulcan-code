@@ -238,7 +238,7 @@ impl PersistedAiCapabilityVendorEntry {
 
     /// Returns whether the current shared vendor exposes an explicit local/cloud connection-mode switch.
     /// 返回当前共享供应商是否暴露显式的本地/云端连接模式切换。
-    pub fn supports_connection_mode(self: &Self) -> bool {
+    pub fn supports_connection_mode(&self) -> bool {
         self.vendor_id.eq_ignore_ascii_case("ollama")
     }
 

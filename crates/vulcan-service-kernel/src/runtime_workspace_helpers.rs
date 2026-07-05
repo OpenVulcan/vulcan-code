@@ -49,13 +49,132 @@ pub(crate) fn vmm_request_project_scope<'a>(
 
 /// Returns the currently selected workspace session when it exists.
 /// 返回当前选中的工作区会话（若存在）。
-pub(crate) fn selected_workspace_session<'a>(
-    workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
-) -> Option<&'a SessionSummary> {
+pub(crate) fn selected_workspace_session(
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+) -> Option<&SessionSummary> {
     workspace
         .sessions
         .iter()
         .find(|session| session.id == workspace.selected_session)
+}
+
+/// Returns the retained active session summary for one session id.
+/// 返回单个会话标识对应的保留活动会话摘要。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains active session summaries.
+/// `workspace_snapshot` 包含活动会话摘要。
+/// `session_id` identifies the session to resolve.
+/// `session_id` 标识需要解析的会话。
+///
+/// # Returns
+/// 返回值
+/// The matching active session summary when present.
+/// 存在时返回匹配的活动会话摘要。
+pub(crate) fn workspace_session_summary_for_session(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<&SessionSummary> {
+    workspace_snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+}
+
+/// Returns the persisted project id from one session summary.
+/// 从单个会话摘要返回持久化项目标识。
+///
+/// # Parameters
+/// 参数
+/// `session` is the retained session summary.
+/// `session` 是保留的会话摘要。
+///
+/// # Returns
+/// 返回值
+/// A non-empty project id when the session belongs to a project.
+/// 当会话属于项目时返回非空项目标识。
+pub(crate) fn session_summary_project_id(session: &SessionSummary) -> Option<&str> {
+    session
+        .project_id
+        .as_deref()
+        .filter(|project_id| !project_id.trim().is_empty())
+}
+
+/// Returns the stable project and creation timestamp locator fields from one session summary.
+/// 从单个会话摘要返回稳定的项目与创建时间定位字段。
+///
+/// # Parameters
+/// 参数
+/// `session` is the retained session summary.
+/// `session` 是保留的会话摘要。
+///
+/// # Returns
+/// 返回值
+/// Non-empty project id and raw Unix-milliseconds creation timestamp when both are present.
+/// 当两者均存在时返回非空项目标识与原始 Unix 毫秒创建时间戳。
+pub(crate) fn session_summary_project_and_created_at(
+    session: &SessionSummary,
+) -> Option<(&str, &str)> {
+    let project_id = session_summary_project_id(session)?;
+    let created_at = session.created_at.trim();
+    if created_at.is_empty() {
+        return None;
+    }
+    Some((project_id, created_at))
+}
+
+/// Resolves a segmented session directory from the stable summary locator.
+/// 通过稳定会话摘要定位分段会话目录。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the Vulcan Code data root containing segmented session directories.
+/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根。
+/// `session` is the retained session summary with project and creation metadata.
+/// `session` 是携带项目与创建时间元数据的保留会话摘要。
+///
+/// # Returns
+/// 返回值
+/// The active or archived segmented session directory when it exists.
+/// 存在时返回活动或归档分段会话目录。
+pub(crate) fn segmented_session_directory_for_summary(
+    data_root: &Path,
+    session: &SessionSummary,
+) -> Option<PathBuf> {
+    let (project_id, created_at) = session_summary_project_and_created_at(session)?;
+    let session_id_text = session.id.to_string();
+    vulcan_workspace_store::workspace_store::find_segmented_session_directory_for_task_store_created_at(
+        data_root,
+        project_id,
+        created_at,
+        &session_id_text,
+    )
+}
+
+/// Resolves a segmented session directory for one active workspace session.
+/// 为单个活动工作区会话解析分段会话目录。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the Vulcan Code data root containing segmented session directories.
+/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根。
+/// `workspace_snapshot` contains active session summaries.
+/// `workspace_snapshot` 包含活动会话摘要。
+/// `session_id` identifies the session to resolve.
+/// `session_id` 标识需要解析的会话。
+///
+/// # Returns
+/// 返回值
+/// The active or archived segmented session directory when it exists.
+/// 存在时返回活动或归档分段会话目录。
+pub(crate) fn segmented_session_directory_for_workspace_session(
+    data_root: &Path,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<PathBuf> {
+    workspace_session_summary_for_session(workspace_snapshot, session_id)
+        .and_then(|session| segmented_session_directory_for_summary(data_root, session))
 }
 
 /// Reads all long-lived runtime handles required by a WebUI prompt submission.
@@ -261,65 +380,59 @@ pub(crate) fn webui_turn_completion_gate_from_state(
     })
 }
 
-/// Returns running child task states from the in-memory cache without segmented-store refresh.
-/// 不刷新分段存储，仅从内存缓存返回仍在运行的子任务状态。
+/// Returns running child task states from the authoritative runtime registry.
+/// 从权威运行时注册表返回仍在运行的子任务状态。
 pub(crate) fn running_webui_subagent_task_states_for_tree_from_cache(
     guard: &mut ServiceBridgeState,
-    workspace_snapshot: &WorkspaceSnapshot,
+    _workspace_snapshot: &WorkspaceSnapshot,
     root_parent_session_id: SessionId,
 ) -> Vec<(SessionId, SubagentTaskPanelState)> {
-    collect_running_subagent_task_states_for_tree(root_parent_session_id, |parent_session_id| {
-        let task_runtime = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| &runtime.task_runtime);
-        let live_listener_task_ids = guard.detached_subagent_task_listeners.clone();
-        guard
-            .session_subagent_tasks
-            .get(&parent_session_id)
-            .map(|tasks| tasks.values().cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|state| {
-                normalize_webui_subagent_task_state(
-                    Some(workspace_snapshot),
-                    &state,
-                    task_runtime,
-                    live_listener_task_ids.contains(&state.task_id),
-                )
-            })
-            .collect::<Vec<_>>()
-    })
+    running_webui_subagent_task_states_for_tree_from_live_cache(guard, root_parent_session_id)
 }
 
-/// Returns running child task states from live runtime handles without cloning the workspace snapshot.
-/// 不克隆工作区快照，仅通过实时运行句柄返回仍在运行的子任务状态。
+/// Returns running child task states from the authoritative runtime registry without workspace access.
+/// 不访问工作区，仅从权威运行时注册表返回仍在运行的子任务状态。
 pub(crate) fn running_webui_subagent_task_states_for_tree_from_live_cache(
     guard: &mut ServiceBridgeState,
     root_parent_session_id: SessionId,
 ) -> Vec<(SessionId, SubagentTaskPanelState)> {
-    collect_running_subagent_task_states_for_tree(root_parent_session_id, |parent_session_id| {
-        let task_runtime = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| &runtime.task_runtime);
-        let live_listener_task_ids = guard.detached_subagent_task_listeners.clone();
-        guard
-            .session_subagent_tasks
-            .get(&parent_session_id)
-            .map(|tasks| tasks.values().cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|state| {
-                normalize_webui_subagent_task_state(
-                    None,
-                    &state,
-                    task_runtime,
-                    live_listener_task_ids.contains(&state.task_id),
-                )
-            })
-            .collect::<Vec<_>>()
-    })
+    let Some(task_runtime) = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| &runtime.task_runtime)
+    else {
+        return Vec::new();
+    };
+    task_runtime
+        .open_subagent_registry_entries_for_parent_tree(root_parent_session_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.status.is_running())
+        .map(|entry| {
+            let parent_session_id = entry.parent_session_id.as_uuid();
+            (
+                parent_session_id,
+                subagent_task_panel_state_from_registry_for_gate(entry),
+            )
+        })
+        .collect()
+}
+
+/// Builds a lightweight WebUI panel state from a registry entry for run-gate calculations.
+/// 为运行闸门计算从注册表条目构建轻量 WebUI 面板状态。
+fn subagent_task_panel_state_from_registry_for_gate(
+    entry: vulcan_session_core::SubagentRegistryEntry,
+) -> SubagentTaskPanelState {
+    SubagentTaskPanelState {
+        task_id: entry.session_id.as_uuid(),
+        public_task_id: entry.agent_id.clone(),
+        parent_session_id: entry.parent_session_id.as_uuid(),
+        subagent_label: entry.agent_id,
+        description: entry.last_task_message,
+        run_state: SubagentTaskRunState::Running,
+        result_text: entry.result_summary.unwrap_or_default(),
+        conversation_state: None,
+    }
 }
 
 /// Marks one child task run as non-blocking for the parent turn completion gate.
@@ -374,14 +487,10 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
     task_ids: &[(SessionId, SessionId)],
 ) {
     for (direct_parent_session_id, task_id) in task_ids {
-        if let Some(tasks) = guard
-            .session_subagent_tasks
-            .get_mut(direct_parent_session_id)
-            && let Some(state) = tasks.get_mut(task_id)
-        {
-            state.run_state = SubagentTaskRunState::Stopped;
-            if state.result_text.trim().is_empty() {
-                state.result_text = SUBAGENT_TASK_STOPPED_SUMMARY_TEXT.to_string();
+        if let Some(entry) = guard.subagent_surface_detail_cache.get_mut(task_id) {
+            entry.task_state.run_state = SubagentTaskRunState::Stopped;
+            if entry.task_state.result_text.trim().is_empty() {
+                entry.task_state.result_text = SUBAGENT_TASK_STOPPED_SUMMARY_TEXT.to_string();
             }
         }
         guard.detached_subagent_task_listeners.remove(task_id);
@@ -409,28 +518,20 @@ pub(crate) fn remove_webui_closed_subagent_tasks_in_state(
         return false;
     }
     let task_ids = task_ids.iter().copied().collect::<BTreeSet<_>>();
-    let mut changed = false;
-    let parent_session_ids = guard
-        .session_subagent_tasks
-        .keys()
-        .copied()
-        .collect::<Vec<_>>();
-    for parent_session_id in parent_session_ids {
-        let remove_empty_parent =
-            if let Some(tasks) = guard.session_subagent_tasks.get_mut(&parent_session_id) {
-                for task_id in &task_ids {
-                    changed |= tasks.remove(task_id).is_some();
-                }
-                tasks.is_empty()
-            } else {
-                false
-            };
-        if remove_empty_parent {
-            guard.session_subagent_tasks.remove(&parent_session_id);
+    let affected_parent_session_ids = task_ids
+        .iter()
+        .filter_map(|task_id| {
             guard
-                .session_subagent_navigation_rounds
-                .remove(&parent_session_id);
-        }
+                .subagent_surface_detail_cache
+                .get(task_id)
+                .map(|entry| entry.task_state.parent_session_id)
+        })
+        .collect::<BTreeSet<_>>();
+    let mut changed = false;
+    for parent_session_id in affected_parent_session_ids {
+        changed |= guard
+            .session_subagent_navigation_rounds
+            .remove(&parent_session_id);
     }
     for task_id in &task_ids {
         changed |= guard.detached_subagent_task_listeners.remove(task_id);
@@ -663,10 +764,7 @@ pub(crate) fn owning_project_id_for_session(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Option<String> {
-    workspace_snapshot
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .and_then(|session| session.project_id.clone())
-        .filter(|project_id| !project_id.trim().is_empty())
+    workspace_session_summary_for_session(workspace_snapshot, session_id)
+        .and_then(session_summary_project_id)
+        .map(str::to_string)
 }

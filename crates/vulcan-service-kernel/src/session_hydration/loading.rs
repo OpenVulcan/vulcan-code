@@ -24,13 +24,21 @@ pub(crate) async fn load_workspace_for_submission(
         // Measures selected session hydration when retained context cannot be reused.
         // 衡量无法复用保留上下文时的选中会话水合耗时。
         let hydration_started_at = current_unix_millis_value();
-        match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
-            controller_runtime.clone(),
-            session_id,
-            SELECTED_SESSION_TURN_LOAD_LIMIT,
-        )
-        .await
+        let hydration = if let Some((project_id, created_at)) =
+            session_project_created_at_for_hydration(&workspace_snapshot, session_id)
         {
+            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project_created_at(
+                    controller_runtime.clone(),
+                    &project_id,
+                    &created_at,
+                    session_id,
+                    SELECTED_SESSION_TURN_LOAD_LIMIT,
+                )
+                .await
+        } else {
+            Ok(empty_session_hydration_snapshot(session_id))
+        };
+        match hydration {
             Ok(hydration) => {
                 apply_submission_session_hydration(
                     &controller_runtime,
@@ -49,6 +57,29 @@ pub(crate) async fn load_workspace_for_submission(
         );
     }
     Ok(workspace_snapshot)
+}
+
+/// Returns deterministic session location fields from one retained workspace snapshot.
+/// 从保留的工作区快照返回确定性的会话定位字段。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains the retained session summaries.
+/// `workspace_snapshot` 包含保留的会话摘要。
+/// `session_id` selects the session to locate.
+/// `session_id` 选择需要定位的会话。
+///
+/// # Returns
+/// 返回值
+/// Owned project id and raw created-at timestamp when both are present on the summary.
+/// 当摘要同时具备项目标识与原始创建时间戳时返回它们的自有副本。
+fn session_project_created_at_for_hydration(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<(String, String)> {
+    workspace_session_summary_for_session(workspace_snapshot, session_id)
+        .and_then(session_summary_project_and_created_at)
+        .map(|(project_id, created_at)| (project_id.to_string(), created_at.to_string()))
 }
 
 /// Returns whether a retained WebUI snapshot can be used as the submit base snapshot.
@@ -87,33 +118,27 @@ pub(crate) async fn load_selected_session_display_hydration(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<SessionHydrationSnapshot, String> {
-    let project_id = owning_project_id_for_session(workspace_snapshot, session_id);
-    match project_id.as_deref() {
-        Some(project_id) => {
-            vulcan_workspace_store::workspace_store::load_session_display_hydration_snapshot_for_project(
+    if let Some((project_id, created_at)) =
+        session_project_created_at_for_hydration(workspace_snapshot, session_id)
+    {
+        vulcan_workspace_store::workspace_store::load_session_display_hydration_snapshot_for_project_created_at(
                 controller_runtime,
-                project_id,
+                &project_id,
+                &created_at,
                 session_id,
                 SELECTED_SESSION_TURN_LOAD_LIMIT,
             )
             .await
-        }
-        None => {
-            vulcan_workspace_store::workspace_store::load_session_display_hydration_snapshot(
-                controller_runtime,
-                session_id,
-                SELECTED_SESSION_TURN_LOAD_LIMIT,
-            )
-            .await
-        }
+            .or_else(|error| {
+                if is_missing_segmented_session_file_error(&error) {
+                    Ok(empty_session_hydration_snapshot(session_id))
+                } else {
+                    Err(error)
+                }
+            })
+    } else {
+        Ok(empty_session_hydration_snapshot(session_id))
     }
-    .or_else(|error| {
-        if is_missing_segmented_session_file_error(&error) {
-            Ok(empty_session_hydration_snapshot(session_id))
-        } else {
-            Err(error)
-        }
-    })
 }
 
 /// Applies display hydration data to the selected workspace session.
@@ -195,23 +220,20 @@ pub(crate) async fn hydrate_retained_submission_session_if_needed(
         return Ok(());
     }
     let hydration_started_at = current_unix_millis_value();
-    let hydration_result =
-        if let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) {
-            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project(
+    let hydration_result = if let Some((project_id, created_at)) =
+        session_project_created_at_for_hydration(workspace_snapshot, session_id)
+    {
+        vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project_created_at(
                 controller_runtime.clone(),
                 &project_id,
+                &created_at,
                 session_id,
                 SELECTED_SESSION_TURN_LOAD_LIMIT,
             )
             .await
-        } else {
-            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
-                controller_runtime.clone(),
-                session_id,
-                SELECTED_SESSION_TURN_LOAD_LIMIT,
-            )
-            .await
-        };
+    } else {
+        Ok(empty_session_hydration_snapshot(session_id))
+    };
     match hydration_result {
         Ok(hydration) => {
             apply_submission_session_hydration(
@@ -257,23 +279,20 @@ pub(crate) async fn hydrate_selected_session_runtime_if_needed(
     if retained_submission_snapshot_has_session_context(workspace_snapshot, session_id) {
         return Ok(());
     }
-    let hydration_result =
-        if let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) {
-            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project(
+    let hydration_result = if let Some((project_id, created_at)) =
+        session_project_created_at_for_hydration(workspace_snapshot, session_id)
+    {
+        vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project_created_at(
                 controller_runtime.clone(),
                 &project_id,
+                &created_at,
                 session_id,
                 SELECTED_SESSION_TURN_LOAD_LIMIT,
             )
             .await
-        } else {
-            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
-                controller_runtime.clone(),
-                session_id,
-                SELECTED_SESSION_TURN_LOAD_LIMIT,
-            )
-            .await
-        };
+    } else {
+        Ok(empty_session_hydration_snapshot(session_id))
+    };
     match hydration_result {
         Ok(hydration) => {
             apply_selected_session_runtime_hydration(workspace_snapshot, session_id, hydration);
@@ -306,14 +325,11 @@ pub(crate) fn apply_selected_session_runtime_hydration(
     session_id: SessionId,
     hydration: SessionHydrationSnapshot,
 ) {
-    if !workspace_snapshot
-        .session_messages
-        .contains_key(&session_id)
+    if let std::collections::btree_map::Entry::Vacant(e) =
+        workspace_snapshot.session_messages.entry(session_id)
     {
         let messages = filter_legacy_goal_internal_user_messages(hydration.messages);
-        workspace_snapshot
-            .session_messages
-            .insert(session_id, messages);
+        e.insert(messages);
     }
     if let Some(mut runtime_state) = hydration.runtime_state {
         sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state);

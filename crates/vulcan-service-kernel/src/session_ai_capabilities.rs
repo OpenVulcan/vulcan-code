@@ -24,8 +24,7 @@ pub(super) struct SessionAiCapabilityConfigurationSaveRequest {
     ai_capability_target_order_overrides: BTreeMap<String, Vec<String>>,
 }
 
-/// Session Plan mode update request sent by the WebUI composer controls.
-
+/// Saves the current session AI capability dialog draft into the session addon document.
 /// 将当前会话 AI 能力快捷面板草稿保存到会话附属状态文档。
 pub(super) async fn service_save_session_ai_capability_configuration(
     app: ServiceEventEmitter,
@@ -175,8 +174,7 @@ pub(super) async fn service_save_session_ai_capability_configuration(
 ///
 /// # Returns
 /// 返回值
-/// The refreshed workbench snapshot after the Plan mode state changes.
-
+/// Returns a persistent hidden user injection that clears on context compaction when model-visible capability changes exist.
 /// 返回一条上下文压缩时清除的持久隐藏用户注入；若无模型可见变化则返回 `None`。
 pub(super) fn session_ai_capability_configuration_update_injection(
     previous_configuration: &PersistedAiToolConfiguration,
@@ -300,8 +298,7 @@ pub(super) fn format_ai_capability_default_route(route: Option<&(String, String)
         .unwrap_or_else(|| String::from("none"))
 }
 
-/// Persists one complete session addon document after the caller enters the addon write queue.
-
+/// Parses the complete disabled capability list submitted by the WebUI session dialog.
 /// 解析 WebUI 会话弹窗中的完整禁用能力列表。
 pub(super) fn parse_session_ai_capability_disabled_kinds(
     raw_kinds: Vec<String>,

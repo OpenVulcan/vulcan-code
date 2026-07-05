@@ -331,10 +331,10 @@ pub(super) fn append_task_windows_path_guidance(system_prompt: &mut String) {
 /// 从一份规范会话快照中提取最后一条可见助手文本。
 pub(super) fn extract_final_assistant_text(snapshot: &CoreConversationSnapshot) -> Option<String> {
     snapshot.messages.iter().rev().find_map(|message| {
-        if let vulcan_core::types::ConversationPayload::Assistant { text, .. } = &message.payload {
-            if !text.trim().is_empty() {
-                return Some(text.clone());
-            }
+        if let vulcan_core::types::ConversationPayload::Assistant { text, .. } = &message.payload
+            && !text.trim().is_empty()
+        {
+            return Some(text.clone());
         }
         None
     })
@@ -346,10 +346,10 @@ pub(super) fn extract_final_assistant_message_id(
     snapshot: &CoreConversationSnapshot,
 ) -> Option<String> {
     snapshot.messages.iter().rev().find_map(|message| {
-        if let vulcan_core::types::ConversationPayload::Assistant { text, .. } = &message.payload {
-            if !text.trim().is_empty() {
-                return Some(message.id.clone());
-            }
+        if let vulcan_core::types::ConversationPayload::Assistant { text, .. } = &message.payload
+            && !text.trim().is_empty()
+        {
+            return Some(message.id.clone());
         }
         None
     })

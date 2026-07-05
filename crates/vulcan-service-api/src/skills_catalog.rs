@@ -402,10 +402,11 @@ pub struct SubagentOriginSummary {
 
 /// Tri-state text patch used by partial agent metadata saves.
 /// 智能体元数据局部保存使用的三态文本补丁。
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub enum OptionalTextPatch {
     /// The request omitted this field and the previous value must be kept.
     /// 请求未提交该字段，必须保留旧值。
+    #[default]
     Missing,
     /// The request explicitly sent null and the previous value must be cleared.
     /// 请求显式提交 null，必须清空旧值。
@@ -413,12 +414,6 @@ pub enum OptionalTextPatch {
     /// The request supplied a replacement text value.
     /// 请求提交了用于替换的文本值。
     Set(String),
-}
-
-impl Default for OptionalTextPatch {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 impl OptionalTextPatch {

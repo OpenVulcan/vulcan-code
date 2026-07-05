@@ -52,17 +52,111 @@ fn webui_subagent_mailbox_rejects_child_result_from_stale_parent_generation() {
         old_generation,
         webui_session_kernel_generation(&state, parent_session_id).expect("new generation")
     );
-    assert!(!enqueue_webui_subagent_mailbox_input(
+    let outcome = enqueue_webui_subagent_mailbox_input(
         &mut state,
         parent_session_id,
         task_session_id,
         &metadata,
+    );
+    assert!(matches!(
+        outcome,
+        SubagentMailboxEnqueueOutcome::Rejected(
+            SubagentMailboxEnqueueRejection::GenerationClosed {
+                source_generation,
+                ..
+            }
+        ) if source_generation == old_generation
     ));
     let kernel = state
         .session_runtime_kernels
         .get(&parent_session_id)
         .expect("kernel should exist");
     assert_eq!(kernel.input_queue().mailbox_len(), 0);
+}
+
+/// Verifies stale child results surface as service-level mailbox delivery errors.
+/// 验证过期子代理结果会在服务层表现为 mailbox 投递错误。
+#[test]
+fn session_mailbox_errors_on_stale_parent_generation() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let event = test_delegate_finished_event(task_session_id, "agent-review", "done");
+
+    start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
+        .expect("first parent turn should start");
+    bind_webui_subagent_parent_turn(&mut service_state, parent_session_id, task_session_id);
+    stop_webui_session_kernel_generation(&mut service_state, parent_session_id);
+    start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-b")
+        .expect("second parent turn should start");
+
+    let state = Arc::new(Mutex::new(service_state));
+    let error = enqueue_webui_session_mailbox_input_if_needed(
+        &state,
+        parent_session_id,
+        &event,
+        true,
+        false,
+    )
+    .expect_err("stale generation should be surfaced as a delivery error");
+
+    assert!(error.contains("generation_closed"));
+    let guard = state.lock().expect("state lock");
+    assert!(
+        guard
+            .subagent_parent_turn_bindings
+            .contains_key(&task_session_id)
+    );
+    let kernel = guard
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("kernel should exist");
+    assert_eq!(kernel.input_queue().mailbox_len(), 0);
+}
+
+/// Verifies repeated child results are treated as idempotent mailbox skips.
+/// 验证重复子代理结果会被视为幂等 mailbox 跳过。
+#[test]
+fn webui_subagent_mailbox_treats_duplicate_input_as_idempotent_skip() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+    let metadata = serde_json::json!({
+        "payload": {
+            "subagent_mailbox_event": {
+                "kind": "completed",
+                "payload": {
+                    "result_text": "child done once"
+                }
+            }
+        }
+    });
+
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
+    let duplicate = enqueue_webui_subagent_mailbox_input(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        &metadata,
+    );
+
+    assert!(matches!(
+        duplicate,
+        SubagentMailboxEnqueueOutcome::AlreadyPresentOrConsumed { .. }
+    ));
+    let kernel = state
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("kernel should exist");
+    assert_eq!(kernel.input_queue().mailbox_len(), 1);
 }
 
 /// Verifies send_message tool completion is mirrored into the child transcript exactly once.
@@ -187,12 +281,15 @@ fn webui_session_kernel_mailbox_turn_accepts_subagent_input() {
         }
     });
 
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut state,
-        parent_session_id,
-        task_session_id,
-        &metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
     start_webui_session_kernel_turn(
         &mut state,
         parent_session_id,
@@ -250,12 +347,15 @@ fn webui_subagent_mailbox_accepts_sibling_during_mailbox_turn() {
     let parent_generation =
         webui_session_kernel_generation(&state, parent_session_id).expect("generation");
     finish_webui_session_kernel_turn(&mut state, parent_session_id, TurnTerminalStatus::Completed);
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut state,
-        parent_session_id,
-        first_task_session_id,
-        &first_metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut state,
+            parent_session_id,
+            first_task_session_id,
+            &first_metadata,
+        )
+        .is_queued()
+    );
     start_webui_session_kernel_turn(
         &mut state,
         parent_session_id,
@@ -268,12 +368,15 @@ fn webui_subagent_mailbox_accepts_sibling_during_mailbox_turn() {
         webui_session_kernel_generation(&state, parent_session_id),
         Some(parent_generation)
     );
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut state,
-        parent_session_id,
-        second_task_session_id,
-        &second_metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut state,
+            parent_session_id,
+            second_task_session_id,
+            &second_metadata,
+        )
+        .is_queued()
+    );
     let kernel = state
         .session_runtime_kernels
         .get(&parent_session_id)
@@ -305,12 +408,15 @@ fn wait_agent_completion_leaves_matching_mailbox_input() {
             }
         }
     });
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut service_state,
-        parent_session_id,
-        task_session_id,
-        &metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut service_state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
     let state = Arc::new(Mutex::new(service_state));
     let started_event = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
@@ -380,12 +486,15 @@ fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
             }
         }
     });
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut service_state,
-        parent_session_id,
-        task_session_id,
-        &metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut service_state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
     let state = Arc::new(Mutex::new(service_state));
     let started_event = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
@@ -507,12 +616,15 @@ fn mailbox_intervention_appends_typed_agent_message() {
             }
         }
     });
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut service_state,
-        parent_session_id,
-        task_session_id,
-        &metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut service_state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
     start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
         .expect("parent turn should start");
     let state = Arc::new(Mutex::new(service_state));
@@ -565,12 +677,15 @@ fn mailbox_intervention_skips_active_wait_scope() {
             }
         }
     });
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut service_state,
-        parent_session_id,
-        task_session_id,
-        &metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut service_state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
     start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
         .expect("parent turn should start");
     session_runtime_kernel_mut(&mut service_state, parent_session_id)
@@ -627,12 +742,15 @@ fn active_wait_scope_suppresses_subagent_mailbox_trigger() {
         )
         .expect("wait scope should register");
 
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut service_state,
-        parent_session_id,
-        task_session_id,
-        &metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut service_state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
 
     let kernel = service_state
         .session_runtime_kernels
@@ -659,12 +777,15 @@ fn stopped_subagent_metadata_enqueues_parent_mailbox_notification() {
         "1000",
     );
 
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut service_state,
-        parent_session_id,
-        task_session_id,
-        &metadata,
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut service_state,
+            parent_session_id,
+            task_session_id,
+            &metadata,
+        )
+        .is_queued()
+    );
     let kernel = service_state
         .session_runtime_kernels
         .get(&parent_session_id)

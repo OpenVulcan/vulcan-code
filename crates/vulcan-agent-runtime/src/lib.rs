@@ -1,6 +1,23 @@
 //! Shared agent runtime for provider execution, tools, and streaming turns.
 //! 共享代理运行时，负责 Provider 执行、工具调用与流式轮次。
 
+#![expect(
+    clippy::too_many_arguments,
+    reason = "agent-runtime provider and tool boundary adapters currently mirror protocol and runtime context fields; objectifying every adapter is a dedicated architecture refactor."
+)]
+#![expect(
+    clippy::large_enum_variant,
+    reason = "execution stream events intentionally carry owned terminal reports across async boundaries until the stream envelope is redesigned."
+)]
+#![expect(
+    clippy::result_large_err,
+    reason = "runtime launch preparation returns owned terminal reports for existing stream error paths."
+)]
+#![expect(
+    clippy::enum_variant_names,
+    reason = "provider wire-format enums preserve upstream delta naming for serde compatibility."
+)]
+
 pub mod agent_profile;
 pub mod agent_runtime;
 pub mod attachment_asset_index;

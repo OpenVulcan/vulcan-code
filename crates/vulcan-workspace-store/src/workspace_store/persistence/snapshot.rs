@@ -30,19 +30,19 @@ pub async fn persist_workspace_snapshot(
         .collect::<Vec<_>>();
     upsert_projects(&controller, &all_projects).await?;
     persist_session_index_snapshot(&controller, snapshot).await?;
-    persist_segmented_snapshot_session_stores(
-        &controller,
-        &snapshot.sessions,
-        &active_owner_map,
-        &snapshot.session_messages,
-        &snapshot.session_runtime_state,
-        &snapshot.archived_sessions,
-        &archived_owner_map,
-        &snapshot.archived_session_messages,
-        &snapshot.archived_session_runtime_state,
-        &snapshot.hydrated_session_ids,
-        &mut warnings,
-    )
+    persist_segmented_snapshot_session_stores(PersistSegmentedSnapshotSessionStoresRequest {
+        controller: &controller,
+        sessions: &snapshot.sessions,
+        active_owner_map: &active_owner_map,
+        session_messages: &snapshot.session_messages,
+        session_runtime_state: &snapshot.session_runtime_state,
+        archived_sessions: &snapshot.archived_sessions,
+        archived_owner_map: &archived_owner_map,
+        archived_session_messages: &snapshot.archived_session_messages,
+        archived_session_runtime_state: &snapshot.archived_session_runtime_state,
+        hydrated_session_ids: &snapshot.hydrated_session_ids,
+        warnings: &mut warnings,
+    })
     .await;
     archive_missing_projects(
         &controller,
@@ -77,55 +77,128 @@ pub(super) async fn persist_session_index_snapshot(
 
 /// Mirrors all loaded snapshot sessions into segmented append-only directories.
 /// 将所有已加载的快照会话镜像到分段追加式目录。
+pub(super) struct PersistSegmentedSnapshotSessionStoresRequest<'a> {
+    /// Controller runtime used to locate the workspace data root.
+    /// 用于定位工作区数据根目录的控制器运行时。
+    pub controller: &'a ControllerRuntimeHandle,
+    /// Active sessions in the visible workspace snapshot.
+    /// 可见工作台快照中的活动会话。
+    pub sessions: &'a [SessionSummary],
+    /// Active session owner lookup by session id.
+    /// 按会话标识索引的活动会话归属表。
+    pub active_owner_map: &'a BTreeMap<SessionId, (String, usize)>,
+    /// Active session transcript windows.
+    /// 活动会话的转录窗口。
+    pub session_messages: &'a BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    /// Active session runtime state entries.
+    /// 活动会话的运行态条目。
+    pub session_runtime_state: &'a BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    /// Archived sessions in the visible workspace snapshot.
+    /// 可见工作台快照中的归档会话。
+    pub archived_sessions: &'a [SessionSummary],
+    /// Archived session owner lookup by session id.
+    /// 按会话标识索引的归档会话归属表。
+    pub archived_owner_map: &'a BTreeMap<SessionId, (String, usize)>,
+    /// Archived session transcript windows.
+    /// 归档会话的转录窗口。
+    pub archived_session_messages: &'a BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    /// Archived session runtime state entries.
+    /// 归档会话的运行态条目。
+    pub archived_session_runtime_state: &'a BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    /// Sessions whose transcript was explicitly hydrated during load.
+    /// 加载期间已显式水合转录的会话集合。
+    pub hydrated_session_ids: &'a BTreeSet<SessionId>,
+    /// Warning sink populated with non-fatal segmented persistence failures.
+    /// 用于收集非致命分段持久化失败的警告容器。
+    pub warnings: &'a mut Vec<String>,
+}
+
+/// Mirrors one active or archived snapshot session group into segmented storage.
+/// 将一组活动或归档快照会话镜像到分段存储。
+pub(super) struct PersistSegmentedSnapshotSessionGroupRequest<'a> {
+    /// Controller runtime used to locate the workspace data root.
+    /// 用于定位工作区数据根目录的控制器运行时。
+    pub controller: &'a ControllerRuntimeHandle,
+    /// Sessions in the current group.
+    /// 当前分组中的会话。
+    pub sessions: &'a [SessionSummary],
+    /// Whether the current group represents archived sessions.
+    /// 当前分组是否表示归档会话。
+    pub archived: bool,
+    /// Session owner lookup by session id.
+    /// 按会话标识索引的会话归属表。
+    pub session_owner_map: &'a BTreeMap<SessionId, (String, usize)>,
+    /// Transcript windows for the current group.
+    /// 当前分组的转录窗口。
+    pub session_messages: &'a BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    /// Runtime state entries for the current group.
+    /// 当前分组的运行态条目。
+    pub session_runtime_state: &'a BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    /// Sessions whose transcript was explicitly hydrated during load.
+    /// 加载期间已显式水合转录的会话集合。
+    pub hydrated_session_ids: &'a BTreeSet<SessionId>,
+    /// Warning sink populated with non-fatal segmented persistence failures.
+    /// 用于收集非致命分段持久化失败的警告容器。
+    pub warnings: &'a mut Vec<String>,
+}
+
+/// Mirrors all loaded snapshot sessions into segmented append-only directories.
+/// 将所有已加载的快照会话镜像到分段追加式目录。
 pub(super) async fn persist_segmented_snapshot_session_stores(
-    controller: &ControllerRuntimeHandle,
-    sessions: &[SessionSummary],
-    active_owner_map: &BTreeMap<SessionId, (String, usize)>,
-    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    archived_sessions: &[SessionSummary],
-    archived_owner_map: &BTreeMap<SessionId, (String, usize)>,
-    archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    hydrated_session_ids: &BTreeSet<SessionId>,
-    warnings: &mut Vec<String>,
+    request: PersistSegmentedSnapshotSessionStoresRequest<'_>,
 ) {
-    persist_segmented_snapshot_session_group(
+    let PersistSegmentedSnapshotSessionStoresRequest {
         controller,
         sessions,
-        false,
         active_owner_map,
         session_messages,
         session_runtime_state,
-        hydrated_session_ids,
-        warnings,
-    )
-    .await;
-    persist_segmented_snapshot_session_group(
-        controller,
         archived_sessions,
-        true,
         archived_owner_map,
         archived_session_messages,
         archived_session_runtime_state,
         hydrated_session_ids,
         warnings,
-    )
+    } = request;
+    persist_segmented_snapshot_session_group(PersistSegmentedSnapshotSessionGroupRequest {
+        controller,
+        sessions,
+        archived: false,
+        session_owner_map: active_owner_map,
+        session_messages,
+        session_runtime_state,
+        hydrated_session_ids,
+        warnings,
+    })
+    .await;
+    persist_segmented_snapshot_session_group(PersistSegmentedSnapshotSessionGroupRequest {
+        controller,
+        sessions: archived_sessions,
+        archived: true,
+        session_owner_map: archived_owner_map,
+        session_messages: archived_session_messages,
+        session_runtime_state: archived_session_runtime_state,
+        hydrated_session_ids,
+        warnings,
+    })
     .await;
 }
 
 /// Mirrors one active or archived snapshot session group into segmented storage.
 /// 将一组活动或归档快照会话镜像到分段存储。
 pub(super) async fn persist_segmented_snapshot_session_group(
-    controller: &ControllerRuntimeHandle,
-    sessions: &[SessionSummary],
-    archived: bool,
-    session_owner_map: &BTreeMap<SessionId, (String, usize)>,
-    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    hydrated_session_ids: &BTreeSet<SessionId>,
-    warnings: &mut Vec<String>,
+    request: PersistSegmentedSnapshotSessionGroupRequest<'_>,
 ) {
+    let PersistSegmentedSnapshotSessionGroupRequest {
+        controller,
+        sessions,
+        archived,
+        session_owner_map,
+        session_messages,
+        session_runtime_state,
+        hydrated_session_ids,
+        warnings,
+    } = request;
     let empty_messages = Vec::<SessionMessageEntry>::new();
     for session in sessions {
         let runtime_state = session_runtime_state.get(&session.id);
@@ -142,7 +215,7 @@ pub(super) async fn persist_segmented_snapshot_session_group(
         });
         let effective_messages = rebuilt_messages
             .as_deref()
-            .unwrap_or_else(|| stored_messages.as_slice());
+            .unwrap_or(stored_messages.as_slice());
         let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
             warnings.push(format!(
                 "跳过缺少明确项目归属的分段会话同步：session={}",

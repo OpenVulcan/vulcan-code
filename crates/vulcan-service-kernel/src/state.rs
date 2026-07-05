@@ -155,9 +155,6 @@ pub(crate) struct WebuiSubagentParentTurnBinding {
 /// 单个已加载 WebUI 子代理界面的长生命周期内存详情缓存。
 #[derive(Debug, Clone)]
 pub(crate) struct WebuiSubagentSurfaceDetailCacheEntry {
-    /// Parent conversation that owns the child task.
-    /// 拥有该子任务的父会话。
-    pub(crate) parent_session_id: SessionId,
     /// Cached task panel state including durable child conversation detail when available.
     /// 缓存的任务面板状态，包含可用的持久子会话详情。
     pub(crate) task_state: SubagentTaskPanelState,
@@ -226,10 +223,9 @@ pub struct ServiceBridgeState {
     /// Goal ids that already received one budget-limit wrap-up guidance in this process.
     /// 本进程内已经收到预算耗尽收尾引导的目标标识集合。
     pub(crate) budget_limit_reported_goal_ids: BTreeSet<String>,
-    /// Cached subagent task panels keyed by parent session and child task id.
-    /// 按父会话与子任务标识索引的子代理任务面板缓存。
-    pub(crate) session_subagent_tasks:
-        BTreeMap<SessionId, BTreeMap<SessionId, SubagentTaskPanelState>>,
+    /// Root sessions whose unclosed subagent metadata has already been loaded from disk.
+    /// 已经从磁盘加载过未关闭子智能体元数据的根会话集合。
+    pub(crate) webui_preloaded_unclosed_subagent_roots: BTreeSet<SessionId>,
     /// Long-lived loaded child transcript details keyed by child task id.
     /// 按子任务标识索引的长生命周期已加载子转录详情。
     pub(crate) subagent_surface_detail_cache:

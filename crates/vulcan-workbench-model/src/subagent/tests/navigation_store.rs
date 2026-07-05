@@ -1,5 +1,28 @@
 use super::*;
 
+/// Builds one task metadata document for navigation-store tests.
+/// 为导航存储测试构建单个任务元数据文档。
+fn navigation_store_test_metadata(
+    root_session_id: vulcan_session_core::SessionNodeId,
+    task_session_id: vulcan_session_core::SessionNodeId,
+    parent: ParentSessionRef,
+    public_task_id: &str,
+    display_title: &str,
+    depth: u16,
+) -> TaskSessionMetadata {
+    TaskSessionMetadata::new(vulcan_task_session::TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent,
+        public_task_id: public_task_id.to_string(),
+        display_title: display_title.to_string(),
+        requested_config: vulcan_session_core::SessionRequestedConfig::default(),
+        effective_config: vulcan_session_core::SessionEffectiveConfig::default(),
+        depth,
+        timestamp_ms: u64::from(depth).saturating_mul(10),
+    })
+}
+
 #[test]
 fn selects_all_unclosed_subagent_navigation_states() {
     let parent_session_id = SessionId::new_v4();
@@ -25,9 +48,7 @@ fn selects_all_unclosed_subagent_navigation_states() {
     ];
 
     let (navigation_states, active_task_id) =
-        select_subagent_navigation_panel_states(&states, Some(completed_task_id), |state| {
-            state.task_id == completed_task_id
-        });
+        select_subagent_navigation_panel_states(states, Some(completed_task_id));
 
     assert_eq!(active_task_id, Some(completed_task_id));
     assert_eq!(navigation_states.len(), 3);
@@ -58,22 +79,15 @@ fn subagent_navigation_surface_visibility_matches_current_round() {
     assert!(subagent_navigation_surface_is_visible(false, false, true));
 }
 
-/// Verifies the shared round retention gate only keeps navigation while parent coordination work remains.
-/// 验证共享轮次保留门禁只会在父级协调工作仍存在时继续保留导航。
+/// Verifies the shared round retention gate keeps navigation only while parent or child runtime work remains.
+/// 验证共享轮次保留门禁只会在父级或子级运行工作仍存在时继续保留导航。
 #[test]
 fn subagent_navigation_round_visibility_tracks_coordination_work() {
     assert!(!subagent_navigation_round_should_remain_visible(
-        false, false, false
+        false, false
     ));
-    assert!(subagent_navigation_round_should_remain_visible(
-        true, false, false
-    ));
-    assert!(subagent_navigation_round_should_remain_visible(
-        false, true, false
-    ));
-    assert!(!subagent_navigation_round_should_remain_visible(
-        false, false, true
-    ));
+    assert!(subagent_navigation_round_should_remain_visible(true, false));
+    assert!(subagent_navigation_round_should_remain_visible(false, true));
 }
 
 /// Verifies the segmented store route lists nested TaskSessions by their direct task-session parent.
@@ -86,20 +100,17 @@ fn loads_nested_panel_states_from_segmented_task_session_store() {
     let parent_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let child_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
     store
-        .create_task_session(TaskSessionMetadata::new(
+        .create_task_session(navigation_store_test_metadata(
             root_session_id,
             parent_task_session_id,
             ParentSessionRef::MainSession { root_session_id },
             "parent-task",
             "父子代理",
-            vulcan_session_core::SessionRequestedConfig::default(),
-            vulcan_session_core::SessionEffectiveConfig::default(),
             1,
-            10,
         ))
         .expect("create parent task session");
     store
-        .create_task_session(TaskSessionMetadata::new(
+        .create_task_session(navigation_store_test_metadata(
             root_session_id,
             child_task_session_id,
             ParentSessionRef::TaskSession {
@@ -108,10 +119,7 @@ fn loads_nested_panel_states_from_segmented_task_session_store() {
             },
             "child-task",
             "嵌套子代理",
-            vulcan_session_core::SessionRequestedConfig::default(),
-            vulcan_session_core::SessionEffectiveConfig::default(),
             2,
-            20,
         ))
         .expect("create child task session");
 
@@ -142,16 +150,13 @@ fn restores_completed_panel_state_from_segmented_task_session_store() {
     let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
     let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
     let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
-    let mut metadata = TaskSessionMetadata::new(
+    let mut metadata = navigation_store_test_metadata(
         root_session_id,
         task_session_id,
         ParentSessionRef::MainSession { root_session_id },
         "image-worker-a",
         "生成图片 A",
-        vulcan_session_core::SessionRequestedConfig::default(),
-        vulcan_session_core::SessionEffectiveConfig::default(),
         1,
-        10,
     );
     metadata.description = Some(String::from("生成湖景图片"));
     store

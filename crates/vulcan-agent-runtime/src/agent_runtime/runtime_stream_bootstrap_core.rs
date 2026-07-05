@@ -17,7 +17,9 @@ use crate::agent_runtime::provider_system_update_lowering::{
     ProviderSystemUpdateLoweringPolicy, lower_provider_system_update,
     provider_system_update_repair_event,
 };
-use crate::context_budget::build_request_context_compaction_budget_snapshot_with_estimator;
+use crate::context_budget::{
+    RequestContextCompactionBudgetSnapshotInput, build_request_context_compaction_budget_snapshot,
+};
 use crate::provider_usage::latest_provider_usage_from_conversation_state;
 use vulcan_context::{
     ContextBaseline, ContextTokenEstimator, RuntimeProviderLoweringRepairEvent,
@@ -212,18 +214,18 @@ pub(crate) async fn seed_runtime_request_snapshot(
             let budget_started_at = after_precheck_unix_millis();
             let observed_usage =
                 latest_provider_usage_from_conversation_state(&request.conversation_state);
-            preparation.context_budget = Some(
-                build_request_context_compaction_budget_snapshot_with_estimator(
-                    &preparation.model_blueprint.provider_id,
-                    &preparation.model_blueprint.model_id,
-                    preparation.model_blueprint.api_family(),
-                    &preparation.model_blueprint.capabilities,
-                    &preparation.model_blueprint.reasoning,
-                    &request_snapshot,
-                    observed_usage.as_ref(),
-                    token_estimator,
-                ),
-            );
+            preparation.context_budget = Some(build_request_context_compaction_budget_snapshot(
+                RequestContextCompactionBudgetSnapshotInput {
+                    provider_id: &preparation.model_blueprint.provider_id,
+                    model_id: &preparation.model_blueprint.model_id,
+                    api_family: preparation.model_blueprint.api_family(),
+                    capabilities: &preparation.model_blueprint.capabilities,
+                    reasoning: &preparation.model_blueprint.reasoning,
+                    request_snapshot: &request_snapshot,
+                    observed_usage: observed_usage.as_ref(),
+                    estimator: token_estimator,
+                },
+            ));
             after_precheck_trace(
                 "after_precheck_29b_context_budget_ready",
                 format!(

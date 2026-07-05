@@ -16,31 +16,34 @@ pub fn render_node(
     cache: &MemoryPromptCache,
     diagnostics: &mut PromptComposerDiagnostics,
 ) -> Option<PromptSegment> {
+    let mut segment_context = CachedSegmentContext { cache, diagnostics };
     let built = match planned_node {
         PlannedNode::ProviderBaseSystem => input.provider_prompt.as_ref().map(|snapshot| {
             build_cached_segment(
-                cache,
-                diagnostics,
-                "provider_base_system",
-                snapshot.fingerprint,
-                PromptNodeKind::System,
-                PromptTarget::System,
-                "Provider Base System Prompt",
-                &snapshot.text,
-                snapshot.source_label.clone(),
+                &mut segment_context,
+                CachedSegmentDescriptor::new(
+                    "provider_base_system",
+                    snapshot.fingerprint,
+                    PromptNodeKind::System,
+                    PromptTarget::System,
+                    "Provider Base System Prompt",
+                    &snapshot.text,
+                    snapshot.source_label.clone(),
+                ),
             )
         }),
         PlannedNode::AgentBaseSystem => input.agent_prompt.as_ref().map(|snapshot| {
             build_cached_segment(
-                cache,
-                diagnostics,
-                "agent_base_system",
-                snapshot.fingerprint,
-                PromptNodeKind::System,
-                PromptTarget::System,
-                "Agent Base System Prompt",
-                &snapshot.text,
-                snapshot.source_label.clone(),
+                &mut segment_context,
+                CachedSegmentDescriptor::new(
+                    "agent_base_system",
+                    snapshot.fingerprint,
+                    PromptNodeKind::System,
+                    PromptTarget::System,
+                    "Agent Base System Prompt",
+                    &snapshot.text,
+                    snapshot.source_label.clone(),
+                ),
             )
         }),
         PlannedNode::FunctionalAgentSystem => input
@@ -50,15 +53,16 @@ pub fn render_node(
             .filter(|text| !text.trim().is_empty())
             .map(|text| {
                 build_cached_segment(
-                    cache,
-                    diagnostics,
-                    "functional_agent_system",
-                    stable_text_hash(text),
-                    PromptNodeKind::System,
-                    PromptTarget::System,
-                    "Functional Agent System Prompt",
-                    text,
-                    "Subagent functional system prompt",
+                    &mut segment_context,
+                    CachedSegmentDescriptor::new(
+                        "functional_agent_system",
+                        stable_text_hash(text),
+                        PromptNodeKind::System,
+                        PromptTarget::System,
+                        "Functional Agent System Prompt",
+                        text,
+                        "Subagent functional system prompt",
+                    ),
                 )
             }),
         PlannedNode::Personality => personality.map(|definition| {
@@ -73,57 +77,63 @@ pub fn render_node(
                 PromptNodeKind::Developer
             };
             build_cached_segment(
-                cache,
-                diagnostics,
-                "personality",
-                stable_text_hash(&format!(
-                    "{}|{}|{}",
-                    definition.id, definition.fingerprint, input.model.supports_native_personality
-                )),
-                kind,
-                target,
-                format!("Personality {}", definition.label),
-                &definition.text,
-                definition.source_label.clone(),
+                &mut segment_context,
+                CachedSegmentDescriptor::new(
+                    "personality",
+                    stable_text_hash(&format!(
+                        "{}|{}|{}",
+                        definition.id,
+                        definition.fingerprint,
+                        input.model.supports_native_personality
+                    )),
+                    kind,
+                    target,
+                    format!("Personality {}", definition.label),
+                    &definition.text,
+                    definition.source_label.clone(),
+                ),
             )
         }),
         PlannedNode::ProjectRules => input.project_rules.as_ref().map(|snapshot| {
             build_cached_segment(
-                cache,
-                diagnostics,
-                "project_rules",
-                snapshot.content_hash,
-                PromptNodeKind::User,
-                PromptTarget::User,
-                format!("Project Rules {}", snapshot.source),
-                &snapshot.text,
-                format!("Project rules `{}`", snapshot.source),
+                &mut segment_context,
+                CachedSegmentDescriptor::new(
+                    "project_rules",
+                    snapshot.content_hash,
+                    PromptNodeKind::User,
+                    PromptTarget::User,
+                    format!("Project Rules {}", snapshot.source),
+                    &snapshot.text,
+                    format!("Project rules `{}`", snapshot.source),
+                ),
             )
         }),
         PlannedNode::EnvironmentContext => input.environment_context.as_ref().map(|snapshot| {
             build_cached_segment(
-                cache,
-                diagnostics,
-                "environment_context",
-                snapshot.fingerprint,
-                PromptNodeKind::User,
-                PromptTarget::User,
-                "Environment Context",
-                &snapshot.text,
-                "Runtime environment context",
+                &mut segment_context,
+                CachedSegmentDescriptor::new(
+                    "environment_context",
+                    snapshot.fingerprint,
+                    PromptNodeKind::User,
+                    PromptTarget::User,
+                    "Environment Context",
+                    &snapshot.text,
+                    "Runtime environment context",
+                ),
             )
         }),
         PlannedNode::TaskGoal => input.task_goal.as_ref().map(|snapshot| {
             build_cached_segment(
-                cache,
-                diagnostics,
-                "task_goal",
-                snapshot.fingerprint,
-                PromptNodeKind::User,
-                PromptTarget::User,
-                "Task Goal",
-                &snapshot.text,
-                "Runtime task goal",
+                &mut segment_context,
+                CachedSegmentDescriptor::new(
+                    "task_goal",
+                    snapshot.fingerprint,
+                    PromptNodeKind::User,
+                    PromptTarget::User,
+                    "Task Goal",
+                    &snapshot.text,
+                    "Runtime task goal",
+                ),
             )
         }),
         PlannedNode::SubagentIdentity => input.subagent.as_ref().map(|snapshot| {
@@ -140,15 +150,16 @@ pub fn render_node(
             .trim()
             .to_string();
             build_cached_segment(
-                cache,
-                diagnostics,
-                "subagent_identity",
-                snapshot.fingerprint(),
-                PromptNodeKind::Developer,
-                PromptTarget::Developer,
-                "Subagent Identity",
-                body,
-                format!("Runtime subagent delegation `{}`", snapshot.identity),
+                &mut segment_context,
+                CachedSegmentDescriptor::new(
+                    "subagent_identity",
+                    snapshot.fingerprint(),
+                    PromptNodeKind::Developer,
+                    PromptTarget::Developer,
+                    "Subagent Identity",
+                    body,
+                    format!("Runtime subagent delegation `{}`", snapshot.identity),
+                ),
             )
         }),
         PlannedNode::ToolHelpBundle => None,
@@ -159,29 +170,88 @@ pub fn render_node(
 /// Build one cached prompt segment.
 /// 构建一个带缓存的提示词片段。
 fn build_cached_segment(
-    cache: &MemoryPromptCache,
-    diagnostics: &mut PromptComposerDiagnostics,
-    namespace: &str,
-    fingerprint: u64,
-    kind: PromptNodeKind,
-    target: PromptTarget,
-    title: impl Into<String>,
-    body: impl Into<String>,
-    source_label: impl Into<String>,
+    context: &mut CachedSegmentContext<'_>,
+    descriptor: CachedSegmentDescriptor,
 ) -> Option<PromptSegment> {
-    let cache_key = node_cache_key(namespace, fingerprint);
-    let source_label = source_label.into();
-    if let Some(segment) = cache.get_node(&cache_key) {
-        diagnostics.record_node_cache(&cache_key, true);
-        return Some(segment.with_source_label(source_label));
+    let cache_key = node_cache_key(descriptor.namespace, descriptor.fingerprint);
+    if let Some(segment) = context.cache.get_node(&cache_key) {
+        context.diagnostics.record_node_cache(&cache_key, true);
+        return Some(segment.with_source_label(descriptor.source_label));
     }
-    diagnostics.record_node_cache(&cache_key, false);
-    let body = body.into();
-    if body.trim().is_empty() {
+    context.diagnostics.record_node_cache(&cache_key, false);
+    if descriptor.body.trim().is_empty() {
         return None;
     }
-    let segment = PromptSegment::new(namespace, cache_key, kind, target, title, body)
-        .with_source_label(source_label);
-    cache.put_node(segment.clone());
+    let segment = PromptSegment::new(
+        descriptor.namespace,
+        cache_key,
+        descriptor.kind,
+        descriptor.target,
+        descriptor.title,
+        descriptor.body,
+    )
+    .with_source_label(descriptor.source_label);
+    context.cache.put_node(segment.clone());
     Some(segment)
+}
+
+/// Runtime dependencies required to build cached prompt segments.
+/// 构建缓存提示词片段所需的运行时依赖。
+struct CachedSegmentContext<'a> {
+    /// Shared prompt node cache.
+    /// 共享提示词节点缓存。
+    cache: &'a MemoryPromptCache,
+    /// Prompt composer diagnostics accumulator.
+    /// 提示词组合诊断累加器。
+    diagnostics: &'a mut PromptComposerDiagnostics,
+}
+
+/// Immutable description of one prompt segment to cache or build.
+/// 单个待缓存或构建提示词片段的不可变描述。
+struct CachedSegmentDescriptor {
+    /// Cache namespace and segment identifier prefix.
+    /// 缓存命名空间与片段标识前缀。
+    namespace: &'static str,
+    /// Stable content fingerprint used by the cache key.
+    /// 缓存键使用的稳定内容指纹。
+    fingerprint: u64,
+    /// Prompt node kind.
+    /// 提示词节点类型。
+    kind: PromptNodeKind,
+    /// Prompt target bucket.
+    /// 提示词目标桶。
+    target: PromptTarget,
+    /// Human-readable segment title.
+    /// 人类可读的片段标题。
+    title: String,
+    /// Segment body text.
+    /// 片段正文文本。
+    body: String,
+    /// Diagnostics source label.
+    /// 诊断来源标签。
+    source_label: String,
+}
+
+impl CachedSegmentDescriptor {
+    /// Build one cached segment descriptor from primitive segment fields.
+    /// 根据基础片段字段构建缓存片段描述。
+    fn new(
+        namespace: &'static str,
+        fingerprint: u64,
+        kind: PromptNodeKind,
+        target: PromptTarget,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        source_label: impl Into<String>,
+    ) -> Self {
+        Self {
+            namespace,
+            fingerprint,
+            kind,
+            target,
+            title: title.into(),
+            body: body.into(),
+            source_label: source_label.into(),
+        }
+    }
 }

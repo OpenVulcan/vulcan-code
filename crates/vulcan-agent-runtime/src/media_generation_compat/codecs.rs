@@ -16,7 +16,7 @@ pub(super) fn decode_hex_bytes(hex: &str, provider_label: &str) -> Result<Vec<u8
             "{provider_label} returned audio data that is not valid hexadecimal."
         ));
     }
-    if trimmed.len() % 2 != 0 {
+    if !trimmed.len().is_multiple_of(2) {
         return Err(format!(
             "{provider_label} returned hexadecimal audio data with an odd length."
         ));

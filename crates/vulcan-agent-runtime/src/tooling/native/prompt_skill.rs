@@ -63,9 +63,6 @@ pub(crate) fn parse_prompt_skill_detail_tool_arguments(
     Ok(parsed)
 }
 
-/// Parses and validates VMM memory-search arguments.
-/// 解析并校验 VMM 记忆检索参数。
-
 /// Samples support files under one prompt-skill directory without reading their contents.
 /// 在单个提示词技能目录下采样支持文件路径但不读取文件内容。
 pub(crate) fn sample_prompt_skill_support_files(

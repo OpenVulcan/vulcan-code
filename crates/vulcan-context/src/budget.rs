@@ -171,86 +171,94 @@ pub fn calibrated_input_token_estimate(
     observed_input_tokens_from_usage(usage).unwrap_or(estimated_input_tokens)
 }
 
+/// Input payload required to build one request-facing budget snapshot.
+/// 构建单个面向请求的预算快照所需的输入载荷。
+#[derive(Clone, Copy)]
+pub struct RequestContextBudgetSnapshotInput<'a> {
+    /// Stable provider identifier used by diagnostics and fingerprints.
+    /// 诊断与指纹使用的稳定 Provider 标识。
+    pub provider_id: &'a str,
+    /// Stable model identifier used by token estimation.
+    /// Token 估算使用的稳定模型标识。
+    pub model_id: &'a str,
+    /// Canonical provider API family.
+    /// 规范 Provider 接口族。
+    pub api_family: ContextProviderApiFamily,
+    /// Resolved provider/model capability snapshot.
+    /// 已解析的 Provider/Model 能力快照。
+    pub capabilities: &'a ContextBudgetCapabilities,
+    /// Resolved reasoning-effort reserve bucket.
+    /// 已解析的推理强度预留分桶。
+    pub reasoning: ContextReasoningEffort,
+    /// Final provider request snapshot used for exact estimation.
+    /// 用于精确估算的最终 Provider 请求快照。
+    pub request_snapshot: &'a CoreProviderRequestSnapshot,
+    /// Optional provider-observed usage used to calibrate estimates.
+    /// 用于校准估算值的可选 Provider 实测用量。
+    pub observed_usage: Option<&'a ProviderUsageSnapshot>,
+}
+
+/// Optional controls for request-facing budget snapshot construction.
+/// 面向请求的预算快照构造可选控制项。
+#[derive(Clone, Copy, Default)]
+pub struct RequestContextBudgetSnapshotOptions<'a> {
+    /// Optional compaction policy used to reserve summary budget.
+    /// 用于预留摘要预算的可选压缩策略。
+    pub compaction_policy: Option<ContextCompactionPolicy>,
+    /// Optional host token estimator.
+    /// 可选宿主 Token 估算器。
+    pub estimator: Option<&'a dyn ContextTokenEstimator>,
+}
+
 /// Builds one exact request-facing budget snapshot from the final provider request snapshot.
 /// 根据最终 Provider 请求快照构建一份精确面向请求的预算快照。
 pub fn build_request_context_budget_snapshot(
-    provider_id: &str,
-    model_id: &str,
-    api_family: ContextProviderApiFamily,
-    capabilities: &ContextBudgetCapabilities,
-    reasoning: ContextReasoningEffort,
-    request_snapshot: &CoreProviderRequestSnapshot,
-    observed_usage: Option<&ProviderUsageSnapshot>,
+    input: RequestContextBudgetSnapshotInput<'_>,
 ) -> ContextBudgetSnapshot {
-    build_request_context_budget_snapshot_with_estimator(
-        provider_id,
-        model_id,
-        api_family,
-        capabilities,
-        reasoning,
-        request_snapshot,
-        observed_usage,
-        None,
-    )
-}
-
-/// Builds one exact request-facing budget snapshot with an optional host token estimator.
-/// 使用可选宿主 Token 估算器构建一份精确面向请求的预算快照。
-pub fn build_request_context_budget_snapshot_with_estimator(
-    provider_id: &str,
-    model_id: &str,
-    api_family: ContextProviderApiFamily,
-    capabilities: &ContextBudgetCapabilities,
-    reasoning: ContextReasoningEffort,
-    request_snapshot: &CoreProviderRequestSnapshot,
-    observed_usage: Option<&ProviderUsageSnapshot>,
-    estimator: Option<&dyn ContextTokenEstimator>,
-) -> ContextBudgetSnapshot {
-    build_request_context_budget_snapshot_with_policy_and_estimator(
-        provider_id,
-        model_id,
-        api_family,
-        capabilities,
-        reasoning,
-        request_snapshot,
-        observed_usage,
-        None,
-        estimator,
-    )
+    build_request_context_budget_snapshot_with_options(input, Default::default())
 }
 
 /// Builds one request-facing budget snapshot with an optional compaction policy and host token estimator.
 /// 使用可选压缩策略与宿主 Token 估算器构建一份面向真实请求的预算快照。
-pub fn build_request_context_budget_snapshot_with_policy_and_estimator(
-    provider_id: &str,
-    model_id: &str,
-    api_family: ContextProviderApiFamily,
-    capabilities: &ContextBudgetCapabilities,
-    reasoning: ContextReasoningEffort,
-    request_snapshot: &CoreProviderRequestSnapshot,
-    observed_usage: Option<&ProviderUsageSnapshot>,
-    compaction_policy: Option<ContextCompactionPolicy>,
-    estimator: Option<&dyn ContextTokenEstimator>,
+pub fn build_request_context_budget_snapshot_with_options(
+    input: RequestContextBudgetSnapshotInput<'_>,
+    options: RequestContextBudgetSnapshotOptions<'_>,
 ) -> ContextBudgetSnapshot {
+    let RequestContextBudgetSnapshotInput {
+        provider_id,
+        model_id,
+        api_family,
+        capabilities,
+        reasoning,
+        request_snapshot,
+        observed_usage,
+    } = input;
     let reserved_reasoning_tokens = reasoning_token_reserve(reasoning);
     let reserved_output_tokens = resolve_output_token_reserve(capabilities);
-    let reserved_compaction_tokens = compaction_policy
+    let reserved_compaction_tokens = options
+        .compaction_policy
         .map(|policy| policy.reserved)
         .unwrap_or(0usize);
-    let compaction_auto_enabled = compaction_policy.map(|policy| policy.auto).unwrap_or(false);
-    let estimated_system_tokens =
-        estimate_text_tokens_for_model(model_id, estimator, &request_snapshot.system_prompt);
+    let compaction_auto_enabled = options
+        .compaction_policy
+        .map(|policy| policy.auto)
+        .unwrap_or(false);
+    let estimated_system_tokens = estimate_text_tokens_for_model(
+        model_id,
+        options.estimator,
+        &request_snapshot.system_prompt,
+    );
     let estimated_history_tokens = request_snapshot
         .history
         .iter()
-        .map(|message| estimate_core_message_tokens(model_id, estimator, message))
+        .map(|message| estimate_core_message_tokens(model_id, options.estimator, message))
         .sum();
     let estimated_prompt_tokens =
-        estimate_text_tokens_for_model(model_id, estimator, &request_snapshot.prompt);
+        estimate_text_tokens_for_model(model_id, options.estimator, &request_snapshot.prompt);
     let estimated_tool_tokens = request_snapshot
         .tool_schemas
         .iter()
-        .map(|schema| estimate_tool_schema_tokens(model_id, estimator, schema))
+        .map(|schema| estimate_tool_schema_tokens(model_id, options.estimator, schema))
         .sum();
     let estimated_input_tokens = estimated_system_tokens
         + estimated_history_tokens
@@ -277,7 +285,7 @@ pub fn build_request_context_budget_snapshot_with_policy_and_estimator(
             capabilities,
             reasoning,
             request_snapshot.tool_schemas.len(),
-            compaction_policy,
+            options.compaction_policy,
         ),
         context_limit: capabilities.context_limit,
         effective_input_limit,
@@ -536,7 +544,7 @@ pub fn estimate_mixed_language_text_tokens(text: &str) -> usize {
             continue;
         }
         if ascii_run > 0 {
-            tokens += (ascii_run + 3usize) / 4usize;
+            tokens += ascii_run.div_ceil(4usize);
             ascii_run = 0;
         }
         tokens += if is_cjk_character(character) {
@@ -546,7 +554,7 @@ pub fn estimate_mixed_language_text_tokens(text: &str) -> usize {
         };
     }
     if ascii_run > 0 {
-        tokens += (ascii_run + 3usize) / 4usize;
+        tokens += ascii_run.div_ceil(4usize);
     }
     tokens
 }

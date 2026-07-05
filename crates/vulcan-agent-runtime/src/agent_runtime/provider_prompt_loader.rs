@@ -83,16 +83,16 @@ pub(crate) fn load_provider_base_system_prompt_with_source(
     let source_prompt_path = runtime_assets::source_resource_directory()
         .join(SYSTEM_PROMPTS_DIR_NAME)
         .join(file_name);
-    if source_prompt_path != packaged_prompt_path {
-        if let Some(prompt) = read_non_empty_system_prompt_file(&source_prompt_path) {
-            return Some(LoadedProviderBaseSystemPrompt {
-                text: prompt,
-                source_label: format!(
-                    "Provider prompt resource `{}`",
-                    source_prompt_path.display()
-                ),
-            });
-        }
+    if source_prompt_path != packaged_prompt_path
+        && let Some(prompt) = read_non_empty_system_prompt_file(&source_prompt_path)
+    {
+        return Some(LoadedProviderBaseSystemPrompt {
+            text: prompt,
+            source_label: format!(
+                "Provider prompt resource `{}`",
+                source_prompt_path.display()
+            ),
+        });
     }
 
     if file_name != DEFAULT_SYSTEM_PROMPT_FILE_NAME {
@@ -112,16 +112,16 @@ pub(crate) fn load_provider_base_system_prompt_with_source(
         let source_default_path = runtime_assets::source_resource_directory()
             .join(SYSTEM_PROMPTS_DIR_NAME)
             .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
-        if source_default_path != packaged_default_path {
-            if let Some(prompt) = read_non_empty_system_prompt_file(&source_default_path) {
-                return Some(LoadedProviderBaseSystemPrompt {
-                    text: prompt,
-                    source_label: format!(
-                        "Provider default prompt resource `{}`",
-                        source_default_path.display()
-                    ),
-                });
-            }
+        if source_default_path != packaged_default_path
+            && let Some(prompt) = read_non_empty_system_prompt_file(&source_default_path)
+        {
+            return Some(LoadedProviderBaseSystemPrompt {
+                text: prompt,
+                source_label: format!(
+                    "Provider default prompt resource `{}`",
+                    source_default_path.display()
+                ),
+            });
         }
     }
 

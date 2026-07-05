@@ -304,9 +304,7 @@ pub(crate) fn item_turn_label(
     item: &InjectionStateItem,
     current_turn_marker: Option<&str>,
 ) -> Option<String> {
-    if item.created_turn_marker.is_none() {
-        return None;
-    }
+    item.created_turn_marker.as_ref()?;
     Some(match item_turn_origin(item, current_turn_marker) {
         InjectionTurnOrigin::Current => String::from("当前轮次"),
         InjectionTurnOrigin::Retained => String::from("历史保留"),

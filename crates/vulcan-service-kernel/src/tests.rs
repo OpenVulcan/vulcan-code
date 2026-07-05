@@ -22,12 +22,16 @@ use test_support::*;
 
 mod active_session_state_tests;
 mod ai_capabilities_tests;
+mod conversation_selection_tests;
 mod detached_subagent_tests;
 mod goal_todolist_tests;
 mod mailbox_tests;
+mod mcp_settings_tests;
 mod prompt_runtime_state_tests;
+mod provider_settings_tests;
 mod rpc_diff_tests;
 mod session_kernel_tests;
 mod stop_task_mirror_tests;
 mod subagent_fixed_model_tests;
 mod subagent_navigation_tests;
+mod workbench_model_routes_tests;

@@ -346,14 +346,14 @@ pub(super) fn shell_command_display_payload(
                         _ => None,
                     };
                     if let Some(normalized_key) = normalized_key {
-                        if normalized_key == "exit_code" {
-                            if let Ok(exit_code) = value.trim().parse::<i64>() {
-                                object.insert(
-                                    normalized_key.to_string(),
-                                    serde_json::Value::Number(serde_json::Number::from(exit_code)),
-                                );
-                                continue;
-                            }
+                        if normalized_key == "exit_code"
+                            && let Ok(exit_code) = value.trim().parse::<i64>()
+                        {
+                            object.insert(
+                                normalized_key.to_string(),
+                                serde_json::Value::Number(serde_json::Number::from(exit_code)),
+                            );
+                            continue;
                         }
                         object.insert(
                             normalized_key.to_string(),

@@ -248,7 +248,7 @@ WHERE thread_id = ?1;
         token_budget: Option<i64>,
     ) -> Result<ThreadGoal, String> {
         let goal_id = Uuid::new_v4().to_string();
-        let now_ms = current_unix_millis() as i64;
+        let now_ms = current_unix_millis();
         let status = status_after_budget_limit(status, 0, token_budget);
         let rows = self
             .query_goal_rows(
@@ -308,7 +308,7 @@ RETURNING
         token_budget: Option<i64>,
     ) -> Result<Option<ThreadGoal>, String> {
         let goal_id = Uuid::new_v4().to_string();
-        let now_ms = current_unix_millis() as i64;
+        let now_ms = current_unix_millis();
         let status = status_after_budget_limit(status, 0, token_budget);
         let rows = self
             .query_goal_rows(
@@ -383,7 +383,7 @@ RETURNING
         let token_budget = update.token_budget.unwrap_or(existing.token_budget);
         let status = update.status.unwrap_or(existing.status);
         let status = status_after_budget_limit(status, existing.tokens_used, token_budget);
-        let now_ms = current_unix_millis() as i64;
+        let now_ms = current_unix_millis();
         let rows = self
             .query_goal_rows(
                 r#"
@@ -451,7 +451,7 @@ RETURNING
         let objective = update.objective.unwrap_or(existing.objective);
         let token_budget = update.token_budget.unwrap_or(existing.token_budget);
         let status = status_after_budget_limit(ThreadGoalStatus::Active, 0, token_budget);
-        let now_ms = current_unix_millis() as i64;
+        let now_ms = current_unix_millis();
         let rows = self
             .query_goal_rows(
                 r#"
@@ -572,7 +572,7 @@ RETURNING
             .time_used_seconds
             .saturating_add(time_delta_seconds.max(0));
         let status = status_after_budget_limit(existing.status, tokens_used, existing.token_budget);
-        let now_ms = current_unix_millis() as i64;
+        let now_ms = current_unix_millis();
         let rows = self
             .query_goal_rows(
                 r#"
@@ -644,7 +644,7 @@ RETURNING
 "#,
                 vec![
                     ControllerSqliteValue::String(status.as_str().to_string()),
-                    ControllerSqliteValue::Int64(current_unix_millis() as i64),
+                    ControllerSqliteValue::Int64(current_unix_millis()),
                     ControllerSqliteValue::String(thread_id.to_string()),
                 ],
             )

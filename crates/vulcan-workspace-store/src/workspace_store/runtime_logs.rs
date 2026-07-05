@@ -65,8 +65,8 @@ pub fn backup_session_runtime_log_before_compaction(
     backup_runtime_log_before_compaction(&session_dir, compaction_id, timestamp)
 }
 
-/// Records the provider-facing injection view applied to one session turn.
-/// 记录单个会话回合已应用的 Provider 可见注入视图。
+/// Request for recording the provider-facing injection view applied to one session turn.
+/// 记录单个会话回合已应用 Provider 可见注入视图的请求。
 ///
 /// # Parameters
 /// 参数
@@ -87,28 +87,60 @@ pub fn backup_session_runtime_log_before_compaction(
 /// `timestamp` is the event timestamp stored in runtime JSONL.
 /// `timestamp` 是写入 runtime JSONL 的事件时间戳。
 ///
+pub struct SessionRuntimeInjectionAppliedRecord<'a> {
+    /// Vulcan Code data root containing segmented session directories.
+    /// 包含分段会话目录的 Vulcan Code 数据根目录。
+    pub data_root: &'a std::path::Path,
+    /// Session whose runtime log should receive the audit event.
+    /// 需要写入审计事件的会话。
+    pub session_id: SessionId,
+    /// Logical prompt turn identifier when available.
+    /// 可用时的逻辑提示词回合标识。
+    pub turn_id: Option<String>,
+    /// Complete provider-facing injection overlay fingerprint.
+    /// 完整 Provider 可见注入覆盖层的指纹。
+    pub combined_fingerprint: Option<String>,
+    /// Persistent system-layer injection blocks.
+    /// 长期系统层注入块。
+    pub persistent_blocks: &'a [String],
+    /// Transient user-overlay injection text.
+    /// 动态用户覆盖注入文本。
+    pub transient_prefix: Option<&'a str>,
+    /// Folded baseline fingerprint after compaction when known.
+    /// 已知的压缩后折叠基线指纹。
+    pub merged_baseline_fingerprint: Option<String>,
+    /// Event timestamp stored in runtime JSONL.
+    /// 写入 runtime JSONL 的事件时间戳。
+    pub timestamp: &'a str,
+}
+
+/// Records the provider-facing injection view applied to one session turn.
+/// 记录单个会话回合已应用的 Provider 可见注入视图。
+///
 /// # Returns
 /// 返回值
 /// `true` when the runtime event was written; missing sessions or empty runtime logs return `false`.
 /// 写入运行时事件时返回 `true`；会话缺失或 runtime 日志为空时返回 `false`。
 pub fn record_session_runtime_injection_applied(
-    data_root: &std::path::Path,
-    session_id: SessionId,
-    turn_id: Option<String>,
-    combined_fingerprint: Option<String>,
-    persistent_blocks: &[String],
-    transient_prefix: Option<&str>,
-    merged_baseline_fingerprint: Option<String>,
-    timestamp: &str,
+    request: SessionRuntimeInjectionAppliedRecord<'_>,
 ) -> Result<bool, String> {
+    let SessionRuntimeInjectionAppliedRecord {
+        data_root,
+        session_id,
+        turn_id,
+        combined_fingerprint,
+        persistent_blocks,
+        transient_prefix,
+        merged_baseline_fingerprint,
+        timestamp,
+    } = request;
     let Some(session_dir) =
         find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
     else {
         return Ok(false);
     };
     let persistent_fingerprint = injection_text_parts_fingerprint(persistent_blocks);
-    let transient_fingerprint =
-        transient_prefix.and_then(|prefix| injection_text_fingerprint(prefix));
+    let transient_fingerprint = transient_prefix.and_then(injection_text_fingerprint);
     let source_node_ids = injection_applied_source_node_ids(persistent_blocks, transient_prefix);
     record_runtime_injection_applied(
         &session_dir,
@@ -304,98 +336,22 @@ pub fn load_session_runtime_system_updates(
         .collect())
 }
 
-/// Loads lightweight child-task mirrors from the parent session metadata without reading child transcripts.
-/// 从父会话元数据加载轻量子任务镜像，不读取子任务转录正文。
+/// Loads the display-only fork source marker from one resolved segmented session directory.
+/// 从一个已解析的分段会话目录加载纯展示分叉来源标记。
 ///
 /// # Parameters
 /// 参数
-/// `data_root` is the Vulcan Code data root containing segmented session directories.
-/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根目录。
-/// `session_id` identifies the parent session whose child task mirrors should be read.
-/// `session_id` 标识需要读取子任务镜像的父会话。
-///
-/// # Returns
-/// 返回值
-/// Lightweight task mirror rows from the parent `metadata.json`; missing sessions return an empty list.
-/// 来自父级 `metadata.json` 的轻量任务镜像；会话缺失时返回空列表。
-pub fn load_segmented_session_task_mirrors(
-    data_root: &std::path::Path,
-    session_id: SessionId,
-) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
-    let Some(session_dir) =
-        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
-    else {
-        return Ok(Vec::new());
-    };
-    load_segmented_session_task_mirrors_from_dir(&session_dir)
-}
-
-/// Loads lightweight child-task mirrors by checking only one known owning project.
-/// 仅检查一个已知所属项目来加载轻量子任务镜像。
-///
-/// # Parameters
-/// 参数
-/// `data_root` is the Vulcan Code data root containing segmented session directories.
-/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根目录。
-/// `project_id` is the known segmented project tag for the parent session.
-/// `project_id` 是父会话已知的分段项目标签。
-/// `session_id` identifies the parent session whose child task mirrors should be read.
-/// `session_id` 标识需要读取子任务镜像的父会话。
-///
-/// # Returns
-/// 返回值
-/// Lightweight task mirror rows from the parent `metadata.json`; missing sessions return an empty list.
-/// 来自父级 `metadata.json` 的轻量任务镜像；会话缺失时返回空列表。
-pub fn load_segmented_session_task_mirrors_for_project(
-    data_root: &std::path::Path,
-    project_id: &str,
-    session_id: SessionId,
-) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
-    let session_id_text = session_id.to_string();
-    let active_dir =
-        find_segmented_session_directory(data_root, false, project_id, &session_id_text)?;
-    let session_dir = match active_dir {
-        Some(session_dir) => Some(session_dir),
-        None => find_segmented_session_directory(data_root, true, project_id, &session_id_text)?,
-    };
-    let Some(session_dir) = session_dir else {
-        return Ok(Vec::new());
-    };
-    load_segmented_session_task_mirrors_from_dir(&session_dir)
-}
-
-/// Loads the display-only fork source marker from one known owning project.
-/// 从一个已知所属项目加载纯展示分叉来源标记。
-///
-/// # Parameters
-/// 参数
-/// `data_root` is the Vulcan Code data root containing segmented session directories.
-/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根目录。
-/// `project_id` is the known segmented project tag for the session.
-/// `project_id` 是会话已知的分段项目标签。
-/// `session_id` identifies the session whose fork source should be read.
-/// `session_id` 标识需要读取分叉来源的会话。
+/// `session_dir` points at the resolved segmented session directory.
+/// `session_dir` 指向已解析的分段会话目录。
 ///
 /// # Returns
 /// 返回值
 /// A display-only fork source marker when present.
 /// 存在时返回纯展示分叉来源标记。
-pub fn load_segmented_session_fork_source_for_project(
-    data_root: &std::path::Path,
-    project_id: &str,
-    session_id: SessionId,
+pub fn load_segmented_session_fork_source_from_directory(
+    session_dir: &std::path::Path,
 ) -> Result<Option<SessionForkSourceSnapshot>, String> {
-    let session_id_text = session_id.to_string();
-    let active_dir =
-        find_segmented_session_directory(data_root, false, project_id, &session_id_text)?;
-    let session_dir = match active_dir {
-        Some(session_dir) => Some(session_dir),
-        None => find_segmented_session_directory(data_root, true, project_id, &session_id_text)?,
-    };
-    let Some(session_dir) = session_dir else {
-        return Ok(None);
-    };
-    let metadata = segmented_session_store::read_session_metadata(&session_dir)?;
+    let metadata = segmented_session_store::read_session_metadata(session_dir)?;
     Ok(metadata
         .fork_source
         .map(|source| SessionForkSourceSnapshot {
@@ -419,7 +375,7 @@ pub fn load_segmented_session_fork_source_for_project(
 /// 返回值
 /// Lightweight task mirror rows from the parent `metadata.json`.
 /// 来自父级 `metadata.json` 的轻量任务镜像行。
-fn load_segmented_session_task_mirrors_from_dir(
+pub fn load_segmented_session_task_mirrors_from_directory(
     session_dir: &std::path::Path,
 ) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
     let metadata = segmented_session_store::read_session_metadata(session_dir)?;

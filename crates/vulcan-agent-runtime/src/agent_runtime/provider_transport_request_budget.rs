@@ -4,7 +4,9 @@
 use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
-use crate::context_budget::build_request_context_compaction_budget_snapshot_with_estimator;
+use crate::context_budget::{
+    RequestContextCompactionBudgetSnapshotInput, build_request_context_compaction_budget_snapshot,
+};
 use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::ProviderApiFamily;
 use std::sync::Arc;
@@ -67,15 +69,17 @@ impl ProviderRequestBudgetGuard {
         &self,
         snapshot: &CoreProviderRequestSnapshot,
     ) -> Result<(), VulcanCoreError> {
-        let budget = build_request_context_compaction_budget_snapshot_with_estimator(
-            self.provider_id.as_str(),
-            self.model_id.as_str(),
-            self.api_family,
-            &self.capabilities,
-            &self.reasoning,
-            snapshot,
-            None,
-            self.token_budget_runtime.estimator(),
+        let budget = build_request_context_compaction_budget_snapshot(
+            RequestContextCompactionBudgetSnapshotInput {
+                provider_id: self.provider_id.as_str(),
+                model_id: self.model_id.as_str(),
+                api_family: self.api_family,
+                capabilities: &self.capabilities,
+                reasoning: &self.reasoning,
+                request_snapshot: snapshot,
+                observed_usage: None,
+                estimator: self.token_budget_runtime.estimator(),
+            },
         );
         if budget.should_compact() {
             return Err(VulcanCoreError::InvalidState {

@@ -107,12 +107,11 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
         "active runtime state must remain untouched"
     );
     assert!(
-        draft
+        !draft
             .runtime_state
             .context_injection_state
             .groups
-            .get("vmm_inject")
-            .is_none(),
+            .contains_key("vmm_inject"),
         "draft runtime state should remove expired transient injections"
     );
     assert!(active_runtime_state.context_start_message_id.is_none());

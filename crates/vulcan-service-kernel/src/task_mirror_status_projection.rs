@@ -7,19 +7,18 @@ use super::*;
 /// 父会话的轻量任务镜像；没有分段会话时返回空列表。
 pub(crate) fn load_segmented_session_task_mirrors_for_service(
     controller_runtime: &ControllerRuntimeHandle,
-    project_id: Option<&str>,
+    workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
-    if let Some(project_id) = project_id.filter(|project_id| !project_id.trim().is_empty()) {
-        return vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors_for_project(
-            &controller_runtime.data_root,
-            project_id,
-            session_id,
-        );
-    }
-    vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
+    let Some(session_dir) = segmented_session_directory_for_workspace_session(
         &controller_runtime.data_root,
+        workspace_snapshot,
         session_id,
+    ) else {
+        return Ok(Vec::new());
+    };
+    vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors_from_directory(
+        &session_dir,
     )
 }
 
@@ -45,14 +44,14 @@ pub(crate) fn apply_persisted_task_mirror_statuses_to_workspace<F>(
     controller_runtime: &ControllerRuntimeHandle,
     workspace_snapshot: &mut WorkspaceSnapshot,
     parent_session_id: SessionId,
-    mut is_task_live_running: F,
+    is_task_live_running: F,
 ) -> Result<(), String>
 where
     F: FnMut(SessionId) -> bool,
 {
     let task_mirrors = load_segmented_session_task_mirrors_for_service(
         controller_runtime,
-        owning_project_id_for_session(workspace_snapshot, parent_session_id).as_deref(),
+        workspace_snapshot,
         parent_session_id,
     )?;
     if task_mirrors.is_empty() {
@@ -71,7 +70,7 @@ where
         messages.as_mut_slice(),
         runtime_state,
         task_mirrors.as_slice(),
-        |task_id| is_task_live_running(task_id),
+        is_task_live_running,
     );
     Ok(())
 }
@@ -186,12 +185,9 @@ pub(crate) fn repair_task_mirror_statuses_for_surface_messages_locked(
     let Some(controller_runtime) = guard.controller_runtime.as_ref() else {
         return;
     };
-    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
-        return;
-    };
     let Ok(task_mirrors) = load_segmented_session_task_mirrors_for_service(
         controller_runtime,
-        Some(project_id.as_str()),
+        workspace_snapshot,
         session_id,
     ) else {
         return;
@@ -535,13 +531,20 @@ pub(crate) fn mark_webui_subagent_task_stopped_in_workspace(
         SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
         &updated_at,
     );
-    let _ = merge_webui_task_session_tool_message_metadata(
+    if let Err(error) = merge_webui_task_session_tool_message_metadata(
         workspace_snapshot,
         parent_session_id,
         &message_id,
         updated_metadata,
         "stopped",
-    );
+    ) {
+        webui_trace(
+            "subagent_stop_parent_tool_metadata_merge_failed",
+            format!(
+                "parent={parent_session_id} task={task_id} message_id={message_id} error={error}"
+            ),
+        );
+    }
 }
 
 /// Finds the best parent task-card message id for a WebUI task-session payload.

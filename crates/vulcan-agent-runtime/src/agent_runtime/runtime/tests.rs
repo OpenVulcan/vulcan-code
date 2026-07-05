@@ -3,10 +3,9 @@ use super::{
     resolve_agent_native_tools,
 };
 use crate::agent_runtime::config::{
-    AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
+    RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
 };
-use crate::provider_config::{PersistedHostToolsConfiguration, PersistedLuaSkillsConfiguration};
-use crate::tooling::NativeToolDescriptor;
+use crate::provider_config::PersistedLuaSkillsConfiguration;
 use crate::tooling::native::{
     CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
@@ -191,36 +190,5 @@ fn build_test_luaskills_entry(skill_id: &str, local_name: &str) -> RuntimeEntryD
             },
             "required": ["value"]
         }),
-    }
-}
-
-/// Builds one minimal runtime configuration for TaskRuntime profile synchronization tests.
-/// 为 TaskRuntime profile 同步测试构建一份最小运行时配置。
-fn test_runtime_config(agents: Vec<RuntimeAgentDefinition>) -> AgentRuntimeConfig {
-    AgentRuntimeConfig {
-        active_model: Some(String::from("deepseek/deepseek-chat")),
-        active_agent_id: agents
-            .first()
-            .map(|agent| agent.id.clone())
-            .unwrap_or_else(|| String::from("agent-a")),
-        agents,
-        skills: Vec::new(),
-        tool_policies: BTreeMap::new(),
-        configured_mcp_server_ids: Vec::new(),
-        enabled_mcp_server_ids: Vec::new(),
-        host_tools: PersistedHostToolsConfiguration::default(),
-    }
-}
-
-/// Builds one native-tool descriptor used by TaskRuntime profile synchronization tests.
-/// 构建 TaskRuntime profile 同步测试使用的原生工具描述符。
-fn test_native_tool_descriptor(tool_id: &str) -> NativeToolDescriptor {
-    NativeToolDescriptor {
-        id: tool_id.to_string(),
-        name: tool_id.to_string(),
-        description: String::from("test tool"),
-        help_text: None,
-        ai_visible: true,
-        available_in_plan: false,
     }
 }

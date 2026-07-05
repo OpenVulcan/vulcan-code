@@ -4,44 +4,8 @@
 use super::*;
 use std::collections::BTreeSet;
 
-/// Lazily loads the recent transcript window and lightweight runtime state for one session.
-/// 为单个会话懒加载最近转录窗口与轻量运行时状态。
-pub async fn load_session_hydration_snapshot(
-    controller: ControllerRuntimeHandle,
-    session_id: SessionId,
-    requested_limit: usize,
-) -> Result<SessionHydrationSnapshot, String> {
-    let locator = query_session_locator(&controller, session_id).await?;
-    load_session_hydration_snapshot_from_locator(
-        controller,
-        session_id,
-        requested_limit,
-        locator,
-        default_session_hydration_window_source_preference(),
-    )
-    .await
-}
-
-/// Lazily loads a display-complete transcript window for one session.
-/// 为单个会话懒加载展示完整的转录窗口。
-pub async fn load_session_display_hydration_snapshot(
-    controller: ControllerRuntimeHandle,
-    session_id: SessionId,
-    requested_limit: usize,
-) -> Result<SessionHydrationSnapshot, String> {
-    let locator = query_session_locator(&controller, session_id).await?;
-    load_session_hydration_snapshot_from_locator(
-        controller,
-        session_id,
-        requested_limit,
-        locator,
-        default_session_hydration_window_source_preference(),
-    )
-    .await
-}
-
-/// Lazily loads one session by constraining segmented lookup to its owning project.
-/// 按所属项目约束分段目录查找，并懒加载单个会话的最近转录窗口与轻量运行态。
+/// Lazily loads one session by its deterministic project, created-at, and session id.
+/// 按确定性的项目、创建时间与会话标识懒加载单个会话。
 ///
 /// # Parameters
 /// 参数
@@ -49,6 +13,8 @@ pub async fn load_session_display_hydration_snapshot(
 /// `controller` 持有工作区存储运行时桥。
 /// `project_id` is the known owning project identifier used as the segmented project tag.
 /// `project_id` 是已知的所属项目标识，用作分段项目标签。
+/// `created_at` is the raw Unix-milliseconds creation timestamp from the session summary.
+/// `created_at` 是会话摘要中的原始 Unix 毫秒创建时间戳。
 /// `session_id` selects the session to hydrate.
 /// `session_id` 选择要水合的会话。
 /// `requested_limit` is the requested recent-turn window size before clamping.
@@ -58,13 +24,20 @@ pub async fn load_session_display_hydration_snapshot(
 /// 返回值
 /// A hydration snapshot for the target session, or an empty snapshot if no segmented directory exists.
 /// 返回目标会话的水合快照；若分段目录不存在则返回空快照。
-pub async fn load_session_hydration_snapshot_for_project(
+pub async fn load_session_hydration_snapshot_for_project_created_at(
     controller: ControllerRuntimeHandle,
     project_id: &str,
+    created_at: &str,
     session_id: SessionId,
     requested_limit: usize,
 ) -> Result<SessionHydrationSnapshot, String> {
-    let locator = query_session_locator_for_project(&controller, project_id, session_id).await?;
+    let locator = query_session_locator_for_project_created_at(
+        &controller,
+        project_id,
+        created_at,
+        session_id,
+    )
+    .await?;
     load_session_hydration_snapshot_from_locator(
         controller,
         session_id,
@@ -75,8 +48,8 @@ pub async fn load_session_hydration_snapshot_for_project(
     .await
 }
 
-/// Lazily loads a display-complete transcript window for one project-scoped session.
-/// 为单个项目内会话懒加载展示完整的转录窗口。
+/// Lazily loads a display-complete transcript window by deterministic session identity.
+/// 通过确定性会话身份懒加载展示完整的转录窗口。
 ///
 /// # Parameters
 /// 参数
@@ -84,6 +57,8 @@ pub async fn load_session_hydration_snapshot_for_project(
 /// `controller` 持有工作区存储运行时桥。
 /// `project_id` is the known owning project identifier used as the segmented project tag.
 /// `project_id` 是已知的所属项目标识，用作分段项目标签。
+/// `created_at` is the raw Unix-milliseconds creation timestamp from the session summary.
+/// `created_at` 是会话摘要中的原始 Unix 毫秒创建时间戳。
 /// `session_id` selects the session to hydrate.
 /// `session_id` 选择要水合的会话。
 /// `requested_limit` is the requested recent-turn window size before clamping.
@@ -93,19 +68,26 @@ pub async fn load_session_hydration_snapshot_for_project(
 /// 返回值
 /// A display-complete hydration snapshot for the target session.
 /// 返回目标会话的展示完整水合快照。
-pub async fn load_session_display_hydration_snapshot_for_project(
+pub async fn load_session_display_hydration_snapshot_for_project_created_at(
     controller: ControllerRuntimeHandle,
     project_id: &str,
+    created_at: &str,
     session_id: SessionId,
     requested_limit: usize,
 ) -> Result<SessionHydrationSnapshot, String> {
-    let locator = query_session_locator_for_project(&controller, project_id, session_id).await?;
+    let locator = query_session_locator_for_project_created_at(
+        &controller,
+        project_id,
+        created_at,
+        session_id,
+    )
+    .await?;
     load_session_hydration_snapshot_from_locator(
         controller,
         session_id,
         requested_limit,
         locator,
-        SegmentedWindowSourcePreference::RawTurnOnly,
+        default_session_hydration_window_source_preference(),
     )
     .await
 }
@@ -135,9 +117,7 @@ async fn load_session_hydration_snapshot_from_locator(
     locator: Option<StoredSessionLocatorRow>,
     source_preference: SegmentedWindowSourcePreference,
 ) -> Result<SessionHydrationSnapshot, String> {
-    let requested_limit = requested_limit
-        .max(1)
-        .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
+    let requested_limit = requested_limit.clamp(1, SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
     let compactions = Vec::new();
     let runtime_state_row = None;
     let target_turn_count = resolve_initial_hydration_turn_count(

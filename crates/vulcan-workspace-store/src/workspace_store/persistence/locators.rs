@@ -12,11 +12,7 @@ pub(super) fn segmented_session_locator_from_summary(
         title: session.title.clone(),
         title_source: session.title_source.as_persisted_key().to_string(),
         archived,
-        created_at: if session.updated_at.trim().is_empty() {
-            current_unix_millis_text()
-        } else {
-            session.updated_at.clone()
-        },
+        created_at: normalized_session_created_at(session),
     }
 }
 
@@ -70,5 +66,5 @@ pub(super) struct SegmentedSessionLocator {
     archived: bool,
     /// Creation timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本存储的创建时间。
-    created_at: String,
+    pub(super) created_at: String,
 }

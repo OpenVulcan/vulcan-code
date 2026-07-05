@@ -60,8 +60,7 @@ pub(super) fn build_task_runtime_preparation_request(
         .effective_config
         .provider_model
         .execution_mode
-        .as_ref()
-        .map(String::as_str)
+        .as_deref()
         .and_then(|value| normalize_optional_task_label(Some(value)))
     {
         request.execution_mode = execution_mode;

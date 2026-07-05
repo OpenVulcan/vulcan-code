@@ -71,12 +71,13 @@ pub(crate) fn validate_shell_session_start_stdin_policy(
     initial_stdin: Option<&str>,
     append_newline: bool,
 ) -> Result<(), NativeToolError> {
-    if let Some(stdin_text) = initial_stdin {
-        if !append_newline && !stdin_payload_has_trailing_newline(stdin_text) {
-            return Err(NativeToolError::new(
-                "shell_session start rejected initial stdin without a trailing newline. Either set `append_newline: true`, include the trailing newline inside `stdin`, or start without `stdin` and use `write` for partial interactive input.",
-            ));
-        }
+    if let Some(stdin_text) = initial_stdin
+        && !append_newline
+        && !stdin_payload_has_trailing_newline(stdin_text)
+    {
+        return Err(NativeToolError::new(
+            "shell_session start rejected initial stdin without a trailing newline. Either set `append_newline: true`, include the trailing newline inside `stdin`, or start without `stdin` and use `write` for partial interactive input.",
+        ));
     }
     Ok(())
 }
@@ -106,7 +107,6 @@ pub(crate) fn validate_terminal_session_start_shell_policy(
 /// 从原始命令字符串中提取起始程序标记，用于尽力检测嵌套交互 shell。
 pub(crate) fn leading_command_program_token(command_text: &str) -> Option<String> {
     command_text
-        .trim()
         .split_whitespace()
         .next()
         .map(|token| token.trim_matches(|character| character == '"' || character == '\''))

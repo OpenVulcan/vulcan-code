@@ -38,6 +38,117 @@ async fn build_task_execution_handler_rejects_missing_shared_context() {
     assert!(error.contains("agent-review"));
 }
 
+/// Verifies a child run is not spawned when the parent live stream is already closed.
+/// 验证父级实时流已经关闭时不会派生子代理运行。
+#[tokio::test]
+async fn build_task_execution_handler_rejects_closed_parent_live_stream_without_orphan_run() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        ExecutionPreparationRequest {
+            session_id: parent_session_id,
+            execution_scope: ExecutionScope::MainSession {
+                session_id: SessionNodeId::from(parent_session_id),
+            },
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
+            execution_agent_id: Some(String::from("main")),
+            agent_system_prompt_override: None,
+            task_session_store_root: None,
+            session_title: String::from("Parent session"),
+            workspace_path: String::from("D:\\openvulcan\\test-project"),
+            prompt: String::from("parent prompt"),
+            conversation_state: SessionConversationState::default(),
+            execution_mode: String::from("build"),
+            temperature: None,
+            reasoning_effort: ReasoningEffortLevel::High,
+            ai_tool_configuration: PersistedAiToolConfiguration::default(),
+            tool_exposure_override: ToolExposureSnapshot::default(),
+            tool_request_rejection_reason: None,
+            tool_request_rejection_all_tools: false,
+            tool_request_rejection_tool_ids: Vec::new(),
+            prompt_purpose: ExecutionPromptPurpose::UserTurn,
+            project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
+            session_prompt_skill_overrides: BTreeMap::new(),
+            context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
+            boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
+            controller_runtime: None,
+            session_goal_context: None,
+            session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
+        },
+    );
+    let _context_guard = task_runtime
+        .install_execution_context(parent_session_id, context)
+        .expect("shared execution context should install");
+    let (sender, receiver) = unbounded_channel::<Result<ProviderStreamDelta, String>>();
+    drop(receiver);
+    let handler = build_task_execution_handler(
+        Arc::clone(&task_runtime),
+        build_test_controller_config("Base prompt"),
+        sender,
+    );
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config: TaskInvocationConfig::main("review this change"),
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+
+    let error = handler(invocation)
+        .await
+        .expect_err("closed parent live stream should reject child start");
+
+    assert!(error.contains("parent live stream closed"));
+    assert!(error.contains("agent-review"));
+    assert!(
+        !task_runtime
+            .task_has_active_or_starting_run(task_id)
+            .expect("active task registry should be readable"),
+        "closed parent stream must not leave an active child run"
+    );
+    assert!(
+        !task_runtime
+            .detached_task_event_streams
+            .read()
+            .expect("detached stream registry should be readable")
+            .contains_key(&task_id),
+        "closed parent stream must not leave a detached event stream"
+    );
+    assert!(
+        !task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should be readable")
+            .contains_key(&task_id),
+        "closed parent stream must not store a synthetic task session"
+    );
+}
+
 /// Verifies stopping one task aborts its active descendant task tree without touching sibling tasks.
 /// 验证停止单个任务会中止其活动后代任务树，并且不会影响旁支任务。
 #[tokio::test]
@@ -132,14 +243,18 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
     let child_join = tokio::spawn(async { std::future::pending::<()>().await });
     let grandchild_join = tokio::spawn(async { std::future::pending::<()>().await });
     let sibling_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let _parent_guard =
-        task_runtime.install_active_task_run(parent_task_id, parent_join.abort_handle());
-    let _child_guard =
-        task_runtime.install_active_task_run(child_task_id, child_join.abort_handle());
-    let _grandchild_guard =
-        task_runtime.install_active_task_run(grandchild_task_id, grandchild_join.abort_handle());
-    let _sibling_guard =
-        task_runtime.install_active_task_run(sibling_task_id, sibling_join.abort_handle());
+    let _parent_guard = task_runtime
+        .install_active_task_run(parent_task_id, parent_join.abort_handle())
+        .expect("parent active run should install");
+    let _child_guard = task_runtime
+        .install_active_task_run(child_task_id, child_join.abort_handle())
+        .expect("child active run should install");
+    let _grandchild_guard = task_runtime
+        .install_active_task_run(grandchild_task_id, grandchild_join.abort_handle())
+        .expect("grandchild active run should install");
+    let _sibling_guard = task_runtime
+        .install_active_task_run(sibling_task_id, sibling_join.abort_handle())
+        .expect("sibling active run should install");
 
     let stopped_task_ids = task_runtime
         .stop_task_tree(parent_task_id)
@@ -222,8 +337,12 @@ async fn active_task_run_guard_preserves_newer_same_task_run() {
     let task_id = Uuid::new_v4();
     let first_join = tokio::spawn(async { std::future::pending::<()>().await });
     let second_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let first_guard = task_runtime.install_active_task_run(task_id, first_join.abort_handle());
-    let second_guard = task_runtime.install_active_task_run(task_id, second_join.abort_handle());
+    let first_guard = task_runtime
+        .install_active_task_run(task_id, first_join.abort_handle())
+        .expect("first active run should install");
+    let second_guard = task_runtime
+        .install_active_task_run(task_id, second_join.abort_handle())
+        .expect("second active run should install");
 
     drop(first_guard);
     assert!(
@@ -242,6 +361,80 @@ async fn active_task_run_guard_preserves_newer_same_task_run() {
     );
     first_join.abort();
     second_join.abort();
+}
+
+/// Verifies active-run registration returns a diagnostic instead of panicking on lock poisoning.
+/// 验证活动运行注册表锁污染时会返回诊断错误而不是 panic。
+#[tokio::test]
+async fn install_active_task_run_reports_poisoned_registry() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = task_runtime
+            .active_task_runs
+            .write()
+            .expect("active task registry should lock before poisoning");
+        panic!("poison active task registry for test");
+    }));
+    assert!(poison_result.is_err());
+
+    let task_id = Uuid::new_v4();
+    let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
+    let install_result = task_runtime.install_active_task_run(task_id, pending_join.abort_handle());
+    pending_join.abort();
+
+    let error = match install_result {
+        Ok(_) => panic!("poisoned active task registry should reject installation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("active task registry is locked"));
+}
+
+/// Verifies detached stream creation returns a diagnostic instead of panicking on lock poisoning.
+/// 验证分离事件流锁污染时会返回诊断错误而不是 panic。
+#[test]
+fn open_detached_task_event_stream_reports_poisoned_registry() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = task_runtime
+            .detached_task_event_streams
+            .write()
+            .expect("detached task stream registry should lock before poisoning");
+        panic!("poison detached task stream registry for test");
+    }));
+    assert!(poison_result.is_err());
+
+    let error = task_runtime
+        .open_detached_task_event_stream_for_run(Uuid::new_v4())
+        .expect_err("poisoned detached stream registry should reject stream open");
+    assert!(error.contains("detached task stream registry is locked"));
+}
+
+/// Verifies backend registration returns a diagnostic instead of panicking on lock poisoning.
+/// 验证后端注册表锁污染时会返回诊断错误而不是 panic。
+#[test]
+fn install_backend_reports_poisoned_registry() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = task_runtime
+            .backends
+            .write()
+            .expect("task backend registry should lock before poisoning");
+        panic!("poison task backend registry for test");
+    }));
+    assert!(poison_result.is_err());
+
+    let install_result = task_runtime.install_backend(
+        Uuid::new_v4(),
+        Arc::new(|_request: TaskExecutionRequest| {
+            Box::pin(async move { Err(String::from("unused backend")) })
+        }),
+    );
+
+    let error = match install_result {
+        Ok(_) => panic!("poisoned task backend registry should reject installation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("task backend registry is locked"));
 }
 
 /// Verifies that caller-facing task identifiers are normalized consistently before being stored or looked up.
@@ -346,30 +539,32 @@ async fn invoke_task_returns_cached_completed_record_without_backend_restart() {
     let task_id = Uuid::new_v4();
     let backend_calls = Arc::new(AtomicUsize::new(0));
     let backend_calls_for_handler = Arc::clone(&backend_calls);
-    let _guard = task_runtime.install_backend(
-        parent_session_id,
-        Arc::new(move |request: TaskExecutionRequest| {
-            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                let controller_config = build_test_controller_config("Backend prompt");
-                Ok(TaskExecutionOutcome {
-                    task_id: request.task_id,
-                    controller_config: controller_config.clone(),
-                    resolved_config: test_resolved_config(
-                        &controller_config,
-                        &request.invocation_config,
-                    ),
-                    snapshot: CoreConversationSnapshot::default(),
-                    provider_turns_executed: 1,
-                    tool_calls_processed: 0,
-                    final_assistant_message_id: Some(String::from("assistant-backend")),
-                    final_output_text: String::from("backend result"),
-                    execution_status: TaskExecutionStatus::Completed,
-                    usage_segments: Vec::new(),
+    let _guard = task_runtime
+        .install_backend(
+            parent_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    let controller_config = build_test_controller_config("Backend prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 1,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: Some(String::from("assistant-backend")),
+                        final_output_text: String::from("backend result"),
+                        execution_status: TaskExecutionStatus::Completed,
+                        usage_segments: Vec::new(),
+                    })
                 })
-            })
-        }),
-    );
+            }),
+        )
+        .expect("task backend should install");
     let mut record = build_task_session_record(
         task_id,
         String::from("image-generator-2"),
@@ -415,6 +610,104 @@ async fn invoke_task_returns_cached_completed_record_without_backend_restart() {
     );
 }
 
+/// Verifies a pre-start cancelled spawn does not persist a failed child-agent record or reserve the public id.
+/// 验证启动前取消的子代理创建不会持久化失败记录，也不会占用公开标识。
+#[tokio::test]
+async fn invoke_spawn_agent_prestart_cancel_does_not_reserve_public_id() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_calls_for_handler = Arc::clone(&backend_calls);
+    let _guard = task_runtime
+        .install_backend(
+            parent_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                let call_index = backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    if call_index == 0 {
+                        return Err(task_start_parent_stream_closed_error(
+                            &request.public_task_id,
+                        ));
+                    }
+                    let controller_config = build_test_controller_config("Retried spawn prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 1,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: Some(String::from("assistant-retry")),
+                        final_output_text: String::from("retry completed"),
+                        execution_status: TaskExecutionStatus::Completed,
+                        usage_segments: Vec::new(),
+                    })
+                })
+            }),
+        )
+        .expect("task backend should install");
+
+    let first_error = task_runtime
+        .invoke_spawn_agent(
+            parent_session_id,
+            json!({
+                "prompt": "review once",
+                "task_id": "retryable-agent"
+            }),
+        )
+        .await
+        .expect_err("pre-start cancellation should surface as an error");
+
+    assert!(first_error.contains("parent live stream closed"));
+    assert!(
+        !first_error.contains("[task-prestart-cancelled]"),
+        "internal pre-start marker should not leak to the caller"
+    );
+    assert!(
+        task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should be readable")
+            .is_empty(),
+        "pre-start cancellation must not persist a failed task record"
+    );
+    assert!(
+        task_runtime
+            .subagent_registry_snapshot()
+            .expect("subagent registry should be readable")
+            .list_all()
+            .is_empty(),
+        "pre-start cancellation must not register an agent entry"
+    );
+
+    let retry_result = task_runtime
+        .invoke_spawn_agent(
+            parent_session_id,
+            json!({
+                "prompt": "review again",
+                "task_id": "retryable-agent"
+            }),
+        )
+        .await
+        .expect("same public id should be reusable after pre-start cancellation");
+
+    assert_eq!(backend_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(retry_result.model_output["execution_status"], "completed");
+    let records = task_runtime
+        .sessions
+        .read()
+        .expect("task session registry should be readable");
+    let retried_record = records
+        .values()
+        .find(|record| record.public_task_id == "retryable-agent")
+        .expect("retried task record should exist");
+    assert_eq!(retried_record.last_status, "completed");
+    assert_eq!(retried_record.last_result_text, "retry completed");
+}
+
 /// Verifies spawn_agent rejects duplicate public labels instead of generating suffixes.
 /// 验证 spawn_agent 会拒绝重复公开标识，而不是自动生成后缀。
 #[tokio::test]
@@ -424,30 +717,32 @@ async fn invoke_spawn_agent_rejects_duplicate_public_id() {
     let completed_task_id = Uuid::new_v4();
     let backend_calls = Arc::new(AtomicUsize::new(0));
     let backend_calls_for_handler = Arc::clone(&backend_calls);
-    let _guard = task_runtime.install_backend(
-        parent_session_id,
-        Arc::new(move |_request: TaskExecutionRequest| {
-            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                let controller_config = build_test_controller_config("Fresh spawn prompt");
-                Ok(TaskExecutionOutcome {
-                    task_id: Uuid::new_v4(),
-                    controller_config: controller_config.clone(),
-                    resolved_config: test_resolved_config(
-                        &controller_config,
-                        &TaskInvocationConfig::main("unused"),
-                    ),
-                    snapshot: CoreConversationSnapshot::default(),
-                    provider_turns_executed: 1,
-                    tool_calls_processed: 0,
-                    final_assistant_message_id: Some(String::from("assistant-fresh")),
-                    final_output_text: String::from("fresh image result"),
-                    execution_status: TaskExecutionStatus::Completed,
-                    usage_segments: Vec::new(),
+    let _guard = task_runtime
+        .install_backend(
+            parent_session_id,
+            Arc::new(move |_request: TaskExecutionRequest| {
+                backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    let controller_config = build_test_controller_config("Fresh spawn prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: Uuid::new_v4(),
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &TaskInvocationConfig::main("unused"),
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 1,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: Some(String::from("assistant-fresh")),
+                        final_output_text: String::from("fresh image result"),
+                        execution_status: TaskExecutionStatus::Completed,
+                        usage_segments: Vec::new(),
+                    })
                 })
-            })
-        }),
-    );
+            }),
+        )
+        .expect("task backend should install");
     let mut completed_record = build_task_session_record(
         completed_task_id,
         String::from("image-generator-2"),
@@ -496,33 +791,35 @@ async fn invoke_spawn_agent_reuses_public_id_after_close_agent() {
     let captured_task_id = Arc::new(std::sync::Mutex::new(None));
     let backend_calls_for_handler = Arc::clone(&backend_calls);
     let captured_task_id_for_handler = Arc::clone(&captured_task_id);
-    let _guard = task_runtime.install_backend(
-        parent_session_id,
-        Arc::new(move |request: TaskExecutionRequest| {
-            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-            *captured_task_id_for_handler
-                .lock()
-                .expect("captured task id lock") = Some(request.task_id);
-            Box::pin(async move {
-                let controller_config = build_test_controller_config("Fresh spawn prompt");
-                Ok(TaskExecutionOutcome {
-                    task_id: request.task_id,
-                    controller_config: controller_config.clone(),
-                    resolved_config: test_resolved_config(
-                        &controller_config,
-                        &request.invocation_config,
-                    ),
-                    snapshot: CoreConversationSnapshot::default(),
-                    provider_turns_executed: 1,
-                    tool_calls_processed: 0,
-                    final_assistant_message_id: Some(String::from("assistant-reused")),
-                    final_output_text: String::from("new reusable result"),
-                    execution_status: TaskExecutionStatus::Completed,
-                    usage_segments: Vec::new(),
+    let _guard = task_runtime
+        .install_backend(
+            parent_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                *captured_task_id_for_handler
+                    .lock()
+                    .expect("captured task id lock") = Some(request.task_id);
+                Box::pin(async move {
+                    let controller_config = build_test_controller_config("Fresh spawn prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 1,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: Some(String::from("assistant-reused")),
+                        final_output_text: String::from("new reusable result"),
+                        execution_status: TaskExecutionStatus::Completed,
+                        usage_segments: Vec::new(),
+                    })
                 })
-            })
-        }),
-    );
+            }),
+        )
+        .expect("task backend should install");
     let closed_record = build_task_session_record(
         closed_task_id,
         String::from("reusable-agent"),
@@ -638,33 +935,35 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
     let captured_prompt = Arc::new(std::sync::Mutex::new(None::<String>));
     let backend_calls_for_handler = Arc::clone(&backend_calls);
     let captured_prompt_for_handler = Arc::clone(&captured_prompt);
-    let _guard = task_runtime.install_backend(
-        parent_session_id,
-        Arc::new(move |request: TaskExecutionRequest| {
-            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-            *captured_prompt_for_handler
-                .lock()
-                .expect("captured prompt lock") = Some(request.prompt.clone());
-            Box::pin(async move {
-                let controller_config = build_test_controller_config("Followup prompt");
-                Ok(TaskExecutionOutcome {
-                    task_id: request.task_id,
-                    controller_config: controller_config.clone(),
-                    resolved_config: test_resolved_config(
-                        &controller_config,
-                        &request.invocation_config,
-                    ),
-                    snapshot: CoreConversationSnapshot::default(),
-                    provider_turns_executed: 0,
-                    tool_calls_processed: 0,
-                    final_assistant_message_id: None,
-                    final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
-                    execution_status: TaskExecutionStatus::Running,
-                    usage_segments: Vec::new(),
+    let _guard = task_runtime
+        .install_backend(
+            parent_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                *captured_prompt_for_handler
+                    .lock()
+                    .expect("captured prompt lock") = Some(request.prompt.clone());
+                Box::pin(async move {
+                    let controller_config = build_test_controller_config("Followup prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 0,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: None,
+                        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+                        execution_status: TaskExecutionStatus::Running,
+                        usage_segments: Vec::new(),
+                    })
                 })
-            })
-        }),
-    );
+            }),
+        )
+        .expect("task backend should install");
 
     let send_result = task_runtime
         .invoke_send_message(
@@ -746,36 +1045,40 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
     let captured_prompt = Arc::new(std::sync::Mutex::new(None::<String>));
     let backend_calls_for_handler = Arc::clone(&backend_calls);
     let captured_prompt_for_handler = Arc::clone(&captured_prompt);
-    let _guard = task_runtime.install_backend(
-        parent_session_id,
-        Arc::new(move |request: TaskExecutionRequest| {
-            backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-            *captured_prompt_for_handler
-                .lock()
-                .expect("captured prompt lock") = Some(request.prompt.clone());
-            Box::pin(async move {
-                let controller_config = build_test_controller_config("Followup prompt");
-                Ok(TaskExecutionOutcome {
-                    task_id: request.task_id,
-                    controller_config: controller_config.clone(),
-                    resolved_config: test_resolved_config(
-                        &controller_config,
-                        &request.invocation_config,
-                    ),
-                    snapshot: CoreConversationSnapshot::default(),
-                    provider_turns_executed: 0,
-                    tool_calls_processed: 0,
-                    final_assistant_message_id: None,
-                    final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
-                    execution_status: TaskExecutionStatus::Running,
-                    usage_segments: Vec::new(),
+    let _guard = task_runtime
+        .install_backend(
+            parent_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                *captured_prompt_for_handler
+                    .lock()
+                    .expect("captured prompt lock") = Some(request.prompt.clone());
+                Box::pin(async move {
+                    let controller_config = build_test_controller_config("Followup prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 0,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: None,
+                        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+                        execution_status: TaskExecutionStatus::Running,
+                        usage_segments: Vec::new(),
+                    })
                 })
-            })
-        }),
-    );
+            }),
+        )
+        .expect("task backend should install");
 
     let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let active_guard = task_runtime.install_active_task_run(task_id, pending_join.abort_handle());
+    let active_guard = task_runtime
+        .install_active_task_run(task_id, pending_join.abort_handle())
+        .expect("active run should install");
     let send_result = task_runtime
         .invoke_send_message(
             parent_session_id,
@@ -902,44 +1205,46 @@ async fn invoke_task_relays_backend_terminal_result_when_backend_waits() {
     let entered_sender = Arc::new(std::sync::Mutex::new(Some(entered_sender)));
     let release_receiver_for_handler = Arc::clone(&release_receiver);
     let entered_sender_for_handler = Arc::clone(&entered_sender);
-    let _guard = task_runtime.install_backend(
-        parent_session_id,
-        Arc::new(move |request: TaskExecutionRequest| {
-            let release_receiver = Arc::clone(&release_receiver_for_handler);
-            let entered_sender = Arc::clone(&entered_sender_for_handler);
-            Box::pin(async move {
-                if let Some(sender) = entered_sender
-                    .lock()
-                    .expect("test entered sender lock")
-                    .take()
-                {
-                    let _ = sender.send(());
-                }
-                let receiver = release_receiver
-                    .lock()
-                    .expect("test release receiver lock")
-                    .take()
-                    .expect("test release receiver should exist");
-                receiver.await.expect("test release should arrive");
-                let controller_config = build_test_controller_config("Backend prompt");
-                Ok(TaskExecutionOutcome {
-                    task_id: request.task_id,
-                    controller_config: controller_config.clone(),
-                    resolved_config: test_resolved_config(
-                        &controller_config,
-                        &request.invocation_config,
-                    ),
-                    snapshot: CoreConversationSnapshot::default(),
-                    provider_turns_executed: 1,
-                    tool_calls_processed: 0,
-                    final_assistant_message_id: Some(String::from("assistant-backend")),
-                    final_output_text: String::from("terminal backend result"),
-                    execution_status: TaskExecutionStatus::Completed,
-                    usage_segments: Vec::new(),
+    let _guard = task_runtime
+        .install_backend(
+            parent_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                let release_receiver = Arc::clone(&release_receiver_for_handler);
+                let entered_sender = Arc::clone(&entered_sender_for_handler);
+                Box::pin(async move {
+                    if let Some(sender) = entered_sender
+                        .lock()
+                        .expect("test entered sender lock")
+                        .take()
+                    {
+                        let _ = sender.send(());
+                    }
+                    let receiver = release_receiver
+                        .lock()
+                        .expect("test release receiver lock")
+                        .take()
+                        .expect("test release receiver should exist");
+                    receiver.await.expect("test release should arrive");
+                    let controller_config = build_test_controller_config("Backend prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 1,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: Some(String::from("assistant-backend")),
+                        final_output_text: String::from("terminal backend result"),
+                        execution_status: TaskExecutionStatus::Completed,
+                        usage_segments: Vec::new(),
+                    })
                 })
-            })
-        }),
-    );
+            }),
+        )
+        .expect("task backend should install");
     let invoking_runtime = Arc::clone(&task_runtime);
     let invoke_task = tokio::spawn(async move {
         invoking_runtime
@@ -1077,7 +1382,9 @@ async fn detached_task_event_stream_reopens_for_resumed_run_with_terminal_record
             ),
         );
 
-    task_runtime.open_detached_task_event_stream_for_run(task_id);
+    task_runtime
+        .open_detached_task_event_stream_for_run(task_id)
+        .expect("detached stream should open");
     let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id));
     let closed_event =
         tokio::time::timeout(std::time::Duration::from_millis(50), stream.next()).await;

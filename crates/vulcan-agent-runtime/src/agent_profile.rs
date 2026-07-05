@@ -309,16 +309,15 @@ pub fn migrate_legacy_provider_agents(
         changed = true;
     }
 
-    if catalog.state.selected_agent_id.is_none() {
-        if let Some(legacy_active_agent_id) = config
+    if catalog.state.selected_agent_id.is_none()
+        && let Some(legacy_active_agent_id) = config
             .legacy_active_agent
             .as_deref()
             .filter(|agent_id| !is_legacy_builtin_agent_id(agent_id))
             .filter(|agent_id| catalog.agents.contains_key(*agent_id))
-        {
-            catalog.state.selected_agent_id = Some(legacy_active_agent_id.to_string());
-            changed = true;
-        }
+    {
+        catalog.state.selected_agent_id = Some(legacy_active_agent_id.to_string());
+        changed = true;
     }
 
     if changed {

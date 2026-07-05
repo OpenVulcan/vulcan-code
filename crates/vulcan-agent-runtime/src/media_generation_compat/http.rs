@@ -56,17 +56,16 @@ pub(super) async fn parse_json_response(
     if let Some(status_code) = payload
         .pointer("/base_resp/status_code")
         .and_then(Value::as_i64)
+        && status_code != 0
     {
-        if status_code != 0 {
-            let status_msg = payload
-                .pointer("/base_resp/status_msg")
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown error");
-            return Err(format!(
-                "{provider_label} returned business error {status_code}: {}",
-                status_msg.trim()
-            ));
-        }
+        let status_msg = payload
+            .pointer("/base_resp/status_msg")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown error");
+        return Err(format!(
+            "{provider_label} returned business error {status_code}: {}",
+            status_msg.trim()
+        ));
     }
     Ok(payload)
 }

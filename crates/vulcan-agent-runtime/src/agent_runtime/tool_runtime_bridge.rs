@@ -173,13 +173,32 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
     if tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver)
         .await
         .is_err()
+        && let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get()
+        && let Ok(mut guard) = registry.lock()
     {
-        if let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get()
-            && let Ok(mut guard) = registry.lock()
-        {
-            guard.remove(&barrier_id);
-        }
+        guard.remove(&barrier_id);
     }
+}
+
+/// Removes a projection barrier for a runtime event that will never reach the host bridge.
+/// 移除一条永远不会到达宿主桥接层的运行时事件投影屏障。
+pub(crate) fn cancel_runtime_event_projection_barrier(
+    barrier: Option<RuntimeEventProjectionBarrier>,
+) {
+    let Some(barrier) = barrier else {
+        return;
+    };
+    let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
+        return;
+    };
+    let Ok(mut guard) = registry.lock() else {
+        eprintln!(
+            "[tool-runtime] runtime-event projection barrier registry is locked; barrier {} could not be cancelled",
+            barrier.id
+        );
+        return;
+    };
+    guard.remove(&barrier.id);
 }
 
 /// Acknowledges one projection barrier from runtime-event metadata after the service emits it.

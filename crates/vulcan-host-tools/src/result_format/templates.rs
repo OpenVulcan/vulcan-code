@@ -36,10 +36,10 @@ pub(super) fn load_template_text(
     }
 
     for candidate in candidates {
-        if candidate.exists() {
-            if let Ok(text) = fs::read_to_string(&candidate) {
-                return Some(text);
-            }
+        if candidate.exists()
+            && let Ok(text) = fs::read_to_string(&candidate)
+        {
+            return Some(text);
         }
     }
 

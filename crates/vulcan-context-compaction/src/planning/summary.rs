@@ -282,7 +282,6 @@ pub(super) fn build_legacy_compaction_summary_text(
 
 /// Resolves the absolute persisted user-turn index for one transcript message identifier by replaying user-turn boundaries over the full session transcript history.
 /// 通过在完整会话转录历史上重放用户轮次边界，解析某条转录消息标识对应的绝对持久化用户轮次索引。
-
 fn compaction_summary_line_for_message(message: &SessionMessageEntry, prune_tools: bool) -> String {
     let label = canonical_compaction_message_label(message);
     let title = canonical_compaction_message_title(message);

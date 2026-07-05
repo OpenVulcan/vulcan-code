@@ -59,7 +59,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         &[],
         current_unix_millis_text(),
     );
-    task_runtime.open_detached_task_event_stream_for_run(task_id);
+    task_runtime.open_detached_task_event_stream_for_run(task_id)?;
     let (delegate_started_event, projection_barrier) =
         attach_runtime_event_projection_barrier(build_task_delegate_runtime_event(
             RuntimeEventKind::DelegateStarted,
@@ -67,9 +67,21 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             "Running and waiting for the subagent to return a result.",
             started_payload,
         ));
-    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-        delegate_started_event,
-    )));
+    if parent_live_sender
+        .send(Ok(ProviderStreamDelta::RuntimeEvent(
+            delegate_started_event,
+        )))
+        .is_err()
+    {
+        cancel_runtime_event_projection_barrier(projection_barrier);
+        task_runtime.close_detached_task_event_stream(task_id);
+        let error = task_start_parent_stream_closed_error(&request.public_task_id);
+        task_runtime_trace(
+            "shared_task_delegate_started_parent_stream_closed",
+            format!("task={} public_task_id={}", task_id, request.public_task_id),
+        );
+        return Err(error);
+    }
     // Wait until the parent workbench projection sees the subagent-start event before the child run advances.
     // 等待父级工作台投影看到子代理启动事件后，再推进子任务执行。
     let has_projection_barrier = projection_barrier.is_some();
@@ -171,7 +183,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         handle: child_run_abort_handle.clone(),
     };
     let active_task_run_guard =
-        task_runtime.install_active_task_run(task_id, child_run_abort_handle);
+        task_runtime.install_active_task_run(task_id, child_run_abort_handle)?;
     task_runtime_trace(
         "shared_task_child_spawned",
         format!(
@@ -187,36 +199,50 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         let resumed_queued_messages = match child_run_result {
             Ok(Ok(completion)) => {
                 let outcome = completion.outcome;
-                let _ =
+                let store_result =
                     task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
                 drop(active_task_run_guard.take());
-                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
-                    &task_runtime,
-                    request.current_session_id,
-                    task_id,
-                )
-                .await;
-                publish_task_finished_to_parent(
-                    &task_runtime,
-                    &request,
-                    &outcome,
-                    "The subagent task has completed.",
-                );
-                if completion.should_compact_context {
-                    spawn_task_session_context_compaction(
-                        Arc::clone(&task_runtime),
-                        compaction_runtime_context,
-                        request.clone(),
-                        outcome.resolved_config.clone(),
-                    );
+                match store_result {
+                    Ok(()) => {
+                        let resumed_queued_messages =
+                            resume_queued_messages_after_active_run_dropped(
+                                &task_runtime,
+                                request.current_session_id,
+                                task_id,
+                            )
+                            .await;
+                        publish_task_finished_to_parent(
+                            &task_runtime,
+                            &request,
+                            &outcome,
+                            "The subagent task has completed.",
+                        );
+                        if completion.should_compact_context {
+                            spawn_task_session_context_compaction(
+                                Arc::clone(&task_runtime),
+                                compaction_runtime_context,
+                                request.clone(),
+                                outcome.resolved_config.clone(),
+                            );
+                        }
+                        resumed_queued_messages
+                    }
+                    Err(error) => {
+                        let detail = format!(
+                            "The subagent task completed, but its terminal state could not be recorded: {error}"
+                        );
+                        eprintln!("[task-runtime] {detail}");
+                        publish_task_failure_to_parent(&task_runtime, &request, &detail);
+                        false
+                    }
                 }
-                resumed_queued_messages
             }
             Ok(Err(error)) if task_execution_error_is_stopped(error.as_str()) => {
-                let stopped_snapshot = current_task_snapshot_from_store(
+                let stopped_snapshot = stopped_task_snapshot_from_store_or_request(
                     &task_runtime,
                     request.root_session_id,
                     task_id,
+                    &request,
                 )
                 .unwrap_or_else(|| request.snapshot.clone());
                 let outcome = build_stopped_task_execution_outcome(
@@ -225,41 +251,68 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                     resolved_config,
                     stopped_snapshot,
                 );
-                let _ =
+                let store_result =
                     task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
                 drop(active_task_run_guard.take());
-                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
-                    &task_runtime,
-                    request.current_session_id,
-                    task_id,
-                )
-                .await;
-                publish_task_finished_to_parent(
-                    &task_runtime,
-                    &request,
-                    &outcome,
-                    outcome.final_output_text.as_str(),
-                );
-                resumed_queued_messages
+                match store_result {
+                    Ok(()) => {
+                        let resumed_queued_messages =
+                            resume_queued_messages_after_active_run_dropped(
+                                &task_runtime,
+                                request.current_session_id,
+                                task_id,
+                            )
+                            .await;
+                        publish_task_finished_to_parent(
+                            &task_runtime,
+                            &request,
+                            &outcome,
+                            outcome.final_output_text.as_str(),
+                        );
+                        resumed_queued_messages
+                    }
+                    Err(error) => {
+                        let detail = format!(
+                            "The stopped subagent task could not record its terminal state: {error}"
+                        );
+                        eprintln!("[task-runtime] {detail}");
+                        publish_task_failure_to_parent(&task_runtime, &request, &detail);
+                        false
+                    }
+                }
             }
             Ok(Err(error)) => {
-                let _ =
+                let mark_result =
                     task_runtime.mark_task_failure(request.current_session_id, &request, &error);
                 drop(active_task_run_guard.take());
-                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
-                    &task_runtime,
-                    request.current_session_id,
-                    task_id,
-                )
-                .await;
-                publish_task_failure_to_parent(&task_runtime, &request, &error);
-                resumed_queued_messages
+                match mark_result {
+                    Ok(()) => {
+                        let resumed_queued_messages =
+                            resume_queued_messages_after_active_run_dropped(
+                                &task_runtime,
+                                request.current_session_id,
+                                task_id,
+                            )
+                            .await;
+                        publish_task_failure_to_parent(&task_runtime, &request, &error);
+                        resumed_queued_messages
+                    }
+                    Err(record_error) => {
+                        let detail = format!(
+                            "The subagent task failed with `{error}`, and recording that failure also failed: {record_error}"
+                        );
+                        eprintln!("[task-runtime] {detail}");
+                        publish_task_failure_to_parent(&task_runtime, &request, &detail);
+                        false
+                    }
+                }
             }
             Err(join_error) if join_error.is_cancelled() => {
-                let stopped_snapshot = current_task_snapshot_from_store(
+                let stopped_snapshot = stopped_task_snapshot_from_store_or_request(
                     &task_runtime,
                     request.root_session_id,
                     task_id,
+                    &request,
                 )
                 .unwrap_or_else(|| request.snapshot.clone());
                 let outcome = build_stopped_task_execution_outcome(
@@ -268,22 +321,35 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                     resolved_config,
                     stopped_snapshot,
                 );
-                let _ =
+                let store_result =
                     task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
                 drop(active_task_run_guard.take());
-                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
-                    &task_runtime,
-                    request.current_session_id,
-                    task_id,
-                )
-                .await;
-                publish_task_finished_to_parent(
-                    &task_runtime,
-                    &request,
-                    &outcome,
-                    outcome.final_output_text.as_str(),
-                );
-                resumed_queued_messages
+                match store_result {
+                    Ok(()) => {
+                        let resumed_queued_messages =
+                            resume_queued_messages_after_active_run_dropped(
+                                &task_runtime,
+                                request.current_session_id,
+                                task_id,
+                            )
+                            .await;
+                        publish_task_finished_to_parent(
+                            &task_runtime,
+                            &request,
+                            &outcome,
+                            outcome.final_output_text.as_str(),
+                        );
+                        resumed_queued_messages
+                    }
+                    Err(error) => {
+                        let detail = format!(
+                            "The cancelled subagent task could not record its stopped state: {error}"
+                        );
+                        eprintln!("[task-runtime] {detail}");
+                        publish_task_failure_to_parent(&task_runtime, &request, &detail);
+                        false
+                    }
+                }
             }
             Err(join_error) => {
                 let error = format!(
@@ -291,17 +357,30 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                     task_id,
                     format_task_join_error(&join_error)
                 );
-                let _ =
+                let mark_result =
                     task_runtime.mark_task_failure(request.current_session_id, &request, &error);
                 drop(active_task_run_guard.take());
-                let resumed_queued_messages = resume_queued_messages_after_active_run_dropped(
-                    &task_runtime,
-                    request.current_session_id,
-                    task_id,
-                )
-                .await;
-                publish_task_failure_to_parent(&task_runtime, &request, &error);
-                resumed_queued_messages
+                match mark_result {
+                    Ok(()) => {
+                        let resumed_queued_messages =
+                            resume_queued_messages_after_active_run_dropped(
+                                &task_runtime,
+                                request.current_session_id,
+                                task_id,
+                            )
+                            .await;
+                        publish_task_failure_to_parent(&task_runtime, &request, &error);
+                        resumed_queued_messages
+                    }
+                    Err(record_error) => {
+                        let detail = format!(
+                            "The subagent task failed with `{error}`, and recording that failure also failed: {record_error}"
+                        );
+                        eprintln!("[task-runtime] {detail}");
+                        publish_task_failure_to_parent(&task_runtime, &request, &detail);
+                        false
+                    }
+                }
             }
         };
         drop(active_task_run_guard.take());
@@ -369,15 +448,52 @@ pub(super) fn current_task_snapshot_from_store(
     task_runtime: &TaskRuntime,
     root_session_id: SessionId,
     task_id: SessionId,
-) -> Option<CoreConversationSnapshot> {
-    let store = task_runtime
+) -> Result<Option<CoreConversationSnapshot>, String> {
+    let Some(store) = task_runtime
         .task_session_store_for_root(root_session_id)
-        .ok()
-        .flatten()?;
-    let context = store.load_context(SessionNodeId::from(task_id)).ok()??;
-    let conversation_state: SessionConversationState =
-        serde_json::from_value(context.conversation_state).ok()?;
-    Some(build_core_conversation_snapshot(&conversation_state))
+        .map_err(|error| {
+            format!("TaskSession store root lookup failed for `{root_session_id}`: {error}")
+        })?
+    else {
+        return Ok(None);
+    };
+    let Some(context) = store
+        .load_context(SessionNodeId::from(task_id))
+        .map_err(|error| {
+            format!("TaskSession context load failed for task `{task_id}`: {error}")
+        })?
+    else {
+        return Ok(None);
+    };
+    let conversation_state: SessionConversationState = serde_json::from_value(
+        context.conversation_state,
+    )
+    .map_err(|error| {
+        format!(
+            "TaskSession context for task `{task_id}` contains invalid conversation state: {error}"
+        )
+    })?;
+    Ok(Some(build_core_conversation_snapshot(&conversation_state)))
+}
+
+/// Loads the latest stopped-task snapshot and logs corrupted persisted context before falling back.
+/// 加载最新停止任务快照，并在持久化上下文损坏时记录诊断后再回退。
+fn stopped_task_snapshot_from_store_or_request(
+    task_runtime: &TaskRuntime,
+    root_session_id: SessionId,
+    task_id: SessionId,
+    request: &TaskExecutionRequest,
+) -> Option<CoreConversationSnapshot> {
+    match current_task_snapshot_from_store(task_runtime, root_session_id, task_id) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!(
+                "[task-session-store] using request snapshot for stopped task `{}` because persisted context could not be loaded: {error}",
+                request.public_task_id
+            );
+            Some(request.snapshot.clone())
+        }
+    }
 }
 
 /// Spawns one non-blocking TaskSession context compaction job after a child task has completed.

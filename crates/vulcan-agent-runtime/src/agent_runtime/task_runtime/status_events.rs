@@ -114,12 +114,14 @@ pub(super) fn parent_ref_for_task_record(record: &TaskSessionRecord) -> ParentSe
 pub(super) fn core_controller_config_to_effective_config(
     controller_config: &CoreControllerConfig,
 ) -> SessionEffectiveConfig {
-    let mut config = SessionEffectiveConfig::default();
-    config.provider_model = ProviderModelSnapshot {
-        provider_id: Some(controller_config.provider_id.clone()),
-        model_id: Some(controller_config.model_id.clone()),
-        reasoning_effort: None,
-        execution_mode: None,
+    let mut config = SessionEffectiveConfig {
+        provider_model: ProviderModelSnapshot {
+            provider_id: Some(controller_config.provider_id.clone()),
+            model_id: Some(controller_config.model_id.clone()),
+            reasoning_effort: None,
+            execution_mode: None,
+        },
+        ..Default::default()
     };
     config.context_compaction.auto_compaction_enabled = true;
     if !controller_config.system_prompt.trim().is_empty() {

@@ -481,27 +481,27 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         record_ids.output_record_id = None;
                     }
                     update_webui_wait_agent_runtime_state(&task_state, session_id, &event);
-                    if matches!(event.kind, RuntimeEventKind::ToolStarted) {
-                        if let Err(error) = apply_session_phase(
+                    if matches!(event.kind, RuntimeEventKind::ToolStarted)
+                        && let Err(error) = apply_session_phase(
                             &app,
                             &task_state,
                             session_id,
                             SessionRunPhase::ToolRunning,
-                        ) {
-                            eprintln!("[webui-service] apply tool phase failed: {error}");
-                        }
+                        )
+                    {
+                        eprintln!("[webui-service] apply tool phase failed: {error}");
                     }
-                    if matches!(event.kind, RuntimeEventKind::ToolFinished) {
-                        if let Err(error) = apply_session_phase(
+                    if matches!(event.kind, RuntimeEventKind::ToolFinished)
+                        && let Err(error) = apply_session_phase(
                             &app,
                             &task_state,
                             session_id,
                             SessionRunPhase::Requesting,
-                        ) {
-                            eprintln!(
-                                "[webui-service] restore request phase after tool failed: {error}"
-                            );
-                        }
+                        )
+                    {
+                        eprintln!(
+                            "[webui-service] restore request phase after tool failed: {error}"
+                        );
                     }
                     let event_is_main_session = task_state.lock().ok().is_some_and(|guard| {
                         guard.workspace_snapshot.as_ref().is_some_and(|workspace| {

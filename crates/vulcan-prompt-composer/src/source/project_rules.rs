@@ -70,10 +70,10 @@ impl ProjectRulesFileCache {
     ) -> Result<Option<ProjectRulesSnapshot>, PromptComposerError> {
         let path = path.as_ref().to_path_buf();
         let marker = project_rules_file_marker(&path)?;
-        if let Some(entry) = self.entries.get(&path) {
-            if entry.marker == marker {
-                return Ok(entry.snapshot.clone());
-            }
+        if let Some(entry) = self.entries.get(&path)
+            && entry.marker == marker
+        {
+            return Ok(entry.snapshot.clone());
         }
 
         let snapshot = match marker {

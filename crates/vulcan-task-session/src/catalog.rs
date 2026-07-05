@@ -585,16 +585,16 @@ pub fn parse_subagent_definition_file(
             message: String::from("Subagent definition file must have a valid UTF-8 file stem."),
         })?
     };
-    parse_subagent_definition_text_with_metadata(
+    parse_subagent_definition_text_with_metadata(SubagentDefinitionParseRequest {
         definition_file,
-        &raw,
+        raw: &raw,
         scope,
         id,
-        None,
-        None,
-        None,
-        None,
-    )
+        category_id: None,
+        package_id: None,
+        sidecar_file: None,
+        sidecar: None,
+    })
 }
 
 /// Parses one Markdown string into a subagent definition.
@@ -619,16 +619,16 @@ pub fn parse_subagent_definition_text(
     scope: SubagentDefinitionScope,
 ) -> Result<SubagentDefinition, SubagentCatalogLoadError> {
     let id = subagent_text_definition_id(definition_file)?;
-    parse_subagent_definition_text_with_metadata(
+    parse_subagent_definition_text_with_metadata(SubagentDefinitionParseRequest {
         definition_file,
         raw,
         scope,
         id,
-        None,
-        None,
-        None,
-        None,
-    )
+        category_id: None,
+        package_id: None,
+        sidecar_file: None,
+        sidecar: None,
+    })
 }
 
 /// Resolves the stable id for a text-only subagent definition parse.
@@ -658,42 +658,50 @@ fn subagent_text_definition_id(definition_file: &Path) -> Result<String, Subagen
     })
 }
 
-/// Parses one Markdown string with resolved catalog metadata.
-/// 使用已解析目录元数据解析一段 Markdown 字符串。
-///
-/// # Parameters
-/// 参数
-/// `definition_file` is the Markdown file to parse.
-/// `definition_file` 是需要解析的 Markdown 文件。
-/// `raw` is the Markdown source text.
-/// `raw` 是 Markdown 源文本。
-/// `scope` identifies the catalog layer.
-/// `scope` 标识目录层。
-/// `id` is the canonical id inferred from the relative path.
-/// `id` 是从相对路径推导出的规范标识。
-/// `category_id` is the optional category path.
-/// `category_id` 是可选分类路径。
-/// `package_id` is the optional package id.
-/// `package_id` 是可选包标识。
-/// `sidecar_file` is the optional sidecar path.
-/// `sidecar_file` 是可选 sidecar 路径。
-/// `sidecar` is the optional parsed sidecar metadata.
-/// `sidecar` 是可选已解析 sidecar 元数据。
-///
-/// # Returns
-/// 返回值
-/// The effective definition for this catalog layer.
-/// 当前目录层的生效定义。
-fn parse_subagent_definition_text_with_metadata(
-    definition_file: &Path,
-    raw: &str,
+/// Request payload used to parse one subagent definition and its sidecar metadata.
+/// 用于解析单个子代理定义及其 sidecar 元数据的请求载荷。
+struct SubagentDefinitionParseRequest<'a> {
+    /// Markdown file to parse.
+    /// 需要解析的 Markdown 文件。
+    definition_file: &'a Path,
+    /// Markdown source text.
+    /// Markdown 源文本。
+    raw: &'a str,
+    /// Catalog layer that supplied the definition.
+    /// 提供该定义的目录层。
     scope: SubagentDefinitionScope,
+    /// Canonical id inferred from the relative path.
+    /// 从相对路径推导出的规范标识。
     id: String,
+    /// Optional category path.
+    /// 可选分类路径。
     category_id: Option<String>,
+    /// Optional package id.
+    /// 可选包标识。
     package_id: Option<String>,
+    /// Optional sidecar path.
+    /// 可选 sidecar 路径。
     sidecar_file: Option<PathBuf>,
+    /// Optional parsed sidecar metadata.
+    /// 可选已解析 sidecar 元数据。
     sidecar: Option<SubagentDefinitionSidecar>,
+}
+
+/// Parses one subagent definition request into its effective catalog definition.
+/// 将单个子代理定义解析请求转换为生效目录定义。
+fn parse_subagent_definition_text_with_metadata(
+    request: SubagentDefinitionParseRequest<'_>,
 ) -> Result<SubagentDefinition, SubagentCatalogLoadError> {
+    let SubagentDefinitionParseRequest {
+        definition_file,
+        raw,
+        scope,
+        id,
+        category_id,
+        package_id,
+        sidecar_file,
+        sidecar,
+    } = request;
     let (frontmatter, body) = split_frontmatter(raw).unwrap_or(("", raw));
     let parsed = if frontmatter.trim().is_empty() {
         SubagentDefinitionFrontmatter::default()
@@ -1374,16 +1382,16 @@ fn parse_subagent_definition_file_in_root(
         Some(path) => Some(read_definition_sidecar(path)?),
         None => None,
     };
-    parse_subagent_definition_text_with_metadata(
+    parse_subagent_definition_text_with_metadata(SubagentDefinitionParseRequest {
         definition_file,
-        &raw,
+        raw: &raw,
         scope,
         id,
         category_id,
-        package_id.map(str::to_string),
+        package_id: package_id.map(str::to_string),
         sidecar_file,
         sidecar,
-    )
+    })
 }
 
 /// Registers category metadata for one directory when a category id is available.
@@ -1628,7 +1636,7 @@ fn write_subagent_sidecar_to_path(
         path: path.to_path_buf(),
         message: format!("Failed to serialize subagent sidecar: {error}"),
     })?;
-    let mut file = fs::File::create(&path).map_err(|error| SubagentCatalogLoadError {
+    let mut file = fs::File::create(path).map_err(|error| SubagentCatalogLoadError {
         path: path.to_path_buf(),
         message: format!("Failed to create user subagent sidecar: {error}"),
     })?;
@@ -2030,10 +2038,10 @@ fn append_legacy_json_string_values(target: &mut Vec<String>, value: &Value) {
         }
         Value::Array(items) => {
             for item in items {
-                if let Value::String(text) = item {
-                    if let Some(value) = non_empty_text(text) {
-                        target.push(value.to_string());
-                    }
+                if let Value::String(text) = item
+                    && let Some(value) = non_empty_text(text)
+                {
+                    target.push(value.to_string());
                 }
             }
         }
@@ -2709,7 +2717,7 @@ impl SubagentToolPolicySidecar {
 /// Modern tool policy object serialized to YAML.
 /// 序列化到 YAML 的新版工具策略对象。
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SubagentToolPolicyObject {
     /// Tool policy mode.
     /// 工具策略模式。
@@ -2763,7 +2771,7 @@ impl SubagentPromptSkillPolicySidecar {
 /// Modern prompt skill policy object serialized to YAML.
 /// 序列化到 YAML 的新版提示词技能策略对象。
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SubagentPromptSkillPolicyObject {
     /// Prompt skill policy mode.
     /// 提示词技能策略模式。
@@ -2963,7 +2971,7 @@ mod tests {
         .expect("markdown file");
         fs::write(
             engineering_root.join("reviewer.yaml"),
-            "schemaVersion: 1\nname: Sidecar Reviewer\nemoji: S\ncolor: blue\nsource:\n  kind: github\n  label: Example/reviewer\n  icon: github\n  url: https://example.test/reviewer\nlocales:\n  zh-CN:\n    name: 旁车审核专家\n    description: 本地化说明。\ntoolPolicy:\n  shell_command: allow\n  spawn_agent: deny\n",
+            "schemaVersion: 1\nname: Sidecar Reviewer\nemoji: S\ncolor: blue\nsource:\n  kind: github\n  label: Example/reviewer\n  icon: github\n  url: https://example.test/reviewer\nlocales:\n  zh-CN:\n    name: 旁车审核专家\n    description: 本地化说明。\ntoolPolicy:\n  shell_command: allow\n",
         )
         .expect("sidecar file");
         fs::write(
@@ -3007,7 +3015,15 @@ mod tests {
             definition.tool_exposure.allowed_tools,
             vec!["shell_command"]
         );
-        assert_eq!(definition.tool_exposure.disabled_tools, vec!["spawn_agent"]);
+        assert_eq!(
+            definition.tool_exposure.policy.mode,
+            CapabilityPolicyMode::AllowOnly
+        );
+        assert_eq!(
+            definition.tool_exposure.policy.selectors,
+            vec!["shell_command"]
+        );
+        assert!(definition.tool_exposure.disabled_tools.is_empty());
         assert!(
             catalog
                 .categories
@@ -3027,6 +3043,43 @@ mod tests {
             Some("工程")
         );
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies legacy deny-only sidecar maps are not parsed as empty modern policies.
+    /// 验证旧版仅禁用 sidecar 映射不会被解析为空的新版策略。
+    #[test]
+    fn sidecar_legacy_deny_tool_policy_maps_to_deny_only() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-sidecar-deny-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let system_root = root.join("system");
+        fs::create_dir_all(&system_root).expect("system root");
+        fs::write(system_root.join("reviewer.md"), "Review.").expect("markdown file");
+        fs::write(
+            system_root.join("reviewer.yaml"),
+            "schemaVersion: 1\ntoolPolicy:\n  spawn_agent: deny\n",
+        )
+        .expect("sidecar file");
+
+        let catalog = load_subagent_catalog_from_roots(system_root, PathBuf::new());
+        let definition = catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "reviewer")
+            .expect("definition");
+
+        assert_eq!(
+            definition.tool_exposure.policy.mode,
+            CapabilityPolicyMode::DenyOnly
+        );
+        assert_eq!(definition.tool_exposure.disabled_tools, vec!["spawn_agent"]);
+        assert!(definition.tool_exposure.allowed_tools.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 

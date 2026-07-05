@@ -163,7 +163,9 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         document.updated_at = document.task_session.updated_at;
         document.agent_kind = segmented_agent_kind(&document.task_session);
         document.agent_profile = segmented_agent_profile(&document.task_session);
-        write_json_file(&metadata_path, &document)
+        write_json_file(&metadata_path, &document)?;
+        refresh_main_session_task_mirror_from_metadata(&self.root_session_dir, &document)?;
+        Ok(())
     }
 
     /// Loads task-session metadata by identifier.
@@ -193,12 +195,9 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
             return Ok(None);
         }
         let mut matches = self
-            .load_all_task_documents()?
+            .load_task_session_metadata_for_parent(parent)?
             .into_iter()
-            .map(|(_, document)| document.task_session)
-            .filter(|metadata| {
-                metadata.parent == parent && metadata.public_task_id == normalized_public_task_id
-            })
+            .filter(|metadata| metadata.public_task_id == normalized_public_task_id)
             .collect::<Vec<_>>();
         matches.sort_by(|left, right| {
             // Prefer open replacements over closed history when a public id was reused.

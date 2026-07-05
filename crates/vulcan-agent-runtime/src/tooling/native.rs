@@ -366,34 +366,5 @@ fn build_native_tool_definition(
     })
 }
 
-/// Builds the AI-visible session todolist update tool.
-/// 构建 AI 可见的会话 todolist更新工具。
-
-/// Builds the English AI-facing description for the session-oriented shell tool.
-/// 构建面向会话 shell 工具面向 AI 的英文描述。
-#[cfg(test)]
-
-/// Parses one raw model payload into the typed shell-command argument structure.
-/// 将一份原始模型载荷解析为强类型 shell 命令参数结构。
-
-/// Parses one raw model payload into the typed prompt-skill argument structure.
-/// 将一份原始模型载荷解析为强类型提示词技能参数结构。
-
-/// Resolves the effective working directory for one shell-command invocation.
-/// 为单次 shell 命令调用解析实际工作目录。
-
-/// Builds the host-only structured payload returned for one shell-session tool action.
-/// 为单次 shell 会话工具动作构建宿主专用结构化返回载荷。
-#[cfg(test)]
-
-/// Executes the host-owned `shell_command` tool and returns a unified tool invocation result.
-/// 执行宿主自有 `shell_command` 工具并返回统一工具调用结果。
-
-/// Executes the host-owned `skill` tool and returns the full prompt-skill body.
-/// 执行宿主自有 `skill` 工具并返回完整提示词技能正文。
-
-/// Executes the host-owned `vmm_memory_search` tool.
-/// 执行宿主自有 `vmm_memory_search` 工具。
-
 #[cfg(test)]
 mod tests;

@@ -43,14 +43,13 @@ impl ExecutionStreamDeltaCoalescer {
     fn push_event(&mut self, event: ExecutionStreamEvent) -> Vec<ExecutionStreamEvent> {
         match event {
             ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
-                if self.pending_output_delta.is_none() {
-                    if let Some((pending_session_id, pending_delta)) =
+                if self.pending_output_delta.is_none()
+                    && let Some((pending_session_id, pending_delta)) =
                         self.pending_thinking_delta.as_mut()
-                        && *pending_session_id == session_id
-                    {
-                        pending_delta.push_str(&delta);
-                        return Vec::new();
-                    }
+                    && *pending_session_id == session_id
+                {
+                    pending_delta.push_str(&delta);
+                    return Vec::new();
                 }
 
                 let flushed_events = self.flush();
@@ -58,14 +57,13 @@ impl ExecutionStreamDeltaCoalescer {
                 flushed_events
             }
             ExecutionStreamEvent::OutputDelta { session_id, delta } => {
-                if self.pending_thinking_delta.is_none() {
-                    if let Some((pending_session_id, pending_delta)) =
+                if self.pending_thinking_delta.is_none()
+                    && let Some((pending_session_id, pending_delta)) =
                         self.pending_output_delta.as_mut()
-                        && *pending_session_id == session_id
-                    {
-                        pending_delta.push_str(&delta);
-                        return Vec::new();
-                    }
+                    && *pending_session_id == session_id
+                {
+                    pending_delta.push_str(&delta);
+                    return Vec::new();
                 }
 
                 let flushed_events = self.flush();
@@ -121,9 +119,28 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let request_history = launch.request_history;
         let core_snapshot = launch.core_snapshot;
         let mut stream_state = launch.stream_state;
-        let _task_execution_context_guard = task_execution_context.map(|context| {
-            task_runtime.install_execution_context(session_id, context)
-        });
+        let _task_execution_context_guard = if let Some(context) = task_execution_context {
+            match task_runtime.install_execution_context(session_id, context) {
+                Ok(guard) => Some(guard),
+                Err(error) => {
+                    for event in build_failure_terminal_events(
+                        session_id,
+                        preparation,
+                        discovery_rows,
+                        discovery_errors,
+                        warnings,
+                        &mut stream_state,
+                        token_budget_runtime.estimator(),
+                        error,
+                    ) {
+                        yield event;
+                    }
+                    return;
+                }
+            }
+        } else {
+            None
+        };
 
         let mut provider_stream = execute_provider_prompt_stream(
             &config,

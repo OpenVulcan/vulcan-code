@@ -252,6 +252,9 @@ export interface HydratedConversationWindowSummary {
   // Conversation identifier owning this retained body window.
   // 拥有该保留正文窗口的会话标识。
   sessionId: string;
+  // Whether session-scoped subagent metadata has been loaded for this retained body window.
+  // 该保留正文窗口对应会话的子智能体元数据是否已经完成加载。
+  subagentMetadataLoaded: boolean;
   // Earliest loaded transcript ordinal used to request older history.
   // 用于继续请求更早历史的已加载最早转录序号。
   earliestOrdinal?: number | null;

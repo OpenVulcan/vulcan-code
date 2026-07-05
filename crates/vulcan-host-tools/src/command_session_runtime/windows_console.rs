@@ -133,11 +133,7 @@ pub(super) fn resolve_windows_console_helper_path() -> Result<PathBuf, String> {
     }
     let current_exe = env::current_exe()
         .map_err(|error| format!("Failed to resolve the current executable path: {error}"))?;
-    let helper_name = if cfg!(debug_assertions) {
-        "vulcan-windows-console-helper.exe"
-    } else {
-        "vulcan-windows-console-helper.exe"
-    };
+    let helper_name = "vulcan-windows-console-helper.exe";
     let beside_current = current_exe.with_file_name(helper_name);
     if beside_current.is_file() {
         return Ok(beside_current);

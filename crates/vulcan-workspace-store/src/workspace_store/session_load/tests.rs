@@ -39,6 +39,19 @@ fn session_boundary_line(
     visibility: SessionEventVisibility,
     text: &str,
 ) -> super::super::segmented_session_store::SegmentedSessionEventLine {
+    session_boundary_line_for_turn(seq, thread_id, "turn-1", kind, visibility, text)
+}
+
+/// Builds one persisted session boundary line for a specific turn id.
+/// 为指定轮次标识构建一条已持久化 会话边界行。
+fn session_boundary_line_for_turn(
+    seq: u64,
+    thread_id: SessionNodeId,
+    turn_id: &str,
+    kind: SessionBoundaryEventKind,
+    visibility: SessionEventVisibility,
+    text: &str,
+) -> super::super::segmented_session_store::SegmentedSessionEventLine {
     let display_payload = if matches!(kind, SessionBoundaryEventKind::UserInput) {
         json!({ "prompt": text })
     } else {
@@ -51,7 +64,7 @@ fn session_boundary_line(
         payload: json!({
             "event_id": format!("event-{seq}"),
             "thread_id": thread_id,
-            "turn_id": "turn-1",
+            "turn_id": turn_id,
             "item_id": serde_json::Value::Null,
             "kind": kind,
             "scope": SessionEventScope::Turn,
@@ -96,13 +109,117 @@ fn session_boundary_window_projects_visible_transcript() {
     assert!(window.boundary_conversation_state.is_some());
 }
 
-/// Verifies ordinary startup hydration preserves display events instead of preferring boundary projection.
-/// 验证普通启动水合会保留展示事件，而不是优先使用边界投影。
+/// Verifies boundary-turn reads skip over large non-boundary tails without losing the latest turn.
+/// 验证边界轮次读取会跳过大量非边界尾部事件，不丢失最新轮次。
 #[test]
-fn default_session_hydration_prefers_raw_display_turns() {
+fn session_boundary_turn_window_skips_non_boundary_tail_noise() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-session-boundary-noise-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7015);
+    let thread_id = SessionNodeId::from(session_id);
+    let project_tag = "project-noise";
+    let request = super::super::segmented_session_store::SegmentedSessionCreateRequest {
+        session_id: session_id.to_string(),
+        project_tag: project_tag.to_string(),
+        created_date: String::from("2026-07-05"),
+        created_at: String::from("100"),
+        project_id: Some(project_tag.to_string()),
+        title: Some(String::from("边界噪声")),
+        title_source: Some(String::from("test")),
+        segment_policy: super::super::segmented_session_store::SegmentPolicy::default(),
+    };
+    let session_dir =
+        super::super::segmented_session_store::create_segmented_session(&root, request)
+            .expect("create segmented session");
+    let boundary_events = vec![
+        SessionBoundaryEvent::new(
+            "turn-1-user",
+            thread_id,
+            0,
+            SessionBoundaryEventKind::UserInput,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            101,
+        )
+        .with_turn_id("turn-1")
+        .with_payload(json!({ "prompt": "第一轮输入" })),
+        SessionBoundaryEvent::new(
+            "turn-1-agent",
+            thread_id,
+            1,
+            SessionBoundaryEventKind::AgentMessage,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            102,
+        )
+        .with_turn_id("turn-1")
+        .with_payload(json!({ "text": "第一轮输出" })),
+        SessionBoundaryEvent::new(
+            "turn-2-user",
+            thread_id,
+            2,
+            SessionBoundaryEventKind::UserInput,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            201,
+        )
+        .with_turn_id("turn-2")
+        .with_payload(json!({ "prompt": "第二轮输入" })),
+        SessionBoundaryEvent::new(
+            "turn-2-agent",
+            thread_id,
+            3,
+            SessionBoundaryEventKind::AgentMessage,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            202,
+        )
+        .with_turn_id("turn-2")
+        .with_payload(json!({ "text": "第二轮输出" })),
+    ];
+    super::super::segmented_session_store::append_segmented_boundary_events(
+        &session_dir,
+        &boundary_events,
+    )
+    .expect("append boundary events");
+    let noise_events = (0..120)
+        .map(|index| super::super::segmented_session_store::SegmentedSessionEventInput {
+            timestamp: (300 + index).to_string(),
+            kind: SegmentedSessionEventKind::DisplayEvent,
+            payload: json!({ "noise": index }),
+            turn_index: None,
+        })
+        .collect::<Vec<_>>();
+    super::super::segmented_session_store::append_segmented_session_events(
+        &session_dir,
+        &noise_events,
+    )
+    .expect("append non-boundary noise");
+
+    let (boundary_lines, has_more_history) =
+        read_segmented_session_boundary_turn_window(&session_dir, None, 1)
+            .expect("read boundary turn window");
+    let window = session_boundary_lines_to_window_messages(&boundary_lines, has_more_history)
+        .expect("project boundary window")
+        .expect("latest boundary turn");
+
+    assert_eq!(window.messages.len(), 2);
+    assert_eq!(window.messages[0].body, "第二轮输入");
+    assert_eq!(window.messages[1].body, "第二轮输出");
+    assert!(window.has_more_history);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies ordinary startup hydration prefers boundary projection so boundary-only follow-up turns load.
+/// 验证普通启动水合优先使用边界投影，确保只写入边界的后续轮次也能载入。
+#[test]
+fn default_session_hydration_prefers_session_boundary_turns() {
     assert_eq!(
         default_session_hydration_window_source_preference(),
-        SegmentedWindowSourcePreference::RawTurnOnly
+        SegmentedWindowSourcePreference::SessionBoundaryFirst
     );
 }
 
@@ -288,21 +405,23 @@ fn hydrate_session_runtime_state_without_segmented_inputs_returns_empty() {
 /// 验证当 turn 窗口行暂时缺失时，启动水合会从运行时上下文回建可见转录。
 #[test]
 fn restore_hydration_window_from_runtime_state_if_empty_rebuilds_visible_messages() {
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.conversation_state = conversation_state_from_session_messages(&[
-        test_message(
-            "user-1",
-            SessionMessageKind::User,
-            SessionMessageRecordKind::Transcript,
-            "启动后要能看到我",
-        ),
-        test_message(
-            "assistant-1",
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::AssistantOutput,
-            "当然可以",
-        ),
-    ]);
+    let runtime_state = SessionRuntimeStateEntry {
+        conversation_state: conversation_state_from_session_messages(&[
+            test_message(
+                "user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "启动后要能看到我",
+            ),
+            test_message(
+                "assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "当然可以",
+            ),
+        ]),
+        ..Default::default()
+    };
 
     let mut messages = Vec::new();
     let mut tool_detail_messages = Vec::new();

@@ -58,7 +58,7 @@ pub fn build_session_turn_stats_from_state_with_segments(
         .unwrap_or(0);
     let start_index = records[boundary_index..=closing_index]
         .iter()
-        .position(|record| record_starts_user_turn(record))
+        .position(record_starts_user_turn)
         .map(|offset| boundary_index + offset)
         .unwrap_or(boundary_index);
     let turn_records = &records[start_index..=closing_index];
@@ -377,7 +377,7 @@ fn canonical_user_record_text(user_record: &SessionConversationRecord) -> Option
                 .or_else(|| metadata.get("canonical_text"))
         })
         .and_then(Value::as_str)
-        .or_else(|| Some(user_record.body.as_str()))
+        .or(Some(user_record.body.as_str()))
 }
 
 /// Returns the canonical user-message indexes used to align visible transcript turns back onto the canonical conversation window.

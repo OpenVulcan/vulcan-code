@@ -136,16 +136,15 @@ pub(in crate::workspace_store) fn segmented_line_to_session_message(
     };
     let mut message =
         serde_json::from_value::<SessionMessageEntry>(message_value).map_err(to_store_error)?;
-    if message.id.trim().is_empty() {
-        if let Some(message_id) = line
+    if message.id.trim().is_empty()
+        && let Some(message_id) = line
             .payload
             .get("message_id")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
-            message.id = message_id.to_string();
-        }
+    {
+        message.id = message_id.to_string();
     }
     if message.created_at.trim().is_empty() {
         message.created_at = line.timestamp.clone();
@@ -159,11 +158,11 @@ pub(in crate::workspace_store) fn segmented_line_matches_tool_turn(
     line: &SegmentedSessionEventLine,
     turn_index: i64,
 ) -> Result<bool, String> {
-    if !line
+    if line
         .payload
         .get("turn_index")
         .and_then(Value::as_i64)
-        .is_some_and(|value| value == turn_index)
+        .is_none_or(|value| value != turn_index)
     {
         return Ok(false);
     }

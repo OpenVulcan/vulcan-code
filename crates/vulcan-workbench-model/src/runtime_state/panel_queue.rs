@@ -35,7 +35,9 @@ pub fn route_pending_prompt_panel_entry_into_internal_queue(
     if let Some(panel_entry) = ui_state.pending_prompt_panel_queue.get_mut(panel_index) {
         panel_entry.state = PendingPromptPanelEntryState::Inserted;
     }
-    Ok(PendingPromptQueueRouteOutcome::Inserted(internal_entry))
+    Ok(PendingPromptQueueRouteOutcome::Inserted(Box::new(
+        internal_entry,
+    )))
 }
 
 /// Takes the next dispatchable prompt from the internal queue or clones the first ready visible row.

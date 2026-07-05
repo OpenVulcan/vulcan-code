@@ -1,5 +1,7 @@
 use crate::config_resolver::TaskSessionResolvedConfig;
-use crate::model::{TaskSessionId, TaskSessionMetadata, TaskSessionSummary};
+use crate::model::{
+    TaskSessionId, TaskSessionMetadata, TaskSessionMetadataInit, TaskSessionSummary,
+};
 use vulcan_session_core::{
     ParentSessionRef, RootSessionId, SessionExecutionOutcome, SessionExecutionRequest,
     SessionRouteError,
@@ -42,17 +44,17 @@ impl TaskSessionCreateRequest {
     /// Builds metadata from this creation request and a generated task-session identifier.
     /// 使用该创建请求和生成的子代理会话标识符构建元数据。
     pub fn into_metadata(self, task_session_id: TaskSessionId) -> TaskSessionMetadata {
-        let mut metadata = TaskSessionMetadata::new(
-            self.root_session_id,
+        let mut metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id: self.root_session_id,
             task_session_id,
-            self.parent,
-            self.public_task_id,
-            self.display_title,
-            self.resolved_config.requested_config,
-            self.resolved_config.effective_config,
-            self.depth,
-            self.timestamp_ms,
-        );
+            parent: self.parent,
+            public_task_id: self.public_task_id,
+            display_title: self.display_title,
+            requested_config: self.resolved_config.requested_config,
+            effective_config: self.resolved_config.effective_config,
+            depth: self.depth,
+            timestamp_ms: self.timestamp_ms,
+        });
         metadata.runtime_policy = self.resolved_config.runtime_policy;
         metadata.description = self.description;
         metadata

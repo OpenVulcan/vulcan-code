@@ -254,10 +254,9 @@ fn ai_capability_update_injection_combines_state_and_default_route_changes_until
     state.apply_compaction();
 
     assert!(
-        state
+        !state
             .groups
-            .get(SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG)
-            .is_none(),
+            .contains_key(SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG),
         "context compaction should clear runtime capability update notices"
     );
 }

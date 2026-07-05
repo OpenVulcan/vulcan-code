@@ -510,11 +510,8 @@ impl CommandSessionRecord {
             .into_iter()
             .take(max_chunks)
             .collect::<Vec<_>>();
-        if track_delivery {
-            if let Some(last_returned_chunk) = returned_chunks.last() {
-                state.highest_delivered_seq =
-                    state.highest_delivered_seq.max(last_returned_chunk.seq);
-            }
+        if track_delivery && let Some(last_returned_chunk) = returned_chunks.last() {
+            state.highest_delivered_seq = state.highest_delivered_seq.max(last_returned_chunk.seq);
         }
         let snapshot = self.snapshot_from_state(&state);
         CommandSessionReadOutcome {

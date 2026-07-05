@@ -16,7 +16,7 @@ pub(crate) async fn service_session_tool_detail(
     let parsed_session_id = session_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
-    let controller_runtime = {
+    let (controller_runtime, session_location) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -36,38 +36,59 @@ pub(crate) async fn service_session_tool_detail(
         {
             return Ok(payload);
         }
-        guard.controller_runtime.clone().ok_or_else(|| {
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
-        })?
-    };
-    let transcript_page = vulcan_workspace_store::workspace_store::load_session_transcript_window(
-        controller_runtime,
-        parsed_session_id,
-        SELECTED_SESSION_TURN_LOAD_LIMIT,
-    )
-    .await?;
-    let transcript_messages = transcript_page
-        .messages
-        .iter()
-        .chain(transcript_page.tool_detail_messages.iter())
-        .collect::<Vec<_>>();
-    find_tool_detail_message(
-        transcript_messages.iter().copied(),
-        record_id.as_deref(),
-        tool_call_id.as_deref(),
-        message_index,
-    )
-    .map(|message| tool_detail_payload_from_session_message(message, seq, message_index))
-    .ok_or_else(|| {
-        record_id
-            .map(|record_id| format!("tool detail record not found: {record_id}"))
-            .unwrap_or_else(|| {
-                format!(
-                    "tool detail record not found for tool call: {}",
-                    tool_call_id.unwrap_or_else(|| String::from("<missing>"))
-                )
+        })?;
+        let session_location = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace_snapshot| {
+                workspace_session_summary_for_session(workspace_snapshot, parsed_session_id)
             })
-    })
+            .and_then(session_summary_project_and_created_at)
+            .map(|(project_id, created_at)| (project_id.to_string(), created_at.to_string()));
+        (controller_runtime, session_location)
+    };
+    let transcript_page = if let Some((project_id, created_at)) = session_location {
+        Some(
+            vulcan_workspace_store::workspace_store::load_session_transcript_window_for_project_created_at(
+                controller_runtime,
+                &project_id,
+                &created_at,
+                parsed_session_id,
+                SELECTED_SESSION_TURN_LOAD_LIMIT,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    transcript_page
+        .as_ref()
+        .and_then(|transcript_page| {
+            let transcript_messages = transcript_page
+                .messages
+                .iter()
+                .chain(transcript_page.tool_detail_messages.iter())
+                .collect::<Vec<_>>();
+            find_tool_detail_message(
+                transcript_messages.iter().copied(),
+                record_id.as_deref(),
+                tool_call_id.as_deref(),
+                message_index,
+            )
+        })
+        .map(|message| tool_detail_payload_from_session_message(message, seq, message_index))
+        .ok_or_else(|| {
+            record_id
+                .map(|record_id| format!("tool detail record not found: {record_id}"))
+                .unwrap_or_else(|| {
+                    format!(
+                        "tool detail record not found for tool call: {}",
+                        tool_call_id.unwrap_or_else(|| String::from("<missing>"))
+                    )
+                })
+        })
 }
 
 /// Finds a hidden tool-detail message by precise record id first, then by tool-call id.

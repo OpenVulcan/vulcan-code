@@ -31,15 +31,7 @@ impl SegmentedTaskSessionStore {
         &self,
         parent: ParentSessionRef,
     ) -> Result<Vec<TaskSessionMetadata>, SessionStoreError> {
-        let mut metadata = self
-            .load_all_task_documents()?
-            .into_iter()
-            .map(|(_, document)| document.task_session)
-            .filter(|metadata| metadata.parent == parent)
-            .collect::<Vec<_>>();
-        metadata.sort_by_key(|metadata| metadata.task_session_id);
-        metadata.dedup_by_key(|metadata| metadata.task_session_id);
-        Ok(metadata)
+        self.load_task_session_metadata_for_parent(parent)
     }
 
     /// Loads every task-session metadata record with one metadata-only directory scan.
@@ -51,6 +43,106 @@ impl SegmentedTaskSessionStore {
             .load_all_task_documents()?
             .into_iter()
             .map(|(_, document)| document.task_session)
+            .collect::<Vec<_>>();
+        metadata.sort_by_key(|metadata| metadata.task_session_id);
+        metadata.dedup_by_key(|metadata| metadata.task_session_id);
+        Ok(metadata)
+    }
+
+    /// Loads all task-session metadata grouped by direct parent with one metadata-only scan.
+    /// 通过一次仅元数据扫描加载按直接父级分组的全部子任务会话元数据。
+    pub fn load_task_session_metadata_by_parent(
+        &self,
+    ) -> Result<BTreeMap<ParentSessionRef, Vec<TaskSessionMetadata>>, SessionStoreError> {
+        let mut metadata_by_parent: BTreeMap<ParentSessionRef, Vec<TaskSessionMetadata>> =
+            BTreeMap::new();
+        for (_, document) in self.load_all_task_documents()? {
+            metadata_by_parent
+                .entry(document.task_session.parent.clone())
+                .or_default()
+                .push(document.task_session);
+        }
+        for metadata in metadata_by_parent.values_mut() {
+            metadata.sort_by_key(|metadata| metadata.task_session_id);
+            metadata.dedup_by_key(|metadata| metadata.task_session_id);
+        }
+        Ok(metadata_by_parent)
+    }
+
+    /// Loads root task mirror summaries without scanning child task directories.
+    /// 加载根任务镜像摘要，且不扫描子任务目录。
+    pub fn load_task_session_mirror_summaries(
+        &self,
+    ) -> Result<Vec<TaskSessionMirrorSummary>, SessionStoreError> {
+        load_main_session_task_mirror_summaries(&self.root_session_dir)
+    }
+
+    /// Returns whether the root main-session metadata document exists.
+    /// 返回根主会话元数据文档是否存在。
+    pub fn root_session_metadata_exists(&self) -> bool {
+        self.root_session_dir.join(SEGMENTED_METADATA_FILE).exists()
+    }
+
+    /// Returns whether the root metadata contains the task mirror array.
+    /// 返回根元数据是否包含子任务镜像数组。
+    pub fn root_session_task_mirror_exists(&self) -> Result<bool, SessionStoreError> {
+        let metadata_path = self.root_session_dir.join(SEGMENTED_METADATA_FILE);
+        if !metadata_path.exists() {
+            return Ok(false);
+        }
+        let metadata = read_required_json::<Value>(&metadata_path)?;
+        Ok(metadata.get("tasks").is_some_and(Value::is_array))
+    }
+
+    /// Returns whether the root session has a task-session directory.
+    /// 返回根会话是否存在子任务会话目录。
+    pub fn task_session_directory_exists(&self) -> bool {
+        self.root_session_dir.join(SEGMENTED_TASK_DIR).is_dir()
+    }
+
+    /// Loads root task mirror summaries grouped by direct parent.
+    /// 加载按直接父级分组的根任务镜像摘要。
+    pub fn load_task_session_mirror_summaries_by_parent(
+        &self,
+    ) -> Result<BTreeMap<ParentSessionRef, Vec<TaskSessionMirrorSummary>>, SessionStoreError> {
+        let mut mirrors_by_parent: BTreeMap<ParentSessionRef, Vec<TaskSessionMirrorSummary>> =
+            BTreeMap::new();
+        for mirror in self.load_task_session_mirror_summaries()? {
+            mirrors_by_parent
+                .entry(mirror.parent.clone())
+                .or_default()
+                .push(mirror);
+        }
+        for mirrors in mirrors_by_parent.values_mut() {
+            mirrors.sort_by_key(|mirror| mirror.task_session_id);
+            mirrors.dedup_by_key(|mirror| mirror.task_session_id);
+        }
+        Ok(mirrors_by_parent)
+    }
+
+    /// Loads root task mirror summaries grouped by reachable parent for one root session tree.
+    /// 按单个根会话树的可达父级分组加载根任务镜像摘要。
+    pub fn load_task_session_mirror_summaries_by_parent_for_root_tree(
+        &self,
+        root_session_id: RootSessionId,
+    ) -> Result<BTreeMap<ParentSessionRef, Vec<TaskSessionMirrorSummary>>, SessionStoreError> {
+        load_main_session_task_mirror_summaries_by_parent_for_root_tree(
+            &self.root_session_dir,
+            root_session_id,
+        )
+    }
+
+    /// Loads direct child task-session metadata for one parent with one metadata-only scan.
+    /// 通过一次仅元数据扫描加载某个父级的直属子任务会话元数据。
+    pub fn load_task_session_metadata_for_parent(
+        &self,
+        parent: ParentSessionRef,
+    ) -> Result<Vec<TaskSessionMetadata>, SessionStoreError> {
+        let mut metadata = self
+            .load_all_task_documents()?
+            .into_iter()
+            .map(|(_, document)| document.task_session)
+            .filter(|metadata| metadata.parent == parent)
             .collect::<Vec<_>>();
         metadata.sort_by_key(|metadata| metadata.task_session_id);
         metadata.dedup_by_key(|metadata| metadata.task_session_id);
@@ -202,15 +294,19 @@ impl SegmentedTaskSessionStore {
         let mut metadata = read_required_task_metadata_document(&metadata_path)?;
         let segment_policy = metadata.segment_policy.clone();
         let line = append_segment_event(
-            &task_dir,
-            &mut metadata.segments,
-            &mut metadata.active_segment,
-            &mut metadata.next_seq,
-            &segment_policy,
-            kind.into(),
-            timestamp_ms.to_string(),
-            payload,
-            None,
+            SegmentEventAppendTarget {
+                dir: &task_dir,
+                segments: &mut metadata.segments,
+                active_segment: &mut metadata.active_segment,
+                next_seq: &mut metadata.next_seq,
+                segment_policy: &segment_policy,
+            },
+            SegmentEventAppendRequest {
+                kind: kind.into(),
+                timestamp: timestamp_ms.to_string(),
+                payload,
+                turn_index: None,
+            },
         )?;
         metadata.updated_at = timestamp_ms;
         metadata.task_session.updated_at = timestamp_ms;

@@ -221,13 +221,13 @@ fn retained_submission_context_accepts_runtime_dialogue_context() {
     let session_id = SessionId::new_v4();
     // runtime_state stores the concrete dialogue context used for future API requests.
     // runtime_state 保存后续 API 请求使用的具体对话层上下文。
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.conversation_state =
-        conversation_state_from_session_messages(&[SessionMessageEntry::new(
-            SessionMessageKind::User,
-            "用户",
-            "继续之前的问题",
-        )]);
+    let runtime_state =
+        SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&[
+                SessionMessageEntry::new(SessionMessageKind::User, "用户", "继续之前的问题"),
+            ]),
+            ..SessionRuntimeStateEntry::default()
+        };
     // workspace_snapshot simulates a retained snapshot whose dialogue layer is ready.
     // workspace_snapshot 模拟对话层已就绪的保留快照。
     let workspace_snapshot = WorkspaceSnapshot {
@@ -275,13 +275,13 @@ fn display_session_messages_prefer_display_window_over_dialogue_context() {
         SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "显示层正文");
     // runtime_state represents the compact dialogue context used for API requests.
     // runtime_state 表示 API 请求使用的压缩对话层上下文。
-    let mut runtime_state = SessionRuntimeStateEntry::default();
-    runtime_state.conversation_state =
-        conversation_state_from_session_messages(&[SessionMessageEntry::new(
-            SessionMessageKind::Assistant,
-            "助手",
-            "对话层正文",
-        )]);
+    let runtime_state =
+        SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&[
+                SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "对话层正文"),
+            ]),
+            ..SessionRuntimeStateEntry::default()
+        };
     // workspace_snapshot carries both layers so the projection priority can be checked directly.
     // workspace_snapshot 同时携带两层状态，以便直接检查投影优先级。
     let workspace_snapshot = WorkspaceSnapshot {
@@ -734,4 +734,305 @@ fn webui_regular_session_detection_excludes_task_session_ids() {
         &workspace_snapshot,
         task_session_id
     ));
+}
+
+/// Verifies conversation hydration reuses retained workspace snapshots only for known sessions.
+/// 验证会话水合只会对已知会话复用保留工作区快照。
+#[test]
+fn retained_workspace_snapshot_for_hydration_requires_known_session() {
+    let known_session_id = SessionId::new_v4();
+    let missing_session_id = SessionId::new_v4();
+    let workspace_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            known_session_id,
+            Some(String::from("project-a")),
+            "已知会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: known_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    assert!(
+        retained_workspace_snapshot_for_session_hydration(
+            Some(workspace_snapshot.clone()),
+            known_session_id
+        )
+        .is_some()
+    );
+    assert!(
+        retained_workspace_snapshot_for_session_hydration(
+            Some(workspace_snapshot),
+            missing_session_id,
+        )
+        .is_none()
+    );
+}
+
+/// Verifies targeted refresh selection prefers the requested visible session over the index default.
+/// 验证带目标刷新选择会优先使用请求的可见会话，而不是索引默认会话。
+#[test]
+fn targeted_refresh_selection_prefers_visible_requested_session() {
+    let default_session_id = SessionId::new_v4();
+    let requested_session_id = SessionId::new_v4();
+    let refreshed_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![
+            SessionSummary::new(
+                default_session_id,
+                Some(String::from("project-a")),
+                "默认会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+            SessionSummary::new(
+                requested_session_id,
+                Some(String::from("project-a")),
+                "请求会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+        ],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: default_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    assert_eq!(
+        selected_session_id_after_refresh(&refreshed_snapshot, Some(requested_session_id)),
+        requested_session_id
+    );
+}
+
+/// Verifies targeted refresh selection does not select a non-visible session after the refresh.
+/// 验证带目标刷新选择不会在刷新后选中不可见会话。
+#[test]
+fn targeted_refresh_selection_keeps_default_when_requested_session_is_not_visible() {
+    let default_session_id = SessionId::new_v4();
+    let archived_session_id = SessionId::new_v4();
+    let refreshed_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            default_session_id,
+            Some(String::from("project-a")),
+            "默认会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: vec![SessionSummary::new(
+            archived_session_id,
+            Some(String::from("project-a")),
+            "归档会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: default_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    assert_eq!(
+        selected_session_id_after_refresh(&refreshed_snapshot, Some(archived_session_id)),
+        default_session_id
+    );
+}
+
+/// Verifies targeted refresh selection survives late in-memory run-state preservation.
+/// 验证带目标刷新选择能抵抗后续内存运行态保留的旧选中会话覆盖。
+#[test]
+fn targeted_refresh_selection_recovers_after_late_run_state_preservation() {
+    let old_session_id = SessionId::new_v4();
+    let requested_session_id = SessionId::new_v4();
+    let previous_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            old_session_id,
+            Some(String::from("project-a")),
+            "旧会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: old_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+    let preserved_state =
+        capture_preserved_workspace_run_state(Some(&previous_snapshot), &BTreeSet::new(), None);
+    let mut refreshed_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![
+            SessionSummary::new(
+                old_session_id,
+                Some(String::from("project-a")),
+                "旧会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+            SessionSummary::new(
+                requested_session_id,
+                Some(String::from("project-a")),
+                "请求会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+        ],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: requested_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    preserve_active_session_run_state(preserved_state.as_ref(), &mut refreshed_snapshot);
+    refreshed_snapshot.selected_session =
+        selected_session_id_after_refresh(&refreshed_snapshot, Some(requested_session_id));
+
+    assert_eq!(refreshed_snapshot.selected_session, requested_session_id);
+}
+
+/// Verifies hydrated-session selection recovers the requested session after late run-state preservation.
+/// 验证完整会话水合选择会在后续运行态保留后恢复请求会话。
+#[test]
+fn hydrated_session_selection_recovers_after_late_run_state_preservation() {
+    let previous_session_id = SessionId::new_v4();
+    let hydrated_session_id = SessionId::new_v4();
+    let previous_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            previous_session_id,
+            Some(String::from("project-a")),
+            "旧选中会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: previous_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+    let preserved_state =
+        capture_preserved_workspace_run_state(Some(&previous_snapshot), &BTreeSet::new(), None);
+    let mut hydrated_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![
+            SessionSummary::new(
+                previous_session_id,
+                Some(String::from("project-a")),
+                "旧选中会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+            SessionSummary::new(
+                hydrated_session_id,
+                Some(String::from("project-a")),
+                "正在水合的会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+        ],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: hydrated_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    preserve_active_session_run_state(preserved_state.as_ref(), &mut hydrated_snapshot);
+    hydrated_snapshot.selected_session =
+        selected_session_id_after_refresh(&hydrated_snapshot, Some(hydrated_session_id));
+
+    assert_eq!(hydrated_snapshot.selected_session, hydrated_session_id);
 }

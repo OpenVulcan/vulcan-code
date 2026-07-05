@@ -4,10 +4,81 @@
 use super::*;
 use vulcan_service_api::PendingPromptsChangedDelta;
 
+/// Input bundle for projecting runtime and workspace state into one WebUI workbench snapshot.
+/// 将运行时与工作区状态投影为 WebUI 工作台快照的输入包。
+pub(crate) struct WorkbenchRuntimeProjection<'a> {
+    /// Controller runtime used for command-session and runtime module summaries.
+    /// 用于命令会话与运行时模块摘要的控制器运行时。
+    pub(crate) controller: &'a ControllerRuntimeHandle,
+    /// Optional command session runtime for live terminal state projection.
+    /// 用于实时终端状态投影的可选命令会话运行时。
+    pub(crate) command_session_runtime: Option<&'a CommandSessionRuntime>,
+    /// LuaSkills catalog snapshot already cached by the service state.
+    /// 服务状态中已缓存的 LuaSkills 目录快照。
+    pub(crate) luaskills_catalog: &'a TauriLuaSkillsCatalog,
+    /// Token budget runtime used by module and context usage summaries.
+    /// 模块与上下文用量摘要使用的 Token 预算运行时。
+    pub(crate) token_budget_runtime: &'a TauriTokenBudgetRuntime,
+    /// MCP runtime catalog snapshot already cached by the service state.
+    /// 服务状态中已缓存的 MCP 运行时目录快照。
+    pub(crate) mcp_catalog: &'a TauriMcpRuntimeCatalog,
+    /// Provider configuration that drives model, settings, and capability projection.
+    /// 驱动模型、设置与能力投影的 Provider 配置。
+    pub(crate) provider_configuration: &'a ProviderConfigurationFile,
+    /// Default AI tool configuration used when the selected session has no override.
+    /// 当前会话没有覆盖配置时使用的默认 AI 工具配置。
+    pub(crate) ai_tool_configuration: &'a PersistedAiToolConfiguration,
+    /// Canonical workspace snapshot being projected.
+    /// 正在投影的规范工作区快照。
+    pub(crate) workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    /// Surface messages for the active visible conversation.
+    /// 当前可见会话的界面消息。
+    pub(crate) surface_messages: &'a [SessionMessageEntry],
+    /// Optional subagent navigation snapshot for the active surface.
+    /// 当前界面的可选子代理导航快照。
+    pub(crate) subagent_navigation: Option<SubagentNavigationSnapshot>,
+    /// Pending ask snapshots exposed to the WebUI.
+    /// 暴露给 WebUI 的待回答问题快照。
+    pub(crate) pending_questions: Vec<PendingQuestionSnapshot>,
+    /// Recent service startup/runtime logs to display.
+    /// 需要展示的近期服务启动与运行日志。
+    pub(crate) logs: &'a [String],
+    /// Live context budget rows keyed by session id.
+    /// 按会话标识索引的实时上下文预算行。
+    pub(crate) live_context_budgets: &'a BTreeMap<SessionId, ContextBudgetSnapshot>,
+    /// Session goal summaries keyed by session id.
+    /// 按会话标识索引的会话目标摘要。
+    pub(crate) session_goal_summaries: &'a BTreeMap<SessionId, SessionGoalSummary>,
+    /// Hydrated conversation window summaries retained by the service state.
+    /// 服务状态中保留的已水合会话窗口摘要。
+    pub(crate) hydrated_conversation_windows: &'a [HydratedConversationWindowSummary],
+    /// Native tool summaries exposed by the active agent runtime.
+    /// 当前代理运行时暴露的原生工具摘要。
+    pub(crate) native_tools: Vec<vulcan_service_api::NativeToolSummary>,
+}
+
 /// Refreshes the WebUI workbench after a focused workspace metadata update.
 /// 在一次聚焦的工作区元数据更新后刷新 WebUI 工作台。
 pub(crate) async fn refresh_workbench_snapshot(
     state: SharedServiceBridgeState,
+) -> Result<WorkbenchSnapshot, String> {
+    refresh_workbench_snapshot_with_selected_session(state, None).await
+}
+
+/// Refreshes the WebUI workbench while preserving an explicit selection target when it exists.
+/// 刷新 WebUI 工作台，并在目标会话存在时保留显式选择目标。
+pub(crate) async fn refresh_workbench_snapshot_for_selected_session(
+    state: SharedServiceBridgeState,
+    target_session_id: SessionId,
+) -> Result<WorkbenchSnapshot, String> {
+    refresh_workbench_snapshot_with_selected_session(state, Some(target_session_id)).await
+}
+
+/// Refreshes the WebUI workbench and optionally overrides the refreshed selection.
+/// 刷新 WebUI 工作台，并可选覆盖刷新后的选中会话。
+async fn refresh_workbench_snapshot_with_selected_session(
+    state: SharedServiceBridgeState,
+    target_session_id: Option<SessionId>,
 ) -> Result<WorkbenchSnapshot, String> {
     let (
         controller_runtime,
@@ -75,7 +146,9 @@ pub(crate) async fn refresh_workbench_snapshot(
         preserved_workspace_run_state.as_ref(),
         &mut refreshed_snapshot,
     );
-    let selected_session_id = refreshed_snapshot.selected_session;
+    let selected_session_id =
+        selected_session_id_after_refresh(&refreshed_snapshot, target_session_id);
+    refreshed_snapshot.selected_session = selected_session_id;
     if selected_session_id != SessionId::nil() {
         hydrate_selected_session_runtime_if_needed(
             controller_runtime.clone(),
@@ -120,6 +193,9 @@ pub(crate) async fn refresh_workbench_snapshot(
             preserved_workspace_run_state.as_ref(),
             &mut refreshed_snapshot,
         );
+        let selected_session_id =
+            selected_session_id_after_refresh(&refreshed_snapshot, target_session_id);
+        refreshed_snapshot.selected_session = selected_session_id;
         retain_hydrated_conversation_windows_for_workspace(
             &mut guard.hydrated_conversation_windows,
             &refreshed_snapshot,
@@ -128,29 +204,34 @@ pub(crate) async fn refresh_workbench_snapshot(
             active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
             subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot),
             guard.session_goal_summaries.clone(),
-            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
+            hydrated_conversation_window_summaries(
+                &guard.hydrated_conversation_windows,
+                &guard.webui_preloaded_unclosed_subagent_roots,
+            ),
         )
     };
-    let mut workbench = workbench_from_runtime(
-        &controller_runtime,
-        agent_runtime_for_status
+    let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
+        controller: &controller_runtime,
+        command_session_runtime: agent_runtime_for_status
             .as_ref()
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &provider_configuration,
-        &ai_tool_configuration,
-        &refreshed_snapshot,
-        surface_messages.as_slice(),
+        luaskills_catalog: &luaskills_catalog,
+        token_budget_runtime: &token_budget_runtime,
+        mcp_catalog: &mcp_catalog,
+        provider_configuration: &provider_configuration,
+        ai_tool_configuration: &ai_tool_configuration,
+        workspace: &refreshed_snapshot,
+        surface_messages: surface_messages.as_slice(),
         subagent_navigation,
-        pending_question_snapshots_from_agent_runtime(agent_runtime_for_status.as_ref()),
-        &logs,
-        &live_context_budgets,
-        &session_goal_summaries,
-        &hydrated_window_summaries,
-        native_tool_summaries_from_agent_runtime(agent_runtime_for_status.as_ref()),
-    );
+        pending_questions: pending_question_snapshots_from_agent_runtime(
+            agent_runtime_for_status.as_ref(),
+        ),
+        logs: &logs,
+        live_context_budgets: &live_context_budgets,
+        session_goal_summaries: &session_goal_summaries,
+        hydrated_conversation_windows: &hydrated_window_summaries,
+        native_tools: native_tool_summaries_from_agent_runtime(agent_runtime_for_status.as_ref()),
+    });
     {
         let mut guard = state
             .lock()
@@ -161,6 +242,25 @@ pub(crate) async fn refresh_workbench_snapshot(
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
     Ok(workbench)
+}
+
+/// Returns the selection after a refresh, preferring a visible requested session.
+/// 返回刷新后的选中会话，优先使用仍可见的请求会话。
+pub(crate) fn selected_session_id_after_refresh(
+    refreshed_snapshot: &WorkspaceSnapshot,
+    target_session_id: Option<SessionId>,
+) -> SessionId {
+    if let Some(target_session_id) = target_session_id {
+        let target_is_visible = target_session_id != SessionId::nil()
+            && refreshed_snapshot
+                .sessions
+                .iter()
+                .any(|session| session.id == target_session_id);
+        if target_is_visible {
+            return target_session_id;
+        }
+    }
+    refreshed_snapshot.selected_session
 }
 
 /// Returns whether one session phase still represents active work.
@@ -507,24 +607,25 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
 
 /// Converts runtime state into a WebUI workbench snapshot.
 /// 将运行时状态转换为 WebUI 工作台快照。
-pub(crate) fn workbench_from_runtime(
-    controller: &ControllerRuntimeHandle,
-    command_session_runtime: Option<&CommandSessionRuntime>,
-    luaskills_catalog: &TauriLuaSkillsCatalog,
-    token_budget_runtime: &TauriTokenBudgetRuntime,
-    mcp_catalog: &TauriMcpRuntimeCatalog,
-    provider_configuration: &ProviderConfigurationFile,
-    ai_tool_configuration: &PersistedAiToolConfiguration,
-    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
-    surface_messages: &[SessionMessageEntry],
-    subagent_navigation: Option<SubagentNavigationSnapshot>,
-    pending_questions: Vec<PendingQuestionSnapshot>,
-    logs: &[String],
-    live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
-    session_goal_summaries: &BTreeMap<SessionId, SessionGoalSummary>,
-    hydrated_conversation_windows: &[HydratedConversationWindowSummary],
-    native_tools: Vec<vulcan_service_api::NativeToolSummary>,
-) -> WorkbenchSnapshot {
+pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> WorkbenchSnapshot {
+    let WorkbenchRuntimeProjection {
+        controller,
+        command_session_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        provider_configuration,
+        ai_tool_configuration,
+        workspace,
+        surface_messages,
+        subagent_navigation,
+        pending_questions,
+        logs,
+        live_context_budgets,
+        session_goal_summaries,
+        hydrated_conversation_windows,
+        native_tools,
+    } = input;
     let selected_conversation_id = if workspace.selected_session == SessionId::nil() {
         None
     } else {
@@ -542,7 +643,7 @@ pub(crate) fn workbench_from_runtime(
         .as_ref()
         .map(|navigation| navigation.active_conversation_id.as_str())
         .or(selected_conversation_id.as_deref());
-    let mut messages = active_conversation_id
+    let messages = active_conversation_id
         .map(|conversation_id| {
             let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
                 workspace,
@@ -556,7 +657,6 @@ pub(crate) fn workbench_from_runtime(
             )
         })
         .unwrap_or_default();
-    append_hydrated_workspace_messages(&mut messages, workspace);
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);

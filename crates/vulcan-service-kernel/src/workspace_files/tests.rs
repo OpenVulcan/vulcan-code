@@ -30,8 +30,10 @@ fn workspace_file_entry_summary_filters_dot_names() {
         workspace_file_entry_summary(&root, &hidden_file, &WorkspaceFileFilterOptions::default())
             .is_none()
     );
-    let mut filters = WorkspaceFileFilterOptions::default();
-    filters.ignore_dot_names = false;
+    let filters = WorkspaceFileFilterOptions {
+        ignore_dot_names: false,
+        ..WorkspaceFileFilterOptions::default()
+    };
     let summary = workspace_file_entry_summary(&root, &hidden_file, &filters)
         .expect("dot file should be visible after disabling dot filter");
 
@@ -81,8 +83,10 @@ fn workspace_file_entry_summary_filters_non_preview_files_only_when_requested() 
         &WorkspaceFileFilterOptions::default(),
     )
     .expect("directory containing non-preview files should be visible by default");
-    let mut filters = WorkspaceFileFilterOptions::default();
-    filters.filter_non_preview_files = true;
+    let filters = WorkspaceFileFilterOptions {
+        filter_non_preview_files: true,
+        ..WorkspaceFileFilterOptions::default()
+    };
 
     assert_eq!(default_file_summary.kind, WorkspaceFileEntryKind::Other);
     assert_eq!(

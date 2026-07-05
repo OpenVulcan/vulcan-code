@@ -28,7 +28,8 @@ pub fn latest_provider_usage_from_conversation_state(
 pub(crate) fn serialize_provider_usage_to_json(
     usage: Option<&ProviderUsageSnapshot>,
 ) -> Option<String> {
-    let usage = usage?.has_any_tokens().then(|| usage.clone())?;
+    let snapshot = usage?;
+    let usage = snapshot.has_any_tokens().then_some(snapshot)?;
     serde_json::to_string(&usage).ok()
 }
 

@@ -67,6 +67,7 @@ import {
   openWorkspaceSubagentContextTab,
   renameWorkspaceFileContextTab,
   trimWorkspaceContextTabStateCache,
+  workspaceSubagentTabId,
   workspaceContextTabStateCache,
   workspaceContextTabCacheKey,
   type WorkspaceContextTabStateEntry,
@@ -370,10 +371,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     // task 保存可用时用于页签标题的可见任务行。
     const task = resolveWorkspaceSubagentTask(navigation, taskId);
     const resolvedTaskId = task?.taskId ?? taskId;
-    const opened = await props.onOpenSubagentPanel(parentConversationId, resolvedTaskId);
-    if (!opened) {
-      return false;
-    }
+    const subagentTabId = workspaceSubagentTabId(parentConversationId, resolvedTaskId);
+    // Open the side tab optimistically so panel routing feedback is immediate.
+    // 乐观打开侧栏页签，让面板路由反馈立即可见。
     setContextTabStateEntry((current) => ({
       ...current,
       state: openWorkspaceSubagentContextTab(
@@ -385,6 +385,16 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       ),
     }));
     openRightContextPanel();
+    const opened = await props.onOpenSubagentPanel(parentConversationId, resolvedTaskId);
+    if (!opened) {
+      // Roll back only the optimistic subagent tab when the backend cannot recover that child transcript.
+      // 后端无法恢复该子会话转录时，只回滚本次乐观打开的子智能体页签。
+      setContextTabStateEntry((current) => ({
+        ...current,
+        state: closeWorkspaceContextTab(current.state, subagentTabId),
+      }));
+      return false;
+    }
     return true;
   }, [openRightContextPanel, props.onOpenSubagentPanel, props.workbench.subagentNavigation, t]);
 

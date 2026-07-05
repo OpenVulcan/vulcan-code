@@ -206,18 +206,51 @@ fn persisted_session_kernel_restores_unconsumed_mailbox_input() {
     let task_session_id = SessionId::new_v4();
     let mut state = test_service_state_with_parent_session(parent_session_id);
 
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut state,
-        parent_session_id,
-        task_session_id,
-        &restored_kernel_subagent_metadata("done"),
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut state,
+            parent_session_id,
+            task_session_id,
+            &restored_kernel_subagent_metadata("done"),
+        )
+        .is_queued()
+    );
     let mut restored = service_state_restored_from_workspace_snapshot(&state, parent_session_id);
     let kernel = session_runtime_kernel_mut(&mut restored, parent_session_id);
 
     assert_eq!(kernel.input_queue().mailbox_len(), 1);
     assert_eq!(kernel.input_queue().unconsumed_mailbox_len(), 1);
     assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+}
+
+/// Verifies an existing live kernel is not replaced by a persisted workspace kernel.
+/// 验证已有实时内核不会被工作区中的持久化内核替换。
+#[test]
+fn session_runtime_kernel_mut_preserves_existing_live_kernel() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut persisted_source = test_service_state_with_parent_session(parent_session_id);
+
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut persisted_source,
+            parent_session_id,
+            task_session_id,
+            &restored_kernel_subagent_metadata("stale"),
+        )
+        .is_queued()
+    );
+
+    let mut state =
+        service_state_restored_from_workspace_snapshot(&persisted_source, parent_session_id);
+    state.session_runtime_kernels.insert(
+        parent_session_id,
+        SessionRuntimeKernel::new(SessionNodeId::from(parent_session_id)),
+    );
+
+    let kernel = session_runtime_kernel_mut(&mut state, parent_session_id);
+
+    assert_eq!(kernel.input_queue().mailbox_len(), 0);
 }
 
 /// Verifies consumed persisted mailbox input does not trigger another restored parent turn.
@@ -229,12 +262,15 @@ fn persisted_session_kernel_restores_consumed_mailbox_cursor() {
     let mut state = test_service_state_with_parent_session(parent_session_id);
     let input_id = format!("subagent-mailbox-{parent_session_id}-{task_session_id}");
 
-    assert!(enqueue_webui_subagent_mailbox_input(
-        &mut state,
-        parent_session_id,
-        task_session_id,
-        &restored_kernel_subagent_metadata("waited"),
-    ));
+    assert!(
+        enqueue_webui_subagent_mailbox_input(
+            &mut state,
+            parent_session_id,
+            task_session_id,
+            &restored_kernel_subagent_metadata("waited"),
+        )
+        .is_queued()
+    );
     {
         let kernel = session_runtime_kernel_mut(&mut state, parent_session_id);
         kernel

@@ -55,5 +55,5 @@ pub(super) enum SegmentedWindowSourcePreference {
 /// 返回普通会话水合使用的保留展示行来源策略。
 pub(super) fn default_session_hydration_window_source_preference() -> SegmentedWindowSourcePreference
 {
-    SegmentedWindowSourcePreference::RawTurnOnly
+    SegmentedWindowSourcePreference::SessionBoundaryFirst
 }

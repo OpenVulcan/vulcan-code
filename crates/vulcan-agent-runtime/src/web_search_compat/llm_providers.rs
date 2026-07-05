@@ -293,14 +293,13 @@ pub(super) async fn execute_minimax_search(
     if let Some(status_code) = payload
         .pointer("/base_resp/status_code")
         .and_then(Value::as_i64)
+        && status_code != 0
     {
-        if status_code != 0 {
-            let message = payload
-                .pointer("/base_resp/status_msg")
-                .and_then(Value::as_str)
-                .unwrap_or("MiniMax Search 返回错误");
-            return Err(message.to_string());
-        }
+        let message = payload
+            .pointer("/base_resp/status_msg")
+            .and_then(Value::as_str)
+            .unwrap_or("MiniMax Search 返回错误");
+        return Err(message.to_string());
     }
 
     let results = payload

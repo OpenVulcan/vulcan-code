@@ -34,6 +34,9 @@ export interface InflightSubagentOpenRequest {
   // Stable parent/task route key for request coalescing.
   // 用于请求合并的稳定父级/任务键。
   key: string;
+  // Monotonic route request sequence owned by the original backend call.
+  // 原始后端调用持有的单调路由请求序号。
+  requestSeq: number;
   // Backend command promise for the transcript load.
   // 转录加载对应的后端命令 Promise。
   promise: Promise<SubagentPanelRouteResponse | null>;
@@ -49,12 +52,41 @@ export interface WorkbenchMergeOptions {
   // Whether local project expansion should win over incoming snapshots.
   // 本地项目展开状态是否优先于传入快照。
   preserveExpandedProjectIds?: boolean;
+  // Controls whether selectedConversationId comes from local UI state or the incoming service snapshot.
+  // 控制 selectedConversationId 来自本地界面状态还是传入的服务端快照。
+  selectedConversationSource?: "local" | "incoming";
+  // Focused conversation id for session-scoped hydration responses.
+  // 会话范围水合响应对应的明确目标会话标识。
+  focusedConversationId?: string | null;
 }
 
 // shouldAcceptWorkbenchRevision returns whether one incoming service revision can mutate UI state.
 // shouldAcceptWorkbenchRevision 判断传入服务版本是否允许修改界面状态。
 export function shouldAcceptWorkbenchRevision(currentRevision: number, incomingRevision: number): boolean {
   return currentRevision <= 0 || incomingRevision > currentRevision;
+}
+
+// visibleConversationId returns a candidate only when it still exists in the provided sidebar list.
+// visibleConversationId 仅在候选会话仍存在于给定侧栏列表时返回该候选。
+//
+// Parameters:
+// 参数：
+// conversations is the authoritative conversation list for this projection.
+// conversations 是本次投影使用的权威会话列表。
+// candidate is the selected conversation candidate to validate.
+// candidate 是需要验证的选中会话候选值。
+//
+// Returns:
+// 返回值：
+// The candidate id when it is visible in conversations; otherwise null.
+// 当候选标识存在于会话列表中时返回该标识，否则返回 null。
+function visibleConversationId(
+  conversations: ConversationSummary[],
+  candidate: string | null | undefined,
+): string | null {
+  return candidate && conversations.some((conversation) => conversation.id === candidate)
+    ? candidate
+    : null;
 }
 
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
@@ -93,20 +125,34 @@ export function mergeWorkbenchSnapshot(
   const retainedMessages = current.messages.filter((message) => (
     !incomingConversationIds.has(message.conversationId) && !incomingMessageIds.has(message.id)
   ));
-  const selectedConversationId = current.selectedConversationId
-    && incoming.conversations.some((conversation) => conversation.id === current.selectedConversationId)
-    ? current.selectedConversationId
-    : incoming.selectedConversationId ?? incoming.conversations[0]?.id ?? null;
+  const incomingSelectedConversationId = visibleConversationId(
+    incoming.conversations,
+    incoming.selectedConversationId,
+  );
+  const localSelectedConversationId = visibleConversationId(
+    incoming.conversations,
+    current.selectedConversationId,
+  );
+  const selectedConversationId = options.selectedConversationSource === "incoming"
+    ? incomingSelectedConversationId ?? localSelectedConversationId ?? incoming.conversations[0]?.id ?? null
+    : localSelectedConversationId ?? incomingSelectedConversationId ?? incoming.conversations[0]?.id ?? null;
   const conversationHydration = selectMergedConversationHydration(
     current.conversationHydration ?? null,
     incoming.conversationHydration ?? null,
     selectedConversationId,
   );
+  const visibleConversationIds = new Set(incoming.conversations.map((conversation) => conversation.id));
+  const incomingSubagentNavigations = deriveIncomingSubagentNavigations(incoming);
   const mergedWorkbench = {
     ...incoming,
     selectedConversationId,
     expandedProjectIds,
     conversationHydration,
+    hydratedConversationWindows: mergeHydratedConversationWindows(
+      current.hydratedConversationWindows ?? [],
+      incoming.hydratedConversationWindows ?? [],
+      visibleConversationIds,
+    ),
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     messages: [...retainedMessages, ...mergedIncomingMessages],
     pendingPromptsByConversation: incoming.pendingPromptsByConversation ?? current.pendingPromptsByConversation ?? [],
@@ -119,13 +165,157 @@ export function mergeWorkbenchSnapshot(
     ),
     subagentNavigationByConversation: mergeSubagentNavigationsByConversation(
       current.subagentNavigationByConversation ?? [],
-      deriveIncomingSubagentNavigations(incoming),
+      incomingSubagentNavigations,
+      focusedSubagentNavigationClearIds(incomingSubagentNavigations, options.focusedConversationId ?? null),
     ),
   };
   return deriveSelectedConversationFields({
     ...mergedWorkbench,
     conversations: applyNormalizedConversationAttention(mergedWorkbench.conversations, mergedWorkbench),
   });
+}
+
+// mergeConversationHydrationSnapshot merges a focused conversation hydration response.
+// mergeConversationHydrationSnapshot 合并一次聚焦会话正文水合响应。
+//
+// Parameters:
+// 参数：
+// current is the UI snapshot currently rendered by the workbench.
+// current 是工作台当前正在渲染的界面快照。
+// incoming is the service snapshot returned by a conversation hydration RPC.
+// incoming 是会话正文水合 RPC 返回的服务快照。
+// options carries the same local-state preferences used by full snapshot merging.
+// options 携带与完整快照合并相同的本地状态偏好。
+//
+// Returns:
+// 返回值：
+// A full merge when the service revision is fresh; otherwise a session-scoped merge.
+// 当服务版本较新时返回完整合并结果，否则返回会话范围内的合并结果。
+export function mergeConversationHydrationSnapshot(
+  current: WorkbenchSnapshot,
+  incoming: WorkbenchSnapshot,
+  options: WorkbenchMergeOptions = {},
+): WorkbenchSnapshot {
+  const currentRevision = current.revision ?? 0;
+  const incomingRevision = incoming.revision ?? 0;
+  if (shouldAcceptWorkbenchRevision(currentRevision, incomingRevision)) {
+    return mergeWorkbenchSnapshot(current, incoming, options);
+  }
+  return mergeStaleConversationHydrationSnapshot(current, incoming, options.focusedConversationId ?? null);
+}
+
+// mergeStaleConversationHydrationSnapshot merges only conversation-local payload from an older hydration response.
+// mergeStaleConversationHydrationSnapshot 只合并旧水合响应中的会话局部载荷。
+//
+// Parameters:
+// 参数：
+// current is the authoritative UI snapshot whose global fields must be preserved.
+// current 是必须保留全局字段的权威界面快照。
+// incoming is the older hydration snapshot carrying focused conversation data.
+// incoming 是携带聚焦会话数据的较旧水合快照。
+// focusedConversationId is the explicit session id from the RPC response.
+// focusedConversationId 是 RPC 响应携带的明确会话标识。
+//
+// Returns:
+// 返回值：
+// A snapshot with focused messages, hydration windows, progress, and subagent navigation merged in.
+// 返回已合入聚焦消息、水合窗口、进度与子代理导航的快照。
+function mergeStaleConversationHydrationSnapshot(
+  current: WorkbenchSnapshot,
+  incoming: WorkbenchSnapshot,
+  focusedConversationId: string | null,
+): WorkbenchSnapshot {
+  const hydratedConversationIds = conversationHydrationPayloadIds(incoming, focusedConversationId);
+  if (hydratedConversationIds.size === 0) {
+    return current;
+  }
+
+  const currentMessagesByConversation = groupMessagesByConversation(current.messages);
+  const incomingMessagesByConversation = groupMessagesByConversation(incoming.messages);
+  const incomingMessageConversationIds = new Set(
+    [...incomingMessagesByConversation.keys()].filter((conversationId) => hydratedConversationIds.has(conversationId)),
+  );
+  const currentConversationsById = new Map(current.conversations.map((conversation) => [conversation.id, conversation]));
+  const incomingConversationsById = new Map(incoming.conversations.map((conversation) => [conversation.id, conversation]));
+  const mergedIncomingMessages = [...incomingMessagesByConversation.entries()]
+    .filter(([conversationId]) => incomingMessageConversationIds.has(conversationId))
+    .flatMap(([conversationId, messages]) => mergeIncomingConversationMessages(
+      currentMessagesByConversation.get(conversationId) ?? [],
+      messages,
+      currentConversationsById.get(conversationId),
+      incomingConversationsById.get(conversationId),
+  ));
+  const incomingMessageIds = new Set(mergedIncomingMessages.map((message) => message.id));
+  const retainedMessages = current.messages.filter((message) => (
+    !incomingMessageConversationIds.has(message.conversationId) && !incomingMessageIds.has(message.id)
+  ));
+  const visibleConversationIds = new Set(current.conversations.map((conversation) => conversation.id));
+  const incomingWindows = (incoming.hydratedConversationWindows ?? [])
+    .filter((window) => hydratedConversationIds.has(window.sessionId));
+  const incomingNavigations = deriveIncomingSubagentNavigations(incoming)
+    .filter((navigation) => hydratedConversationIds.has(navigation.parentConversationId));
+  const incomingHydration = incoming.conversationHydration
+    && hydratedConversationIds.has(incoming.conversationHydration.sessionId)
+    ? incoming.conversationHydration
+    : null;
+  const mergedWorkbench = {
+    ...current,
+    conversationHydration: selectMergedConversationHydration(
+      current.conversationHydration ?? null,
+      incomingHydration,
+      current.selectedConversationId ?? null,
+    ),
+    hydratedConversationWindows: mergeHydratedConversationWindows(
+      current.hydratedConversationWindows ?? [],
+      incomingWindows,
+      visibleConversationIds,
+    ),
+    subagentNavigationByConversation: mergeSubagentNavigationsByConversation(
+      current.subagentNavigationByConversation ?? [],
+      incomingNavigations,
+      focusedSubagentNavigationClearIds(incomingNavigations, focusedConversationId),
+    ),
+    messages: [...retainedMessages, ...mergedIncomingMessages],
+  };
+  return deriveSelectedConversationFields({
+    ...mergedWorkbench,
+    conversations: applyNormalizedConversationAttention(mergedWorkbench.conversations, mergedWorkbench),
+  });
+}
+
+// conversationHydrationPayloadIds finds the conversation ids that a hydration response may safely update.
+// conversationHydrationPayloadIds 找出一次水合响应允许安全更新的会话标识。
+//
+// Parameters:
+// 参数：
+// incoming is the hydration snapshot to inspect.
+// incoming 是需要检查的水合快照。
+// focusedConversationId is the explicit target id supplied by the caller.
+// focusedConversationId 是调用方提供的明确目标标识。
+//
+// Returns:
+// 返回值：
+// A set containing message, progress, and selected conversation ids from the payload.
+// 返回包含消息、进度与选中会话标识的集合。
+function conversationHydrationPayloadIds(
+  incoming: WorkbenchSnapshot,
+  focusedConversationId: string | null,
+): Set<string> {
+  const ids = new Set<string>();
+  if (focusedConversationId) {
+    ids.add(focusedConversationId);
+    return ids;
+  }
+  for (const message of incoming.messages) {
+    ids.add(message.conversationId);
+  }
+  if (incoming.selectedConversationId) {
+    ids.add(incoming.selectedConversationId);
+  }
+  if (incoming.conversationHydration?.sessionId) {
+    ids.add(incoming.conversationHydration.sessionId);
+  }
+  return ids;
 }
 
 // selectMergedConversationHydration keeps background conversation loads from overwriting the selected load progress.
@@ -136,7 +326,7 @@ function selectMergedConversationHydration(
   selectedConversationId: string | null,
 ): ConversationHydrationProgress | null {
   if (!incoming) {
-    return current;
+    return current?.sessionId === selectedConversationId ? current : null;
   }
   if (!selectedConversationId || incoming.sessionId === selectedConversationId) {
     return incoming;
@@ -145,6 +335,34 @@ function selectMergedConversationHydration(
     return current;
   }
   return incoming;
+}
+
+// mergeHydratedConversationWindows preserves retained conversation body windows across partial snapshots.
+// mergeHydratedConversationWindows 在局部快照之间保留已保留的会话正文窗口。
+//
+// Parameters:
+// 参数：
+// currentWindows are the UI-known retained conversation windows before the backend update.
+// currentWindows 是后端更新前 UI 已知的保留会话窗口。
+// incomingWindows are retained conversation windows carried by the incoming backend snapshot.
+// incomingWindows 是当前后端快照携带的保留会话窗口。
+// visibleConversationIds are conversation ids still present in the incoming sidebar summary.
+// visibleConversationIds 是当前侧栏摘要中仍然存在的会话标识。
+//
+// Returns:
+// 返回值：
+// A per-session merged window list that keeps known hydrated state for still-visible conversations.
+// 返回按会话合并后的窗口列表，为仍可见会话保留已知水合状态。
+function mergeHydratedConversationWindows(
+  currentWindows: NonNullable<WorkbenchSnapshot["hydratedConversationWindows"]>,
+  incomingWindows: NonNullable<WorkbenchSnapshot["hydratedConversationWindows"]>,
+  visibleConversationIds: Set<string>,
+): NonNullable<WorkbenchSnapshot["hydratedConversationWindows"]> {
+  const merged = new Map(currentWindows.map((window) => [window.sessionId, window]));
+  for (const window of incomingWindows) {
+    merged.set(window.sessionId, window);
+  }
+  return [...merged.values()].filter((window) => visibleConversationIds.has(window.sessionId));
 }
 
 // deriveSelectedConversationFields projects top-level selected-session fields from normalized per-session caches.
@@ -178,8 +396,36 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
     sessionPlanMode: sessionAddons?.sessionPlanMode ?? null,
     sessionVmmPolicy: sessionVmmPolicyEntry?.sessionVmmPolicy ?? null,
     subagentNavigation,
-    contextInjection: contextInjectionEntry?.contextInjection ?? workbench.contextInjection ?? null,
+    contextInjection: contextInjectionEntry?.contextInjection ?? null,
   };
+}
+
+// workbenchWithSelectedConversationProjection reprojects selected-session fields for a UI-local conversation choice.
+// workbenchWithSelectedConversationProjection 根据 UI 本地会话选择重新投影当前会话字段。
+//
+// Parameters:
+// 参数：
+// workbench is the normalized snapshot to project.
+// workbench 是需要投影的规范化快照。
+// selectedConversationId is the UI-local selected conversation id.
+// selectedConversationId 是 UI 本地选中的会话标识。
+//
+// Returns:
+// 返回值：
+// A workbench whose top-level selected-session fields match the visible selected conversation, or are cleared.
+// 返回顶层当前会话字段匹配可见选中会话或已清空的工作台快照。
+export function workbenchWithSelectedConversationProjection(
+  workbench: WorkbenchSnapshot,
+  selectedConversationId: string | null | undefined,
+): WorkbenchSnapshot {
+  const visibleSelectedConversationId = visibleConversationId(
+    workbench.conversations,
+    selectedConversationId,
+  );
+  return deriveSelectedConversationFields({
+    ...workbench,
+    selectedConversationId: visibleSelectedConversationId,
+  });
 }
 
 // upsertPendingPromptsForConversation upserts or removes one conversation prompt queue.
@@ -242,17 +488,6 @@ function upsertContextInjectionForConversation(
   return entry.contextInjection ? [...next, entry] : next;
 }
 
-// contextInjectionForConversation returns the cached memory-panel projection for one conversation.
-// contextInjectionForConversation 返回单个会话缓存的记忆面板投影。
-function contextInjectionForConversation(
-  workbench: WorkbenchSnapshot,
-  conversationId: string,
-): WorkbenchSnapshot["contextInjection"] {
-  return workbench.contextInjectionByConversation
-    ?.find((entry) => entry.conversationId === conversationId)
-    ?.contextInjection ?? null;
-}
-
 // deriveIncomingSubagentNavigations extracts full-snapshot subagent navigation cache entries.
 // deriveIncomingSubagentNavigations 提取全量快照中的子代理导航缓存条目。
 function deriveIncomingSubagentNavigations(workbench: WorkbenchSnapshot): SubagentNavigationSnapshot[] {
@@ -260,17 +495,35 @@ function deriveIncomingSubagentNavigations(workbench: WorkbenchSnapshot): Subage
   return workbench.subagentNavigation ? [...entries, workbench.subagentNavigation] : entries;
 }
 
-// mergeSubagentNavigationsByConversation merges subagent navigation snapshots by parent conversation id.
-// mergeSubagentNavigationsByConversation 按父会话标识合并子代理导航快照。
+// mergeSubagentNavigationsByConversation merges subagent navigation snapshots by parent conversation id and applies explicit clears first.
+// mergeSubagentNavigationsByConversation 按父会话标识合并子代理导航快照，并先应用显式清理。
 function mergeSubagentNavigationsByConversation(
   current: SubagentNavigationSnapshot[],
   incoming: SubagentNavigationSnapshot[],
+  clearParentConversationIds: Set<string> = new Set(),
 ): SubagentNavigationSnapshot[] {
   const merged = new Map(current.map((navigation) => [navigation.parentConversationId, navigation]));
+  for (const parentConversationId of clearParentConversationIds) {
+    merged.delete(parentConversationId);
+  }
   for (const navigation of incoming) {
     merged.set(navigation.parentConversationId, navigation);
   }
   return [...merged.values()];
+}
+
+// focusedSubagentNavigationClearIds returns the focused parent ids whose missing navigation is authoritative.
+// focusedSubagentNavigationClearIds 返回缺失导航具有权威删除语义的聚焦父会话标识。
+function focusedSubagentNavigationClearIds(
+  incoming: SubagentNavigationSnapshot[],
+  focusedConversationId: string | null,
+): Set<string> {
+  if (!focusedConversationId) {
+    return new Set();
+  }
+  return incoming.some((navigation) => navigation.parentConversationId === focusedConversationId)
+    ? new Set()
+    : new Set([focusedConversationId]);
 }
 
 // upsertSubagentNavigationForConversation upserts or removes one parent conversation navigation snapshot.
@@ -608,6 +861,38 @@ export function mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
   return injectCachedSubagentSurfaceMessages(mergedWorkbench, cache);
 }
 
+// mergeConversationHydrationSnapshotWithSubagentSurfaceMessageCache preserves child surfaces during focused hydration merges.
+// mergeConversationHydrationSnapshotWithSubagentSurfaceMessageCache 在聚焦水合合并期间保留子代理界面。
+//
+// Parameters:
+// 参数：
+// current is the current workbench snapshot.
+// current 是当前工作台快照。
+// incoming is the conversation hydration snapshot returned by the service.
+// incoming 是服务返回的会话水合快照。
+// cache stores loaded subagent panel message windows.
+// cache 保存已载入的子代理面板消息窗口。
+// options controls local state preservation for fresh full-snapshot merges.
+// options 控制较新完整快照合并时的本地状态保留策略。
+//
+// Returns:
+// 返回值：
+// A workbench snapshot with focused hydration data and cached subagent panels preserved.
+// 返回保留聚焦水合数据与子代理面板缓存的工作台快照。
+export function mergeConversationHydrationSnapshotWithSubagentSurfaceMessageCache(
+  current: WorkbenchSnapshot,
+  incoming: WorkbenchSnapshot,
+  cache: SubagentSurfaceMessageCache,
+  options?: WorkbenchMergeOptions,
+): WorkbenchSnapshot {
+  const mergedWorkbench = mergeConversationHydrationSnapshot(current, incoming, options);
+  if (mergedWorkbench === current) {
+    return injectCachedSubagentSurfaceMessages(current, cache);
+  }
+  rememberSubagentSurfaceMessages(cache, mergedWorkbench);
+  return injectCachedSubagentSurfaceMessages(mergedWorkbench, cache);
+}
+
 // mergeConversationMessagesWithSubagentSurfaceMessageCache replaces one message window and updates child-surface cache when applicable.
 // mergeConversationMessagesWithSubagentSurfaceMessageCache 替换单个消息窗口，并在适用时更新子代理界面缓存。
 export function mergeConversationMessagesWithSubagentSurfaceMessageCache(
@@ -799,7 +1084,6 @@ export function markConversationLocallyRead(workbench: WorkbenchSnapshot, conver
   return deriveSelectedConversationFields({
     ...workbench,
     selectedConversationId: conversationId,
-    contextInjection: contextInjectionForConversation(workbench, conversationId),
     conversations: workbench.conversations.map((conversation) => (
       conversation.id === conversationId
         ? {

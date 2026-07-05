@@ -116,9 +116,7 @@ fn agent_runtime_module_level_dead_code_suppressions_stay_narrow() {
             }
 
             let relative_path = path.strip_prefix(&runtime_root).ok()?;
-            let approved = approved_suffixes
-                .iter()
-                .any(|approved_suffix| relative_path == *approved_suffix);
+            let approved = approved_suffixes.contains(&relative_path);
 
             (!approved).then_some(path)
         })

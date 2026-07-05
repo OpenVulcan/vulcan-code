@@ -172,6 +172,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 append_runtime_event_projection(app, state, parent_session_id, &event)?;
             }
             acknowledge_runtime_event_projection_barrier(&event);
+            let mut mailbox_delivery_error: Option<String> = None;
             if is_finished {
                 {
                     let mut guard = state
@@ -187,18 +188,31 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     parent_is_stopped,
                 ) {
                     eprintln!("[webui-service] enqueue session mailbox input failed: {error}");
+                    webui_trace(
+                        "detached_parent_event_mailbox_delivery_rejected",
+                        format!("parent={parent_session_id} task={task_id} error={error}"),
+                    );
+                    mailbox_delivery_error = Some(error);
                 }
                 {
                     let mut guard = state
                         .lock()
                         .map_err(|error| format!("failed to lock service state: {error}"))?;
                     clear_webui_subagent_completion_gate_ignored(&mut guard, task_id);
-                    clear_webui_subagent_parent_turn_binding(&mut guard, task_id);
+                    if mailbox_delivery_error.is_none() {
+                        clear_webui_subagent_parent_turn_binding(&mut guard, task_id);
+                    } else {
+                        webui_trace(
+                            "subagent_parent_turn_binding_preserved_after_mailbox_error",
+                            format!("parent={parent_session_id} task={task_id}"),
+                        );
+                    }
                 }
                 refresh_webui_subagent_navigation_round_visibility(state, parent_session_id)?;
                 emit_webui_subagent_navigation_changed_delta(app, state)?;
                 if parent_is_regular_session
                     && !parent_is_stopped
+                    && mailbox_delivery_error.is_none()
                     && let Some(completion_request) =
                         maybe_prepare_webui_parent_completion_after_subagent_finished(
                             state,
@@ -219,33 +233,40 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 parent_is_regular_session,
                 parent_is_stopped,
             ) {
-                let started_mailbox_turn = maybe_start_webui_mailbox_turn_if_ready(
-                    app,
-                    state,
-                    controller_runtime,
-                    agent_runtime,
-                    parent_session_id,
-                )
-                .await?;
-                let started = if started_mailbox_turn {
-                    true
+                if let Some(error) = mailbox_delivery_error.as_ref() {
+                    webui_trace(
+                        "detached_parent_event_pending_skip_mailbox_error",
+                        format!("parent={parent_session_id} task={task_id} error={error}"),
+                    );
                 } else {
-                    maybe_prepare_next_webui_pending_prompt(
+                    let started_mailbox_turn = maybe_start_webui_mailbox_turn_if_ready(
                         app,
                         state,
                         controller_runtime,
                         agent_runtime,
                         parent_session_id,
-                        false,
                     )
-                    .await?
-                };
-                webui_trace(
-                    "detached_parent_event_pending_result",
-                    format!(
-                        "parent={parent_session_id} task={task_id} started_next_prompt={started}"
-                    ),
-                );
+                    .await?;
+                    let started = if started_mailbox_turn {
+                        true
+                    } else {
+                        maybe_prepare_next_webui_pending_prompt(
+                            app,
+                            state,
+                            controller_runtime,
+                            agent_runtime,
+                            parent_session_id,
+                            false,
+                        )
+                        .await?
+                    };
+                    webui_trace(
+                        "detached_parent_event_pending_result",
+                        format!(
+                            "parent={parent_session_id} task={task_id} started_next_prompt={started}"
+                        ),
+                    );
+                }
             } else if parent_is_regular_session && parent_is_stopped {
                 webui_trace(
                     "detached_parent_event_pending_skip_stopped",
@@ -284,6 +305,9 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                         Some(String::from("detached_subagent_parent_event")),
                     );
                 });
+            }
+            if let Some(error) = mailbox_delivery_error {
+                return Err(error);
             }
             Ok(())
         }
@@ -411,14 +435,31 @@ pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let mailbox_accepted = enqueue_webui_subagent_mailbox_input(
+    let mailbox_outcome = enqueue_webui_subagent_mailbox_input(
         &mut guard,
         parent_session_id,
         panel_state.task_id,
         metadata,
     );
-    if !mailbox_accepted {
-        return Ok(false);
+    match mailbox_outcome {
+        SubagentMailboxEnqueueOutcome::Queued => {}
+        SubagentMailboxEnqueueOutcome::AlreadyPresentOrConsumed { input_id } => {
+            webui_trace(
+                "session_mailbox_input_idempotent_skip",
+                format!(
+                    "parent={parent_session_id} task={} input_id={input_id}",
+                    panel_state.task_id
+                ),
+            );
+            return Ok(false);
+        }
+        SubagentMailboxEnqueueOutcome::Rejected(rejection) => {
+            return Err(format!(
+                "subagent mailbox input rejected: parent={parent_session_id} task={} reason={}",
+                panel_state.task_id,
+                rejection.diagnostic()
+            ));
+        }
     }
     webui_trace(
         "session_mailbox_input_enqueued",

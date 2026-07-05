@@ -359,16 +359,16 @@ fn build_chunk_plan(
                        current_bytes: &mut usize,
                        current_line_count: &mut usize,
                        end_line: usize| {
-        if let Some(start_line) = *current_start {
-            if *current_line_count > 0 {
-                chunks.push(OverflowChunk {
-                    offset: start_line - 1,
-                    limit: *current_line_count,
-                    start_line,
-                    end_line,
-                    byte_count: *current_bytes,
-                });
-            }
+        if let Some(start_line) = *current_start
+            && *current_line_count > 0
+        {
+            chunks.push(OverflowChunk {
+                offset: start_line - 1,
+                limit: *current_line_count,
+                start_line,
+                end_line,
+                byte_count: *current_bytes,
+            });
         }
         *current_start = None;
         *current_bytes = 0;

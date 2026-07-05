@@ -42,6 +42,11 @@ impl TaskRuntime {
         let outcome = match backend(invocation.clone()).await {
             Ok(outcome) => outcome,
             Err(error) => {
+                if let Some(visible_error) =
+                    handle_prestart_cancelled_backend_error(self, &invocation, &error)?
+                {
+                    return Err(visible_error);
+                }
                 self.mark_task_failure(current_session_id, &invocation, &error)?;
                 return Err(error);
             }
@@ -82,6 +87,11 @@ impl TaskRuntime {
         let outcome = match backend(invocation.clone()).await {
             Ok(outcome) => outcome,
             Err(error) => {
+                if let Some(visible_error) =
+                    handle_prestart_cancelled_backend_error(self, &invocation, &error)?
+                {
+                    return Err(visible_error);
+                }
                 self.mark_task_failure(current_session_id, &invocation, &error)?;
                 return Err(error);
             }
@@ -226,7 +236,6 @@ impl TaskRuntime {
             "subagent_list_agents_start",
             format!("parent={current_session_id}"),
         );
-        self.restore_persisted_subagent_registry_for_parent_tree(current_session_id)?;
         let registry_entries =
             self.subagent_registry_entries_for_list_request(current_session_id, &args)?;
         let queued_message_counts = registry_entries
@@ -252,6 +261,25 @@ impl TaskRuntime {
             ),
         );
         Ok(result)
+    }
+
+    /// Returns WebUI-visible open child-agent registry entries using the same semantics as list_agents.
+    /// 使用与 list_agents 相同的语义返回 WebUI 可见的未关闭子代理注册表条目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the selected root or direct parent session id for the requested tree.
+    /// `current_session_id` 是请求树对应的选中根会话或直接父会话标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Registry entries that are still open and visible to normal subagent orchestration.
+    /// 仍处于未关闭状态且对常规子代理调度可见的注册表条目。
+    pub fn open_subagent_registry_entries_for_parent_tree(
+        &self,
+        current_session_id: SessionId,
+    ) -> Result<Vec<SubagentRegistryEntry>, String> {
+        self.subagent_registry_entries_for_list_request(current_session_id, &json!({}))
     }
 
     /// Returns read-only subagent orchestration information for model planning.
@@ -362,10 +390,10 @@ impl TaskRuntime {
             .into_iter()
             .filter(|definition| definition.enabled)
             .filter(|definition| {
-                if let Some(agent_id) = request.agent_id.as_deref() {
-                    if definition.id != agent_id {
-                        return false;
-                    }
+                if let Some(agent_id) = request.agent_id.as_deref()
+                    && definition.id != agent_id
+                {
+                    return false;
                 }
                 let Some(query) = query.as_deref() else {
                     return true;
@@ -450,7 +478,6 @@ impl TaskRuntime {
         &self,
         current_session_id: SessionId,
     ) -> Result<Value, String> {
-        self.restore_persisted_subagent_registry_for_parent_tree(current_session_id)?;
         let parent_session_id = SessionNodeId::from(current_session_id);
         let registry = self.subagent_registry_snapshot()?;
         let open_agents = registry
@@ -506,9 +533,9 @@ impl TaskRuntime {
                 let is_resident = resident_session_ids.contains(&entry.session_id);
                 let is_archived = entry.status == SubagentStatus::Archived;
                 let is_restored_stopped = entry.status == SubagentStatus::Stopped;
-                (is_resident && (include_closed || !is_archived))
-                    || (!is_resident && is_restored_stopped)
-                    || (include_closed && is_archived)
+                is_resident && !is_archived
+                    || include_closed && is_archived
+                    || !is_resident && is_restored_stopped
             })
             .filter_map(|entry| {
                 let entry_path =
@@ -545,7 +572,6 @@ impl TaskRuntime {
                 "An agent cannot close itself; return your result and let the parent close you if needed.",
             ));
         }
-        self.restore_persisted_subagent_registry_for_parent_tree(current_session_id)?;
         let parent_session_id = SessionNodeId::from(current_session_id);
         let entry = self
             .subagent_registry_snapshot()?
@@ -692,7 +718,6 @@ impl TaskRuntime {
                 "An agent cannot interrupt itself; return your result and let the parent interrupt you if needed.",
             ));
         }
-        self.restore_persisted_subagent_registry_for_parent_tree(current_session_id)?;
         let trace_started_at = current_unix_millis_u64();
         task_runtime_trace(
             "subagent_interrupt_agent_start",
@@ -755,6 +780,27 @@ impl TaskRuntime {
             .get(&current_session_id)
             .is_some_and(|record| record.public_task_id == normalized_target))
     }
+}
+
+/// Converts a pre-start backend cancellation into a visible error after discarding the unstarted placeholder.
+/// 丢弃未启动占位后，将启动前后端取消转换为对外可见错误。
+fn handle_prestart_cancelled_backend_error(
+    task_runtime: &TaskRuntime,
+    invocation: &TaskExecutionRequest,
+    error: &str,
+) -> Result<Option<String>, String> {
+    if !task_execution_error_is_prestart_cancelled(error) {
+        return Ok(None);
+    }
+    let visible_error = task_execution_visible_error(error).to_string();
+    task_runtime
+        .discard_prestarted_task_record(invocation)
+        .map_err(|cleanup_error| {
+            format!(
+                "{visible_error} The pre-start child-agent placeholder could not be discarded: {cleanup_error}"
+            )
+        })?;
+    Ok(Some(visible_error))
 }
 
 /// Collects registry agent ids that should be closed for one close_agent request.

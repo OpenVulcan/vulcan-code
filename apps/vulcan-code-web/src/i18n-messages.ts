@@ -674,6 +674,7 @@ export type TranslationKey =
   | "conversation.subagent.call"
   | "conversation.subagent.calling"
   | "conversation.subagent.closeTask"
+  | "conversation.subagent.loadingTranscript"
   | "conversation.subagent.closeConfirmTitle"
   | "conversation.subagent.closeConfirmDescription"
   | "conversation.subagent.closeConfirm"
@@ -1848,6 +1849,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.yes": "是",
     "conversation.subagent.detail.no": "否",
     "conversation.subagent.closeTask": "结束智能体",
+    "conversation.subagent.loadingTranscript": "正在加载智能体消息",
     "conversation.subagent.closeConfirmTitle": "结束这个智能体？",
     "conversation.subagent.closeConfirmDescription": "将结束「{task}」的智能体生命周期并清理待处理消息。结束后不能继续发送消息。",
     "conversation.subagent.closeConfirm": "确认结束",
@@ -2979,6 +2981,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.yes": "Yes",
     "conversation.subagent.detail.no": "No",
     "conversation.subagent.closeTask": "End agent",
+    "conversation.subagent.loadingTranscript": "Loading agent messages",
     "conversation.subagent.closeConfirmTitle": "End this agent?",
     "conversation.subagent.closeConfirmDescription": "This will end \"{task}\" and clear queued messages. Ended agents cannot receive more messages.",
     "conversation.subagent.closeConfirm": "End agent",

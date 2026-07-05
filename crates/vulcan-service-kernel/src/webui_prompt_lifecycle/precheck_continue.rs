@@ -296,19 +296,11 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         ),
     );
     let task_session_root_started_at = current_unix_millis_value();
-    request.task_session_store_root = owning_project_id_for_session(
+    request.task_session_store_root = segmented_session_directory_for_workspace_session(
+        &controller_runtime.data_root,
         &workspace_snapshot,
         session_id,
-    )
-    .and_then(|project_id| {
-        vulcan_workspace_store::workspace_store::find_segmented_session_directory_for_task_store(
-            &controller_runtime.data_root,
-            &project_id,
-            &session_id.to_string(),
-        )
-        .ok()
-        .flatten()
-    });
+    );
     webui_after_precheck_trace(
         "after_precheck_11_task_session_root_ready",
         format!(
@@ -349,16 +341,19 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
             .has_transient()
             .then(|| injection.transient_prefix.clone());
         spawn_service_task(async move {
+            let timestamp = current_unix_millis_text();
             if let Err(error) =
                 vulcan_workspace_store::workspace_store::record_session_runtime_injection_applied(
-                    &data_root,
-                    session_id,
-                    Some(prompt_turn_id_for_audit),
-                    Some(fingerprint),
-                    &persistent_blocks,
-                    transient_prefix.as_deref(),
-                    None,
-                    &current_unix_millis_text(),
+                    vulcan_workspace_store::workspace_store::SessionRuntimeInjectionAppliedRecord {
+                        data_root: &data_root,
+                        session_id,
+                        turn_id: Some(prompt_turn_id_for_audit),
+                        combined_fingerprint: Some(fingerprint),
+                        persistent_blocks: &persistent_blocks,
+                        transient_prefix: transient_prefix.as_deref(),
+                        merged_baseline_fingerprint: None,
+                        timestamp: &timestamp,
+                    },
                 )
             {
                 webui_trace(

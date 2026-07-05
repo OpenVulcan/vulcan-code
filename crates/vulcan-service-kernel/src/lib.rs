@@ -1,6 +1,15 @@
 //! Core service kernel used by Vulcan Code WebUI hosts.
 //! Vulcan Code WebUI 宿主使用的核心服务内核。
 
+#![expect(
+    clippy::too_many_arguments,
+    reason = "service-kernel WebUI boundary functions still pass explicit runtime handles while the shared service context object is being designed as a separate architectural refactor"
+)]
+#![expect(
+    clippy::type_complexity,
+    reason = "service-kernel runtime handle bundles intentionally remain explicit until the shared service context object lands"
+)]
+
 use std::{
     collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher},
     env,
@@ -132,15 +141,12 @@ use vulcan_workbench_model::{
     SessionTodolistItemStatus, SessionTodolistState, SessionTurnStatsKind, SessionTurnStatsStatus,
     SessionTurnUsageSegment, SessionWorkMode, SubagentTaskPanelState, SubagentTaskRunState,
     TaskProjectSummary, attach_tool_display_state_to_metadata, build_session_record_message_id,
-    build_stopped_task_session_metadata, collect_running_subagent_task_states_for_tree,
-    find_task_session_tool_message_id_for_payload, merge_subagent_task_panel_cache,
-    merge_tool_display_metadata, normalize_subagent_task_panel_state,
-    parse_subagent_task_panel_metadata, parse_subagent_task_prompt_metadata,
-    select_subagent_navigation_panel_states, subagent_navigation_round_should_remain_visible,
-    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
-    subagent_task_panel_is_openable,
+    build_stopped_task_session_metadata, find_task_session_tool_message_id_for_payload,
+    merge_tool_display_metadata, parse_subagent_task_panel_metadata,
+    parse_subagent_task_prompt_metadata, select_subagent_navigation_panel_states,
+    subagent_navigation_round_should_remain_visible, subagent_navigation_surface_is_visible,
+    subagent_navigation_task_label, subagent_task_panel_is_openable,
     subagent_task_panel_state_detail_from_segmented_task_session_store,
-    subagent_task_panel_state_from_task_session,
     subagent_task_panel_state_has_recoverable_conversation,
     task_session_execution_status_from_tool_metadata, task_session_message_match_score,
     task_session_payload_from_tool_metadata,
@@ -150,8 +156,8 @@ use vulcan_workspace_store::{
     workspace_store::{
         GoalUpdate, SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
         WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot, fork_persisted_session,
-        load_persisted_user_prompt_edit_draft, load_segmented_session_fork_source_for_project,
-        record_persisted_session_fork_source_marker, rollback_persisted_session_before_user_prompt,
+        load_persisted_user_prompt_edit_draft, record_persisted_session_fork_source_marker,
+        rollback_persisted_session_before_user_prompt,
     },
 };
 
@@ -240,6 +246,12 @@ use conversation_history::{
     HydratedConversationWindowState, hydrated_conversation_window_summaries,
     load_hydrated_session_workbench, retain_hydrated_conversation_windows_for_workspace,
     service_session_history_page, service_session_messages, service_session_tool_detail,
+};
+#[cfg(test)]
+use conversation_history::{
+    focused_history_page_response_workbench,
+    preserve_retained_hydrated_payloads_after_index_refresh,
+    retained_workspace_snapshot_for_session_hydration,
 };
 use conversation_message_projection::*;
 use conversation_run_services::*;
@@ -362,10 +374,10 @@ use workbench_session_panels::*;
 #[cfg(test)]
 use workbench_surface_projection::active_surface_session_id_from_state;
 use workbench_surface_projection::{
-    active_surface_messages_from_workspace_and_state, preserved_active_surface_session_id,
-    subagent_navigation_snapshot_from_cached_state, subagent_navigation_snapshot_from_state,
-    subagent_run_state_key, surface_messages_for_session_without_subagent_navigation_refresh,
-    webui_subagent_panel_has_recoverable_detail,
+    active_surface_messages_from_workspace_and_state, open_subagent_registry_entry_for_task,
+    preserved_active_surface_session_id, subagent_navigation_snapshot_from_cached_state,
+    subagent_navigation_snapshot_from_state, subagent_run_state_key,
+    surface_messages_for_session_without_subagent_navigation_refresh,
 };
 use workspace_files::{service_workspace_files_list, service_workspace_files_read};
 use workspace_persistence_versions::*;
@@ -424,7 +436,7 @@ pub fn create_service_bridge_state(
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
-        session_subagent_tasks: BTreeMap::new(),
+        webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,
@@ -480,8 +492,5 @@ pub fn service_prepare_for_app_shutdown(
 /// `session_id` identifies the parent session whose task mirrors should be read.
 /// `session_id` 标识需要读取任务镜像的父会话。
 ///
-/// # Returns
-/// 返回值
-
 #[cfg(test)]
 mod tests;

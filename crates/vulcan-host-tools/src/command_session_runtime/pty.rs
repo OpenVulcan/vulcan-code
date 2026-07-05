@@ -219,16 +219,46 @@ pub(super) fn answer_pty_terminal_status_queries(
     text.replace("\x1b[6n", "")
 }
 
-pub(super) async fn run_pty_command_session_supervisor(
-    record: Arc<CommandSessionRecord>,
-    _master: Box<dyn portable_pty::MasterPty + Send>,
-    mut child: Box<dyn portable_pty::Child + Send + Sync>,
-    reader: Box<dyn Read + Send>,
-    writer: Box<dyn Write + Send>,
-    mut control_receiver: UnboundedReceiver<CommandSessionControlMessage>,
-    initial_stdin: Option<String>,
-    initial_stdin_append_newline: bool,
-) {
+pub(super) struct PtyCommandSessionSupervisorInput {
+    /// Runtime record that owns status, output buffers, and control metadata.
+    /// 持有状态、输出缓冲与控制元数据的运行时记录。
+    pub record: Arc<CommandSessionRecord>,
+    /// Master PTY handle kept alive for the lifetime of the session.
+    /// 在会话生命周期内保持存活的主 PTY 句柄。
+    pub master: Box<dyn portable_pty::MasterPty + Send>,
+    /// Spawned PTY child process owned by the supervisor.
+    /// 由监管器持有的已启动 PTY 子进程。
+    pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// Blocking PTY reader consumed by the output pump thread.
+    /// 由输出泵线程消费的阻塞式 PTY 读取器。
+    pub reader: Box<dyn Read + Send>,
+    /// Blocking PTY writer shared with stdin control calls.
+    /// 与标准输入控制调用共享的阻塞式 PTY 写入器。
+    pub writer: Box<dyn Write + Send>,
+    /// Control channel used by runtime API calls to write or stop the session.
+    /// 运行时 API 写入或停止会话时使用的控制通道。
+    pub control_receiver: UnboundedReceiver<CommandSessionControlMessage>,
+    /// Optional initial stdin payload submitted immediately after start.
+    /// 启动后立即提交的可选初始标准输入内容。
+    pub initial_stdin: Option<String>,
+    /// Whether the supervisor appends the interactive newline to initial stdin.
+    /// 监管器是否为初始标准输入追加交互式换行。
+    pub initial_stdin_append_newline: bool,
+}
+
+/// Runs the background PTY supervisor that owns the child process lifecycle and stdin control channel.
+/// 运行后台 PTY 监管器，持有子进程生命周期与标准输入控制通道。
+pub(super) async fn run_pty_command_session_supervisor(input: PtyCommandSessionSupervisorInput) {
+    let PtyCommandSessionSupervisorInput {
+        record,
+        master: _master,
+        mut child,
+        reader,
+        writer,
+        mut control_receiver,
+        initial_stdin,
+        initial_stdin_append_newline,
+    } = input;
     let writer = Arc::new(StdMutex::new(writer));
     let killer = Arc::new(StdMutex::new(child.clone_killer()));
     let reader_state = Arc::clone(&record.shared_state);

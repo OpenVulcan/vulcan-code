@@ -77,30 +77,30 @@ pub(super) fn extract_perplexity_citations(payload: &Value) -> Vec<WebSearchCita
 pub(super) fn extract_xai_output_text(payload: &Value) -> Option<String> {
     if let Some(output) = payload.get("output").and_then(Value::as_array) {
         for item in output {
-            if item.get("type").and_then(Value::as_str) == Some("message") {
-                if let Some(content_items) = item.get("content").and_then(Value::as_array) {
-                    for block in content_items {
-                        // xAI Responses message items expose visible text through output_text content blocks.
-                        // xAI Responses 的 message 条目会通过 output_text 内容块暴露可见文本。
-                        if block.get("type").and_then(Value::as_str) == Some("output_text") {
-                            if let Some(text) = block.get("text").and_then(Value::as_str) {
-                                let trimmed = text.trim();
-                                if !trimmed.is_empty() {
-                                    return Some(trimmed.to_string());
-                                }
-                            }
+            if item.get("type").and_then(Value::as_str) == Some("message")
+                && let Some(content_items) = item.get("content").and_then(Value::as_array)
+            {
+                for block in content_items {
+                    // xAI Responses message items expose visible text through output_text content blocks.
+                    // xAI Responses 的 message 条目会通过 output_text 内容块暴露可见文本。
+                    if block.get("type").and_then(Value::as_str) == Some("output_text")
+                        && let Some(text) = block.get("text").and_then(Value::as_str)
+                    {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_string());
                         }
                     }
                 }
             }
             // Some Responses-compatible payloads also emit standalone output_text items.
             // 部分 Responses 兼容载荷也会返回独立的 output_text 条目。
-            if item.get("type").and_then(Value::as_str) == Some("output_text") {
-                if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        return Some(trimmed.to_string());
-                    }
+            if item.get("type").and_then(Value::as_str) == Some("output_text")
+                && let Some(text) = item.get("text").and_then(Value::as_str)
+            {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
                 }
             }
         }
@@ -249,13 +249,12 @@ pub(super) fn decode_duckduckgo_url(raw_url: &str) -> String {
     } else {
         raw_url.to_string()
     };
-    if let Ok(parsed) = reqwest::Url::parse(&normalized) {
-        if let Some(uddg) = parsed
+    if let Ok(parsed) = reqwest::Url::parse(&normalized)
+        && let Some(uddg) = parsed
             .query_pairs()
             .find_map(|(key, value)| (key == "uddg").then(|| value.to_string()))
-        {
-            return uddg;
-        }
+    {
+        return uddg;
     }
     normalized
 }

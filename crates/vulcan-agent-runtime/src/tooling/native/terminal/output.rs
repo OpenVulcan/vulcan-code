@@ -35,14 +35,13 @@ pub(crate) fn coalesce_terminal_output_chunks(
 ) -> Vec<CommandSessionOutputChunk> {
     let mut coalesced: Vec<CommandSessionOutputChunk> = Vec::new();
     for chunk in chunks {
-        if let Some(last_chunk) = coalesced.last_mut() {
-            if last_chunk.stream == chunk.stream
-                && last_chunk.text.len().saturating_add(chunk.text.len())
-                    <= TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES
-            {
-                last_chunk.text.push_str(&chunk.text);
-                continue;
-            }
+        if let Some(last_chunk) = coalesced.last_mut()
+            && last_chunk.stream == chunk.stream
+            && last_chunk.text.len().saturating_add(chunk.text.len())
+                <= TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES
+        {
+            last_chunk.text.push_str(&chunk.text);
+            continue;
         }
         coalesced.push(chunk);
     }

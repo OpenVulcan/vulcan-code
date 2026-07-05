@@ -242,14 +242,14 @@ pub fn resolve_context_request_mode(input: ContextRequestModeInput<'_>) -> Conte
         };
     };
 
-    if let Some(context_budget) = input.context_budget {
-        if !context_budget.baseline_matches_active_runtime {
-            return ContextRequestMode::IncrementalDisabled {
-                reason: ContextIncrementalDisabledReason::BaselineMismatch {
-                    detail: context_budget.baseline_mismatch_reason.clone(),
-                },
-            };
-        }
+    if let Some(context_budget) = input.context_budget
+        && !context_budget.baseline_matches_active_runtime
+    {
+        return ContextRequestMode::IncrementalDisabled {
+            reason: ContextIncrementalDisabledReason::BaselineMismatch {
+                detail: context_budget.baseline_mismatch_reason.clone(),
+            },
+        };
     }
 
     if input.history_message_count == 0 && input.continuation_message_id.is_none() {

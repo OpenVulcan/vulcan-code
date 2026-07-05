@@ -187,8 +187,7 @@ pub(super) fn is_path_separator_only_project_name(name: &str) -> bool {
 /// 从 Windows 或 Unix 路径字符串中提取最后一级文件夹名称。
 pub(super) fn project_folder_name_from_path_text(path: &str) -> Option<String> {
     path.split(['\\', '/'])
-        .filter(|segment| !segment.trim().is_empty())
-        .next_back()
+        .rfind(|segment| !segment.trim().is_empty())
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
         .map(ToOwned::to_owned)

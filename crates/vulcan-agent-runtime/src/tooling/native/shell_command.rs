@@ -332,19 +332,18 @@ pub(crate) fn shell_command_args_schema(
         "additionalProperties": false
     });
 
-    if rtk_support.is_available() {
-        if let Some(properties) = schema
+    if rtk_support.is_available()
+        && let Some(properties) = schema
             .get_mut("properties")
             .and_then(serde_json::Value::as_object_mut)
-        {
-            properties.insert(
-                String::from("disabled_rtk"),
-                json!({
-                    "type": "boolean",
-                    "description": "Optional per-call RTK bypass. Set true to run the raw command exactly as provided without RTK rewrite routing. Default: false."
-                }),
-            );
-        }
+    {
+        properties.insert(
+            String::from("disabled_rtk"),
+            json!({
+                "type": "boolean",
+                "description": "Optional per-call RTK bypass. Set true to run the raw command exactly as provided without RTK rewrite routing. Default: false."
+            }),
+        );
     }
 
     schema

@@ -537,10 +537,10 @@ pub(crate) fn replace_conversation_messages_in_workbench_window(
             inserted_conversation_messages = true;
         }
     }
-    if !inserted_conversation_messages {
-        if let Some(next_messages) = pending_conversation_messages.take() {
-            messages.extend(next_messages);
-        }
+    if !inserted_conversation_messages
+        && let Some(next_messages) = pending_conversation_messages.take()
+    {
+        messages.extend(next_messages);
     }
 }
 
@@ -847,10 +847,6 @@ pub(crate) fn workbench_should_emit_runtime_event_message_patch(
             .subagent_surface_detail_cache
             .contains_key(&session_id)
         || guard.detached_subagent_task_listeners.contains(&session_id)
-        || guard
-            .session_subagent_tasks
-            .values()
-            .any(|tasks| tasks.contains_key(&session_id))
 }
 
 /// Extracts closed subagent task ids from a structured `close_agent` host result.

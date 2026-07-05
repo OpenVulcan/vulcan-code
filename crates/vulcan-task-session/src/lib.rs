@@ -50,7 +50,7 @@ pub use config_resolver::{
 };
 pub use model::{
     TaskFeedback, TaskInvocationEvent, TaskInvocationEventKind, TaskSessionId, TaskSessionMetadata,
-    TaskSessionStatus, TaskSessionSummary,
+    TaskSessionMetadataInit, TaskSessionMirrorSummary, TaskSessionStatus, TaskSessionSummary,
 };
 pub use profile::SubagentProfile;
 pub use router::{TaskSessionHistoryPage, TaskSessionRouter};
@@ -63,7 +63,8 @@ mod tests {
     use super::{
         SubagentProfile, TaskInvocationConfig, TaskSessionCompactionStore,
         TaskSessionConfigResolutionInput, TaskSessionConfigResolver, TaskSessionMetadata,
-        TaskSessionStatus, TaskSessionStore, apply_task_session_compaction_result,
+        TaskSessionMetadataInit, TaskSessionStatus, TaskSessionStore,
+        apply_task_session_compaction_result,
     };
     use serde_json::json;
     use vulcan_context::{
@@ -80,14 +81,16 @@ mod tests {
     /// Builds a parent config used by resolver tests.
     /// 构建解析器测试使用的父级配置。
     fn parent_config() -> SessionEffectiveConfig {
-        let mut config = SessionEffectiveConfig::default();
-        config.provider_model = ProviderModelSnapshot {
-            provider_id: Some("deepseek".to_string()),
-            model_id: Some("deepseek-v4".to_string()),
-            reasoning_effort: Some("high".to_string()),
-            execution_mode: Some("build".to_string()),
+        let mut config = SessionEffectiveConfig {
+            provider_model: ProviderModelSnapshot {
+                provider_id: Some("deepseek".to_string()),
+                model_id: Some("deepseek-v4".to_string()),
+                reasoning_effort: Some("high".to_string()),
+                execution_mode: Some("build".to_string()),
+            },
+            system_prompt_layers: vec!["parent prompt".to_string()],
+            ..Default::default()
         };
-        config.system_prompt_layers = vec!["parent prompt".to_string()];
         config.tool_exposure.allowed_tools = vec!["shell_command".to_string()];
         config
     }
@@ -238,17 +241,17 @@ mod tests {
             invocation: TaskInvocationConfig::main("run task"),
         });
 
-        let metadata = TaskSessionMetadata::new(
+        let metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
             root_session_id,
             task_session_id,
             parent,
-            "task-1",
-            "Run task",
-            resolved.requested_config,
-            resolved.effective_config,
-            1,
-            10,
-        );
+            public_task_id: String::from("task-1"),
+            display_title: String::from("Run task"),
+            requested_config: resolved.requested_config,
+            effective_config: resolved.effective_config,
+            depth: 1,
+            timestamp_ms: 10,
+        });
 
         assert_eq!(metadata.status, TaskSessionStatus::Created);
         assert!(!metadata.runtime_policy.database_projection_enabled);
@@ -272,17 +275,17 @@ mod tests {
             profile: None,
             invocation: TaskInvocationConfig::main("persist task"),
         });
-        let mut metadata = TaskSessionMetadata::new(
+        let mut metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
             root_session_id,
             task_session_id,
-            parent.clone(),
-            "task-file",
-            "Task file",
-            resolved.requested_config,
-            resolved.effective_config,
-            1,
-            123,
-        );
+            parent: parent.clone(),
+            public_task_id: String::from("task-file"),
+            display_title: String::from("Task file"),
+            requested_config: resolved.requested_config,
+            effective_config: resolved.effective_config,
+            depth: 1,
+            timestamp_ms: 123,
+        });
 
         store
             .create_task_session(metadata.clone())

@@ -295,164 +295,174 @@ pub(crate) async fn service_select_conversation(
     state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let select_started_at = current_unix_millis_value();
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let retained_read_started_at = current_unix_millis_value();
-    let (
-        controller_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-        mut provider_configuration,
-        ai_tool_configuration,
-        live_context_budgets,
-        pending_questions,
-        mut workspace_snapshot,
-    ) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
-        let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
-        let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; token budget runtime is not ready")
-        })?;
-        let mcp_catalog = cached_mcp_catalog_from_state(&guard);
-        let logs = guard.startup.recent_logs.clone();
-        let workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-        let provider_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.provider_configuration.clone())
-            .unwrap_or_default();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
-        let live_context_budgets = guard.live_context_budgets.clone();
-        let pending_questions =
-            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
-        (
-            controller_runtime,
-            luaskills_catalog,
-            token_budget_runtime,
-            mcp_catalog,
-            logs,
-            provider_configuration,
-            ai_tool_configuration,
-            live_context_budgets,
-            pending_questions,
-            workspace_snapshot,
-        )
+    if let Some(workbench) =
+        select_conversation_in_retained_state(&state, session_id, &conversation_id)?
+    {
+        return Ok(workbench);
+    }
+    refresh_workbench_snapshot_for_selected_session(state, session_id).await
+}
+
+/// Selects one retained conversation without reading segmented files or rebuilding the full workbench.
+/// 不读取分段文件且不重建完整工作台，选中一个已保留的会话。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared WebUI service state that owns the retained workspace snapshot.
+/// `state` 是持有保留工作区快照的共享 WebUI 服务状态。
+/// `session_id` identifies the conversation selected by the sidebar.
+/// `session_id` 标识侧栏选中的会话。
+/// `conversation_id` is the string form returned to the WebUI snapshot.
+/// `conversation_id` 是返回给 WebUI 快照的字符串形式。
+/// `subagent_surface_preload` is an optional lock-free surface preload captured before selection.
+/// `subagent_surface_preload` 是选择前在锁外完成的可选界面预载结果。
+///
+/// # Returns
+/// 返回值
+/// `Some(workbench)` when the retained workspace contains the session, or `None` when a full refresh is required.
+/// 当保留工作区包含该会话时返回 `Some(workbench)`；需要完整刷新时返回 `None`。
+fn select_conversation_in_retained_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    conversation_id: &str,
+) -> Result<Option<WorkbenchSnapshot>, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(mut workspace_snapshot) = guard.workspace_snapshot.take() else {
+        return Err(String::from(
+            "service is still starting; workspace snapshot is not ready",
+        ));
     };
-    webui_trace_if_slow(
-        "select_conversation_retained_read",
-        retained_read_started_at,
-        format!("session={session_id}"),
-    );
-    let exists = workspace_snapshot
+    let workspace_contains_session = workspace_snapshot
         .sessions
         .iter()
         .any(|session| session.id == session_id);
-    if !exists {
-        return refresh_workbench_snapshot(state).await;
-    }
-    workspace_snapshot.selected_session = session_id;
-    restore_webui_runtime_controls_for_session(
-        &mut provider_configuration,
-        workspace_snapshot.session_runtime_state.get(&session_id),
-    );
-    let (
-        surface_messages,
-        subagent_navigation,
-        session_goal_summaries,
-        command_session_runtime,
-        native_tools,
-        hydrated_window_summaries,
-    ) = {
-        let projection_started_at = current_unix_millis_value();
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.active_subagent_panel = None;
-        retain_hydrated_conversation_windows_for_workspace(
-            &mut guard.hydrated_conversation_windows,
-            &workspace_snapshot,
-        );
-        if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
-            agent_runtime.provider_configuration = provider_configuration.clone();
-        }
-        let command_session_runtime = guard
-            .agent_runtime
-            .as_ref()
-            .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
-        let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
-        let result = (
-            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
-            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot),
-            guard.session_goal_summaries.clone(),
-            command_session_runtime,
-            native_tools,
-            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
-        );
-        webui_trace_if_slow(
-            "select_conversation_surface_projection",
-            projection_started_at,
-            format!("session={session_id}"),
-        );
-        result
-    };
-    let workbench_build_started_at = current_unix_millis_value();
-    let mut workbench = workbench_from_runtime(
-        &controller_runtime,
-        command_session_runtime.as_deref(),
-        &luaskills_catalog,
-        &token_budget_runtime,
-        &mcp_catalog,
-        &provider_configuration,
-        &ai_tool_configuration,
-        &workspace_snapshot,
-        surface_messages.as_slice(),
-        subagent_navigation,
-        pending_questions,
-        &logs,
-        &live_context_budgets,
-        &session_goal_summaries,
-        &hydrated_window_summaries,
-        native_tools,
-    );
-    webui_trace_if_slow(
-        "select_conversation_workbench_build",
-        workbench_build_started_at,
-        format!("session={session_id}"),
-    );
-    {
-        let commit_started_at = current_unix_millis_value();
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        workbench.revision = guard.workbench_generation;
+    let workbench_contains_conversation = guard
+        .workbench
+        .conversations
+        .iter()
+        .any(|conversation| conversation.id == conversation_id);
+    if !workspace_contains_session || !workbench_contains_conversation {
         guard.workspace_snapshot = Some(workspace_snapshot);
-        guard.workbench = workbench.clone();
-        webui_trace_if_slow(
-            "select_conversation_commit",
-            commit_started_at,
-            format!("session={session_id}"),
+        return Ok(None);
+    }
+
+    workspace_snapshot.selected_session = session_id;
+    guard.active_subagent_panel = None;
+    retain_hydrated_conversation_windows_for_workspace(
+        &mut guard.hydrated_conversation_windows,
+        &workspace_snapshot,
+    );
+    let selected_runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
+    if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
+        restore_webui_runtime_controls_for_session(
+            &mut agent_runtime.provider_configuration,
+            selected_runtime_state,
         );
     }
-    webui_trace_if_slow(
-        "select_conversation_total",
-        select_started_at,
-        format!("session={session_id}"),
+    let messages =
+        retained_selected_conversation_messages(&workspace_snapshot, session_id, conversation_id);
+    let subagent_navigation =
+        subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+    let hydrated_windows = hydrated_conversation_window_summaries(
+        &guard.hydrated_conversation_windows,
+        &guard.webui_preloaded_unclosed_subagent_roots,
     );
-    Ok(workbench)
+
+    guard.workbench.selected_conversation_id = Some(conversation_id.to_string());
+    guard.workbench.messages = messages;
+    guard.workbench.subagent_navigation = subagent_navigation;
+    guard.workbench.hydrated_conversation_windows = hydrated_windows;
+    guard.workbench.conversation_hydration = guard
+        .workbench
+        .conversation_hydration
+        .take()
+        .filter(|progress| progress.session_id == conversation_id);
+    sync_selected_conversation_fields_for_retained_workbench(&mut guard.workbench, conversation_id);
+    guard.workspace_snapshot = Some(workspace_snapshot);
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
+    Ok(Some(guard.workbench.clone()))
+}
+
+/// Projects only the retained message window for the selected conversation.
+/// 仅投影当前选中会话已保留的消息窗口。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains retained hydrated message windows.
+/// `workspace_snapshot` 包含已保留的水合消息窗口。
+/// `session_id` identifies the selected root conversation.
+/// `session_id` 标识选中的根会话。
+/// `conversation_id` is the string identifier used by WebUI messages.
+/// `conversation_id` 是 WebUI 消息使用的字符串标识。
+///
+/// # Returns
+/// 返回值
+/// A message list containing the selected hydrated body when present.
+/// 返回只包含已存在选中正文的消息列表。
+fn retained_selected_conversation_messages(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    conversation_id: &str,
+) -> Vec<ConversationMessage> {
+    workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .map(|session_messages| {
+            conversation_messages_from_session(
+                conversation_id,
+                session_messages,
+                workspace_surface_allows_user_prompt_editing(workspace_snapshot, session_id, None),
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// Reprojects selected-only workbench fields from retained per-conversation caches.
+/// 从按会话保留的缓存重新投影仅当前会话使用的工作台字段。
+///
+/// # Parameters
+/// 参数
+/// `workbench` is the retained snapshot being updated in place.
+/// `workbench` 是正在原地更新的保留快照。
+/// `conversation_id` identifies the newly selected conversation.
+/// `conversation_id` 标识新选中的会话。
+fn sync_selected_conversation_fields_for_retained_workbench(
+    workbench: &mut WorkbenchSnapshot,
+    conversation_id: &str,
+) {
+    workbench.pending_question = workbench
+        .pending_questions
+        .iter()
+        .find(|question| question.session_id == conversation_id)
+        .cloned();
+    workbench.pending_prompts = workbench
+        .pending_prompts_by_conversation
+        .iter()
+        .find(|entry| entry.conversation_id == conversation_id)
+        .map(|entry| entry.pending_prompts.clone())
+        .unwrap_or_default();
+    let selected_addons = workbench
+        .session_addons_by_conversation
+        .iter()
+        .find(|entry| entry.conversation_id == conversation_id);
+    workbench.session_goal = selected_addons.and_then(|entry| entry.session_goal.clone());
+    workbench.session_todolist = selected_addons.and_then(|entry| entry.session_todolist.clone());
+    workbench.session_plan_mode = selected_addons.and_then(|entry| entry.session_plan_mode.clone());
+    workbench.session_vmm_policy = workbench
+        .session_vmm_policies_by_conversation
+        .iter()
+        .find(|entry| entry.conversation_id == conversation_id)
+        .map(|entry| entry.session_vmm_policy.clone())
+        .or_else(|| selected_addons.and_then(|entry| entry.session_vmm_policy.clone()));
+    workbench.context_injection = workbench
+        .context_injection_by_conversation
+        .iter()
+        .find(|entry| entry.conversation_id == conversation_id)
+        .and_then(|entry| entry.context_injection.clone());
 }
