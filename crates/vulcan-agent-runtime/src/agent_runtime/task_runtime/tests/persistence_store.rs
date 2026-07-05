@@ -1,4 +1,5 @@
 use super::*;
+use std::io::BufReader;
 use vulcan_task_session::TaskSessionMetadataInit;
 
 /// Builds one persisted task metadata document for task-runtime tests.
@@ -409,8 +410,11 @@ async fn close_agent_persists_archived_status_for_restored_agent() {
         .await
         .expect("diagnostic list should succeed");
     assert_eq!(
-        diagnostic_list.model_output["agents"][0]["lifecycle_state"],
-        "closed"
+        diagnostic_list.model_output["agents"]
+            .as_array()
+            .expect("diagnostic agents should be an array")
+            .len(),
+        0
     );
 
     let backend_calls = Arc::new(AtomicUsize::new(0));
@@ -848,10 +852,10 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         completed_parent_event.payload["subagent_mailbox_event"]["kind"],
         "completed"
     );
-    let root_metadata = serde_json::from_reader::<_, Value>(
+    let root_metadata = serde_json::from_reader::<_, Value>(BufReader::new(
         std::fs::File::open(temp_dir.path().join("metadata.json"))
             .expect("root metadata should open"),
-    )
+    ))
     .expect("root metadata should parse");
     assert_eq!(root_metadata["tasks"][0]["line_count"], 3);
     let registry = task_runtime
@@ -1059,10 +1063,10 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
         .expect("metadata should load")
         .expect("metadata should exist");
     assert_eq!(metadata.status, TaskSessionStatus::Running);
-    let root_metadata = serde_json::from_reader::<_, Value>(
+    let root_metadata = serde_json::from_reader::<_, Value>(BufReader::new(
         std::fs::File::open(temp_dir.path().join("metadata.json"))
             .expect("root metadata should open"),
-    )
+    ))
     .expect("root metadata should parse");
     assert_eq!(root_metadata["tasks"][0]["status"], "running");
     assert_eq!(root_metadata["tasks"][0]["line_count"], 2);

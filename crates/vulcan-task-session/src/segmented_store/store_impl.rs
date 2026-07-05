@@ -208,6 +208,14 @@ impl SegmentedTaskSessionStore {
         &self,
         task_session_id: TaskSessionId,
     ) -> Result<PathBuf, SessionStoreError> {
+        let expected_id = task_session_id.to_string();
+        let direct_task_dir = self
+            .task_root_dir()
+            .join(sanitize_file_component(&expected_id));
+        let direct_metadata_path = direct_task_dir.join(SEGMENTED_METADATA_FILE);
+        if direct_metadata_path.is_file() {
+            return Ok(direct_task_dir);
+        }
         self.find_task_dir(task_session_id)?.ok_or_else(|| {
             SessionStoreError::new(format!("TaskSession `{task_session_id}` is not indexed."))
         })

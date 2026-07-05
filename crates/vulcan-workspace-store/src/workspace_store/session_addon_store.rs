@@ -4,7 +4,7 @@
 use crate::model::SessionAddonState;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -89,7 +89,8 @@ where
 {
     let file = File::open(path)
         .map_err(|error| format!("打开 JSON 文件失败 `{}`：{error}", path.display()))?;
-    serde_json::from_reader(file)
+    let reader = BufReader::new(file);
+    serde_json::from_reader(reader)
         .map_err(|error| format!("解析 JSON 文件失败 `{}`：{error}", path.display()))
 }
 

@@ -187,7 +187,8 @@ pub(super) fn read_json_file<T: for<'de> Deserialize<'de>>(
         return Ok(None);
     }
     let file = File::open(path).map_err(to_store_error)?;
-    serde_json::from_reader(file)
+    let reader = BufReader::new(file);
+    serde_json::from_reader(reader)
         .map(Some)
         .map_err(to_store_error)
 }

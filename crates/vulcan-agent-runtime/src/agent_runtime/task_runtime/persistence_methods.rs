@@ -45,6 +45,9 @@ impl TaskRuntime {
                     root_session_id,
                     parent_task_session_id: metadata.task_session_id,
                 });
+                if metadata.status == TaskSessionStatus::Archived {
+                    continue;
+                }
                 self.upsert_subagent_registry_entry_from_metadata(&metadata)?;
             }
         }
