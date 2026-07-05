@@ -39,6 +39,10 @@ pub struct SubagentTaskSummary {
     /// 传给子代理的可选任务描述。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional catalog agent identifier for agent-mode child agents.
+    /// 智能体模式子代理对应的可选目录智能体标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile_id: Option<String>,
     /// Canonical lowercase run state such as running, completed, stopped, or failed.
     /// 规范小写运行状态，例如 running、completed、stopped 或 failed。
     pub run_state: String,

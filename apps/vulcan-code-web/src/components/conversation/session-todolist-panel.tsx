@@ -966,8 +966,7 @@ function conversationSessionSubagentTooltip(
   return [
     task.label,
     `${t("conversation.subagent.detail.status")}: ${conversationSessionSubagentRunStateLabel(task.runState, t)}`,
-    `${t("conversation.subagent.detail.name")}: ${task.publicTaskId}`,
-    task.description ? `${t("conversation.subagent.detail.description")}: ${task.description}` : null,
+    task.agentProfileId ? `${t("conversation.subagent.detail.agent")}: ${task.agentProfileId}` : null,
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 

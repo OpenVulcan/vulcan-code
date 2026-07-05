@@ -1,6 +1,8 @@
 //! Workbench surface and subagent navigation projection helpers.
 //! 工作台界面与子代理导航投影辅助逻辑。
 
+use std::collections::BTreeMap;
+
 use super::{
     ServiceBridgeState, conversation_state_to_session_messages,
     display_session_messages_from_workspace, filter_display_session_messages,
@@ -14,6 +16,18 @@ use vulcan_workbench_model::{
     SessionId, SessionMessageEntry, SubagentTaskPanelState, SubagentTaskRunState,
 };
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
+
+/// Combined subagent navigation row projected from the authoritative runtime registry.
+/// 从权威运行时注册表投影出的组合智能体导航行。
+#[derive(Clone)]
+struct SubagentTaskNavigationProjection {
+    /// Renderable state reused by the existing panel navigation selector.
+    /// 复用现有面板导航筛选器的可渲染状态。
+    state: SubagentTaskPanelState,
+    /// Optional catalog agent identifier derived only from agent.md prompt sources.
+    /// 仅从 agent.md 提示词来源派生的可选目录智能体标识。
+    agent_profile_id: Option<String>,
+}
 
 /// Returns the currently active transcript surface session id for the WebUI.
 /// 返回 WebUI 当前活动转录界面的会话标识。
@@ -166,8 +180,12 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
     let has_visible_round = guard
         .session_subagent_navigation_rounds
         .contains(&parent_session_id);
-    let normalized_states =
-        authoritative_subagent_tree_states_from_registry(guard, parent_session_id);
+    let normalized_projection =
+        authoritative_subagent_tree_projection_from_registry(guard, parent_session_id);
+    let normalized_states = normalized_projection
+        .iter()
+        .map(|projection| projection.state.clone())
+        .collect::<Vec<_>>();
     let requested_active_task_id =
         valid_active_subagent_task_id_for_states(guard, &normalized_states);
     if guard.active_subagent_panel.is_some() && requested_active_task_id.is_none() {
@@ -187,9 +205,23 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
     if navigation_states.is_empty() {
         return None;
     }
+    let agent_profile_ids = normalized_projection
+        .into_iter()
+        .filter_map(|projection| {
+            projection
+                .agent_profile_id
+                .map(|agent_profile_id| (projection.state.task_id, agent_profile_id))
+        })
+        .collect::<BTreeMap<_, _>>();
     let tasks = navigation_states
         .iter()
-        .map(|state| subagent_task_summary_from_state(state, active_task_id))
+        .map(|state| {
+            subagent_task_summary_from_state(
+                state,
+                active_task_id,
+                agent_profile_ids.get(&state.task_id).cloned(),
+            )
+        })
         .collect::<Vec<_>>();
     Some(SubagentNavigationSnapshot {
         parent_conversation_id: parent_session_id.to_string(),
@@ -197,6 +229,14 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
         active_task_id: active_task_id.map(|task_id| task_id.to_string()),
         tasks,
     })
+}
+
+/// Extracts the catalog agent id from an agent.md prompt source.
+/// 从 agent.md 提示词来源中提取目录智能体标识。
+fn subagent_agent_profile_id_from_prompt_source(prompt_source: Option<&str>) -> Option<String> {
+    let prompt_source = prompt_source?.trim();
+    let agent_profile_id = prompt_source.strip_prefix("agent_md:")?.trim();
+    (!agent_profile_id.is_empty()).then(|| agent_profile_id.to_string())
 }
 
 /// Returns one authoritative open registry entry for a child task in the selected tree.
@@ -240,6 +280,18 @@ fn authoritative_subagent_tree_states_from_registry(
     guard: &ServiceBridgeState,
     root_parent_session_id: SessionId,
 ) -> Vec<SubagentTaskPanelState> {
+    authoritative_subagent_tree_projection_from_registry(guard, root_parent_session_id)
+        .into_iter()
+        .map(|projection| projection.state)
+        .collect()
+}
+
+/// Builds panel projections from the authoritative runtime registry for every open task.
+/// 从权威运行时注册表为每个未关闭任务构建面板投影。
+fn authoritative_subagent_tree_projection_from_registry(
+    guard: &ServiceBridgeState,
+    root_parent_session_id: SessionId,
+) -> Vec<SubagentTaskNavigationProjection> {
     let Some(task_runtime) = guard
         .agent_runtime
         .as_ref()
@@ -260,7 +312,12 @@ fn authoritative_subagent_tree_states_from_registry(
         };
     entries
         .iter()
-        .map(|entry| subagent_task_panel_state_from_registry_entry(guard, entry))
+        .map(|entry| SubagentTaskNavigationProjection {
+            state: subagent_task_panel_state_from_registry_entry(guard, entry),
+            agent_profile_id: subagent_agent_profile_id_from_prompt_source(
+                entry.prompt_source.as_deref(),
+            ),
+        })
         .collect()
 }
 
@@ -328,12 +385,14 @@ fn valid_active_subagent_task_id_for_states(
 fn subagent_task_summary_from_state(
     state: &SubagentTaskPanelState,
     active_task_id: Option<SessionId>,
+    agent_profile_id: Option<String>,
 ) -> SubagentTaskSummary {
     SubagentTaskSummary {
         task_id: state.task_id.to_string(),
         public_task_id: state.public_task_id.clone(),
         label: subagent_navigation_task_label(state),
         description: state.description.clone(),
+        agent_profile_id,
         run_state: subagent_run_state_key(state.run_state).to_string(),
         is_running: state.run_state.is_running(),
         is_active: active_task_id == Some(state.task_id),

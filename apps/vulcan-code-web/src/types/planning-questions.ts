@@ -45,6 +45,9 @@ export interface SubagentTaskSummary {
   // Optional task description.
   // 可选任务描述。
   description?: string | null;
+  // Optional catalog agent identifier used by agent-mode child agents.
+  // 智能体模式子代理使用的可选目录智能体标识。
+  agentProfileId?: string | null;
   // Canonical run state key.
   // 规范运行状态键。
   runState: string;
