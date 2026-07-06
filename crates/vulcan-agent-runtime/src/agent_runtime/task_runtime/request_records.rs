@@ -182,12 +182,7 @@ pub(super) fn prepare_task_execution_request(
                 task_id,
                 &invocation_config,
             );
-            attach_subagent_runtime_debug_extra(
-                &mut invocation_config,
-                &fork_turns,
-                initial_snapshot.messages.len(),
-                false,
-            );
+            attach_subagent_runtime_debug_extra(&mut invocation_config);
             sessions.insert(
                 task_id,
                 TaskSessionRecord {
@@ -241,47 +236,29 @@ pub(super) fn prepare_task_execution_request(
     })
 }
 
-/// Attaches non-secret runtime debug metadata to the invocation extra payload.
-/// 将不含敏感提示词正文的运行时调试元数据附加到调用扩展载荷。
+/// Attaches non-secret creation metadata to the invocation extra payload.
+/// 将不含敏感提示词正文的创建元数据附加到调用扩展载荷。
 ///
 /// # Parameters
 /// 参数
 /// `invocation_config` is the invocation being persisted for this task.
 /// `invocation_config` 是即将为该任务持久化的调用配置。
-/// `fork_turns` is the effective fork selector used for the initial snapshot.
-/// `fork_turns` 是构建初始快照时使用的有效派生选择器。
-/// `snapshot_message_count` is the number of messages in the child initial snapshot.
-/// `snapshot_message_count` 是子代理初始快照中的消息数量。
-/// `is_resumed` indicates whether this metadata was produced for a resumed task.
-/// `is_resumed` 表示该元数据是否来自续跑任务。
-fn attach_subagent_runtime_debug_extra(
-    invocation_config: &mut TaskInvocationConfig,
-    fork_turns: &str,
-    snapshot_message_count: usize,
-    is_resumed: bool,
-) {
+fn attach_subagent_runtime_debug_extra(invocation_config: &mut TaskInvocationConfig) {
     let agent_id = invocation_config
         .subagent_profile_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let agent_kind = if agent_id.is_some() {
-        "agent_profile"
-    } else {
-        "parent_clone"
-    };
-    let prompt_source =
-        subagent_prompt_source_for_task_config(invocation_config.subagent_profile_id.as_deref());
-    let debug = json!({
-        "agent_kind": agent_kind,
-        "agent_mode": invocation_config.subagent_mode,
-        "agent_id": invocation_config.subagent_profile_id,
-        "prompt_source": prompt_source,
-        "fork_turns": fork_turns,
-        "initial_snapshot_messages": snapshot_message_count,
-        "inherit_parent_config": invocation_config.inherit_parent_config,
-        "is_resumed": is_resumed,
-    });
+    let creation_mode = debug_creation_mode_for_invocation(invocation_config);
+    let mut debug = serde_json::Map::new();
+    debug.insert(String::from("creation_mode"), json!(creation_mode));
+    if let Some(agent_id) = agent_id {
+        debug.insert(String::from("agent_id"), json!(agent_id));
+    }
+    if debug_has_custom_system_prompt(invocation_config) {
+        debug.insert(String::from("has_custom_system_prompt"), json!(true));
+    }
+    let debug = Value::Object(debug);
     match &mut invocation_config.extra {
         Value::Object(map) => {
             map.insert(String::from("_subagent_runtime_debug"), debug);
@@ -299,6 +276,47 @@ fn attach_subagent_runtime_debug_extra(
             });
         }
     }
+}
+
+/// Resolves the model-facing creation mode for debug surfaces without changing runtime behavior.
+/// 在不改变运行行为的前提下，为调试表面解析模型侧创建模式。
+fn debug_creation_mode_for_invocation(invocation_config: &TaskInvocationConfig) -> &'static str {
+    let runtime_agent_mode = debug_runtime_agent_mode_for_invocation(invocation_config);
+    if invocation_config
+        .subagent_profile_id
+        .as_deref()
+        .is_some_and(|agent_id| !agent_id.trim().is_empty())
+        || runtime_agent_mode == SUBAGENT_MODE_EXPERT
+    {
+        return "agent";
+    }
+    if runtime_agent_mode == SUBAGENT_MODE_MIRROR {
+        return "mirror";
+    }
+    if debug_has_custom_system_prompt(invocation_config) {
+        return "custom";
+    }
+    "default"
+}
+
+/// Resolves the internal runtime mode used only to derive the public creation mode.
+/// 解析仅用于推导公开创建模式的内部运行模式。
+fn debug_runtime_agent_mode_for_invocation(invocation_config: &TaskInvocationConfig) -> &str {
+    invocation_config
+        .subagent_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .unwrap_or(SUBAGENT_MODE_DEFAULT)
+}
+
+/// Returns whether this invocation carries a replacement custom system prompt.
+/// 返回本次调用是否携带替换型自定义系统提示词。
+fn debug_has_custom_system_prompt(invocation_config: &TaskInvocationConfig) -> bool {
+    invocation_config
+        .system_prompt
+        .as_deref()
+        .is_some_and(|system_prompt| !system_prompt.trim().is_empty())
 }
 
 /// Appends the hidden mirror-mode user prompt to a newly forked child snapshot.

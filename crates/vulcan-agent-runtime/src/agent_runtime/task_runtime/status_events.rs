@@ -227,6 +227,9 @@ pub(super) fn build_subagent_mailbox_payload(
     outcome: Option<&TaskExecutionOutcome>,
 ) -> Value {
     let agent_kind = subagent_kind_for_invocation(&invocation.invocation_config);
+    let prompt_source = subagent_prompt_source_for_task_config(
+        invocation.invocation_config.subagent_profile_id.as_deref(),
+    );
     let debug = subagent_runtime_debug_payload(&invocation.invocation_config);
     json!({
         "child_thread_id": invocation.task_id.to_string(),
@@ -236,7 +239,7 @@ pub(super) fn build_subagent_mailbox_payload(
         "parent_task_id": invocation.parent_task_id.map(|value| value.to_string()),
         "parent_turn_id": Value::Null,
         "agent_kind": agent_kind,
-        "prompt_source": debug.get("prompt_source").cloned().unwrap_or(Value::Null),
+        "prompt_source": prompt_source,
         "debug": debug,
         "status": subagent_status_from_task_status(status),
         "task_status": status,

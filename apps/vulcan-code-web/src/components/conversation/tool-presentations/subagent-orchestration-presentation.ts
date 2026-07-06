@@ -418,11 +418,11 @@ function subagentAgentStatusResult(
   return stringValue(statusObject?.completed) ?? stringValue(statusObject?.errored);
 }
 
-// subagentDebugSummary converts runtime diagnostics into a compact human-readable line.
-// subagentDebugSummary 将运行时诊断转换为紧凑的人类可读信息行。
+// subagentDebugSummary converts creation diagnostics into a compact human-readable line.
+// subagentDebugSummary 将创建诊断转换为紧凑的人类可读信息行。
 function subagentDebugSummary(
-  // Raw debug payload from the runtime.
-  // 运行时返回的原始调试载荷。
+  // Raw creation debug payload.
+  // 原始创建调试载荷。
   value: unknown,
 ): string | null {
   const debug = objectValue(value);
@@ -430,9 +430,11 @@ function subagentDebugSummary(
     return null;
   }
   const parts = [
-    stringValue(debug.agent_kind ?? debug.agentKind),
-    stringValue(debug.prompt_source ?? debug.promptSource),
-    subagentDebugPart("messages", numberValue(debug.initial_snapshot_messages ?? debug.initialSnapshotMessages)?.toString() ?? null),
+    subagentDebugPart("mode", stringValue(debug.creation_mode ?? debug.creationMode)),
+    subagentDebugPart("agent", stringValue(debug.agent_id ?? debug.agentId)),
+    debug.has_custom_system_prompt === true || debug.hasCustomSystemPrompt === true
+      ? "custom prompt"
+      : null,
   ].filter((part): part is string => Boolean(part));
   return parts.length ? parts.join(" · ") : null;
 }

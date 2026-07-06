@@ -569,18 +569,60 @@ fn spawn_agent_expert_forces_empty_initial_snapshot() {
         request.subagent.as_deref(),
         Some("engineering/code-reviewer")
     );
+    let debug = &request.invocation_config.extra["_subagent_runtime_debug"];
+    assert_eq!(debug["creation_mode"], "agent");
+    assert_eq!(debug["agent_id"], "engineering/code-reviewer");
+    assert!(debug.get("agent_mode").is_none());
+    assert!(debug.get("runtime_agent_mode").is_none());
+    assert!(debug.get("prompt_source").is_none());
+    assert!(debug.get("fork_turns").is_none());
+    assert!(debug.get("initial_snapshot_messages").is_none());
+}
+
+/// Verifies custom spawn-agent debug metadata only reports creation-facing fields.
+/// 验证自定义 spawn_agent 调试元数据只上报创建侧字段。
+#[test]
+fn spawn_agent_custom_debug_reports_creation_mode() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let mapped_args = task_tool_args_from_spawn_agent_args(json!({
+        "message": "Tell the repository story.",
+        "task_name": "git-storyteller",
+        "creation_mode": "custom",
+        "system_prompt": "You are a git historian."
+    }))
+    .expect("custom spawn arguments should map to task arguments");
+    let args = parse_task_tool_arguments(mapped_args).expect("custom task arguments should parse");
+    let resolved_identifier = ResolvedTaskSessionIdentifier {
+        task_id,
+        public_task_id: String::from("git-storyteller"),
+        is_resumed: false,
+        persisted_metadata: None,
+    };
+
+    let request =
+        prepare_task_execution_request(&task_runtime, parent_session_id, resolved_identifier, args)
+            .expect("custom task execution request should be prepared");
+    let debug = &request.invocation_config.extra["_subagent_runtime_debug"];
+
     assert_eq!(
-        request.invocation_config.extra["_subagent_runtime_debug"]["fork_turns"],
-        "none"
+        request.invocation_config.system_prompt.as_deref(),
+        Some("You are a git historian.")
     );
     assert_eq!(
-        request.invocation_config.extra["_subagent_runtime_debug"]["initial_snapshot_messages"],
-        0
+        request.invocation_config.subagent_mode.as_deref(),
+        Some(SUBAGENT_MODE_DEFAULT)
     );
-    assert_eq!(
-        request.invocation_config.extra["_subagent_runtime_debug"]["prompt_source"],
-        "agent_md:engineering/code-reviewer"
-    );
+    assert_eq!(debug["creation_mode"], "custom");
+    assert_eq!(debug["has_custom_system_prompt"], true);
+    assert!(debug.get("agent_mode").is_none());
+    assert!(debug.get("runtime_agent_mode").is_none());
+    assert!(debug.get("prompt_source").is_none());
+    assert!(debug.get("fork_turns").is_none());
+    assert!(debug.get("initial_snapshot_messages").is_none());
+    assert!(debug.get("inherit_parent_config").is_none());
+    assert!(debug.get("is_resumed").is_none());
 }
 
 /// Verifies spawn_agent fork fails when the parent runtime context is missing.

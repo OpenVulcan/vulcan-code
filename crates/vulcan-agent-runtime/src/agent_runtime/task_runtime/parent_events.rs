@@ -283,8 +283,8 @@ pub(super) fn build_task_host_payload(
     })
 }
 
-/// Reads the non-secret subagent runtime debug payload from one invocation.
-/// 从单次调用中读取不含敏感提示词正文的子代理运行时调试载荷。
+/// Reads the non-secret subagent creation debug payload from one invocation.
+/// 从单次调用中读取不含敏感提示词正文的子代理创建调试载荷。
 ///
 /// # Parameters
 /// 参数
@@ -293,8 +293,8 @@ pub(super) fn build_task_host_payload(
 ///
 /// # Returns
 /// 返回值
-/// A JSON object with mode, source, fork, and snapshot diagnostics when available.
-/// 可用时返回包含模式、来源、派生和快照诊断信息的 JSON 对象。
+/// A JSON object with creation-facing diagnostics when available.
+/// 可用时返回包含创建侧诊断信息的 JSON 对象。
 pub(super) fn subagent_runtime_debug_payload(invocation: &TaskInvocationConfig) -> Value {
     invocation
         .extra
