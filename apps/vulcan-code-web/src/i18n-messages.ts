@@ -790,8 +790,8 @@ export type TranslationKey =
   | "toolPresentation.ask.running"
   | "toolPresentation.ask.ignored"
   | "toolPresentation.ask.completed"
-  | "toolPresentation.ask.questionFallback"
-  | "toolPresentation.ask.userAnswer"
+  | "toolPresentation.ask.questionLabel"
+  | "toolPresentation.ask.answerLabel"
   | "toolPresentation.ask.waitingAnswer"
   | "toolPresentation.file.count"
   | "toolPresentation.file.multiChange"
@@ -1925,8 +1925,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.ask.running": "提问中",
     "toolPresentation.ask.ignored": "已忽略",
     "toolPresentation.ask.completed": "已提问",
-    "toolPresentation.ask.questionFallback": "问题 {index}",
-    "toolPresentation.ask.userAnswer": "用户回答",
+    "toolPresentation.ask.questionLabel": "问题：",
+    "toolPresentation.ask.answerLabel": "回答：",
     "toolPresentation.ask.waitingAnswer": "等待用户回答",
     "toolPresentation.file.count": "{count} 个文件",
     "toolPresentation.file.multiChange": "多文件变更",
@@ -3057,8 +3057,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.ask.running": "Asking",
     "toolPresentation.ask.ignored": "Ignored",
     "toolPresentation.ask.completed": "Asked",
-    "toolPresentation.ask.questionFallback": "Question {index}",
-    "toolPresentation.ask.userAnswer": "User answer",
+    "toolPresentation.ask.questionLabel": "Question:",
+    "toolPresentation.ask.answerLabel": "Answer:",
     "toolPresentation.ask.waitingAnswer": "Waiting for user answer",
     "toolPresentation.file.count": "{count} files",
     "toolPresentation.file.multiChange": "Multiple file changes",

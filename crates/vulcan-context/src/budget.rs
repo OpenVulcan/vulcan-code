@@ -305,7 +305,7 @@ pub fn build_request_context_budget_snapshot_with_options(
         estimated_total_tokens,
         usage_ratio,
         observed_usage: observed_usage.cloned(),
-        severity: resolve_budget_severity(usage_ratio),
+        severity: context_budget_severity_for_ratio(usage_ratio),
     }
 }
 
@@ -406,7 +406,17 @@ pub fn build_context_budget_fingerprint(
 
 /// Returns the coarse budget severity bucket that corresponds to one usage ratio.
 /// 返回某个占用比例对应的粗粒度预算严重级别分桶。
-fn resolve_budget_severity(usage_ratio: f32) -> ContextBudgetSeverity {
+///
+/// # Parameters
+/// 参数
+/// `usage_ratio` is the estimated or observed input-token ratio against the effective window.
+/// `usage_ratio` 是估算或实测输入 token 相对有效窗口的占用比例。
+///
+/// # Returns
+/// 返回值
+/// The shared severity bucket used by both live and historical context-budget snapshots.
+/// 返回实时与历史上下文预算快照共同使用的共享严重级别分桶。
+pub fn context_budget_severity_for_ratio(usage_ratio: f32) -> ContextBudgetSeverity {
     if usage_ratio >= CONTEXT_BUDGET_OVERFLOW_RATIO {
         ContextBudgetSeverity::Overflow
     } else if usage_ratio >= CONTEXT_BUDGET_COMPACTION_RATIO {
@@ -619,6 +629,28 @@ mod tests {
         };
 
         assert_eq!(calibrated_input_token_estimate(10, Some(&usage)), 128);
+    }
+
+    /// Verifies ratio boundaries map to the shared context-budget severity buckets.
+    /// 验证占用比例边界会映射到共享上下文预算严重级别分桶。
+    #[test]
+    fn context_budget_severity_for_ratio_respects_thresholds() {
+        assert_eq!(
+            context_budget_severity_for_ratio(CONTEXT_BUDGET_WARNING_RATIO - 0.01),
+            ContextBudgetSeverity::Healthy
+        );
+        assert_eq!(
+            context_budget_severity_for_ratio(CONTEXT_BUDGET_WARNING_RATIO),
+            ContextBudgetSeverity::Warning
+        );
+        assert_eq!(
+            context_budget_severity_for_ratio(CONTEXT_BUDGET_COMPACTION_RATIO),
+            ContextBudgetSeverity::CompactSoon
+        );
+        assert_eq!(
+            context_budget_severity_for_ratio(CONTEXT_BUDGET_OVERFLOW_RATIO),
+            ContextBudgetSeverity::Overflow
+        );
     }
 
     /// Verifies anchor validation reports both budget and assembly fingerprint drift.

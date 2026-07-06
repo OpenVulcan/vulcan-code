@@ -108,36 +108,54 @@ impl TaskRuntime {
 
     /// Seeds one debug-only TaskRuntime resident subagent entry for service-layer tests.
     /// 为服务层测试播种一条仅调试构建可用的 TaskRuntime 常驻子代理条目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `seed` contains the exact task identity, ownership, display, and result fields to mirror.
+    /// `seed` 包含需要镜像的精确任务标识、归属、展示与结果字段。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` when the task record and registry entry are inserted successfully.
+    /// 任务记录与注册表条目成功写入时返回 `Ok(())`。
     #[cfg(debug_assertions)]
-    #[allow(clippy::too_many_arguments)]
     pub fn seed_debug_subagent_registry_entry(
         &self,
-        root_session_id: SessionId,
-        parent_session_id: SessionId,
-        task_id: SessionId,
-        public_task_id: String,
-        display_title: String,
-        description: Option<String>,
-        subagent: Option<String>,
-        status: TaskSessionStatus,
-        result_summary: Option<String>,
+        seed: DebugSubagentRegistryEntrySeed,
     ) -> Result<(), String> {
-        let prompt = result_summary.clone().unwrap_or_else(|| display_title.clone());
-        let mut record = build_task_session_record(
+        let DebugSubagentRegistryEntrySeed {
+            root_session_id,
+            parent_session_id,
             task_id,
             public_task_id,
-            root_session_id,
-            (parent_session_id != root_session_id).then_some(parent_session_id),
-            if parent_session_id == root_session_id { 1 } else { 2 },
+            display_title,
             description,
             subagent,
-            TaskInvocationConfig::main(prompt.clone()),
+            status,
+            result_summary,
+        } = seed;
+        let prompt = result_summary
+            .clone()
+            .unwrap_or_else(|| display_title.clone());
+        let mut record = build_task_session_record(TaskSessionRecordInit {
+            task_id,
+            public_task_id,
+            origin_session_id: root_session_id,
+            parent_task_id: (parent_session_id != root_session_id).then_some(parent_session_id),
+            depth: if parent_session_id == root_session_id {
+                1
+            } else {
+                2
+            },
+            description,
+            subagent,
+            invocation_config: TaskInvocationConfig::main(prompt.clone()),
             display_title,
-            None,
-            CoreConversationSnapshot::default(),
-            prompt,
-            status_name_for_task_session_status(status).to_string(),
-        );
+            controller_config: None,
+            snapshot: CoreConversationSnapshot::default(),
+            last_prompt: prompt,
+            last_status: status_name_for_task_session_status(status).to_string(),
+        });
         record.last_result_text = result_summary.unwrap_or_default();
         self.sessions
             .write()

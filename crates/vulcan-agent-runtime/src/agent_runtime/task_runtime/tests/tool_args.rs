@@ -355,21 +355,21 @@ fn spawn_agent_arguments_reject_nested_spawn_at_depth_one() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let child_session_id = Uuid::new_v4();
-    let child_record = build_task_session_record(
-        child_session_id,
-        String::from("worker-a"),
-        parent_session_id,
-        None,
-        1,
-        Some(String::from("Worker A")),
-        None,
-        TaskInvocationConfig::main("initial work"),
-        String::from("Worker A"),
-        None,
-        CoreConversationSnapshot::default(),
-        String::from("initial work"),
-        String::from("running"),
-    );
+    let child_record = build_task_session_record(TaskSessionRecordInit {
+        task_id: child_session_id,
+        public_task_id: String::from("worker-a"),
+        origin_session_id: parent_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: Some(String::from("Worker A")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("initial work"),
+        display_title: String::from("Worker A"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("initial work"),
+        last_status: String::from("running"),
+    });
     task_runtime
         .sessions
         .write()

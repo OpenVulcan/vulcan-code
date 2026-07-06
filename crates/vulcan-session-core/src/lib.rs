@@ -28,6 +28,9 @@ pub mod router;
 /// Shared single-source active-turn runtime kernel.
 /// 共享单一事实活动回合运行时内核。
 pub mod runtime_kernel;
+/// Shared segmented-session file IO coordination.
+/// 共享分段会话文件 IO 协调。
+pub mod segmented_file_io;
 /// Shared selector matching helpers for session-scoped routing.
 /// 共享会话级路由使用的选择器匹配辅助逻辑。
 pub mod selector;

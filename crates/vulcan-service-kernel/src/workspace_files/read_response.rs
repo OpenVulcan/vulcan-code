@@ -3,6 +3,44 @@
 
 use super::*;
 
+/// Builds the shared metadata shell for one workspace file read response.
+/// 构建单个工作区文件读取响应的共享元数据外壳。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root` is the canonical workspace root.
+/// `workspace_root` 是规范化工作区根。
+/// `file` is the canonical file path.
+/// `file` 是规范化文件路径。
+/// `metadata` is the already loaded file metadata.
+/// `metadata` 是已加载的文件元数据。
+/// `kind` is the already classified file kind.
+/// `kind` 是已完成分类的文件类别。
+///
+/// # Returns
+/// 返回值
+/// A response with path, kind, MIME, and size populated while content fields stay empty.
+/// 返回已填充路径、类别、MIME 和大小且内容字段为空的响应。
+fn workspace_file_read_response_shell(
+    workspace_root: &Path,
+    file: &Path,
+    metadata: &fs::Metadata,
+    kind: WorkspaceFileEntryKind,
+) -> WorkspaceFileReadResponse {
+    WorkspaceFileReadResponse {
+        workspace_path: normalized_workspace_path_text_from_path(workspace_root),
+        path: normalized_workspace_path_text_from_path(file),
+        relative_path: workspace_file_relative_path_text(workspace_root, file),
+        mime_type: workspace_file_mime_type(file, &kind),
+        size_bytes: metadata.len(),
+        content: None,
+        encoding: None,
+        line_count: None,
+        truncated: false,
+        kind,
+    }
+}
+
 /// Reads one code file with a bounded UTF-8 preview limit.
 /// 使用有界 UTF-8 预览限制读取单个代码文件。
 ///
@@ -53,18 +91,12 @@ pub(crate) fn workspace_file_read_code_response(
     }
     let decoded = workspace_file_decode_text_preview(&bytes);
     let line_count = decoded.content.lines().count();
-    Ok(WorkspaceFileReadResponse {
-        workspace_path: normalized_workspace_path_text_from_path(workspace_root),
-        path: normalized_workspace_path_text_from_path(file),
-        relative_path: workspace_file_relative_path_text(workspace_root, file),
-        kind,
-        mime_type: workspace_file_mime_type(file, &WorkspaceFileEntryKind::Code),
-        size_bytes: metadata.len(),
-        content: Some(decoded.content),
-        encoding: Some(decoded.encoding),
-        line_count: Some(line_count),
-        truncated,
-    })
+    let mut response = workspace_file_read_response_shell(workspace_root, file, metadata, kind);
+    response.content = Some(decoded.content);
+    response.encoding = Some(decoded.encoding);
+    response.line_count = Some(line_count);
+    response.truncated = truncated;
+    Ok(response)
 }
 
 /// Stores decoded text and the encoding label used for a workspace file preview.
@@ -127,16 +159,5 @@ pub(crate) fn workspace_file_media_response(
     metadata: &fs::Metadata,
     kind: WorkspaceFileEntryKind,
 ) -> WorkspaceFileReadResponse {
-    WorkspaceFileReadResponse {
-        workspace_path: normalized_workspace_path_text_from_path(workspace_root),
-        path: normalized_workspace_path_text_from_path(file),
-        relative_path: workspace_file_relative_path_text(workspace_root, file),
-        mime_type: workspace_file_mime_type(file, &kind),
-        size_bytes: metadata.len(),
-        content: None,
-        encoding: None,
-        line_count: None,
-        truncated: false,
-        kind,
-    }
+    workspace_file_read_response_shell(workspace_root, file, metadata, kind)
 }

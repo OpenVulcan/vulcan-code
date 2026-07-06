@@ -29,7 +29,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
         tooltip_rows.push(format!(
             "输入占用：{:.0}% · {}",
             context_budget.usage_percent(),
-            context_budget_severity_label(context_budget.severity),
+            context_budget.severity.display_label(),
         ));
         tooltip_rows.push(format!(
             "输入窗口（API实测/本地估算）：{}",
@@ -64,7 +64,7 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
 
     Some(ContextUsageSnapshot {
         percent: context_budget
-            .map(|budget| budget.usage_percent().round().clamp(0.0, 100.0) as u8)
+            .map(|budget| budget.usage_percent().round() as u8)
             .unwrap_or(0),
         severity: context_budget
             .map(context_budget_severity_key)
@@ -249,15 +249,7 @@ pub(crate) fn active_provider_configuration_model_capabilities(
 /// The broad context-budget severity bucket.
 /// 返回粗粒度上下文预算严重级别。
 pub(crate) fn historical_context_budget_severity(usage_ratio: f32) -> ContextBudgetSeverity {
-    if usage_ratio >= vulcan_context::CONTEXT_BUDGET_OVERFLOW_RATIO {
-        ContextBudgetSeverity::Overflow
-    } else if usage_ratio >= vulcan_context::CONTEXT_BUDGET_COMPACTION_RATIO {
-        ContextBudgetSeverity::CompactSoon
-    } else if usage_ratio >= vulcan_context::CONTEXT_BUDGET_WARNING_RATIO {
-        ContextBudgetSeverity::Warning
-    } else {
-        ContextBudgetSeverity::Healthy
-    }
+    vulcan_context::budget::context_budget_severity_for_ratio(usage_ratio)
 }
 
 /// Builds the context-budget token breakdown rows used by the tooltip.
@@ -272,11 +264,7 @@ pub(crate) fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapsh
     let raw_total: usize = raw_parts.iter().map(|(_, value)| *value).sum();
     let prediction_row = format!(
         "预测拆分（预算器）：{}",
-        raw_parts
-            .iter()
-            .map(|(label, value)| format!("{label} {value}"))
-            .collect::<Vec<_>>()
-            .join(" / ")
+        context_budget_token_breakdown_text(&raw_parts, None)
     );
 
     let Some(observed_input) =
@@ -287,19 +275,37 @@ pub(crate) fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapsh
     if raw_total == 0 {
         return vec![prediction_row];
     }
-    let calibrated = raw_parts
-        .iter()
-        .map(|(label, value)| {
-            let scaled = ((*value as f64 / raw_total as f64) * observed_input as f64).round();
-            format!("{label} {}", scaled as usize)
-        })
-        .collect::<Vec<_>>()
-        .join(" / ");
+    let calibrated =
+        context_budget_token_breakdown_text(&raw_parts, Some((observed_input, raw_total)));
     vec![
         String::from("说明：API实测为准；拆分已按实测输入比例校准。"),
         prediction_row,
         format!("校准拆分（实测）：{calibrated}"),
     ]
+}
+
+/// Builds one slash-separated context-budget token breakdown row.
+/// 构建单条斜杠分隔的上下文预算 Token 拆分行。
+fn context_budget_token_breakdown_text(
+    raw_parts: &[(&str, usize)],
+    calibration: Option<(usize, usize)>,
+) -> String {
+    let mut row = String::new();
+    for (label, value) in raw_parts {
+        if !row.is_empty() {
+            row.push_str(" / ");
+        }
+        let display_value = if let Some((observed_input, raw_total)) = calibration {
+            let scaled = ((*value as f64 / raw_total as f64) * observed_input as f64).round();
+            scaled as usize
+        } else {
+            *value
+        };
+        row.push_str(label);
+        row.push(' ');
+        row.push_str(&display_value.to_string());
+    }
+    row
 }
 
 /// Returns the stable context-budget severity key consumed by WebUI CSS.
@@ -308,24 +314,7 @@ pub(crate) fn context_budget_severity_key(context_budget: &ContextBudgetSnapshot
     if !context_budget.baseline_matches_active_runtime {
         return String::from("baseline-mismatch");
     }
-    match context_budget.severity {
-        ContextBudgetSeverity::Healthy => "healthy",
-        ContextBudgetSeverity::Warning => "warning",
-        ContextBudgetSeverity::CompactSoon => "compact-soon",
-        ContextBudgetSeverity::Overflow => "overflow",
-    }
-    .to_string()
-}
-
-/// Returns the user-facing context-budget severity label.
-/// 返回面向用户的上下文预算严重级别标签。
-pub(crate) fn context_budget_severity_label(severity: ContextBudgetSeverity) -> &'static str {
-    match severity {
-        ContextBudgetSeverity::Healthy => "正常",
-        ContextBudgetSeverity::Warning => "预警",
-        ContextBudgetSeverity::CompactSoon => "建议压缩",
-        ContextBudgetSeverity::Overflow => "预算溢出",
-    }
+    context_budget.severity.stable_key().to_string()
 }
 
 /// Formats one provider usage row for the context usage tooltip.
@@ -354,5 +343,58 @@ pub(crate) fn provider_usage_label(usage: &vulcan_core::types::ProviderUsageSnap
         String::from("无可用 Token 数据")
     } else {
         parts.join(" / ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one context budget snapshot for tooltip row tests.
+    /// 为提示浮层行测试构建单个上下文预算快照。
+    fn test_context_budget_snapshot() -> ContextBudgetSnapshot {
+        ContextBudgetSnapshot {
+            estimated_system_tokens: 10,
+            estimated_history_tokens: 30,
+            estimated_prompt_tokens: 20,
+            estimated_tool_tokens: 40,
+            estimated_input_tokens: 100,
+            observed_usage: Some(vulcan_core::types::ProviderUsageSnapshot {
+                input_tokens: Some(200),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Verifies context budget breakdown rows include raw and observed-calibrated text.
+    /// 验证上下文预算拆分行包含原始文本与实测校准文本。
+    #[test]
+    fn context_budget_breakdown_rows_include_calibrated_text() {
+        let context_budget = test_context_budget_snapshot();
+
+        assert_eq!(
+            context_budget_breakdown_rows(&context_budget),
+            vec![
+                String::from("说明：API实测为准；拆分已按实测输入比例校准。"),
+                String::from("预测拆分（预算器）：系统 10 / 历史 30 / 当前 20 / 工具 40"),
+                String::from("校准拆分（实测）：系统 20 / 历史 60 / 当前 40 / 工具 80"),
+            ]
+        );
+    }
+
+    /// Verifies context budget breakdown rows keep only prediction text without observed input.
+    /// 验证缺少实测输入时上下文预算拆分行只保留预测文本。
+    #[test]
+    fn context_budget_breakdown_rows_skip_calibration_without_observed_input() {
+        let mut context_budget = test_context_budget_snapshot();
+        context_budget.observed_usage = None;
+
+        assert_eq!(
+            context_budget_breakdown_rows(&context_budget),
+            vec![String::from(
+                "预测拆分（预算器）：系统 10 / 历史 30 / 当前 20 / 工具 40"
+            )]
+        );
     }
 }

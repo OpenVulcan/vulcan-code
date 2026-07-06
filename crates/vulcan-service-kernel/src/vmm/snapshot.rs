@@ -27,7 +27,7 @@ pub(crate) fn vmm_memory_snapshot(
     let selected_session = selected_workspace_session(workspace);
     let selected_project = vmm_request_project_scope(
         workspace,
-        selected_session.and_then(|session| session.project_id.as_deref()),
+        selected_session.and_then(session_summary_project_id),
     );
     let project_layer = selected_project
         .map(|project| cached_project_vmm_layer(&project.path))

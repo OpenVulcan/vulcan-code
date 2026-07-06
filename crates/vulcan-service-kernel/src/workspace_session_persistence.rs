@@ -2,6 +2,7 @@
 //! 工作区会话持久化任务。
 
 use super::*;
+use std::future::Future;
 
 /// Persists only the changed session after a WebUI runtime mutation.
 /// 在 WebUI 运行时变更后仅持久化被修改的单个会话。
@@ -41,18 +42,7 @@ pub(crate) async fn persist_workspace_session_update_unlocked(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Result<(), String> {
-    let (session, archived) = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|candidate| candidate.id == session_id)
-        .map(|session| (session, false))
-        .or_else(|| {
-            workspace_snapshot
-                .archived_sessions
-                .iter()
-                .find(|candidate| candidate.id == session_id)
-                .map(|session| (session, true))
-        })
+    let (session, archived) = workspace_session_with_archive_status(workspace_snapshot, session_id)
         .ok_or_else(|| format!("单会话保存失败：未找到会话：{session_id}"))?;
     let session_messages = if archived {
         &workspace_snapshot.archived_session_messages
@@ -86,12 +76,7 @@ pub(crate) async fn persist_workspace_session_update_unlocked(
         &[]
     };
     let compactions = session_compactions.get(&session_id).map(Vec::as_slice);
-    let task_projects = workspace_snapshot
-        .task_projects
-        .iter()
-        .cloned()
-        .chain(workspace_snapshot.archived_task_projects.iter().cloned())
-        .collect::<Vec<_>>();
+    let task_projects = workspace_task_projects_for_persistence(workspace_snapshot);
 
     vulcan_workspace_store::workspace_store::persist_single_session_update(
         controller_runtime,
@@ -124,11 +109,59 @@ pub(crate) fn workspace_snapshot_contains_regular_session(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> bool {
+    workspace_session_with_archive_status(workspace_snapshot, session_id).is_some()
+}
+
+/// Returns one session summary and whether it comes from the archived list.
+/// 返回单个会话摘要以及它是否来自归档列表。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the retained WebUI workspace snapshot.
+/// `workspace_snapshot` 是保留的 WebUI 工作区快照。
+/// `session_id` identifies the session to find in active or archived rows.
+/// `session_id` 标识需要在活动或归档行中查找的会话。
+///
+/// # Returns
+/// 返回值
+/// The matched session summary and archived flag, or `None` when absent.
+/// 返回匹配的会话摘要和归档标记；不存在时返回 `None`。
+pub(crate) fn workspace_session_with_archive_status(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<(&SessionSummary, bool)> {
     workspace_snapshot
         .sessions
         .iter()
-        .chain(workspace_snapshot.archived_sessions.iter())
-        .any(|session| session.id == session_id)
+        .find(|candidate| candidate.id == session_id)
+        .map(|session| (session, false))
+        .or_else(|| {
+            workspace_snapshot
+                .archived_sessions
+                .iter()
+                .find(|candidate| candidate.id == session_id)
+                .map(|session| (session, true))
+        })
+}
+
+/// Collects active and archived task projects for workspace-store persistence calls.
+/// 为 workspace-store 持久化调用收集活动与归档任务项目。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the retained WebUI workspace snapshot.
+/// `workspace_snapshot` 是保留的 WebUI 工作区快照。
+///
+/// # Returns
+/// 返回值
+/// A cloned project list containing active projects followed by archived projects.
+/// 返回克隆后的项目列表，顺序为活动项目在前、归档项目在后。
+pub(crate) fn workspace_task_projects_for_persistence(
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Vec<TaskProjectSummary> {
+    workspace_task_projects_including_archived(workspace_snapshot)
+        .cloned()
+        .collect()
 }
 
 /// Returns whether the retained workspace snapshot contains one active project.
@@ -155,6 +188,47 @@ pub(crate) fn workspace_snapshot_contains_active_project(
         .any(|project| project.id == project_id)
 }
 
+/// Spawns one session-versioned persistence task behind the shared workspace write gate.
+/// 在共享工作区写入闸门后启动一个按会话版本保护的持久化任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the session persistence version table.
+/// `state` 持有会话持久化版本表。
+/// `session_id` selects the session whose write version is being checked.
+/// `session_id` 选择需要检查写入版本的会话。
+/// `version_error_label` is the diagnostic text used when version allocation fails.
+/// `version_error_label` 是分配版本失败时使用的诊断文本。
+/// `persist` performs the concrete persistence write after the version is still current.
+/// `persist` 在版本仍为当前版本后执行具体持久化写入。
+fn spawn_session_versioned_workspace_persist_task<F, Fut>(
+    state: SharedServiceBridgeState,
+    session_id: SessionId,
+    version_error_label: &'static str,
+    persist: F,
+) where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    // persist_version records the newest whole-session persistence generation before spawning.
+    // persist_version 记录启动后台任务前最新的整会话持久化代际。
+    let persist_version = match next_webui_session_persist_version(&state, session_id) {
+        Ok(version) => version,
+        Err(error) => {
+            eprintln!("[webui-service] {version_error_label}: {error}");
+            return;
+        }
+    };
+    spawn_service_task(async move {
+        let persist_lock = webui_workspace_persist_lock();
+        let _persist_guard = persist_lock.lock().await;
+        if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
+            return;
+        }
+        persist().await;
+    });
+}
+
 /// Persists one WebUI session snapshot in the background without blocking visible UI updates.
 /// 在后台持久化一个 WebUI 会话快照，不阻塞可见 UI 更新。
 ///
@@ -178,30 +252,23 @@ pub(crate) fn spawn_workspace_session_persist_task(
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
         return;
     }
-    let persist_version = match next_webui_session_persist_version(&state, session_id) {
-        Ok(version) => version,
-        Err(error) => {
-            eprintln!("[webui-service] background persist version failed: {error}");
-            return;
-        }
-    };
-    spawn_service_task(async move {
-        let persist_lock = webui_workspace_persist_lock();
-        let _persist_guard = persist_lock.lock().await;
-        if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
-            return;
-        }
-        if let Err(error) = persist_workspace_session_update_unlocked(
-            controller_runtime,
-            &workspace_snapshot,
-            session_id,
-        )
-        .await
-        {
-            let reason = reason.unwrap_or_else(|| String::from("session_update"));
-            eprintln!("[webui-service] background persist failed ({reason}): {error}");
-        }
-    });
+    spawn_session_versioned_workspace_persist_task(
+        state,
+        session_id,
+        "background persist version failed",
+        move || async move {
+            if let Err(error) = persist_workspace_session_update_unlocked(
+                controller_runtime,
+                &workspace_snapshot,
+                session_id,
+            )
+            .await
+            {
+                let reason = reason.unwrap_or_else(|| String::from("session_update"));
+                eprintln!("[webui-service] background persist failed ({reason}): {error}");
+            }
+        },
+    );
 }
 
 /// Persists only one WebUI session runtime-state document in the background.
@@ -229,46 +296,41 @@ pub(crate) fn spawn_workspace_session_runtime_state_persist_task(
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
         return;
     }
-    let persist_version = match next_webui_session_persist_version(&state, session_id) {
-        Ok(version) => version,
-        Err(error) => {
-            eprintln!("[webui-service] runtime-state persist version failed: {error}");
-            return;
-        }
-    };
-    spawn_service_task(async move {
-        let persist_lock = webui_workspace_persist_lock();
-        let _persist_guard = persist_lock.lock().await;
-        if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
-            return;
-        }
-        let Some(runtime_state) = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .cloned()
-            .or_else(|| {
-                workspace_snapshot
-                    .archived_session_runtime_state
-                    .get(&session_id)
-                    .cloned()
-            })
-        else {
-            return;
-        };
-        if let Err(error) =
-            vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-                controller_runtime,
-                session_id,
-                &runtime_state,
-            )
-            .await
-        {
-            let reason_label = reason.as_deref().unwrap_or("runtime_state");
-            eprintln!(
-                "[webui-service] background runtime-state persist failed ({reason_label}): {error}"
-            );
-        }
-    });
+    spawn_session_versioned_workspace_persist_task(
+        state,
+        session_id,
+        "runtime-state persist version failed",
+        move || async move {
+            let Some(runtime_state) = workspace_snapshot
+                .session_runtime_state
+                .get(&session_id)
+                .cloned()
+                .or_else(|| {
+                    workspace_snapshot
+                        .archived_session_runtime_state
+                        .get(&session_id)
+                        .cloned()
+                })
+            else {
+                return;
+            };
+            // persist_result keeps the store call readable inside the version-gated task.
+            // persist_result 让版本门闸任务内的存储调用保持易读。
+            let persist_result =
+                vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+                    controller_runtime,
+                    session_id,
+                    &runtime_state,
+                )
+                .await;
+            if let Err(error) = persist_result {
+                let reason_label = reason.as_deref().unwrap_or("runtime_state");
+                eprintln!(
+                    "[webui-service] background runtime-state persist failed ({reason_label}): {error}"
+                );
+            }
+        },
+    );
 }
 
 /// Spawns a background write for the current visible transcript without touching runtime state.
@@ -296,8 +358,9 @@ pub(crate) fn spawn_workspace_session_transcript_persist_task(
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
         return;
     }
-    let display_messages = display_session_messages_from_workspace(&workspace_snapshot, session_id)
-        .unwrap_or_default();
+    let display_messages =
+        stable_display_session_messages_from_workspace(&workspace_snapshot, session_id)
+            .unwrap_or_default();
     if display_messages.is_empty() {
         return;
     }
@@ -384,27 +447,13 @@ pub(crate) fn spawn_workspace_session_addon_state_persist_task(
         {
             return;
         }
-        let Some((session, archived)) = workspace_snapshot
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .map(|session| (session.clone(), false))
-            .or_else(|| {
-                workspace_snapshot
-                    .archived_sessions
-                    .iter()
-                    .find(|session| session.id == session_id)
-                    .map(|session| (session.clone(), true))
-            })
+        let Some((session, archived)) =
+            workspace_session_with_archive_status(&workspace_snapshot, session_id)
+                .map(|(session, archived)| (session.clone(), archived))
         else {
             return;
         };
-        let task_projects = workspace_snapshot
-            .task_projects
-            .iter()
-            .cloned()
-            .chain(workspace_snapshot.archived_task_projects.iter().cloned())
-            .collect::<Vec<_>>();
+        let task_projects = workspace_task_projects_for_persistence(&workspace_snapshot);
         match vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update(
             controller_runtime,
             &task_projects,
@@ -431,4 +480,125 @@ pub(crate) fn spawn_workspace_session_addon_state_persist_task(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a workspace snapshot with one active and one archived session/project row.
+    /// 构建包含一条活动与一条归档会话/项目行的工作区快照。
+    fn test_workspace_snapshot_with_archived_rows(
+        active_session_id: SessionId,
+        archived_session_id: SessionId,
+    ) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                "active-project",
+                "Active Project",
+                r"D:\active-project",
+                false,
+                0,
+                None,
+                None,
+                vec![active_session_id],
+            )],
+            archived_task_projects: vec![TaskProjectSummary::new(
+                "archived-project",
+                "Archived Project",
+                r"D:\archived-project",
+                false,
+                1,
+                None,
+                None,
+                vec![archived_session_id],
+            )],
+            sessions: vec![SessionSummary::new(
+                active_session_id,
+                Some(String::from("active-project")),
+                "Active Session",
+                "",
+                SessionState::Running,
+                0,
+                0,
+                "now",
+            )],
+            archived_sessions: vec![SessionSummary::new(
+                archived_session_id,
+                Some(String::from("archived-project")),
+                "Archived Session",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "earlier",
+            )],
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: active_session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Verifies session lookup reports active and archived rows through one helper.
+    /// 验证会话查找通过同一个 helper 区分活动与归档行。
+    #[test]
+    fn workspace_session_with_archive_status_reports_active_and_archived_rows() {
+        let active_session_id = SessionId::new_v4();
+        let archived_session_id = SessionId::new_v4();
+        let missing_session_id = SessionId::new_v4();
+        let workspace_snapshot =
+            test_workspace_snapshot_with_archived_rows(active_session_id, archived_session_id);
+
+        let (active_session, active_archived) =
+            workspace_session_with_archive_status(&workspace_snapshot, active_session_id)
+                .expect("active session should be found");
+        let (archived_session, archived_archived) =
+            workspace_session_with_archive_status(&workspace_snapshot, archived_session_id)
+                .expect("archived session should be found");
+
+        assert_eq!(active_session.id, active_session_id);
+        assert!(!active_archived);
+        assert_eq!(archived_session.id, archived_session_id);
+        assert!(archived_archived);
+        assert!(workspace_snapshot_contains_regular_session(
+            &workspace_snapshot,
+            active_session_id
+        ));
+        assert!(workspace_snapshot_contains_regular_session(
+            &workspace_snapshot,
+            archived_session_id
+        ));
+        assert!(!workspace_snapshot_contains_regular_session(
+            &workspace_snapshot,
+            missing_session_id
+        ));
+    }
+
+    /// Verifies persistence project collection keeps active projects before archived projects.
+    /// 验证持久化项目收集会保持活动项目先于归档项目。
+    #[test]
+    fn workspace_task_projects_for_persistence_keeps_active_then_archived_projects() {
+        let workspace_snapshot =
+            test_workspace_snapshot_with_archived_rows(SessionId::new_v4(), SessionId::new_v4());
+
+        let project_ids = workspace_task_projects_for_persistence(&workspace_snapshot)
+            .into_iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            project_ids,
+            vec![
+                String::from("active-project"),
+                String::from("archived-project")
+            ]
+        );
+    }
 }

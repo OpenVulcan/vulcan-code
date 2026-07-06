@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[cfg(debug_assertions)]
+use vulcan_agent_runtime::agent_runtime::task_runtime::DebugSubagentRegistryEntrySeed;
+
 /// Owns one temporary segmented-session project directory created under the service data root.
 /// 持有一个创建在服务数据根目录下的临时分段会话项目目录。
 pub(super) struct TestSegmentedProjectRoot {
@@ -91,8 +94,7 @@ pub(super) fn seed_test_subagent_registry_from_panel_states(
     if guard.agent_runtime.is_none() {
         guard.agent_runtime = Some(test_agent_runtime_bridge());
     }
-    let project_root =
-        TestSegmentedProjectRoot::new(format!("registry-fixture-{root_session_id}"));
+    let project_root = TestSegmentedProjectRoot::new(format!("registry-fixture-{root_session_id}"));
     let session_dir = project_root.path().join(format!(
         "{NAVIGATION_TEST_ROOT_CREATED_DATE_FOR_SUPPORT}-{root_session_id}"
     ));
@@ -175,17 +177,18 @@ pub(super) fn seed_test_live_subagent_registry_from_panel_states(
         .task_runtime;
     for state in states {
         task_runtime
-            .seed_debug_subagent_registry_entry(
+            .seed_debug_subagent_registry_entry(DebugSubagentRegistryEntrySeed {
                 root_session_id,
-                state.parent_session_id,
-                state.task_id,
-                state.public_task_id.clone(),
-                state.subagent_label.clone(),
-                state.description.clone(),
-                Some(state.subagent_label.clone()),
-                test_task_session_status_from_panel_state(state.run_state),
-                (!state.result_text.trim().is_empty()).then_some(state.result_text.clone()),
-            )
+                parent_session_id: state.parent_session_id,
+                task_id: state.task_id,
+                public_task_id: state.public_task_id.clone(),
+                display_title: state.subagent_label.clone(),
+                description: state.description.clone(),
+                subagent: Some(state.subagent_label.clone()),
+                status: test_task_session_status_from_panel_state(state.run_state),
+                result_summary: (!state.result_text.trim().is_empty())
+                    .then_some(state.result_text.clone()),
+            })
             .expect("seed debug subagent registry entry");
     }
 }

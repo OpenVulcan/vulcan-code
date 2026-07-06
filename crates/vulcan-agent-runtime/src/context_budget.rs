@@ -9,7 +9,6 @@ use vulcan_context::budget::{
     ContextReasoningEffort, ContextTokenEstimator, RequestContextBudgetSnapshotInput,
     RequestContextBudgetSnapshotOptions, build_request_context_budget_snapshot_with_options,
 };
-#[allow(unused_imports)]
 pub use vulcan_context::{
     CONTEXT_BUDGET_COMPACTION_RATIO, CONTEXT_BUDGET_OVERFLOW_RATIO, CONTEXT_BUDGET_WARNING_RATIO,
     ContextBudgetSeverity, ContextBudgetSnapshot, ContextCompactionPolicy,

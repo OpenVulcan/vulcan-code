@@ -12,6 +12,7 @@ pub(in crate::workspace_store) fn append_segmented_session_events(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     // Load metadata first so sequence numbers and active segment remain authoritative.
     // 先加载元数据，确保序号与活动分段以元数据为准。
     let mut metadata = read_session_metadata(session_dir)?;
@@ -36,6 +37,7 @@ pub(in crate::workspace_store) fn append_segmented_boundary_events(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     // Load metadata before every batch so the store remains the only sequence authority.
     // 批量追加前先加载元数据，确保存储层始终是唯一序号来源。
     let mut metadata = read_session_metadata(session_dir)?;
@@ -69,6 +71,7 @@ pub(in crate::workspace_store) fn append_segmented_session_message_tail(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let mut metadata = read_session_metadata(session_dir)?;
     let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
     if messages.len() < first_new_index {
@@ -110,8 +113,8 @@ pub(in crate::workspace_store) fn append_segmented_session_message_tail(
     Ok(appended_lines)
 }
 
-/// Appends a transcript update, converting non-tail changes into an append-only rollback boundary.
-/// 追加一次转录更新，并将非尾部变化转换为追加式回滚边界。
+/// Appends or physically rewrites one transcript update without creating rollback bloat.
+/// 追加或物理重写一次转录更新，避免创建回滚膨胀。
 pub(in crate::workspace_store) fn append_segmented_session_message_update(
     session_dir: &Path,
     messages: &[SessionMessageEntry],
@@ -119,7 +122,7 @@ pub(in crate::workspace_store) fn append_segmented_session_message_update(
     match append_segmented_session_message_tail(session_dir, messages) {
         Ok(lines) => Ok(lines),
         Err(error) if error.contains("non-tail transcript change") => {
-            append_segmented_session_replacement(session_dir, messages)
+            rewrite_segmented_session_message_records(session_dir, messages)
         }
         Err(error) => Err(error),
     }
@@ -137,6 +140,7 @@ pub(in crate::workspace_store) fn append_segmented_session_message_suffix(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let mut metadata = read_session_metadata(session_dir)?;
     let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
     let mut new_message_ids = BTreeSet::new();
@@ -164,57 +168,144 @@ pub(in crate::workspace_store) fn append_segmented_session_message_suffix(
     Ok(appended_lines)
 }
 
-/// Appends a rollback marker followed by the full replacement transcript.
-/// 追加回滚标记，然后写入完整替换转录。
-pub(in crate::workspace_store) fn append_segmented_session_replacement(
+/// Physically rewrites persisted message rows to match the supplied transcript.
+/// 将已持久化的消息行物理重写为给定转录。
+pub(in crate::workspace_store) fn rewrite_segmented_session_message_records(
     session_dir: &Path,
     messages: &[SessionMessageEntry],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    // Rollback replacement rewrites metadata checkpoints, so it shares the append lock.
-    // 回滚替换会重写元数据检查点，因此共用追加锁。
+    // Message-row rewrites update segment files and metadata under the same append lock.
+    // 消息行重写会在同一把追加锁下更新分段文件与元数据。
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let mut metadata = read_session_metadata(session_dir)?;
     let turn_indexes = assign_segmented_message_turn_indexes(messages);
-    let timestamp = messages
-        .last()
-        .map(|message| non_empty_timestamp_text(&message.created_at))
-        .unwrap_or_else(current_unix_millis_text);
-    let replacement_history = messages
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(to_store_error)?;
-    let rollback_event = SegmentedSessionEventInput {
-        timestamp: timestamp.clone(),
-        kind: SegmentedSessionEventKind::ThreadRolledBack,
-        payload: json!({
-            "reason": "non_tail_transcript_update",
-            "replacement_message_count": messages.len(),
-            "replacement_history": replacement_history,
-        }),
-        turn_index: None,
-    };
-    let mut events = Vec::with_capacity(messages.len().saturating_add(1));
-    events.push(rollback_event);
-    events.extend(
-        messages
-            .iter()
-            .enumerate()
-            .map(|(index, message)| {
-                segmented_event_input_from_message(index, message, turn_indexes[index])
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    );
-    backfill_tool_detail_ref_sequences(
-        &mut events[1..],
-        metadata.next_global_seq.saturating_add(1),
-    );
-    let lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
+    let original_segments = metadata.segments.clone();
+    let mut rewritten_segments = Vec::new();
+    let mut changed_lines = Vec::new();
+    let mut seen_message_indexes = BTreeSet::new();
+    let mut latest_rollback_seq = None;
+    let mut highest_retained_seq = None;
+    for segment in &original_segments {
+        let segment_path = session_dir.join(&segment.file);
+        let original_lines = read_segment_event_lines(&segment_path)?;
+        let mut rewritten_lines = Vec::new();
+        for line in original_lines.iter().cloned() {
+            if line.kind == SegmentedSessionEventKind::ThreadRolledBack {
+                latest_rollback_seq = Some(line.seq);
+            }
+            if line.payload.get("message").is_none() {
+                rewritten_lines.push(line);
+                continue;
+            }
+            let message_index = segmented_line_message_index(&line)?;
+            if !seen_message_indexes.insert(message_index) {
+                return Err(format!(
+                    "Segmented session message rewrite rejected duplicate persisted message index {message_index}."
+                ));
+            }
+            let Some(message) = messages.get(message_index) else {
+                continue;
+            };
+            let rewritten_line = segmented_line_from_message(
+                line.seq,
+                message_index,
+                message,
+                turn_indexes[message_index],
+            )?;
+            if rewritten_line != line {
+                changed_lines.push(rewritten_line.clone());
+            }
+            rewritten_lines.push(rewritten_line);
+        }
+        if rewritten_lines != original_lines {
+            write_json_lines_file_atomic(&segment_path, &rewritten_lines)?;
+        }
+        if !rewritten_lines.is_empty() {
+            if let Some(segment_highest_seq) = rewritten_lines.iter().map(|line| line.seq).max() {
+                highest_retained_seq = Some(
+                    highest_retained_seq
+                        .map(|highest_seq: u64| highest_seq.max(segment_highest_seq))
+                        .unwrap_or(segment_highest_seq),
+                );
+            }
+            rewritten_segments.push(rebuild_segment_metadata(&segment.file, &rewritten_lines)?);
+        } else if segment_path.exists() {
+            fs::remove_file(&segment_path).map_err(to_store_error)?;
+        }
+    }
+    if rewritten_segments.is_empty() {
+        let empty_segment = SegmentMetadata::empty(segment_file_name(1), 0);
+        write_json_lines_file_atomic::<SegmentedSessionEventLine>(
+            &session_dir.join(&empty_segment.file),
+            &[],
+        )?;
+        metadata.active_segment = empty_segment.file.clone();
+        metadata.next_global_seq = empty_segment.start_seq;
+        metadata.segments = vec![empty_segment];
+    } else {
+        metadata.active_segment = rewritten_segments
+            .last()
+            .map(|segment| segment.file.clone())
+            .unwrap_or_else(|| segment_file_name(1));
+        metadata.next_global_seq = highest_retained_seq
+            .map(|seq| seq.saturating_add(1))
+            .unwrap_or(1);
+        metadata.segments = rewritten_segments;
+    }
+    metadata.latest_rollback_seq = latest_rollback_seq;
+    let mut missing_events = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if seen_message_indexes.contains(&index) {
+            continue;
+        }
+        missing_events.push(segmented_event_input_from_message(
+            index,
+            message,
+            turn_indexes[index],
+        )?);
+    }
+    backfill_tool_detail_ref_sequences(&mut missing_events, metadata.next_global_seq);
+    let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &missing_events)?;
+    changed_lines.extend(appended_lines);
     update_segmented_message_checkpoint(&mut metadata, messages)?;
     write_metadata(session_dir, &metadata)?;
-    Ok(lines)
+    Ok(changed_lines)
+}
+
+/// Builds one event line for an existing sequence from a transcript message.
+/// 使用既有序号从转录消息构建一条事件行。
+fn segmented_line_from_message(
+    seq: u64,
+    index: usize,
+    message: &SessionMessageEntry,
+    turn_index: i64,
+) -> Result<SegmentedSessionEventLine, String> {
+    let event = segmented_event_input_from_message(index, message, turn_index)?;
+    Ok(SegmentedSessionEventLine {
+        seq,
+        timestamp: event.timestamp,
+        kind: event.kind,
+        payload: event.payload,
+    })
+}
+
+/// Reads the persisted transcript message index from one message-bearing line.
+/// 从一条携带消息的事件行读取已持久化的转录消息索引。
+fn segmented_line_message_index(line: &SegmentedSessionEventLine) -> Result<usize, String> {
+    let index = line
+        .payload
+        .get("message_index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            format!(
+                "Segmented session message rewrite rejected message line without message_index at seq {}.",
+                line.seq
+            )
+        })?;
+    usize::try_from(index).map_err(to_store_error)
 }
 
 /// Physically truncates a segmented session before one persisted message without adding display events.
@@ -229,6 +320,7 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let mut metadata = read_session_metadata(session_dir)?;
     let mut retained_segment_lines: Vec<(String, Vec<SegmentedSessionEventLine>)> = Vec::new();
     let mut found_cutoff = false;
@@ -277,7 +369,7 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
         }
     }
     if retained_segments.is_empty() {
-        let empty_segment = SegmentMetadata::empty(segment_file_name(1), 1);
+        let empty_segment = SegmentMetadata::empty(segment_file_name(1), 0);
         write_json_lines_file_atomic::<SegmentedSessionEventLine>(
             &session_dir.join(&empty_segment.file),
             &[],
@@ -291,9 +383,11 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
             .last()
             .map(|segment| segment.file.clone())
             .unwrap_or_else(|| segment_file_name(1));
-        metadata.next_global_seq = retained_segments
-            .last()
-            .and_then(|segment| segment.start_seq.checked_add(segment.line_count))
+        metadata.next_global_seq = retained_segment_lines
+            .iter()
+            .flat_map(|(_, lines)| lines.iter().map(|line| line.seq))
+            .max()
+            .map(|seq| seq.saturating_add(1))
             .unwrap_or(1);
         metadata.segments = retained_segments;
         metadata.latest_rollback_seq = latest_rollback_seq;

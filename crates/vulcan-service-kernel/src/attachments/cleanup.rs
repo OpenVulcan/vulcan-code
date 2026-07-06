@@ -94,6 +94,20 @@ pub(crate) struct WebuiAttachmentCleanupReportSummary {
     summary: String,
 }
 
+/// Shared resolved context for one attachment cleanup operation.
+/// 单次附件清理操作的共享解析上下文。
+struct WebuiAttachmentCleanupOperationContext {
+    /// Project root path text that owns the managed attachment index.
+    /// 拥有托管附件索引的项目根路径文本。
+    project_path: String,
+    /// Normalized cutoff date text passed to the runtime cleanup layer.
+    /// 传递给运行时清理层的规范化截止日期文本。
+    cutoff_date: String,
+    /// Runtime attachment-kind selection derived from the WebUI request.
+    /// 从 WebUI 请求派生的运行时附件类型选择。
+    selection: AttachmentCleanupSelection,
+}
+
 /// Builds a project-scoped managed attachment cleanup preview for the WebUI settings dialog.
 /// 为 WebUI 设置弹窗构建项目级托管附件清理预览。
 ///
@@ -112,15 +126,20 @@ pub(crate) async fn service_preview_project_attachment_cleanup(
     state: SharedServiceBridgeState,
     request: WebuiProjectAttachmentCleanupRequest,
 ) -> Result<WebuiAttachmentCleanupPreviewSummary, String> {
-    let project_path = vmm_project_scope_path(&state, Some(&request.project_id))?;
-    let cutoff_date = request.cutoff_date.trim().to_string();
-    let selection = webui_attachment_cleanup_selection(request.selection);
-    spawn_service_blocking_task(move || {
-        let preview = preview_attachment_cleanup(&project_path, &cutoff_date, selection)?;
-        Ok(webui_attachment_cleanup_preview_summary(preview))
-    })
+    run_webui_attachment_cleanup_operation(
+        state,
+        request,
+        "附件清理预览任务失败",
+        |context| {
+            let preview = preview_attachment_cleanup(
+                &context.project_path,
+                &context.cutoff_date,
+                context.selection,
+            )?;
+            Ok(webui_attachment_cleanup_preview_summary(preview))
+        },
+    )
     .await
-    .map_err(|error| format!("附件清理预览任务失败：{error}"))?
 }
 
 /// Executes a project-scoped managed attachment cleanup for the WebUI settings dialog.
@@ -141,15 +160,61 @@ pub(crate) async fn service_execute_project_attachment_cleanup(
     state: SharedServiceBridgeState,
     request: WebuiProjectAttachmentCleanupRequest,
 ) -> Result<WebuiAttachmentCleanupReportSummary, String> {
-    let project_path = vmm_project_scope_path(&state, Some(&request.project_id))?;
-    let cutoff_date = request.cutoff_date.trim().to_string();
-    let selection = webui_attachment_cleanup_selection(request.selection);
-    spawn_service_blocking_task(move || {
-        let report = execute_attachment_cleanup(&project_path, &cutoff_date, selection)?;
-        Ok(webui_attachment_cleanup_report_summary(report))
-    })
+    run_webui_attachment_cleanup_operation(
+        state,
+        request,
+        "附件清理执行任务失败",
+        |context| {
+            let report = execute_attachment_cleanup(
+                &context.project_path,
+                &context.cutoff_date,
+                context.selection,
+            )?;
+            Ok(webui_attachment_cleanup_report_summary(report))
+        },
+    )
     .await
-    .map_err(|error| format!("附件清理执行任务失败：{error}"))?
+}
+
+/// Runs one project-scoped attachment cleanup operation on the blocking pool.
+/// 在 blocking 线程池运行单个项目级附件清理操作。
+/// Parameters: state and request resolve shared cleanup context, task_error_label names join failures, and operation performs runtime cleanup work.
+/// 参数：state 和 request 解析共享清理上下文，task_error_label 命名 join 失败，operation 执行运行时清理工作。
+/// Returns: the operation result after context resolution and blocking task completion.
+/// 返回：完成上下文解析和 blocking 任务后的操作结果。
+async fn run_webui_attachment_cleanup_operation<T, F>(
+    state: SharedServiceBridgeState,
+    request: WebuiProjectAttachmentCleanupRequest,
+    task_error_label: &'static str,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(WebuiAttachmentCleanupOperationContext) -> Result<T, String> + Send + 'static,
+{
+    let context = webui_attachment_cleanup_operation_context(&state, request)?;
+    spawn_service_blocking_task(move || operation(context))
+        .await
+        .map_err(|error| format!("{task_error_label}：{error}"))?
+}
+
+/// Resolves a WebUI attachment cleanup request into shared runtime inputs.
+/// 将 WebUI 附件清理请求解析为共享运行时输入。
+fn webui_attachment_cleanup_operation_context(
+    state: &SharedServiceBridgeState,
+    request: WebuiProjectAttachmentCleanupRequest,
+) -> Result<WebuiAttachmentCleanupOperationContext, String> {
+    Ok(WebuiAttachmentCleanupOperationContext {
+        project_path: vmm_project_scope_path(state, Some(&request.project_id))?,
+        cutoff_date: webui_attachment_cleanup_cutoff_date(&request.cutoff_date),
+        selection: webui_attachment_cleanup_selection(request.selection),
+    })
+}
+
+/// Normalizes cleanup cutoff date text from the WebUI request.
+/// 规范化 WebUI 请求中的清理截止日期文本。
+fn webui_attachment_cleanup_cutoff_date(cutoff_date: &str) -> String {
+    cutoff_date.trim().to_string()
 }
 
 /// Converts the WebUI cleanup-kind selection into the runtime attachment cleanup selection.
@@ -298,10 +363,72 @@ fn webui_attachment_cleanup_kind_summary(per_kind_counts: &BTreeMap<String, usiz
     if per_kind_counts.is_empty() {
         String::from("未匹配任何类型")
     } else {
-        per_kind_counts
-            .iter()
-            .map(|(kind, count)| format!("{kind}:{count}"))
-            .collect::<Vec<_>>()
-            .join(" / ")
+        let mut summary = String::new();
+        for (kind, count) in per_kind_counts {
+            if !summary.is_empty() {
+                summary.push_str(" / ");
+            }
+            summary.push_str(kind);
+            summary.push(':');
+            summary.push_str(&count.to_string());
+        }
+        summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies cleanup cutoff date text is trimmed before runtime use.
+    /// 验证清理截止日期文本在传给运行时前会被裁剪。
+    #[test]
+    fn webui_attachment_cleanup_cutoff_date_trims_text() {
+        assert_eq!(
+            webui_attachment_cleanup_cutoff_date("  2026-07-06  "),
+            "2026-07-06"
+        );
+    }
+
+    /// Verifies WebUI cleanup kind switches are mapped without inversion.
+    /// 验证 WebUI 清理类型开关映射时不会反转。
+    #[test]
+    fn webui_attachment_cleanup_selection_maps_kind_flags() {
+        let selection = webui_attachment_cleanup_selection(WebuiAttachmentCleanupSelection {
+            image: true,
+            audio: false,
+            video: true,
+            pdf: false,
+        });
+
+        assert!(selection.image);
+        assert!(!selection.audio);
+        assert!(selection.video);
+        assert!(!selection.pdf);
+    }
+
+    /// Verifies cleanup kind summaries are formatted in stable key order.
+    /// 验证清理类型摘要会按稳定键顺序格式化。
+    #[test]
+    fn webui_attachment_cleanup_kind_summary_formats_counts_in_key_order() {
+        let mut per_kind_counts = BTreeMap::new();
+        per_kind_counts.insert(String::from("video"), 2);
+        per_kind_counts.insert(String::from("image"), 3);
+        per_kind_counts.insert(String::from("audio"), 1);
+
+        assert_eq!(
+            webui_attachment_cleanup_kind_summary(&per_kind_counts),
+            "audio:1 / image:3 / video:2"
+        );
+    }
+
+    /// Verifies cleanup kind summaries keep the empty preview label.
+    /// 验证清理类型摘要会保留空预览文案。
+    #[test]
+    fn webui_attachment_cleanup_kind_summary_keeps_empty_label() {
+        assert_eq!(
+            webui_attachment_cleanup_kind_summary(&BTreeMap::new()),
+            "未匹配任何类型"
+        );
     }
 }

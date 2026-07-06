@@ -68,33 +68,17 @@ fn transcript_mapping_marks_only_user_prompts_and_assistant_outputs_as_visible_t
     );
 }
 
-/// Verifies segment turn-range pruning skips impossible segments and keeps unknown ranges safe.
-/// 验证分段轮次范围裁剪会跳过不可能命中的分段，并对未知范围保持保守。
-#[test]
-fn segment_may_contain_turn_uses_known_bounds_conservatively() {
-    let mut segment = SegmentMetadata::empty("s001.jsonl".to_string(), 0);
-    assert!(segment_may_contain_turn(&segment, 3));
-
-    segment.first_turn_index = Some(2);
-    segment.last_turn_index = Some(4);
-    assert!(segment_may_contain_turn(&segment, 3));
-    assert!(!segment_may_contain_turn(&segment, 1));
-    assert!(!segment_may_contain_turn(&segment, 5));
-
-    segment.first_turn_index = Some(6);
-    segment.last_turn_index = None;
-    assert!(!segment_may_contain_turn(&segment, 5));
-    assert!(segment_may_contain_turn(&segment, 6));
-}
-
 /// Verifies metadata patching updates metadata without modifying segment files.
 /// 验证元数据补丁会更新元数据且不会修改分段文件。
 #[test]
 fn metadata_patch_does_not_touch_segment_lines() {
     let root = test_root("metadata_patch_does_not_touch_segment_lines");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let before_lines = read_segment_event_lines(&session_dir.join("s001.jsonl"))
         .expect("read segment before patch");
 
@@ -123,7 +107,8 @@ fn metadata_patch_does_not_touch_segment_lines() {
 fn archive_and_restore_preserve_segment_lines() {
     let root = test_root("archive_and_restore_preserve_segment_lines");
     let request = test_session_request(SegmentPolicy::default());
-    let session_dir = create_segmented_session(&root, request.clone()).expect("create session");
+    let session_dir = create_segmented_session_in_location(&root, false, request.clone())
+        .expect("create session");
     append_segmented_session_events(
         &session_dir,
         &[test_event(
@@ -175,13 +160,14 @@ fn archive_and_restore_preserve_segment_lines() {
     assert_eq!(restored_metadata.archived_at, None);
 }
 
-/// Verifies archive, restore, and delete can locate segmented directories by session id alone.
-/// 验证归档、恢复与删除可仅按会话标识定位分段目录。
+/// Verifies id-based archive still feeds exact-date restore and delete paths.
+/// 验证按标识归档后仍可进入精确日期恢复与删除路径。
 #[test]
-fn archive_restore_and_delete_by_id_locate_session_directory() {
-    let root = test_root("archive_restore_and_delete_by_id_locate_session_directory");
+fn archive_by_id_then_restore_and_delete_by_created_date() {
+    let root = test_root("archive_by_id_then_restore_and_delete_by_created_date");
     let request = test_session_request(SegmentPolicy::default());
-    let session_dir = create_segmented_session(&root, request.clone()).expect("create session");
+    let session_dir = create_segmented_session_in_location(&root, false, request.clone())
+        .expect("create session");
 
     let archived_dir = archive_segmented_session_by_id(
         &root,
@@ -194,13 +180,14 @@ fn archive_restore_and_delete_by_id_locate_session_directory() {
     assert!(!session_dir.exists());
     assert!(archived_dir.exists());
 
-    let restored_dir = restore_segmented_session_by_id(
+    let restored_dir = restore_segmented_session_by_created_date(
         &root,
         &request.project_tag,
+        &request.created_date,
         &request.session_id,
         "2026-06-06T12:30:00Z",
     )
-    .expect("restore by id")
+    .expect("restore by created date")
     .expect("restored path");
     assert!(!archived_dir.exists());
     assert!(restored_dir.exists());
@@ -215,12 +202,24 @@ fn archive_restore_and_delete_by_id_locate_session_directory() {
     .expect("archived path");
     assert!(archived_dir.exists());
     assert!(
-        delete_segmented_session_by_id(&root, true, &request.project_tag, &request.session_id)
-            .expect("delete archived by id")
+        delete_segmented_session_by_created_date(
+            &root,
+            true,
+            &request.project_tag,
+            &request.created_date,
+            &request.session_id,
+        )
+        .expect("delete archived by created date")
     );
     assert!(!archived_dir.exists());
     assert!(
-        !delete_segmented_session_by_id(&root, true, &request.project_tag, &request.session_id)
-            .expect("missing delete is no-op")
+        !delete_segmented_session_by_created_date(
+            &root,
+            true,
+            &request.project_tag,
+            &request.created_date,
+            &request.session_id,
+        )
+        .expect("missing delete is no-op")
     );
 }

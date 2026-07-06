@@ -388,74 +388,172 @@ pub(crate) fn vmm_memory_action_result(
     request: Value,
     outcome: vulcan_service_runtime::vmm_management::VmmManagementOutcome,
 ) -> Result<VmmMemoryActionResult, String> {
-    let summary = outcome.summary();
-    let (kind, response) = match outcome {
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::Healthz(status) => {
-            ("healthz", json!({ "status": status }))
+    use vulcan_service_runtime::vmm_management::VmmManagementOutcome;
+
+    let (kind, summary, response) = match outcome {
+        VmmManagementOutcome::Healthz(status) => (
+            "healthz",
+            format!("VMM 连接正常：{status}"),
+            json!({ "status": status }),
+        ),
+        VmmManagementOutcome::UsersAndProjects { users, projects } => {
+            let summary = format!(
+                "用户 {} 个；项目 {} 个。",
+                users.users.len(),
+                projects.projects.len()
+            );
+            (
+                "users_projects",
+                summary,
+                json!({ "users": users.users, "projects": projects.projects }),
+            )
         }
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::UsersAndProjects {
-            users,
-            projects,
-        } => (
-            "users_projects",
-            json!({ "users": users.users, "projects": projects.projects }),
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::Resolved {
-            user,
-            project,
-        } => ("resolved", json!({ "user": user, "project": project })),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::EnsureProject(response) => (
-            "ensure_project",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::DeleteUser(response) => (
-            "delete_user",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::DeleteProject(response) => (
-            "delete_project",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::MigrateProject(response) => (
-            "migrate_project",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ProfileNodes(response) => (
-            "profile_nodes",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ProfileBundle(response) => (
-            "profile_bundle",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ProfileInstruction(
-            response,
-        ) => (
-            "profile_instruction",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ResolveUser(response) => (
-            "resolve_user",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::SearchMemoryEvents(
-            response,
-        ) => (
-            "search_memory_events",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::GetTurnDetails(response) => (
-            "get_turn_details",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::WriteMemories(response) => (
-            "write_memories",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
-        vulcan_service_runtime::vmm_management::VmmManagementOutcome::DeleteMemories(response) => (
-            "delete_memories",
-            serde_json::to_value(response).map_err(vmm_json_error)?,
-        ),
+        VmmManagementOutcome::Resolved { user, project } => {
+            let user_text = user
+                .user
+                .as_ref()
+                .map(|entry| format!("{}:{}", entry.user_id, entry.user_name))
+                .unwrap_or_else(|| user.message.clone());
+            let project_text = project
+                .project
+                .as_ref()
+                .map(|entry| format!("{}:{}", entry.project_id, entry.display_path))
+                .unwrap_or_else(|| project.message.clone());
+            (
+                "resolved",
+                format!("用户 {user_text}；项目 {project_text}。"),
+                json!({ "user": user, "project": project }),
+            )
+        }
+        VmmManagementOutcome::EnsureProject(response) => {
+            let project_text = response
+                .project
+                .as_ref()
+                .map(|entry| format!("{}:{}", entry.project_id, entry.display_path))
+                .unwrap_or_else(|| response.message.clone());
+            let summary = format!(
+                "项目预检：{project_text}；exists={}；needs_confirm={}。",
+                response.exists, response.needs_confirm
+            );
+            ("ensure_project", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::DeleteUser(response) => {
+            let summary = format!(
+                "删除用户：{}；requires_confirmation={}；deleted_users={}；deleted_memories={}；deleted_profiles={}。",
+                response.message,
+                response.requires_confirmation,
+                response.deleted_users,
+                response.deleted_memories,
+                response.deleted_profiles
+            );
+            ("delete_user", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::DeleteProject(response) => {
+            let summary = format!(
+                "删除项目：{}；needs_confirm={}；deleted_projects={}；deleted_memories={}；deleted_profiles={}。",
+                response.message,
+                response.needs_confirm,
+                response.deleted_projects,
+                response.deleted_memories,
+                response.deleted_profiles
+            );
+            ("delete_project", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::MigrateProject(response) => {
+            let summary = format!(
+                "迁移项目：{}；needs_confirm={}；migrated_sessions={}；migrated_memories={}；rebuilt_vectors={}。",
+                response.message,
+                response.needs_confirm,
+                response.migrated_sessions,
+                response.migrated_memories,
+                response.rebuilt_vector_rows
+            );
+            ("migrate_project", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::ProfileNodes(response) => {
+            let summary = format!("已读取 {} 个 active 画像节点。", response.nodes.len());
+            ("profile_nodes", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::ProfileBundle(response) => {
+            let summary = format!(
+                "画像 bundle 已读取：combined={} 字符，team={}，space={}，project={}，user={}。",
+                response.combined_text.chars().count(),
+                response.team_profile.chars().count(),
+                response.space_profile.chars().count(),
+                response.project_profile.chars().count(),
+                response.user_profile.chars().count()
+            );
+            ("profile_bundle", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::ProfileInstruction(response) => {
+            let summary = format!(
+                "画像指令已应用：instruction_id={}；accepted={}；retired={}。",
+                response.instruction_id,
+                response.accepted_nodes.len(),
+                response.retired_nodes.len()
+            );
+            (
+                "profile_instruction",
+                summary,
+                vmm_response_value(response)?,
+            )
+        }
+        VmmManagementOutcome::ResolveUser(response) => {
+            let user_text = response
+                .user
+                .as_ref()
+                .map(|entry| format!("{}:{}", entry.user_id, entry.user_name))
+                .unwrap_or_else(|| response.message.clone());
+            let summary = format!(
+                "用户解析：{user_text}；created={}；exists={}。",
+                response.created, response.exists
+            );
+            ("resolve_user", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::SearchMemoryEvents(response) => {
+            let hit_count = response
+                .results
+                .iter()
+                .map(|group| group.hits.len())
+                .sum::<usize>();
+            let summary = format!(
+                "记忆检索完成：queries={}；hits={}；trace={}。",
+                response.results.len(),
+                hit_count,
+                response.trace_id
+            );
+            (
+                "search_memory_events",
+                summary,
+                vmm_response_value(response)?,
+            )
+        }
+        VmmManagementOutcome::GetTurnDetails(response) => {
+            let summary = format!(
+                "Turn 详情读取完成：turns={}；trace={}。",
+                response.turns.len(),
+                response.trace_id
+            );
+            ("get_turn_details", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::WriteMemories(response) => {
+            let summary = format!(
+                "主动写入完成：items={}；trace={}。",
+                response.items.len(),
+                response.trace_id
+            );
+            ("write_memories", summary, vmm_response_value(response)?)
+        }
+        VmmManagementOutcome::DeleteMemories(response) => {
+            let summary = format!(
+                "记忆删除完成：deleted={}；not_found={}；vectors={}；trace={}。",
+                response.deleted_memory_ids.len(),
+                response.not_found_memory_ids.len(),
+                response.deleted_vector_rows,
+                response.trace_id
+            );
+            ("delete_memories", summary, vmm_response_value(response)?)
+        }
     };
     Ok(VmmMemoryActionResult {
         action: action.to_string(),
@@ -464,6 +562,12 @@ pub(crate) fn vmm_memory_action_result(
         request,
         response,
     })
+}
+
+/// Serializes one VMM response payload for a WebUI action result.
+/// 为 WebUI 动作结果序列化单个 VMM 响应载荷。
+fn vmm_response_value(response: impl serde::Serialize) -> Result<Value, String> {
+    serde_json::to_value(response).map_err(vmm_json_error)
 }
 
 /// Formats a JSON projection error for VMM responses.

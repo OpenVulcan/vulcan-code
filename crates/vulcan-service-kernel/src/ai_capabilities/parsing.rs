@@ -26,6 +26,23 @@ pub(crate) fn parse_ai_capability_connection_mode(
     }
 }
 
+/// Trims one AI capability target selector and discards empty values.
+/// 修剪单个 AI 能力目标选择器并丢弃空值。
+///
+/// # Parameters
+/// 参数
+/// `raw_selector` is the selector string received from the WebUI payload.
+/// `raw_selector` 是从 WebUI 载荷接收的选择器字符串。
+///
+/// # Returns
+/// 返回值
+/// A non-empty trimmed selector, or `None` when the payload item is blank.
+/// 返回非空的已修剪选择器；当载荷项为空白时返回 `None`。
+fn clean_ai_capability_target_selector(raw_selector: String) -> Option<String> {
+    let selector = raw_selector.trim();
+    (!selector.is_empty()).then(|| selector.to_string())
+}
+
 /// Parses prompt-level AI capability target order overrides from the WebUI payload.
 /// 从 WebUI 载荷中解析提示词级 AI 能力目标顺序覆盖。
 ///
@@ -52,8 +69,7 @@ pub(crate) fn parse_ai_capability_target_order_overrides(
         };
         let cleaned_selectors = selectors
             .into_iter()
-            .map(|selector| selector.trim().to_string())
-            .filter(|selector| !selector.is_empty())
+            .filter_map(clean_ai_capability_target_selector)
             .collect::<Vec<_>>();
         if !cleaned_selectors.is_empty() {
             overrides.insert(kind, cleaned_selectors);
@@ -80,7 +96,54 @@ pub(crate) fn parse_ai_capability_target_selectors(
     raw_selectors
         .unwrap_or_default()
         .into_iter()
-        .map(|selector| selector.trim().to_string())
-        .filter(|selector| !selector.is_empty())
+        .filter_map(clean_ai_capability_target_selector)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies target order overrides share the canonical selector cleanup rule.
+    /// 验证目标顺序覆盖复用标准选择器清洗规则。
+    #[test]
+    fn target_order_overrides_trim_and_drop_blank_selectors() {
+        let overrides = parse_ai_capability_target_order_overrides(Some(BTreeMap::from([(
+            String::from("understand_image"),
+            vec![
+                String::from("  vendor-a/vision  "),
+                String::from("  "),
+                String::from("vendor-b/vision"),
+            ],
+        )])))
+        .expect("valid capability kind should parse");
+
+        assert_eq!(
+            overrides.get(&AiToolKind::UnderstandImage),
+            Some(&vec![
+                String::from("vendor-a/vision"),
+                String::from("vendor-b/vision")
+            ])
+        );
+    }
+
+    /// Verifies selector set parsing trims, drops blanks, and deduplicates values.
+    /// 验证选择器集合解析会修剪、丢弃空白并去重。
+    #[test]
+    fn target_selectors_trim_drop_blank_and_deduplicate() {
+        let selectors = parse_ai_capability_target_selectors(Some(vec![
+            String::from("  vendor-a/vision  "),
+            String::from(""),
+            String::from("vendor-a/vision"),
+            String::from("vendor-b/vision"),
+        ]));
+
+        assert_eq!(
+            selectors,
+            BTreeSet::from([
+                String::from("vendor-a/vision"),
+                String::from("vendor-b/vision")
+            ])
+        );
+    }
 }

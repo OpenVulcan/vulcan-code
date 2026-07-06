@@ -466,13 +466,31 @@ pub(crate) fn cached_project_vmm_layer_for_session(
     workspace: &WorkspaceSnapshot,
     session: &SessionSummary,
 ) -> Option<vulcan_vmm::VmmConfigLayer> {
-    let project_id = session.project_id.as_deref()?;
-    workspace
-        .task_projects
-        .iter()
-        .chain(workspace.archived_task_projects.iter())
-        .find(|project| project.id == project_id)
+    let project_id = session_summary_project_id(session)?;
+    workspace_task_project_for_project_id_including_archived(workspace, project_id)
         .map(|project| cached_project_vmm_layer(&project.path))
+}
+
+/// Returns whether one session belongs to a restorable project id.
+/// 返回单个会话是否属于可恢复的项目标识。
+///
+/// # Parameters
+/// 参数
+/// `session` is the session whose project binding should be checked.
+/// `session` 是需要检查项目归属的会话。
+/// `restorable_project_ids` contains visible and archived project ids that can restore sessions.
+/// `restorable_project_ids` 包含可恢复会话的可见与归档项目标识。
+///
+/// # Returns
+/// 返回值
+/// `true` when the session has a non-blank project id that is restorable.
+/// 当会话拥有非空白且可恢复的项目标识时返回 `true`。
+fn session_has_restorable_project_id(
+    session: &SessionSummary,
+    restorable_project_ids: &BTreeSet<&str>,
+) -> bool {
+    session_summary_project_id(session)
+        .is_some_and(|project_id| restorable_project_ids.contains(project_id))
 }
 
 /// Builds compact RuntimeEvent metadata for WebUI trace logs.
@@ -626,11 +644,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         hydrated_conversation_windows,
         native_tools,
     } = input;
-    let selected_conversation_id = if workspace.selected_session == SessionId::nil() {
-        None
-    } else {
-        Some(workspace.selected_session.to_string())
-    };
+    let selected_conversation_id =
+        selected_workspace_session_id(workspace).map(|session_id| session_id.to_string());
     let pending_question = selected_conversation_id
         .as_ref()
         .and_then(|conversation_id| {
@@ -667,10 +682,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         .unwrap_or(ai_tool_configuration);
     let ai_capability_model_capabilities =
         active_provider_configuration_model_capabilities(provider_configuration);
-    let restorable_project_ids = workspace
-        .task_projects
-        .iter()
-        .chain(workspace.archived_task_projects.iter())
+    let restorable_project_ids = workspace_task_projects_including_archived(workspace)
         .map(|project| project.id.as_str())
         .collect::<BTreeSet<_>>();
     let pending_prompts_by_conversation = workspace
@@ -705,20 +717,13 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                         Some(runtime_state),
                     )
                 });
-            if session_goal.is_none()
-                && session_todolist.is_none()
-                && session_plan_mode.is_none()
-                && session_vmm_policy.is_none()
-            {
-                return None;
-            }
-            Some(SessionAddonsChangedDelta {
-                conversation_id: session.id.to_string(),
+            session_addons_changed_delta_for_retained_list(
+                session.id.to_string(),
                 session_goal,
                 session_todolist,
                 session_plan_mode,
                 session_vmm_policy,
-            })
+            )
         })
         .collect::<Vec<_>>();
     let session_vmm_policies_by_conversation = workspace
@@ -801,7 +806,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                         unread,
                         Some(session.updated_at.clone()),
                     ),
-                    project_id: session.project_id.clone(),
+                    project_id: session_summary_project_id_owned(session),
                     fork_source: conversation_fork_source_summary_from_session(session),
                 }
             })
@@ -821,12 +826,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         archived_conversations: workspace
             .archived_sessions
             .iter()
-            .filter(|session| {
-                session
-                    .project_id
-                    .as_deref()
-                    .is_some_and(|project_id| restorable_project_ids.contains(project_id))
-            })
+            .filter(|session| session_has_restorable_project_id(session, &restorable_project_ids))
             .filter(|session| session_segmented_metadata_exists(session))
             .map(|session| ConversationSummary {
                 id: session.id.to_string(),
@@ -837,7 +837,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 last_updated_at: session.updated_at.clone(),
                 unread: false,
                 attention: None,
-                project_id: session.project_id.clone(),
+                project_id: session_summary_project_id_owned(session),
                 fork_source: conversation_fork_source_summary_from_session(session),
             })
             .collect(),
@@ -923,5 +923,113 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             provider_configuration,
             ai_tool_configuration,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::*;
+
+    /// Builds one workspace snapshot for cached project VMM layer tests.
+    /// 构建用于缓存项目 VMM 配置层测试的工作区快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the session stored in the snapshot.
+    /// `session_id` 是写入快照的会话标识。
+    /// `session_project_id` is the project id stored on the session.
+    /// `session_project_id` 是写入会话的项目标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A workspace snapshot containing one whitespace-id project and one session.
+    /// 返回包含一个空白标识项目与一个会话的工作区快照。
+    fn workspace_snapshot_with_blank_project(
+        session_id: SessionId,
+        session_project_id: Option<String>,
+    ) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                "   ",
+                "Blank Project",
+                r"D:\projects\blank",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                session_project_id,
+                "VMM 投影测试会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Verifies blank session project ids do not resolve cached project VMM layers.
+    /// 验证空白会话项目标识不会解析缓存项目 VMM 配置层。
+    #[test]
+    fn cached_project_vmm_layer_for_session_ignores_blank_project_id() {
+        // session_id identifies the session whose VMM layer is resolved.
+        // session_id 标识需要解析 VMM 配置层的会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot contains a whitespace-id project that must not be selected.
+        // workspace_snapshot 包含一个不应被选中的空白标识项目。
+        let workspace_snapshot =
+            workspace_snapshot_with_blank_project(session_id, Some(String::from("   ")));
+
+        assert!(
+            cached_project_vmm_layer_for_session(
+                &workspace_snapshot,
+                &workspace_snapshot.sessions[0]
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies archived-session restoration ignores blank project ids.
+    /// 验证归档会话恢复会忽略空白项目标识。
+    #[test]
+    fn session_has_restorable_project_id_ignores_blank_project_id() {
+        // session stores the archived conversation project id under test.
+        // session 保存测试中的归档会话项目标识。
+        let session = SessionSummary::new(
+            SessionId::new_v4(),
+            Some(String::from("   ")),
+            "归档会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        );
+        // restorable_project_ids intentionally contains the same blank id.
+        // restorable_project_ids 故意包含相同的空白标识。
+        let restorable_project_ids = BTreeSet::from(["   "]);
+
+        assert!(!session_has_restorable_project_id(
+            &session,
+            &restorable_project_ids
+        ));
     }
 }

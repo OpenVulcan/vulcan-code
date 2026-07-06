@@ -13,7 +13,6 @@ pub(super) fn load_segmented_window_messages(
     session_id: SessionId,
     before_ordinal: Option<i64>,
     requested_limit: usize,
-    source_preference: SegmentedWindowSourcePreference,
 ) -> Result<Option<SegmentedWindowMessages>, String> {
     let Some(locator) = locator else {
         return Ok(None);
@@ -25,21 +24,60 @@ pub(super) fn load_segmented_window_messages(
     };
     let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     let before_seq = before_ordinal.and_then(|value| u64::try_from(value).ok());
-    if matches!(
-        source_preference,
-        SegmentedWindowSourcePreference::SessionBoundaryFirst
-    ) && let Some(mut window) =
+    if let Some(mut window) =
         load_segmented_boundary_window_messages(&session_dir, before_seq, requested_limit)?
     {
         if let Some(raw_window) =
             load_segmented_raw_window_messages(&session_dir, before_seq, requested_limit)?
         {
-            window.tool_detail_messages = raw_window.tool_detail_messages;
-            window.has_more_history = window.has_more_history || raw_window.has_more_history;
+            merge_raw_timeline_window_into_boundary_window(&mut window, raw_window);
         }
         return Ok(Some(window));
     }
     load_segmented_raw_window_messages(&session_dir, before_seq, requested_limit)
+}
+
+/// Merges a raw segmented window into a boundary-projected window for visible timeline hydration.
+/// 将 raw 分段窗口合并到 boundary 投影窗口，用于可见时间线水合。
+/// Parameters: `boundary_window` is mutated in place, and `raw_window` is the raw display window read from segmented event rows.
+/// 参数：`boundary_window` 会被就地更新，`raw_window` 是从分段事件行读取的 raw 展示窗口。
+/// Returns nothing.
+/// 返回值：无。
+pub(super) fn merge_raw_timeline_window_into_boundary_window(
+    boundary_window: &mut SegmentedWindowMessages,
+    raw_window: SegmentedWindowMessages,
+) {
+    let raw_has_timeline_process_rows = raw_window
+        .messages
+        .iter()
+        .any(session_message_is_timeline_process_row);
+    let raw_has_more_history = raw_window.has_more_history;
+    let raw_earliest_ordinal = raw_window.earliest_ordinal;
+    boundary_window.tool_detail_messages = raw_window.tool_detail_messages;
+    boundary_window.has_more_history = boundary_window.has_more_history || raw_has_more_history;
+
+    if raw_has_timeline_process_rows {
+        boundary_window.messages = raw_window.messages;
+        boundary_window.full_messages = raw_window.full_messages;
+        boundary_window.earliest_ordinal =
+            raw_earliest_ordinal.or(boundary_window.earliest_ordinal);
+    }
+}
+
+/// Returns whether a session message is a timeline-only process row that boundary projection may omit.
+/// 返回会话消息是否为 boundary 投影可能省略的时间线专用过程行。
+/// Parameters: `message` is the persisted session message entry being classified.
+/// 参数：`message` 是正在分类的已持久化会话消息项。
+/// Return value: `true` means the row must stay visible in the main transcript timeline.
+/// 返回值：`true` 表示该行必须保留在主转录时间线中可见。
+fn session_message_is_timeline_process_row(message: &SessionMessageEntry) -> bool {
+    matches!(
+        message.record_kind,
+        SessionMessageRecordKind::ToolCallOutput
+            | SessionMessageRecordKind::ToolResultOutput
+            | SessionMessageRecordKind::TurnStats
+            | SessionMessageRecordKind::CompactionStatus
+    )
 }
 
 /// Loads one raw segmented display window from message-bearing event lines.

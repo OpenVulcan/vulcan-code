@@ -167,75 +167,75 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
             .expect("task session registry should be writable");
         sessions.insert(
             parent_task_id,
-            build_task_session_record(
-                parent_task_id,
-                String::from("parent"),
-                root_session_id,
-                None,
-                1,
-                None,
-                None,
-                TaskInvocationConfig::main("parent prompt"),
-                String::from("parent"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("parent prompt"),
-                String::from("running"),
-            ),
+            build_task_session_record(TaskSessionRecordInit {
+                task_id: parent_task_id,
+                public_task_id: String::from("parent"),
+                origin_session_id: root_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: None,
+                subagent: None,
+                invocation_config: TaskInvocationConfig::main("parent prompt"),
+                display_title: String::from("parent"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("parent prompt"),
+                last_status: String::from("running"),
+            }),
         );
         sessions.insert(
             child_task_id,
-            build_task_session_record(
-                child_task_id,
-                String::from("child"),
-                root_session_id,
-                Some(parent_task_id),
-                2,
-                None,
-                None,
-                TaskInvocationConfig::main("child prompt"),
-                String::from("child"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("child prompt"),
-                String::from("running"),
-            ),
+            build_task_session_record(TaskSessionRecordInit {
+                task_id: child_task_id,
+                public_task_id: String::from("child"),
+                origin_session_id: root_session_id,
+                parent_task_id: Some(parent_task_id),
+                depth: 2,
+                description: None,
+                subagent: None,
+                invocation_config: TaskInvocationConfig::main("child prompt"),
+                display_title: String::from("child"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("child prompt"),
+                last_status: String::from("running"),
+            }),
         );
         sessions.insert(
             grandchild_task_id,
-            build_task_session_record(
-                grandchild_task_id,
-                String::from("grandchild"),
-                root_session_id,
-                Some(child_task_id),
-                3,
-                None,
-                None,
-                TaskInvocationConfig::main("grandchild prompt"),
-                String::from("grandchild"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("grandchild prompt"),
-                String::from("running"),
-            ),
+            build_task_session_record(TaskSessionRecordInit {
+                task_id: grandchild_task_id,
+                public_task_id: String::from("grandchild"),
+                origin_session_id: root_session_id,
+                parent_task_id: Some(child_task_id),
+                depth: 3,
+                description: None,
+                subagent: None,
+                invocation_config: TaskInvocationConfig::main("grandchild prompt"),
+                display_title: String::from("grandchild"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("grandchild prompt"),
+                last_status: String::from("running"),
+            }),
         );
         sessions.insert(
             sibling_task_id,
-            build_task_session_record(
-                sibling_task_id,
-                String::from("sibling"),
-                root_session_id,
-                None,
-                1,
-                None,
-                None,
-                TaskInvocationConfig::main("sibling prompt"),
-                String::from("sibling"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("sibling prompt"),
-                String::from("running"),
-            ),
+            build_task_session_record(TaskSessionRecordInit {
+                task_id: sibling_task_id,
+                public_task_id: String::from("sibling"),
+                origin_session_id: root_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: None,
+                subagent: None,
+                invocation_config: TaskInvocationConfig::main("sibling prompt"),
+                display_title: String::from("sibling"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("sibling prompt"),
+                last_status: String::from("running"),
+            }),
         );
     }
 
@@ -501,21 +501,21 @@ fn resolve_task_session_id_reuses_existing_public_task_identifier() {
         .expect("task session registry should be writable")
         .insert(
             first.task_id,
-            build_task_session_record(
-                first.task_id,
-                first.public_task_id.clone(),
-                parent_session_id,
-                None,
-                1,
-                None,
-                None,
-                TaskInvocationConfig::main("inspect readme"),
-                String::from("research_readme"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("inspect readme"),
-                String::from("created"),
-            ),
+            build_task_session_record(TaskSessionRecordInit {
+                task_id: first.task_id,
+                public_task_id: first.public_task_id.clone(),
+                origin_session_id: parent_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: None,
+                subagent: None,
+                invocation_config: TaskInvocationConfig::main("inspect readme"),
+                display_title: String::from("research_readme"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("inspect readme"),
+                last_status: String::from("created"),
+            }),
         );
 
     let resumed = resolve_task_session_id(
@@ -528,6 +528,75 @@ fn resolve_task_session_id_reuses_existing_public_task_identifier() {
     assert_eq!(resumed.task_id, first.task_id);
     assert_eq!(resumed.public_task_id, first.public_task_id);
     assert!(resumed.is_resumed);
+}
+
+/// Verifies persisted metadata keeps description and subagent profile identity separate when restored.
+/// 验证持久化元数据恢复时会区分描述与子代理配置身份。
+#[test]
+fn persisted_metadata_restore_uses_profile_id_as_subagent_label() {
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let requested_config = SessionRequestedConfig {
+        subagent_profile_id: Some(String::from("engineering/code-reviewer")),
+        ..Default::default()
+    };
+    let effective_config = SessionEffectiveConfig {
+        subagent_profile_id: Some(String::from("engineering/code-reviewer")),
+        ..Default::default()
+    };
+    let mut metadata = TaskSessionMetadata::new(vulcan_task_session::TaskSessionMetadataInit {
+        root_session_id: SessionNodeId::from(root_session_id),
+        task_session_id: SessionNodeId::from(task_id),
+        parent: ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        public_task_id: String::from("review-worker"),
+        display_title: String::from("Review code"),
+        requested_config,
+        effective_config,
+        depth: 1,
+        timestamp_ms: 100,
+    });
+    metadata.description = Some(String::from("Review the changed Rust files"));
+    metadata.last_result_summary = Some(String::from("Review complete"));
+
+    let record = task_session_record_from_persisted_metadata(
+        &metadata,
+        None,
+        String::from("resume review"),
+        TaskInvocationConfig::main("resume review"),
+        None,
+        None,
+    )
+    .expect("persisted metadata should restore");
+    assert_eq!(
+        record.description.as_deref(),
+        Some("Review the changed Rust files")
+    );
+    assert_eq!(
+        record.subagent.as_deref(),
+        Some("engineering/code-reviewer")
+    );
+
+    let cached_result = build_cached_task_invocation_result_from_metadata(
+        root_session_id,
+        &ResolvedTaskSessionIdentifier {
+            task_id,
+            public_task_id: String::from("review-worker"),
+            is_resumed: true,
+            persisted_metadata: None,
+        },
+        &metadata,
+        "resume review",
+    );
+    assert_eq!(
+        cached_result.model_output["description"],
+        "Review the changed Rust files"
+    );
+    assert_eq!(
+        cached_result.model_output["subagent"],
+        "engineering/code-reviewer"
+    );
 }
 
 /// Verifies completed task ids return cached results without restarting the backend.
@@ -565,21 +634,21 @@ async fn invoke_task_returns_cached_completed_record_without_backend_restart() {
             }),
         )
         .expect("task backend should install");
-    let mut record = build_task_session_record(
+    let mut record = build_task_session_record(TaskSessionRecordInit {
         task_id,
-        String::from("image-generator-2"),
-        parent_session_id,
-        None,
-        1,
-        Some(String::from("Image generation")),
-        Some(String::from("image-agent")),
-        TaskInvocationConfig::main("generate image"),
-        String::from("Image generation (image-agent)"),
-        None,
-        CoreConversationSnapshot::default(),
-        String::from("generate image"),
-        String::from("completed"),
-    );
+        public_task_id: String::from("image-generator-2"),
+        origin_session_id: parent_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: Some(String::from("Image generation")),
+        subagent: Some(String::from("image-agent")),
+        invocation_config: TaskInvocationConfig::main("generate image"),
+        display_title: String::from("Image generation (image-agent)"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("generate image"),
+        last_status: String::from("completed"),
+    });
     record.last_result_text = String::from("cached image result");
     task_runtime
         .sessions
@@ -743,21 +812,21 @@ async fn invoke_spawn_agent_rejects_duplicate_public_id() {
             }),
         )
         .expect("task backend should install");
-    let mut completed_record = build_task_session_record(
-        completed_task_id,
-        String::from("image-generator-2"),
-        parent_session_id,
-        None,
-        1,
-        Some(String::from("Image generation")),
-        Some(String::from("image-agent")),
-        TaskInvocationConfig::main("generate image"),
-        String::from("Image generation (image-agent)"),
-        None,
-        CoreConversationSnapshot::default(),
-        String::from("generate image"),
-        String::from("completed"),
-    );
+    let mut completed_record = build_task_session_record(TaskSessionRecordInit {
+        task_id: completed_task_id,
+        public_task_id: String::from("image-generator-2"),
+        origin_session_id: parent_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: Some(String::from("Image generation")),
+        subagent: Some(String::from("image-agent")),
+        invocation_config: TaskInvocationConfig::main("generate image"),
+        display_title: String::from("Image generation (image-agent)"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("generate image"),
+        last_status: String::from("completed"),
+    });
     completed_record.last_result_text = String::from("cached image result");
     task_runtime
         .sessions
@@ -820,21 +889,21 @@ async fn invoke_spawn_agent_reuses_public_id_after_close_agent() {
             }),
         )
         .expect("task backend should install");
-    let closed_record = build_task_session_record(
-        closed_task_id,
-        String::from("reusable-agent"),
-        parent_session_id,
-        None,
-        1,
-        Some(String::from("Reusable agent")),
-        None,
-        TaskInvocationConfig::main("old work"),
-        String::from("Reusable agent"),
-        None,
-        CoreConversationSnapshot::default(),
-        String::from("old work"),
-        String::from("completed"),
-    );
+    let closed_record = build_task_session_record(TaskSessionRecordInit {
+        task_id: closed_task_id,
+        public_task_id: String::from("reusable-agent"),
+        origin_session_id: parent_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: Some(String::from("Reusable agent")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("old work"),
+        display_title: String::from("Reusable agent"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("old work"),
+        last_status: String::from("completed"),
+    });
     task_runtime
         .sessions
         .write()
@@ -1017,21 +1086,21 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
-    let running_record = build_task_session_record(
+    let running_record = build_task_session_record(TaskSessionRecordInit {
         task_id,
-        String::from("worker-a"),
-        parent_session_id,
-        None,
-        1,
-        Some(String::from("Worker A")),
-        None,
-        TaskInvocationConfig::main("initial work"),
-        String::from("Worker A"),
-        None,
-        CoreConversationSnapshot::default(),
-        String::from("initial work"),
-        String::from("running"),
-    );
+        public_task_id: String::from("worker-a"),
+        origin_session_id: parent_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: Some(String::from("Worker A")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("initial work"),
+        display_title: String::from("Worker A"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("initial work"),
+        last_status: String::from("running"),
+    });
     task_runtime
         .sessions
         .write()
@@ -1123,21 +1192,21 @@ async fn send_message_to_root_enters_parent_mailbox_and_interrupt_rejects_root()
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let child_session_id = Uuid::new_v4();
-    let record = build_task_session_record(
-        child_session_id,
-        String::from("worker-a"),
-        parent_session_id,
-        None,
-        1,
-        Some(String::from("Worker A")),
-        None,
-        TaskInvocationConfig::main("initial work"),
-        String::from("Worker A"),
-        None,
-        CoreConversationSnapshot::default(),
-        String::from("initial work"),
-        String::from("running"),
-    );
+    let record = build_task_session_record(TaskSessionRecordInit {
+        task_id: child_session_id,
+        public_task_id: String::from("worker-a"),
+        origin_session_id: parent_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: Some(String::from("Worker A")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("initial work"),
+        display_title: String::from("Worker A"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("initial work"),
+        last_status: String::from("running"),
+    });
     task_runtime
         .sessions
         .write()
@@ -1328,21 +1397,21 @@ async fn detached_task_event_stream_closes_for_terminal_record_without_buffer() 
         .expect("task session registry should be writable")
         .insert(
             task_id,
-            build_task_session_record(
+            build_task_session_record(TaskSessionRecordInit {
                 task_id,
-                String::from("image-worker-a"),
-                root_session_id,
-                None,
-                1,
-                Some(String::from("生成图片")),
-                Some(String::from("image-agent")),
-                TaskInvocationConfig::main("generate image"),
-                String::from("生成图片 (image-agent)"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("generate image"),
-                String::from("completed"),
-            ),
+                public_task_id: String::from("image-worker-a"),
+                origin_session_id: root_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: Some(String::from("生成图片")),
+                subagent: Some(String::from("image-agent")),
+                invocation_config: TaskInvocationConfig::main("generate image"),
+                display_title: String::from("生成图片 (image-agent)"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("generate image"),
+                last_status: String::from("completed"),
+            }),
         );
 
     let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id));
@@ -1365,21 +1434,21 @@ async fn detached_task_event_stream_reopens_for_resumed_run_with_terminal_record
         .expect("task session registry should be writable")
         .insert(
             task_id,
-            build_task_session_record(
+            build_task_session_record(TaskSessionRecordInit {
                 task_id,
-                String::from("review-worker-a"),
-                root_session_id,
-                None,
-                1,
-                Some(String::from("review code")),
-                Some(String::from("code-reviewer")),
-                TaskInvocationConfig::main("review code"),
-                String::from("review code (code-reviewer)"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("review code"),
-                String::from("completed"),
-            ),
+                public_task_id: String::from("review-worker-a"),
+                origin_session_id: root_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: Some(String::from("review code")),
+                subagent: Some(String::from("code-reviewer")),
+                invocation_config: TaskInvocationConfig::main("review code"),
+                display_title: String::from("review code (code-reviewer)"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("review code"),
+                last_status: String::from("completed"),
+            }),
         );
 
     task_runtime

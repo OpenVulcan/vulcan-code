@@ -51,13 +51,3 @@ pub(super) fn find_segmented_session_dir_for_locator(
     let _ = (controller, session_id);
     Ok(Some(locator.session_dir.clone()))
 }
-
-/// Returns no controller runtime document because segmented state files own hydration state.
-/// 不返回控制器运行态文档，因为分段 state 文件拥有水合状态。
-pub(super) async fn query_session_runtime_state_row(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<Option<StoredRuntimeStateRow>, String> {
-    let _ = (controller, session_id);
-    Ok(None)
-}

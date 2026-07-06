@@ -28,21 +28,11 @@ pub(crate) fn vmm_request_project_scope<'a>(
     project_id: Option<&str>,
 ) -> Option<&'a TaskProjectSummary> {
     project_id
-        .and_then(|project_id| {
-            workspace
-                .task_projects
-                .iter()
-                .find(|project| project.id == project_id)
-        })
+        .and_then(|project_id| workspace_task_project_for_project_id(workspace, project_id))
         .or_else(|| {
             selected_workspace_session(workspace)
-                .and_then(|session| session.project_id.as_deref())
-                .and_then(|project_id| {
-                    workspace
-                        .task_projects
-                        .iter()
-                        .find(|project| project.id == project_id)
-                })
+                .and_then(session_summary_project_id)
+                .and_then(|project_id| workspace_task_project_for_project_id(workspace, project_id))
         })
         .or_else(|| workspace.task_projects.first())
 }
@@ -52,10 +42,128 @@ pub(crate) fn vmm_request_project_scope<'a>(
 pub(crate) fn selected_workspace_session(
     workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
 ) -> Option<&SessionSummary> {
+    let selected_session_id = selected_workspace_session_id(workspace)?;
     workspace
         .sessions
         .iter()
-        .find(|session| session.id == workspace.selected_session)
+        .find(|session| session.id == selected_session_id)
+}
+
+/// Returns the selected session id when the workspace has a real selection.
+/// 当工作区存在真实选中会话时返回选中会话标识。
+///
+/// # Parameters
+/// 参数
+/// `workspace` contains the retained selected session id.
+/// `workspace` 包含保留的选中会话标识。
+///
+/// # Returns
+/// 返回值
+/// The selected session id when it is not the nil placeholder.
+/// 当选中会话不是 nil 占位值时返回该会话标识。
+pub(crate) fn selected_workspace_session_id(
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+) -> Option<SessionId> {
+    (workspace.selected_session != SessionId::nil()).then_some(workspace.selected_session)
+}
+
+/// Returns one visible project matching a non-blank project id.
+/// 返回与非空白项目标识匹配的单个可见项目。
+///
+/// # Parameters
+/// 参数
+/// `workspace` contains visible project summaries.
+/// `workspace` 包含可见项目摘要。
+/// `project_id` is the requested project identifier.
+/// `project_id` 是请求的项目标识。
+///
+/// # Returns
+/// 返回值
+/// The matching project summary when the id is non-blank and present.
+/// 当项目标识非空白且存在时返回匹配的项目摘要。
+pub(crate) fn workspace_task_project_for_project_id<'a>(
+    workspace: &'a WorkspaceSnapshot,
+    project_id: &str,
+) -> Option<&'a TaskProjectSummary> {
+    if project_id.trim().is_empty() {
+        return None;
+    }
+    workspace
+        .task_projects
+        .iter()
+        .find(|project| project.id == project_id)
+}
+
+/// Iterates visible projects followed by archived projects.
+/// 依次遍历可见项目与归档项目。
+///
+/// # Parameters
+/// 参数
+/// `workspace` contains both active and archived project summaries.
+/// `workspace` 包含活动与归档项目摘要。
+///
+/// # Returns
+/// 返回值
+/// An iterator over active project rows first, then archived project rows.
+/// 返回先活动项目、后归档项目的迭代器。
+pub(crate) fn workspace_task_projects_including_archived<'a>(
+    workspace: &'a WorkspaceSnapshot,
+) -> impl Iterator<Item = &'a TaskProjectSummary> + 'a {
+    workspace
+        .task_projects
+        .iter()
+        .chain(workspace.archived_task_projects.iter())
+}
+
+/// Returns one visible or archived project matching a non-blank project id.
+/// 返回与非空白项目标识匹配的单个可见或归档项目。
+///
+/// # Parameters
+/// 参数
+/// `workspace` contains active and archived project summaries.
+/// `workspace` 包含活动与归档项目摘要。
+/// `project_id` is the requested project identifier.
+/// `project_id` 是请求的项目标识。
+///
+/// # Returns
+/// 返回值
+/// The matching project summary when the id is non-blank and present in either project list.
+/// 当项目标识非空白且存在于任一项目列表中时返回匹配项目摘要。
+pub(crate) fn workspace_task_project_for_project_id_including_archived<'a>(
+    workspace: &'a WorkspaceSnapshot,
+    project_id: &str,
+) -> Option<&'a TaskProjectSummary> {
+    if project_id.trim().is_empty() {
+        return None;
+    }
+    workspace_task_projects_including_archived(workspace).find(|project| project.id == project_id)
+}
+
+/// Returns one mutable visible project matching a non-blank project id.
+/// 返回与非空白项目标识匹配的单个可变可见项目。
+///
+/// # Parameters
+/// 参数
+/// `workspace` contains visible project summaries.
+/// `workspace` 包含可见项目摘要。
+/// `project_id` is the requested project identifier.
+/// `project_id` 是请求的项目标识。
+///
+/// # Returns
+/// 返回值
+/// The matching mutable project summary when the id is non-blank and present.
+/// 当项目标识非空白且存在时返回匹配的可变项目摘要。
+pub(crate) fn workspace_task_project_for_project_id_mut<'a>(
+    workspace: &'a mut WorkspaceSnapshot,
+    project_id: &str,
+) -> Option<&'a mut TaskProjectSummary> {
+    if project_id.trim().is_empty() {
+        return None;
+    }
+    workspace
+        .task_projects
+        .iter_mut()
+        .find(|project| project.id == project_id)
 }
 
 /// Returns the retained active session summary for one session id.
@@ -82,6 +190,48 @@ pub(crate) fn workspace_session_summary_for_session(
         .find(|session| session.id == session_id)
 }
 
+/// Returns the mutable active session summary from a session slice.
+/// 从会话切片返回可变活动会话摘要。
+///
+/// # Parameters
+/// 参数
+/// `sessions` contains active session summaries.
+/// `sessions` 包含活动会话摘要。
+/// `session_id` identifies the session to resolve.
+/// `session_id` 标识需要解析的会话。
+///
+/// # Returns
+/// 返回值
+/// The matching mutable active session summary when present.
+/// 存在时返回匹配的可变活动会话摘要。
+pub(crate) fn active_session_summary_for_session_mut(
+    sessions: &mut [SessionSummary],
+    session_id: SessionId,
+) -> Option<&mut SessionSummary> {
+    sessions.iter_mut().find(|session| session.id == session_id)
+}
+
+/// Returns the mutable active session summary for one session id.
+/// 返回单个会话标识对应的可变活动会话摘要。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains active session summaries.
+/// `workspace_snapshot` 包含活动会话摘要。
+/// `session_id` identifies the session to resolve.
+/// `session_id` 标识需要解析的会话。
+///
+/// # Returns
+/// 返回值
+/// The matching mutable active session summary when present.
+/// 存在时返回匹配的可变活动会话摘要。
+pub(crate) fn workspace_session_summary_for_session_mut(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<&mut SessionSummary> {
+    active_session_summary_for_session_mut(&mut workspace_snapshot.sessions, session_id)
+}
+
 /// Returns the persisted project id from one session summary.
 /// 从单个会话摘要返回持久化项目标识。
 ///
@@ -99,6 +249,22 @@ pub(crate) fn session_summary_project_id(session: &SessionSummary) -> Option<&st
         .project_id
         .as_deref()
         .filter(|project_id| !project_id.trim().is_empty())
+}
+
+/// Returns the owned persisted project id from one session summary.
+/// 从单个会话摘要返回拥有所有权的持久化项目标识。
+///
+/// # Parameters
+/// 参数
+/// `session` is the retained session summary.
+/// `session` 是保留的会话摘要。
+///
+/// # Returns
+/// 返回值
+/// A non-empty owned project id when the session belongs to a project.
+/// 当会话属于项目时返回拥有所有权的非空项目标识。
+pub(crate) fn session_summary_project_id_owned(session: &SessionSummary) -> Option<String> {
+    session_summary_project_id(session).map(str::to_string)
 }
 
 /// Returns the stable project and creation timestamp locator fields from one session summary.
@@ -619,10 +785,7 @@ pub(crate) fn stop_webui_session_work(
     workspace_snapshot
         .session_run_phases
         .insert(session_id, SessionRunPhase::Stopped);
-    if let Some(session) = workspace_snapshot
-        .sessions
-        .iter_mut()
-        .find(|session| session.id == session_id)
+    if let Some(session) = workspace_session_summary_for_session_mut(workspace_snapshot, session_id)
     {
         session.status = SessionState::Blocked;
         session.focus = String::from("已按用户请求停止当前会话运行。");
@@ -731,16 +894,10 @@ pub(crate) fn workspace_path_for_session(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> String {
-    workspace_snapshot
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .and_then(|session| session.project_id.as_deref())
+    workspace_session_summary_for_session(workspace_snapshot, session_id)
+        .and_then(session_summary_project_id)
         .and_then(|project_id| {
-            workspace_snapshot
-                .task_projects
-                .iter()
-                .find(|project| project.id == project_id)
+            workspace_task_project_for_project_id(workspace_snapshot, project_id)
         })
         .map(|project| project.path.clone())
         .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()))
@@ -767,4 +924,378 @@ pub(crate) fn owning_project_id_for_session(
     workspace_session_summary_for_session(workspace_snapshot, session_id)
         .and_then(session_summary_project_id)
         .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::*;
+
+    /// Builds one workspace snapshot with a single session and project.
+    /// 构建一个包含单个会话和项目的工作区快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the session stored in the snapshot.
+    /// `session_id` 是写入快照的会话标识。
+    /// `project_id` is the project id stored on the session summary.
+    /// `project_id` 是写入会话摘要的项目标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A workspace snapshot containing one project and one session.
+    /// 返回包含一个项目与一个会话的工作区快照。
+    fn workspace_snapshot_with_session_project(
+        session_id: SessionId,
+        project_id: Option<String>,
+    ) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                "project-a",
+                "Project A",
+                r"D:\projects\project-a",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                project_id,
+                "测试会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Verifies workspace path resolution returns the owning project path for valid project ids.
+    /// 验证工作区路径解析会为有效项目标识返回所属项目路径。
+    #[test]
+    fn workspace_path_for_session_returns_project_path_for_valid_project_id() {
+        // session_id identifies the session being resolved in this test.
+        // session_id 标识本测试中要解析的会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot provides one matching project for the session.
+        // workspace_snapshot 为该会话提供一个匹配的项目。
+        let workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("project-a")));
+
+        assert_eq!(
+            workspace_path_for_session(&workspace_snapshot, session_id),
+            r"D:\projects\project-a"
+        );
+    }
+
+    /// Verifies project helpers keep active-only and active-plus-archived semantics separate.
+    /// 验证项目辅助函数会区分仅活动与活动加归档语义。
+    #[test]
+    fn workspace_task_project_including_archived_resolves_archived_project() {
+        // session_id anchors the snapshot helper without affecting project lookup.
+        // session_id 用于构造快照辅助数据，不影响项目查找。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot contains one active project and one archived project.
+        // workspace_snapshot 包含一个活动项目和一个归档项目。
+        let mut workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("project-a")));
+        workspace_snapshot
+            .archived_task_projects
+            .push(TaskProjectSummary::new(
+                "archived-project",
+                "Archived Project",
+                r"D:\\projects\\archived",
+                false,
+                1,
+                None,
+                None,
+                Vec::new(),
+            ));
+
+        // project_ids records the iteration order promised by the shared helper.
+        // project_ids 记录共享辅助函数承诺的遍历顺序。
+        let project_ids = workspace_task_projects_including_archived(&workspace_snapshot)
+            .map(|project| project.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(project_ids, vec!["project-a", "archived-project"]);
+        assert!(
+            workspace_task_project_for_project_id(&workspace_snapshot, "archived-project")
+                .is_none()
+        );
+        assert_eq!(
+            workspace_task_project_for_project_id_including_archived(
+                &workspace_snapshot,
+                "archived-project"
+            )
+            .map(|project| project.path.as_str()),
+            Some(r"D:\\projects\\archived")
+        );
+        assert!(
+            workspace_task_project_for_project_id_including_archived(&workspace_snapshot, "   ")
+                .is_none()
+        );
+    }
+
+    /// Verifies active session lookup does not resolve archived sessions.
+    /// 验证活动会话查找不会解析归档会话。
+    #[test]
+    fn workspace_session_summary_for_session_ignores_archived_sessions() {
+        // active_session_id identifies the retained active session row.
+        // active_session_id 标识保留的活动会话行。
+        let active_session_id = SessionId::new_v4();
+        // archived_session_id identifies a row that has moved to archived sessions.
+        // archived_session_id 标识已经移动到归档会话的行。
+        let archived_session_id = SessionId::new_v4();
+        // workspace_snapshot contains both active and archived rows to prove active-only semantics.
+        // workspace_snapshot 同时包含活动和归档行，用于证明仅活动语义。
+        let mut workspace_snapshot = workspace_snapshot_with_session_project(
+            active_session_id,
+            Some(String::from("project-a")),
+        );
+        workspace_snapshot
+            .archived_sessions
+            .push(SessionSummary::new(
+                archived_session_id,
+                Some(String::from("project-a")),
+                "归档会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ));
+
+        assert!(
+            workspace_session_summary_for_session(&workspace_snapshot, active_session_id).is_some()
+        );
+        assert!(
+            workspace_session_summary_for_session(&workspace_snapshot, archived_session_id)
+                .is_none()
+        );
+    }
+
+    /// Verifies mutable active session lookup updates the matching session only.
+    /// 验证可变活动会话查找只会更新匹配会话。
+    #[test]
+    fn workspace_session_summary_for_session_mut_updates_matching_session() {
+        // session_id identifies the mutable session under test.
+        // session_id 标识本测试中的可变会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot contains one session that should be resolved mutably.
+        // workspace_snapshot 包含一个应被可变解析的会话。
+        let mut workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("project-a")));
+
+        {
+            // session stores the mutable summary returned by the shared helper.
+            // session 保存共享辅助函数返回的可变摘要。
+            let session =
+                workspace_session_summary_for_session_mut(&mut workspace_snapshot, session_id)
+                    .expect("existing active session should resolve mutably");
+            session.status = SessionState::Running;
+            session.focus = String::from("正在准备请求");
+        }
+
+        assert_eq!(workspace_snapshot.sessions[0].status, SessionState::Running);
+        assert_eq!(workspace_snapshot.sessions[0].focus, "正在准备请求");
+        assert!(
+            workspace_session_summary_for_session_mut(&mut workspace_snapshot, SessionId::new_v4())
+                .is_none()
+        );
+    }
+
+    /// Verifies slice-level mutable active session lookup updates the matching session only.
+    /// 验证切片级可变活动会话查找只会更新匹配会话。
+    #[test]
+    fn active_session_summary_for_session_mut_updates_matching_session_slice() {
+        // session_id identifies the mutable session inside the active session slice.
+        // session_id 标识活动会话切片中的可变会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot owns the active session slice used by the helper.
+        // workspace_snapshot 持有辅助函数使用的活动会话切片。
+        let mut workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("project-a")));
+
+        {
+            // session stores the mutable summary returned from the slice-level helper.
+            // session 保存切片级辅助函数返回的可变摘要。
+            let session = active_session_summary_for_session_mut(
+                &mut workspace_snapshot.sessions,
+                session_id,
+            )
+            .expect("existing active session should resolve mutably");
+            session.status = SessionState::Blocked;
+            session.focus = String::from("终态报告已应用");
+        }
+
+        assert_eq!(workspace_snapshot.sessions[0].status, SessionState::Blocked);
+        assert_eq!(workspace_snapshot.sessions[0].focus, "终态报告已应用");
+        assert!(
+            active_session_summary_for_session_mut(
+                &mut workspace_snapshot.sessions,
+                SessionId::new_v4()
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies selected session id projection ignores the nil placeholder.
+    /// 验证选中会话标识投影会忽略 nil 占位值。
+    #[test]
+    fn selected_workspace_session_id_ignores_nil_selection() {
+        // session_id identifies the real session stored in the snapshot.
+        // session_id 标识快照中保存的真实会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot starts with a selected session that will be cleared to nil.
+        // workspace_snapshot 初始包含选中会话，随后会被清空为 nil。
+        let mut workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("project-a")));
+        workspace_snapshot.selected_session = SessionId::nil();
+
+        assert_eq!(selected_workspace_session_id(&workspace_snapshot), None);
+        assert!(selected_workspace_session(&workspace_snapshot).is_none());
+    }
+
+    /// Verifies blank session project ids use the same workspace-root fallback as missing projects.
+    /// 验证空白会话项目标识会使用与缺失项目相同的工作区根目录回退。
+    #[test]
+    fn workspace_path_for_session_falls_back_for_blank_project_id() {
+        // session_id identifies the session with an invalid blank project id.
+        // session_id 标识携带无效空白项目标识的会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot keeps the blank project id so the fallback path is observable.
+        // workspace_snapshot 保留空白项目标识，以便观察回退路径。
+        let workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("   ")));
+
+        assert_eq!(
+            workspace_path_for_session(&workspace_snapshot, session_id),
+            normalized_workspace_path_text_from_path(&workspace_root())
+        );
+    }
+
+    /// Verifies owning project resolution drops blank session project ids.
+    /// 验证所属项目解析会丢弃空白会话项目标识。
+    #[test]
+    fn owning_project_id_for_session_ignores_blank_project_id() {
+        // session_id identifies the session whose owning project is resolved.
+        // session_id 标识需要解析所属项目的会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot keeps a blank project id on the session summary.
+        // workspace_snapshot 在会话摘要中保留空白项目标识。
+        let workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("   ")));
+
+        assert_eq!(
+            owning_project_id_for_session(&workspace_snapshot, session_id),
+            None
+        );
+    }
+
+    /// Verifies owned session project id projection drops blank values.
+    /// 验证拥有所有权的会话项目标识投影会丢弃空白值。
+    #[test]
+    fn session_summary_project_id_owned_ignores_blank_project_id() {
+        // session_id identifies the session used to build the test summary.
+        // session_id 标识用于构建测试摘要的会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot keeps a blank project id on its only session.
+        // workspace_snapshot 在唯一会话中保留空白项目标识。
+        let workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("   ")));
+
+        assert_eq!(
+            session_summary_project_id_owned(&workspace_snapshot.sessions[0]),
+            None
+        );
+    }
+
+    /// Verifies VMM project scope ignores blank project ids before falling back.
+    /// 验证 VMM 项目作用域会先忽略空白项目标识再执行回退。
+    #[test]
+    fn vmm_request_project_scope_ignores_blank_project_id() {
+        // session_id identifies the selected session with a blank project id.
+        // session_id 标识携带空白项目标识的选中会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot contains both a normal project and a whitespace-id project.
+        // workspace_snapshot 同时包含普通项目与空白标识项目。
+        let mut workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("   ")));
+        workspace_snapshot
+            .task_projects
+            .push(TaskProjectSummary::new(
+                "   ",
+                "Blank Project",
+                r"D:\projects\blank",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            ));
+
+        // selected_scope stores the resolved project after blank id filtering.
+        // selected_scope 保存空白标识过滤后的项目解析结果。
+        let selected_scope = vmm_request_project_scope(&workspace_snapshot, Some("   "))
+            .expect("VMM scope should fall back to the first visible project");
+
+        assert_eq!(selected_scope.id, "project-a");
+    }
+
+    /// Verifies mutable project lookup shares the same blank-id filtering as immutable lookup.
+    /// 验证可变项目查找与不可变查找共享相同的空白标识过滤。
+    #[test]
+    fn workspace_task_project_for_project_id_mut_rejects_blank_project_id() {
+        // session_id anchors the snapshot helper without affecting project lookup.
+        // session_id 用于构造快照辅助数据，不影响项目查找。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot contains one normal project and one malformed blank project.
+        // workspace_snapshot 包含一个普通项目和一个异常空白项目。
+        let mut workspace_snapshot =
+            workspace_snapshot_with_session_project(session_id, Some(String::from("project-a")));
+        workspace_snapshot
+            .task_projects
+            .push(TaskProjectSummary::new(
+                "   ",
+                "Blank Project",
+                r"D:\projects\blank",
+                false,
+                1,
+                None,
+                None,
+                Vec::new(),
+            ));
+
+        {
+            // project stores the mutable project resolved by a valid non-blank id.
+            // project 保存通过有效非空白标识解析出的可变项目。
+            let project =
+                workspace_task_project_for_project_id_mut(&mut workspace_snapshot, "project-a")
+                    .expect("valid project id should resolve to a mutable project");
+            project.title = String::from("Updated Project");
+        }
+
+        assert_eq!(workspace_snapshot.task_projects[0].title, "Updated Project");
+        assert!(
+            workspace_task_project_for_project_id_mut(&mut workspace_snapshot, "   ").is_none()
+        );
+        assert_eq!(workspace_snapshot.task_projects[1].title, "Blank Project");
+    }
 }

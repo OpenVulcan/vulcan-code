@@ -1,20 +1,15 @@
 //! Controller-backed persistence helpers for projects, sessions, transcript history, and hidden context nodes.
 //! 项目、会话、转录历史与隐藏上下文节点的控制器持久化辅助模块。
 
-#![allow(dead_code)]
-
 use crate::conversation_protocol::{
-    SessionConversationState, SessionProviderContinuationState,
-    conversation_state_from_session_messages,
+    SessionConversationState, conversation_state_from_session_messages,
 };
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::model::{
     SessionAddonState, SessionCompactionEntry, SessionId, SessionMessageEntry,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
-    VmmProfileSyncState, VmmWritebackOutboxEntry,
+    SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
-use crate::provider_usage::parse_provider_usage_from_json;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
@@ -22,13 +17,11 @@ use std::hash::{Hash, Hasher};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
-use vulcan_context_injection::ContextInjectionState;
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionBoundaryStateStore,
     SessionBoundaryStorageWrite, SessionBoundaryStore, SessionEventScope, SessionEventVisibility,
 };
 use vulcan_session_core::SessionNodeId;
-use vulcan_vmm::VmmConfigLayer;
 
 mod goal_store;
 mod persistence;
@@ -41,12 +34,12 @@ use self::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,
     SegmentedSessionEventKind, SegmentedSessionMetadataPatch, append_segmented_boundary_events,
     append_segmented_session_events, backup_runtime_log_before_compaction,
-    clear_all_segmented_session_roots, create_segmented_session_in_location,
-    find_segmented_session_directory, find_segmented_session_directory_by_id,
-    load_session_boundary_state, patch_segmented_session_metadata, read_runtime_log_lines,
-    read_segmented_session_event_window, read_state, record_runtime_audit_event,
-    record_runtime_injection_applied, replace_session_boundary_state, segmented_session_directory,
-    state_document_from_runtime_state, write_state,
+    create_segmented_session_in_location, find_segmented_session_directory,
+    find_segmented_session_directory_by_id, load_session_boundary_state,
+    patch_segmented_session_metadata, read_runtime_log_lines, read_segmented_session_event_window,
+    read_state, record_runtime_audit_event, record_runtime_injection_applied,
+    replace_session_boundary_state, segmented_session_directory, state_document_from_runtime_state,
+    write_state,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use goal_store::{
@@ -65,7 +58,7 @@ pub use persistence::{
     persist_single_session_update, persist_workspace_snapshot,
     record_persisted_session_fork_source_marker, remove_project_after_archiving_sessions,
     rename_project, rename_single_session_metadata, restore_project_with_sessions,
-    restore_single_session, rollback_persisted_session_before_user_prompt, toggle_project_pinned,
+    rollback_persisted_session_before_user_prompt, toggle_project_pinned,
 };
 pub use session_load::{
     load_session_display_hydration_snapshot_for_project_created_at,
@@ -74,30 +67,12 @@ pub use session_load::{
     load_session_transcript_window_for_project_created_at,
 };
 
-/// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.
-/// 在 protobuf/gRPC 结构开销接近 tonic 默认限制前使用的请求帧目标预算。
-const SQLITE_BATCH_SAFE_FRAME_TARGET_BYTES: usize = 1024 * 1024;
-/// Maximum row count kept in one SQLite batch regardless of byte-size estimates.
-/// 单个 SQLite 批处理在字节估算之外仍要遵守的最大行数。
-const SQLITE_BATCH_SAFE_ROW_LIMIT: usize = 128;
-/// Conservative per-batch structure overhead for typed SQLite requests.
-/// 类型化 SQLite 请求按批次估算的保守结构开销。
-const SQLITE_BATCH_FRAME_OVERHEAD_BYTES: usize = 4096;
-/// Conservative per-row structure overhead for typed SQLite request parameters.
-/// 类型化 SQLite 请求参数按行估算的保守结构开销。
-const SQLITE_ROW_FRAME_OVERHEAD_BYTES: usize = 256;
-/// Conservative per-value structure overhead for typed SQLite scalar values.
-/// 类型化 SQLite 标量值按字段估算的保守结构开销。
-const SQLITE_VALUE_FRAME_OVERHEAD_BYTES: usize = 48;
 /// Maximum transcript turn-page size supported by storage-side lazy transcript paging queries.
 /// 存储侧懒加载转录分页查询支持的最大轮次分页大小。
 pub const SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT: usize = 50;
 /// Number of complete turns kept visible before the latest compaction boundary when the startup transcript page would otherwise stop too late.
 /// 当启动转录分页本应停得过晚时，在最近压缩边界之前仍需额外保留的完整轮次数量。
 pub const SESSION_TRANSCRIPT_COMPACTION_OVERLAP_TURN_COUNT: usize = 5;
-/// Tool-detail page size used when a specific turn asks for its tool rows.
-/// 指定轮次请求工具明细行时使用的分页大小。
-pub const SESSION_TOOL_DETAIL_PAGE_LIMIT: usize = 100;
 /// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
 /// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
 const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;

@@ -472,11 +472,8 @@ pub(crate) fn workspace_surface_allows_user_prompt_editing(
     if session_id == SessionId::nil() {
         return false;
     }
-    if workspace_snapshot
-        .sessions
-        .iter()
-        .chain(workspace_snapshot.archived_sessions.iter())
-        .find(|session| session.id == session_id)
+    if workspace_session_with_archive_status(workspace_snapshot, session_id)
+        .map(|(session, _)| session)
         .is_none_or(|session| session.status == SessionState::Running)
     {
         return false;
@@ -771,4 +768,71 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         ),
     );
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Builds a workspace snapshot that contains one archived session.
+    /// 构建一个包含单个归档会话的工作区快照。
+    fn workspace_with_archived_session(
+        session_id: SessionId,
+        status: SessionState,
+    ) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "归档会话",
+                "",
+                status,
+                0,
+                0,
+                "刚刚",
+            )],
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Verifies archived prompt-editing surfaces still obey the session status.
+    /// 验证归档提示词编辑表面仍然遵循会话状态。
+    #[test]
+    fn workspace_surface_allows_user_prompt_editing_uses_archived_session_status() {
+        // archived_session_id identifies the archived surface being checked.
+        // archived_session_id 标识正在检查的归档表面。
+        let archived_session_id = SessionId::new_v4();
+        // completed_workspace proves terminal archived sessions may be edited.
+        // completed_workspace 证明终态归档会话允许编辑。
+        let completed_workspace =
+            workspace_with_archived_session(archived_session_id, SessionState::Completed);
+        // running_workspace proves still-running archived sessions stay locked.
+        // running_workspace 证明仍在运行的归档会话保持锁定。
+        let running_workspace =
+            workspace_with_archived_session(archived_session_id, SessionState::Running);
+
+        assert!(workspace_surface_allows_user_prompt_editing(
+            &completed_workspace,
+            archived_session_id,
+            None,
+        ));
+        assert!(!workspace_surface_allows_user_prompt_editing(
+            &running_workspace,
+            archived_session_id,
+            None,
+        ));
+    }
 }

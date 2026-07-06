@@ -21,6 +21,8 @@ use crate::normalized_workspace_path_text_from_path;
 const WORKSPACE_FILE_DIRECTORY_ENTRY_LIMIT: usize = 1_000;
 
 // WORKSPACE_FILE_READ_LIMIT_BYTES caps one code preview response payload.
+// WORKSPACE_FILE_READ_LIMIT_BYTES 限制单次代码预览响应载荷大小。
+const WORKSPACE_FILE_READ_LIMIT_BYTES: usize = 1_048_576;
 
 mod entry_summary;
 mod file_kind;
@@ -33,8 +35,67 @@ use file_kind::*;
 use path_metadata::*;
 use path_security::*;
 use read_response::*;
-// WORKSPACE_FILE_READ_LIMIT_BYTES 限制单次代码预览响应载荷大小。
-const WORKSPACE_FILE_READ_LIMIT_BYTES: usize = 1_048_576;
+
+/// Builds a workspace file walker with the shared ignore and symlink policy.
+/// 使用共享忽略规则和符号链接策略构建工作区文件遍历器。
+///
+/// # Parameters
+/// 参数
+/// `directory` is the directory that the walker should scan.
+/// `directory` 是遍历器需要扫描的目录。
+/// `filters` are the active workspace file filters.
+/// `filters` 是当前生效的工作区文件过滤器。
+/// `max_depth` optionally limits recursive traversal depth.
+/// `max_depth` 可选限制递归遍历深度。
+///
+/// # Returns
+/// 返回值
+/// A configured walker builder shared by listing and descendant-preview scans.
+/// 返回由列表和后代预览扫描共享的已配置遍历器构建器。
+fn workspace_file_walk_builder(
+    directory: &Path,
+    filters: &WorkspaceFileFilterOptions,
+    max_depth: Option<usize>,
+) -> WalkBuilder {
+    let mut walker = WalkBuilder::new(directory);
+    walker
+        .max_depth(max_depth)
+        .follow_links(false)
+        .hidden(false)
+        .ignore(filters.use_ignore_files)
+        .git_ignore(filters.use_gitignore)
+        .git_global(filters.use_gitignore)
+        .git_exclude(filters.use_gitignore)
+        .parents(filters.use_ignore_files || filters.use_gitignore);
+    walker
+}
+
+/// Returns whether the active filters allow previewing one media file kind.
+/// 返回当前过滤规则是否允许预览单个媒体文件类别。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the already classified workspace file kind.
+/// `kind` 是已完成分类的工作区文件类别。
+/// `filters` are the active workspace file filters.
+/// `filters` 是当前生效的工作区文件过滤器。
+///
+/// # Returns
+/// 返回值
+/// `true` when the media kind is enabled by the current filters.
+/// 当当前过滤器启用该媒体类别时返回 `true`。
+fn workspace_file_media_kind_allowed(
+    kind: &WorkspaceFileEntryKind,
+    filters: &WorkspaceFileFilterOptions,
+) -> bool {
+    match kind {
+        WorkspaceFileEntryKind::Image => filters.allow_images,
+        WorkspaceFileEntryKind::Video => filters.allow_videos,
+        WorkspaceFileEntryKind::Code
+        | WorkspaceFileEntryKind::Directory
+        | WorkspaceFileEntryKind::Other => false,
+    }
+}
 
 /// Lists one workspace directory for the right-side file context panel.
 /// 为右侧文件上下文面板列出单个工作区目录。
@@ -77,16 +138,7 @@ pub(super) async fn service_workspace_files_list(
         ));
     }
 
-    let mut walker = WalkBuilder::new(&directory);
-    walker
-        .max_depth(Some(1))
-        .follow_links(false)
-        .hidden(false)
-        .ignore(filters.use_ignore_files)
-        .git_ignore(filters.use_gitignore)
-        .git_global(filters.use_gitignore)
-        .git_exclude(filters.use_gitignore)
-        .parents(filters.use_ignore_files || filters.use_gitignore);
+    let walker = workspace_file_walk_builder(&directory, &filters, Some(1));
 
     let mut entries = Vec::new();
     let mut truncated = false;
@@ -187,20 +239,17 @@ pub(super) async fn service_workspace_files_read(
             &metadata,
             WorkspaceFileEntryKind::Code,
         ),
-        WorkspaceFileEntryKind::Image if filters.allow_images => Ok(workspace_file_media_response(
-            &workspace_root,
-            &file,
-            &metadata,
-            WorkspaceFileEntryKind::Image,
-        )),
-        WorkspaceFileEntryKind::Video if filters.allow_videos => Ok(workspace_file_media_response(
-            &workspace_root,
-            &file,
-            &metadata,
-            WorkspaceFileEntryKind::Video,
-        )),
         WorkspaceFileEntryKind::Image | WorkspaceFileEntryKind::Video => {
-            Err(String::from("当前过滤规则未允许预览该媒体文件。"))
+            if workspace_file_media_kind_allowed(&kind, &filters) {
+                Ok(workspace_file_media_response(
+                    &workspace_root,
+                    &file,
+                    &metadata,
+                    kind,
+                ))
+            } else {
+                Err(String::from("当前过滤规则未允许预览该媒体文件。"))
+            }
         }
         WorkspaceFileEntryKind::Directory | WorkspaceFileEntryKind::Other => {
             Err(String::from("当前文件类型不支持预览。"))

@@ -2,7 +2,7 @@
 //! workbench session panels 辅助逻辑。
 
 use super::*;
-use vulcan_service_api::ConversationAttentionSummary;
+use vulcan_service_api::{ConversationAttentionSummary, ConversationSummary};
 
 /// Projects session todolist state into the WebUI snapshot.
 /// 将会话 todolist 状态投影到 WebUI 快照。
@@ -23,19 +23,17 @@ pub(crate) fn session_todolist_summary_from_runtime_state(
     if todolist.is_empty() || todolist.items.is_empty() {
         return None;
     }
-    let items = todolist
-        .items
-        .iter()
-        .map(|item| SessionTodolistItemSummary {
+    let mut items = Vec::with_capacity(todolist.items.len());
+    let mut completed_count = 0;
+    for item in &todolist.items {
+        if item.status == SessionTodolistItemStatus::Completed {
+            completed_count += 1;
+        }
+        items.push(SessionTodolistItemSummary {
             step: item.step.clone(),
             status: session_todolist_item_status_key(item.status).to_string(),
-        })
-        .collect::<Vec<_>>();
-    let completed_count = todolist
-        .items
-        .iter()
-        .filter(|item| item.status == SessionTodolistItemStatus::Completed)
-        .count();
+        });
+    }
     Some(SessionTodolistSummary {
         explanation: todolist.explanation.clone(),
         total_count: items.len(),
@@ -114,6 +112,49 @@ pub(crate) fn session_vmm_policy_summary_from_layers(
         memory_writeback_mode: vmm_policy_mode_key(summary_layer.memory_writeback_enabled),
         memory_writeback_enabled: effective.memory_writeback_enabled,
     }
+}
+
+/// Builds one retained session-addons list entry when it has visible content.
+/// 当会话附属保留列表项存在可见内容时构建该条目。
+///
+/// # Parameters
+/// 参数
+/// `conversation_id` is the conversation id used by retained Workbench lists.
+/// `conversation_id` 是保留工作台列表使用的会话标识。
+/// `session_goal` is the optional goal summary for the session.
+/// `session_goal` 是该会话的可选目标摘要。
+/// `session_todolist` is the optional todolist summary for the session.
+/// `session_todolist` 是该会话的可选待办摘要。
+/// `session_plan_mode` is the optional Plan mode summary for the session.
+/// `session_plan_mode` 是该会话的可选计划模式摘要。
+/// `session_vmm_policy` is the optional non-empty session VMM policy list projection.
+/// `session_vmm_policy` 是可选的非空会话 VMM 策略列表投影。
+///
+/// # Returns
+/// 返回值
+/// A retained list delta when any addon panel should be shown.
+/// 当任意附属面板需要展示时返回保留列表增量。
+pub(crate) fn session_addons_changed_delta_for_retained_list(
+    conversation_id: String,
+    session_goal: Option<SessionGoalSummary>,
+    session_todolist: Option<SessionTodolistSummary>,
+    session_plan_mode: Option<SessionPlanModeSummary>,
+    session_vmm_policy: Option<SessionVmmPolicySummary>,
+) -> Option<SessionAddonsChangedDelta> {
+    if session_goal.is_none()
+        && session_todolist.is_none()
+        && session_plan_mode.is_none()
+        && session_vmm_policy.is_none()
+    {
+        return None;
+    }
+    Some(SessionAddonsChangedDelta {
+        conversation_id,
+        session_goal,
+        session_todolist,
+        session_plan_mode,
+        session_vmm_policy,
+    })
 }
 
 /// Converts one optional VMM policy override into a tri-state mode key.
@@ -263,36 +304,129 @@ pub(crate) fn conversation_attention_summary_for_session(
         .iter()
         .find(|question| question.session_id == session_id.to_string())
     {
-        return Some(ConversationAttentionSummary {
-            kind: String::from("ask"),
-            priority: 90,
-            request_id: Some(question.id.clone()),
-            label: Some(String::from("Ask question waiting")),
+        return Some(conversation_attention_summary(
+            "ask",
+            90,
+            Some(question.id.clone()),
+            "Ask question waiting",
             updated_at,
-        });
+        ));
     }
     if session_plan_mode.is_some_and(|summary| summary.execution_mode.eq_ignore_ascii_case("plan"))
     {
-        return Some(ConversationAttentionSummary {
-            kind: String::from("plan_confirm"),
-            priority: 80,
-            request_id: session_plan_mode
+        return Some(conversation_attention_summary(
+            "plan_confirm",
+            80,
+            session_plan_mode
                 .and_then(|summary| summary.artifact.as_ref())
                 .map(|artifact| artifact.path.clone()),
-            label: Some(String::from("Plan mode waiting")),
+            "Plan mode waiting",
             updated_at,
-        });
+        ));
     }
     if unread {
-        return Some(ConversationAttentionSummary {
-            kind: String::from("unread"),
-            priority: 10,
-            request_id: None,
-            label: Some(String::from("Unread activity")),
+        return Some(conversation_attention_summary(
+            "unread",
+            10,
+            None,
+            "Unread activity",
             updated_at,
-        });
+        ));
     }
     None
+}
+
+/// Refreshes a conversation summary with the highest-priority sidebar attention marker.
+/// 使用最高优先级侧栏注意力标记刷新会话摘要。
+///
+/// # Parameters
+/// 参数
+/// `conversation` is the mutable WebUI conversation summary to update.
+/// `conversation` 是要更新的可变 WebUI 会话摘要。
+/// `session_id` identifies the conversation session.
+/// `session_id` 标识会话。
+/// `pending_questions` contains all current ask requests.
+/// `pending_questions` 包含当前所有 ask 请求。
+/// `session_plan_mode` is the optional Plan mode projection for this session.
+/// `session_plan_mode` 是该会话的可选计划模式投影。
+pub(crate) fn refresh_conversation_attention_summary(
+    conversation: &mut ConversationSummary,
+    session_id: SessionId,
+    pending_questions: &[PendingQuestionSnapshot],
+    session_plan_mode: Option<&SessionPlanModeSummary>,
+) {
+    // Normalize empty timestamps before they reach the WebUI diagnostic payload.
+    // 在进入 WebUI 诊断载荷前归一化空时间戳。
+    let updated_at =
+        (!conversation.last_updated_at.is_empty()).then(|| conversation.last_updated_at.clone());
+    conversation.attention = conversation_attention_summary_for_session(
+        session_id,
+        pending_questions,
+        session_plan_mode,
+        conversation.unread,
+        updated_at,
+    );
+}
+
+/// Replaces one retained conversation-scoped projection entry.
+/// 替换单条按会话归属保留的投影条目。
+///
+/// # Parameters
+/// 参数
+/// `entries` is the retained per-conversation projection list.
+/// `entries` 是按会话保留的投影列表。
+/// `conversation_id` identifies the conversation whose entry should be replaced.
+/// `conversation_id` 标识需要替换投影条目的会话。
+/// `next_entry` is the replacement entry, or `None` when the projection should be cleared.
+/// `next_entry` 是替换条目；为 `None` 时表示清除该投影。
+/// `entry_conversation_id` reads the owning conversation id from an existing entry.
+/// `entry_conversation_id` 从已有条目读取所属会话标识。
+pub(crate) fn replace_conversation_scoped_projection_entry<Entry>(
+    entries: &mut Vec<Entry>,
+    conversation_id: &str,
+    next_entry: Option<Entry>,
+    entry_conversation_id: impl Fn(&Entry) -> &str,
+) {
+    entries.retain(|entry| entry_conversation_id(entry) != conversation_id);
+    if let Some(entry) = next_entry {
+        entries.push(entry);
+    }
+}
+
+/// Builds one conversation attention marker with shared field conversion.
+/// 使用共享字段转换构建单个会话注意力标记。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the stable attention marker key.
+/// `kind` 是稳定的注意力标记键。
+/// `priority` is the marker ordering priority.
+/// `priority` 是标记排序优先级。
+/// `request_id` identifies the owning request or artifact when available.
+/// `request_id` 在可用时标识所属请求或产物。
+/// `label` is the user-facing marker label.
+/// `label` 是面向用户的标记标签。
+/// `updated_at` carries the source session update timestamp.
+/// `updated_at` 携带来源会话更新时间。
+///
+/// # Returns
+/// 返回值
+/// A conversation attention summary ready for WebUI projection.
+/// 返回可用于 WebUI 投影的会话注意力摘要。
+fn conversation_attention_summary(
+    kind: &str,
+    priority: u8,
+    request_id: Option<String>,
+    label: &str,
+    updated_at: Option<String>,
+) -> ConversationAttentionSummary {
+    ConversationAttentionSummary {
+        kind: kind.to_string(),
+        priority,
+        request_id,
+        label: Some(label.to_string()),
+        updated_at,
+    }
 }
 
 /// Builds the selected-session context injection side-panel snapshot.
@@ -321,6 +455,30 @@ pub(crate) fn context_injection_snapshot_from_runtime_state(
     })
 }
 
+/// Builds one context-injection delta from optional session runtime state.
+/// 从可选会话运行态构建单条上下文注入增量。
+///
+/// # Parameters
+/// 参数
+/// `session_id` identifies the conversation that owns the memory panel.
+/// `session_id` 标识拥有记忆面板的会话。
+/// `runtime_state` is the optional retained runtime entry for that conversation.
+/// `runtime_state` 是该会话的可选保留运行态条目。
+///
+/// # Returns
+/// 返回值
+/// A delta whose `context_injection` is `None` when the runtime entry has no panel state.
+/// 返回一条增量；当运行态没有面板状态时 `context_injection` 为 `None`。
+pub(crate) fn context_injection_changed_delta_from_runtime_state(
+    session_id: SessionId,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> ContextInjectionChangedDelta {
+    ContextInjectionChangedDelta {
+        conversation_id: session_id.to_string(),
+        context_injection: context_injection_snapshot_from_runtime_state(runtime_state),
+    }
+}
+
 /// Builds retained context injection projections for hydrated conversations.
 /// 为已水合会话构建保留的上下文注入投影。
 ///
@@ -341,13 +499,11 @@ pub(crate) fn context_injection_by_conversation_from_workspace(
     session_ids
         .iter()
         .filter_map(|session_id| {
-            let context_injection = context_injection_snapshot_from_runtime_state(
+            let delta = context_injection_changed_delta_from_runtime_state(
+                *session_id,
                 workspace.session_runtime_state.get(session_id),
-            )?;
-            Some(ContextInjectionChangedDelta {
-                conversation_id: session_id.to_string(),
-                context_injection: Some(context_injection),
-            })
+            );
+            delta.context_injection.is_some().then_some(delta)
         })
         .collect()
 }
@@ -402,16 +558,339 @@ pub(crate) fn context_injection_memory_id_from_detail(detail: &str) -> Option<u6
 /// Builds the same compact multi-line preview used by the WebUI panel.
 /// 构建与 WebUI 面板一致的多行紧凑预览。
 pub(crate) fn compact_panel_preview(content: &str) -> String {
-    let mut lines = content
+    // Accumulates preview text directly instead of buffering line strings.
+    // 直接累积预览文本，避免缓存行字符串。
+    let mut preview = String::new();
+    // Counts inspected visible lines, including the seventh truncation sentinel.
+    // 统计已检查的可见行，包含用于截断判断的第七行哨兵。
+    let mut inspected_lines = 0usize;
+
+    for line in content
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .take(7)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if lines.len() > 6 {
-        lines.truncate(6);
-        lines.push(String::from("..."));
+    {
+        inspected_lines += 1;
+        if inspected_lines > 6 {
+            if !preview.is_empty() {
+                preview.push('\n');
+            }
+            preview.push_str("...");
+            break;
+        }
+        if !preview.is_empty() {
+            preview.push('\n');
+        }
+        preview.push_str(line);
     }
-    lines.join("\n")
+    preview
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulcan_service_api::PendingPromptsChangedDelta;
+
+    /// Builds one pending question snapshot for attention-priority tests.
+    /// 为注意力优先级测试构建单个待回答问题快照。
+    fn test_pending_question(session_id: SessionId) -> PendingQuestionSnapshot {
+        PendingQuestionSnapshot {
+            id: String::from("question-1"),
+            session_id: session_id.to_string(),
+            sequence: 1,
+            questions: Vec::new(),
+        }
+    }
+
+    /// Builds one plan-mode summary with a request-identifying artifact path.
+    /// 构建带有请求标识产物路径的计划模式摘要。
+    fn test_plan_summary(execution_mode: &str) -> SessionPlanModeSummary {
+        SessionPlanModeSummary {
+            execution_mode: execution_mode.to_string(),
+            prompt_injected: true,
+            artifact: Some(SessionPlanArtifactSummary {
+                name: String::from("Plan"),
+                path: String::from("docs/plan/test.md"),
+                content: None,
+                updated_at: String::from("1780000000000"),
+            }),
+        }
+    }
+
+    /// Builds one conversation summary for attention refresh tests.
+    /// 为注意力刷新测试构建单个会话摘要。
+    fn test_conversation_summary(unread: bool, last_updated_at: &str) -> ConversationSummary {
+        ConversationSummary {
+            id: String::from("session-1"),
+            title: String::from("Session"),
+            status: String::from("idle"),
+            run_phase: String::from("idle"),
+            last_updated_label: String::from("now"),
+            last_updated_at: last_updated_at.to_string(),
+            unread,
+            attention: None,
+            project_id: None,
+            fork_source: None,
+        }
+    }
+
+    /// Verifies conversation-scoped retained projections replace and clear matching entries.
+    /// 验证按会话归属保留的投影会替换和清除匹配条目。
+    #[test]
+    fn replace_conversation_scoped_projection_entry_replaces_and_clears_matches() {
+        // entries stores retained pending-prompt projections for multiple conversations.
+        // entries 保存多个会话的待发送提示词保留投影。
+        let mut entries = vec![
+            PendingPromptsChangedDelta {
+                conversation_id: String::from("conversation-a"),
+                pending_prompts: Vec::new(),
+            },
+            PendingPromptsChangedDelta {
+                conversation_id: String::from("conversation-b"),
+                pending_prompts: Vec::new(),
+            },
+        ];
+
+        replace_conversation_scoped_projection_entry(
+            &mut entries,
+            "conversation-a",
+            Some(PendingPromptsChangedDelta {
+                conversation_id: String::from("conversation-a"),
+                pending_prompts: Vec::new(),
+            }),
+            |entry| entry.conversation_id.as_str(),
+        );
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.conversation_id == "conversation-a")
+                .count(),
+            1
+        );
+        assert_eq!(
+            entries.last().map(|entry| entry.conversation_id.as_str()),
+            Some("conversation-a")
+        );
+
+        replace_conversation_scoped_projection_entry(
+            &mut entries,
+            "conversation-b",
+            None,
+            |entry| entry.conversation_id.as_str(),
+        );
+
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.conversation_id != "conversation-b")
+        );
+    }
+
+    /// Verifies retained session-addons entries are omitted when all panels are empty.
+    /// 验证所有面板为空时会省略保留会话附属条目。
+    #[test]
+    fn session_addons_changed_delta_for_retained_list_omits_empty_entry() {
+        // entry stores the retained-list projection when any addon content exists.
+        // entry 保存存在任意附属内容时的保留列表投影。
+        let entry = session_addons_changed_delta_for_retained_list(
+            String::from("conversation-a"),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert!(entry.is_none());
+    }
+
+    /// Verifies retained session-addons entries preserve non-empty panel summaries.
+    /// 验证保留会话附属条目会保留非空面板摘要。
+    #[test]
+    fn session_addons_changed_delta_for_retained_list_keeps_plan_entry() {
+        // plan_mode identifies the addon panel that should keep the retained entry visible.
+        // plan_mode 标识应保持保留条目可见的附属面板。
+        let plan_mode = test_plan_summary("plan");
+        // entry stores the retained-list projection built from the shared helper.
+        // entry 保存共享辅助函数构建出的保留列表投影。
+        let entry = session_addons_changed_delta_for_retained_list(
+            String::from("conversation-a"),
+            None,
+            None,
+            Some(plan_mode),
+            None,
+        )
+        .expect("plan mode should produce a retained addon entry");
+
+        assert_eq!(entry.conversation_id, "conversation-a");
+        assert!(entry.session_goal.is_none());
+        assert!(entry.session_todolist.is_none());
+        assert_eq!(
+            entry
+                .session_plan_mode
+                .as_ref()
+                .map(|summary| summary.execution_mode.as_str()),
+            Some("plan")
+        );
+        assert!(entry.session_vmm_policy.is_none());
+    }
+
+    /// Verifies compact panel previews trim blank lines.
+    /// 验证紧凑面板预览会裁剪空行。
+    #[test]
+    fn compact_panel_preview_trims_blank_lines() {
+        // content represents rendered panel text with indentation and blank separators.
+        // content 表示带缩进和空白分隔符的已渲染面板文本。
+        let content = "  first line  \n\n\tsecond line\n   \n third line ";
+
+        assert_eq!(
+            compact_panel_preview(content),
+            "first line\nsecond line\nthird line"
+        );
+    }
+
+    /// Verifies the seventh visible line becomes the compact-preview truncation sentinel.
+    /// 验证第七条可见行会变成紧凑预览的截断哨兵。
+    #[test]
+    fn compact_panel_preview_uses_seventh_visible_line_as_truncation_sentinel() {
+        // content contains seven visible lines so the preview should keep six lines and append dots.
+        // content 包含七条可见行，因此预览应保留六条并追加省略号。
+        let content = "one\ntwo\nthree\nfour\nfive\nsix\nseven";
+
+        assert_eq!(
+            compact_panel_preview(content),
+            "one\ntwo\nthree\nfour\nfive\nsix\n..."
+        );
+    }
+
+    /// Verifies conversation attention uses ask, then plan, then unread priority.
+    /// 验证会话注意力按 ask、plan、unread 的优先级生成。
+    #[test]
+    fn conversation_attention_summary_uses_ask_plan_unread_priority() {
+        let session_id = SessionId::new_v4();
+        let updated_at = Some(String::from("1780000000000"));
+        let pending_questions = vec![test_pending_question(session_id)];
+        let plan_summary = test_plan_summary("plan");
+
+        let ask_attention = conversation_attention_summary_for_session(
+            session_id,
+            &pending_questions,
+            Some(&plan_summary),
+            true,
+            updated_at.clone(),
+        )
+        .expect("ask attention should be produced");
+        assert_eq!(ask_attention.kind, "ask");
+        assert_eq!(ask_attention.priority, 90);
+        assert_eq!(ask_attention.request_id.as_deref(), Some("question-1"));
+        assert_eq!(ask_attention.updated_at, updated_at);
+
+        let plan_attention = conversation_attention_summary_for_session(
+            session_id,
+            &[],
+            Some(&plan_summary),
+            true,
+            None,
+        )
+        .expect("plan attention should be produced");
+        assert_eq!(plan_attention.kind, "plan_confirm");
+        assert_eq!(plan_attention.priority, 80);
+        assert_eq!(
+            plan_attention.request_id.as_deref(),
+            Some("docs/plan/test.md")
+        );
+
+        let build_summary = test_plan_summary("build");
+        let unread_attention = conversation_attention_summary_for_session(
+            session_id,
+            &[],
+            Some(&build_summary),
+            true,
+            None,
+        )
+        .expect("unread attention should be produced");
+        assert_eq!(unread_attention.kind, "unread");
+        assert_eq!(unread_attention.priority, 10);
+
+        assert!(
+            conversation_attention_summary_for_session(
+                session_id,
+                &[],
+                Some(&build_summary),
+                false,
+                None,
+            )
+            .is_none()
+        );
+    }
+
+    /// Verifies the shared refresh helper updates summaries and normalizes empty timestamps.
+    /// 验证共享刷新辅助函数会更新摘要并归一化空时间戳。
+    #[test]
+    fn refresh_conversation_attention_summary_updates_summary_from_runtime_inputs() {
+        // Use one stable session id for the pending ask lookup.
+        // 使用一个稳定会话标识匹配待回答 ask。
+        let session_id = SessionId::new_v4();
+        // Keep an ask request present to verify the highest-priority branch.
+        // 保留一个 ask 请求以验证最高优先级分支。
+        let pending_questions = vec![test_pending_question(session_id)];
+        // Keep a Plan summary present to prove ask still wins after the helper extraction.
+        // 保留计划摘要以证明抽取辅助函数后 ask 仍然优先。
+        let plan_summary = test_plan_summary("plan");
+        // Start with an empty timestamp to verify the shared normalization behavior.
+        // 使用空时间戳启动以验证共享归一化行为。
+        let mut conversation = test_conversation_summary(true, "");
+
+        refresh_conversation_attention_summary(
+            &mut conversation,
+            session_id,
+            &pending_questions,
+            Some(&plan_summary),
+        );
+
+        assert_eq!(
+            conversation
+                .attention
+                .as_ref()
+                .map(|attention| attention.kind.as_str()),
+            Some("ask")
+        );
+        assert_eq!(
+            conversation
+                .attention
+                .as_ref()
+                .and_then(|attention| attention.updated_at.as_deref()),
+            None
+        );
+
+        // Use build mode so unread is the only remaining attention source.
+        // 使用 build 模式让未读状态成为唯一剩余注意力来源。
+        let build_summary = test_plan_summary("build");
+        // Keep a concrete timestamp to verify non-empty values are preserved.
+        // 保留具体时间戳以验证非空值会被保留。
+        let mut unread_conversation = test_conversation_summary(true, "1780000000000");
+
+        refresh_conversation_attention_summary(
+            &mut unread_conversation,
+            session_id,
+            &[],
+            Some(&build_summary),
+        );
+
+        assert_eq!(
+            unread_conversation
+                .attention
+                .as_ref()
+                .map(|attention| attention.kind.as_str()),
+            Some("unread")
+        );
+        assert_eq!(
+            unread_conversation
+                .attention
+                .as_ref()
+                .and_then(|attention| attention.updated_at.as_deref()),
+            Some("1780000000000")
+        );
+    }
 }

@@ -211,26 +211,22 @@ pub(crate) fn materialize_prompt_session(
     prompt: &str,
 ) -> Result<(SessionId, String, String), String> {
     if let Some(session_id) = conversation_id.and_then(parse_session_id)
-        && let Some(session) = workspace_snapshot
-            .sessions
-            .iter_mut()
-            .find(|candidate| candidate.id == session_id)
+        && let Some(session) =
+            active_session_summary_for_session_mut(&mut workspace_snapshot.sessions, session_id)
     {
         session.status = SessionState::Running;
         session.last_updated_label = String::from("刚刚");
         workspace_snapshot.selected_session = session_id;
-        let workspace_path = session
-            .project_id
+        let session_title = session.title.clone();
+        let owner_project_id = session_summary_project_id(session).map(str::to_string);
+        let workspace_path = owner_project_id
             .as_deref()
             .and_then(|owner_id| {
-                workspace_snapshot
-                    .task_projects
-                    .iter()
-                    .find(|project| project.id == owner_id)
+                workspace_task_project_for_project_id(workspace_snapshot, owner_id)
             })
             .map(|project| project.path.clone())
             .unwrap_or_default();
-        return Ok((session_id, session.title.clone(), workspace_path));
+        return Ok((session_id, session_title, workspace_path));
     }
 
     let project_id = project_id.ok_or_else(|| String::from("新建会话需要提供项目标识。"))?;

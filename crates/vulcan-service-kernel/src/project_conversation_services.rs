@@ -50,9 +50,9 @@ pub(super) fn selected_session_id_from_state(
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     if let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref()
-        && workspace_snapshot.selected_session != SessionId::nil()
+        && let Some(selected_session_id) = selected_workspace_session_id(workspace_snapshot)
     {
-        return Ok(workspace_snapshot.selected_session);
+        return Ok(selected_session_id);
     }
     guard
         .workbench

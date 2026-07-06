@@ -170,12 +170,42 @@ pub(super) fn append_encoded_json_line(
     }
     let mut file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(path)
         .map_err(to_store_error)?;
+    let boundary_bytes = ensure_jsonl_append_boundary(&mut file)?;
     file.write_all(encoded.as_bytes()).map_err(to_store_error)?;
     file.write_all(b"\n").map_err(to_store_error)?;
-    Ok(encoded.len() as u64 + 1)
+    Ok(boundary_bytes + encoded.len() as u64 + 1)
+}
+
+/// Ensures the existing JSONL file tail ends with a newline before appending another row.
+/// 确保已有 JSONL 文件尾部在追加新行前以换行结束。
+///
+/// # Parameters
+/// 参数
+/// `file` is the append handle opened for the target JSONL file.
+/// `file` 是为目标 JSONL 文件打开的追加句柄。
+///
+/// # Returns
+/// 返回值
+/// The number of boundary bytes written before the next JSONL record.
+/// 返回下一条 JSONL 记录前额外写入的边界字节数。
+fn ensure_jsonl_append_boundary(file: &mut File) -> Result<u64, SessionStoreError> {
+    let len = file.metadata().map_err(to_store_error)?.len();
+    if len == 0 {
+        return Ok(0);
+    }
+    file.seek(SeekFrom::Start(len.saturating_sub(1)))
+        .map_err(to_store_error)?;
+    let mut tail = [0_u8; 1];
+    file.read_exact(&mut tail).map_err(to_store_error)?;
+    if tail[0] != b'\n' {
+        file.write_all(b"\n").map_err(to_store_error)?;
+        return Ok(1);
+    }
+    Ok(0)
 }
 
 /// Reads one optional JSON document.

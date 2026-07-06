@@ -44,3 +44,4 @@ target
 /apps/vulcan-code-web/.vite/
 /apps/vulcan-code-web/tsconfig.tsbuildinfo
 /apps/vulcan-code-tauri/gen/
+TASK_LOG.md

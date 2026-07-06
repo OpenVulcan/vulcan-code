@@ -81,7 +81,6 @@ pub struct QuestionRequest {
     pub id: String,
     /// Controller session that owns the current blocking tool call.
     /// 拥有当前阻塞式工具调用的控制器会话标识。
-    #[allow(dead_code)]
     pub session_id: SessionId,
     /// Monotonic sequence used to present older pending questions before newer ones.
     /// 用于让较早的问题请求先于较新的请求展示的单调序号。

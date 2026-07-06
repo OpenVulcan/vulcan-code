@@ -173,25 +173,21 @@ fn build_git_commit_summary_input(
     let mut notices = Vec::new();
     let mut sections = Vec::new();
     let staged_diff = load_webui_staged_git_diff(repository_root)?;
-    if !staged_diff.trim().is_empty() {
-        sections.push(format!("## Staged changes\n\n{staged_diff}"));
-    }
+    append_git_commit_summary_diff_section(&mut sections, "Staged changes", &staged_diff);
     if include_unstaged {
         let unstaged_diff = load_webui_unstaged_git_diff(repository_root)?;
-        if !unstaged_diff.trim().is_empty() {
-            sections.push(format!("## Unstaged tracked changes\n\n{unstaged_diff}"));
-        }
+        append_git_commit_summary_diff_section(
+            &mut sections,
+            "Unstaged tracked changes",
+            &unstaged_diff,
+        );
         let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices)?;
-        if !untracked_diff.trim().is_empty() {
-            sections.push(format!("## Untracked files\n\n{untracked_diff}"));
-        }
+        append_git_commit_summary_diff_section(&mut sections, "Untracked files", &untracked_diff);
     }
     if sections.is_empty() {
         return Err(String::from("当前没有可用于生成提交信息的变更。"));
     }
-    if !notices.is_empty() {
-        sections.insert(0, format!("## Notices\n\n{}", notices.join("\n")));
-    }
+    prepend_git_commit_summary_notices(&mut sections, &notices);
     let full_content = sections.join("\n\n");
     let token_estimate = estimate_git_commit_prompt_tokens(model_id, &full_content, estimator);
     if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
@@ -245,12 +241,12 @@ fn build_git_commit_summary_rtk_input(
         }
         let mut notices = Vec::new();
         let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices).ok()?;
-        if !untracked_diff.trim().is_empty() {
-            change_sections.push(format!("## Untracked files\n\n{untracked_diff}"));
-        }
-        if !notices.is_empty() {
-            change_sections.insert(0, format!("## Notices\n\n{}", notices.join("\n")));
-        }
+        append_git_commit_summary_diff_section(
+            &mut change_sections,
+            "Untracked files",
+            &untracked_diff,
+        );
+        prepend_git_commit_summary_notices(&mut change_sections, &notices);
     }
     if change_sections.is_empty() {
         return None;
@@ -264,6 +260,43 @@ fn build_git_commit_summary_rtk_input(
     ];
     sections.extend(change_sections);
     Some(sections.join("\n\n"))
+}
+
+/// Appends one Git commit-summary diff section when its body contains useful content.
+/// 当正文包含有效内容时，追加一段 Git 提交总结 diff 区块。
+///
+/// # Parameters
+/// 参数
+/// `sections` receives the formatted prompt section.
+/// `sections` 接收格式化后的提示词区块。
+/// `title` is the markdown heading text without the leading hashes.
+/// `title` 是不包含井号前缀的 Markdown 标题文本。
+/// `body` is the raw Git diff body to preserve in the prompt.
+/// `body` 是需要在提示词中保留的原始 Git diff 正文。
+///
+/// # Returns
+/// 返回值
+/// Returns whether a section was appended.
+/// 返回是否实际追加了区块。
+fn append_git_commit_summary_diff_section(
+    sections: &mut Vec<String>,
+    title: &str,
+    body: &str,
+) -> bool {
+    if body.trim().is_empty() {
+        return false;
+    }
+    sections.push(format!("## {title}\n\n{body}"));
+    true
+}
+
+/// Prepends Git commit-summary notices before change sections.
+/// 将 Git 提交总结提示前置到变更区块之前。
+fn prepend_git_commit_summary_notices(sections: &mut Vec<String>, notices: &[String]) {
+    if notices.is_empty() {
+        return;
+    }
+    sections.insert(0, format!("## Notices\n\n{}", notices.join("\n")));
 }
 
 /// Runs one RTK Git command and formats its output as a prompt section.
@@ -303,11 +336,17 @@ fn load_rtk_git_commit_summary_command_section(
 /// Removes RTK runtime warning lines from Git summary output.
 /// 从 Git 总结输出中移除 RTK 运行时警告行。
 fn clean_rtk_git_commit_summary_output(stdout: &str) -> String {
-    stdout
+    let mut cleaned = String::new();
+    for line in stdout
         .lines()
         .filter(|line| !line.trim_start().starts_with("[rtk]"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    {
+        if !cleaned.is_empty() {
+            cleaned.push('\n');
+        }
+        cleaned.push_str(line);
+    }
+    cleaned
 }
 
 /// Returns whether one formatted RTK section contains no useful command output.
@@ -504,5 +543,66 @@ mod tests {
     fn cleans_rtk_warning_lines_from_commit_summary_output() {
         let output = "[rtk] /!\\ No hook installed — run `rtk init -g`\n M src/lib.rs\n";
         assert_eq!(clean_rtk_git_commit_summary_output(output), " M src/lib.rs");
+    }
+
+    /// Verifies RTK output cleaning keeps non-warning lines in their original order.
+    /// 验证 RTK 输出清理会保留非警告行的原始顺序。
+    #[test]
+    fn clean_rtk_git_commit_summary_output_preserves_remaining_lines() {
+        let output = concat!(
+            "## main...origin/main\n",
+            " M src/lib.rs\n",
+            "  [rtk] local warning with indentation\n",
+            "?? tests/new.rs\n",
+        );
+
+        assert_eq!(
+            clean_rtk_git_commit_summary_output(output),
+            "## main...origin/main\n M src/lib.rs\n?? tests/new.rs"
+        );
+    }
+
+    /// Verifies blank commit-summary diff bodies do not create empty prompt sections.
+    /// 验证空白提交总结 diff 正文不会创建空提示词区块。
+    #[test]
+    fn commit_summary_diff_section_skips_blank_body() {
+        let mut sections = Vec::new();
+
+        assert!(!append_git_commit_summary_diff_section(
+            &mut sections,
+            "Staged changes",
+            " \n\t"
+        ));
+        assert!(sections.is_empty());
+
+        assert!(append_git_commit_summary_diff_section(
+            &mut sections,
+            "Staged changes",
+            "diff --git a/lib.rs b/lib.rs"
+        ));
+        assert_eq!(
+            sections,
+            vec![String::from(
+                "## Staged changes\n\ndiff --git a/lib.rs b/lib.rs"
+            )]
+        );
+    }
+
+    /// Verifies commit-summary notices are prepended before collected change sections.
+    /// 验证提交总结提示会前置到已收集的变更区块之前。
+    #[test]
+    fn commit_summary_notices_are_prepended_before_changes() {
+        let mut sections = vec![String::from("## Staged changes\n\nM src/lib.rs")];
+        let notices = vec![String::from("untracked file was skipped")];
+
+        prepend_git_commit_summary_notices(&mut sections, &notices);
+
+        assert_eq!(
+            sections,
+            vec![
+                String::from("## Notices\n\nuntracked file was skipped"),
+                String::from("## Staged changes\n\nM src/lib.rs"),
+            ]
+        );
     }
 }

@@ -52,6 +52,46 @@ fn test_visible_message(message_id: &str, body: &str) -> SessionMessageEntry {
         .with_runtime_metadata(message_id, "100")
 }
 
+/// Builds a compact test compaction entry anchored to one message.
+/// 构建一条锚定到单条消息的紧凑测试压缩记录。
+///
+/// # Parameters
+/// 参数
+/// `entry_id` is the stable compaction entry id.
+/// `entry_id` 是稳定的压缩记录标识。
+/// `message_id` is the transcript message id that anchors the compaction boundary.
+/// `message_id` 是锚定压缩边界的转录消息标识。
+/// `turn_index` is the turn boundary stored with the compaction.
+/// `turn_index` 是随压缩记录保存的轮次边界。
+/// `summary_message_id` is the generated summary message id.
+/// `summary_message_id` 是生成的摘要消息标识。
+/// `created_at` is the deterministic creation timestamp used by tests.
+/// `created_at` 是测试使用的确定性创建时间戳。
+///
+/// # Returns
+/// 返回值
+/// A minimal compaction entry for hydration-retention tests.
+/// 返回用于水合保留测试的最小压缩记录。
+fn test_compaction_entry(
+    entry_id: &str,
+    message_id: &str,
+    turn_index: i64,
+    summary_message_id: &str,
+    created_at: &str,
+) -> vulcan_context::SessionCompactionEntry {
+    vulcan_context::SessionCompactionEntry {
+        id: entry_id.to_string(),
+        source_until_message_id: Some(message_id.to_string()),
+        source_until_turn_index: Some(turn_index),
+        context_start_message_id: Some(message_id.to_string()),
+        context_budget_fingerprint: None,
+        context_assembly_fingerprint: None,
+        retained_tail_start_turn_index: None,
+        summary_message_id: Some(summary_message_id.to_string()),
+        created_at: created_at.to_string(),
+    }
+}
+
 /// Creates minimal segmented root metadata for retained-selection preload tests.
 /// 为保留选择预载测试创建最小分段根元数据。
 ///
@@ -746,15 +786,55 @@ fn history_page_response_workbench_is_focused_on_requested_session() {
     );
 }
 
+/// Verifies active-surface checks include both selected and subagent-active conversations.
+/// 验证活动界面判断同时包含选中会话与子代理活动会话。
+#[test]
+fn workbench_surface_matches_selected_or_subagent_active_conversation() {
+    // selected_session_id identifies the regular selected conversation.
+    // selected_session_id 标识常规选中会话。
+    let selected_session_id = SessionId::new_v4();
+    // subagent_session_id identifies the child conversation currently shown by subagent navigation.
+    // subagent_session_id 标识子代理导航当前展示的子会话。
+    let subagent_session_id = SessionId::new_v4();
+    // unrelated_session_id proves unrelated conversations are not treated as active.
+    // unrelated_session_id 证明无关会话不会被视为活动界面。
+    let unrelated_session_id = SessionId::new_v4();
+    // workbench stores both the regular selection and active subagent navigation surface.
+    // workbench 同时保存常规选中会话和活动子代理导航界面。
+    let mut workbench = fallback_workbench_snapshot(&[]);
+    workbench.selected_conversation_id = Some(selected_session_id.to_string());
+    workbench.subagent_navigation = Some(SubagentNavigationSnapshot {
+        parent_conversation_id: selected_session_id.to_string(),
+        active_conversation_id: subagent_session_id.to_string(),
+        active_task_id: Some(subagent_session_id.to_string()),
+        tasks: Vec::new(),
+    });
+
+    assert!(workbench_surface_matches_conversation(
+        &workbench,
+        selected_session_id.to_string().as_str()
+    ));
+    assert!(workbench_surface_matches_conversation(
+        &workbench,
+        subagent_session_id.to_string().as_str()
+    ));
+    assert!(!workbench_surface_matches_conversation(
+        &workbench,
+        unrelated_session_id.to_string().as_str()
+    ));
+}
+
 /// Verifies lightweight hydration refresh preserves retained payloads for other sessions.
 /// 验证轻量水合刷新会保留其它会话的已水合载荷。
 #[test]
 fn hydration_index_refresh_preserves_other_retained_payloads() {
     let hydrating_session_id = SessionId::new_v4();
     let retained_session_id = SessionId::new_v4();
+    let preloaded_session_id = SessionId::new_v4();
     let removed_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(hydrating_session_id);
     add_second_conversation(&mut service_state, retained_session_id);
+    add_second_conversation(&mut service_state, preloaded_session_id);
     let retained_workspace = service_state
         .workspace_snapshot
         .as_mut()
@@ -768,6 +848,13 @@ fn hydration_index_refresh_preserves_other_retained_payloads() {
         vec![test_visible_message("retained-message", "retained body")],
     );
     retained_workspace.session_messages.insert(
+        preloaded_session_id,
+        vec![test_visible_message(
+            "preloaded-retained-message",
+            "retained preloaded body",
+        )],
+    );
+    retained_workspace.session_messages.insert(
         removed_session_id,
         vec![test_visible_message("removed-message", "removed body")],
     );
@@ -778,33 +865,71 @@ fn hydration_index_refresh_preserves_other_retained_payloads() {
             ..SessionRuntimeStateEntry::default()
         },
     );
+    retained_workspace.session_runtime_state.insert(
+        preloaded_session_id,
+        SessionRuntimeStateEntry {
+            active_model_id: Some(String::from("retained-preloaded-model")),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
     retained_workspace.session_compactions.insert(
         retained_session_id,
-        vec![vulcan_context::SessionCompactionEntry {
-            id: String::from("retained-compaction"),
-            source_until_message_id: Some(String::from("retained-message")),
-            source_until_turn_index: Some(1),
-            context_start_message_id: Some(String::from("retained-message")),
-            context_budget_fingerprint: None,
-            context_assembly_fingerprint: None,
-            retained_tail_start_turn_index: None,
-            summary_message_id: Some(String::from("summary-message")),
-            created_at: String::from("100"),
-        }],
+        vec![test_compaction_entry(
+            "retained-compaction",
+            "retained-message",
+            1,
+            "summary-message",
+            "100",
+        )],
+    );
+    retained_workspace.session_compactions.insert(
+        preloaded_session_id,
+        vec![test_compaction_entry(
+            "retained-preloaded-compaction",
+            "preloaded-retained-message",
+            1,
+            "preloaded-summary-message",
+            "100",
+        )],
     );
     retained_workspace.hydrated_session_ids.extend([
         hydrating_session_id,
         retained_session_id,
+        preloaded_session_id,
         removed_session_id,
     ]);
     let retained_workspace = retained_workspace.clone();
     let mut refreshed_workspace = retained_workspace.clone();
-    refreshed_workspace.session_messages = BTreeMap::from([(
-        hydrating_session_id,
-        vec![test_visible_message("hydrating-new", "new hydrating")],
+    refreshed_workspace.session_messages = BTreeMap::from([
+        (
+            hydrating_session_id,
+            vec![test_visible_message("hydrating-new", "new hydrating")],
+        ),
+        (
+            preloaded_session_id,
+            vec![test_visible_message(
+                "preloaded-current-message",
+                "current preloaded body",
+            )],
+        ),
+    ]);
+    refreshed_workspace.session_runtime_state = BTreeMap::from([(
+        preloaded_session_id,
+        SessionRuntimeStateEntry {
+            active_model_id: Some(String::from("current-preloaded-model")),
+            ..SessionRuntimeStateEntry::default()
+        },
     )]);
-    refreshed_workspace.session_runtime_state = BTreeMap::new();
-    refreshed_workspace.session_compactions = BTreeMap::new();
+    refreshed_workspace.session_compactions = BTreeMap::from([(
+        preloaded_session_id,
+        vec![test_compaction_entry(
+            "current-preloaded-compaction",
+            "preloaded-current-message",
+            2,
+            "current-summary-message",
+            "200",
+        )],
+    )]);
     refreshed_workspace.hydrated_session_ids = BTreeSet::from([hydrating_session_id]);
 
     preserve_retained_hydrated_payloads_after_index_refresh(
@@ -833,8 +958,22 @@ fn hydration_index_refresh_preserves_other_retained_payloads() {
         Some("retained-model")
     );
     assert_eq!(
+        refreshed_workspace.session_messages[&preloaded_session_id][0].body,
+        "current preloaded body"
+    );
+    assert_eq!(
+        refreshed_workspace.session_runtime_state[&preloaded_session_id]
+            .active_model_id
+            .as_deref(),
+        Some("current-preloaded-model")
+    );
+    assert_eq!(
         refreshed_workspace.session_compactions[&retained_session_id][0].id,
         "retained-compaction"
+    );
+    assert_eq!(
+        refreshed_workspace.session_compactions[&preloaded_session_id][0].id,
+        "current-preloaded-compaction"
     );
     assert!(
         refreshed_workspace
@@ -845,6 +984,11 @@ fn hydration_index_refresh_preserves_other_retained_payloads() {
         refreshed_workspace
             .hydrated_session_ids
             .contains(&retained_session_id)
+    );
+    assert!(
+        refreshed_workspace
+            .hydrated_session_ids
+            .contains(&preloaded_session_id)
     );
     assert!(
         !refreshed_workspace

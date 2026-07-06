@@ -29,7 +29,8 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_reasoning_selection_effort,
     composer_attachment_summary_from_core, current_unix_millis_text, emit_service_event_with_trace,
-    parse_reasoning_effort, session_ai_tool_configuration_or_default,
+    owning_project_id_for_session, parse_reasoning_effort,
+    replace_conversation_scoped_projection_entry, session_ai_tool_configuration_or_default,
     session_has_pending_plan_artifact,
 };
 
@@ -207,11 +208,7 @@ fn enqueue_webui_pending_prompt_panel_entry(
     entry: PendingPromptPanelEntry,
 ) -> Result<(), String> {
     let now = current_unix_millis_text();
-    let project_id = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .and_then(|session| session.project_id.clone());
+    let project_id = owning_project_id_for_session(workspace_snapshot, session_id);
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .entry(session_id)
@@ -387,29 +384,27 @@ pub(super) fn emit_pending_prompts_changed_delta(
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let revision = guard.workbench_generation;
         guard.workbench.revision = revision;
-        if guard.workbench.selected_conversation_id.as_deref() == Some(conversation_id.as_str()) {
-            guard.workbench.pending_prompts = pending_prompts.clone();
+        // delta is the authoritative pending-prompt projection for this conversation.
+        // delta 是该会话的权威待发送提示词投影。
+        let delta = PendingPromptsChangedDelta {
+            conversation_id,
+            pending_prompts,
+        };
+        if guard.workbench.selected_conversation_id.as_deref()
+            == Some(delta.conversation_id.as_str())
+        {
+            guard.workbench.pending_prompts = delta.pending_prompts.clone();
         }
-        guard
-            .workbench
-            .pending_prompts_by_conversation
-            .retain(|entry| entry.conversation_id != conversation_id);
-        if !pending_prompts.is_empty() {
-            guard
-                .workbench
-                .pending_prompts_by_conversation
-                .push(PendingPromptsChangedDelta {
-                    conversation_id: conversation_id.clone(),
-                    pending_prompts: pending_prompts.clone(),
-                });
-        }
+        replace_conversation_scoped_projection_entry(
+            &mut guard.workbench.pending_prompts_by_conversation,
+            delta.conversation_id.as_str(),
+            (!delta.pending_prompts.is_empty()).then(|| delta.clone()),
+            |entry| entry.conversation_id.as_str(),
+        );
         (
             WorkbenchDeltaEnvelope {
                 generation: revision,
-                delta: WorkbenchDelta::PendingPromptsChanged(PendingPromptsChangedDelta {
-                    conversation_id,
-                    pending_prompts,
-                }),
+                delta: WorkbenchDelta::PendingPromptsChanged(delta),
             },
             revision,
         )
@@ -531,11 +526,7 @@ pub(super) fn insert_webui_pending_prompt_into_internal_queue(
     workspace_path: &str,
     entry_id: &str,
 ) -> Result<(), String> {
-    let project_id = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .and_then(|session| session.project_id.clone());
+    let project_id = owning_project_id_for_session(workspace_snapshot, session_id);
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
@@ -640,15 +631,62 @@ fn pending_prompt_preview_text(prompt: &str, attachments: &[ConversationAttachme
     let text = if trimmed_prompt.is_empty() {
         String::from("附件消息")
     } else {
-        trimmed_prompt
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut normalized_prompt = String::new();
+        // Collapse all whitespace classes into single spaces without materializing a token list.
+        // 不落地中间词元列表，直接把所有空白字符折叠为单个空格。
+        for segment in trimmed_prompt.split_whitespace() {
+            if !normalized_prompt.is_empty() {
+                normalized_prompt.push(' ');
+            }
+            normalized_prompt.push_str(segment);
+        }
+        normalized_prompt
     };
     let preview = format!("{attachment_prefix}{text}");
     if preview.chars().count() <= 48 {
         preview
     } else {
         format!("{}...", preview.chars().take(48).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulcan_core::types::ConversationAttachmentKind;
+
+    /// Builds one minimal pending-prompt preview attachment.
+    /// 构建一个最小待发送提示词预览附件。
+    fn preview_test_attachment() -> ConversationAttachment {
+        ConversationAttachment {
+            kind: ConversationAttachmentKind::Image,
+            file_name: String::from("chart.png"),
+            local_path: String::from("C:/tmp/chart.png"),
+            source_path: None,
+            asset_id: None,
+            byte_len: Some(128),
+            preview_local_path: None,
+            mime_type: String::from("image/png"),
+        }
+    }
+
+    /// Verifies pending prompt previews collapse whitespace without changing visible words.
+    /// 验证待发送提示词预览会折叠空白且不改变可见词语。
+    #[test]
+    fn pending_prompt_preview_collapses_whitespace_without_token_collection() {
+        assert_eq!(
+            pending_prompt_preview_text("  hello\t\n  world  ", &[]),
+            "hello world"
+        );
+    }
+
+    /// Verifies attachment-only pending prompt previews keep the canonical label.
+    /// 验证仅包含附件的待发送提示词预览会保留规范标签。
+    #[test]
+    fn pending_prompt_preview_uses_attachment_label_for_empty_prompt() {
+        assert_eq!(
+            pending_prompt_preview_text("   ", &[preview_test_attachment()]),
+            "1 个附件 · 附件消息"
+        );
     }
 }

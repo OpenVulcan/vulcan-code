@@ -11,9 +11,11 @@ fn merge_refreshed_models_only_auto_enables_new_default_models() {
     let mut new_default_model = test_model_choice("new-default-model", true, None);
     new_default_model.default_enabled = true;
 
-    let mut entry = PersistedProviderEntry::default();
-    entry.models = persist_remote_models(&[old_default_model.clone(), manual_model.clone()]);
-    entry.enabled_models = Some(vec![String::from("manual-model")]);
+    let mut entry = PersistedProviderEntry {
+        models: persist_remote_models(&[old_default_model.clone(), manual_model.clone()]),
+        enabled_models: Some(vec![String::from("manual-model")]),
+        ..PersistedProviderEntry::default()
+    };
 
     merge_refreshed_models(
         &mut entry,

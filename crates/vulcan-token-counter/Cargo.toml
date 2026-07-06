@@ -9,6 +9,11 @@ license.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "convert_tokenizer_json_to_tkz"
+path = "src/bin/convert_tokenizer_json_to_tkz.rs"
+test = false
+
 [dependencies]
 thiserror = "2.0.17"
 tokie = "0.0.9"

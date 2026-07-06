@@ -46,7 +46,6 @@ pub async fn load_session_history_page_for_project_created_at(
         session_id,
         Some(before_ordinal),
         requested_limit,
-        default_session_hydration_window_source_preference(),
     )? {
         return Ok(SessionHistoryPage {
             session_id,
@@ -106,7 +105,6 @@ pub async fn load_session_transcript_window_for_project_created_at(
         session_id,
         None,
         requested_limit,
-        default_session_hydration_window_source_preference(),
     )? {
         return Ok(SessionHistoryPage {
             session_id,

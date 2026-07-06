@@ -172,6 +172,10 @@ fn session_todolist_summary_counts_completed_items() {
                     step: String::from("补充测试"),
                     status: SessionTodolistItemStatus::InProgress,
                 },
+                SessionTodolistItem {
+                    step: String::from("等待复核"),
+                    status: SessionTodolistItemStatus::Pending,
+                },
             ],
             updated_at: Some(String::from("2026-06-17T00:00:00Z")),
         },
@@ -182,10 +186,14 @@ fn session_todolist_summary_counts_completed_items() {
         .expect("summary should exist");
 
     assert_eq!(summary.explanation.as_deref(), Some("审核修复"));
-    assert_eq!(summary.total_count, 2);
+    assert_eq!(summary.total_count, 3);
     assert_eq!(summary.completed_count, 1);
+    assert_eq!(summary.items[0].step, "完成菜单接入");
     assert_eq!(summary.items[0].status, "completed");
+    assert_eq!(summary.items[1].step, "补充测试");
     assert_eq!(summary.items[1].status, "in_progress");
+    assert_eq!(summary.items[2].step, "等待复核");
+    assert_eq!(summary.items[2].status, "pending");
     assert_eq!(summary.updated_at.as_deref(), Some("2026-06-17T00:00:00Z"));
 }
 

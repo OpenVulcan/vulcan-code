@@ -3,6 +3,75 @@
 
 use super::*;
 
+/// Static metadata for one composer attachment kind.
+/// 单个输入区附件类型的静态元数据。
+struct ComposerAttachmentKindMetadata {
+    /// Primary stable key exchanged with the WebUI.
+    /// 与 WebUI 交换的主要稳定键。
+    key: &'static str,
+    /// Legacy or alternate stable keys accepted from WebUI summaries.
+    /// 从 WebUI 摘要接受的旧版或备用稳定键。
+    aliases: &'static [&'static str],
+    /// Localized label used by picker controls.
+    /// 文件选择控件使用的本地化标签。
+    label: &'static str,
+    /// Browser file picker accept list.
+    /// 浏览器文件选择器 accept 列表。
+    accept: &'static str,
+}
+
+impl ComposerAttachmentKindMetadata {
+    /// Returns whether one normalized key belongs to this attachment kind.
+    /// 返回单个规范化键是否属于该附件类型。
+    fn matches_key(&self, key: &str) -> bool {
+        self.key == key || self.aliases.contains(&key)
+    }
+}
+
+/// Ordered composer attachment kinds shown by the WebUI capability controls.
+/// WebUI 能力控件展示的输入区附件类型顺序。
+pub(crate) fn composer_attachment_kinds() -> [ConversationAttachmentKind; 4] {
+    [
+        ConversationAttachmentKind::Image,
+        ConversationAttachmentKind::Video,
+        ConversationAttachmentKind::Audio,
+        ConversationAttachmentKind::Pdf,
+    ]
+}
+
+/// Returns static metadata for one composer attachment kind.
+/// 返回单个输入区附件类型的静态元数据。
+fn composer_attachment_kind_metadata(
+    kind: &ConversationAttachmentKind,
+) -> ComposerAttachmentKindMetadata {
+    match kind {
+        ConversationAttachmentKind::Image => ComposerAttachmentKindMetadata {
+            key: "image",
+            aliases: &[],
+            label: "图片",
+            accept: "image/png,image/jpeg,image/webp,image/gif,image/bmp",
+        },
+        ConversationAttachmentKind::Video => ComposerAttachmentKindMetadata {
+            key: "video",
+            aliases: &[],
+            label: "视频",
+            accept: "video/mp4,video/quicktime,video/x-matroska,video/webm,video/x-msvideo",
+        },
+        ConversationAttachmentKind::Audio => ComposerAttachmentKindMetadata {
+            key: "audio",
+            aliases: &[],
+            label: "音频",
+            accept: "audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg",
+        },
+        ConversationAttachmentKind::Pdf => ComposerAttachmentKindMetadata {
+            key: "pdf",
+            aliases: &["document"],
+            label: "PDF",
+            accept: "application/pdf",
+        },
+    }
+}
+
 /// Converts a core conversation attachment into the WebUI service DTO.
 /// 将核心会话附件转换为 WebUI service DTO。
 ///
@@ -57,6 +126,24 @@ pub(crate) fn composer_attachment_summary_to_core(
     })
 }
 
+/// Validates one WebUI attachment summary without cloning its payload fields.
+/// 在不克隆载荷字段的情况下校验单个 WebUI 附件摘要。
+///
+/// # Parameters
+/// 参数
+/// `summary` is the WebUI service attachment summary to validate.
+/// `summary` 是需要校验的 WebUI 服务附件摘要。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the summary can be converted by the submit path.
+/// 当摘要可被提交流程转换时返回 `Ok(())`。
+pub(crate) fn validate_composer_attachment_summary(
+    summary: &ComposerAttachmentSummary,
+) -> Result<(), String> {
+    parse_composer_attachment_kind(&summary.kind).map(|_| ())
+}
+
 /// Parses one stable composer attachment kind key.
 /// 解析单个稳定输入区附件类型键。
 ///
@@ -70,13 +157,16 @@ pub(crate) fn composer_attachment_summary_to_core(
 /// The parsed core attachment kind.
 /// 解析后的核心附件类型。
 fn parse_composer_attachment_kind(value: &str) -> Result<ConversationAttachmentKind, String> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "image" => Ok(ConversationAttachmentKind::Image),
-        "audio" => Ok(ConversationAttachmentKind::Audio),
-        "video" => Ok(ConversationAttachmentKind::Video),
-        "pdf" | "document" => Ok(ConversationAttachmentKind::Pdf),
-        other => Err(format!("不支持的附件类型：{other}")),
+    // Normalize once so aliases are compared with the same rules as primary keys.
+    // 只规范化一次，确保别名和主键使用同一套比较规则。
+    let normalized = value.trim().to_ascii_lowercase();
+    for kind in composer_attachment_kinds() {
+        let metadata = composer_attachment_kind_metadata(&kind);
+        if metadata.matches_key(&normalized) {
+            return Ok(kind);
+        }
     }
+    Err(format!("不支持的附件类型：{normalized}"))
 }
 
 /// Resolves an attachment descriptor from a browser file name when the MIME type is missing.
@@ -110,12 +200,7 @@ pub(crate) fn attachment_descriptor_from_path_fallback(
 /// A localized attachment kind label.
 /// 本地化的附件类型标签。
 pub(crate) fn composer_attachment_kind_label(kind: &ConversationAttachmentKind) -> &'static str {
-    match kind {
-        ConversationAttachmentKind::Image => "图片",
-        ConversationAttachmentKind::Audio => "音频",
-        ConversationAttachmentKind::Video => "视频",
-        ConversationAttachmentKind::Pdf => "PDF",
-    }
+    composer_attachment_kind_metadata(kind).label
 }
 
 /// Returns the browser file picker accept list for one attachment kind.
@@ -131,16 +216,7 @@ pub(crate) fn composer_attachment_kind_label(kind: &ConversationAttachmentKind) 
 /// A comma-separated browser file accept list.
 /// 逗号分隔的浏览器文件 accept 列表。
 pub(crate) fn composer_attachment_kind_accept(kind: &ConversationAttachmentKind) -> &'static str {
-    match kind {
-        ConversationAttachmentKind::Image => "image/png,image/jpeg,image/webp,image/gif,image/bmp",
-        ConversationAttachmentKind::Audio => {
-            "audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg"
-        }
-        ConversationAttachmentKind::Video => {
-            "video/mp4,video/quicktime,video/x-matroska,video/webm,video/x-msvideo"
-        }
-        ConversationAttachmentKind::Pdf => "application/pdf",
-    }
+    composer_attachment_kind_metadata(kind).accept
 }
 
 /// Extracts composer attachments from durable transcript metadata.
@@ -172,4 +248,72 @@ pub(crate) fn composer_message_attachments_from_metadata(
         .iter()
         .map(composer_attachment_summary_from_core)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies composer attachment kind aliases parse through shared metadata.
+    /// 验证输入区附件类型别名会通过共享元数据解析。
+    #[test]
+    fn parse_composer_attachment_kind_accepts_pdf_document_alias() {
+        // Parsed attachment kind from the legacy document key.
+        // 从旧版 document 键解析出的附件类型。
+        let kind = parse_composer_attachment_kind(" Document ")
+            .expect("document alias should parse as pdf attachment");
+
+        assert_eq!(kind, ConversationAttachmentKind::Pdf);
+    }
+
+    /// Verifies labels and accept lists come from the shared metadata source.
+    /// 验证标签和 accept 列表来自共享元数据源。
+    #[test]
+    fn composer_attachment_kind_metadata_feeds_label_and_accept() {
+        // Core attachment kind selected for metadata projection.
+        // 用于元数据投影的核心附件类型。
+        let kind = ConversationAttachmentKind::Image;
+
+        assert_eq!(composer_attachment_kind_label(&kind), "图片");
+        assert_eq!(
+            composer_attachment_kind_accept(&kind),
+            "image/png,image/jpeg,image/webp,image/gif,image/bmp"
+        );
+    }
+
+    /// Verifies borrowed summary validation rejects unknown attachment kinds.
+    /// 验证借用式摘要校验会拒绝未知附件类型。
+    #[test]
+    fn validate_composer_attachment_summary_rejects_unknown_kind() {
+        let summary = ComposerAttachmentSummary {
+            kind: String::from("spreadsheet"),
+            file_name: String::from("data.xlsx"),
+            local_path: String::from("C:/tmp/data.xlsx"),
+            source_path: None,
+            asset_id: Some(String::from("asset")),
+            byte_len: Some(4),
+            preview_local_path: None,
+            mime_type: String::from(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        };
+
+        let error = validate_composer_attachment_summary(&summary)
+            .expect_err("unknown attachment kind should be rejected");
+
+        assert!(error.contains("spreadsheet"));
+    }
+
+    /// Verifies composer capabilities keep the expected kind ordering source.
+    /// 验证输入区能力保持预期的附件类型顺序来源。
+    #[test]
+    fn composer_attachment_kinds_keep_capability_order() {
+        assert_eq!(
+            composer_attachment_kinds()
+                .iter()
+                .map(ConversationAttachmentKind::modality_name)
+                .collect::<Vec<_>>(),
+            vec!["image", "video", "audio", "pdf"]
+        );
+    }
 }

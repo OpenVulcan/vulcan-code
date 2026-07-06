@@ -139,29 +139,6 @@ pub async fn archive_single_session_for_project(
     Ok(())
 }
 
-/// Restores one archived session summary into the visible project binding.
-/// 将单个已归档会话摘要恢复到可见项目绑定中。
-pub async fn restore_single_session(
-    controller: ControllerRuntimeHandle,
-    task_projects: &[TaskProjectSummary],
-    session: &SessionSummary,
-) -> Result<(), String> {
-    let project_id = session
-        .project_id
-        .as_deref()
-        .or_else(|| {
-            task_projects
-                .iter()
-                .find(|project| project.session_ids.contains(&session.id))
-                .map(|project| project.id.as_str())
-        })
-        .ok_or_else(|| format!("恢复会话失败：未找到会话所属项目：{}", session.id))?;
-    restore_segmented_session_directory_for_project_if_present(&controller, project_id, session)?;
-    upsert_session_index_row(&controller, session, project_id, false, 0, None).await?;
-    let _ = task_projects;
-    Ok(())
-}
-
 /// Archives all visible sessions under one project while keeping the project active.
 /// 归档单个项目下的全部可见会话，同时保留项目为活动状态。
 pub async fn archive_project_sessions(
@@ -235,7 +212,6 @@ pub async fn remove_project_after_archiving_sessions(
 /// 将单个已归档项目及其子会话摘要恢复到可见树中。
 pub async fn restore_project_with_sessions(
     controller: ControllerRuntimeHandle,
-    task_projects: &[TaskProjectSummary],
     project: &TaskProjectSummary,
     sessions: &[SessionSummary],
 ) -> Result<(), String> {
@@ -248,7 +224,6 @@ pub async fn restore_project_with_sessions(
         upsert_session_index_row(&controller, session, &project.id, false, index, None).await?;
     }
     upsert_projects(&controller, &[(project.clone(), false)]).await?;
-    let _ = task_projects;
     Ok(())
 }
 
@@ -339,21 +314,6 @@ pub(super) fn restore_segmented_session_directory_for_project_if_present(
         &session.id.to_string(),
         &restored_at,
     )?;
-    Ok(())
-}
-
-/// Deletes active and archived segmented session directories for one known project when present.
-/// 在已知项目标识时删除活动与归档树中存在的分段会话目录。
-pub(super) fn delete_segmented_session_directories_for_project_if_present(
-    controller: &ControllerRuntimeHandle,
-    project_id: &str,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let session_id_text = session_id.to_string();
-    let _ =
-        delete_segmented_session_by_id(&controller.data_root, true, project_id, &session_id_text)?;
-    let _ =
-        delete_segmented_session_by_id(&controller.data_root, false, project_id, &session_id_text)?;
     Ok(())
 }
 

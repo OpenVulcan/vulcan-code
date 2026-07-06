@@ -28,6 +28,10 @@ fn emit_subagent_navigation_delta_from_route_response(
     );
 }
 
+/// Direct parent, child task id, and optional cached panel state used when marking stopped subagents.
+/// 标记已停止子代理时使用的直接父会话、子任务标识与可选缓存面板状态。
+type SubagentTaskStopMark = (SessionId, SessionId, Option<SubagentTaskPanelState>);
+
 /// Opens one subagent transcript panel from the already-hydrated in-memory session state.
 /// 从已水合的内存会话状态中打开单个子智能体转录面板。
 ///
@@ -93,13 +97,12 @@ pub(super) async fn service_open_subagent_panel(
                 "子智能体会话尚未完成初始化，或该智能体已经关闭。",
             ));
         };
-        let response = build_subagent_panel_route_response_for_task_locked(
+        build_subagent_panel_route_response_for_task_locked(
             &mut guard,
             &workspace_snapshot,
             resolved_parent_session_id,
             task_session_id,
-        );
-        response
+        )
     };
     webui_trace_if_slow(
         "open_subagent_panel_cache_slow",
@@ -258,7 +261,9 @@ pub(super) async fn service_stop_subagent_task(
             .subagent_surface_detail_cache
             .get(&task_session_id)
             .map(|entry| entry.task_state.clone());
-        let mut task_states_to_mark =
+        // Capture stop candidates before aborting runtime tasks, because aborting updates the live registry.
+        // 在中止运行时任务前捕获停止候选，因为中止会更新实时注册表。
+        let mut task_states_to_mark: Vec<SubagentTaskStopMark> =
             vec![(resolved_parent_session_id, task_session_id, root_state)];
         task_states_to_mark.extend(
             running_webui_subagent_task_states_for_tree_from_cache(
@@ -286,9 +291,14 @@ pub(super) async fn service_stop_subagent_task(
         ),
     );
     let stopped_task_id_set = stopped_task_ids.iter().copied().collect::<BTreeSet<_>>();
-    let stopped_parent_session_ids = task_states_to_mark
-        .iter()
+    // Reuse one filtered list for every cleanup path that needs the cached panel state.
+    // 复用同一份过滤结果，供所有需要缓存面板状态的清理路径使用。
+    let stopped_task_marks = task_states_to_mark
+        .into_iter()
         .filter(|(_, task_id, _)| stopped_task_id_set.contains(task_id))
+        .collect::<Vec<_>>();
+    let stopped_parent_session_ids = stopped_task_marks
+        .iter()
         .map(|(direct_parent_session_id, _, _)| *direct_parent_session_id)
         .collect::<BTreeSet<_>>();
     let response = {
@@ -301,10 +311,7 @@ pub(super) async fn service_stop_subagent_task(
                     .workspace_snapshot
                     .as_mut()
                     .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-                for (direct_parent_session_id, task_id, task_state) in &task_states_to_mark {
-                    if !stopped_task_id_set.contains(task_id) {
-                        continue;
-                    }
+                for (direct_parent_session_id, task_id, task_state) in &stopped_task_marks {
                     mark_webui_subagent_task_stopped_in_workspace(
                         workspace,
                         *direct_parent_session_id,
@@ -313,17 +320,12 @@ pub(super) async fn service_stop_subagent_task(
                     );
                 }
             }
-            let stopped_task_pairs = task_states_to_mark
+            let stopped_task_pairs = stopped_task_marks
                 .iter()
-                .filter(|(_, task_id, _)| stopped_task_id_set.contains(task_id))
                 .map(|(direct_parent_session_id, task_id, _)| (*direct_parent_session_id, *task_id))
                 .collect::<Vec<_>>();
             mark_webui_subagent_tasks_stopped_in_state(&mut guard, &stopped_task_pairs);
-            enqueue_stopped_subagent_mailbox_notifications(
-                &mut guard,
-                &task_states_to_mark,
-                &stopped_task_id_set,
-            );
+            enqueue_stopped_subagent_mailbox_notifications(&mut guard, &stopped_task_marks);
             for task_id in &stopped_task_id_set {
                 guard.detached_subagent_task_listeners.remove(task_id);
                 if guard
@@ -505,17 +507,17 @@ fn closed_subagent_task_ids_from_close_result(
 
 /// Enqueues stopped child-agent notifications into each owning parent mailbox once.
 /// 将已停止子代理通知一次性加入其所属父会话 mailbox。
+///
+/// `stopped_task_marks` contains only stopped tasks with known direct-parent routing.
+/// `stopped_task_marks` 仅包含已停止且具备直接父级路由信息的任务。
 fn enqueue_stopped_subagent_mailbox_notifications(
     guard: &mut ServiceBridgeState,
-    task_states_to_mark: &[(SessionId, SessionId, Option<SubagentTaskPanelState>)],
-    stopped_task_id_set: &BTreeSet<SessionId>,
+    stopped_task_marks: &[SubagentTaskStopMark],
 ) {
     let updated_at = current_unix_millis_text();
     let mut notified_pairs = BTreeSet::new();
-    for (direct_parent_session_id, task_id, task_state) in task_states_to_mark {
-        if !stopped_task_id_set.contains(task_id)
-            || !notified_pairs.insert((*direct_parent_session_id, *task_id))
-        {
+    for (direct_parent_session_id, task_id, task_state) in stopped_task_marks {
+        if !notified_pairs.insert((*direct_parent_session_id, *task_id)) {
             continue;
         }
         let metadata = build_stopped_task_session_metadata(

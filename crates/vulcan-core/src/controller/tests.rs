@@ -13,6 +13,22 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// One buffered streaming-delta batch paired with the final provider response.
+/// 与最终 Provider 响应配对的一批缓冲流式增量。
+type PlannedStreamingTurn = (Vec<ProviderTurnDelta>, ProviderTurnResponse);
+
+/// Shared queue of planned streaming turns consumed by the mock streaming adapter.
+/// 由模拟流式适配器消费的共享计划流式回合队列。
+type PlannedStreamingTurnQueue = Arc<Mutex<VecDeque<PlannedStreamingTurn>>>;
+
+/// Pre-planned mock tool outcome returned for one requested tool.
+/// 单个被请求工具返回的预设模拟工具结果。
+type MockToolOutcome = Result<(String, Option<Value>, bool), String>;
+
+/// Tool-name indexed outcome table used by the mock tool executor.
+/// 模拟工具执行器按工具名称索引的结果表。
+type MockToolOutcomeMap = BTreeMap<String, MockToolOutcome>;
+
 /// Captures pre-planned provider turn responses and records the built request snapshots.
 /// 持有预先规划的 Provider 回合响应，并记录构建出的请求快照。
 #[derive(Debug, Clone)]
@@ -65,7 +81,7 @@ struct MockStreamingProviderAdapter {
     model_id: String,
     /// Planned normalized provider responses paired with the deltas that should be emitted before each final response.
     /// 与每次最终响应之前应发出的增量配对保存的规范化 Provider 响应计划队列。
-    planned_turns: Arc<Mutex<VecDeque<(Vec<ProviderTurnDelta>, ProviderTurnResponse)>>>,
+    planned_turns: PlannedStreamingTurnQueue,
     /// Built request snapshots captured before execution.
     /// 执行前捕获到的请求快照集合。
     built_requests: Arc<Mutex<Vec<ProviderRequestSnapshot>>>,
@@ -74,7 +90,7 @@ struct MockStreamingProviderAdapter {
 impl MockStreamingProviderAdapter {
     /// Creates one mock streaming provider adapter from the planned turn sequence.
     /// 根据计划中的回合序列创建一个模拟流式 Provider 适配器。
-    fn new(planned_turns: Vec<(Vec<ProviderTurnDelta>, ProviderTurnResponse)>) -> Self {
+    fn new(planned_turns: Vec<PlannedStreamingTurn>) -> Self {
         Self {
             provider_id: String::from("mock-openai-streaming"),
             model_id: String::from("mock-model"),
@@ -250,7 +266,7 @@ impl VulcanStreamingProviderAdapter for MockStreamingProviderAdapter {
 struct MockToolExecutor {
     /// Pre-planned tool outcomes keyed by tool name.
     /// 按工具名称索引的预先规划工具结果。
-    outcomes_by_tool: BTreeMap<String, Result<(String, Option<Value>, bool), String>>,
+    outcomes_by_tool: MockToolOutcomeMap,
     /// Recorded tool invocation requests received by the executor.
     /// 被执行器收到并记录下来的工具调用请求集合。
     executed_requests: Arc<Mutex<Vec<ToolInvocationRequest>>>,

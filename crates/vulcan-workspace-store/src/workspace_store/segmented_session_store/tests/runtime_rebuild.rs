@@ -5,9 +5,12 @@ use super::*;
 #[test]
 fn runtime_log_rebuilds_and_restores_conversation_state() {
     let root = test_root("runtime_log_rebuilds_and_restores_conversation_state");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let messages = vec![
         test_message(
             "m-user-1",
@@ -46,9 +49,12 @@ fn runtime_log_rebuilds_and_restores_conversation_state() {
 #[test]
 fn runtime_log_missing_rebuilds_from_segmented_display_segments() {
     let root = test_root("runtime_log_missing_rebuilds_from_segmented_display_segments");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let messages = vec![
         test_message(
             "m-user-1",
@@ -84,7 +90,8 @@ fn runtime_log_missing_rebuilds_from_non_initial_display_segments() {
         ..SegmentPolicy::default()
     };
     let session_dir =
-        create_segmented_session(&root, test_session_request(policy)).expect("create session");
+        create_segmented_session_in_location(&root, false, test_session_request(policy))
+            .expect("create session");
     let messages = vec![
         test_message(
             "m-user-1",
@@ -140,9 +147,12 @@ fn runtime_log_missing_rebuilds_from_non_initial_display_segments() {
 #[test]
 fn runtime_log_tolerates_and_repairs_corrupt_jsonl_tail() {
     let root = test_root("runtime_log_tolerates_and_repairs_corrupt_jsonl_tail");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let messages = vec![
         test_message(
             "m-user-1",
@@ -200,9 +210,12 @@ fn runtime_log_tolerates_and_repairs_corrupt_jsonl_tail() {
 #[test]
 fn runtime_log_full_corruption_falls_back_to_segmented_replay() {
     let root = test_root("runtime_log_full_corruption_falls_back_to_segmented_replay");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let messages = vec![
         test_message(
             "m-user-1",

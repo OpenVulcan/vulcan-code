@@ -18,6 +18,7 @@ use crate::{
     SharedServiceBridgeState, controller_runtime_from_state,
     normalized_workspace_path_text_from_path, refresh_workbench_snapshot,
     service_add_project_initial_directory,
+    workspace_task_project_for_project_id_including_archived,
 };
 
 /// Browses one host directory for the WebUI project folder picker.
@@ -315,7 +316,6 @@ pub async fn service_add_project_from_path(
             .collect::<Vec<_>>();
         vulcan_workspace_store::workspace_store::restore_project_with_sessions(
             controller_runtime,
-            &workspace_snapshot.task_projects,
             &project,
             &restored_sessions,
         )
@@ -384,28 +384,40 @@ fn build_task_project_id(
         format!("{base_slug}-{path_suffix}")
     };
 
-    if !workspace_snapshot
-        .task_projects
-        .iter()
-        .chain(workspace_snapshot.archived_task_projects.iter())
-        .any(|project| project.id == candidate)
-    {
+    if !workspace_task_project_id_exists(workspace_snapshot, &candidate) {
         return candidate;
     }
 
     let mut counter = 2usize;
     loop {
         let next_candidate = format!("{candidate}-{counter}");
-        if !workspace_snapshot
-            .task_projects
-            .iter()
-            .chain(workspace_snapshot.archived_task_projects.iter())
-            .any(|project| project.id == next_candidate)
-        {
+        if !workspace_task_project_id_exists(workspace_snapshot, &next_candidate) {
             return next_candidate;
         }
         counter += 1;
     }
+}
+
+/// Checks whether a project id already exists in visible or archived project lists.
+/// 检查项目标识是否已经存在于可见或归档项目列表中。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the project lists used by project creation.
+/// `workspace_snapshot` 持有项目创建时使用的项目列表。
+/// `project_id` is the candidate project identifier.
+/// `project_id` 是候选项目标识。
+///
+/// # Returns
+/// 返回值
+/// `true` when either visible or archived projects already use the id.
+/// 当可见或归档项目已经使用该标识时返回 `true`。
+fn workspace_task_project_id_exists(
+    workspace_snapshot: &WorkspaceSnapshot,
+    project_id: &str,
+) -> bool {
+    workspace_task_project_for_project_id_including_archived(workspace_snapshot, project_id)
+        .is_some()
 }
 
 /// Converts one label into a compact ASCII identifier component.
@@ -423,4 +435,102 @@ fn slugify_identifier(value: &str) -> String {
         }
     }
     slug.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::*;
+    use vulcan_workbench_model::SessionId;
+
+    /// Builds an empty workspace snapshot for project id generation tests.
+    /// 构建用于项目标识生成测试的空工作区快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A workspace snapshot with no visible or archived projects.
+    /// 返回不包含可见或归档项目的工作区快照。
+    fn empty_workspace_snapshot() -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: SessionId::nil(),
+            hydrated_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Builds one task project summary with only the id relevant to collision tests.
+    /// 构建仅项目标识与冲突测试相关的任务项目摘要。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` is the summary id to store in the workspace snapshot.
+    /// `project_id` 是写入工作区快照的摘要标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A task project summary using the supplied id.
+    /// 返回使用给定标识的任务项目摘要。
+    fn task_project_with_id(project_id: &str) -> TaskProjectSummary {
+        TaskProjectSummary::new(
+            project_id,
+            "Project",
+            format!(r"D:\projects\{project_id}"),
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// Verifies generated project ids avoid visible and archived project collisions.
+    /// 验证生成的项目标识会避开可见和归档项目冲突。
+    #[test]
+    fn build_task_project_id_avoids_visible_and_archived_collisions() {
+        let title = "My Project";
+        let normalized_path_text = r"D:\projects\my-project";
+        let mut workspace_snapshot = empty_workspace_snapshot();
+        let base_id = build_task_project_id(&workspace_snapshot, title, normalized_path_text);
+        workspace_snapshot
+            .task_projects
+            .push(task_project_with_id(&base_id));
+        workspace_snapshot
+            .archived_task_projects
+            .push(task_project_with_id(&format!("{base_id}-2")));
+
+        let project_id = build_task_project_id(&workspace_snapshot, title, normalized_path_text);
+
+        assert_eq!(format!("{base_id}-3"), project_id);
+    }
+
+    /// Verifies project id lookup treats archived project ids as occupied.
+    /// 验证项目标识查找会把归档项目标识视为已占用。
+    #[test]
+    fn workspace_task_project_id_exists_checks_archived_projects() {
+        let mut workspace_snapshot = empty_workspace_snapshot();
+        workspace_snapshot
+            .archived_task_projects
+            .push(task_project_with_id("archived-project"));
+
+        assert!(workspace_task_project_id_exists(
+            &workspace_snapshot,
+            "archived-project"
+        ));
+        assert!(!workspace_task_project_id_exists(
+            &workspace_snapshot,
+            "missing-project"
+        ));
+    }
 }

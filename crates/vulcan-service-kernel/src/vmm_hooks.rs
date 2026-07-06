@@ -18,7 +18,7 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
     ServiceBridgeState, SharedServiceBridgeState, current_unix_millis_value,
-    load_project_configuration, webui_trace,
+    load_project_configuration, webui_trace, workspace_task_projects_including_archived,
 };
 
 /// Process-local project VMM layer cache keyed by normalized workspace path.
@@ -322,11 +322,7 @@ pub(super) fn build_vmm_hook_config_snapshot(
     let snapshot_started_at = current_unix_millis_value();
     let mut projects_by_workspace = std::collections::BTreeMap::new();
     let mut project_count = 0usize;
-    for project in workspace_snapshot
-        .task_projects
-        .iter()
-        .chain(workspace_snapshot.archived_task_projects.iter())
-    {
+    for project in workspace_task_projects_including_archived(workspace_snapshot) {
         project_count += 1;
         let project_layer = cached_project_vmm_layer(&project.path);
         if !project_layer.is_empty() {
@@ -334,48 +330,40 @@ pub(super) fn build_vmm_hook_config_snapshot(
         }
     }
 
-    let sessions = workspace_snapshot
+    // sessions stores non-empty per-session VMM layers keyed by session id.
+    // sessions 按会话标识保存非空的会话级 VMM 配置层。
+    let mut sessions = std::collections::BTreeMap::new();
+    // outboxes stores pending VMM writeback work keyed by session id.
+    // outboxes 按会话标识保存待处理的 VMM 写回任务。
+    let mut outboxes = std::collections::BTreeMap::new();
+    // profile_sync stores non-empty VMM profile synchronization state keyed by session id.
+    // profile_sync 按会话标识保存非空的 VMM 画像同步状态。
+    let mut profile_sync = std::collections::BTreeMap::new();
+    // last_compaction_ids stores the latest known compaction id for every runtime-state row.
+    // last_compaction_ids 保存每条运行态记录最近一次已知的压缩标识。
+    let mut last_compaction_ids = std::collections::BTreeMap::new();
+    for (session_id, runtime_state) in workspace_snapshot
         .session_runtime_state
         .iter()
         .chain(workspace_snapshot.archived_session_runtime_state.iter())
-        .filter(|(_, runtime_state)| !runtime_state.vmm.is_empty())
-        .map(|(session_id, runtime_state)| (session_id.to_string(), runtime_state.vmm.clone()))
-        .collect();
-    let outboxes = workspace_snapshot
-        .session_runtime_state
-        .iter()
-        .chain(workspace_snapshot.archived_session_runtime_state.iter())
-        .filter(|(_, runtime_state)| !runtime_state.vmm_writeback_outbox.is_empty())
-        .map(|(session_id, runtime_state)| {
-            (
-                session_id.to_string(),
+    {
+        // session_key is shared by all VMM hook snapshot maps for this runtime-state row.
+        // session_key 是该运行态记录在所有 VMM hook 快照映射中的共享键。
+        let session_key = session_id.to_string();
+        if !runtime_state.vmm.is_empty() {
+            sessions.insert(session_key.clone(), runtime_state.vmm.clone());
+        }
+        if !runtime_state.vmm_writeback_outbox.is_empty() {
+            outboxes.insert(
+                session_key.clone(),
                 runtime_state.vmm_writeback_outbox.clone(),
-            )
-        })
-        .collect();
-    let profile_sync = workspace_snapshot
-        .session_runtime_state
-        .iter()
-        .chain(workspace_snapshot.archived_session_runtime_state.iter())
-        .filter(|(_, runtime_state)| !runtime_state.vmm_profile_sync.is_empty())
-        .map(|(session_id, runtime_state)| {
-            (
-                session_id.to_string(),
-                runtime_state.vmm_profile_sync.clone(),
-            )
-        })
-        .collect();
-    let last_compaction_ids = workspace_snapshot
-        .session_runtime_state
-        .iter()
-        .chain(workspace_snapshot.archived_session_runtime_state.iter())
-        .map(|(session_id, runtime_state)| {
-            (
-                session_id.to_string(),
-                runtime_state.last_compaction_id.clone(),
-            )
-        })
-        .collect();
+            );
+        }
+        if !runtime_state.vmm_profile_sync.is_empty() {
+            profile_sync.insert(session_key.clone(), runtime_state.vmm_profile_sync.clone());
+        }
+        last_compaction_ids.insert(session_key, runtime_state.last_compaction_id.clone());
+    }
     let snapshot = VmmHookConfigSnapshot {
         global: provider_configuration.vmm.clone(),
         projects_by_workspace,

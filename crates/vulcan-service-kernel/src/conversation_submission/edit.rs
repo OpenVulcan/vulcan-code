@@ -29,12 +29,10 @@ pub(crate) async fn service_submit_user_prompt_edit(
     }
     let session_id = parse_session_id(&request.conversation_id)
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_INVALID_CONVERSATION"))?;
-    let _validated_attachments = request
+    request
         .attachments
-        .clone()
-        .into_iter()
-        .map(composer_attachment_summary_to_core)
-        .collect::<Result<Vec<_>, _>>()?;
+        .iter()
+        .try_for_each(validate_composer_attachment_summary)?;
     let controller_runtime = {
         let mut guard = state
             .lock()

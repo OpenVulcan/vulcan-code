@@ -3,6 +3,7 @@
 
 use super::*;
 use reqwest::Url;
+use vulcan_service_api::WebuiServiceDiscoverySnapshot;
 
 /// Opens a trusted external URL with the system default browser.
 /// 使用系统默认浏览器打开可信外部链接。
@@ -68,14 +69,11 @@ pub(crate) fn rpc_required_param<T>(params: &Value, key: &str) -> Result<T, Stri
 where
     T: DeserializeOwned,
 {
-    let object = params
-        .as_object()
-        .ok_or_else(|| String::from("service RPC params must be a JSON object"))?;
+    let object = rpc_params_object(params)?;
     let value = object
         .get(key)
         .ok_or_else(|| format!("missing service RPC parameter: {key}"))?;
-    serde_json::from_value(value.clone())
-        .map_err(|error| format!("invalid service RPC parameter `{key}`: {error}"))
+    deserialize_rpc_param(key, value)
 }
 
 /// Reads an optional typed value from one RPC parameter object.
@@ -84,17 +82,55 @@ pub(crate) fn rpc_optional_param<T>(params: &Value, key: &str) -> Result<Option<
 where
     T: DeserializeOwned,
 {
-    let Some(object) = params.as_object() else {
-        return Err(String::from("service RPC params must be a JSON object"));
-    };
+    let object = rpc_params_object(params)?;
     let Some(value) = object.get(key) else {
         return Ok(None);
     };
     if value.is_null() {
         return Ok(None);
     }
+    deserialize_rpc_param(key, value).map(Some)
+}
+
+/// Borrows the JSON object backing one service RPC params payload.
+/// 借用单个服务 RPC 参数载荷背后的 JSON 对象。
+///
+/// # Parameters
+/// 参数
+/// `params` is the raw RPC params value supplied by the WebUI bridge.
+/// `params` 是 WebUI 桥接层提供的原始 RPC 参数值。
+///
+/// # Returns
+/// 返回值
+/// The borrowed params object, or the canonical non-object params error.
+/// 返回借用的参数对象，或标准非对象参数错误。
+fn rpc_params_object(
+    params: &Value,
+) -> Result<&serde_json::Map<String, serde_json::Value>, String> {
+    params
+        .as_object()
+        .ok_or_else(|| String::from("service RPC params must be a JSON object"))
+}
+
+/// Deserializes one typed service RPC parameter with the canonical error text.
+/// 使用标准错误文本反序列化单个类型化服务 RPC 参数。
+///
+/// # Parameters
+/// 参数
+/// `key` is the parameter name used in diagnostics.
+/// `key` 是诊断中使用的参数名称。
+/// `value` is the raw JSON parameter value.
+/// `value` 是原始 JSON 参数值。
+///
+/// # Returns
+/// 返回值
+/// The typed parameter value, or the canonical invalid-parameter error.
+/// 返回类型化参数值，或标准无效参数错误。
+fn deserialize_rpc_param<T>(key: &str, value: &Value) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
     serde_json::from_value(value.clone())
-        .map(Some)
         .map_err(|error| format!("invalid service RPC parameter `{key}`: {error}"))
 }
 
@@ -209,31 +245,48 @@ pub(crate) fn mark_webui_service_discovery_status(
     let Some(shared_discovery) = shared_discovery else {
         return;
     };
-    let ready_snapshot = {
+    let status_snapshot = {
         let mut snapshot = match shared_discovery.lock() {
             Ok(snapshot) => snapshot,
             Err(error) => error.into_inner(),
         };
-        let port = snapshot.port;
-        let pid = snapshot.pid;
-        let started_at = snapshot.started_at.clone();
-        let service_token = snapshot.service_token.clone();
-        *snapshot = webui_service_discovery_snapshot_with_status(
-            status,
-            port,
-            pid,
-            started_at,
-            service_token,
-        );
+        *snapshot = webui_service_discovery_snapshot_with_replaced_status(&snapshot, status);
         snapshot.clone()
     };
     if let Err(error) = write_webui_service_discovery_snapshot(
-        &ready_snapshot,
+        &status_snapshot,
         dirs::home_dir(),
         std::env::temp_dir(),
     ) {
-        eprintln!("[webui-service] browser service discovery ready write failed: {error}");
+        eprintln!("[webui-service] browser service discovery {status} write failed: {error}");
     }
+}
+
+/// Rebuilds one WebUI service discovery snapshot with a replacement status.
+/// 使用替换状态重建一个 WebUI 服务发现快照。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the current discovery snapshot whose stable fields should be preserved.
+/// `snapshot` 是需要保留稳定字段的当前发现快照。
+/// `status` is the replacement discovery status.
+/// `status` 是替换后的发现状态。
+///
+/// # Returns
+/// 返回值
+/// A discovery snapshot with the same port, pid, startup time, and token, but a new status.
+/// 返回保留相同端口、进程标识、启动时间和令牌但使用新状态的发现快照。
+fn webui_service_discovery_snapshot_with_replaced_status(
+    snapshot: &WebuiServiceDiscoverySnapshot,
+    status: &'static str,
+) -> WebuiServiceDiscoverySnapshot {
+    webui_service_discovery_snapshot_with_status(
+        status,
+        snapshot.port,
+        snapshot.pid,
+        snapshot.started_at.clone(),
+        snapshot.service_token.clone(),
+    )
 }
 
 /// Marks the browser-facing service discovery snapshot as ready after bootstrap completes.
@@ -314,5 +367,77 @@ mod tests {
             "https://user:token@github.com/msitarzewski/agency-agents"
         ));
         assert!(!external_url_is_allowed("not a url"));
+    }
+
+    /// Verifies required RPC params report missing keys with the canonical message.
+    /// 验证必填 RPC 参数会使用标准文案报告缺失键。
+    #[test]
+    fn rpc_required_param_reports_missing_key() {
+        let error = rpc_required_param::<String>(&json!({}), "projectId")
+            .expect_err("missing required RPC parameter should return a diagnostic");
+
+        assert_eq!("missing service RPC parameter: projectId", error);
+    }
+
+    /// Verifies optional RPC params treat missing and null values as absent.
+    /// 验证可选 RPC 参数会把缺失值和 null 值视为不存在。
+    #[test]
+    fn rpc_optional_param_treats_missing_and_null_as_none() {
+        assert_eq!(
+            None,
+            rpc_optional_param::<String>(&json!({}), "projectId")
+                .expect("missing optional RPC parameter should parse as None")
+        );
+        assert_eq!(
+            None,
+            rpc_optional_param::<String>(&json!({ "projectId": null }), "projectId")
+                .expect("null optional RPC parameter should parse as None")
+        );
+    }
+
+    /// Verifies required and optional RPC params share the same invalid-value diagnostics.
+    /// 验证必填和可选 RPC 参数共享同一套无效值诊断。
+    #[test]
+    fn rpc_params_share_invalid_value_diagnostics() {
+        let required_error = rpc_required_param::<u64>(&json!({ "limit": "many" }), "limit")
+            .expect_err("invalid required RPC parameter should return a diagnostic");
+        let optional_error = rpc_optional_param::<u64>(&json!({ "limit": "many" }), "limit")
+            .expect_err("invalid optional RPC parameter should return a diagnostic");
+
+        assert!(required_error.starts_with("invalid service RPC parameter `limit`:"));
+        assert_eq!(required_error, optional_error);
+    }
+
+    /// Verifies required and optional RPC params share the same non-object diagnostics.
+    /// 验证必填和可选 RPC 参数共享同一套非对象诊断。
+    #[test]
+    fn rpc_params_share_non_object_diagnostics() {
+        let required_error = rpc_required_param::<String>(&json!(true), "projectId")
+            .expect_err("non-object required RPC params should return a diagnostic");
+        let optional_error = rpc_optional_param::<String>(&json!(true), "projectId")
+            .expect_err("non-object optional RPC params should return a diagnostic");
+
+        assert_eq!("service RPC params must be a JSON object", required_error);
+        assert_eq!(required_error, optional_error);
+    }
+
+    /// Verifies discovery status replacement preserves stable service identity fields.
+    /// 验证发现状态替换会保留稳定服务身份字段。
+    #[test]
+    fn discovery_status_replacement_preserves_service_identity() {
+        let snapshot = webui_service_starting_discovery_snapshot(48123, 42, "1000", "token-a");
+
+        let replaced = webui_service_discovery_snapshot_with_replaced_status(
+            &snapshot,
+            WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+        );
+
+        assert_eq!(replaced.status, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED);
+        assert_eq!(replaced.base_url, snapshot.base_url);
+        assert_eq!(replaced.host, snapshot.host);
+        assert_eq!(replaced.port, snapshot.port);
+        assert_eq!(replaced.pid, snapshot.pid);
+        assert_eq!(replaced.started_at, snapshot.started_at);
+        assert_eq!(replaced.service_token, snapshot.service_token);
     }
 }

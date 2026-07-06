@@ -143,9 +143,9 @@ use vulcan_workbench_model::{
     TaskProjectSummary, attach_tool_display_state_to_metadata, build_session_record_message_id,
     build_stopped_task_session_metadata, find_task_session_tool_message_id_for_payload,
     merge_tool_display_metadata, parse_subagent_task_panel_metadata,
-    parse_subagent_task_prompt_metadata, select_subagent_navigation_panel_states,
-    subagent_navigation_round_should_remain_visible, subagent_navigation_surface_is_visible,
-    subagent_navigation_task_label, subagent_task_panel_is_openable,
+    parse_subagent_task_prompt_metadata, subagent_navigation_round_should_remain_visible,
+    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
+    subagent_task_panel_is_openable,
     subagent_task_panel_state_detail_from_segmented_task_session_store,
     subagent_task_panel_state_has_recoverable_conversation,
     task_session_execution_status_from_tool_metadata, task_session_message_match_score,
@@ -231,7 +231,7 @@ use attachments::{
     composer_attachment_summary_to_core, composer_message_attachments_from_metadata,
     service_execute_project_attachment_cleanup, service_pick_composer_attachments,
     service_preview_project_attachment_cleanup, service_stage_composer_attachment_bytes,
-    service_stage_composer_attachment_paths,
+    service_stage_composer_attachment_paths, validate_composer_attachment_summary,
 };
 use command_sessions::*;
 use context_compaction::{

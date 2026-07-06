@@ -126,30 +126,3 @@ pub fn subagent_navigation_round_should_remain_visible(
 ) -> bool {
     has_active_parent_run || has_running_subagents
 }
-
-/// Selects the subagent states that should appear in a navigation surface for the current parent.
-/// 为当前父级选择应该出现在子代理导航界面中的状态列表。
-///
-/// # Parameters
-/// 参数
-/// `normalized_states` is the already refreshed and normalized child panel state list consumed by selection.
-/// `normalized_states` 是已经刷新并归一化、并由选择过程消费的子面板状态列表。
-/// `requested_active_task_id` is the task that is currently opened, when any.
-/// `requested_active_task_id` 是当前已打开的任务标识；没有打开项时为空。
-/// # Returns
-/// 返回值
-/// The visible navigation states plus the still-valid active task id.
-/// 返回可见导航状态列表，以及仍然有效的活动任务标识。
-pub fn select_subagent_navigation_panel_states(
-    normalized_states: Vec<SubagentTaskPanelState>,
-    requested_active_task_id: Option<SessionId>,
-) -> (Vec<SubagentTaskPanelState>, Option<SessionId>) {
-    let navigation_states = normalized_states;
-
-    let active_task_id = requested_active_task_id.filter(|task_id| {
-        navigation_states
-            .iter()
-            .any(|state| state.task_id == *task_id)
-    });
-    (navigation_states, active_task_id)
-}

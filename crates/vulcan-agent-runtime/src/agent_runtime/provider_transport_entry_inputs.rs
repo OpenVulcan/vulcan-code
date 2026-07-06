@@ -1,18 +1,21 @@
 //! Shared provider transport entry-input preparation helpers reused by provider-specific stream entrypoints.
 //! 供各 Provider 专用流式入口复用的共享传输入口输入准备辅助模块。
 
+use crate::agent_runtime::provider_transport_request::ProviderTransportExecutionRequest;
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::provider_transport_tool_context::{
     PreparedHostToolRuntimeContext, prepare_host_tool_runtime_context,
 };
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
+use crate::provider_config::ModelInterleavedCapability;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
 use vulcan_core::types::{
-    ControllerConfig as CoreControllerConfig,
+    ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     ProviderContextInjection as CoreProviderContextInjection,
     ProviderPromptLayers as CoreProviderPromptLayers,
 };
@@ -64,9 +67,35 @@ pub(crate) struct PreparedProviderTransportRuntimeInputs {
     pub(crate) tool_request_rejection_tool_ids: Vec<String>,
 }
 
+/// Prepared one-shot launch data split from a routed provider transport execution request.
+/// 从已路由 Provider 传输执行请求中拆分出来的一次性启动数据。
+pub(crate) struct PreparedProviderTransportStreamLaunch {
+    /// Shared runtime inputs consumed by the host-controlled streaming runtime.
+    /// 由宿主控制流式运行时消费的共享运行时输入。
+    pub(crate) runtime_inputs: PreparedProviderTransportRuntimeInputs,
+    /// Canonical conversation snapshot consumed by the host-owned controller loop.
+    /// 由宿主自有控制器循环消费的规范会话快照。
+    pub(crate) core_snapshot: CoreConversationSnapshot,
+    /// Resolved API key passed down to the concrete provider adapter constructor.
+    /// 下传给具体 Provider 适配器构造函数的已解析 API Key。
+    pub(crate) api_key: String,
+    /// Optional normalized base URL override used by providers that support custom endpoints.
+    /// 供支持自定义端点的 Provider 使用的可选规范化基础地址覆盖值。
+    pub(crate) base_url: Option<String>,
+    /// Human-readable runtime label preserved for transport diagnostics.
+    /// 为传输诊断保留的人类可读运行时标签。
+    pub(crate) runtime_label: String,
+    /// Optional model-scoped interleaved reasoning capability reused by compatible transports.
+    /// 兼容传输链路复用的可选模型级交错推理能力描述。
+    pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
+    /// Optional host intervention invoked at replay-safe tool boundaries.
+    /// 在可回放安全工具边界调用的可选宿主干预钩子。
+    pub(crate) prompt_intervention: Option<RuntimePromptIntervention>,
+}
+
 /// Prepares the shared provider transport entry inputs from lightweight borrowed arguments.
 /// 根据轻量借用参数准备共享 Provider 传输入口输入对象。
-pub(crate) fn prepare_provider_transport_entry_inputs(
+fn prepare_provider_transport_entry_inputs(
     provider_id: &str,
     model_id: &str,
     system_preamble: &str,
@@ -100,7 +129,7 @@ pub(crate) fn prepare_provider_transport_entry_inputs(
 
 /// Prepares the full shared runtime inputs for one host-controlled provider stream, including controller config plus host tool runtime state.
 /// 为一次宿主控制 Provider 流准备完整共享运行时输入，包括控制器配置与宿主工具运行时状态。
-pub(crate) fn prepare_provider_transport_runtime_inputs(
+fn prepare_provider_transport_runtime_inputs(
     provider_id: &str,
     model_id: &str,
     system_preamble: &str,
@@ -150,10 +179,78 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
 
 /// Normalizes one optional base URL override by dropping empty strings and returning an owned value when present.
 /// 规范化单个可选基础地址覆盖值，在存在时返回拥有所有权的值，并丢弃空字符串。
-pub(crate) fn normalize_optional_base_url(base_url: Option<&str>) -> Option<String> {
+fn normalize_optional_base_url(base_url: Option<&str>) -> Option<String> {
     base_url
         .filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
+}
+
+/// Splits one owned routed provider execution request into shared runtime inputs plus provider-specific launch fields; returns data ready for a concrete stream entrypoint.
+/// 将一份自有的已路由 Provider 执行请求拆分为共享运行时输入与 Provider 专用启动字段；返回可供具体流式入口使用的数据。
+pub(crate) fn prepare_provider_transport_stream_launch(
+    request: ProviderTransportExecutionRequest,
+) -> PreparedProviderTransportStreamLaunch {
+    let ProviderTransportExecutionRequest {
+        api_family: _,
+        runtime_kind: _,
+        provider_id,
+        runtime_label,
+        api_key,
+        base_url,
+        model_id,
+        execution_mode,
+        system_preamble,
+        prompt,
+        core_snapshot,
+        temperature,
+        max_turns,
+        headers,
+        tools_manager,
+        session_id,
+        task_runtime,
+        resolved_tools,
+        additional_params,
+        context_injection,
+        interleaved_reasoning,
+        request_budget_guard,
+        retry_policy,
+        prompt_intervention,
+        tool_request_rejection_reason,
+        tool_request_rejection_all_tools,
+        tool_request_rejection_tool_ids,
+    } = request;
+    let normalized_base_url = normalize_optional_base_url(base_url.as_deref());
+    let runtime_inputs = prepare_provider_transport_runtime_inputs(
+        provider_id.as_str(),
+        model_id.as_str(),
+        system_preamble.as_str(),
+        prompt.as_str(),
+        temperature,
+        max_turns,
+        &headers,
+        additional_params,
+        context_injection,
+        tools_manager,
+        &resolved_tools,
+        session_id,
+        execution_mode.as_str(),
+        task_runtime,
+        request_budget_guard,
+        retry_policy,
+        tool_request_rejection_reason,
+        tool_request_rejection_all_tools,
+        tool_request_rejection_tool_ids,
+    );
+
+    PreparedProviderTransportStreamLaunch {
+        runtime_inputs,
+        core_snapshot,
+        api_key,
+        base_url: normalized_base_url,
+        runtime_label,
+        interleaved_reasoning,
+        prompt_intervention,
+    }
 }
 
 #[cfg(test)]

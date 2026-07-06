@@ -11,7 +11,6 @@ use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
 use vulcan_core::types::{
-    ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderContextInjection as CoreProviderContextInjection,
 };
@@ -50,9 +49,6 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Exact outgoing prompt text for the current controller turn.
     /// 当前控制器回合的精确出站提示词文本。
     pub(crate) prompt: String,
-    /// Provider-visible request history retained for debugging parity and adapter signatures.
-    /// 为保持调试一致性与适配器签名而保留的 Provider 可见请求历史。
-    pub(crate) request_history: Vec<CoreConversationMessage>,
     /// Canonical conversation snapshot consumed by the host-owned controller loop.
     /// 供宿主自有控制器循环消费的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
@@ -118,7 +114,6 @@ pub(crate) fn build_provider_transport_execution_request(
     execution_mode: &str,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,
@@ -148,7 +143,6 @@ pub(crate) fn build_provider_transport_execution_request(
         execution_mode: execution_mode.to_string(),
         system_preamble: system_preamble.to_string(),
         prompt: prompt.to_string(),
-        request_history,
         core_snapshot,
         temperature,
         max_turns,

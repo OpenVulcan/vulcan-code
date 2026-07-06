@@ -137,21 +137,9 @@ export function ConversationBlocksView(props: {
     );
   }
 
-  const [block] = props.blocks;
-  if (!block) {
-    return null;
-  }
-  if (block.kind === "markdown") {
-    return (
-      <MarkdownMessage
-        content={block.body}
-        eager={props.forceEagerMarkdown}
-        streaming={props.itemStreaming}
-        onOpenMedia={props.onOpenMedia}
-      />
-    );
-  }
-  return (
+  // renderSpecialBlock keeps shared row props identical when a secondary structured block owns the visible card.
+  // renderSpecialBlock 在次级结构化块承载可见卡片时保持行级共享属性一致。
+  const renderSpecialBlock = (block: ConversationBlock) => (
     <SpecialConversationBlock
       autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
       block={block}
@@ -176,6 +164,28 @@ export function ConversationBlocksView(props: {
       onTrace={props.onTrace}
     />
   );
+  // planArtifactBlock takes precedence because submit_plan stores the artifact on the tool row metadata.
+  // planArtifactBlock 优先展示，因为 submit_plan 会把计划产物挂在工具行元数据上。
+  const planArtifactBlock = props.blocks.find((block) => block.kind === "plan-artifact" && block.planArtifact);
+  if (planArtifactBlock) {
+    return renderSpecialBlock(planArtifactBlock);
+  }
+
+  const [block] = props.blocks;
+  if (!block) {
+    return null;
+  }
+  if (block.kind === "markdown") {
+    return (
+      <MarkdownMessage
+        content={block.body}
+        eager={props.forceEagerMarkdown}
+        streaming={props.itemStreaming}
+        onOpenMedia={props.onOpenMedia}
+      />
+    );
+  }
+  return renderSpecialBlock(block);
 }
 
 // SpecialConversationBlock renders compact tool, command, diff, thinking, and notice rows.

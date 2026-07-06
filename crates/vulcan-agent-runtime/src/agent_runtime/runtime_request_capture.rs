@@ -77,7 +77,6 @@ pub async fn capture_runtime_provider_wire_request(
         launch.active_agent.as_ref(),
         &launch.system_preamble,
         &launch.effective_prompt,
-        launch.request_history,
         launch.core_snapshot,
         launch.task_runtime,
         launch.token_budget_runtime,

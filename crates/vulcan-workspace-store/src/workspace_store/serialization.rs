@@ -25,160 +25,6 @@ pub(super) fn session_history_context_turn_bounds(
     )
 }
 
-/// Parses one persisted transcript UI-state JSON payload into the typed runtime-state structure.
-/// 将一条持久化转录界面状态 JSON 载荷解析为带类型的运行时状态结构。
-pub(super) fn parse_session_ui_state_from_json(value: &str) -> Option<SessionTranscriptUiState> {
-    serde_json::from_str(value).ok()
-}
-
-/// Parses one persisted provider continuation JSON payload into the typed cursor structure.
-/// 将一条持久化 Provider continuation JSON 载荷解析为带类型的游标结构。
-pub(super) fn parse_session_continuation_from_json(
-    value: &str,
-) -> Option<SessionProviderContinuationState> {
-    serde_json::from_str(value).ok()
-}
-
-/// Parses one persisted canonical conversation-state JSON payload into the typed runtime structure.
-/// 将一条持久化规范会话状态 JSON 载荷解析为带类型的运行时结构。
-pub(super) fn parse_session_conversation_state_from_json(
-    value: Option<&str>,
-) -> Option<SessionConversationState> {
-    value.and_then(|payload| serde_json::from_str(payload).ok())
-}
-
-/// Parses one persisted hidden context-injection JSON payload into runtime state.
-/// 将一条持久化隐藏上下文注入 JSON 载荷解析为运行态。
-pub(super) fn parse_context_injection_state_from_json(
-    value: &str,
-) -> Option<ContextInjectionState> {
-    serde_json::from_str(value).ok()
-}
-
-/// Serializes one typed transcript UI-state structure into the persisted JSON payload when needed.
-/// 在需要时将一条带类型的转录界面状态结构序列化为持久化 JSON 载荷。
-pub(super) fn serialize_session_ui_state_to_json(
-    state: &SessionTranscriptUiState,
-) -> Option<String> {
-    if state.is_empty() {
-        None
-    } else {
-        serde_json::to_string(state).ok()
-    }
-}
-
-/// Serializes one typed provider continuation cursor into the persisted JSON payload when needed.
-/// 在需要时将一条带类型的 Provider continuation 游标序列化为持久化 JSON 载荷。
-pub(super) fn serialize_session_continuation_to_json(
-    continuation: &SessionProviderContinuationState,
-) -> Option<String> {
-    if continuation.provider_id.is_none()
-        && continuation.model_id.is_none()
-        && continuation.last_provider_message_id.is_none()
-        && continuation.updated_at.is_none()
-    {
-        None
-    } else {
-        serde_json::to_string(continuation).ok()
-    }
-}
-
-/// Serializes hidden context-injection runtime state into the persisted JSON payload when needed.
-/// 在需要时将隐藏上下文注入运行态序列化为持久化 JSON 载荷。
-pub(super) fn serialize_context_injection_state_to_json(
-    state: &ContextInjectionState,
-) -> Option<String> {
-    if state.is_empty() {
-        None
-    } else {
-        serde_json::to_string(state).ok()
-    }
-}
-
-/// Serializes session-level VMM overrides into the persisted JSON payload when needed.
-/// 在需要时将会话级 VMM 覆盖序列化为持久化 JSON 载荷。
-pub(super) fn serialize_vmm_config_layer_to_json(layer: &VmmConfigLayer) -> Option<String> {
-    if layer.is_empty() {
-        None
-    } else {
-        serde_json::to_string(layer).ok()
-    }
-}
-
-/// Parses persisted session-level VMM overrides from a JSON payload.
-/// 从 JSON 载荷解析持久化的会话级 VMM 覆盖。
-pub(super) fn parse_vmm_config_layer_from_json(value: &str) -> Option<VmmConfigLayer> {
-    serde_json::from_str(value).ok()
-}
-
-/// Serializes the VMM writeback outbox into the persisted JSON payload when needed.
-/// 在需要时将 VMM 写回 outbox 序列化为持久化 JSON 载荷。
-pub(super) fn serialize_vmm_writeback_outbox_to_json(
-    outbox: &[VmmWritebackOutboxEntry],
-) -> Option<String> {
-    if outbox.is_empty() {
-        None
-    } else {
-        serde_json::to_string(outbox).ok()
-    }
-}
-
-/// Parses a persisted VMM writeback outbox JSON payload.
-/// 解析持久化的 VMM 写回 outbox JSON 载荷。
-pub(super) fn parse_vmm_writeback_outbox_from_json(
-    value: &str,
-) -> Option<Vec<VmmWritebackOutboxEntry>> {
-    serde_json::from_str(value).ok()
-}
-
-/// Serializes the VMM profile sync state into the persisted JSON payload when needed.
-/// 在需要时将 VMM 画像同步状态序列化为持久化 JSON 载荷。
-pub(super) fn serialize_vmm_profile_sync_to_json(state: &VmmProfileSyncState) -> Option<String> {
-    if state.is_empty() {
-        None
-    } else {
-        serde_json::to_string(state).ok()
-    }
-}
-
-/// Parses a persisted VMM profile sync JSON payload.
-/// 解析持久化的 VMM 画像同步 JSON 载荷。
-pub(super) fn parse_vmm_profile_sync_from_json(value: &str) -> Option<VmmProfileSyncState> {
-    serde_json::from_str(value).ok()
-}
-
-/// Serializes one typed canonical conversation state into the persisted JSON payload when it still carries messages or records.
-/// 当规范会话状态仍携带消息或记录时，将其序列化为持久化 JSON 载荷。
-pub(super) fn serialize_session_conversation_state_to_json(
-    conversation_state: &SessionConversationState,
-) -> Option<String> {
-    if conversation_state.messages.is_empty()
-        && conversation_state.records.is_empty()
-        && conversation_state.continuation.provider_id.is_none()
-        && conversation_state.continuation.model_id.is_none()
-        && conversation_state
-            .continuation
-            .last_provider_message_id
-            .is_none()
-        && conversation_state.continuation.updated_at.is_none()
-    {
-        None
-    } else {
-        serde_json::to_string(conversation_state).ok()
-    }
-}
-
-/// Returns one default message title when no explicit title is stored in the metadata payload.
-/// 当元数据载荷中未存储显式标题时返回默认消息标题。
-pub(super) fn default_message_title(role: &str) -> &'static str {
-    match role {
-        "user" => "用户指令",
-        "assistant" => "AI 输出",
-        "error" => "执行失败",
-        _ => "运行消息",
-    }
-}
-
 /// Builds one short focus preview from the latest visible transcript row.
 /// 根据最近一条可见转录行构建一段简短聚焦预览。
 pub(super) fn session_focus_preview(messages: &[SessionMessageEntry]) -> String {
@@ -296,26 +142,94 @@ pub(super) fn relative_time_label_from_unix_millis(timestamp_millis: i64) -> Str
 /// Truncates one multi-line preview into a single compact snippet used by persistence-derived summaries.
 /// 将一段多行预览截断为单条紧凑片段，供基于持久化的摘要使用。
 pub(super) fn truncate_preview_lines(value: &str, max_lines: usize, max_chars: usize) -> String {
-    let joined = value
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(max_lines)
-        .collect::<Vec<_>>()
-        .join(" / ");
-    let normalized = if joined.is_empty() {
-        value.split_whitespace().collect::<Vec<_>>().join(" ")
-    } else {
-        joined
-    };
-
-    if normalized.chars().count() <= max_chars {
-        normalized
-    } else {
-        let truncated = normalized
-            .chars()
-            .take(max_chars.saturating_sub(1))
-            .collect::<String>();
-        format!("{truncated}…")
+    let mut preview = String::new();
+    let mut preview_chars = 0usize;
+    let mut exceeded = false;
+    let mut selected_lines = 0usize;
+    // Keep only the bounded prefix needed for the final preview.
+    // 只保留最终预览所需的有界前缀。
+    for line in value.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if selected_lines >= max_lines {
+            break;
+        }
+        if selected_lines > 0 {
+            append_preview_piece(
+                &mut preview,
+                &mut preview_chars,
+                &mut exceeded,
+                max_chars,
+                " / ",
+            );
+        }
+        append_preview_piece(
+            &mut preview,
+            &mut preview_chars,
+            &mut exceeded,
+            max_chars,
+            line,
+        );
+        selected_lines += 1;
+        if exceeded {
+            break;
+        }
     }
+    if selected_lines == 0 {
+        for word in value.split_whitespace() {
+            if !preview.is_empty() {
+                append_preview_piece(
+                    &mut preview,
+                    &mut preview_chars,
+                    &mut exceeded,
+                    max_chars,
+                    " ",
+                );
+            }
+            append_preview_piece(
+                &mut preview,
+                &mut preview_chars,
+                &mut exceeded,
+                max_chars,
+                word,
+            );
+            if exceeded {
+                break;
+            }
+        }
+    }
+    finish_preview_text(preview, exceeded, max_chars)
+}
+
+/// Appends one preview piece while preserving enough overflow state to mirror final truncation.
+/// 追加单段预览文本，并保留足够的溢出状态以复现最终截断语义。
+fn append_preview_piece(
+    preview: &mut String,
+    preview_chars: &mut usize,
+    exceeded: &mut bool,
+    max_chars: usize,
+    piece: &str,
+) {
+    if *exceeded {
+        return;
+    }
+    for character in piece.chars() {
+        if *preview_chars < max_chars {
+            preview.push(character);
+            *preview_chars += 1;
+        } else {
+            *exceeded = true;
+            return;
+        }
+    }
+}
+
+/// Finalizes one bounded preview with the existing single-ellipsis truncation rule.
+/// 使用既有的单省略号截断规则完成有界预览。
+fn finish_preview_text(preview: String, exceeded: bool, max_chars: usize) -> String {
+    if !exceeded {
+        return preview;
+    }
+    let keep_chars = max_chars.saturating_sub(1);
+    let mut truncated = preview.chars().take(keep_chars).collect::<String>();
+    truncated.push('…');
+    truncated
 }

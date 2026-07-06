@@ -363,6 +363,58 @@ fn task_runtime_mirrors_expert_profile_into_subagent_registry() {
     );
 }
 
+/// Verifies custom system-prompt subagents are mirrored as custom registry entries.
+/// 验证自定义系统提示词子代理会以自定义类型镜像到注册表。
+#[test]
+fn task_runtime_mirrors_custom_prompt_into_subagent_registry() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let mut invocation_config = TaskInvocationConfig::main("review this change");
+    invocation_config.system_prompt = Some(String::from("You are a focused reviewer."));
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("custom-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("custom reviewer")),
+        invocation_config,
+        display_title: String::from("Review code (custom reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
+    };
+
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &outcome)
+        .expect("running custom task should store");
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read");
+    let entry = registry
+        .get("custom-review")
+        .expect("running custom registry entry should exist");
+
+    assert_eq!(entry.agent_kind, SubagentKind::Custom);
+}
+
 /// Verifies list_agents exposes the Vulcan root subagent tree with path filtering.
 /// 验证 list_agents 会暴露 Vulcan 根子代理树并支持路径过滤。
 #[tokio::test]
@@ -963,21 +1015,21 @@ async fn interrupt_agent_rejects_root_self_and_unknown_targets() {
             .expect("task session registry should be writable");
         sessions.insert(
             child_task_id,
-            build_task_session_record(
-                child_task_id,
-                String::from("worker"),
-                root_session_id,
-                None,
-                1,
-                None,
-                None,
-                TaskInvocationConfig::main("worker prompt"),
-                String::from("worker"),
-                None,
-                CoreConversationSnapshot::default(),
-                String::from("worker prompt"),
-                String::from("running"),
-            ),
+            build_task_session_record(TaskSessionRecordInit {
+                task_id: child_task_id,
+                public_task_id: String::from("worker"),
+                origin_session_id: root_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: None,
+                subagent: None,
+                invocation_config: TaskInvocationConfig::main("worker prompt"),
+                display_title: String::from("worker"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("worker prompt"),
+                last_status: String::from("running"),
+            }),
         );
     }
 

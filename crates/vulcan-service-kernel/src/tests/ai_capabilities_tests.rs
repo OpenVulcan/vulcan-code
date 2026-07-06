@@ -261,6 +261,34 @@ fn ai_capability_update_injection_combines_state_and_default_route_changes_until
     );
 }
 
+/// Verifies session dialog disabled target selectors update matching target bindings case-insensitively.
+/// 验证会话弹窗禁用目标选择器会以大小写不敏感方式更新匹配的目标 binding。
+#[test]
+fn session_ai_capability_dialog_draft_disables_matching_target_selector() {
+    let mut configuration = test_understand_image_ai_tool_configuration();
+
+    apply_session_ai_capability_dialog_draft(
+        &mut configuration,
+        &std::collections::BTreeSet::new(),
+        &std::collections::BTreeSet::from([String::from("MINIMAX/MINIMAX")]),
+        &std::collections::BTreeMap::new(),
+    )
+    .expect("valid dialog draft should apply");
+
+    let minimax_vendor = configuration
+        .vendors
+        .iter()
+        .find(|vendor| vendor.vendor_id == "minimax")
+        .expect("minimax vendor should remain configured");
+    let minimax_binding = minimax_vendor
+        .targets
+        .iter()
+        .find(|binding| binding.target_alias() == "minimax")
+        .expect("minimax target should remain configured");
+
+    assert!(!minimax_binding.enabled);
+}
+
 /// Builds a minimal usable image-understanding host route for WebUI capability summary tests.
 /// 为 WebUI 能力摘要测试构建一条最小可用的图片理解宿主路由。
 fn test_understand_image_ai_tool_configuration() -> PersistedAiToolConfiguration {

@@ -5,9 +5,12 @@ use super::*;
 #[test]
 fn append_session_events_advances_sequence_without_rewriting_first_line() {
     let root = test_root("append_session_events_advances_sequence_without_rewriting_first_line");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create segmented session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create segmented session");
     let before_lines = read_segment_event_lines(&session_dir.join("s001.jsonl"))
         .expect("read lines before append");
 
@@ -39,14 +42,107 @@ fn append_session_events_advances_sequence_without_rewriting_first_line() {
     assert_eq!(metadata.segments[0].line_count, 3);
 }
 
+/// Verifies append repairs a historical JSONL tail that is missing its newline.
+/// 验证追加会修复缺少尾部换行的历史 JSONL 行。
+#[test]
+fn append_session_events_repairs_missing_jsonl_tail_newline() {
+    let root = test_root("append_session_events_repairs_missing_jsonl_tail_newline");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create segmented session");
+    let segment_path = session_dir.join("s001.jsonl");
+    let mut bytes = fs::read(&segment_path).expect("read segment bytes");
+    assert_eq!(bytes.pop(), Some(b'\n'));
+    fs::write(&segment_path, bytes).expect("rewrite segment without trailing newline");
+
+    append_segmented_session_events(
+        &session_dir,
+        &[test_event(
+            "2026-06-06T10:01:00Z",
+            SegmentedSessionEventKind::UserPrompt,
+        )],
+    )
+    .expect("append event after missing newline");
+
+    let text = fs::read_to_string(&segment_path).expect("read repaired segment text");
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines
+            .iter()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    );
+    let events = read_segment_event_lines(&segment_path).expect("read repaired lines");
+    assert_eq!(events[0].seq, 0);
+    assert_eq!(events[1].seq, 1);
+}
+
+/// Verifies append repairs a truncated JSONL tail before writing the next event.
+/// 验证追加会在写入下一条事件前修复截断的 JSONL 尾行。
+#[test]
+fn append_session_events_repairs_truncated_jsonl_tail_line() {
+    let root = test_root("append_session_events_repairs_truncated_jsonl_tail_line");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create segmented session");
+    append_segmented_session_events(
+        &session_dir,
+        &[test_event(
+            "2026-06-06T10:01:00Z",
+            SegmentedSessionEventKind::UserPrompt,
+        )],
+    )
+    .expect("append first event");
+    let segment_path = session_dir.join("s001.jsonl");
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&segment_path)
+        .expect("open segment for corruption");
+    write!(file, "{{\"seq\":999,\"timestamp\":\"broken\"").expect("append truncated json tail");
+
+    append_segmented_session_events(
+        &session_dir,
+        &[test_event(
+            "2026-06-06T10:02:00Z",
+            SegmentedSessionEventKind::AssistantOutput,
+        )],
+    )
+    .expect("append event after repairing truncated tail");
+
+    let text = fs::read_to_string(&segment_path).expect("read repaired segment text");
+    assert!(
+        text.lines()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    );
+    let events = read_segment_event_lines(&segment_path).expect("read repaired lines");
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].seq, 0);
+    assert_eq!(events[1].seq, 1);
+    assert_eq!(events[2].seq, 2);
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+            .expect("read repaired metadata");
+    assert_eq!(metadata.next_global_seq, 3);
+    assert_eq!(metadata.segments[0].line_count, 3);
+}
+
 /// Unknown historical segment event types are skipped instead of failing the whole session load.
 /// 未知历史分段事件类型会被跳过，而不是导致整个会话加载失败。
 #[test]
 fn read_segment_event_lines_skips_unknown_historical_event_types() {
     let root = test_root("read_segment_event_lines_skips_unknown_historical_event_types");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let segment_path = session_dir.join("s001.jsonl");
     let mut file = OpenOptions::new()
         .append(true)
@@ -80,7 +176,8 @@ fn append_session_events_rolls_over_by_line_count() {
         max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
     };
     let session_dir =
-        create_segmented_session(&root, test_session_request(policy)).expect("create session");
+        create_segmented_session_in_location(&root, false, test_session_request(policy))
+            .expect("create session");
 
     append_segmented_session_events(
         &session_dir,
@@ -111,8 +208,9 @@ fn append_session_events_rolls_over_by_line_count() {
 #[test]
 fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
     let root = test_root("append_message_tail_is_idempotent_and_maps_transcript_kinds");
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         test_session_request(SegmentPolicy {
             max_lines: 4,
             max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
@@ -170,9 +268,12 @@ fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
 #[test]
 fn append_message_tail_backfills_tool_detail_ref_sequence() {
     let root = test_root("append_message_tail_backfills_tool_detail_ref_sequence");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let user = test_message(
         "m-user",
         SessionMessageKind::User,

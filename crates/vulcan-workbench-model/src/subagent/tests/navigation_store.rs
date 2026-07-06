@@ -23,52 +23,6 @@ fn navigation_store_test_metadata(
     })
 }
 
-#[test]
-fn selects_all_unclosed_subagent_navigation_states() {
-    let parent_session_id = SessionId::new_v4();
-    let running_task_id = SessionId::new_v4();
-    let completed_task_id = SessionId::new_v4();
-    let hidden_task_id = SessionId::new_v4();
-    let states = vec![
-        test_subagent_state(
-            parent_session_id,
-            running_task_id,
-            SubagentTaskRunState::Running,
-        ),
-        test_subagent_state(
-            parent_session_id,
-            completed_task_id,
-            SubagentTaskRunState::Completed,
-        ),
-        test_subagent_state(
-            parent_session_id,
-            hidden_task_id,
-            SubagentTaskRunState::Completed,
-        ),
-    ];
-
-    let (navigation_states, active_task_id) =
-        select_subagent_navigation_panel_states(states, Some(completed_task_id));
-
-    assert_eq!(active_task_id, Some(completed_task_id));
-    assert_eq!(navigation_states.len(), 3);
-    assert!(
-        navigation_states
-            .iter()
-            .any(|state| state.task_id == running_task_id)
-    );
-    assert!(
-        navigation_states
-            .iter()
-            .any(|state| state.task_id == completed_task_id)
-    );
-    assert!(
-        navigation_states
-            .iter()
-            .any(|state| state.task_id == hidden_task_id)
-    );
-}
-
 /// Verifies the shared navigation visibility gate preserves every unclosed child route.
 /// 验证共享导航可见性门禁会保留每个未关闭子代理入口。
 #[test]

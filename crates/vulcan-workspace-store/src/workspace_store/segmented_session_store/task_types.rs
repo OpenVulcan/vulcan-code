@@ -54,33 +54,6 @@ pub(in crate::workspace_store) struct SubagentSpawnedBy {
     pub tool_call_id: Option<String>,
 }
 
-/// Canonical metadata payload written as the first line of each child task session.
-/// 写入每个子任务会话首行的规范元数据载荷。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(in crate::workspace_store) struct SubagentTaskMetadataPayload {
-    /// Child task session identifier.
-    /// 子任务会话标识。
-    pub task_session_id: String,
-    /// Parent main session identifier.
-    /// 父主会话标识。
-    pub parent_session_id: String,
-    /// Parent project tag used in the directory layout.
-    /// 目录布局中使用的父项目标签。
-    pub parent_project_tag: String,
-    /// Agent source kind for this child task.
-    /// 当前子任务的代理来源类型。
-    pub agent_kind: SubagentAgentKind,
-    /// Agent profile details for this child task.
-    /// 当前子任务的代理画像详情。
-    pub agent_profile: SubagentAgentProfile,
-    /// Parent-side spawn information.
-    /// 父侧派生信息。
-    pub spawned_by: SubagentSpawnedBy,
-    /// Creation timestamp for this child task.
-    /// 当前子任务的创建时间戳。
-    pub created_at: String,
-}
-
 /// Lightweight task mirror stored in the parent session metadata.
 /// 保存在父会话元数据中的轻量任务镜像。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

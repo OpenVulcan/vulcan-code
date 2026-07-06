@@ -31,10 +31,10 @@ use super::{
     emit_workbench_event, load_selected_session_display_hydration,
     load_webui_unclosed_subagent_surface_preload_once, native_tool_summaries_from_agent_runtime,
     pending_question_snapshots_from_agent_runtime, preserve_active_session_run_state,
-    restore_webui_subagent_registry_for_session_hydration,
-    selected_session_id_after_refresh, session_summary_project_and_created_at,
-    subagent_navigation_snapshot_from_cached_state, sync_selected_session_goal_summary_from_store,
-    webui_trace_if_slow, workbench_from_runtime, workspace_session_summary_for_session,
+    restore_webui_subagent_registry_for_session_hydration, selected_session_id_after_refresh,
+    session_summary_project_and_created_at, subagent_navigation_snapshot_from_cached_state,
+    sync_selected_session_goal_summary_from_store, webui_trace_if_slow, workbench_from_runtime,
+    workbench_surface_matches_conversation, workspace_session_summary_for_session,
     workspace_snapshot_contains_regular_session, workspace_surface_allows_user_prompt_editing,
 };
 
@@ -383,18 +383,26 @@ pub(super) async fn service_session_history_page(
         let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() else {
             return Err(String::from("service workspace snapshot is not ready"));
         };
-        let merged_messages = merge_older_session_history_page(
-            workspace_snapshot
+        let (response_messages, page_messages) = {
+            let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
+                workspace_snapshot,
+                parsed_session_id,
+                None,
+            );
+            let retained_messages = workspace_snapshot
                 .session_messages
                 .entry(parsed_session_id)
-                .or_default(),
-            &page,
-        );
-        let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
-            workspace_snapshot,
-            parsed_session_id,
-            None,
-        );
+                .or_default();
+            prepend_unique_older_session_history_page(retained_messages, &page);
+            (
+                conversation_messages_from_session(
+                    &session_id,
+                    retained_messages,
+                    allow_user_prompt_editing,
+                ),
+                conversation_messages_from_session(&session_id, &page.messages, false),
+            )
+        };
         remember_hydrated_conversation_window(
             &mut guard.hydrated_conversation_windows,
             parsed_session_id,
@@ -405,12 +413,7 @@ pub(super) async fn service_session_history_page(
             &guard.hydrated_conversation_windows,
             &guard.webui_preloaded_unclosed_subagent_roots,
         );
-        let response_messages = conversation_messages_from_session(
-            &session_id,
-            &merged_messages,
-            allow_user_prompt_editing,
-        );
-        if guard.workbench.selected_conversation_id.as_deref() == Some(session_id.as_str()) {
+        if workbench_surface_matches_conversation(&guard.workbench, session_id.as_str()) {
             guard.workbench.messages = response_messages.clone();
         }
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
@@ -418,7 +421,6 @@ pub(super) async fn service_session_history_page(
         let workbench = guard.workbench.clone();
         let response_workbench =
             focused_history_page_response_workbench(&workbench, response_messages);
-        let page_messages = conversation_messages_from_session(&session_id, &page.messages, false);
         (workbench, response_workbench, page_messages)
     };
     emit_workbench_event(&app, &workbench);
@@ -455,10 +457,12 @@ fn empty_session_history_page(session_id: SessionId) -> SessionHistoryPage {
 
 /// Prepends an older history page into the retained session message window without duplicating rows.
 /// 将更早历史页前置合并到保留的会话消息窗口中，并避免重复行。
-fn merge_older_session_history_page(
+/// Prepends older page messages into the retained hydrated window without duplicating stable rows.
+/// 将较早分页消息前置合并进已保留的水合窗口，并避免重复稳定行。
+fn prepend_unique_older_session_history_page(
     retained_messages: &mut Vec<SessionMessageEntry>,
     page: &SessionHistoryPage,
-) -> Vec<SessionMessageEntry> {
+) {
     let mut seen_keys = retained_messages
         .iter()
         .map(session_message_entry_stable_merge_key)
@@ -470,8 +474,7 @@ fn merge_older_session_history_page(
         .cloned()
         .collect::<Vec<_>>();
     merged.append(retained_messages);
-    *retained_messages = merged.clone();
-    retained_messages.clone()
+    *retained_messages = merged;
 }
 
 /// Returns the stable merge key used by transcript history pagination.
@@ -638,37 +641,80 @@ pub(crate) fn preserve_retained_hydrated_payloads_after_index_refresh(
     retained_snapshot: &WorkspaceSnapshot,
     hydrating_session_id: SessionId,
 ) {
-    let retained_session_ids = retained_snapshot
-        .hydrated_session_ids
-        .iter()
-        .copied()
-        .filter(|session_id| *session_id != hydrating_session_id)
-        .filter(|session_id| {
-            workspace_snapshot_contains_regular_session(refreshed_snapshot, *session_id)
-        })
-        .collect::<BTreeSet<_>>();
-    for session_id in &retained_session_ids {
-        if let Some(messages) = retained_snapshot.session_messages.get(session_id) {
-            refreshed_snapshot
-                .session_messages
-                .entry(*session_id)
-                .or_insert_with(|| messages.clone());
+    for session_id in retained_snapshot.hydrated_session_ids.iter().copied() {
+        if session_id == hydrating_session_id {
+            continue;
         }
-        if let Some(runtime_state) = retained_snapshot.session_runtime_state.get(session_id) {
-            refreshed_snapshot
-                .session_runtime_state
-                .entry(*session_id)
-                .or_insert_with(|| runtime_state.clone());
+        if !workspace_snapshot_contains_regular_session(refreshed_snapshot, session_id) {
+            continue;
         }
-        if let Some(compactions) = retained_snapshot.session_compactions.get(session_id) {
-            refreshed_snapshot
-                .session_compactions
-                .entry(*session_id)
-                .or_insert_with(|| compactions.clone());
-        }
-        if refreshed_snapshot.session_messages.contains_key(session_id) {
-            refreshed_snapshot.hydrated_session_ids.insert(*session_id);
-        }
+        preserve_retained_hydrated_session_payloads(
+            refreshed_snapshot,
+            retained_snapshot,
+            session_id,
+        );
+    }
+}
+
+/// Restores retained payloads for one already hydrated session after an index refresh.
+/// 在索引刷新后为单个已水合会话恢复保留载荷。
+///
+/// # Parameters
+/// 参数
+/// `refreshed_snapshot` is the workspace snapshot receiving retained payloads.
+/// `refreshed_snapshot` 是接收保留载荷的工作区快照。
+/// `retained_snapshot` is the previous in-memory workspace snapshot.
+/// `retained_snapshot` 是之前的内存工作区快照。
+/// `session_id` identifies the retained hydrated session to restore.
+/// `session_id` 标识需要恢复的已水合保留会话。
+fn preserve_retained_hydrated_session_payloads(
+    refreshed_snapshot: &mut WorkspaceSnapshot,
+    retained_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) {
+    preserve_retained_hydrated_payload(
+        &mut refreshed_snapshot.session_messages,
+        &retained_snapshot.session_messages,
+        session_id,
+    );
+    preserve_retained_hydrated_payload(
+        &mut refreshed_snapshot.session_runtime_state,
+        &retained_snapshot.session_runtime_state,
+        session_id,
+    );
+    preserve_retained_hydrated_payload(
+        &mut refreshed_snapshot.session_compactions,
+        &retained_snapshot.session_compactions,
+        session_id,
+    );
+    if refreshed_snapshot
+        .session_messages
+        .contains_key(&session_id)
+    {
+        refreshed_snapshot.hydrated_session_ids.insert(session_id);
+    }
+}
+
+/// Copies one retained session payload into a refreshed payload map only when it is missing.
+/// 仅在刷新后的载荷表缺失时复制单个保留会话载荷。
+///
+/// # Parameters
+/// 参数
+/// `refreshed_payloads` is the refreshed payload map that should keep existing entries.
+/// `refreshed_payloads` 是应保留已有条目的刷新后载荷表。
+/// `retained_payloads` is the previous payload map used as the fallback source.
+/// `retained_payloads` 是作为回退来源的旧载荷表。
+/// `session_id` identifies the session payload to restore.
+/// `session_id` 标识需要恢复的会话载荷。
+fn preserve_retained_hydrated_payload<T: Clone>(
+    refreshed_payloads: &mut BTreeMap<SessionId, T>,
+    retained_payloads: &BTreeMap<SessionId, T>,
+    session_id: SessionId,
+) {
+    if let Some(payload) = retained_payloads.get(&session_id) {
+        refreshed_payloads
+            .entry(session_id)
+            .or_insert_with(|| payload.clone());
     }
 }
 
@@ -931,27 +977,28 @@ pub(crate) fn focused_history_page_response_workbench(
     response_workbench
 }
 
-/// Selects a retained workspace snapshot only when it contains the requested regular session.
-/// 仅在保留工作区快照包含目标常规会话时选择它作为水合基准。
+/// Builds a lightweight retained workspace snapshot when it still contains the target regular session.
+/// 当保留的工作区快照仍包含目标常规会话时构建轻量保留工作区快照。
 ///
 /// # Parameters
 /// 参数
-/// `retained_workspace_snapshot` is the in-memory workspace snapshot retained by the service.
-/// `retained_workspace_snapshot` 是服务端保留的内存工作区快照。
+/// `retained_workspace_snapshot` is the optional in-memory workspace snapshot retained by the service.
+/// `retained_workspace_snapshot` 是服务端保留的可选内存工作区快照。
 /// `session_id` identifies the conversation being hydrated.
 /// `session_id` 标识正在水合的会话。
 ///
 /// # Returns
 /// 返回值
-/// `Some(snapshot)` when the retained snapshot can safely replace a full workspace-index reload.
-/// 当保留快照可安全替代完整工作区索引重载时返回 `Some(snapshot)`。
-#[cfg(test)]
+/// `Some(snapshot)` with transcript payloads stripped when the retained snapshot can replace an index reload.
+/// 当保留快照可替代索引重载时返回已剥离转录载荷的 `Some(snapshot)`。
 pub(crate) fn retained_workspace_snapshot_for_session_hydration(
-    retained_workspace_snapshot: Option<WorkspaceSnapshot>,
+    retained_workspace_snapshot: Option<&WorkspaceSnapshot>,
     session_id: SessionId,
 ) -> Option<WorkspaceSnapshot> {
-    retained_workspace_snapshot
-        .filter(|snapshot| workspace_snapshot_contains_regular_session(snapshot, session_id))
+    retained_workspace_snapshot.and_then(|snapshot| {
+        workspace_snapshot_contains_regular_session(snapshot, session_id)
+            .then(|| lightweight_workspace_index_snapshot_for_hydration(snapshot))
+    })
 }
 
 /// Clones the retained workspace snapshot for a session after the UI has entered the index-read phase.
@@ -966,8 +1013,8 @@ pub(crate) fn retained_workspace_snapshot_for_session_hydration(
 ///
 /// # Returns
 /// 返回值
-/// `Some(snapshot)` when the retained snapshot still contains the requested regular session.
-/// 当保留快照仍包含请求的常规会话时返回 `Some(snapshot)`。
+/// `Some(snapshot)` with transcript payloads stripped when the retained snapshot is valid.
+/// 当保留快照有效时返回已剥离转录载荷的 `Some(snapshot)`。
 fn retained_workspace_snapshot_for_session_hydration_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
@@ -977,10 +1024,10 @@ fn retained_workspace_snapshot_for_session_hydration_from_state(
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.workspace_snapshot.as_ref().and_then(|snapshot| {
-            workspace_snapshot_contains_regular_session(snapshot, session_id)
-                .then(|| lightweight_workspace_index_snapshot_for_hydration(snapshot))
-        })
+        retained_workspace_snapshot_for_session_hydration(
+            guard.workspace_snapshot.as_ref(),
+            session_id,
+        )
     };
     webui_trace_if_slow(
         "session_hydration_retained_workspace_clone_slow",
@@ -1029,4 +1076,46 @@ fn emit_conversation_hydration_progress(
     };
     emit_workbench_event(app, &workbench);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one visible history message with stable runtime metadata.
+    /// 构建一条带稳定运行时元数据的可见历史消息。
+    fn history_test_message(id: &str, body: &str, created_at: &str) -> SessionMessageEntry {
+        SessionMessageEntry::new(
+            vulcan_workbench_model::SessionMessageKind::Assistant,
+            "输出",
+            body,
+        )
+        .with_runtime_metadata(id, created_at)
+    }
+
+    /// Verifies older history pages are prepended once while retained duplicates keep precedence.
+    /// 验证较早历史分页只前置一次，且已保留窗口中的重复项保持优先。
+    #[test]
+    fn prepends_unique_older_history_page_into_retained_window() {
+        let session_id = SessionId::new_v4();
+        let retained_duplicate = history_test_message("m2", "retained", "20");
+        let retained_newer = history_test_message("m3", "newer", "30");
+        let older_unique = history_test_message("m1", "older", "10");
+        let older_duplicate = history_test_message("m2", "older duplicate", "20");
+        let page = SessionHistoryPage {
+            session_id,
+            messages: vec![older_unique.clone(), older_duplicate],
+            tool_detail_messages: Vec::new(),
+            earliest_ordinal: Some(1),
+            has_more_history: false,
+        };
+        let mut retained_messages = vec![retained_duplicate.clone(), retained_newer.clone()];
+
+        prepend_unique_older_session_history_page(&mut retained_messages, &page);
+
+        assert_eq!(
+            retained_messages,
+            vec![older_unique, retained_duplicate, retained_newer]
+        );
+    }
 }

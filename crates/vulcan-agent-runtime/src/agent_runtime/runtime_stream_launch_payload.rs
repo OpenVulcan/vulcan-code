@@ -11,10 +11,7 @@ use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::model::SessionId;
 use std::sync::Arc;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
-use vulcan_core::types::{
-    ConversationMessage as CoreConversationMessage,
-    ConversationSnapshot as CoreConversationSnapshot,
-};
+use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Launch payload that captures everything the outer runtime stream needs after preparation and bootstrap have both succeeded.
@@ -62,9 +59,6 @@ pub struct RuntimeStreamLaunch {
     /// Effective system preamble sent to the provider transport layer.
     /// 发送给 Provider 传输层的生效系统前导语。
     pub(crate) system_preamble: String,
-    /// Provider-visible history reconstructed from canonical conversation messages.
-    /// 从规范会话消息重建得到的 Provider 可见历史记录。
-    pub(crate) request_history: Vec<CoreConversationMessage>,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
@@ -100,7 +94,6 @@ pub(crate) fn build_runtime_stream_launch_payload(
         discovery_errors: bootstrap.discovery_errors,
         warnings: bootstrap.warnings,
         system_preamble: bootstrap.system_preamble,
-        request_history: bootstrap.request_history,
         core_snapshot: bootstrap.core_snapshot,
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller),
         lowering_repair_events: bootstrap.lowering_repair_events,
@@ -347,7 +340,6 @@ mod tests {
             discovery_errors: vec![String::from("mcp-error")],
             warnings: vec![String::from("warning")],
             system_preamble: String::from("system preamble"),
-            request_history: Vec::new(),
             core_snapshot,
             core_controller,
             lowering_repair_events: Vec::new(),
@@ -545,7 +537,6 @@ mod tests {
         let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
             system_preamble,
             prompt_layers: _,
-            request_history,
             core_snapshot,
             core_controller,
             lowering_repair_events: _,
@@ -580,7 +571,6 @@ mod tests {
             discovery_errors: Vec::new(),
             warnings: Vec::new(),
             system_preamble,
-            request_history,
             core_snapshot,
             core_controller,
             lowering_repair_events: Vec::new(),

@@ -36,16 +36,14 @@ use runtime_state::{
     hydrate_session_runtime_state, load_segmented_runtime_state,
     resolve_initial_hydration_turn_count, restore_hydration_window_from_runtime_state_if_empty,
 };
-use types::{
-    SegmentedWindowMessages, SegmentedWindowSourcePreference, StoredSessionLocatorRow,
-    default_session_hydration_window_source_preference,
+use types::{SegmentedWindowMessages, StoredSessionLocatorRow};
+use windows::{
+    apply_boundary_conversation_projection_to_runtime_state, load_segmented_window_messages,
 };
 #[cfg(test)]
 use windows::{
-    read_segmented_session_boundary_turn_window, session_boundary_lines_to_window_messages,
-};
-use windows::{
-    apply_boundary_conversation_projection_to_runtime_state, load_segmented_window_messages,
+    merge_raw_timeline_window_into_boundary_window, read_segmented_session_boundary_turn_window,
+    session_boundary_lines_to_window_messages,
 };
 
 #[cfg(test)]

@@ -268,6 +268,18 @@ export function ChatArea(props: ChatAreaProps) {
       updatedAt: artifact.updatedAt,
     };
   }, [isEmptyConversation, props.workbench.sessionPlanMode?.artifact]);
+  // pendingAskQuestion tracks the selected session's blocking ask request.
+  // pendingAskQuestion 跟踪当前选中会话的阻塞式 ask 请求。
+  const pendingAskQuestion = React.useMemo(() => {
+    const question = props.workbench.pendingQuestion ?? null;
+    if (isEmptyConversation || !question || question.sessionId !== props.selectedConversationId) {
+      return null;
+    }
+    return question;
+  }, [isEmptyConversation, props.selectedConversationId, props.workbench.pendingQuestion]);
+  // composerBlockedByDecision hides the normal composer until the user resolves the blocking decision surface.
+  // composerBlockedByDecision 在用户处理完阻塞式决策界面前隐藏普通输入区。
+  const composerBlockedByDecision = Boolean(pendingPlanArtifact || pendingAskQuestion);
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
   const conversationStreamSignature = React.useMemo(
@@ -921,14 +933,14 @@ export function ChatArea(props: ChatAreaProps) {
   });
 
   React.useEffect(() => {
-    if (pendingPlanArtifact) {
+    if (composerBlockedByDecision) {
       setComposerDockHeight(0);
     }
-  }, [pendingPlanArtifact]);
+  }, [composerBlockedByDecision]);
 
   // composerDock stays as a floating layer outside the transcript scroll flow.
   // composerDock 作为转录滚动流之外的浮动层保持挂载。
-  const composerDock = pendingPlanArtifact ? null : (
+  const composerDock = composerBlockedByDecision ? null : (
     <ChatAreaComposerDockLayer
       chatAreaProps={props}
       projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}

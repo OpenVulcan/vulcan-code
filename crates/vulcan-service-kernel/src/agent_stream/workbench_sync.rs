@@ -24,20 +24,16 @@ pub(crate) fn build_subagent_panel_route_response_locked(
         active_session_id,
         surface_messages.as_mut_slice(),
     );
+    let selected_conversation_id =
+        selected_workspace_session_id(workspace_snapshot).map(|session_id| session_id.to_string());
     let active_conversation_id = subagent_navigation
         .as_ref()
         .map(|navigation| navigation.active_conversation_id.clone())
-        .or_else(|| {
-            (workspace_snapshot.selected_session != SessionId::nil())
-                .then(|| workspace_snapshot.selected_session.to_string())
-        });
+        .or_else(|| selected_conversation_id.clone());
     let parent_conversation_id = subagent_navigation
         .as_ref()
         .map(|navigation| navigation.parent_conversation_id.clone())
-        .or_else(|| {
-            (workspace_snapshot.selected_session != SessionId::nil())
-                .then(|| workspace_snapshot.selected_session.to_string())
-        });
+        .or_else(|| selected_conversation_id.clone());
     let messages = active_conversation_id
         .as_deref()
         .map(|conversation_id| {
@@ -365,10 +361,7 @@ pub(crate) fn mark_webui_prompt_snapshot_preparing(
     {
         runtime_state.updated_at = now.clone();
     }
-    if let Some(session) = workspace_snapshot
-        .sessions
-        .iter_mut()
-        .find(|session| session.id == session_id)
+    if let Some(session) = workspace_session_summary_for_session_mut(workspace_snapshot, session_id)
     {
         session.status = SessionState::Running;
         session.focus = String::from("正在准备请求");

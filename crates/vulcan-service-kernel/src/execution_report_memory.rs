@@ -4,7 +4,7 @@
 use vulcan_agent_runtime::{
     ExecutionPromptPurpose, ExecutionRunReport,
     agent_runtime::conversation_hooks::ConversationCompletionRequest,
-    conversation_protocol::{SessionConversationState, conversation_state_to_session_messages},
+    conversation_protocol::SessionConversationState,
 };
 use vulcan_core::types::ProviderUsageSnapshot;
 use vulcan_service_api::ServiceEventEmitter;
@@ -14,19 +14,22 @@ use vulcan_workspace_store::{
 };
 
 use super::{
-    AgentRuntimeBridge, ContextUsageChangedDelta, ServiceEvent, SharedServiceBridgeState,
-    UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
+    AgentRuntimeBridge, ContextUsageChangedDelta, ServiceBridgeState, ServiceEvent,
+    SharedServiceBridgeState, UpdateConversationRunPhaseDelta, WorkbenchDelta,
+    WorkbenchDeltaEnvelope, active_session_summary_for_session_mut,
     apply_checkpoint_conversation_state, apply_terminal_execution_report_to_state,
     apply_vmm_writeback_effects_to_runtime_state, build_conversation_messages_patched_delta,
     build_vmm_hook_config_snapshot, context_usage_snapshot_from_runtime_state,
     conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
     emit_service_event_with_trace, merge_runtime_state_records_into_display_messages,
-    persist_workspace_session_update, replace_conversation_messages_in_workbench_window,
+    owning_project_id_for_session, persist_workspace_session_update,
+    replace_conversation_messages_in_workbench_window,
     replace_display_messages_with_runtime_state_records, spawn_service_task,
     spawn_workspace_session_runtime_state_persist_task,
     spawn_workspace_session_transcript_persist_task, sync_hydrated_session_dialogue_ready_marker,
     webui_trace, webui_trace_if_slow, webui_turn_completion_gate_from_state,
-    workbench_surface_matches_conversation, workspace_snapshot_contains_regular_session,
+    workbench_surface_matches_conversation, workspace_session_summary_for_session,
+    workspace_snapshot_contains_regular_session,
 };
 
 /// Applies one streamed conversation checkpoint to retained workspace memory.
@@ -73,10 +76,8 @@ pub(super) fn apply_conversation_checkpoint(
             let now = current_unix_millis_text();
             // Only main-session checkpoints may persist through workspace-store; TaskSession checkpoints stay in memory here.
             // 只有主会话 checkpoint 可以通过 workspace-store 持久化；TaskSession checkpoint 在这里仅更新内存显示态。
-            let is_main_session = workspace
-                .sessions
-                .iter()
-                .any(|candidate| candidate.id == session_id);
+            let is_main_session =
+                workspace_session_summary_for_session(workspace, session_id).is_some();
             let runtime_state = workspace
                 .session_runtime_state
                 .entry(session_id)
@@ -214,7 +215,7 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         let now = current_unix_millis_text();
-        let (is_success, conversation_state) = {
+        let (is_success, runtime_state_snapshot) = {
             let runtime_state = workspace
                 .session_runtime_state
                 .entry(session_id)
@@ -224,17 +225,16 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
                 });
             let apply_result =
                 apply_terminal_execution_report_to_state(runtime_state, session_id, &now, report);
-            (
-                apply_result.is_success,
-                runtime_state.conversation_state.clone(),
-            )
+            // runtime_state_snapshot is the authoritative state after terminal report application for display projection.
+            // runtime_state_snapshot 是终态报告应用后的权威状态，用于显示层投影。
+            let runtime_state_snapshot = runtime_state.clone();
+            (apply_result.is_success, runtime_state_snapshot)
         };
-        let messages = conversation_state_to_session_messages(&conversation_state);
-        if messages.is_empty() {
-            workspace.session_messages.remove(&session_id);
-        } else {
-            workspace.session_messages.insert(session_id, messages);
-        }
+        replace_display_messages_with_runtime_state_records(
+            workspace,
+            session_id,
+            &runtime_state_snapshot,
+        );
         workspace.session_run_phases.insert(
             session_id,
             if is_success {
@@ -331,10 +331,9 @@ pub(super) fn apply_execution_report_to_memory(
             let now = current_unix_millis_text();
             // Main-session membership decides whether completion hooks and VMM side effects may run.
             // 主会话成员关系决定完成 hook 与 VMM 副作用是否允许执行。
-            let is_main_session = workspace
-                .sessions
-                .iter()
-                .any(|candidate| candidate.id == session_id);
+            let is_main_session =
+                workspace_session_summary_for_session(workspace, session_id).is_some();
+            let project_id = owning_project_id_for_session(workspace, session_id);
             let runtime_state = workspace
                 .session_runtime_state
                 .entry(session_id)
@@ -344,11 +343,6 @@ pub(super) fn apply_execution_report_to_memory(
                 });
             let apply_result =
                 apply_terminal_execution_report_to_state(runtime_state, session_id, &now, &report);
-            let project_id = workspace
-                .sessions
-                .iter()
-                .find(|candidate| candidate.id == session_id)
-                .and_then(|session| session.project_id.clone());
             let conversation_state = runtime_state.conversation_state.clone();
             let should_dispatch_completion_hook = is_main_session
                 && apply_result.is_success
@@ -397,10 +391,8 @@ pub(super) fn apply_execution_report_to_memory(
                     report.provider_request_count,
                 );
             }
-            if let Some(session) = workspace
-                .sessions
-                .iter_mut()
-                .find(|candidate| candidate.id == session_id)
+            if let Some(session) =
+                active_session_summary_for_session_mut(&mut workspace.sessions, session_id)
             {
                 session.status = if apply_result.is_success {
                     SessionState::Completed
@@ -464,10 +456,7 @@ pub(super) fn apply_execution_report_to_memory(
         "execution_report_applied",
         format!(
             "session={session_id} is_main_session={} prompt_purpose={} runs_completed_turn_hooks={} completion_status={} pending_subagents={} has_active_hook_turn={} error={} provider_requests={} output_chars={}",
-            workspace_snapshot
-                .sessions
-                .iter()
-                .any(|candidate| candidate.id == session_id),
+            workspace_session_summary_for_session(&workspace_snapshot, session_id).is_some(),
             prompt_purpose.diagnostics_label(),
             runs_completed_turn_hooks,
             completion_gate.completion_status().as_str(),
@@ -563,9 +552,15 @@ fn emit_terminal_execution_report_workbench_deltas(
             None
         };
         let mut events = Vec::new();
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        let phase_generation = guard.workbench_generation;
-        guard.workbench.revision = phase_generation;
+        let phase_event = terminal_report_workbench_delta_envelope(
+            &mut guard,
+            WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
+                conversation_id: conversation_id.clone(),
+                run_phase: run_phase.to_string(),
+                status: Some(status_label.to_string()),
+                last_updated_label: Some(String::from("now")),
+            }),
+        );
         for conversation in &mut guard.workbench.conversations {
             if conversation.id == conversation_id {
                 conversation.run_phase = run_phase.to_string();
@@ -575,44 +570,32 @@ fn emit_terminal_execution_report_workbench_deltas(
                 break;
             }
         }
-        events.push(WorkbenchDeltaEnvelope {
-            generation: phase_generation,
-            delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
-                conversation_id: conversation_id.clone(),
-                run_phase: run_phase.to_string(),
-                status: Some(status_label.to_string()),
-                last_updated_label: Some(String::from("now")),
-            }),
-        });
+        events.push(phase_event);
         if surface_matches {
             if let Some(message_patch) = build_conversation_messages_patched_delta(
                 &conversation_id,
                 before_visible_messages.as_slice(),
                 messages.as_slice(),
             ) {
-                guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-                let message_generation = guard.workbench_generation;
-                guard.workbench.revision = message_generation;
+                let message_event = terminal_report_workbench_delta_envelope(
+                    &mut guard,
+                    WorkbenchDelta::ConversationMessagesPatched(message_patch),
+                );
                 replace_conversation_messages_in_workbench_window(
                     &mut guard.workbench.messages,
                     &conversation_id,
                     messages,
                 );
-                events.push(WorkbenchDeltaEnvelope {
-                    generation: message_generation,
-                    delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
-                });
+                events.push(message_event);
             }
-            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-            let context_generation = guard.workbench_generation;
-            guard.workbench.revision = context_generation;
-            guard.workbench.context_usage = context_usage.clone();
-            events.push(WorkbenchDeltaEnvelope {
-                generation: context_generation,
-                delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
-                    context_usage,
+            let context_event = terminal_report_workbench_delta_envelope(
+                &mut guard,
+                WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta {
+                    context_usage: context_usage.clone(),
                 }),
-            });
+            );
+            guard.workbench.context_usage = context_usage;
+            events.push(context_event);
         }
         events
     };
@@ -624,6 +607,30 @@ fn emit_terminal_execution_report_workbench_deltas(
         );
     }
     Ok(())
+}
+
+/// Builds a terminal-report workbench delta envelope and advances the retained revision.
+/// 构建终态报告工作台增量信封，并推进保留的工作台版本。
+///
+/// # Parameters
+/// 参数
+/// `guard` is the locked service state whose workbench revision should advance.
+/// `guard` 是已加锁的服务状态，其工作台版本需要推进。
+/// `delta` is the workbench delta emitted for the terminal report flow.
+/// `delta` 是终态报告流程发出的工作台增量。
+///
+/// # Returns
+/// 返回值
+/// A delta envelope carrying the newly assigned generation.
+/// 返回携带新分配 generation 的增量信封。
+fn terminal_report_workbench_delta_envelope(
+    guard: &mut ServiceBridgeState,
+    delta: WorkbenchDelta,
+) -> WorkbenchDeltaEnvelope {
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    let generation = guard.workbench_generation;
+    guard.workbench.revision = generation;
+    WorkbenchDeltaEnvelope { generation, delta }
 }
 
 /// Spawns the completed-turn hook without blocking queued prompt dispatch.

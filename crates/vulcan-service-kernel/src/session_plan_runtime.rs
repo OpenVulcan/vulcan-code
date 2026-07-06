@@ -290,11 +290,8 @@ pub(crate) fn emit_session_addons_changed_delta(
             .as_ref()
             .map(|runtime| runtime.provider_configuration.vmm.clone())
             .unwrap_or_default();
-        let session_record = workspace
-            .sessions
-            .iter()
-            .chain(workspace.archived_sessions.iter())
-            .find(|session| session.id == session_id);
+        let session_record = workspace_session_with_archive_status(workspace, session_id)
+            .map(|(session, _)| session);
         let project_layer = session_record
             .and_then(|session| cached_project_vmm_layer_for_session(workspace, session));
         let session_vmm_policy = Some(session_vmm_policy_summary_from_layers(
@@ -305,6 +302,13 @@ pub(crate) fn emit_session_addons_changed_delta(
         let session_vmm_policy_for_list = runtime_state
             .filter(|runtime_state| !runtime_state.vmm.is_empty())
             .and(session_vmm_policy.clone());
+        let session_addons_list_entry = session_addons_changed_delta_for_retained_list(
+            conversation_id.clone(),
+            session_goal.clone(),
+            session_todolist.clone(),
+            session_plan_mode.clone(),
+            session_vmm_policy_for_list.clone(),
+        );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
@@ -316,60 +320,43 @@ pub(crate) fn emit_session_addons_changed_delta(
         }
         let pending_questions =
             pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
-        guard
-            .workbench
-            .session_addons_by_conversation
-            .retain(|entry| entry.conversation_id != conversation_id);
-        if session_goal.is_some()
-            || session_todolist.is_some()
-            || session_plan_mode.is_some()
-            || session_vmm_policy_for_list.is_some()
-        {
-            guard
-                .workbench
-                .session_addons_by_conversation
-                .push(SessionAddonsChangedDelta {
-                    conversation_id: conversation_id.clone(),
-                    session_goal: session_goal.clone(),
-                    session_todolist: session_todolist.clone(),
-                    session_plan_mode: session_plan_mode.clone(),
-                    session_vmm_policy: session_vmm_policy_for_list.clone(),
-                });
-        }
+        replace_conversation_scoped_projection_entry(
+            &mut guard.workbench.session_addons_by_conversation,
+            conversation_id.as_str(),
+            session_addons_list_entry,
+            |entry| entry.conversation_id.as_str(),
+        );
         let conversation_is_visible = guard
             .workbench
             .conversations
             .iter()
             .any(|candidate| candidate.id == conversation_id);
-        guard
-            .workbench
-            .session_vmm_policies_by_conversation
-            .retain(|entry| entry.conversation_id != conversation_id);
-        if conversation_is_visible && let Some(session_vmm_policy) = session_vmm_policy.clone() {
-            guard.workbench.session_vmm_policies_by_conversation.push(
-                SessionVmmPolicyByConversation {
-                    conversation_id: conversation_id.clone(),
-                    session_vmm_policy,
-                },
-            );
-        }
+        replace_conversation_scoped_projection_entry(
+            &mut guard.workbench.session_vmm_policies_by_conversation,
+            conversation_id.as_str(),
+            if conversation_is_visible {
+                session_vmm_policy.clone().map(|session_vmm_policy| {
+                    SessionVmmPolicyByConversation {
+                        conversation_id: conversation_id.clone(),
+                        session_vmm_policy,
+                    }
+                })
+            } else {
+                None
+            },
+            |entry| entry.conversation_id.as_str(),
+        );
         if let Some(conversation) = guard
             .workbench
             .conversations
             .iter_mut()
             .find(|candidate| candidate.id == conversation_id)
         {
-            let updated_at = if conversation.last_updated_at.is_empty() {
-                None
-            } else {
-                Some(conversation.last_updated_at.clone())
-            };
-            conversation.attention = conversation_attention_summary_for_session(
+            refresh_conversation_attention_summary(
+                conversation,
                 session_id,
                 &pending_questions,
                 session_plan_mode.as_ref(),
-                conversation.unread,
-                updated_at,
             );
         }
         let delta = SessionAddonsChangedDelta {

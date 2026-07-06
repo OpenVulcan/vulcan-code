@@ -1119,27 +1119,45 @@ fn target_agent_id_for_save(
 /// Normalizes an editable agent file name into a stable definition id.
 /// 将可编辑智能体文件名规范化为稳定定义标识。
 fn normalize_agent_file_name_input(value: &str) -> String {
-    let mut segments = value
+    // Keep one pending segment so only the final path segment loses its extension.
+    // 保留一个待定片段，确保只有最后一个路径片段会移除扩展名。
+    let mut normalized = String::new();
+    let mut pending_segment = None;
+    for segment in value
         .trim()
-        .replace('\\', "/")
-        .split('/')
+        .split(['/', '\\'])
         .filter(|segment| !segment.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if let Some(last_segment) = segments.last_mut() {
-        *last_segment = strip_agent_file_segment_extension(last_segment);
+    {
+        if let Some(previous_segment) = pending_segment.replace(segment) {
+            push_agent_file_name_segment(&mut normalized, previous_segment);
+        }
     }
-    segments.join("/")
+    if let Some(last_segment) = pending_segment {
+        push_agent_file_name_segment(
+            &mut normalized,
+            strip_agent_file_segment_extension(last_segment),
+        );
+    }
+    normalized
+}
+
+/// Appends one normalized agent id segment to an existing slash-separated id.
+/// 将单个规范化智能体标识片段追加到现有斜杠分隔标识。
+fn push_agent_file_name_segment(normalized: &mut String, segment: &str) {
+    if !normalized.is_empty() {
+        normalized.push('/');
+    }
+    normalized.push_str(segment);
 }
 
 /// Removes the last extension-like suffix from one agent id path segment.
 /// 从单个智能体标识路径片段移除最后一个扩展名形式的后缀。
-fn strip_agent_file_segment_extension(segment: &str) -> String {
+fn strip_agent_file_segment_extension(segment: &str) -> &str {
     segment
         .rsplit_once('.')
         .filter(|(stem, _extension)| !stem.is_empty())
-        .map(|(stem, _extension)| stem.to_string())
-        .unwrap_or_else(|| segment.to_string())
+        .map(|(stem, _extension)| stem)
+        .unwrap_or(segment)
 }
 
 /// Collects all possible user-layer files that can override one system agent definition.
@@ -1149,15 +1167,12 @@ fn restore_default_user_file_candidates(
     definition: &vulcan_task_session::SubagentDefinition,
 ) -> Result<Vec<PathBuf>, String> {
     let mut candidates = Vec::new();
-    push_unique_path(&mut candidates, user_subagent_definition_path(agent_id)?);
-    push_unique_path(&mut candidates, user_subagent_sidecar_path(agent_id)?);
-    push_unique_path(&mut candidates, user_subagent_override_path(agent_id)?);
-    if definition.source.scope == vulcan_task_session::SubagentDefinitionScope::User {
-        push_unique_path(&mut candidates, definition.source.file.clone());
-    }
-    if let Some(sidecar_file) = definition.source.sidecar_file.as_ref() {
-        push_unique_path(&mut candidates, sidecar_file.clone());
-    }
+    push_user_subagent_generated_files(&mut candidates, agent_id, true)?;
+    push_user_subagent_source_files(
+        &mut candidates,
+        &definition.source,
+        definition.source.scope == vulcan_task_session::SubagentDefinitionScope::User,
+    );
     Ok(candidates)
 }
 
@@ -1168,13 +1183,8 @@ fn user_definition_delete_candidates(
     definition: &vulcan_task_session::SubagentDefinition,
 ) -> Result<Vec<PathBuf>, String> {
     let mut candidates = Vec::new();
-    push_unique_path(&mut candidates, definition.source.file.clone());
-    if let Some(sidecar_file) = definition.source.sidecar_file.as_ref() {
-        push_unique_path(&mut candidates, sidecar_file.clone());
-    }
-    push_unique_path(&mut candidates, user_subagent_definition_path(agent_id)?);
-    push_unique_path(&mut candidates, user_subagent_sidecar_path(agent_id)?);
-    push_unique_path(&mut candidates, user_subagent_override_path(agent_id)?);
+    push_user_subagent_source_files(&mut candidates, &definition.source, true);
+    push_user_subagent_generated_files(&mut candidates, agent_id, true)?;
     Ok(candidates)
 }
 
@@ -1185,22 +1195,52 @@ fn remove_stale_user_subagent_files_for_source(
     previous_source: &vulcan_task_session::SubagentDefinitionSource,
     retained_file: &Path,
 ) -> Result<(), String> {
-    let mut candidates = Vec::new();
-    push_unique_path(&mut candidates, previous_source.file.clone());
-    if let Some(sidecar_file) = previous_source.sidecar_file.as_ref() {
-        push_unique_path(&mut candidates, sidecar_file.clone());
-    }
-    push_unique_path(
-        &mut candidates,
-        user_subagent_sidecar_path(previous_agent_id)?,
-    );
-    push_unique_path(
-        &mut candidates,
-        user_subagent_override_path(previous_agent_id)?,
-    );
+    let candidates = stale_user_subagent_file_candidates(previous_agent_id, previous_source)?;
     for path in candidates {
         remove_user_subagent_file_if_safe(&path, retained_file)?;
     }
+    Ok(())
+}
+
+/// Collects stale user-owned source files for one previous agent id.
+/// 收集单个旧智能体标识对应的旧用户来源文件。
+fn stale_user_subagent_file_candidates(
+    previous_agent_id: &str,
+    previous_source: &vulcan_task_session::SubagentDefinitionSource,
+) -> Result<Vec<PathBuf>, String> {
+    let mut candidates = Vec::new();
+    push_user_subagent_source_files(&mut candidates, previous_source, true);
+    push_user_subagent_generated_files(&mut candidates, previous_agent_id, false)?;
+    Ok(candidates)
+}
+
+/// Pushes source-owned user agent files into one candidate list.
+/// 将来源记录拥有的用户智能体文件推入候选列表。
+fn push_user_subagent_source_files(
+    candidates: &mut Vec<PathBuf>,
+    source: &vulcan_task_session::SubagentDefinitionSource,
+    include_primary_file: bool,
+) {
+    if include_primary_file {
+        push_unique_path(candidates, source.file.clone());
+    }
+    if let Some(sidecar_file) = source.sidecar_file.as_ref() {
+        push_unique_path(candidates, sidecar_file.clone());
+    }
+}
+
+/// Pushes generated user agent files for one agent id into one candidate list.
+/// 将单个智能体标识对应的派生用户文件推入候选列表。
+fn push_user_subagent_generated_files(
+    candidates: &mut Vec<PathBuf>,
+    agent_id: &str,
+    include_definition_file: bool,
+) -> Result<(), String> {
+    if include_definition_file {
+        push_unique_path(candidates, user_subagent_definition_path(agent_id)?);
+    }
+    push_unique_path(candidates, user_subagent_sidecar_path(agent_id)?);
+    push_unique_path(candidates, user_subagent_override_path(agent_id)?);
     Ok(())
 }
 
@@ -1270,4 +1310,144 @@ fn remove_user_subagent_file_if_safe(path: &Path, retained_file: &Path) -> Resul
     }
     std::fs::remove_file(path)
         .map_err(|error| format!("删除旧智能体文件 `{}` 失败：{error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one minimal user subagent definition for file-candidate tests.
+    /// 为文件候选测试构建一个最小用户智能体定义。
+    fn test_user_subagent_definition() -> vulcan_task_session::SubagentDefinition {
+        vulcan_task_session::SubagentDefinition {
+            id: String::from("engineering/test-agent"),
+            name: String::from("Test Agent"),
+            description: None,
+            locales: std::collections::BTreeMap::new(),
+            origin: None,
+            emoji: String::from("AI"),
+            color: String::from("gray"),
+            vibe: None,
+            mode: vulcan_task_session::SubagentDefinitionMode::Expert,
+            system_prompt: None,
+            system_prompt_append: None,
+            provider_model: Default::default(),
+            tool_exposure: Default::default(),
+            prompt_skills: Default::default(),
+            context_compaction: Default::default(),
+            runtime_policy: Default::default(),
+            max_depth: None,
+            enabled: true,
+            source: vulcan_task_session::SubagentDefinitionSource {
+                scope: vulcan_task_session::SubagentDefinitionScope::User,
+                file: std::path::PathBuf::from("custom/test-agent.md"),
+                sidecar_file: Some(std::path::PathBuf::from("custom/test-agent.sidecar.json")),
+                source_key: String::from("user:engineering/test-agent"),
+                category_id: Some(String::from("engineering")),
+                package_id: None,
+                remote_url: None,
+                override_of: None,
+                source_hash: None,
+                version: None,
+                etag: None,
+                last_modified: None,
+                updated_at: None,
+            },
+            extra: serde_json::Value::Null,
+        }
+    }
+
+    /// Verifies delete candidates include source and generated definition files.
+    /// 验证删除候选会包含来源文件与派生定义文件。
+    #[test]
+    fn user_definition_delete_candidates_include_source_and_generated_files() {
+        let definition = test_user_subagent_definition();
+        let candidates = user_definition_delete_candidates("engineering/test-agent", &definition)
+            .expect("delete candidates should resolve");
+
+        assert!(candidates.contains(&std::path::PathBuf::from("custom/test-agent.md")));
+        assert!(candidates.contains(&std::path::PathBuf::from("custom/test-agent.sidecar.json")));
+        assert!(
+            candidates.contains(
+                &user_subagent_definition_path("engineering/test-agent")
+                    .expect("definition path should resolve")
+            )
+        );
+        assert!(
+            candidates.contains(
+                &user_subagent_sidecar_path("engineering/test-agent")
+                    .expect("sidecar path should resolve")
+            )
+        );
+        assert!(
+            candidates.contains(
+                &user_subagent_override_path("engineering/test-agent")
+                    .expect("override path should resolve")
+            )
+        );
+    }
+
+    /// Verifies editable agent file names normalize separators and strip the final extension.
+    /// 验证可编辑智能体文件名会归一化分隔符并移除最终扩展名。
+    #[test]
+    fn normalize_agent_file_name_input_normalizes_separators_and_final_extension() {
+        // editable_name mirrors a Windows-style file path submitted from the WebUI.
+        // editable_name 模拟 WebUI 提交的 Windows 风格文件路径。
+        let editable_name = r"  engineering\reviewer.md  ";
+
+        assert_eq!(
+            normalize_agent_file_name_input(editable_name),
+            "engineering/reviewer"
+        );
+        assert_eq!(
+            normalize_agent_file_name_input("//engineering//reviewer.sidecar.json"),
+            "engineering/reviewer.sidecar"
+        );
+    }
+
+    /// Verifies agent file-name normalization preserves non-final segment text.
+    /// 验证智能体文件名归一化会保留非最终片段文本。
+    #[test]
+    fn normalize_agent_file_name_input_preserves_non_final_segments() {
+        // dotted_category proves only the last path segment is treated as a file name.
+        // dotted_category 证明只有最后一个路径片段会按文件名处理。
+        let dotted_category = "team.v1/reviewer.md";
+
+        assert_eq!(
+            normalize_agent_file_name_input(dotted_category),
+            "team.v1/reviewer"
+        );
+        assert_eq!(normalize_agent_file_name_input(".md"), ".md");
+    }
+
+    /// Verifies stale cleanup candidates keep source files but skip generated definitions.
+    /// 验证旧文件清理候选保留来源文件但跳过派生定义文件。
+    #[test]
+    fn stale_user_subagent_file_candidates_skip_generated_definition_file() {
+        let definition = test_user_subagent_definition();
+        let candidates =
+            stale_user_subagent_file_candidates("engineering/test-agent", &definition.source)
+                .expect("stale candidates should resolve");
+
+        assert!(candidates.contains(&std::path::PathBuf::from("custom/test-agent.md")));
+        assert!(candidates.contains(&std::path::PathBuf::from("custom/test-agent.sidecar.json")));
+        assert!(
+            !candidates.contains(
+                &user_subagent_definition_path("engineering/test-agent")
+                    .expect("definition path should resolve")
+            )
+        );
+        assert!(
+            candidates.contains(
+                &user_subagent_sidecar_path("engineering/test-agent")
+                    .expect("sidecar path should resolve")
+            )
+        );
+        assert!(
+            candidates.contains(
+                &user_subagent_override_path("engineering/test-agent")
+                    .expect("override path should resolve")
+            )
+        );
+    }
 }

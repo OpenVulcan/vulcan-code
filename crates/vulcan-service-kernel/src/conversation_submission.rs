@@ -21,8 +21,8 @@ use super::{
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
     build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
     capture_preserved_workspace_run_state, composer_attachment_summary_to_core,
-    conversation_attention_summary_for_session, conversation_fork_source_summary_from_session,
-    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
+    conversation_fork_source_summary_from_session, conversation_messages_from_session,
+    current_unix_millis_text, current_unix_millis_value,
     current_workspace_snapshot_from_shared_state, effective_workbench_disabled_ai_capability_kinds,
     emit_materialized_session_message_delta, emit_pending_prompts_changed_delta,
     emit_service_event_with_trace, enqueue_webui_pending_prompt_from_submission,
@@ -32,18 +32,20 @@ use super::{
     mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
     parse_ai_capability_target_order_overrides, parse_ai_capability_target_selectors,
     parse_reasoning_effort, parse_session_id, pending_question_snapshots_from_agent_runtime,
-    preserve_active_session_run_state, replace_conversation_messages_in_workbench_window,
+    preserve_active_session_run_state, refresh_conversation_attention_summary,
+    replace_conversation_messages_in_workbench_window,
     retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
     rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
     session_ai_tool_configuration_or_default, session_has_blocking_system_prompt_work,
-    session_plan_mode_summary_from_runtime_state, snapshot_webui_context_before_user_prompt,
-    spawn_service_task, spawn_workspace_session_persist_task, start_webui_precheck_or_continue,
+    session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
+    snapshot_webui_context_before_user_prompt, spawn_service_task,
+    spawn_workspace_session_persist_task, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
-    sync_hydrated_session_dialogue_ready_marker, webui_session_allows_user_prompt_editing,
-    webui_session_has_active_run, webui_session_kernel_has_active_turn,
-    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
-    workbench_with_live_pending_question, workspace_path_for_session,
-    workspace_user_prompt_message_allows_destructive_edit,
+    sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
+    webui_session_allows_user_prompt_editing, webui_session_has_active_run,
+    webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
+    webui_trace_if_slow, workbench_with_live_pending_question, workspace_path_for_session,
+    workspace_session_summary_for_session, workspace_user_prompt_message_allows_destructive_edit,
 };
 mod edit;
 
@@ -666,10 +668,7 @@ fn emit_submitted_conversation_summary_delta(
     workspace_snapshot: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     session_id: vulcan_workbench_model::SessionId,
 ) -> Result<u64, String> {
-    let session = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|candidate| candidate.id == session_id)
+    let session = workspace_session_summary_for_session(workspace_snapshot, session_id)
         .ok_or_else(|| format!("submitted session was not materialized: {session_id}"))?;
     let run_phase = workspace_snapshot
         .session_run_phases
@@ -699,7 +698,7 @@ fn emit_submitted_conversation_summary_delta(
         last_updated_at: session.updated_at.clone(),
         unread,
         attention: None,
-        project_id: session.project_id.clone(),
+        project_id: session_summary_project_id_owned(session),
         fork_source: conversation_fork_source_summary_from_session(session),
     };
     let event = {
@@ -708,12 +707,11 @@ fn emit_submitted_conversation_summary_delta(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let pending_questions =
             pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
-        conversation.attention = conversation_attention_summary_for_session(
+        refresh_conversation_attention_summary(
+            &mut conversation,
             session_id,
             &pending_questions,
             session_plan_mode.as_ref(),
-            unread,
-            Some(session.updated_at.clone()),
         );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let revision = guard.workbench_generation;

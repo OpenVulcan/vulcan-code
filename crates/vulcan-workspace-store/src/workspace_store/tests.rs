@@ -3,15 +3,13 @@
 
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventKind,
-    append_segmented_session_message_update, create_segmented_session,
+    append_segmented_session_message_update, create_segmented_session_in_location,
     ensure_runtime_log_from_segmented_context, read_segmented_session_event_window, read_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
-use crate::model::{
-    PendingPromptPanelEntry, PendingPromptPanelEntryState, SessionAddonNamespace,
-    SessionAddonState, SessionRuntimeControls,
-};
+use crate::conversation_protocol::SessionProviderContinuationState;
+use crate::model::{SessionAddonNamespace, SessionAddonState, SessionRuntimeControls};
 use vulcan_context::{SessionConversationRecord, SessionMessageKind};
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
@@ -58,6 +56,21 @@ fn loaded_runtime_state_drops_process_scoped_precheck_latch() {
     assert!(runtime_state.active_precheck_turn_id.is_none());
 }
 
+/// Verifies persistence preview snippets keep line joining, fallback compaction, and truncation rules.
+/// 验证持久化预览片段保持行拼接、回退压缩与截断规则。
+#[test]
+fn truncate_preview_lines_preserves_compaction_and_truncation_rules() {
+    assert_eq!(
+        truncate_preview_lines("  first line  \n\n second line \n third line ", 2, 80),
+        "first line / second line"
+    );
+    assert_eq!(
+        truncate_preview_lines(" alpha   beta\n\tgamma ", 0, 80),
+        "alpha beta gamma"
+    );
+    assert_eq!(truncate_preview_lines("abcdef", 1, 4), "abc…");
+}
+
 /// Verifies session addon persistence writes only the addon document beside segmented state.
 /// 验证会话附属状态持久化只写入分段状态旁的附属文档。
 #[test]
@@ -67,8 +80,9 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7011);
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         SegmentedSessionCreateRequest {
             session_id: session_id.to_string(),
             project_tag: String::from("project-addon"),
@@ -136,8 +150,9 @@ fn session_hydration_rebuilds_runtime_log_from_segmented_jsonl() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7010);
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         SegmentedSessionCreateRequest {
             session_id: session_id.to_string(),
             project_tag: String::from("project-context"),
@@ -201,8 +216,9 @@ fn records_only_state_session_hydration_rebuilds_provider_messages_from_segmente
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7012);
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         SegmentedSessionCreateRequest {
             session_id: session_id.to_string(),
             project_tag: String::from("project-context"),
@@ -298,8 +314,9 @@ fn records_only_state_without_replay_preserves_existing_records() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7013);
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         SegmentedSessionCreateRequest {
             session_id: session_id.to_string(),
             project_tag: String::from("project-context"),
@@ -363,8 +380,9 @@ fn segmented_context_public_apis_write_state_and_turn_context() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7001);
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         SegmentedSessionCreateRequest {
             session_id: session_id.to_string(),
             project_tag: String::from("project-context"),
@@ -433,8 +451,9 @@ fn segmented_session_rename_updates_metadata_without_touching_segments() {
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7008);
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         SegmentedSessionCreateRequest {
             session_id: session_id.to_string(),
             project_tag: String::from("project-rename"),
@@ -617,8 +636,9 @@ fn workspace_segmented_boundary_store_runs_external_lifecycle_without_overwritin
     ));
     let session_id = SessionId::from_u128(7004);
     let thread_id = SessionNodeId::from(session_id);
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         SegmentedSessionCreateRequest {
             session_id: session_id.to_string(),
             project_tag: String::from("project-context"),
@@ -748,56 +768,6 @@ fn session_history_context_turn_bounds_clamp_lower_edge() {
 fn session_history_context_turn_bounds_expand_around_anchor() {
     assert_eq!(session_history_context_turn_bounds(12, 2), (10, 14));
     assert_eq!(session_history_context_turn_bounds(12, -1), (12, 12));
-}
-
-/// Verifies that visible pending prompt-panel rows keep the transcript UI state persistable across restarts.
-/// 验证可见待发送提示词面板行会让转录界面状态跨重启保持可持久化。
-#[test]
-fn session_ui_state_json_preserves_pending_prompt_panel_queue() {
-    let state = SessionTranscriptUiState {
-        pending_prompt_panel_queue: vec![PendingPromptPanelEntry {
-            id: String::from("panel-1"),
-            prompt: String::from("继续排队消息"),
-            preview: String::from("继续排队消息"),
-            attachments: Vec::new(),
-            hidden_model_guidance: None,
-            model_reference: None,
-            runtime_options: crate::model::PendingPromptRuntimeOptions::default(),
-            state: PendingPromptPanelEntryState::Ready,
-            created_at: String::from("1"),
-        }],
-        ..SessionTranscriptUiState::default()
-    };
-
-    let json_payload = serialize_session_ui_state_to_json(&state)
-        .expect("pending panel queue should make UI state persistable");
-    let parsed = parse_session_ui_state_from_json(&json_payload)
-        .expect("pending panel queue UI state should parse");
-
-    assert_eq!(parsed.pending_prompt_panel_queue.len(), 1);
-    assert_eq!(parsed.pending_prompt_panel_queue[0].prompt, "继续排队消息");
-}
-
-/// Verifies that session-scoped composer draft state round-trips through the persisted transcript UI-state JSON payload.
-/// 验证按会话归属的输入框草稿状态可以在持久化转录界面状态 JSON 载荷中正确往返。
-#[test]
-fn session_ui_state_json_preserves_composer_draft() {
-    let state = SessionTranscriptUiState {
-        composer_draft: crate::model::SessionComposerDraftState {
-            text: String::from("请继续修复这个问题"),
-            attachments: Vec::new(),
-            scroll_offset: 24.0,
-        },
-        ..SessionTranscriptUiState::default()
-    };
-
-    let json_payload = serialize_session_ui_state_to_json(&state)
-        .expect("composer draft should make UI state persistable");
-    let parsed = parse_session_ui_state_from_json(&json_payload)
-        .expect("composer draft UI state should parse");
-
-    assert_eq!(parsed.composer_draft.text, "请继续修复这个问题");
-    assert_eq!(parsed.composer_draft.scroll_offset, 24.0);
 }
 
 /// Verifies that rebuilding runtime state from recent messages preserves provider continuation.

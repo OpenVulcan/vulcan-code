@@ -63,20 +63,6 @@ pub(crate) fn append_stream_delta_record(
             runtime_state.updated_at = now.clone();
             projected_entry
         };
-        if let Some(projected_entry) = projected_entry.as_ref()
-            && projected_entry.is_visible_to_user()
-            && !projected_entry.body.trim().is_empty()
-        {
-            let messages = workspace.session_messages.entry(session_id).or_default();
-            if let Some(existing) = messages
-                .iter_mut()
-                .find(|message| message.id == projected_entry.id)
-            {
-                *existing = projected_entry.clone();
-            } else {
-                messages.push(projected_entry.clone());
-            }
-        }
         workspace.session_run_phases.insert(session_id, run_phase);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         let Some(projected_entry) = projected_entry else {
@@ -313,16 +299,12 @@ pub(crate) fn emit_context_injection_changed_delta(
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
         guard.workbench.context_injection = delta.context_injection.clone();
-        guard
-            .workbench
-            .context_injection_by_conversation
-            .retain(|entry| entry.conversation_id != delta.conversation_id);
-        if delta.context_injection.is_some() {
-            guard
-                .workbench
-                .context_injection_by_conversation
-                .push(delta.clone());
-        }
+        replace_conversation_scoped_projection_entry(
+            &mut guard.workbench.context_injection_by_conversation,
+            delta.conversation_id.as_str(),
+            delta.context_injection.is_some().then(|| delta.clone()),
+            |entry| entry.conversation_id.as_str(),
+        );
         WorkbenchDeltaEnvelope {
             generation,
             delta: WorkbenchDelta::ContextInjectionChanged(delta),
@@ -357,12 +339,10 @@ fn context_injection_changed_delta_from_workspace_snapshot(
     if workspace_snapshot.selected_session != session_id {
         return None;
     }
-    Some(ContextInjectionChangedDelta {
-        conversation_id: session_id.to_string(),
-        context_injection: context_injection_snapshot_from_runtime_state(
-            workspace_snapshot.session_runtime_state.get(&session_id),
-        ),
-    })
+    Some(context_injection_changed_delta_from_runtime_state(
+        session_id,
+        workspace_snapshot.session_runtime_state.get(&session_id),
+    ))
 }
 
 /// Maps one execution phase to the compact sidebar session status.
@@ -636,28 +616,35 @@ pub(crate) fn append_runtime_event_projection(
                         updated_at: now.clone(),
                         ..SessionRuntimeStateEntry::default()
                     });
+                let before_projection_records = runtime_state.conversation_state.records.clone();
                 if append_runtime_event_projection_to_state(runtime_state, session_id, &now, event)
                 {
-                    let merged_messages = merge_session_messages_with_conversation_state_records(
+                    let projection_entries = runtime_event_projection_entries_from_changed_records(
+                        before_projection_records.as_slice(),
+                        runtime_state.conversation_state.records.as_slice(),
+                    );
+                    let merged_messages = merge_session_messages_with_runtime_event_entries(
                         workspace
                             .session_messages
                             .get(&session_id)
                             .map(Vec::as_slice)
                             .unwrap_or(&[]),
-                        &runtime_state.conversation_state,
+                        projection_entries.as_slice(),
                     );
-                    // Runtime tool projection must use the same visible-message filter as final hydration.
-                    // 运行时工具投影必须使用与最终水合一致的可见消息过滤规则。
-                    projected_messages = conversation_messages_from_session(
-                        &conversation_id,
-                        &merged_messages,
-                        false,
-                    );
-                    workspace
-                        .session_messages
-                        .insert(session_id, merged_messages);
-                    marker_sync_required = true;
-                    transcript_changed = true;
+                    if !projection_entries.is_empty() {
+                        // Runtime tool projection must use the same visible-message filter as final hydration.
+                        // 运行时工具投影必须使用与最终水合一致的可见消息过滤规则。
+                        projected_messages = conversation_messages_from_session(
+                            &conversation_id,
+                            &merged_messages,
+                            false,
+                        );
+                        workspace
+                            .session_messages
+                            .insert(session_id, merged_messages);
+                        marker_sync_required = true;
+                        transcript_changed = true;
+                    }
                 }
                 if let Some(todolist) = todolist_state_from_tool_finished_event(event, &now)
                     && runtime_state.todolist != todolist
@@ -847,6 +834,75 @@ pub(crate) fn workbench_should_emit_runtime_event_message_patch(
             .subagent_surface_detail_cache
             .contains_key(&session_id)
         || guard.detached_subagent_task_listeners.contains(&session_id)
+}
+
+/// Returns stable transcript entries created or updated by one runtime tool projection.
+/// 返回单次运行时工具投影创建或更新的稳定转录项。
+fn runtime_event_projection_entries_from_changed_records(
+    before_records: &[SessionConversationRecord],
+    after_records: &[SessionConversationRecord],
+) -> Vec<SessionMessageEntry> {
+    let before_by_id = before_records
+        .iter()
+        .map(|record| (record.id.as_str(), record))
+        .collect::<BTreeMap<_, _>>();
+    after_records
+        .iter()
+        .filter(|record| runtime_event_projection_record_is_stable(record))
+        .filter(|record| {
+            before_by_id
+                .get(record.id.as_str())
+                .is_none_or(|before| !session_conversation_records_equal(before, record))
+        })
+        .map(session_message_entry_from_conversation_record)
+        .collect()
+}
+
+/// Returns whether one runtime record is safe to retain before the turn has completed.
+/// 返回单条运行时记录是否可以在当前轮次完成前稳定保留。
+fn runtime_event_projection_record_is_stable(record: &SessionConversationRecord) -> bool {
+    matches!(
+        record.record_kind,
+        SessionMessageRecordKind::ToolCallOutput
+            | SessionMessageRecordKind::ToolResultOutput
+            | SessionMessageRecordKind::ToolDetailOutput
+    )
+}
+
+/// Compares two runtime conversation records without requiring protocol-level PartialEq.
+/// 在不要求协议类型实现 PartialEq 的情况下比较两条运行时会话记录。
+fn session_conversation_records_equal(
+    left: &SessionConversationRecord,
+    right: &SessionConversationRecord,
+) -> bool {
+    left.id == right.id
+        && left.kind == right.kind
+        && left.record_kind == right.record_kind
+        && left.visible == right.visible
+        && left.title == right.title
+        && left.body == right.body
+        && left.metadata == right.metadata
+        && left.created_at == right.created_at
+}
+
+/// Merges changed runtime tool entries into retained display transcript rows.
+/// 将变化的运行时工具项合并到已保留的显示转录行中。
+fn merge_session_messages_with_runtime_event_entries(
+    existing_messages: &[SessionMessageEntry],
+    projection_entries: &[SessionMessageEntry],
+) -> Vec<SessionMessageEntry> {
+    let mut merged_messages = existing_messages.to_vec();
+    for entry in projection_entries {
+        if let Some(existing_entry) = merged_messages
+            .iter_mut()
+            .find(|message| message.id == entry.id)
+        {
+            *existing_entry = entry.clone();
+        } else {
+            merged_messages.push(entry.clone());
+        }
+    }
+    merged_messages
 }
 
 /// Extracts closed subagent task ids from a structured `close_agent` host result.
@@ -1069,6 +1125,62 @@ mod tests {
         );
     }
 
+    /// Verifies runtime tool projection does not promote active streaming drafts into retained transcript rows.
+    /// 验证运行时工具投影不会把活跃流式草稿提升为保留转录行。
+    #[test]
+    fn runtime_tool_projection_keeps_streaming_drafts_out_of_retained_rows() {
+        let session_id = SessionId::new_v4();
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let mut thinking_record_id = None;
+        append_stream_delta_record_to_state(
+            &mut runtime_state,
+            session_id,
+            "1000",
+            &mut thinking_record_id,
+            SessionMessageRecordKind::ThinkingOutput,
+            "思考过程",
+            "正在整理工具调用。",
+            true,
+        );
+        let before_projection_records = runtime_state.conversation_state.records.clone();
+        let started = RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "工具调用 · call-read · vulcan_file_read",
+            "## Tool Call",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-read",
+            "tool_name": "vulcan_file_read",
+            "arguments": {
+                "path": "README.md"
+            }
+        })));
+
+        assert!(append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "1001",
+            &started,
+        ));
+        let projection_entries = runtime_event_projection_entries_from_changed_records(
+            before_projection_records.as_slice(),
+            runtime_state.conversation_state.records.as_slice(),
+        );
+        let merged_messages =
+            merge_session_messages_with_runtime_event_entries(&[], projection_entries.as_slice());
+
+        assert_eq!(merged_messages.len(), 1);
+        assert_eq!(
+            merged_messages[0].record_kind,
+            SessionMessageRecordKind::ToolCallOutput
+        );
+        assert!(
+            !merged_messages
+                .iter()
+                .any(|message| message.record_kind == SessionMessageRecordKind::ThinkingOutput)
+        );
+    }
+
     /// Verifies selected-session memory injections are projected through a dedicated workbench delta.
     /// 验证当前选中会话的记忆注入会通过专用工作台增量投影。
     #[test]
@@ -1142,6 +1254,54 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Verifies selected-session deltas can clear the memory panel while retained lists omit empties.
+    /// 验证选中会话增量可清空记忆面板，而保留列表会省略空条目。
+    #[test]
+    fn context_injection_delta_clears_selected_session_but_omits_empty_retained_entries() {
+        // Selected session whose runtime state is absent after memory cleanup.
+        // 记忆清理后运行态缺失的选中会话。
+        let selected_session_id = SessionId::new_v4();
+        // Hydrated background session with no runtime state.
+        // 没有运行态的已水合后台会话。
+        let hydrated_session_id = SessionId::new_v4();
+        // Workspace snapshot used by both stream delta and retained projection paths.
+        // 流式增量与保留投影路径共同使用的工作区快照。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: selected_session_id,
+            hydrated_session_ids: BTreeSet::from([hydrated_session_id]),
+        };
+
+        // Selected session still produces a delta with a None payload so the UI can clear it.
+        // 选中会话仍会产生 None 载荷增量，以便 UI 清空面板。
+        let selected_delta = context_injection_changed_delta_from_workspace_snapshot(
+            &workspace_snapshot,
+            selected_session_id,
+        )
+        .expect("selected session should emit a clearing delta");
+        // Retained by-conversation projection omits empty entries.
+        // 按会话保留的投影会省略空条目。
+        let retained_deltas = context_injection_by_conversation_from_workspace(&workspace_snapshot);
+
+        assert_eq!(
+            selected_delta.conversation_id,
+            selected_session_id.to_string()
+        );
+        assert!(selected_delta.context_injection.is_none());
+        assert!(retained_deltas.is_empty());
     }
 
     /// Verifies a tool-start message patch carries the phase that closes the thinking overlay.

@@ -261,36 +261,23 @@ fn segmented_json_string(value: &serde_json::Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// 通过分段检查点和规范事件流为单个会话恢复水合后的运行时状态。
+/// Rebuilds hydration runtime state from the segmented window when no state file exists.
+/// 当分段状态文件不存在时，根据分段窗口重建水合运行态。
 pub(super) async fn hydrate_session_runtime_state(
     session_id: SessionId,
-    runtime_state_row: Option<StoredRuntimeStateRow>,
     full_messages: &[SessionMessageEntry],
 ) -> Result<Option<SessionRuntimeStateEntry>, String> {
-    let Some(mut runtime_state) = runtime_state_row.map(stored_runtime_state_row_to_entry) else {
-        if full_messages.is_empty() {
-            return Ok(None);
-        }
-        let mut runtime_state = SessionRuntimeStateEntry {
-            conversation_state: conversation_state_from_session_messages(full_messages),
-            updated_at: current_unix_millis_text(),
-            ..Default::default()
-        };
-        let _ = repair_duplicate_conversation_record_ids(
-            session_id,
-            &mut runtime_state.conversation_state,
-        );
-        return Ok(Some(runtime_state));
+    if full_messages.is_empty() {
+        return Ok(None);
+    }
+
+    let mut runtime_state = SessionRuntimeStateEntry {
+        conversation_state: conversation_state_from_session_messages(full_messages),
+        updated_at: current_unix_millis_text(),
+        ..Default::default()
     };
-    if runtime_state.updated_at.trim().is_empty() {
-        runtime_state.updated_at = current_unix_millis_text();
-    }
-    if runtime_state.conversation_state.records.is_empty() && !full_messages.is_empty() {
-        runtime_state.conversation_state = conversation_state_from_session_messages(full_messages);
-    }
     let _ =
         repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
-
     Ok(Some(runtime_state))
 }
 
@@ -331,12 +318,10 @@ pub(super) fn restore_hydration_window_from_runtime_state_if_empty(
 pub(super) fn resolve_initial_hydration_turn_count(
     requested_turn_count: usize,
     compactions: &[SessionCompactionEntry],
-    runtime_state_row: Option<&StoredRuntimeStateRow>,
     locator: Option<&StoredSessionLocatorRow>,
 ) -> usize {
     let mut effective_turn_count = requested_turn_count.max(1);
-    let Some(boundary_turn_index) =
-        active_compaction_overlap_boundary_turn_index(compactions, runtime_state_row)
+    let Some(boundary_turn_index) = active_compaction_overlap_boundary_turn_index(compactions)
     else {
         return effective_turn_count;
     };
@@ -361,12 +346,8 @@ pub(super) fn resolve_initial_hydration_turn_count(
 /// 根据持久化运行时状态元数据与检查点行解析当前活动压缩重叠边界。
 fn active_compaction_overlap_boundary_turn_index(
     compactions: &[SessionCompactionEntry],
-    runtime_state_row: Option<&StoredRuntimeStateRow>,
 ) -> Option<i64> {
-    let active_compaction = runtime_state_row
-        .and_then(|row| row.last_compaction_id.as_deref())
-        .and_then(|compaction_id| compactions.iter().find(|entry| entry.id == compaction_id))
-        .or_else(|| compactions.last())?;
+    let active_compaction = compactions.last()?;
 
     active_compaction
         .retained_tail_start_turn_index

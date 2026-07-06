@@ -270,9 +270,8 @@ fn attach_subagent_runtime_debug_extra(
     } else {
         "parent_clone"
     };
-    let prompt_source = agent_id
-        .map(|value| format!("agent_md:{value}"))
-        .unwrap_or_else(|| String::from("core"));
+    let prompt_source =
+        subagent_prompt_source_for_task_config(invocation_config.subagent_profile_id.as_deref());
     let debug = json!({
         "agent_kind": agent_kind,
         "agent_mode": invocation_config.subagent_mode,
@@ -471,23 +470,78 @@ pub(super) fn truncate_snapshot_to_last_user_turns(
     }
 }
 
+/// Initialization fields for creating one fresh task-session record.
+/// 用于创建一条全新任务会话记录的初始化字段。
+pub(super) struct TaskSessionRecordInit {
+    /// Stable internal task-session identifier.
+    /// 稳定的内部任务会话标识。
+    pub(super) task_id: SessionId,
+    /// Caller-facing public task identifier.
+    /// 面向调用方的公开任务标识。
+    pub(super) public_task_id: String,
+    /// Root controller session that owns the task tree.
+    /// 拥有任务树的根控制器会话。
+    pub(super) origin_session_id: SessionId,
+    /// Optional parent task-session identifier for nested tasks.
+    /// 嵌套任务的可选父任务会话标识。
+    pub(super) parent_task_id: Option<SessionId>,
+    /// Task depth inside the task tree.
+    /// 任务在任务树中的深度。
+    pub(super) depth: usize,
+    /// Optional task description supplied by the invocation.
+    /// 调用提供的可选任务描述。
+    pub(super) description: Option<String>,
+    /// Optional selected subagent label.
+    /// 可选的已选择子代理标签。
+    pub(super) subagent: Option<String>,
+    /// Resolved invocation configuration used to run or resume the task.
+    /// 用于运行或恢复任务的已解析调用配置。
+    pub(super) invocation_config: TaskInvocationConfig,
+    /// Display title shown in task surfaces.
+    /// 任务界面中展示的标题。
+    pub(super) display_title: String,
+    /// Optional controller configuration captured for the task.
+    /// 为该任务捕获的可选控制器配置。
+    pub(super) controller_config: Option<CoreControllerConfig>,
+    /// Conversation snapshot attached to the task record.
+    /// 附加到任务记录上的会话快照。
+    pub(super) snapshot: CoreConversationSnapshot,
+    /// Last prompt used to launch or inspect the task.
+    /// 用于启动或检查任务的最近提示词。
+    pub(super) last_prompt: String,
+    /// Last known execution status text.
+    /// 最近已知的执行状态文本。
+    pub(super) last_status: String,
+}
+
 /// Builds one task-session record with the provided metadata and execution state.
 /// 使用给定元数据与执行状态构建一条任务会话记录。
-pub(super) fn build_task_session_record(
-    task_id: SessionId,
-    public_task_id: String,
-    origin_session_id: SessionId,
-    parent_task_id: Option<SessionId>,
-    depth: usize,
-    description: Option<String>,
-    subagent: Option<String>,
-    invocation_config: TaskInvocationConfig,
-    display_title: String,
-    controller_config: Option<CoreControllerConfig>,
-    snapshot: CoreConversationSnapshot,
-    last_prompt: String,
-    last_status: String,
-) -> TaskSessionRecord {
+///
+/// # Parameters
+/// 参数
+/// `init` contains every identity, ownership, display, snapshot, and status field for the new record.
+/// `init` 包含新记录所需的全部标识、归属、展示、快照与状态字段。
+///
+/// # Returns
+/// 返回值
+/// A fresh in-memory task-session record with synchronized created and updated timestamps.
+/// 返回创建与更新时间戳一致的全新内存任务会话记录。
+pub(super) fn build_task_session_record(init: TaskSessionRecordInit) -> TaskSessionRecord {
+    let TaskSessionRecordInit {
+        task_id,
+        public_task_id,
+        origin_session_id,
+        parent_task_id,
+        depth,
+        description,
+        subagent,
+        invocation_config,
+        display_title,
+        controller_config,
+        snapshot,
+        last_prompt,
+        last_status,
+    } = init;
     let timestamp = current_unix_millis_text();
     TaskSessionRecord {
         task_id,
@@ -537,7 +591,7 @@ pub(super) fn task_session_record_from_persisted_metadata(
         } => Some(Uuid::from(parent_task_session_id)),
         ParentSessionRef::MainSession { .. } | ParentSessionRef::None => None,
     };
-    let subagent = subagent_override.or_else(|| metadata.description.clone());
+    let subagent = subagent_override.or_else(|| task_metadata_subagent_label(metadata));
 
     Ok(TaskSessionRecord {
         task_id: Uuid::from(metadata.task_session_id),
@@ -557,6 +611,22 @@ pub(super) fn task_session_record_from_persisted_metadata(
         updated_at: metadata.updated_at.to_string(),
         last_status: status_name_for_task_session_status(metadata.status).to_string(),
     })
+}
+
+/// Restores the display subagent label available from persisted task metadata.
+/// 从持久化任务元数据恢复可用的展示子代理标签。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the persisted task-session metadata being projected into runtime state.
+/// `metadata` 是正被投影到运行时状态中的持久化任务会话元数据。
+///
+/// # Returns
+/// 返回值
+/// The normalized profile identifier when the persisted task was backed by a catalog profile.
+/// 当持久化任务由目录配置支持时返回归一化后的配置标识。
+pub(super) fn task_metadata_subagent_label(metadata: &TaskSessionMetadata) -> Option<String> {
+    normalize_optional_task_label(metadata.subagent_profile_id.as_deref())
 }
 
 /// Recreates one task invocation config from the persisted requested configuration snapshot.

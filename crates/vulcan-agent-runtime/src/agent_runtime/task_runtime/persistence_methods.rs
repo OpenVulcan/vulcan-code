@@ -80,10 +80,9 @@ impl TaskRuntime {
             metadata.stop_reason.clone()
         };
         entry.updated_at_ms = metadata.updated_at;
-        entry.prompt_source = metadata
-            .subagent_profile_id
-            .as_ref()
-            .map(|profile_id| format!("agent_md:{profile_id}"));
+        entry.prompt_source = Some(subagent_prompt_source_for_task_config(
+            metadata.subagent_profile_id.as_deref(),
+        ));
         entry.last_task_message = store
             .as_ref()
             .and_then(|store| {
@@ -267,6 +266,7 @@ impl TaskRuntime {
     ) -> Result<(), String> {
         let record = self.build_task_outcome_record(current_session_id, invocation, outcome)?;
         let persisted_status = self.persist_task_record_outcome(&record, invocation, outcome)?;
+        let record = self.task_session_record_for_persisted_status(record, persisted_status)?;
         self.commit_task_session_record(record.clone())?;
         self.upsert_subagent_registry_entry(
             &record,
@@ -303,6 +303,7 @@ impl TaskRuntime {
             Some(&outcome.controller_config),
             Some(outcome),
         )?;
+        let record = self.task_session_record_for_persisted_status(record, persisted_status)?;
         self.commit_task_session_record(record.clone())?;
         self.upsert_subagent_registry_entry(
             &record,
@@ -329,24 +330,24 @@ impl TaskRuntime {
             .get(&invocation.task_id)
             .cloned()
             .unwrap_or_else(|| {
-                build_task_session_record(
-                    invocation.task_id,
-                    invocation.public_task_id.clone(),
-                    invocation.root_session_id,
-                    invocation.parent_task_id,
-                    invocation.depth,
-                    invocation.description.clone(),
-                    invocation.subagent.clone(),
-                    invocation.invocation_config.clone(),
-                    invocation.display_title.clone(),
-                    invocation
+                build_task_session_record(TaskSessionRecordInit {
+                    task_id: invocation.task_id,
+                    public_task_id: invocation.public_task_id.clone(),
+                    origin_session_id: invocation.root_session_id,
+                    parent_task_id: invocation.parent_task_id,
+                    depth: invocation.depth,
+                    description: invocation.description.clone(),
+                    subagent: invocation.subagent.clone(),
+                    invocation_config: invocation.invocation_config.clone(),
+                    display_title: invocation.display_title.clone(),
+                    controller_config: invocation
                         .controller_config
                         .clone()
                         .or_else(|| Some(outcome.controller_config.clone())),
-                    invocation.snapshot.clone(),
-                    invocation.prompt.clone(),
-                    String::from("created"),
-                )
+                    snapshot: invocation.snapshot.clone(),
+                    last_prompt: invocation.prompt.clone(),
+                    last_status: String::from("created"),
+                })
             });
         debug_assert_eq!(record.task_id, invocation.task_id);
         let _ = &record.created_at;
@@ -377,6 +378,36 @@ impl TaskRuntime {
         Ok(())
     }
 
+    /// Aligns an in-memory task record with the status that persistence accepted as canonical.
+    /// 将内存任务记录对齐到持久化层接受的规范状态。
+    fn task_session_record_for_persisted_status(
+        &self,
+        mut record: TaskSessionRecord,
+        persisted_status: TaskSessionStatus,
+    ) -> Result<TaskSessionRecord, String> {
+        let persisted_status_name = status_name_for_task_session_status(persisted_status);
+        if record.last_status == persisted_status_name {
+            return Ok(record);
+        }
+        if !persisted_status.is_active()
+            && let Some(existing) = self
+                .sessions
+                .read()
+                .map_err(|_| {
+                    String::from(
+                        "The task session registry is locked and cannot preserve terminal status.",
+                    )
+                })?
+                .get(&record.task_id)
+                .cloned()
+                .filter(|existing| existing.last_status == persisted_status_name)
+        {
+            return Ok(existing);
+        }
+        record.last_status = persisted_status_name.to_string();
+        Ok(record)
+    }
+
     /// Builds the next failed task-session record without mutating the in-memory session map.
     /// 构建下一条失败任务会话记录，但不修改内存会话表。
     fn build_failed_task_record(
@@ -391,21 +422,21 @@ impl TaskRuntime {
             .get(&invocation.task_id)
             .cloned()
             .unwrap_or_else(|| {
-                build_task_session_record(
-                    invocation.task_id,
-                    invocation.public_task_id.clone(),
-                    invocation.root_session_id,
-                    invocation.parent_task_id,
-                    invocation.depth,
-                    invocation.description.clone(),
-                    invocation.subagent.clone(),
-                    invocation.invocation_config.clone(),
-                    invocation.display_title.clone(),
-                    invocation.controller_config.clone(),
-                    invocation.snapshot.clone(),
-                    invocation.prompt.clone(),
-                    String::from("created"),
-                )
+                build_task_session_record(TaskSessionRecordInit {
+                    task_id: invocation.task_id,
+                    public_task_id: invocation.public_task_id.clone(),
+                    origin_session_id: invocation.root_session_id,
+                    parent_task_id: invocation.parent_task_id,
+                    depth: invocation.depth,
+                    description: invocation.description.clone(),
+                    subagent: invocation.subagent.clone(),
+                    invocation_config: invocation.invocation_config.clone(),
+                    display_title: invocation.display_title.clone(),
+                    controller_config: invocation.controller_config.clone(),
+                    snapshot: invocation.snapshot.clone(),
+                    last_prompt: invocation.prompt.clone(),
+                    last_status: String::from("created"),
+                })
             });
         debug_assert_eq!(record.task_id, invocation.task_id);
         let _ = &record.created_at;
@@ -454,9 +485,7 @@ impl TaskRuntime {
         );
         entry.status = subagent_status_from_task_session_status(status);
         entry.updated_at_ms = updated_at_ms;
-        if let Some(prompt_source) = subagent_prompt_source_for_task_record(record) {
-            entry.prompt_source = Some(prompt_source);
-        }
+        entry.prompt_source = Some(subagent_prompt_source_for_task_record(record));
         if !record.last_prompt.trim().is_empty() {
             entry.last_task_message = Some(record.last_prompt.clone());
         }
@@ -511,6 +540,7 @@ impl TaskRuntime {
     ) -> Result<(), String> {
         let record = self.build_failed_task_record(invocation, error)?;
         let persisted_status = self.persist_task_record_failure(&record, invocation, error)?;
+        let record = self.task_session_record_for_persisted_status(record, persisted_status)?;
         self.commit_task_session_record(record.clone())?;
         self.upsert_subagent_registry_entry(
             &record,
@@ -672,13 +702,10 @@ impl TaskRuntime {
                     metadata
                 }
             };
-            persisted_status = if metadata.status == TaskSessionStatus::Archived
-                && status != TaskSessionStatus::Archived
-            {
-                TaskSessionStatus::Archived
-            } else {
-                status
-            };
+            persisted_status = resolve_persisted_task_session_status(metadata.status, status);
+            if persisted_status != status {
+                return Ok(persisted_status);
+            }
             metadata.display_title = record.display_title.clone();
             metadata.description = record.description.clone();
             metadata.subagent_profile_id =
@@ -969,13 +996,10 @@ fn subagent_parent_session_id_from_metadata(metadata: &TaskSessionMetadata) -> S
 /// Derives the subagent kind from persisted TaskSession configuration fields.
 /// 根据持久化 TaskSession 配置字段派生子代理类型。
 fn subagent_kind_for_task_metadata(metadata: &TaskSessionMetadata) -> SubagentKind {
-    if metadata.subagent_profile_id.is_some() {
-        return SubagentKind::AgentMd;
-    }
-    if metadata.requested_config.system_prompt.is_some() {
-        return SubagentKind::Custom;
-    }
-    SubagentKind::Clone
+    subagent_kind_for_task_config(
+        metadata.subagent_profile_id.as_deref(),
+        metadata.requested_config.system_prompt.as_deref(),
+    )
 }
 
 /// Converts persisted status into a safe restored registry status without resuming execution.

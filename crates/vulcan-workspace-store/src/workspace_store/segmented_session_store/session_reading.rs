@@ -3,22 +3,6 @@
 
 use super::*;
 
-/// Reads the latest events from the active segment without scanning older segment files.`r`n/// 只从活动分段读取最新事件，不扫描更早的分段文件。
-pub(in crate::workspace_store) fn read_segmented_session_active_tail(
-    session_dir: &Path,
-    max_lines: usize,
-) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    if max_lines == 0 {
-        return Ok(Vec::new());
-    }
-    let metadata = read_session_metadata(session_dir)?;
-    let mut lines = read_segment_event_lines(&session_dir.join(metadata.active_segment))?;
-    if lines.len() > max_lines {
-        lines = lines.split_off(lines.len().saturating_sub(max_lines));
-    }
-    Ok(lines)
-}
-
 /// Reads a backward transcript window ending before the optional sequence cursor.
 /// 读取一个结束于可选序号游标之前的反向转录窗口。
 pub(in crate::workspace_store) fn read_segmented_session_event_window(
@@ -29,6 +13,7 @@ pub(in crate::workspace_store) fn read_segmented_session_event_window(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    repair_segmented_session_jsonl_files_if_needed(session_dir)?;
     let metadata = read_session_metadata(session_dir)?;
     let cursor = before_seq.unwrap_or(u64::MAX);
     let mut window = Vec::with_capacity(limit);
@@ -62,6 +47,7 @@ pub(in crate::workspace_store) fn read_segmented_session_turn_window(
             has_more_history: false,
         });
     }
+    repair_segmented_session_jsonl_files_if_needed(session_dir)?;
     let metadata = read_session_metadata(session_dir)?;
     let cursor = before_seq.unwrap_or(u64::MAX);
     // Rollback replacement lines define the durable transcript boundary for display reads.
@@ -102,94 +88,6 @@ pub(in crate::workspace_store) fn read_segmented_session_turn_window(
     })
 }
 
-/// Reads one tool-detail page for a specific turn from segmented JSONL files.
-/// 从分段 JSONL 文件读取指定轮次的一页工具详情。
-pub(in crate::workspace_store) fn read_segmented_session_tool_detail_window(
-    session_dir: &Path,
-    turn_index: i64,
-    before_seq: Option<u64>,
-    limit: usize,
-) -> Result<SegmentedSessionToolDetailWindow, String> {
-    if limit == 0 {
-        return Ok(SegmentedSessionToolDetailWindow {
-            lines: Vec::new(),
-            has_more_detail: false,
-        });
-    }
-    let metadata = read_session_metadata(session_dir)?;
-    let cursor = before_seq.unwrap_or(u64::MAX);
-    let mut window = Vec::with_capacity(limit);
-    let mut has_more_detail = false;
-    for segment in metadata.segments.iter().rev() {
-        if segment.start_seq >= cursor || !segment_may_contain_turn(segment, turn_index) {
-            continue;
-        }
-        let lines = read_segment_event_lines(&session_dir.join(&segment.file))?;
-        for line in lines.into_iter().rev() {
-            if line.seq >= cursor || !segmented_line_matches_tool_turn(&line, turn_index)? {
-                continue;
-            }
-            if window.len() == limit {
-                has_more_detail = true;
-                window.reverse();
-                return Ok(SegmentedSessionToolDetailWindow {
-                    lines: window,
-                    has_more_detail,
-                });
-            }
-            window.push(line);
-        }
-    }
-    window.reverse();
-    Ok(SegmentedSessionToolDetailWindow {
-        lines: window,
-        has_more_detail,
-    })
-}
-
-/// Reads the complete tool-detail stream for a specific turn from segmented JSONL files.
-/// 从分段 JSONL 文件读取指定轮次的完整工具详情流。
-pub(in crate::workspace_store) fn read_segmented_session_complete_tool_detail_turn(
-    session_dir: &Path,
-    turn_index: i64,
-) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    let metadata = read_session_metadata(session_dir)?;
-    let mut matching_lines = Vec::new();
-    for segment in &metadata.segments {
-        if !segment_may_contain_turn(segment, turn_index) {
-            continue;
-        }
-        let lines = read_segment_event_lines(&session_dir.join(&segment.file))?;
-        for line in lines {
-            if segmented_line_matches_tool_turn(&line, turn_index)? {
-                matching_lines.push(line);
-            }
-        }
-    }
-    Ok(matching_lines)
-}
-
-/// Returns whether segment turn metadata can contain the requested display turn.
-/// 返回分段轮次元数据是否可能包含指定展示轮次。
-pub(in crate::workspace_store) fn segment_may_contain_turn(
-    segment: &SegmentMetadata,
-    turn_index: i64,
-) -> bool {
-    if segment
-        .first_turn_index
-        .is_some_and(|first_turn_index| first_turn_index > turn_index)
-    {
-        return false;
-    }
-    if segment
-        .last_turn_index
-        .is_some_and(|last_turn_index| last_turn_index < turn_index)
-    {
-        return false;
-    }
-    true
-}
-
 /// Projects segmented JSONL events back into displayable transcript messages.
 /// 将分段 JSONL 事件投影回可展示的转录消息。
 pub(in crate::workspace_store) fn segmented_lines_to_session_messages(
@@ -209,14 +107,24 @@ pub(in crate::workspace_store) fn segmented_lines_to_session_messages(
 pub(in crate::workspace_store) fn replay_segmented_session_context(
     session_dir: &Path,
 ) -> Result<Option<SegmentedSessionReplayResult>, String> {
+    repair_segmented_session_jsonl_files_if_needed(session_dir)?;
+    replay_segmented_session_context_without_repair(session_dir)
+}
+
+/// Rebuilds conversation state after the caller has already repaired segmented JSONL files.
+/// 在调用方已经修复分段 JSONL 文件后重建会话状态。
+fn replay_segmented_session_context_without_repair(
+    session_dir: &Path,
+) -> Result<Option<SegmentedSessionReplayResult>, String> {
     let metadata = read_session_metadata(session_dir)?;
     let scan = find_latest_compaction_anchor(session_dir, &metadata.segments)?;
-    let mut messages = scan
-        .anchor
-        .as_ref()
-        .map(|anchor| replacement_history_to_session_messages(&anchor.replacement_history))
-        .transpose()?
-        .unwrap_or_default();
+    let latest_rollback_seq = scan.rollback_markers.iter().map(|marker| marker.seq).max();
+    let mut messages = match scan.anchor.as_ref() {
+        Some(anchor) if compaction_anchor_is_replay_baseline(anchor, latest_rollback_seq) => {
+            replacement_history_to_session_messages(&anchor.replacement_history)?
+        }
+        _ => Vec::new(),
+    };
     let suffix = suffix_after_latest_rollback(&scan);
     messages.extend(segmented_lines_to_session_messages(&suffix)?);
     if messages.is_empty() {
@@ -247,6 +155,21 @@ pub(in crate::workspace_store) fn replay_segmented_session_context(
     }))
 }
 
+/// Returns whether one replacement-history anchor remains the replay baseline after rollback markers.
+/// 返回单个 replacement-history 锚点在回滚标记之后是否仍可作为重放基线。
+fn compaction_anchor_is_replay_baseline(
+    anchor: &SegmentedCompactionAnchor,
+    latest_rollback_seq: Option<u64>,
+) -> bool {
+    match anchor.anchor_kind {
+        SegmentedSessionEventKind::Compacted => true,
+        SegmentedSessionEventKind::ThreadRolledBack => {
+            latest_rollback_seq.is_none_or(|rollback_seq| rollback_seq <= anchor.anchor_seq)
+        }
+        _ => false,
+    }
+}
+
 /// Rebuilds one bloated display transcript from its effective replacement-anchor view when needed.
 /// 在需要时根据有效 replacement 锚点视图重建一个膨胀的显示转录。
 pub(in crate::workspace_store) fn repair_segmented_session_display_if_needed(
@@ -255,11 +178,12 @@ pub(in crate::workspace_store) fn repair_segmented_session_display_if_needed(
     let _guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let metadata = read_session_metadata(session_dir)?;
     if !segmented_display_needs_maintenance(&metadata) {
         return Ok(None);
     }
-    let Some(replay) = replay_segmented_session_context(session_dir)? else {
+    let Some(replay) = replay_segmented_session_context_without_repair(session_dir)? else {
         return Ok(None);
     };
     let messages = conversation_state_to_session_messages(&replay.conversation_state);

@@ -24,16 +24,8 @@ impl ConversationHookRuntime {
         runtime
     }
 
-    /// Returns the shared hook dispatcher for registration and inspection.
-    /// 返回用于注册与检查的共享 hook 调度器。
-    #[allow(dead_code)]
-    pub fn dispatcher(&self) -> &HookDispatcher {
-        &self.dispatcher
-    }
-
     /// Returns the mutable shared hook dispatcher for registration.
     /// 返回用于注册的可变共享 hook 调度器。
-    #[allow(dead_code)]
     pub fn dispatcher_mut(&mut self) -> &mut HookDispatcher {
         &mut self.dispatcher
     }

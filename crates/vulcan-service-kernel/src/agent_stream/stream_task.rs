@@ -505,10 +505,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                     let event_is_main_session = task_state.lock().ok().is_some_and(|guard| {
                         guard.workspace_snapshot.as_ref().is_some_and(|workspace| {
-                            workspace
-                                .sessions
-                                .iter()
-                                .any(|candidate| candidate.id == session_id)
+                            workspace_session_summary_for_session(workspace, session_id).is_some()
                         })
                     });
                     if event_is_main_session

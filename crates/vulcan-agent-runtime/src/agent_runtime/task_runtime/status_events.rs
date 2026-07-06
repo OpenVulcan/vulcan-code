@@ -24,6 +24,27 @@ pub(super) fn task_session_status_from_execution_status_text(status: &str) -> Ta
     }
 }
 
+/// Resolves a persisted task status without letting stale active updates reopen terminal work.
+/// 解析持久化任务状态，避免迟到的活跃状态重新打开已终止任务。
+pub(super) fn resolve_persisted_task_session_status(
+    current_status: TaskSessionStatus,
+    incoming_status: TaskSessionStatus,
+) -> TaskSessionStatus {
+    if current_status == TaskSessionStatus::Archived
+        && incoming_status != TaskSessionStatus::Archived
+    {
+        return TaskSessionStatus::Archived;
+    }
+    if matches!(
+        current_status,
+        TaskSessionStatus::Completed | TaskSessionStatus::Stopped
+    ) && incoming_status.is_active()
+    {
+        return current_status;
+    }
+    incoming_status
+}
+
 /// Maps TaskSession status into the Vulcan-native subagent registry status.
 /// 将 TaskSession 状态映射为 Vulcan 原生子代理注册表状态。
 ///
@@ -260,16 +281,37 @@ pub(super) fn subagent_kind_for_invocation(
 /// The subagent kind stored in the native registry.
 /// 写入原生注册表的子代理类型。
 pub(super) fn subagent_kind_for_task_record(record: &TaskSessionRecord) -> SubagentKind {
-    if record
-        .invocation_config
-        .subagent_profile_id
-        .as_deref()
-        .is_some_and(|profile_id| !profile_id.trim().is_empty())
-    {
-        SubagentKind::AgentMd
-    } else {
-        SubagentKind::Clone
+    subagent_kind_for_task_config(
+        record.invocation_config.subagent_profile_id.as_deref(),
+        record.invocation_config.system_prompt.as_deref(),
+    )
+}
+
+/// Maps task configuration identity fields into the Vulcan-native subagent kind.
+/// 将任务配置身份字段映射为 Vulcan 原生子代理类型。
+///
+/// # Parameters
+/// 参数
+/// `profile_id` is the optional catalog-backed subagent profile identifier.
+/// `profile_id` 是可选的目录驱动子代理配置标识。
+/// `system_prompt` is the optional custom replacement system prompt.
+/// `system_prompt` 是可选的自定义替换系统提示词。
+///
+/// # Returns
+/// 返回值
+/// The native registry kind implied by the explicit profile or custom prompt configuration.
+/// 返回由显式配置或自定义提示词配置推导出的原生注册表类型。
+pub(super) fn subagent_kind_for_task_config(
+    profile_id: Option<&str>,
+    system_prompt: Option<&str>,
+) -> SubagentKind {
+    if profile_id.is_some_and(|profile_id| !profile_id.trim().is_empty()) {
+        return SubagentKind::AgentMd;
     }
+    if system_prompt.is_some_and(|system_prompt| !system_prompt.trim().is_empty()) {
+        return SubagentKind::Custom;
+    }
+    SubagentKind::Clone
 }
 
 /// Resolves a prompt-source label for one task-session record.
@@ -282,17 +324,30 @@ pub(super) fn subagent_kind_for_task_record(record: &TaskSessionRecord) -> Subag
 ///
 /// # Returns
 /// 返回值
-/// A stable source marker for core subagent tasks.
-/// 核心子代理任务使用的稳定来源标记。
-pub(super) fn subagent_prompt_source_for_task_record(record: &TaskSessionRecord) -> Option<String> {
-    Some(
-        record
-            .invocation_config
-            .subagent_profile_id
-            .as_deref()
-            .map(|profile_id| format!("agent_md:{profile_id}"))
-            .unwrap_or_else(|| String::from("core")),
-    )
+/// The stable source marker for this subagent task.
+/// 该子代理任务的稳定提示词来源标记。
+pub(super) fn subagent_prompt_source_for_task_record(record: &TaskSessionRecord) -> String {
+    subagent_prompt_source_for_task_config(record.invocation_config.subagent_profile_id.as_deref())
+}
+
+/// Resolves a prompt-source label from task configuration identity.
+/// 从任务配置身份解析提示词来源标签。
+///
+/// # Parameters
+/// 参数
+/// `profile_id` is the optional catalog-backed subagent profile identifier.
+/// `profile_id` 是可选的目录驱动子代理配置标识。
+///
+/// # Returns
+/// 返回值
+/// `agent_md:{profile_id}` for catalog-backed agents, otherwise `core`.
+/// 对目录驱动代理返回 `agent_md:{profile_id}`，否则返回 `core`。
+pub(super) fn subagent_prompt_source_for_task_config(profile_id: Option<&str>) -> String {
+    profile_id
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty())
+        .map(|profile_id| format!("agent_md:{profile_id}"))
+        .unwrap_or_else(|| String::from("core"))
 }
 
 /// Maps a persisted TaskSession status into the subagent mailbox status contract.

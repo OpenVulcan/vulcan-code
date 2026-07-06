@@ -299,6 +299,8 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     assert!(branch.unified_diff.contains("branch target"));
     assert_eq!(staged.files.len(), 1);
     assert_eq!(staged.files[0].new_path, "src/staged.rs");
+    assert_eq!(staged.files[0].old_file_line_count, Some(0));
+    assert_eq!(staged.files[0].new_file_line_count, Some(1));
 
     let detail = load_webui_workspace_diff_file_detail(
         &repository_text,

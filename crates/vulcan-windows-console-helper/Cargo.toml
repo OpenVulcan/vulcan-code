@@ -15,6 +15,11 @@ dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"
 
+[[bin]]
+name = "vulcan-windows-console-helper"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

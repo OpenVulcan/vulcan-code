@@ -739,7 +739,7 @@ fn webui_regular_session_detection_excludes_task_session_ids() {
 /// Verifies conversation hydration reuses retained workspace snapshots only for known sessions.
 /// 验证会话水合只会对已知会话复用保留工作区快照。
 #[test]
-fn retained_workspace_snapshot_for_hydration_requires_known_session() {
+fn retained_workspace_snapshot_for_hydration_requires_known_session_and_strips_payloads() {
     let known_session_id = SessionId::new_v4();
     let missing_session_id = SessionId::new_v4();
     let workspace_snapshot = WorkspaceSnapshot {
@@ -756,28 +756,48 @@ fn retained_workspace_snapshot_for_hydration_requires_known_session() {
             "刚刚",
         )],
         archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
+        session_messages: BTreeMap::from([(
+            known_session_id,
+            vec![SessionMessageEntry::new(
+                SessionMessageKind::User,
+                "用户",
+                "保留消息",
+            )],
+        )]),
         archived_session_messages: BTreeMap::new(),
         session_compactions: BTreeMap::new(),
         archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::new(),
+        session_runtime_state: BTreeMap::from([(
+            known_session_id,
+            SessionRuntimeStateEntry {
+                active_model_id: Some(String::from("retained-model")),
+                ..SessionRuntimeStateEntry::default()
+            },
+        )]),
         archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::new(),
+        session_run_phases: BTreeMap::from([(known_session_id, SessionRunPhase::MemoryRecall)]),
         expanded_task_projects: BTreeSet::new(),
         selected_session: known_session_id,
-        hydrated_session_ids: BTreeSet::new(),
+        hydrated_session_ids: BTreeSet::from([known_session_id]),
     };
 
-    assert!(
-        retained_workspace_snapshot_for_session_hydration(
-            Some(workspace_snapshot.clone()),
-            known_session_id
-        )
-        .is_some()
+    let retained_snapshot = retained_workspace_snapshot_for_session_hydration(
+        Some(&workspace_snapshot),
+        known_session_id,
+    )
+    .expect("known session should reuse retained snapshot");
+    assert_eq!(retained_snapshot.sessions.len(), 1);
+    assert_eq!(retained_snapshot.selected_session, known_session_id);
+    assert_eq!(
+        retained_snapshot.session_run_phases.get(&known_session_id),
+        Some(&SessionRunPhase::MemoryRecall)
     );
+    assert!(retained_snapshot.session_messages.is_empty());
+    assert!(retained_snapshot.session_runtime_state.is_empty());
+    assert!(retained_snapshot.hydrated_session_ids.is_empty());
     assert!(
         retained_workspace_snapshot_for_session_hydration(
-            Some(workspace_snapshot),
+            Some(&workspace_snapshot),
             missing_session_id,
         )
         .is_none()
@@ -1035,4 +1055,66 @@ fn hydrated_session_selection_recovers_after_late_run_state_preservation() {
         selected_session_id_after_refresh(&hydrated_snapshot, Some(hydrated_session_id));
 
     assert_eq!(hydrated_snapshot.selected_session, hydrated_session_id);
+}
+
+/// Verifies existing prompt sessions ignore blank project ids during materialization.
+/// 验证已有提示词会话在物化时会忽略空白项目标识。
+#[test]
+fn materialize_prompt_session_ignores_blank_existing_session_project_id() {
+    // session_id identifies the existing conversation selected by the WebUI.
+    // session_id 标识 WebUI 选择的既有会话。
+    let session_id = SessionId::new_v4();
+    // conversation_id stores the existing conversation id text passed by the WebUI.
+    // conversation_id 保存 WebUI 传入的既有会话标识文本。
+    let conversation_id = session_id.to_string();
+    // workspace_snapshot contains a blank-id project that must not be treated as an owner.
+    // workspace_snapshot 包含不应被当作所属项目的空白标识项目。
+    let mut workspace_snapshot = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            "   ",
+            "Blank Project",
+            "D:/blank-project",
+            false,
+            0,
+            None,
+            None,
+            vec![session_id],
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            Some(String::from("   ")),
+            "既有会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: SessionId::nil(),
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    let (resolved_session_id, session_title, workspace_path) = materialize_prompt_session(
+        &mut workspace_snapshot,
+        None,
+        Some(&conversation_id),
+        "继续这个会话",
+    )
+    .expect("existing conversation should materialize");
+
+    assert_eq!(resolved_session_id, session_id);
+    assert_eq!(session_title, "既有会话");
+    assert_eq!(workspace_path, "");
+    assert_eq!(workspace_snapshot.selected_session, session_id);
+    assert_eq!(workspace_snapshot.sessions[0].status, SessionState::Running);
 }

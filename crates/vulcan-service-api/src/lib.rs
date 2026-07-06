@@ -172,11 +172,12 @@ mod tests {
     #[test]
     fn webui_static_relative_path_accepts_safe_assets() {
         assert_eq!(
-            webui_static_relative_path("/").unwrap(),
+            webui_static_relative_path("/").expect("root request should resolve to index.html"),
             PathBuf::from("index.html")
         );
         assert_eq!(
-            webui_static_relative_path("/assets/app.js").unwrap(),
+            webui_static_relative_path("/assets/app.js")
+                .expect("safe asset request should resolve under assets"),
             PathBuf::from("assets").join("app.js")
         );
     }
@@ -209,15 +210,18 @@ mod tests {
         fs::write(root.join("assets").join("app.js"), "console.log(1);").expect("write js");
 
         assert_eq!(
-            webui_static_file_path_for_request(&root, "/assets/app.js").unwrap(),
+            webui_static_file_path_for_request(&root, "/assets/app.js")
+                .expect("direct static asset request should resolve"),
             Some(root.join("assets").join("app.js"))
         );
         assert_eq!(
-            webui_static_file_path_for_request(&root, "/conversation/abc").unwrap(),
+            webui_static_file_path_for_request(&root, "/conversation/abc")
+                .expect("SPA route request should resolve through index fallback"),
             Some(root.join("index.html"))
         );
         assert_eq!(
-            webui_static_file_path_for_request(&root, "/assets/missing.js").unwrap(),
+            webui_static_file_path_for_request(&root, "/assets/missing.js")
+                .expect("missing static asset request should be safely classified"),
             None
         );
 
@@ -249,7 +253,10 @@ mod tests {
 
         let missing = build_webui_static_response(None, "/", "no-cache", "missing");
         assert_eq!(missing.status, 404);
-        assert_eq!(String::from_utf8(missing.body).unwrap(), "missing");
+        assert_eq!(
+            String::from_utf8(missing.body).expect("missing response body should be UTF-8 text"),
+            "missing"
+        );
 
         fs::remove_dir_all(root).expect("remove temp directory");
     }

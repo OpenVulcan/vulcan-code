@@ -5,6 +5,9 @@ pub(super) fn append_main_session_task_link_event(
     root_session_dir: &Path,
     event: &TaskInvocationEvent,
 ) -> Result<bool, SessionStoreError> {
+    let _guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
     if !metadata_path.exists() {
         return Ok(false);
@@ -26,6 +29,10 @@ pub(super) fn append_main_session_task_link_event(
         .get("next_global_seq")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    next_seq = next_seq.max(next_main_session_sequence_after_existing_lines(
+        root_session_dir,
+        &segments,
+    )?);
     let segment_policy = serde_json::from_value::<SegmentPolicy>(
         metadata
             .get("segment_policy")
@@ -94,12 +101,29 @@ pub(super) fn append_main_session_task_link_event(
     Ok(true)
 }
 
+/// Returns the next root-session sequence after the highest persisted segment line.
+/// 返回已持久化根会话分段行最大序号之后的下一个序号。
+fn next_main_session_sequence_after_existing_lines(
+    root_session_dir: &Path,
+    segments: &[SegmentMetadata],
+) -> Result<u64, SessionStoreError> {
+    Ok(read_segment_lines(root_session_dir, segments)?
+        .into_iter()
+        .map(|line| line.seq)
+        .max()
+        .map(|seq| seq.saturating_add(1))
+        .unwrap_or(0))
+}
+
 /// Refreshes the root metadata task mirror from a saved child metadata document without appending a parent event.
 /// 从已保存的子任务元数据文档刷新根元数据任务镜像，且不追加父级事件。
 pub(super) fn refresh_main_session_task_mirror_from_metadata(
     root_session_dir: &Path,
     document: &SegmentedTaskMetadataDocument,
 ) -> Result<bool, SessionStoreError> {
+    let _guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
     if !metadata_path.exists() {
         return Ok(false);

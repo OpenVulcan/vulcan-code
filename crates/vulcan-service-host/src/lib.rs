@@ -654,7 +654,12 @@ mod tests {
     #[test]
     fn browser_events_rejects_disallowed_origin() {
         let mut headers = AxumHeaderMap::new();
-        headers.insert("origin", "https://example.com".parse().unwrap());
+        headers.insert(
+            "origin",
+            "https://example.com"
+                .parse()
+                .expect("disallowed test origin should be a valid header value"),
+        );
 
         assert!(!webui_service_headers_origin_is_allowed(&headers));
     }

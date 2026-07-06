@@ -31,7 +31,10 @@ import {
   ConversationRenderItemView,
   renderItemHiddenByThinkingDisplay,
 } from "@/components/conversation/conversation-render-items";
-import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
+import {
+  PlanArtifactBlock,
+  type PlanArtifactActionPayload,
+} from "@/components/conversation/conversation-plan-artifact";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
   latestThinkingBlockIdAfterLastUser,
@@ -237,6 +240,15 @@ export function ConversationWorkspace(props: {
     () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockIds)),
     [props.hiddenThinkingBlockIds, timelineItems],
   );
+  // pendingPlanArtifactAlreadyVisible prevents duplicated Plan cards after the fixed tool projection is present.
+  // pendingPlanArtifactAlreadyVisible 在修复后的工具投影已存在时防止重复显示计划卡。
+  const pendingPlanArtifactAlreadyVisible = React.useMemo(() => {
+    const artifact = props.pendingPlanArtifact ?? null;
+    if (!artifact) {
+      return false;
+    }
+    return visibleTimelineItems.some((item) => timelineItemContainsPlanArtifact(item, artifact));
+  }, [props.pendingPlanArtifact, visibleTimelineItems]);
   // forkTargetByFinalAssistantMetaKey maps final-answer action rows to their fork rollback boundary.
   // forkTargetByFinalAssistantMetaKey 将最终回答操作行映射到对应的分叉回滚边界。
   const forkTargetByFinalAssistantMetaKey = React.useMemo(() => {
@@ -617,6 +629,17 @@ export function ConversationWorkspace(props: {
                   ))}
                 </ConversationTurnShell>
               ))}
+              {props.pendingPlanArtifact && !pendingPlanArtifactAlreadyVisible ? (
+                <PlanArtifactBlock
+                  artifact={props.pendingPlanArtifact}
+                  disabled={props.sessionRunning}
+                  pending
+                  onCancel={props.onPlanArtifactCancel ?? (() => undefined)}
+                  onCopyText={props.onCopyText}
+                  onExecute={props.onPlanArtifactExecute ?? (() => undefined)}
+                  onSuggest={props.onPlanArtifactSuggest ?? (() => undefined)}
+                />
+              ) : null}
             </div>
             {props.footer ? (
               <div className="conversation-footer" data-conversation-scroll-footer="true">
@@ -640,6 +663,47 @@ export function ConversationWorkspace(props: {
       </ConversationMeasuredCollapseProvider>
     </MarkdownImageWorkspacePathProvider>
   );
+}
+
+// timelineItemContainsPlanArtifact reports whether one timeline item already renders a matching Plan artifact.
+// timelineItemContainsPlanArtifact 判断单个时间线项是否已经渲染匹配的计划产物。
+function timelineItemContainsPlanArtifact(
+  item: ConversationTimelineItem,
+  artifact: ConversationPlanArtifact,
+): boolean {
+  if (item.kind === "item" || item.kind === "final-assistant-meta") {
+    return renderItemContainsPlanArtifact(item.item, artifact);
+  }
+  if (item.kind !== "process") {
+    return false;
+  }
+  return item.process.items.some((processItem) => renderItemContainsPlanArtifact(processItem, artifact))
+    || item.process.guidanceItems.some((guidanceItem) => renderItemContainsPlanArtifact(guidanceItem, artifact));
+}
+
+// renderItemContainsPlanArtifact reports whether one render row carries a matching Plan artifact block.
+// renderItemContainsPlanArtifact 判断单条渲染行是否携带匹配的计划产物块。
+function renderItemContainsPlanArtifact(
+  item: ConversationRenderItem,
+  artifact: ConversationPlanArtifact,
+): boolean {
+  return item.blocks.some((block) => (
+    block.planArtifact
+      ? conversationPlanArtifactsMatch(block.planArtifact, artifact)
+      : false
+  ));
+}
+
+// conversationPlanArtifactsMatch compares stable file identity first and content identity second.
+// conversationPlanArtifactsMatch 优先比较稳定文件身份，其次比较内容身份。
+function conversationPlanArtifactsMatch(
+  left: ConversationPlanArtifact,
+  right: ConversationPlanArtifact,
+): boolean {
+  if (left.path && left.updatedAt && left.path === right.path && left.updatedAt === right.updatedAt) {
+    return true;
+  }
+  return left.name === right.name && left.content.trim() === right.content.trim();
 }
 
 // ConversationTurnShell keeps one loaded turn's outer height stable across remounts.

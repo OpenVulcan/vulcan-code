@@ -29,7 +29,7 @@ fn navigation_test_parent_session_summary(
     SessionSummary::new(
         parent_session_id,
         Some(project_id.to_string()),
-            "parent session",
+        "parent session",
         "",
         SessionState::Completed,
         0,
@@ -189,6 +189,78 @@ fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_r
 
     assert_eq!(active_session_id, task_session_id);
     assert_eq!(surface_messages, vec![child_message]);
+}
+
+/// Verifies active subagent surfaces fall back to cached conversation detail when no display rows exist.
+/// 验证活动子代理界面在没有显示层行时会回退到缓存会话详情。
+#[test]
+fn active_subagent_surface_reads_cached_conversation_detail_without_display_rows() {
+    // Parent session that owns the active subagent tree.
+    // 拥有活动子代理树的父会话。
+    let parent_session_id = SessionId::new_v4();
+    // Child task selected as the current surface.
+    // 被选为当前界面的子任务。
+    let task_session_id = SessionId::new_v4();
+    // Service state with an active child panel but no persisted child display rows.
+    // 带活动子面板但没有持久子显示行的服务状态。
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
+        parent_session_id,
+        task_id: task_session_id,
+    });
+    // Cached detail state supplies the only available child transcript.
+    // 缓存详情状态提供唯一可用的子任务转录。
+    let mut task_state =
+        cached_navigation_test_state(parent_session_id, task_session_id, "cached detail body");
+    if let Some(conversation_state) = task_state.conversation_state.as_mut() {
+        // hidden-cache-detail-record exercises the display filter used by cached surface fallback.
+        // hidden-cache-detail-record 覆盖缓存界面回退路径使用的显示过滤规则。
+        conversation_state.records.push(SessionConversationRecord {
+            id: String::from("hidden-cache-detail-record"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::SummaryOutput,
+            visible: false,
+            title: String::from("内部摘要"),
+            body: String::from("hidden cached detail"),
+            metadata: None,
+            created_at: String::from("0"),
+        });
+    }
+    cache_test_subagent_surface_detail_states(&mut guard, &[task_state.clone()]);
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        &[task_state],
+    );
+    // Workspace snapshot intentionally has no entry for the child task session.
+    // 工作区快照故意不包含子任务会话条目。
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .clone();
+
+    // Active-surface path computes the child id before reading cached detail.
+    // 活动界面路径会先计算子任务标识，再读取缓存详情。
+    let active_surface_messages =
+        active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot);
+    // Preserved-navigation path receives the already resolved child id.
+    // 保留导航路径接收已经解析出的子任务标识。
+    let preserved_surface_messages =
+        surface_messages_for_session_without_subagent_navigation_refresh(
+            &guard,
+            &workspace_snapshot,
+            task_session_id,
+        );
+
+    assert_eq!(active_surface_messages.len(), 1);
+    assert_eq!(active_surface_messages[0].body, "cached detail body");
+    assert!(
+        active_surface_messages
+            .iter()
+            .all(|message| message.id != "hidden-cache-detail-record")
+    );
+    assert_eq!(preserved_surface_messages, active_surface_messages);
 }
 
 /// Verifies unclosed cached subagents remain listed without hijacking the parent-session surface.
@@ -438,15 +510,15 @@ fn registry_nested_subagent_parent_lookup_uses_direct_parent() {
         .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
         .expect("session hydration should restore nested task registry");
 
-    let resolved_entry = open_subagent_registry_entry_for_task(
-        &guard,
-        root_session_id,
-        nested_task_id,
-    )
-    .expect("registry lookup should succeed")
-    .expect("nested child should be open");
+    let resolved_entry =
+        open_subagent_registry_entry_for_task(&guard, root_session_id, nested_task_id)
+            .expect("registry lookup should succeed")
+            .expect("nested child should be open");
 
-    assert_eq!(resolved_entry.parent_session_id.as_uuid(), nested_parent_task_id);
+    assert_eq!(
+        resolved_entry.parent_session_id.as_uuid(),
+        nested_parent_task_id
+    );
 }
 
 /// Verifies workspace bootstrap wording no longer promises subagent index preload.
@@ -553,7 +625,11 @@ fn detail_preload_does_not_create_navigation_membership_without_registry_metadat
         subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot).is_none(),
         "render-detail preload must not invent navigation membership"
     );
-    assert!(!guard.subagent_surface_detail_cache.contains_key(&task_session_id));
+    assert!(
+        !guard
+            .subagent_surface_detail_cache
+            .contains_key(&task_session_id)
+    );
 }
 
 /// Verifies preload treats a missing root mirror as an empty unclosed-subagent index.
@@ -1053,9 +1129,12 @@ fn hydration_preloads_unclosed_subagent_surface_from_segmented_store() {
     task_store
         .create_task_session(metadata)
         .expect("create persisted subagent task session");
-    let child_message =
-        SessionMessageEntry::new(SessionMessageKind::Assistant, "output", "persisted child detail")
-            .with_runtime_metadata("child-output", "1000");
+    let child_message = SessionMessageEntry::new(
+        SessionMessageKind::Assistant,
+        "output",
+        "persisted child detail",
+    )
+    .with_runtime_metadata("child-output", "1000");
     let conversation_state = conversation_state_from_session_messages(&[child_message]);
     task_store
         .save_context(vulcan_session_core::SessionContextDocument {
@@ -1136,10 +1215,12 @@ fn hydration_preloads_unclosed_subagent_surface_from_segmented_store() {
             .subagent_surface_detail_cache
             .contains_key(&task_session_id)
     );
-    assert!(guard
-        .subagent_surface_detail_cache
-        .get(&task_session_id)
-        .is_some_and(|entry| entry.task_state.conversation_state.is_some()));
+    assert!(
+        guard
+            .subagent_surface_detail_cache
+            .get(&task_session_id)
+            .is_some_and(|entry| entry.task_state.conversation_state.is_some())
+    );
     let navigation =
         subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)
             .expect("preloaded subagent should be visible without disk reload");
@@ -1661,8 +1742,11 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
         conversation_state: None,
     }];
     cache_test_subagent_surface_detail_states(&mut guard, &task_states);
-    let _registry_fixture =
-        seed_test_subagent_registry_from_panel_states(&mut guard, previous_session_id, &task_states);
+    let _registry_fixture = seed_test_subagent_registry_from_panel_states(
+        &mut guard,
+        previous_session_id,
+        &task_states,
+    );
     let workspace_snapshot = WorkspaceSnapshot {
         task_projects: Vec::new(),
         archived_task_projects: Vec::new(),
@@ -1792,6 +1876,51 @@ fn task_session_tool_metadata_merge_reports_missing_parent_card() {
 
 /// Builds a compact open subagent state for navigation projection tests.
 /// 涓哄鑸姇褰辨祴璇曟瀯寤虹揣鍑戠殑鏈叧闂櫤鑳戒綋鐘舵€併€?
+/// Verifies cache writes rely on the trailing prune to evict expired render details.
+/// 验证缓存写入依赖尾部清理即可移除过期渲染详情。
+#[test]
+fn subagent_surface_detail_cache_write_prunes_expired_entries_after_insert() {
+    let parent_session_id = SessionId::new_v4();
+    let expired_task_id = SessionId::new_v4();
+    let fresh_task_id = SessionId::new_v4();
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    let mut workspace_snapshot = guard
+        .workspace_snapshot
+        .take()
+        .expect("test workspace snapshot should exist");
+    guard.subagent_surface_detail_cache.insert(
+        expired_task_id,
+        WebuiSubagentSurfaceDetailCacheEntry {
+            task_state: cached_navigation_test_state(
+                parent_session_id,
+                expired_task_id,
+                "expired-task",
+            ),
+            messages: Vec::new(),
+            last_access_ms: 0,
+        },
+    );
+
+    cache_webui_subagent_surface_detail_for_task(
+        &mut guard,
+        &mut workspace_snapshot,
+        parent_session_id,
+        cached_navigation_test_state(parent_session_id, fresh_task_id, "fresh-task"),
+    );
+    guard.workspace_snapshot = Some(workspace_snapshot);
+
+    assert!(
+        !guard
+            .subagent_surface_detail_cache
+            .contains_key(&expired_task_id)
+    );
+    assert!(
+        guard
+            .subagent_surface_detail_cache
+            .contains_key(&fresh_task_id)
+    );
+}
+
 fn cached_navigation_test_state(
     parent_session_id: SessionId,
     task_id: SessionId,

@@ -17,40 +17,6 @@ impl WorkspaceSnapshotPersistOutcome {
     }
 }
 
-/// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.
-/// 在 protobuf/gRPC 结构开销接近 tonic 默认限制前使用的请求帧目标预算。
-const SQLITE_BATCH_SAFE_FRAME_TARGET_BYTES: usize = 1024 * 1024;
-/// Maximum row count kept in one SQLite batch regardless of byte-size estimates.
-/// 单个 SQLite 批处理在字节估算之外仍要遵守的最大行数。
-const SQLITE_BATCH_SAFE_ROW_LIMIT: usize = 128;
-/// Conservative per-batch structure overhead for typed SQLite requests.
-/// 类型化 SQLite 请求按批次估算的保守结构开销。
-const SQLITE_BATCH_FRAME_OVERHEAD_BYTES: usize = 4096;
-/// Conservative per-row structure overhead for typed SQLite request parameters.
-/// 类型化 SQLite 请求参数按行估算的保守结构开销。
-const SQLITE_ROW_FRAME_OVERHEAD_BYTES: usize = 256;
-/// Conservative per-value structure overhead for typed SQLite scalar values.
-/// 类型化 SQLite 标量值按字段估算的保守结构开销。
-const SQLITE_VALUE_FRAME_OVERHEAD_BYTES: usize = 48;
-/// Maximum transcript turn-page size supported by storage-side lazy transcript paging queries.
-/// 存储侧懒加载转录分页查询支持的最大轮次分页大小。
-pub const SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT: usize = 50;
-/// Number of complete turns kept visible before the latest compaction boundary when the startup transcript page would otherwise stop too late.
-/// 当启动转录分页本应停得过晚时，在最近压缩边界之前仍需额外保留的完整轮次数量。
-pub const SESSION_TRANSCRIPT_COMPACTION_OVERLAP_TURN_COUNT: usize = 5;
-/// Tool-detail page size used when a specific turn asks for its tool rows.
-/// 指定轮次请求工具明细行时使用的分页大小。
-pub const SESSION_TOOL_DETAIL_PAGE_LIMIT: usize = 100;
-/// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
-/// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
-const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;
-/// Minimum message-row floor used when one segmented turn window contains dense rows.
-/// 当单个分段轮次窗口包含密集行时使用的最小消息行下限。
-const SESSION_TRANSCRIPT_MIN_ROW_LIMIT: usize = 100;
-/// App metadata key used to persist collapsed task-project identifiers.
-/// 用于持久化已折叠任务项目标识的应用元数据键。
-const COLLAPSED_TASK_PROJECTS_METADATA_KEY: &str = "workspace.collapsed_task_projects";
-
 /// Stable in-memory snapshot hydrated from the controller-backed workspace database.
 /// 从控制器承载的工作台数据库中还原出的稳定内存快照。
 #[derive(Debug, Clone)]
@@ -186,21 +152,6 @@ pub struct SessionHistoryPage {
     pub has_more_history: bool,
 }
 
-/// One tool-detail page loaded on demand for a single conversation turn.
-/// 为单个对话轮次按需加载的一页工具明细。
-#[derive(Debug, Clone)]
-pub struct SessionToolDetailPage {
-    /// Tool-call and tool-result messages restored in ascending display order.
-    /// 按展示正序恢复出的工具调用与工具结果消息。
-    pub messages: Vec<SessionMessageEntry>,
-    /// Earliest loaded ordinal after this page is merged.
-    /// 合并该页后已加载的最早序号。
-    pub earliest_ordinal: Option<i64>,
-    /// Whether more older tool-detail rows probably still exist in this turn.
-    /// 当前轮次内是否大概率仍存在更多更早的工具明细行。
-    pub has_more_detail: bool,
-}
-
 /// Raw project row decoded from the controller SQLite query payload.
 /// 从控制器 SQLite 查询载荷中解码出的原始项目行。
 #[derive(Debug, Clone, Deserialize)]
@@ -253,9 +204,6 @@ pub(super) struct StoredSessionIndexRow {
     /// SQLite numeric archived flag.
     /// SQLite 数值型归档标记。
     pub(super) archived: i64,
-    /// Project-local stable sort order.
-    /// 项目内稳定排序值。
-    pub(super) sort_order: i64,
     /// Raw creation timestamp as Unix milliseconds text.
     /// Unix 毫秒文本格式的原始创建时间。
     pub(super) created_at: String,
@@ -271,71 +219,4 @@ pub(super) struct StoredAppMetadataRow {
     /// Persisted metadata value.
     /// 持久化元数据值。
     pub(super) value: String,
-}
-
-/// Lightweight session turn-index row used by tool-detail hydration lookups.
-/// 工具明细水合查询使用的轻量会话轮次索引行。
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct StoredSessionTurnIndexRow {
-    /// Stable conversation-turn index already stored in SQLite.
-    /// 已持久化到 SQLite 中的稳定对话轮次索引。
-    pub(super) turn_index: i64,
-}
-
-/// Disabled legacy runtime-state shape retained for migration-free loader boundaries.
-/// 为无旧兼容加载边界保留的已禁用旧运行态形状。
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct StoredRuntimeStateRow {
-    /// Stable session identifier.
-    /// 稳定会话标识。
-    pub(super) session_id: String,
-    /// Optional active agent identifier.
-    /// 可选的激活代理标识。
-    pub(super) active_agent_id: Option<String>,
-    /// Optional active provider identifier.
-    /// 可选的激活供应商标识。
-    pub(super) active_provider_id: Option<String>,
-    /// Optional active model identifier.
-    /// 可选的激活模型标识。
-    pub(super) active_model_id: Option<String>,
-    /// Optional latest compaction identifier.
-    /// 可选的最近一次压缩标识。
-    pub(super) last_compaction_id: Option<String>,
-    /// Optional current context start message identifier.
-    /// 可选的当前上下文起始消息标识。
-    pub(super) context_start_message_id: Option<String>,
-    /// Optional persisted transcript UI state payload.
-    /// 可选的持久化转录界面状态载荷。
-    pub(super) ui_state_json: Option<String>,
-    /// Optional persisted provider usage payload.
-    /// 可选的持久化 Provider 用量载荷。
-    #[serde(default)]
-    pub(super) provider_usage_json: Option<String>,
-    /// Optional persisted full canonical conversation-state payload.
-    /// 可选的持久化完整规范会话状态载荷。
-    #[serde(default)]
-    pub(super) conversation_state_json: Option<String>,
-    /// Optional persisted lightweight provider continuation payload.
-    /// 可选的持久化轻量 Provider continuation 载荷。
-    #[serde(default)]
-    pub(super) continuation_json: Option<String>,
-    /// Optional persisted hidden context-injection runtime payload.
-    /// 可选的隐藏上下文注入运行态载荷。
-    #[serde(default)]
-    pub(super) context_injection_json: Option<String>,
-    /// Optional persisted session-level VMM override payload.
-    /// 可选的持久化会话级 VMM 覆盖载荷。
-    #[serde(default)]
-    pub(super) vmm_json: Option<String>,
-    /// Optional persisted VMM writeback outbox payload.
-    /// 可选的持久化 VMM 写回 outbox 载荷。
-    #[serde(default)]
-    pub(super) vmm_writeback_outbox_json: Option<String>,
-    /// Optional persisted VMM profile sync state payload.
-    /// 可选的持久化 VMM 画像同步状态载荷。
-    #[serde(default)]
-    pub(super) vmm_profile_sync_json: Option<String>,
-    /// Updated-at timestamp stored as Unix milliseconds text.
-    /// 以 Unix 毫秒文本形式存储的更新时间。
-    pub(super) updated_at: String,
 }

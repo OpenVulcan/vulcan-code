@@ -288,15 +288,35 @@ pub(super) fn insert_file_list_header_field(
 /// Builds a bounded one-line display summary without duplicating the full model output.
 /// 构建有界单行展示摘要，避免重复保存完整模型输出。
 pub(super) fn compact_display_summary(source: &str) -> String {
-    let compact = source.split_whitespace().collect::<Vec<_>>().join(" ");
     const MAX_SUMMARY_CHARS: usize = 240;
-    if compact.chars().count() <= MAX_SUMMARY_CHARS {
-        return compact;
+    let mut summary = String::new();
+    let mut summary_chars = 0usize;
+    // Build the compact preview directly and stop once the visible limit is reached.
+    // 直接构建紧凑预览，并在达到可见长度上限后停止。
+    for word in source.split_whitespace() {
+        let separator_chars = if summary.is_empty() { 0 } else { 1 };
+        let word_chars = word.chars().count();
+        let next_chars = summary_chars
+            .saturating_add(separator_chars)
+            .saturating_add(word_chars);
+        if next_chars > MAX_SUMMARY_CHARS {
+            if separator_chars == 1 && summary_chars < MAX_SUMMARY_CHARS {
+                summary.push(' ');
+                summary_chars += 1;
+            }
+            let remaining_chars = MAX_SUMMARY_CHARS.saturating_sub(summary_chars);
+            summary.extend(word.chars().take(remaining_chars));
+            summary.push_str("...");
+            return summary;
+        }
+        if separator_chars == 1 {
+            summary.push(' ');
+            summary_chars += 1;
+        }
+        summary.push_str(word);
+        summary_chars += word_chars;
     }
-    format!(
-        "{}...",
-        compact.chars().take(MAX_SUMMARY_CHARS).collect::<String>()
-    )
+    summary
 }
 
 /// Parses a shell-command model output into command, status, and stream fields for display.

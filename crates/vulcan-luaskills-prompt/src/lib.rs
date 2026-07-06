@@ -472,7 +472,14 @@ fn render_compact_schema_name_list(names: &[String], max_visible: usize) -> Stri
 /// Collapses whitespace in one help string to keep developer prompts compact.
 /// 折叠帮助字符串中的空白以保持开发者提示词紧凑。
 fn compact_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut compact = String::new();
+    for word in text.split_whitespace() {
+        if !compact.is_empty() {
+            compact.push(' ');
+        }
+        compact.push_str(word);
+    }
+    compact
 }
 
 #[cfg(test)]
@@ -481,8 +488,9 @@ mod tests {
     //! 隐式 LuaSkills 提示词渲染测试。
 
     use super::{
-        LuaSkillPromptEntry, render_luaskill_argument_summary, render_luaskill_help_output,
-        render_luaskill_schema_markdown, render_luaskills_prompt_segment,
+        LuaSkillPromptEntry, compact_whitespace, render_luaskill_argument_summary,
+        render_luaskill_help_output, render_luaskill_schema_markdown,
+        render_luaskills_prompt_segment,
     };
     use serde_json::json;
 
@@ -533,6 +541,17 @@ mod tests {
 
         assert!(summary.contains("paths: string, required."));
         assert!(summary.contains("noignore: boolean, optional."));
+    }
+
+    /// Verifies compact help text collapses all whitespace runs into single spaces.
+    /// 验证紧凑帮助文本会将所有连续空白折叠为单个空格。
+    #[test]
+    fn compact_whitespace_collapses_prompt_help_text() {
+        assert_eq!(
+            compact_whitespace("  Pick\n\tcandidate   files first.  "),
+            "Pick candidate files first."
+        );
+        assert_eq!(compact_whitespace("  \n\t  "), "");
     }
 
     /// Verifies LuaSkill help output is scoped to enabled implicit entries.

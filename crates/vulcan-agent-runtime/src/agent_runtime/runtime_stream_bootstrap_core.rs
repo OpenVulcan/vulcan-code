@@ -27,7 +27,6 @@ use vulcan_context::{
 };
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
-    ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderPromptLayers as CoreProviderPromptLayers,
 };
@@ -94,9 +93,6 @@ pub(crate) struct RuntimeBootstrapCore {
     /// Structured prompt layers sent through `vulcan-core` request snapshots.
     /// 通过 `vulcan-core` 请求快照发送的结构化提示词层。
     pub prompt_layers: CoreProviderPromptLayers,
-    /// Provider-visible history reconstructed from canonical conversation messages.
-    /// 从规范会话消息重建得到的 Provider 可见历史记录。
-    pub request_history: Vec<CoreConversationMessage>,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub core_snapshot: CoreConversationSnapshot,
@@ -132,7 +128,6 @@ pub(crate) fn build_runtime_bootstrap_core(
             &preparation.runtime_system_updates,
             system_update_policy,
         )?;
-    let request_history = core_snapshot.messages.clone();
     let core_controller = VulcanCoreController::new(
         build_core_controller_config_with_layers(
             preparation,
@@ -147,7 +142,6 @@ pub(crate) fn build_runtime_bootstrap_core(
     Ok(RuntimeBootstrapCore {
         system_preamble,
         prompt_layers: runtime_prompt.provider_layers,
-        request_history,
         core_snapshot,
         core_controller,
         lowering_repair_events,

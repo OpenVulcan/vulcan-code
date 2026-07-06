@@ -56,18 +56,14 @@ pub(crate) async fn service_run_git_commit_action(
                 &repository_root,
                 &["checkout", "-b", &branch_name],
             )?;
-            if !output.status.success() {
-                return Err(format_webui_git_error("git checkout -b", &output));
-            }
+            ensure_git_commit_action_command_succeeded("git checkout -b", output)?;
             summary_rows.push(format!("已创建并切换到分支 `{branch_name}`。"));
         }
     }
 
     if request.include_unstaged {
         let output = run_webui_git_mutating_command(&repository_root, &["add", "-A"])?;
-        if !output.status.success() {
-            return Err(format_webui_git_error("git add -A", &output));
-        }
+        ensure_git_commit_action_command_succeeded("git add -A", output)?;
         summary_rows.push(String::from("已暂存工作区变更。"));
     }
 
@@ -78,9 +74,7 @@ pub(crate) async fn service_run_git_commit_action(
             &["commit", "-F", "-"],
             commit_message.as_bytes(),
         )?;
-        if !output.status.success() {
-            return Err(format_webui_git_error("git commit", &output));
-        }
+        ensure_git_commit_action_command_succeeded("git commit", output)?;
         committed = true;
         summary_rows.push(String::from("已创建 Git 提交。"));
     }
@@ -94,9 +88,7 @@ pub(crate) async fn service_run_git_commit_action(
             vec!["push", "-u", "origin", branch_name.as_str()]
         };
         let output = run_webui_git_mutating_command(&repository_root, &push_args)?;
-        if !output.status.success() {
-            return Err(format_webui_git_error("git push", &output));
-        }
+        ensure_git_commit_action_command_succeeded("git push", output)?;
         pushed = true;
         summary_rows.push(String::from("已推送当前分支。"));
     }
@@ -118,6 +110,22 @@ pub(crate) async fn service_run_git_commit_action(
         commit_hash: head_commit.as_ref().map(|commit| commit.hash.clone()),
         commit_message: head_commit.map(|commit| commit.subject),
     })
+}
+
+/// Ensures one Git commit action command completed successfully.
+/// 确保单个 Git 提交动作命令已成功完成。
+/// Parameters: label is the stable error label, and output is the completed Git process output.
+/// 参数：label 是稳定错误标签，output 是已完成的 Git 进程输出。
+/// Returns: `Ok(())` on success, or the formatted Git error on failure.
+/// 返回：成功时返回 `Ok(())`，失败时返回格式化后的 Git 错误。
+fn ensure_git_commit_action_command_succeeded(
+    label: &str,
+    output: std::process::Output,
+) -> Result<(), String> {
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format_webui_git_error(label, &output))
 }
 
 /// Validates that a Git commit action is attached to a known session.
@@ -151,14 +159,8 @@ fn normalize_git_commit_action_branch_name(branch_name: &str) -> Result<String, 
         &workspace_root(),
         &["check-ref-format", "--branch", branch_name.as_str()],
     )?;
-    if output.status.success() {
-        Ok(branch_name)
-    } else {
-        Err(format_webui_git_error(
-            "git check-ref-format --branch",
-            &output,
-        ))
-    }
+    ensure_git_commit_action_command_succeeded("git check-ref-format --branch", output)?;
+    Ok(branch_name)
 }
 
 /// Ensures the requested new branch does not already exist locally.

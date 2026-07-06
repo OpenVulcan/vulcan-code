@@ -1,8 +1,12 @@
 //! Convert one Hugging Face `tokenizer.json` file into tokie's `.tkz` binary format.
 //! 将单个 Hugging Face `tokenizer.json` 文件转换为 tokie 的 `.tkz` 二进制格式。
 
+// Keep CLI-only code out of Cargo's synthetic bin test target.
+// 将仅 CLI 执行的代码排除在 Cargo 合成的 bin 测试目标之外。
+#[cfg(not(test))]
 use std::{env, path::PathBuf};
 
+#[cfg(not(test))]
 use tokie::Tokenizer;
 
 /// Converts one tokenizer JSON file into one `.tkz` output file.
@@ -12,6 +16,7 @@ use tokie::Tokenizer;
 /// 返回值
 /// `Ok(())` when the conversion succeeds.
 /// 转换成功时返回 `Ok(())`。
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     let input = args

@@ -1,21 +1,17 @@
 //! WebUI Git file action service logic.
 //! WebUI Git 文件级操作服务逻辑。
 
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeSet, path::Path};
 
 use super::command::{format_webui_git_error, run_webui_git_command};
-use super::diff::resolve_webui_git_repository_root;
+use super::diff::resolve_webui_workspace_git_resolution;
 use super::diff_text::ensure_webui_git_pathspec_text;
 use super::model::{
     WebuiWorkspaceGitFileAction, WebuiWorkspaceGitFileActionFile,
     WebuiWorkspaceGitFileActionRequest, WebuiWorkspaceGitFileActionResult,
 };
 use super::search::clear_webui_diff_search_caches;
-use crate::{normalized_workspace_path_text_from_path, workspace_root};
+use crate::normalized_workspace_path_text_from_path;
 
 /// Executes one WebUI file-level Git operation inside a resolved repository.
 /// 在解析后的仓库中执行单个 WebUI 文件级 Git 操作。
@@ -23,16 +19,8 @@ pub(crate) fn run_webui_workspace_git_file_action(
     workspace_path: &str,
     request: WebuiWorkspaceGitFileActionRequest,
 ) -> Result<WebuiWorkspaceGitFileActionResult, String> {
-    let requested_path = PathBuf::from(workspace_path.trim());
-    let workspace_path = if requested_path.as_os_str().is_empty() {
-        workspace_root()
-    } else {
-        requested_path
-    };
-    let workspace_path = fs::canonicalize(&workspace_path).map_err(|error| {
-        format!("failed to resolve workspace path `{workspace_path:?}`: {error}")
-    })?;
-    let Some(repository_root) = resolve_webui_git_repository_root(&workspace_path)? else {
+    let resolution = resolve_webui_workspace_git_resolution(workspace_path)?;
+    let Some(repository_root) = resolution.repository_root else {
         return Err(String::from(
             "当前工作区不是 Git 仓库，无法执行 Git 文件操作。",
         ));

@@ -534,30 +534,13 @@ pub(crate) async fn persist_workspace_session_addon_state_update(
     session_id: SessionId,
     addon_state: SessionAddonState,
 ) -> Result<SessionAddonState, String> {
-    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
-        return Err(format!("未找到要保存附属状态的会话：{session_id}"));
-    }
-    let Some((session, archived)) = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .map(|session| (session.clone(), false))
-        .or_else(|| {
-            workspace_snapshot
-                .archived_sessions
-                .iter()
-                .find(|session| session.id == session_id)
-                .map(|session| (session.clone(), true))
-        })
+    let Some((session, archived)) =
+        workspace_session_with_archive_status(&workspace_snapshot, session_id)
+            .map(|(session, archived)| (session.clone(), archived))
     else {
         return Err(format!("未找到要保存附属状态的会话：{session_id}"));
     };
-    let task_projects = workspace_snapshot
-        .task_projects
-        .iter()
-        .cloned()
-        .chain(workspace_snapshot.archived_task_projects.iter().cloned())
-        .collect::<Vec<_>>();
+    let task_projects = workspace_task_projects_for_persistence(&workspace_snapshot);
     vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update(
         controller_runtime,
         &task_projects,

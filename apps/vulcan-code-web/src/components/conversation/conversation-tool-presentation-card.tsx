@@ -805,10 +805,9 @@ function AskQuestionPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`ask-question:${presentation.id}`} expanded={expanded}>
         <div className="ask-question-detail">
-          {hydratedPresentation.questions.map((question, index) => (
+          {hydratedPresentation.questions.map((question) => (
             <AskQuestionAnswerItem
               ignoredAnswerText={hydratedPresentation.ignoredAnswerText}
-              index={index}
               item={question}
               key={question.id}
               state={hydratedPresentation.state}
@@ -833,9 +832,6 @@ function askQuestionPresentationDetailCacheKey(presentation: AskQuestionPresenta
 // AskQuestionAnswerItem renders one expanded question and its user answer.
 // AskQuestionAnswerItem 渲染展开区中的单个问题与用户回答。
 function AskQuestionAnswerItem(props: {
-  // Zero-based display index.
-  // 从零开始的展示序号。
-  index: number;
   // Question-answer item.
   // 问答条目。
   item: AskQuestionPresentationItem;
@@ -852,13 +848,13 @@ function AskQuestionAnswerItem(props: {
   const answerText = askQuestionAnswerText(props.item, props.ignoredAnswerText, props.state, props.t);
   return (
     <div className="ask-question-item">
-      <div className="ask-question-item-header">
-        <span>{props.item.header || formatTranslation(props.t, "toolPresentation.ask.questionFallback", { index: String(props.index + 1) })}</span>
+      <div className="ask-question-row">
+        <span className="ask-question-label">{props.t("toolPresentation.ask.questionLabel")}</span>
+        <span className="ask-question-text">{props.item.question}</span>
       </div>
-      <div className="ask-question-prompt">{props.item.question}</div>
-      <div className={cn("ask-question-answer", !props.item.answered && props.state !== "running" && "ignored")}>
-        <span className="ask-question-answer-label">{props.t("toolPresentation.ask.userAnswer")}</span>
-        <span className="ask-question-answer-text">{answerText}</span>
+      <div className={cn("ask-question-row", !props.item.answered && props.state !== "running" && "ignored")}>
+        <span className="ask-question-label">{props.t("toolPresentation.ask.answerLabel")}</span>
+        <span className="ask-question-text">{answerText}</span>
       </div>
     </div>
   );

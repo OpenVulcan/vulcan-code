@@ -116,7 +116,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let discovery_errors = launch.discovery_errors;
         let warnings = launch.warnings;
         let system_preamble = launch.system_preamble;
-        let request_history = launch.request_history;
         let core_snapshot = launch.core_snapshot;
         let mut stream_state = launch.stream_state;
         let _task_execution_context_guard = if let Some(context) = task_execution_context {
@@ -148,7 +147,6 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             active_agent.as_ref(),
             &system_preamble,
             &effective_prompt,
-            request_history,
             core_snapshot,
             task_runtime,
             token_budget_runtime.clone(),

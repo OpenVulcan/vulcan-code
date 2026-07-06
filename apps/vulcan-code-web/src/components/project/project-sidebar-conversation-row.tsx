@@ -137,17 +137,17 @@ function ConversationRowLeading(props: {
   return (
     <span className={cn("conversation-tree-leading", isRunning && "running")}>
       <span className={cn("conversation-tree-leading-status", isRunning && "running")}>
-        {isRunning ? (
-          <span className="conversation-tree-status-mark" aria-label={t("conversationRow.running")}>
-            <LoaderCircle aria-label={t("conversationRow.running")} className="conversation-tree-running-spinner spin" size={14} />
-          </span>
-        ) : attentionKind === "ask" ? (
+        {attentionKind === "ask" ? (
           <span className="conversation-tree-status-mark" title={attentionLabel ?? undefined}>
             <CircleHelp aria-label={attentionLabel ?? t("conversationRow.askAttention")} className="conversation-tree-attention-icon ask" size={14} />
           </span>
         ) : attentionKind === "plan_confirm" ? (
           <span className="conversation-tree-status-mark" title={attentionLabel ?? undefined}>
             <ClipboardList aria-label={attentionLabel ?? t("conversationRow.planAttention")} className="conversation-tree-attention-icon plan" size={14} />
+          </span>
+        ) : isRunning ? (
+          <span className="conversation-tree-status-mark" aria-label={t("conversationRow.running")}>
+            <LoaderCircle aria-label={t("conversationRow.running")} className="conversation-tree-running-spinner spin" size={14} />
           </span>
         ) : props.conversation.unread && !props.isSelected ? (
           <span className="conversation-tree-status-mark">

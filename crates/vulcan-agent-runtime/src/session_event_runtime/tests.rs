@@ -376,6 +376,24 @@ fn tool_result_projection_preserves_runtime_event_order() {
     );
 }
 
+/// Verifies display summaries collapse whitespace and truncate without changing visible semantics.
+/// 验证展示摘要会折叠空白并在不改变可见语义的前提下截断。
+#[test]
+fn compact_display_summary_collapses_whitespace_and_truncates() {
+    assert_eq!(
+        compact_display_summary("  alpha\n\tbeta   gamma  "),
+        "alpha beta gamma"
+    );
+    // Long source whose compacted form exceeds the display summary limit.
+    // 压缩后超过展示摘要长度上限的长文本来源。
+    let long_source = format!("{} tail", "a".repeat(241));
+    // Expected text mirrors the existing first-240-characters truncation rule.
+    // 期望文本保持既有的前 240 个字符截断规则。
+    let expected = format!("{}...", "a".repeat(240));
+
+    assert_eq!(compact_display_summary(&long_source), expected);
+}
+
 /// Verifies WebUI visible tool cards keep raw change-set host metadata for expandable file-change rendering.
 /// 验证 WebUI 可见工具卡片会保留原始 change-set 宿主元数据，用于文件变更展开渲染。
 #[test]
@@ -766,6 +784,81 @@ fn tool_result_projection_preserves_structured_ask_display() {
             .and_then(|answers| answers.first())
             .and_then(serde_json::Value::as_str),
         Some("继续")
+    );
+}
+
+/// Verifies submitted Plan artifacts stay visible so WebUI can render the confirmation card.
+/// 验证已提交计划产物保留在可见元数据中，使 WebUI 能渲染确认卡片。
+#[test]
+fn tool_result_projection_preserves_plan_artifact_host_result() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · call-plan · submit_plan",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-plan",
+        "tool_name": "submit_plan",
+        "arguments": {
+            "name": "Test Plan"
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3300",
+        &started,
+    ));
+    let finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-plan",
+        "## Result ID\n\n`tool-result-call-plan`\n\n## Tool Result\n\nPlan artifact saved.",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-plan",
+        "tool_result_id": "tool-result-call-plan",
+        "tool_name": "submit_plan",
+        "display_state": "completed",
+        "host_result": {
+            "kind": "plan_artifact",
+            "payload": {
+                "name": "Test Plan",
+                "path": "docs/plan/test-plan.md",
+                "content": "# Test Plan\n\n- Step one",
+                "updatedAt": "3301"
+            }
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3301",
+        &finished,
+    ));
+
+    let tool_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+        .expect("submit_plan tool call record should remain visible");
+    let metadata = tool_record.metadata.as_ref().expect("plan metadata");
+    assert_eq!(
+        metadata
+            .get("host_result")
+            .and_then(|host_result| host_result.get("kind"))
+            .and_then(serde_json::Value::as_str),
+        Some("plan_artifact")
+    );
+    assert_eq!(
+        metadata
+            .get("host_result")
+            .and_then(|host_result| host_result.get("payload"))
+            .and_then(|payload| payload.get("content"))
+            .and_then(serde_json::Value::as_str),
+        Some("# Test Plan\n\n- Step one")
     );
 }
 

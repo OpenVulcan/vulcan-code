@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
@@ -77,9 +77,6 @@ const RUNTIME_COMPACTION_BACKUP_LIMIT: usize = 5;
 /// Process-local mutex protecting overwrite-only state read/modify/write operations.
 /// 保护覆盖式状态读改写操作的进程内互斥锁。
 static SEGMENTED_STATE_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-/// Process-local mutex protecting segmented JSONL append read/modify/write operations.
-/// 保护分段 JSONL 追加读改写操作的进程内互斥锁。
-static SEGMENTED_APPEND_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 mod message_events;
 mod message_mapping;
@@ -139,15 +136,6 @@ pub(super) fn segmented_session_directory(
         .join(root_name)
         .join(safe_project_tag)
         .join(session_dir_name)
-}
-
-/// Creates the initial main session directory and writes its first metadata event.
-/// 创建初始主会话目录并写入首条元数据事件。
-pub(super) fn create_segmented_session(
-    data_root: &Path,
-    request: SegmentedSessionCreateRequest,
-) -> Result<PathBuf, String> {
-    create_segmented_session_in_location(data_root, false, request)
 }
 
 /// Creates the initial main session directory in the active or archived tree.

@@ -749,7 +749,14 @@ fn split_frontmatter(raw: &str) -> Option<(&str, &str)> {
 /// Collapses repeated whitespace for compact prompt rendering.
 /// 折叠重复空白以便紧凑渲染提示词。
 fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut collapsed = String::new();
+    for word in text.split_whitespace() {
+        if !collapsed.is_empty() {
+            collapsed.push(' ');
+        }
+        collapsed.push_str(word);
+    }
+    collapsed
 }
 
 /// Trims one optional string and drops it when empty.

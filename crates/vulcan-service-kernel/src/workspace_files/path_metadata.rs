@@ -3,7 +3,35 @@
 
 use super::*;
 
-///
+/// Metadata shared by extension-based workspace file classification and MIME projection.
+/// 工作区文件扩展名分类与 MIME 投影共享的元数据。
+#[derive(Debug, Clone)]
+pub(crate) struct WorkspaceFileExtensionMetadata {
+    /// Entry kind assigned to files with this extension.
+    /// 拥有该扩展名的文件应分配的条目类别。
+    pub(crate) kind: WorkspaceFileEntryKind,
+    /// MIME type emitted for files with this extension.
+    /// 拥有该扩展名的文件应输出的 MIME 类型。
+    pub(crate) mime_type: &'static str,
+}
+
+/// Path-derived workspace file metadata used by listing and preview decisions.
+/// 列表与预览决策使用的路径派生工作区文件元数据。
+#[derive(Debug, Clone)]
+pub(crate) struct WorkspaceFilePathMetadata {
+    /// Entry kind assigned to the path.
+    /// 路径对应的条目类别。
+    pub(crate) kind: WorkspaceFileEntryKind,
+    /// Lowercase file extension without the dot.
+    /// 不含点号的小写文件扩展名。
+    pub(crate) extension: Option<String>,
+    /// Static MIME type associated with the classified file.
+    /// 与已分类文件关联的静态 MIME 类型。
+    pub(crate) mime_type: Option<&'static str>,
+}
+
+/// Returns one workspace-relative path using WebUI-stable slash separators.
+/// 返回使用 WebUI 稳定斜杠分隔符的工作区相对路径。
 /// # Parameters
 /// 参数
 /// `workspace_root` is the canonical workspace root.
@@ -16,21 +44,22 @@ use super::*;
 /// A slash-separated relative path, or an empty string for the root itself.
 /// 返回斜杠分隔的相对路径，根目录自身返回空字符串。
 pub(crate) fn workspace_file_relative_path_text(workspace_root: &Path, path: &Path) -> String {
-    path.strip_prefix(workspace_root)
-        .ok()
-        .map(|relative| {
-            relative
-                .components()
-                .filter_map(|component| match component {
-                    std::path::Component::Normal(value) => {
-                        Some(value.to_string_lossy().to_string())
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .unwrap_or_default()
+    let Ok(relative) = path.strip_prefix(workspace_root) else {
+        return String::new();
+    };
+    let mut relative_path = String::new();
+    // Build the slash-separated projection without materializing every segment.
+    // 直接构建斜杠分隔投影，避免为每个路径段分配中间集合。
+    for component in relative.components() {
+        let std::path::Component::Normal(value) = component else {
+            continue;
+        };
+        if !relative_path.is_empty() {
+            relative_path.push('/');
+        }
+        relative_path.push_str(value.to_string_lossy().as_ref());
+    }
+    relative_path
 }
 
 /// Returns a parent directory only when it remains inside the workspace root.
@@ -52,7 +81,7 @@ pub(crate) fn workspace_file_parent_inside_root(
     path: &Path,
 ) -> Option<PathBuf> {
     let parent = path.parent()?;
-    if parent == workspace_root || parent.starts_with(workspace_root) {
+    if workspace_path_is_inside_root(parent, workspace_root) {
         Some(parent.to_path_buf())
     } else {
         None
@@ -77,65 +106,48 @@ pub(crate) fn workspace_file_extension(path: &Path) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
-/// Returns whether an extension is treated as a code/text preview file.
-/// 返回某个扩展名是否按代码或文本预览文件处理。
+/// Returns kind, extension, and MIME facts derived from one workspace file path.
+/// 返回从单个工作区文件路径派生出的类别、扩展名和 MIME 事实。
 ///
 /// # Parameters
 /// 参数
-/// `extension` is the lowercase extension without the dot.
-/// `extension` 是不含点号的小写扩展名。
+/// `path` is the file path to classify.
+/// `path` 是需要分类的文件路径。
 ///
 /// # Returns
 /// 返回值
-/// `true` when the extension belongs to the default code allowlist.
-/// 当扩展名属于默认代码白名单时返回 `true`。
-pub(crate) fn workspace_file_extension_is_code(extension: &str) -> bool {
-    matches!(
-        extension,
-        "rs" | "ts"
-            | "tsx"
-            | "js"
-            | "jsx"
-            | "mjs"
-            | "cjs"
-            | "json"
-            | "toml"
-            | "yaml"
-            | "yml"
-            | "md"
-            | "hbs"
-            | "ps1"
-            | "sh"
-            | "bash"
-            | "zsh"
-            | "py"
-            | "lua"
-            | "css"
-            | "html"
-            | "htm"
-            | "sql"
-            | "txt"
-            | "lock"
-            | "ini"
-            | "cfg"
-            | "conf"
-            | "xml"
-            | "svg"
-            | "c"
-            | "h"
-            | "cpp"
-            | "hpp"
-            | "go"
-            | "java"
-            | "kt"
-            | "swift"
-            | "rb"
-            | "php"
-    )
+/// A single metadata bundle used to avoid re-reading extension rules per field.
+/// 返回单个元数据集合，避免为每个字段重复读取扩展名规则。
+pub(crate) fn workspace_file_path_metadata(path: &Path) -> WorkspaceFilePathMetadata {
+    let Some(extension) = workspace_file_extension(path) else {
+        let kind = if workspace_file_name_without_extension_is_code(path) {
+            WorkspaceFileEntryKind::Code
+        } else {
+            WorkspaceFileEntryKind::Other
+        };
+        let mime_type = (kind == WorkspaceFileEntryKind::Code).then_some("text/plain");
+        return WorkspaceFilePathMetadata {
+            kind,
+            extension: None,
+            mime_type,
+        };
+    };
+    let Some(metadata) = workspace_file_extension_metadata(&extension) else {
+        return WorkspaceFilePathMetadata {
+            kind: WorkspaceFileEntryKind::Other,
+            extension: Some(extension),
+            mime_type: None,
+        };
+    };
+    WorkspaceFilePathMetadata {
+        kind: metadata.kind,
+        extension: Some(extension),
+        mime_type: Some(metadata.mime_type),
+    }
 }
 
-/// Returns whether an extension is treated as an image file.
-/// 返回某个扩展名是否按图片文件处理。
+/// Returns the preview metadata assigned to a lowercase extension.
+/// 返回小写扩展名对应的预览元数据。
 ///
 /// # Parameters
 /// 参数
@@ -144,29 +156,78 @@ pub(crate) fn workspace_file_extension_is_code(extension: &str) -> bool {
 ///
 /// # Returns
 /// 返回值
-/// `true` when the extension is displayable through the image preview path.
-/// 当扩展名可通过图片预览路径显示时返回 `true`。
-pub(crate) fn workspace_file_extension_is_image(extension: &str) -> bool {
-    matches!(
-        extension,
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg"
-    )
-}
-
-/// Returns whether an extension is treated as a video file.
-/// 返回某个扩展名是否按视频文件处理。
-///
-/// # Parameters
-/// 参数
-/// `extension` is the lowercase extension without the dot.
-/// `extension` 是不含点号的小写扩展名。
-///
-/// # Returns
-/// 返回值
-/// `true` when the extension is displayable through the video preview path.
-/// 当扩展名可通过视频预览路径显示时返回 `true`。
-pub(crate) fn workspace_file_extension_is_video(extension: &str) -> bool {
-    matches!(extension, "mp4" | "webm" | "mov" | "mkv")
+/// Shared metadata when the extension can be previewed by the workspace file panel.
+/// 当扩展名可由工作区文件面板预览时返回共享元数据。
+pub(crate) fn workspace_file_extension_metadata(
+    extension: &str,
+) -> Option<WorkspaceFileExtensionMetadata> {
+    let metadata = match extension {
+        "png" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Image,
+            mime_type: "image/png",
+        },
+        "jpg" | "jpeg" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Image,
+            mime_type: "image/jpeg",
+        },
+        "webp" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Image,
+            mime_type: "image/webp",
+        },
+        "gif" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Image,
+            mime_type: "image/gif",
+        },
+        "bmp" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Image,
+            mime_type: "image/bmp",
+        },
+        "svg" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Image,
+            mime_type: "image/svg+xml",
+        },
+        "mp4" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/mp4",
+        },
+        "webm" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/webm",
+        },
+        "mov" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/quicktime",
+        },
+        "mkv" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Video,
+            mime_type: "video/x-matroska",
+        },
+        "html" | "htm" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Code,
+            mime_type: "text/html",
+        },
+        "css" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Code,
+            mime_type: "text/css",
+        },
+        "json" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Code,
+            mime_type: "application/json",
+        },
+        "md" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Code,
+            mime_type: "text/markdown",
+        },
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "toml" | "yaml" | "yml" | "hbs"
+        | "ps1" | "sh" | "bash" | "zsh" | "py" | "lua" | "sql" | "txt" | "lock" | "ini" | "cfg"
+        | "conf" | "xml" | "c" | "h" | "cpp" | "hpp" | "go" | "java" | "kt" | "swift" | "rb"
+        | "php" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Code,
+            mime_type: "text/plain",
+        },
+        _ => return None,
+    };
+    Some(metadata)
 }
 
 /// Returns whether a no-extension file name should still be treated as code.
@@ -191,14 +252,7 @@ pub(crate) fn workspace_file_name_without_extension_is_code(path: &Path) -> bool
     };
     matches!(
         name.as_str(),
-        "license"
-            | "readme"
-            | "makefile"
-            | "dockerfile"
-            | "gitignore"
-            | "gitattributes"
-            | "ignore"
-            | "agents.md"
+        "license" | "readme" | "makefile" | "dockerfile" | "gitignore" | "gitattributes" | "ignore"
     )
 }
 
@@ -220,33 +274,13 @@ pub(crate) fn workspace_file_mime_type(
     path: &Path,
     kind: &WorkspaceFileEntryKind,
 ) -> Option<String> {
-    let extension = workspace_file_extension(path)?;
-    let mime = match kind {
-        WorkspaceFileEntryKind::Code => match extension.as_str() {
-            "html" | "htm" => "text/html",
-            "css" => "text/css",
-            "json" => "application/json",
-            "md" => "text/markdown",
-            "svg" => "image/svg+xml",
-            _ => "text/plain",
-        },
-        WorkspaceFileEntryKind::Image => match extension.as_str() {
-            "jpg" | "jpeg" => "image/jpeg",
-            "webp" => "image/webp",
-            "gif" => "image/gif",
-            "bmp" => "image/bmp",
-            "svg" => "image/svg+xml",
-            _ => "image/png",
-        },
-        WorkspaceFileEntryKind::Video => match extension.as_str() {
-            "webm" => "video/webm",
-            "mov" => "video/quicktime",
-            "mkv" => "video/x-matroska",
-            _ => "video/mp4",
-        },
-        WorkspaceFileEntryKind::Directory | WorkspaceFileEntryKind::Other => return None,
-    };
-    Some(String::from(mime))
+    let metadata = workspace_file_path_metadata(path);
+    metadata
+        .kind
+        .eq(kind)
+        .then_some(metadata.mime_type)
+        .flatten()
+        .map(String::from)
 }
 
 /// Returns whether one file or directory name uses the Unix dot-hidden convention.

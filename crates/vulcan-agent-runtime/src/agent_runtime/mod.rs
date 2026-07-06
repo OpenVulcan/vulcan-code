@@ -54,6 +54,7 @@ pub mod provider_transport_azure_http;
 pub mod provider_transport_cohere;
 pub mod provider_transport_cohere_adapter;
 pub mod provider_transport_cohere_http;
+pub mod provider_transport_common_adapter;
 pub mod provider_transport_entry_inputs;
 pub mod provider_transport_google;
 pub mod provider_transport_google_adapter;

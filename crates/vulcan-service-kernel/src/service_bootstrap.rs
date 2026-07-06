@@ -31,11 +31,10 @@ use super::{
     active_surface_messages_from_workspace_and_state, build_vmm_hook_config_snapshot,
     emit_service_event_with_trace, fallback_workbench_snapshot,
     hydrated_conversation_window_summaries, install_webui_question_runtime_event_bridge,
-    mark_webui_service_discovery_failed,
-    mark_webui_service_discovery_ready, native_tool_summaries_from_agent_runtime,
-    normalized_workspace_path_text_from_path, pending_question_snapshots_from_agent_runtime,
-    subagent_navigation_snapshot_from_cached_state, token_budget_status, workbench_from_runtime,
-    workspace_root,
+    mark_webui_service_discovery_failed, mark_webui_service_discovery_ready,
+    native_tool_summaries_from_agent_runtime, normalized_workspace_path_text_from_path,
+    pending_question_snapshots_from_agent_runtime, subagent_navigation_snapshot_from_cached_state,
+    token_budget_status, workbench_from_runtime, workspace_root,
 };
 
 mod ai_tool_config;

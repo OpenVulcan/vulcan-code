@@ -82,10 +82,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .on_window_event(move |_window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                if let Err(error) = service_prepare_for_app_shutdown(&shutdown_state) {
-                    eprintln!("[vulcan-code-tauri] app shutdown preparation failed: {error}");
-                }
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. })
+                && let Err(error) = service_prepare_for_app_shutdown(&shutdown_state)
+            {
+                eprintln!("[vulcan-code-tauri] app shutdown preparation failed: {error}");
             }
         })
         .setup(move |app| {

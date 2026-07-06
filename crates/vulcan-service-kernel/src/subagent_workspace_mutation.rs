@@ -1,10 +1,7 @@
 //! subagent workspace mutation helpers.
 //! subagent workspace mutation 辅助逻辑。
 
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use super::*;
 use vulcan_agent_runtime::agent_runtime::task_runtime::TaskRuntime;
@@ -122,6 +119,62 @@ pub(crate) enum SubagentNavigationRefreshMode {
     Preserve,
 }
 
+/// Owned input bundle collected under the workspace mutation lock for a later workbench rebuild.
+/// 在工作区变更锁内收集、供后续工作台重建使用的拥有所有权输入包。
+struct WorkspaceMutationWorkbenchRebuildInputs {
+    /// Workspace snapshot after the requested mutation has been applied.
+    /// 应用本次请求变更后的工作区快照。
+    workspace_snapshot: WorkspaceSnapshot,
+    /// Workbench generation assigned while committing the mutated workspace snapshot.
+    /// 提交已变更工作区快照时分配的工作台代际。
+    rebuild_generation: u64,
+    /// Controller runtime handle used by the workbench projector.
+    /// 工作台投影器使用的控制器运行时句柄。
+    controller_runtime: ControllerRuntimeHandle,
+    /// Cached LuaSkills catalog snapshot used by the workbench projector.
+    /// 工作台投影器使用的 LuaSkills 缓存目录快照。
+    luaskills_catalog: TauriLuaSkillsCatalog,
+    /// Shared token budget runtime used by workbench context usage summaries.
+    /// 工作台上下文用量摘要使用的共享 Token 预算运行时。
+    token_budget_runtime: Arc<TauriTokenBudgetRuntime>,
+    /// Cached MCP runtime catalog snapshot used by settings and tool summaries.
+    /// 设置与工具摘要使用的 MCP 运行时缓存目录快照。
+    mcp_catalog: TauriMcpRuntimeCatalog,
+    /// Provider configuration snapshot used to render model and capability choices.
+    /// 用于渲染模型与能力选项的 Provider 配置快照。
+    provider_configuration: ProviderConfigurationFile,
+    /// AI tool configuration snapshot used to render capability visibility.
+    /// 用于渲染能力可见性的 AI 工具配置快照。
+    ai_tool_configuration: PersistedAiToolConfiguration,
+    /// Surface messages for the active conversation or selected subagent panel.
+    /// 当前会话或已选子代理面板的界面消息。
+    surface_messages: Vec<SessionMessageEntry>,
+    /// Optional subagent navigation snapshot selected for the rebuilt workbench.
+    /// 重建工作台使用的可选子代理导航快照。
+    subagent_navigation: Option<SubagentNavigationSnapshot>,
+    /// Pending ask-tool questions projected from the active runtime.
+    /// 从当前运行时投影出的待回答 ask 工具问题。
+    pending_questions: Vec<PendingQuestionSnapshot>,
+    /// Recent service logs included in the rebuilt workbench.
+    /// 包含在重建工作台中的近期服务日志。
+    logs: Vec<String>,
+    /// Latest live context budget snapshots keyed by session id.
+    /// 按会话标识索引的最新实时上下文预算快照。
+    live_context_budgets: BTreeMap<SessionId, ContextBudgetSnapshot>,
+    /// Latest session goal summaries keyed by session id.
+    /// 按会话标识索引的最新会话目标摘要。
+    session_goal_summaries: BTreeMap<SessionId, SessionGoalSummary>,
+    /// Optional command session runtime used for live terminal state projection.
+    /// 用于实时终端状态投影的可选命令会话运行时。
+    command_session_runtime: Option<Arc<CommandSessionRuntime>>,
+    /// Native tool summaries exposed by the active agent runtime.
+    /// 当前代理运行时暴露的原生工具摘要。
+    native_tools: Vec<vulcan_service_api::NativeToolSummary>,
+    /// Hydrated conversation window summaries retained by the service state.
+    /// 服务状态中保留的已水合会话窗口摘要。
+    hydrated_window_summaries: Vec<HydratedConversationWindowSummary>,
+}
+
 /// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
 /// 修改保留的工作区快照并发出重建后的工作台快照。
 pub(crate) fn with_workspace_mutation_and_full_workbench_rebuild_for_cold_path<F>(
@@ -172,25 +225,9 @@ where
     F: FnOnce(&mut WorkspaceSnapshot),
 {
     let trace_started_at = current_unix_millis_value();
-    let (
-        workspace_snapshot,
-        rebuild_generation,
-        controller_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        provider_configuration,
-        ai_tool_configuration,
-        surface_messages,
-        subagent_navigation,
-        pending_questions,
-        logs,
-        live_context_budgets,
-        session_goal_summaries,
-        command_session_runtime,
-        native_tools,
-        hydrated_window_summaries,
-    ) = {
+    // Collect the owned rebuild inputs while the state lock is held, then project outside the lock.
+    // 在持有状态锁期间收集拥有所有权的重建输入，然后在锁外完成投影。
+    let rebuild_inputs = {
         let trace_lock_wait_started_at = current_unix_millis_value();
         let mut guard = state
             .lock()
@@ -289,8 +326,8 @@ where
             trace_workbench_started_at,
             format!("mode={subagent_navigation_refresh_mode:?} generation={rebuild_generation}"),
         );
-        (
-            returned_workspace_snapshot,
+        WorkspaceMutationWorkbenchRebuildInputs {
+            workspace_snapshot: returned_workspace_snapshot,
             rebuild_generation,
             controller_runtime,
             luaskills_catalog,
@@ -307,8 +344,29 @@ where
             command_session_runtime,
             native_tools,
             hydrated_window_summaries,
-        )
+        }
     };
+    // Split the named input bundle so moved projection fields do not obscure the returned workspace snapshot.
+    // 拆分具名输入包，避免被投影移动的字段遮蔽最终返回的工作区快照。
+    let WorkspaceMutationWorkbenchRebuildInputs {
+        workspace_snapshot,
+        rebuild_generation,
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        provider_configuration,
+        ai_tool_configuration,
+        surface_messages,
+        subagent_navigation,
+        pending_questions,
+        logs,
+        live_context_budgets,
+        session_goal_summaries,
+        command_session_runtime,
+        native_tools,
+        hydrated_window_summaries,
+    } = rebuild_inputs;
     let trace_workbench_started_at = current_unix_millis_value();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
@@ -530,7 +588,6 @@ pub(crate) fn cache_webui_subagent_surface_detail_for_task(
     task_state: SubagentTaskPanelState,
 ) {
     let now = current_unix_millis_value();
-    prune_webui_subagent_surface_detail_cache(guard, now);
     if let Some(conversation_state) = task_state.conversation_state.clone() {
         replace_webui_subagent_task_conversation_state(
             workspace_snapshot,
@@ -600,7 +657,8 @@ pub(crate) fn load_webui_unclosed_subagent_surface_preload(
     let mut states_by_parent: BTreeMap<SessionId, Vec<SubagentTaskPanelState>> = BTreeMap::new();
     for entry in &entries {
         let direct_parent_session_id = entry.parent_session_id.as_uuid();
-        let state = subagent_task_panel_state_from_registry_entry_for_preload(store.as_ref(), entry);
+        let state =
+            subagent_task_panel_state_from_registry_entry_for_preload(store.as_ref(), entry);
         states_by_parent
             .entry(direct_parent_session_id)
             .or_default()
@@ -608,10 +666,12 @@ pub(crate) fn load_webui_unclosed_subagent_surface_preload(
     }
     Ok(states_by_parent
         .into_iter()
-        .map(|(parent_session_id, task_states)| WebuiSubagentSurfacePreload {
-            parent_session_id,
-            task_states,
-        })
+        .map(
+            |(parent_session_id, task_states)| WebuiSubagentSurfacePreload {
+                parent_session_id,
+                task_states,
+            },
+        )
         .collect())
 }
 

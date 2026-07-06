@@ -170,6 +170,7 @@ fn send_message_tool_finished_appends_child_transcript_prompt_once() {
         .workspace_snapshot
         .as_mut()
         .expect("workspace snapshot should exist");
+    workspace.hydrated_session_ids.insert(task_session_id);
     let event = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · send_message",
@@ -212,6 +213,7 @@ fn send_message_tool_finished_appends_child_transcript_prompt_once() {
         messages[0].record_kind,
         SessionMessageRecordKind::DisplayNote
     );
+    assert!(!workspace.hydrated_session_ids.contains(&task_session_id));
 }
 
 /// Verifies send_message projection can use the standard tool-finished title id when metadata omits it.
@@ -225,6 +227,7 @@ fn send_message_projection_uses_tool_finished_title_id_when_metadata_omits_call_
         .workspace_snapshot
         .as_mut()
         .expect("workspace snapshot should exist");
+    workspace.hydrated_session_ids.insert(task_session_id);
     let event = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-send-title-1",
@@ -261,6 +264,33 @@ fn send_message_projection_uses_tool_finished_title_id_when_metadata_omits_call_
         .expect("child transcript should exist");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].body, "追加一条没有 metadata call id 的消息。");
+    assert!(!workspace.hydrated_session_ids.contains(&task_session_id));
+}
+
+/// Verifies stopped notice projection is idempotent and synchronizes the child dialogue-ready marker.
+/// 验证停止提示投影保持幂等，并会同步子任务对话层就绪标记。
+#[test]
+fn subagent_stop_notice_projection_syncs_dialogue_ready_marker_once() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+    let workspace = state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot should exist");
+    workspace.hydrated_session_ids.insert(task_session_id);
+
+    append_webui_subagent_stop_notice_if_needed(workspace, task_session_id);
+    append_webui_subagent_stop_notice_if_needed(workspace, task_session_id);
+
+    let messages = workspace
+        .session_messages
+        .get(&task_session_id)
+        .expect("child transcript should exist");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].title, "执行已停止");
+    assert_eq!(messages[0].body, SUBAGENT_TASK_STOPPED_SUMMARY_TEXT);
+    assert!(!workspace.hydrated_session_ids.contains(&task_session_id));
 }
 
 /// Verifies a mailbox-triggered kernel turn accepts queued subagent mailbox input.

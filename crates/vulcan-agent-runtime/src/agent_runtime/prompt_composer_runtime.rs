@@ -4,10 +4,9 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
 use vulcan_prompt_composer::{
-    PromptAssemblyInput, PromptAssemblyOutput, PromptCacheEvent, PromptCacheReport,
-    PromptComposerEngine, PromptComposerError, PromptComposerResourceConfig,
-    PromptInvalidationEvent, PromptInvalidationReason, PromptSegment,
-    session::fingerprint::compute_assembly_fingerprint,
+    PromptAssemblyOutput, PromptCacheEvent, PromptCacheReport, PromptComposerEngine,
+    PromptComposerError, PromptComposerResourceConfig, PromptInvalidationEvent,
+    PromptInvalidationReason, PromptSegment, session::fingerprint::compute_assembly_fingerprint,
 };
 
 /// User-level Vulcan root directory name.
@@ -209,7 +208,6 @@ fn default_prompt_composer_resource_config() -> Option<PromptComposerResourceCon
 
 /// Reload the shared runtime prompt composer from resource directories.
 /// 根据资源目录重载共享运行时提示词组合器。
-#[allow(dead_code)]
 pub fn reload_runtime_prompt_composer_engine(
     resources: &PromptComposerResourceConfig,
 ) -> Result<(), PromptComposerError> {
@@ -302,15 +300,6 @@ fn runtime_prompt_cache_prefixes_for_reason(reason: &PromptInvalidationReason) -
         | PromptInvalidationReason::SessionCompacted
         | PromptInvalidationReason::SessionBaselineRebuilt => Vec::new(),
     }
-}
-
-/// Compose one prompt through the current shared engine.
-/// 通过当前共享引擎组合一份提示词。
-#[allow(dead_code)]
-pub(crate) fn compose_with_runtime_prompt_composer(
-    input: &PromptAssemblyInput,
-) -> Result<vulcan_prompt_composer::PromptAssemblyOutput, PromptComposerError> {
-    runtime_prompt_composer_engine().compose(input)
 }
 
 /// Record the latest main-agent prompt-composer output for diagnostics.
@@ -661,11 +650,38 @@ fn format_prompt_report_fingerprint(fingerprint: u64) -> String {
 /// Truncate one prompt report preview by Unicode scalar count.
 /// 按 Unicode 标量数量截断一段提示词报告预览。
 fn truncate_prompt_report_preview(text: &str, max_chars: usize) -> String {
-    let trimmed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if trimmed.chars().count() <= max_chars {
-        return trimmed;
+    let mut preview = String::new();
+    let mut preview_chars = 0usize;
+    let mut exceeded = false;
+    // Collapse whitespace directly and stop once the visible preview limit is crossed.
+    // 直接折叠空白，并在越过可见预览上限后停止。
+    for word in text.split_whitespace() {
+        if !preview.is_empty() {
+            if preview_chars < max_chars {
+                preview.push(' ');
+                preview_chars += 1;
+            } else {
+                exceeded = true;
+                break;
+            }
+        }
+        for character in word.chars() {
+            if preview_chars < max_chars {
+                preview.push(character);
+                preview_chars += 1;
+            } else {
+                exceeded = true;
+                break;
+            }
+        }
+        if exceeded {
+            break;
+        }
     }
-    format!("{}…", trimmed.chars().take(max_chars).collect::<String>())
+    if exceeded {
+        preview.push('…');
+    }
+    preview
 }
 
 #[cfg(test)]
@@ -677,8 +693,8 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use vulcan_prompt_composer::{
-        ModelDescriptor, PersonalitySelection, PromptAssemblyMode, ProviderPromptSnapshot,
-        ToolCatalogSnapshot, ToolDescriptor,
+        ModelDescriptor, PersonalitySelection, PromptAssemblyInput, PromptAssemblyMode,
+        ProviderPromptSnapshot, ToolCatalogSnapshot, ToolDescriptor,
     };
 
     /// Verifies reloading resources makes custom personalities and tool help visible.
@@ -905,6 +921,18 @@ mod tests {
                 .markdown
                 .contains("Use shell_command for concrete local inspection")
         );
+    }
+
+    /// Verifies prompt report previews compact whitespace and keep the existing truncation rule.
+    /// 验证提示词报告预览会压缩空白并保持既有截断规则。
+    #[test]
+    fn truncate_prompt_report_preview_compacts_and_truncates() {
+        assert_eq!(
+            truncate_prompt_report_preview("  alpha\n\tbeta   gamma  ", 32),
+            "alpha beta gamma"
+        );
+        assert_eq!(truncate_prompt_report_preview("abcdef", 3), "abc…");
+        assert_eq!(truncate_prompt_report_preview("abcdef", 0), "…");
     }
 
     /// Builds one unique temporary directory for tests.

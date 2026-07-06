@@ -109,6 +109,87 @@ fn session_boundary_window_projects_visible_transcript() {
     assert!(window.boundary_conversation_state.is_some());
 }
 
+/// Verifies raw process rows remain visible when boundary projection provides canonical transcript state.
+/// 验证 boundary 投影提供规范转录状态时，raw 过程行仍保留在主时间线可见。
+#[test]
+fn boundary_window_keeps_raw_timeline_process_rows() {
+    let thread_id = SessionNodeId::new_v4();
+    let mut boundary_window = session_boundary_lines_to_window_messages(
+        &[
+            session_boundary_line(
+                1,
+                thread_id,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventVisibility::Visible,
+                "run command",
+            ),
+            session_boundary_line(
+                2,
+                thread_id,
+                SessionBoundaryEventKind::AgentMessage,
+                SessionEventVisibility::Visible,
+                "done",
+            ),
+        ],
+        false,
+    )
+    .expect("project session boundary")
+    .expect("visible transcript");
+    let mut raw_tool_call = test_message(
+        "raw-tool-call",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolCallOutput,
+        "",
+    );
+    raw_tool_call.metadata = Some(json!({
+        "tool_call_id": "call-1",
+        "tool_name": "shell_command",
+    }));
+    let raw_messages = vec![
+        test_message(
+            "raw-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "run command",
+        ),
+        raw_tool_call.clone(),
+        test_message(
+            "raw-assistant",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "done",
+        ),
+    ];
+    let raw_window = SegmentedWindowMessages {
+        messages: raw_messages.clone(),
+        tool_detail_messages: vec![raw_tool_call],
+        earliest_ordinal: Some(10),
+        has_more_history: true,
+        full_messages: raw_messages,
+        boundary_conversation_state: None,
+    };
+
+    merge_raw_timeline_window_into_boundary_window(&mut boundary_window, raw_window);
+
+    assert_eq!(boundary_window.messages.len(), 3);
+    assert!(matches!(
+        boundary_window.messages[0].record_kind,
+        SessionMessageRecordKind::Transcript
+    ));
+    assert!(matches!(
+        boundary_window.messages[1].record_kind,
+        SessionMessageRecordKind::ToolCallOutput
+    ));
+    assert!(matches!(
+        boundary_window.messages[2].record_kind,
+        SessionMessageRecordKind::AssistantOutput
+    ));
+    assert_eq!(boundary_window.tool_detail_messages.len(), 1);
+    assert_eq!(boundary_window.earliest_ordinal, Some(10));
+    assert!(boundary_window.has_more_history);
+    assert!(boundary_window.boundary_conversation_state.is_some());
+}
+
 /// Verifies boundary-turn reads skip over large non-boundary tails without losing the latest turn.
 /// 验证边界轮次读取会跳过大量非边界尾部事件，不丢失最新轮次。
 #[test]
@@ -130,9 +211,10 @@ fn session_boundary_turn_window_skips_non_boundary_tail_noise() {
         title_source: Some(String::from("test")),
         segment_policy: super::super::segmented_session_store::SegmentPolicy::default(),
     };
-    let session_dir =
-        super::super::segmented_session_store::create_segmented_session(&root, request)
-            .expect("create segmented session");
+    let session_dir = super::super::segmented_session_store::create_segmented_session_in_location(
+        &root, false, request,
+    )
+    .expect("create segmented session");
     let boundary_events = vec![
         SessionBoundaryEvent::new(
             "turn-1-user",
@@ -185,12 +267,14 @@ fn session_boundary_turn_window_skips_non_boundary_tail_noise() {
     )
     .expect("append boundary events");
     let noise_events = (0..120)
-        .map(|index| super::super::segmented_session_store::SegmentedSessionEventInput {
-            timestamp: (300 + index).to_string(),
-            kind: SegmentedSessionEventKind::DisplayEvent,
-            payload: json!({ "noise": index }),
-            turn_index: None,
-        })
+        .map(
+            |index| super::super::segmented_session_store::SegmentedSessionEventInput {
+                timestamp: (300 + index).to_string(),
+                kind: SegmentedSessionEventKind::DisplayEvent,
+                payload: json!({ "noise": index }),
+                turn_index: None,
+            },
+        )
         .collect::<Vec<_>>();
     super::super::segmented_session_store::append_segmented_session_events(
         &session_dir,
@@ -211,16 +295,6 @@ fn session_boundary_turn_window_skips_non_boundary_tail_noise() {
     assert!(window.has_more_history);
 
     let _ = std::fs::remove_dir_all(root);
-}
-
-/// Verifies ordinary startup hydration prefers boundary projection so boundary-only follow-up turns load.
-/// 验证普通启动水合优先使用边界投影，确保只写入边界的后续轮次也能载入。
-#[test]
-fn default_session_hydration_prefers_session_boundary_turns() {
-    assert_eq!(
-        default_session_hydration_window_source_preference(),
-        SegmentedWindowSourcePreference::SessionBoundaryFirst
-    );
 }
 
 /// Verifies archived and restored session directories still hydrate display text from session boundary events.
@@ -244,9 +318,12 @@ fn session_boundary_archive_restore_keeps_display_projection() {
         title_source: Some(String::from("test")),
         segment_policy: super::super::segmented_session_store::SegmentPolicy::default(),
     };
-    let session_dir =
-        super::super::segmented_session_store::create_segmented_session(&root, request.clone())
-            .expect("create segmented session");
+    let session_dir = super::super::segmented_session_store::create_segmented_session_in_location(
+        &root,
+        false,
+        request.clone(),
+    )
+    .expect("create segmented session");
     let boundary_events = vec![
         SessionBoundaryEvent::new(
             "turn-1-user",
@@ -298,14 +375,16 @@ fn session_boundary_archive_restore_keeps_display_projection() {
     assert_eq!(archived_window.messages[0].body, "用户归档前输入");
     assert_eq!(archived_window.messages[1].body, "助手归档后输出");
 
-    let restored_dir = super::super::segmented_session_store::restore_segmented_session_by_id(
-        &root,
-        project_tag,
-        &request.session_id,
-        "300",
-    )
-    .expect("restore session")
-    .expect("restored directory");
+    let restored_dir =
+        super::super::segmented_session_store::restore_segmented_session_by_created_date(
+            &root,
+            project_tag,
+            &request.created_date,
+            &request.session_id,
+            "300",
+        )
+        .expect("restore session")
+        .expect("restored directory");
     let restored_lines =
         read_segmented_session_event_window(&restored_dir, None, 8).expect("read restored");
     let restored_boundary_lines = restored_lines
@@ -375,7 +454,6 @@ fn hydrate_session_runtime_state_rebuilds_from_segmented_window() {
     let hydrated = runtime
         .block_on(hydrate_session_runtime_state(
             session_id,
-            None,
             &transcript_messages,
         ))
         .expect("hydrate runtime state")
@@ -395,7 +473,7 @@ fn hydrate_session_runtime_state_without_segmented_inputs_returns_empty() {
         .build()
         .expect("build current-thread tokio runtime");
     let hydrated = runtime
-        .block_on(hydrate_session_runtime_state(session_id, None, &[]))
+        .block_on(hydrate_session_runtime_state(session_id, &[]))
         .expect("hydrate empty runtime state");
 
     assert!(hydrated.is_none());

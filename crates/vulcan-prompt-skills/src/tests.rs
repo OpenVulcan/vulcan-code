@@ -194,6 +194,17 @@ fn resolves_session_over_project_over_global() {
     assert_eq!(resolved[0].source, PromptSkillStateSource::Session);
 }
 
+/// Verifies prompt skill descriptions collapse repeated whitespace for compact instructions.
+/// 验证提示词技能描述会折叠重复空白以生成紧凑指令。
+#[test]
+fn collapse_whitespace_compacts_skill_descriptions() {
+    assert_eq!(
+        collapse_whitespace("  Use\n\tfor   compact   skill descriptions.  "),
+        "Use for compact skill descriptions."
+    );
+    assert_eq!(collapse_whitespace(" \n\t "), "");
+}
+
 #[test]
 fn renders_only_enabled_skills() {
     let skills = vec![

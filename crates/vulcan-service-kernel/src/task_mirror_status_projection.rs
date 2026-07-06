@@ -128,34 +128,99 @@ pub(crate) fn apply_task_mirror_statuses_to_parent_messages<F>(
             }),
             execution_status.as_str(),
         );
+        let live_running_override = execution_status == "running";
         for message_id in message_ids {
-            for message in messages.iter_mut() {
-                if message.id == message_id {
-                    let Some(updated_metadata) = merge_task_mirror_tool_display_metadata(
-                        message.metadata.clone(),
-                        metadata_update.clone(),
-                        execution_status == "running",
-                    ) else {
-                        continue;
-                    };
-                    message.metadata = Some(updated_metadata);
-                }
-            }
-            if let Some(runtime_state) = runtime_state.as_deref_mut() {
-                for record in &mut runtime_state.conversation_state.records {
-                    if record.id == message_id {
-                        let Some(updated_metadata) = merge_task_mirror_tool_display_metadata(
-                            record.metadata.clone(),
-                            metadata_update.clone(),
-                            execution_status == "running",
-                        ) else {
-                            continue;
-                        };
-                        record.metadata = Some(updated_metadata);
-                    }
-                }
-            }
+            apply_task_mirror_metadata_update_to_parent_rows(
+                messages,
+                runtime_state.as_deref_mut(),
+                &message_id,
+                &metadata_update,
+                live_running_override,
+            );
         }
+    }
+}
+
+/// Applies one task-mirror metadata update to matching projected and canonical parent rows.
+/// 将单个任务镜像元数据更新应用到匹配的父级投影行与规范行。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the mutable projected parent transcript window.
+/// `messages` 是可变父级投影转录窗口。
+/// `runtime_state` optionally carries canonical parent conversation records.
+/// `runtime_state` 可选携带父级规范会话记录。
+/// `message_id` is the task-card row id to update in both stores.
+/// `message_id` 是需要在两个存储中更新的任务卡片行标识。
+/// `metadata_update` is the already normalized task-mirror display metadata.
+/// `metadata_update` 是已规范化的任务镜像展示元数据。
+/// `live_running_override` preserves live runtime state over stale terminal metadata.
+/// `live_running_override` 保留实时运行态对陈旧终态元数据的覆盖。
+///
+/// # Returns
+/// 返回值
+/// No value; matching rows are updated in place.
+/// 无返回值；匹配行会被原地更新。
+fn apply_task_mirror_metadata_update_to_parent_rows(
+    messages: &mut [SessionMessageEntry],
+    runtime_state: Option<&mut SessionRuntimeStateEntry>,
+    message_id: &str,
+    metadata_update: &Value,
+    live_running_override: bool,
+) {
+    for message in messages
+        .iter_mut()
+        .filter(|message| message.id == message_id)
+    {
+        apply_task_mirror_metadata_update_to_slot(
+            &mut message.metadata,
+            metadata_update,
+            live_running_override,
+        );
+    }
+    if let Some(runtime_state) = runtime_state {
+        for record in runtime_state
+            .conversation_state
+            .records
+            .iter_mut()
+            .filter(|record| record.id == message_id)
+        {
+            apply_task_mirror_metadata_update_to_slot(
+                &mut record.metadata,
+                metadata_update,
+                live_running_override,
+            );
+        }
+    }
+}
+
+/// Merges one task-mirror metadata update into a message or record metadata slot.
+/// 将单个任务镜像元数据更新合并进消息或记录的元数据槽位。
+///
+/// # Parameters
+/// 参数
+/// `metadata_slot` is the mutable metadata field from a projected message or canonical record.
+/// `metadata_slot` 是来自投影消息或规范记录的可变元数据字段。
+/// `metadata_update` is the display metadata update to merge.
+/// `metadata_update` 是需要合并的展示元数据更新。
+/// `live_running_override` preserves live runtime state over stale terminal metadata.
+/// `live_running_override` 保留实时运行态对陈旧终态元数据的覆盖。
+///
+/// # Returns
+/// 返回值
+/// No value; the metadata slot is replaced only when merging produces metadata.
+/// 无返回值；仅当合并产出元数据时替换元数据槽位。
+fn apply_task_mirror_metadata_update_to_slot(
+    metadata_slot: &mut Option<Value>,
+    metadata_update: &Value,
+    live_running_override: bool,
+) {
+    if let Some(updated_metadata) = merge_task_mirror_tool_display_metadata(
+        metadata_slot.clone(),
+        metadata_update.clone(),
+        live_running_override,
+    ) {
+        *metadata_slot = Some(updated_metadata);
     }
 }
 
@@ -236,26 +301,20 @@ pub(crate) fn find_task_session_tool_message_ids_for_payload<'a>(
 ) -> BTreeSet<String> {
     let mut message_ids = BTreeSet::new();
     for message in messages {
-        if !task_session_record_kind_can_display_status(message.record_kind) {
-            continue;
-        }
-        if message
-            .metadata
-            .as_ref()
-            .is_some_and(|metadata| task_session_message_match_score(metadata, payload) > 0)
-        {
+        if task_session_tool_metadata_matches_payload(
+            message.record_kind,
+            message.metadata.as_ref(),
+            payload,
+        ) {
             message_ids.insert(message.id.clone());
         }
     }
     for record in records {
-        if !task_session_record_kind_can_display_status(record.record_kind) {
-            continue;
-        }
-        if record
-            .metadata
-            .as_ref()
-            .is_some_and(|metadata| task_session_message_match_score(metadata, payload) > 0)
-        {
+        if task_session_tool_metadata_matches_payload(
+            record.record_kind,
+            record.metadata.as_ref(),
+            payload,
+        ) {
             message_ids.insert(record.id.clone());
         }
     }
@@ -305,11 +364,7 @@ pub(crate) fn surface_contains_task_session_tool_card<'a>(
 /// `true` when the message kind can display status and metadata has a task-session payload.
 /// 当消息类型可展示状态且元数据包含 task-session 载荷时返回 `true`。
 pub(crate) fn session_message_is_task_session_tool_card(message: &SessionMessageEntry) -> bool {
-    task_session_record_kind_can_display_status(message.record_kind)
-        && message
-            .metadata
-            .as_ref()
-            .is_some_and(|metadata| task_session_payload_from_tool_metadata(metadata).is_some())
+    task_session_metadata_represents_tool_card(message.record_kind, message.metadata.as_ref())
 }
 
 /// Returns whether one canonical record is a visible task-session tool card.
@@ -325,11 +380,55 @@ pub(crate) fn session_message_is_task_session_tool_card(message: &SessionMessage
 /// `true` when the record kind can display status and metadata has a task-session payload.
 /// 当记录类型可展示状态且元数据包含 task-session 载荷时返回 `true`。
 pub(crate) fn session_record_is_task_session_tool_card(record: &SessionConversationRecord) -> bool {
-    task_session_record_kind_can_display_status(record.record_kind)
-        && record
-            .metadata
-            .as_ref()
+    task_session_metadata_represents_tool_card(record.record_kind, record.metadata.as_ref())
+}
+
+/// Returns whether one metadata value belongs to a visible task-session tool card.
+/// 返回单个元数据值是否属于可见 task-session 工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `record_kind` is the transcript record kind attached to the message or record.
+/// `record_kind` 是消息或记录携带的转录记录类型。
+/// `metadata` is the optional tool metadata attached to the message or record.
+/// `metadata` 是消息或记录携带的可选工具元数据。
+///
+/// # Returns
+/// 返回值
+/// `true` when the record kind is displayable and the metadata has a task-session payload.
+/// 当记录类型可展示且元数据包含 task-session 载荷时返回 `true`。
+fn task_session_metadata_represents_tool_card(
+    record_kind: SessionMessageRecordKind,
+    metadata: Option<&Value>,
+) -> bool {
+    task_session_record_kind_can_display_status(record_kind)
+        && metadata
             .is_some_and(|metadata| task_session_payload_from_tool_metadata(metadata).is_some())
+}
+
+/// Returns whether one metadata value matches a task-session payload on a displayable row.
+/// 返回单个元数据值是否在可展示行上匹配 task-session 载荷。
+///
+/// # Parameters
+/// 参数
+/// `record_kind` is the transcript record kind attached to the message or record.
+/// `record_kind` 是消息或记录携带的转录记录类型。
+/// `metadata` is the optional tool metadata attached to the message or record.
+/// `metadata` 是消息或记录携带的可选工具元数据。
+/// `payload` is the task-session payload used for identity matching.
+/// `payload` 是用于身份匹配的 task-session 载荷。
+///
+/// # Returns
+/// 返回值
+/// `true` when the row can display status and the metadata matches the payload.
+/// 当该行可展示状态且元数据匹配载荷时返回 `true`。
+fn task_session_tool_metadata_matches_payload(
+    record_kind: SessionMessageRecordKind,
+    metadata: Option<&Value>,
+    payload: &Value,
+) -> bool {
+    task_session_record_kind_can_display_status(record_kind)
+        && metadata.is_some_and(|metadata| task_session_message_match_score(metadata, payload) > 0)
 }
 
 /// Returns whether one record kind can be a visible task-session tool row.
@@ -568,17 +667,11 @@ pub(crate) fn find_webui_task_session_tool_message_id_for_payload(
     parent_session_id: SessionId,
     payload: &Value,
 ) -> Option<String> {
-    let messages = workspace_snapshot
-        .session_messages
-        .get(&parent_session_id)
-        .into_iter()
-        .flat_map(|messages| messages.iter().rev());
-    let records = workspace_snapshot
-        .session_runtime_state
-        .get(&parent_session_id)
-        .into_iter()
-        .flat_map(|runtime_state| runtime_state.conversation_state.records.iter().rev());
-    find_task_session_tool_message_id_for_payload(messages, records, payload)
+    find_task_session_tool_message_id_for_payload(
+        reversed_webui_task_session_messages(workspace_snapshot, parent_session_id),
+        reversed_webui_task_session_records(workspace_snapshot, parent_session_id),
+        payload,
+    )
 }
 
 /// Finds every WebUI parent task-card message id for one task-session payload.
@@ -602,17 +695,61 @@ pub(crate) fn find_webui_task_session_tool_message_ids_for_payload(
     parent_session_id: SessionId,
     payload: &Value,
 ) -> BTreeSet<String> {
-    let messages = workspace_snapshot
+    find_task_session_tool_message_ids_for_payload(
+        reversed_webui_task_session_messages(workspace_snapshot, parent_session_id),
+        reversed_webui_task_session_records(workspace_snapshot, parent_session_id),
+        payload,
+    )
+}
+
+/// Returns projected WebUI parent messages in newest-first order for task-card lookup.
+/// 返回用于 task 卡片查找的 WebUI 父级投影消息，顺序为最新优先。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` provides the retained WebUI transcript projection.
+/// `workspace_snapshot` 提供保留的 WebUI 转录投影。
+/// `parent_session_id` selects the parent session that owns the task card.
+/// `parent_session_id` 选择拥有 task 卡片的父会话。
+///
+/// # Returns
+/// 返回值
+/// An iterator over projected parent messages from newest to oldest.
+/// 返回从新到旧遍历父级投影消息的迭代器。
+fn reversed_webui_task_session_messages(
+    workspace_snapshot: &WorkspaceSnapshot,
+    parent_session_id: SessionId,
+) -> impl Iterator<Item = &SessionMessageEntry> + '_ {
+    workspace_snapshot
         .session_messages
         .get(&parent_session_id)
         .into_iter()
-        .flat_map(|messages| messages.iter().rev());
-    let records = workspace_snapshot
+        .flat_map(|messages| messages.iter().rev())
+}
+
+/// Returns canonical WebUI parent records in newest-first order for task-card lookup.
+/// 返回用于 task 卡片查找的 WebUI 父级规范记录，顺序为最新优先。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` provides the retained WebUI runtime state.
+/// `workspace_snapshot` 提供保留的 WebUI 运行时状态。
+/// `parent_session_id` selects the parent session that owns the task card.
+/// `parent_session_id` 选择拥有 task 卡片的父会话。
+///
+/// # Returns
+/// 返回值
+/// An iterator over canonical parent records from newest to oldest.
+/// 返回从新到旧遍历父级规范记录的迭代器。
+fn reversed_webui_task_session_records(
+    workspace_snapshot: &WorkspaceSnapshot,
+    parent_session_id: SessionId,
+) -> impl Iterator<Item = &SessionConversationRecord> + '_ {
+    workspace_snapshot
         .session_runtime_state
         .get(&parent_session_id)
         .into_iter()
-        .flat_map(|runtime_state| runtime_state.conversation_state.records.iter().rev());
-    find_task_session_tool_message_ids_for_payload(messages, records, payload)
+        .flat_map(|runtime_state| runtime_state.conversation_state.records.iter().rev())
 }
 
 /// Replaces one child task transcript with the canonical conversation returned by the subagent.

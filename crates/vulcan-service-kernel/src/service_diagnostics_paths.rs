@@ -105,13 +105,3 @@ pub(crate) fn strip_windows_verbatim_prefix(path: &str) -> String {
     }
     path.to_string()
 }
-
-/// Returns the first existing path from a workspace-relative candidate list.
-/// 从工作区相对候选列表中返回第一个存在的路径。
-#[allow(dead_code)]
-pub(crate) fn first_existing_path(workspace_root: &Path, candidates: &[&str]) -> Option<PathBuf> {
-    candidates
-        .iter()
-        .map(|candidate| workspace_root.join(candidate))
-        .find(|path| path.exists())
-}

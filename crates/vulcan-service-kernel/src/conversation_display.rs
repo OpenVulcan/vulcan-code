@@ -2,6 +2,7 @@
 //! 会话显示消息投影辅助函数。
 
 use super::*;
+use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 
 /// Returns the display transcript window for one session from a concrete workspace snapshot.
 /// 从具体工作区快照返回单个会话的显示层转录窗口。
@@ -9,10 +10,24 @@ pub(crate) fn display_session_messages_from_workspace(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Option<Vec<SessionMessageEntry>> {
-    if let Some(messages) = workspace_snapshot.session_messages.get(&session_id) {
-        return Some(filter_display_session_messages(messages.clone()));
+    if let Some(messages) =
+        stable_display_session_messages_from_workspace(workspace_snapshot, session_id)
+    {
+        return Some(messages);
     }
     display_record_messages_from_workspace(workspace_snapshot, session_id)
+}
+
+/// Returns only the stable retained display transcript rows for one session.
+/// 仅返回单个会话已保留的稳定显示转录行。
+pub(crate) fn stable_display_session_messages_from_workspace(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<Vec<SessionMessageEntry>> {
+    workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .map(|messages| filter_display_session_messages(messages.clone()))
 }
 
 /// Returns display-record messages for fallback rendering without deriving from runtime-only messages.
@@ -22,12 +37,30 @@ pub(crate) fn display_record_messages_from_workspace(
     session_id: SessionId,
 ) -> Option<Vec<SessionMessageEntry>> {
     if let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) {
-        let messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
+        let messages = display_messages_from_conversation_state(&runtime_state.conversation_state);
         if !messages.is_empty() {
-            return Some(filter_display_session_messages(messages));
+            return Some(messages);
         }
     }
     None
+}
+
+/// Projects one runtime conversation state into user-facing display transcript rows.
+/// 将单个运行态会话状态投影为面向用户的显示层转录行。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the runtime-owned conversation state that may contain hidden records.
+/// `conversation_state` 是可能包含隐藏记录的运行态会话状态。
+///
+/// # Returns
+/// 返回值
+/// Returns filtered display messages derived from the runtime conversation state.
+/// 返回从运行态会话状态派生出的已过滤显示消息。
+pub(crate) fn display_messages_from_conversation_state(
+    conversation_state: &SessionConversationState,
+) -> Vec<SessionMessageEntry> {
+    filter_display_session_messages(conversation_state_to_session_messages(conversation_state))
 }
 
 /// Merges one runtime dialogue state into the display transcript window for a session.
@@ -55,9 +88,7 @@ pub(crate) fn merge_runtime_state_records_into_display_messages(
         &runtime_state.conversation_state,
     );
     let merged_messages = filter_display_session_messages(merged_messages);
-    workspace_snapshot
-        .session_messages
-        .insert(session_id, merged_messages);
+    set_display_session_messages(workspace_snapshot, session_id, merged_messages);
 }
 
 /// Replaces the display transcript with the canonical records owned by one runtime dialogue state.
@@ -76,9 +107,7 @@ pub(crate) fn replace_display_messages_with_runtime_state_records(
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) {
-    let mut messages = filter_display_session_messages(conversation_state_to_session_messages(
-        &runtime_state.conversation_state,
-    ));
+    let mut messages = display_messages_from_conversation_state(&runtime_state.conversation_state);
     if let Some(existing_messages) = workspace_snapshot.session_messages.get(&session_id) {
         for existing_message in existing_messages {
             if session_message_is_display_only_agent_message(existing_message) {
@@ -86,6 +115,25 @@ pub(crate) fn replace_display_messages_with_runtime_state_records(
             }
         }
     }
+    set_display_session_messages(workspace_snapshot, session_id, messages);
+}
+
+/// Writes display transcript rows while omitting empty retained entries.
+/// 写入显示层转录行，同时省略空的保留条目。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the workspace snapshot whose display layer should be updated.
+/// `workspace_snapshot` 是需要更新显示层的工作区快照。
+/// `session_id` selects the display transcript owner.
+/// `session_id` 选择显示层转录所属会话。
+/// `messages` contains the projected display rows.
+/// `messages` 包含已投影的显示行。
+fn set_display_session_messages(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    messages: Vec<SessionMessageEntry>,
+) {
     if messages.is_empty() {
         workspace_snapshot.session_messages.remove(&session_id);
     } else {
@@ -295,4 +343,41 @@ pub(crate) fn session_message_is_internal_agent_message_injection(
 ) -> bool {
     let body = message.body.trim_start();
     body.starts_with("<agent_message>") || body.starts_with(INTER_AGENT_MESSAGES_HEADER)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Verifies empty display transcript updates remove retained session entries.
+    /// 验证空显示层转录更新会移除保留会话条目。
+    #[test]
+    fn set_display_session_messages_removes_empty_entries() {
+        let session_id = SessionId::new_v4();
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(session_id, Vec::new())]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        set_display_session_messages(&mut workspace_snapshot, session_id, Vec::new());
+
+        assert!(
+            !workspace_snapshot
+                .session_messages
+                .contains_key(&session_id)
+        );
+    }
 }

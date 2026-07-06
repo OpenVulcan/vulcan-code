@@ -3,7 +3,8 @@
 
 use super::*;
 
-/// 当内存消息项尚未分配标识时构建一个确定性消息标识。
+/// Reads one segment event file without mutating on-disk data.
+/// 读取单个分段事件文件，且不改动磁盘数据。
 pub(in crate::workspace_store) fn read_segment_event_lines(
     segment_path: &Path,
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
@@ -59,6 +60,187 @@ pub(in crate::workspace_store) fn read_segment_event_lines_tolerant(
         );
     }
     Ok(lines)
+}
+
+/// Repairs malformed segmented JSONL files while holding the shared append lock.
+/// 在持有共享追加锁时修复格式损坏的分段 JSONL 文件。
+pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed(
+    session_dir: &Path,
+) -> Result<bool, String> {
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)
+}
+
+/// Repairs malformed segmented JSONL files when the caller already owns the append lock.
+/// 当调用方已经持有追加锁时修复格式损坏的分段 JSONL 文件。
+pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed_locked(
+    session_dir: &Path,
+) -> Result<bool, String> {
+    let mut metadata = read_session_metadata(session_dir)?;
+    let original_segments = metadata.segments.clone();
+    let mut retained_segment_lines: Vec<(String, Vec<SegmentedSessionEventLine>)> = Vec::new();
+    let mut changed = original_segments.is_empty();
+    let mut discard_remaining_segments = false;
+
+    for segment in &original_segments {
+        let segment_path = session_dir.join(&segment.file);
+        if discard_remaining_segments {
+            if segment_path.exists() {
+                fs::remove_file(&segment_path).map_err(to_store_error)?;
+                changed = true;
+            }
+            continue;
+        }
+
+        let repair_read = read_segment_event_lines_for_repair(&segment_path)?;
+        changed |= repair_read.changed;
+        if repair_read.truncated_at_corrupt_line {
+            discard_remaining_segments = true;
+        }
+        if repair_read.lines.is_empty() {
+            if segment_path.exists() {
+                fs::remove_file(&segment_path).map_err(to_store_error)?;
+                changed = true;
+            }
+            continue;
+        }
+        if repair_read.changed {
+            write_json_lines_file_atomic(&segment_path, &repair_read.lines)?;
+        }
+        retained_segment_lines.push((segment.file.clone(), repair_read.lines));
+    }
+
+    let retained_segments = retained_segment_lines
+        .iter()
+        .map(|(file, lines)| rebuild_segment_metadata(file, lines))
+        .collect::<Result<Vec<_>, _>>()?;
+    let active_segment = retained_segments
+        .last()
+        .map(|segment| segment.file.clone())
+        .unwrap_or_else(|| segment_file_name(1));
+    let next_global_seq = retained_segment_lines
+        .iter()
+        .flat_map(|(_, lines)| lines.iter().map(|line| line.seq))
+        .max()
+        .map(|seq| seq.saturating_add(1))
+        .unwrap_or(0);
+    let latest_rollback_seq = retained_segment_lines
+        .iter()
+        .flat_map(|(_, lines)| lines.iter())
+        .filter(|line| line.kind == SegmentedSessionEventKind::ThreadRolledBack)
+        .map(|line| line.seq)
+        .max();
+    changed |= metadata.segments != retained_segments;
+    changed |= metadata.active_segment != active_segment;
+    changed |= metadata.next_global_seq != next_global_seq;
+    changed |= metadata.latest_rollback_seq != latest_rollback_seq;
+
+    if !changed {
+        return Ok(false);
+    }
+
+    let retained_segments = if retained_segments.is_empty() {
+        let empty_segment = SegmentMetadata::empty(segment_file_name(1), 0);
+        write_json_lines_file_atomic::<SegmentedSessionEventLine>(
+            &session_dir.join(&empty_segment.file),
+            &[],
+        )?;
+        vec![empty_segment]
+    } else {
+        retained_segments
+    };
+    metadata.active_segment = retained_segments
+        .last()
+        .map(|segment| segment.file.clone())
+        .unwrap_or_else(|| segment_file_name(1));
+    metadata.next_global_seq = retained_segment_lines
+        .iter()
+        .flat_map(|(_, lines)| lines.iter().map(|line| line.seq))
+        .max()
+        .map(|seq| seq.saturating_add(1))
+        .unwrap_or(0);
+    metadata.segments = retained_segments;
+    metadata.latest_rollback_seq = latest_rollback_seq;
+    metadata.updated_at = current_unix_millis_text();
+
+    let effective_lines = retained_segment_lines
+        .iter()
+        .flat_map(|(_, lines)| lines.iter())
+        .filter(|line| {
+            metadata
+                .latest_rollback_seq
+                .is_none_or(|seq| line.seq > seq)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let messages = segmented_lines_to_session_messages(&effective_lines)?;
+    update_segmented_message_checkpoint(&mut metadata, &messages)?;
+    write_metadata(session_dir, &metadata)?;
+    Ok(true)
+}
+
+/// Parsed JSONL content and repair status for one segment file.
+/// 单个分段文件的 JSONL 解析内容与修复状态。
+struct SegmentJsonlRepairRead {
+    /// Retained valid event lines.
+    /// 保留下来的有效事件行。
+    lines: Vec<SegmentedSessionEventLine>,
+    /// Whether the physical file or metadata should be rewritten.
+    /// 是否需要重写物理文件或元数据。
+    changed: bool,
+    /// Whether a malformed line forced truncating this segment suffix.
+    /// 是否存在格式错误行导致当前分段后缀被截断。
+    truncated_at_corrupt_line: bool,
+}
+
+/// Reads one segment file into valid lines and marks the first malformed line as the cutoff.
+/// 将单个分段文件读取为有效事件行，并把首条格式错误行标记为截断点。
+fn read_segment_event_lines_for_repair(
+    segment_path: &Path,
+) -> Result<SegmentJsonlRepairRead, String> {
+    if !segment_path.exists() {
+        return Ok(SegmentJsonlRepairRead {
+            lines: Vec::new(),
+            changed: true,
+            truncated_at_corrupt_line: true,
+        });
+    }
+    let file = File::open(segment_path).map_err(to_store_error)?;
+    let reader = BufReader::new(file);
+    let mut lines = Vec::new();
+    let mut changed = false;
+    let mut truncated_at_corrupt_line = false;
+    for line in reader.lines() {
+        let line = line.map_err(to_store_error)?;
+        if line.trim().is_empty() {
+            changed = true;
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            changed = true;
+            truncated_at_corrupt_line = true;
+            break;
+        };
+        if !segmented_event_value_has_known_kind(&value) {
+            changed = true;
+            continue;
+        }
+        match serde_json::from_value::<SegmentedSessionEventLine>(value) {
+            Ok(event_line) => lines.push(event_line),
+            Err(_) => {
+                changed = true;
+                truncated_at_corrupt_line = true;
+                break;
+            }
+        }
+    }
+    Ok(SegmentJsonlRepairRead {
+        lines,
+        changed,
+        truncated_at_corrupt_line,
+    })
 }
 
 /// Returns whether one raw segment JSON value declares an event type accepted by the current schema.
@@ -223,40 +405,6 @@ pub(in crate::workspace_store) fn session_boundary_payload(
     })
 }
 
-/// Appends events using a task session metadata document already loaded by the caller.
-/// 使用调用方已加载的子任务会话元数据文档追加事件。
-pub(in crate::workspace_store) fn append_task_events_with_metadata(
-    task_dir: &Path,
-    metadata: &mut SegmentedTaskSessionMetadata,
-    events: &[SegmentedSessionEventInput],
-) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    // Keep appended lines for tests and projection callers.
-    // 为测试与投影调用方保留已追加行。
-    let mut appended_lines = Vec::new();
-    for event in events {
-        // Allocate task-local sequence numbers independently from the parent session.
-        // 独立于父会话分配子任务局部序号。
-        let line = SegmentedSessionEventLine {
-            seq: metadata.next_local_seq,
-            timestamp: event.timestamp.clone(),
-            kind: event.kind,
-            payload: event.payload.clone(),
-        };
-        append_line_to_active_segment(
-            task_dir,
-            &metadata.segment_policy,
-            &mut metadata.active_segment,
-            &mut metadata.segments,
-            &line,
-            event.turn_index,
-        )?;
-        metadata.next_local_seq += 1;
-        metadata.updated_at = event.timestamp.clone();
-        appended_lines.push(line);
-    }
-    Ok(appended_lines)
-}
-
 /// Appends one line to the active segment, rolling over before the write when needed.
 /// 向活动分段追加一行，并在需要时于写入前滚动到新分段。
 pub(in crate::workspace_store) fn append_line_to_active_segment(
@@ -286,8 +434,8 @@ pub(in crate::workspace_store) fn append_line_to_active_segment(
         return Err("Segment metadata is empty.".to_string());
     };
     let segment_path = session_dir.join(&segment.file);
-    append_json_line(&segment_path, line)?;
-    update_segment_metadata(segment, line, line_byte_len, turn_index);
+    let actual_line_byte_len = append_json_line(&segment_path, line)?;
+    update_segment_metadata(segment, line, actual_line_byte_len, turn_index);
     Ok(())
 }
 
@@ -413,7 +561,6 @@ pub(in crate::workspace_store) fn list_segmented_session_catalog_for_root(
             let metadata = read_session_metadata(&session_dir)?;
             entries.push(SegmentedSessionCatalogEntry {
                 session_dir,
-                archived,
                 metadata,
             });
         }
@@ -460,7 +607,7 @@ pub(in crate::workspace_store) fn segmented_state_file_io_lock() -> &'static Mut
 /// Returns the shared process-local mutex used for segmented JSONL append operations.
 /// 返回分段 JSONL 追加操作共用的进程内互斥锁。
 pub(in crate::workspace_store) fn segmented_append_file_io_lock() -> &'static Mutex<()> {
-    SEGMENTED_APPEND_FILE_IO_LOCK.get_or_init(|| Mutex::new(()))
+    vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
 }
 
 /// Builds a stable segment file name from its one-based index.
@@ -477,7 +624,7 @@ pub(in crate::workspace_store) fn create_dir_all(path: &Path) -> Result<(), Stri
 
 /// Appends one JSON value as a JSONL line.
 /// 将一个 JSON 值作为 JSONL 行追加写入。
-pub(in crate::workspace_store) fn append_json_line<T>(path: &Path, value: &T) -> Result<(), String>
+pub(in crate::workspace_store) fn append_json_line<T>(path: &Path, value: &T) -> Result<u64, String>
 where
     T: Serialize,
 {
@@ -490,12 +637,15 @@ where
     encoded_line.push('\n');
     let mut file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(path)
         .map_err(to_store_error)?;
+    let boundary_bytes = ensure_jsonl_append_boundary(&mut file)?;
     file.write_all(encoded_line.as_bytes())
         .map_err(to_store_error)?;
-    file.flush().map_err(to_store_error)
+    file.flush().map_err(to_store_error)?;
+    Ok(boundary_bytes + encoded_line.len() as u64)
 }
 
 /// Reads a required JSON document from disk.
@@ -585,12 +735,42 @@ where
     }
     let mut file = OpenOptions::new()
         .append(true)
+        .read(true)
         .create(true)
         .open(path)
         .map_err(to_store_error)?;
+    ensure_jsonl_append_boundary(&mut file)?;
     file.write_all(encoded_batch.as_bytes())
         .map_err(to_store_error)?;
     file.flush().map_err(to_store_error)
+}
+
+/// Ensures the existing JSONL file tail ends with a newline before appending another row.
+/// 确保已有 JSONL 文件尾部在追加新行前以换行结束。
+///
+/// # Parameters
+/// 参数
+/// `file` is the append handle opened for the target JSONL file.
+/// `file` 是为目标 JSONL 文件打开的追加句柄。
+///
+/// # Returns
+/// 返回值
+/// The number of boundary bytes written before the next JSONL record.
+/// 返回下一条 JSONL 记录前额外写入的边界字节数。
+fn ensure_jsonl_append_boundary(file: &mut File) -> Result<u64, String> {
+    let len = file.metadata().map_err(to_store_error)?.len();
+    if len == 0 {
+        return Ok(0);
+    }
+    file.seek(SeekFrom::Start(len.saturating_sub(1)))
+        .map_err(to_store_error)?;
+    let mut tail = [0_u8; 1];
+    file.read_exact(&mut tail).map_err(to_store_error)?;
+    if tail[0] != b'\n' {
+        file.write_all(b"\n").map_err(to_store_error)?;
+        return Ok(1);
+    }
+    Ok(0)
 }
 
 /// Builds a collision-free temporary JSON path next to the target file.

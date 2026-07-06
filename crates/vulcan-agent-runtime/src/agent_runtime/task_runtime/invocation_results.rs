@@ -143,7 +143,7 @@ pub(super) fn build_cached_task_invocation_result_from_metadata(
         depth: usize::from(metadata.depth),
         prompt: incoming_prompt.to_string(),
         description: metadata.description.clone(),
-        subagent: metadata.description.clone(),
+        subagent: task_metadata_subagent_label(metadata),
         result_text,
         updated_at: metadata.updated_at.to_string(),
     })

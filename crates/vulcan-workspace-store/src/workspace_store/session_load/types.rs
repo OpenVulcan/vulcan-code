@@ -38,22 +38,3 @@ pub(super) struct SegmentedWindowMessages {
     /// 当窗口来自 会话边界事件时对应的规范 会话边界投影会话状态。
     pub(super) boundary_conversation_state: Option<SessionConversationState>,
 }
-
-/// Selects which segmented source should feed the visible transcript window.
-/// 选择用于构建可见转录窗口的分段数据来源。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SegmentedWindowSourcePreference {
-    /// Prefer compact session-boundary projection when it exists.
-    /// 当存在会话边界投影时优先使用紧凑投影。
-    SessionBoundaryFirst,
-    /// Read the raw turn window so tool, thinking, and stats rows stay available.
-    /// 读取原始轮次窗口，确保工具、思考与统计行仍可展示。
-    RawTurnOnly,
-}
-
-/// Returns the display-preserving source preference for ordinary session hydration.
-/// 返回普通会话水合使用的保留展示行来源策略。
-pub(super) fn default_session_hydration_window_source_preference() -> SegmentedWindowSourcePreference
-{
-    SegmentedWindowSourcePreference::SessionBoundaryFirst
-}

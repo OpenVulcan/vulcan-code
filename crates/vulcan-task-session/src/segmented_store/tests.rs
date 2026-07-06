@@ -74,6 +74,48 @@ fn create_root_session_metadata(root: &Path, root_session_id: SessionNodeId) {
     .expect("write root segment");
 }
 
+/// Verifies root task-link appends repair a main-session JSONL tail that is missing its newline.
+/// 验证根任务关联追加会修复缺少尾部换行的主会话 JSONL 行。
+#[test]
+fn root_task_link_repairs_missing_jsonl_tail_newline() {
+    let root = test_root("root_task_link_repairs_missing_jsonl_tail_newline");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    let segment_path = root.join("s001.jsonl");
+    let mut bytes = fs::read(&segment_path).expect("read root segment bytes");
+    assert_eq!(bytes.pop(), Some(b'\n'));
+    fs::write(&segment_path, bytes).expect("rewrite root segment without trailing newline");
+
+    store
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent: ParentSessionRef::MainSession { root_session_id },
+            public_task_id: "repair-child".to_string(),
+            display_title: "repair-child".to_string(),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 1,
+            timestamp_ms: 200,
+        }))
+        .expect("create task session");
+
+    let text = fs::read_to_string(&segment_path).expect("read repaired root segment text");
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines
+            .iter()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    );
+    let metadata = read_required_json::<Value>(&root.join(SEGMENTED_METADATA_FILE))
+        .expect("read root metadata");
+    assert_eq!(metadata["next_global_seq"], json!(2));
+    assert_eq!(metadata["segments"][0]["line_count"], json!(2));
+}
+
 /// Verifies the segmented store writes task metadata, state, segments, and parent links without old tasks layout files.
 /// 验证分段存储会写入子任务元数据、状态、分段和父关联，同时不产生旧 tasks 布局文件。
 #[test]
@@ -884,4 +926,53 @@ fn parent_task_link_rejects_missing_child_metadata() {
     let root_lines =
         read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl")).expect("root lines");
     assert_eq!(root_lines.len(), 1);
+}
+
+/// Verifies root task-link appends follow the highest persisted sequence, not stale metadata.
+/// 验证根任务关联追加跟随已持久化最大序号，而不是陈旧元数据。
+#[test]
+fn root_task_link_uses_highest_existing_sequence_when_metadata_is_stale() {
+    let root = test_root("root_task_link_uses_highest_existing_sequence_when_metadata_is_stale");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    append_json_line(
+        &root.join("s001.jsonl"),
+        &SegmentedEventLine {
+            seq: 5,
+            timestamp: "150".to_string(),
+            kind: "session_boundary".to_string(),
+            payload: json!({ "kind": "retained_after_rewrite" }),
+            turn_index: None,
+        },
+    )
+    .expect("write retained high-sequence root line");
+    let metadata_path = root.join(SEGMENTED_METADATA_FILE);
+    let mut metadata = read_required_json::<Value>(&metadata_path).expect("read root metadata");
+    metadata["next_global_seq"] = json!(1);
+    metadata["segments"][0]["line_count"] = json!(2);
+    write_json_file(&metadata_path, &metadata).expect("write stale root metadata");
+
+    store
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent: ParentSessionRef::MainSession { root_session_id },
+            public_task_id: "stale-seq-child".to_string(),
+            display_title: "stale-seq-child".to_string(),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 1,
+            timestamp_ms: 200,
+        }))
+        .expect("create task session");
+
+    let root_lines =
+        read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl")).expect("read root lines");
+    let task_link = root_lines.last().expect("task link line");
+    assert_eq!(task_link.seq, 6);
+    let updated_metadata =
+        read_required_json::<Value>(&metadata_path).expect("read updated root metadata");
+    assert_eq!(updated_metadata["next_global_seq"], json!(7));
 }

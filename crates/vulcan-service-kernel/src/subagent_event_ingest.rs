@@ -94,7 +94,7 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
             .filter(|message| message.conversation_id == conversation_id)
             .cloned()
             .collect::<Vec<_>>();
-        let projected_messages = {
+        let (projected_messages, cached_messages) = {
             let workspace = guard
                 .workspace_snapshot
                 .as_mut()
@@ -123,8 +123,21 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
                 .get(&normalized_state.task_id)
                 .cloned()
                 .unwrap_or_default();
-            conversation_messages_from_session(&conversation_id, messages.as_slice(), false)
+            (
+                conversation_messages_from_session(&conversation_id, messages.as_slice(), false),
+                messages,
+            )
         };
+        let cache_access_ms = current_unix_millis_value();
+        guard.subagent_surface_detail_cache.insert(
+            normalized_state.task_id,
+            WebuiSubagentSurfaceDetailCacheEntry {
+                task_state: normalized_state.clone(),
+                messages: cached_messages,
+                last_access_ms: cache_access_ms,
+            },
+        );
+        prune_webui_subagent_surface_detail_cache(&mut guard, cache_access_ms);
         if let Some(message_patch) = build_conversation_messages_patched_delta(
             &conversation_id,
             before_visible_messages.as_slice(),
@@ -220,15 +233,77 @@ pub(crate) fn seed_webui_subagent_task_prompt_if_needed(
     {
         return;
     }
-    let now = current_unix_millis_text();
-    workspace_snapshot.session_messages.insert(
-        task_id,
-        vec![
-            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", prompt)
-                .with_runtime_metadata(format!("session-{task_id}-subagent-prompt-{now}"), now),
-        ],
-    );
+    append_webui_subagent_session_message(workspace_snapshot, task_id, || {
+        build_webui_subagent_task_prompt_message(task_id, prompt)
+    });
+}
+
+/// Appends one child-task display message and synchronizes its dialogue-ready marker.
+/// 追加一条子任务显示消息，并同步其对话层就绪标记。
+fn append_webui_subagent_session_message<Build>(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    task_id: SessionId,
+    build_message: Build,
+) where
+    Build: FnOnce() -> SessionMessageEntry,
+{
+    workspace_snapshot
+        .session_messages
+        .entry(task_id)
+        .or_default()
+        .push(build_message());
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
+}
+
+/// Appends one child-task display message only when no existing row matches the duplicate predicate, then synchronizes its dialogue-ready marker.
+/// 仅当没有现有行命中重复判定时追加一条子任务显示消息，然后同步其对话层就绪标记。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the child transcript cache being mutated.
+/// `workspace_snapshot` 持有正在变更的子任务转录缓存。
+/// `task_id` selects the child transcript to update.
+/// `task_id` 选择要更新的子任务转录。
+/// `is_duplicate` identifies an already-projected row that should suppress the new message.
+/// `is_duplicate` 识别会抑制新消息的已投影行。
+/// `build_message` creates the new display row only after duplicate checks pass.
+/// `build_message` 仅在重复检查通过后创建新的显示行。
+///
+/// # Returns
+/// 返回值
+/// Returns whether the message was appended.
+/// 返回是否实际追加了消息。
+fn append_webui_subagent_session_message_if_missing<IsDuplicate, Build>(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    task_id: SessionId,
+    is_duplicate: IsDuplicate,
+    build_message: Build,
+) -> bool
+where
+    IsDuplicate: Fn(&SessionMessageEntry) -> bool,
+    Build: FnOnce() -> SessionMessageEntry,
+{
+    let messages = workspace_snapshot
+        .session_messages
+        .entry(task_id)
+        .or_default();
+    if messages.iter().any(is_duplicate) {
+        return false;
+    }
+    messages.push(build_message());
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
+    true
+}
+
+/// Builds the initial child task prompt display row.
+/// 构建初始子任务提示词显示行。
+fn build_webui_subagent_task_prompt_message(
+    task_id: SessionId,
+    prompt: &str,
+) -> SessionMessageEntry {
+    let now = current_unix_millis_text();
+    SessionMessageEntry::new(SessionMessageKind::User, "用户指令", prompt)
+        .with_runtime_metadata(format!("session-{task_id}-subagent-prompt-{now}"), now)
 }
 
 /// Appends a parent-to-child send_message prompt to the child transcript from one tool event.
@@ -275,13 +350,27 @@ pub(crate) fn append_webui_subagent_send_message_from_event_if_needed(
         .filter(|value| !value.trim().is_empty())?;
     let tool_call_id = subagent_send_message_tool_call_id(event, metadata)?;
     let message_id = format!("session-{task_id}-subagent-send-message-{tool_call_id}");
-    let messages = workspace_snapshot
-        .session_messages
-        .entry(task_id)
-        .or_default();
-    if messages.iter().any(|entry| entry.id == message_id) {
+    let duplicate_message_id = message_id.clone();
+    let appended = append_webui_subagent_session_message_if_missing(
+        workspace_snapshot,
+        task_id,
+        |entry| entry.id == duplicate_message_id,
+        || build_webui_subagent_send_message(payload, task_id, message, message_id),
+    );
+    if !appended {
         return None;
     }
+    Some(task_id)
+}
+
+/// Builds one display-only child transcript row from a parent-to-child send_message payload.
+/// 根据父级发往子任务的 send_message 载荷构建一条仅显示的子转录行。
+fn build_webui_subagent_send_message(
+    payload: &Value,
+    task_id: SessionId,
+    message: &str,
+    message_id: String,
+) -> SessionMessageEntry {
     let now = current_unix_millis_text();
     let mut entry = SessionMessageEntry::new(SessionMessageKind::User, "智能体消息", message)
         .with_runtime_metadata(message_id, now);
@@ -297,9 +386,7 @@ pub(crate) fn append_webui_subagent_send_message_from_event_if_needed(
         "queued": payload.get("queued").cloned(),
         "interrupted": payload.get("interrupted").cloned(),
     }));
-    messages.push(entry);
-    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
-    Some(task_id)
+    entry
 }
 
 /// Resolves the stable tool-call id used to de-duplicate a projected send_message prompt.
@@ -331,25 +418,27 @@ pub(crate) fn append_webui_subagent_stop_notice_if_needed(
     workspace_snapshot: &mut WorkspaceSnapshot,
     task_id: SessionId,
 ) {
-    let messages = workspace_snapshot
-        .session_messages
-        .entry(task_id)
-        .or_default();
-    if messages.iter().any(|message| {
-        message.title == "执行已停止" && message.body.trim() == SUBAGENT_TASK_STOPPED_SUMMARY_TEXT
-    }) {
-        return;
-    }
-    let now = current_unix_millis_text();
-    messages.push(
-        SessionMessageEntry::new(
-            SessionMessageKind::Assistant,
-            "执行已停止",
-            SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
-        )
-        .with_runtime_metadata(format!("session-{task_id}-subagent-stopped-{now}"), now),
+    append_webui_subagent_session_message_if_missing(
+        workspace_snapshot,
+        task_id,
+        |message| {
+            message.title == "执行已停止"
+                && message.body.trim() == SUBAGENT_TASK_STOPPED_SUMMARY_TEXT
+        },
+        || build_webui_subagent_stop_notice(task_id),
     );
-    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
+}
+
+/// Builds the canonical stopped notice appended to one child task transcript.
+/// 构建追加到单个子任务转录中的规范停止提示。
+fn build_webui_subagent_stop_notice(task_id: SessionId) -> SessionMessageEntry {
+    let now = current_unix_millis_text();
+    SessionMessageEntry::new(
+        SessionMessageKind::Assistant,
+        "执行已停止",
+        SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
+    )
+    .with_runtime_metadata(format!("session-{task_id}-subagent-stopped-{now}"), now)
 }
 
 /// Links one delegate task-session payload back onto the visible WebUI parent task card.

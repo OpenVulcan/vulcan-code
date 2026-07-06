@@ -152,29 +152,6 @@ pub(in crate::workspace_store) fn segmented_line_to_session_message(
     Ok(Some(message))
 }
 
-/// Returns whether one segmented event line is a tool-detail row for the requested turn.
-/// 返回单条分段事件行是否是指定轮次的工具详情行。
-pub(in crate::workspace_store) fn segmented_line_matches_tool_turn(
-    line: &SegmentedSessionEventLine,
-    turn_index: i64,
-) -> Result<bool, String> {
-    if line
-        .payload
-        .get("turn_index")
-        .and_then(Value::as_i64)
-        .is_none_or(|value| value != turn_index)
-    {
-        return Ok(false);
-    }
-    let Some(message) = segmented_line_to_session_message(line)? else {
-        return Ok(false);
-    };
-    Ok(matches!(
-        message.record_kind,
-        SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
-    ))
-}
-
 /// Extracts the display turn index carried by one segmented event line.
 /// 提取单条分段事件行携带的展示轮次索引。
 pub(in crate::workspace_store) fn segmented_line_turn_index(

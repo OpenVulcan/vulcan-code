@@ -669,3 +669,93 @@ fn preserve_active_session_run_state_ignores_stale_running_without_kernel() {
             .contains_key(&session_id)
     );
 }
+
+/// Verifies preserved sessions with blank project ids do not rejoin blank project nodes.
+/// 验证带空白项目标识的保留会话不会重新加入空白项目节点。
+#[test]
+fn preserve_active_session_run_state_ignores_blank_project_membership() {
+    // session_id identifies the active session retained across refresh.
+    // session_id 标识刷新期间被保留的活动会话。
+    let session_id = SessionId::new_v4();
+    // previous_snapshot contains a blank project id that must be treated as no project.
+    // previous_snapshot 包含必须视为无项目的空白项目标识。
+    let previous_snapshot = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            "   ",
+            "Blank Project",
+            "D:/blank-project",
+            false,
+            0,
+            None,
+            None,
+            vec![session_id],
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            Some(String::from("   ")),
+            "空白项目会话",
+            "正在刷新",
+            SessionState::Running,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::from([(session_id, SessionRuntimeStateEntry::default())]),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::Requesting)]),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+    // refreshed_snapshot still contains the blank project node, making accidental membership visible.
+    // refreshed_snapshot 仍包含空白项目节点，以便观察误加入成员关系。
+    let mut refreshed_snapshot = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            "   ",
+            "Blank Project",
+            "D:/blank-project",
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: Vec::new(),
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: SessionId::nil(),
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    let preserved_workspace_run_state = capture_preserved_workspace_run_state(
+        Some(&previous_snapshot),
+        &BTreeSet::from([session_id]),
+        None,
+    );
+    preserve_active_session_run_state(
+        preserved_workspace_run_state.as_ref(),
+        &mut refreshed_snapshot,
+    );
+
+    assert!(
+        refreshed_snapshot
+            .sessions
+            .iter()
+            .any(|session| session.id == session_id)
+    );
+    assert!(refreshed_snapshot.task_projects[0].session_ids.is_empty());
+}

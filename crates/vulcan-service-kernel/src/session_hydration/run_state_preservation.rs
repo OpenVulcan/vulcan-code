@@ -189,21 +189,16 @@ fn capture_preserved_workspace_run_state_with_message_scope(
             .get(&previous_session.id)
             .copied();
         let previous_project_index =
-            previous_session
-                .project_id
-                .as_deref()
-                .and_then(|project_id| {
-                    previous_snapshot
-                        .task_projects
-                        .iter()
-                        .find(|project| project.id == project_id)
-                        .and_then(|project| {
-                            project
-                                .session_ids
-                                .iter()
-                                .position(|session_id| *session_id == previous_session.id)
-                        })
-                });
+            session_summary_project_id(previous_session).and_then(|project_id| {
+                workspace_task_project_for_project_id(previous_snapshot, project_id).and_then(
+                    |project| {
+                        project
+                            .session_ids
+                            .iter()
+                            .position(|session_id| *session_id == previous_session.id)
+                    },
+                )
+            });
         sessions.push(PreservedSessionRunState {
             previous_index,
             previous_project_index,
@@ -222,8 +217,7 @@ fn capture_preserved_workspace_run_state_with_message_scope(
                 .flatten(),
         });
     }
-    let selected_session = (previous_snapshot.selected_session != SessionId::nil())
-        .then_some(previous_snapshot.selected_session);
+    let selected_session = selected_workspace_session_id(previous_snapshot);
     (selected_session.is_some() || !sessions.is_empty()).then_some(PreservedWorkspaceRunState {
         selected_session,
         sessions,
@@ -361,14 +355,12 @@ fn preserve_visible_project_session_membership(
     preserved_session: &PreservedSessionRunState,
 ) {
     let previous_session = &preserved_session.session;
-    let Some(project_id) = previous_session.project_id.as_deref() else {
+    let Some(project_id) = session_summary_project_id(previous_session) else {
         return;
     };
     let previous_index = preserved_session.previous_project_index.unwrap_or_default();
-    if let Some(refreshed_project) = refreshed_snapshot
-        .task_projects
-        .iter_mut()
-        .find(|project| project.id == project_id)
+    if let Some(refreshed_project) =
+        workspace_task_project_for_project_id_mut(refreshed_snapshot, project_id)
     {
         refreshed_project
             .session_ids

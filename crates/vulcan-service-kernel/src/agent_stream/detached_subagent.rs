@@ -345,11 +345,7 @@ pub(crate) fn maybe_prepare_webui_parent_completion_after_subagent_finished(
             .as_mut()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         let now = current_unix_millis_text();
-        let project_id = workspace
-            .sessions
-            .iter()
-            .find(|session| session.id == parent_session_id)
-            .and_then(|session| session.project_id.clone());
+        let project_id = owning_project_id_for_session(workspace, parent_session_id);
         let runtime_state = workspace
             .session_runtime_state
             .entry(parent_session_id)
@@ -500,25 +496,28 @@ pub(crate) fn webui_session_mailbox_input_from_kernel(
     let Some(kernel) = guard.session_runtime_kernels.get(&parent_session_id) else {
         return Ok(None);
     };
-    let matching_inputs = kernel
-        .input_queue()
-        .get_unconsumed_mailbox_input()
-        .into_iter()
-        .filter(|input| {
-            input.kind == TurnInputKind::SubagentMessage
-                && task_id.is_none_or(|task_id| {
-                    input.payload.get("task_id").and_then(Value::as_str) == Some(task_id)
-                })
-        })
-        .collect::<Vec<_>>();
-    if matching_inputs.is_empty() {
-        return Ok(None);
-    };
-    let messages = matching_inputs
-        .into_iter()
-        .map(|input| webui_agent_message_text_from_turn_input(parent_session_id, &input))
-        .collect::<Vec<_>>();
-    Ok(Some(messages.join("\n\n")))
+    let mut mailbox_prompt = String::new();
+    for input in kernel.input_queue().get_unconsumed_mailbox_input() {
+        if input.kind != TurnInputKind::SubagentMessage
+            || task_id.is_some_and(|task_id| {
+                input.payload.get("task_id").and_then(Value::as_str) != Some(task_id)
+            })
+        {
+            continue;
+        }
+        if !mailbox_prompt.is_empty() {
+            mailbox_prompt.push_str("\n\n");
+        }
+        mailbox_prompt.push_str(&webui_agent_message_text_from_turn_input(
+            parent_session_id,
+            &input,
+        ));
+    }
+    if mailbox_prompt.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(mailbox_prompt))
+    }
 }
 
 /// Returns whether a detached subagent parent event may dispatch the next queued prompt.

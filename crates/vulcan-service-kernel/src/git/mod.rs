@@ -10,6 +10,7 @@ mod diff;
 mod diff_text;
 mod model;
 mod search;
+mod selection;
 mod settings;
 mod snapshot;
 

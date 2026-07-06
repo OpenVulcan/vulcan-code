@@ -2,6 +2,10 @@
 //! 输入区附件暂存辅助逻辑。
 
 use super::*;
+use crate::{
+    session_summary_project_id, workspace_session_summary_for_session,
+    workspace_task_project_for_project_id,
+};
 
 /// Rejects the retired native attachment picker RPC.
 /// 拒绝已退役的原生附件选择器 RPC。
@@ -141,29 +145,36 @@ fn composer_attachment_workspace_path(
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
-        return Ok(normalized_workspace_path_text_from_path(&workspace_root()));
+        return Ok(default_composer_attachment_workspace_path());
     };
     let owner_project_id = conversation_id
         .and_then(parse_session_id)
         .and_then(|session_id| {
-            workspace_snapshot
-                .sessions
-                .iter()
-                .find(|session| session.id == session_id)
-                .and_then(|session| session.project_id.as_deref())
+            workspace_session_summary_for_session(workspace_snapshot, session_id)
+                .and_then(session_summary_project_id)
         })
         .or(project_id)
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let Some(owner_project_id) = owner_project_id else {
-        return Ok(normalized_workspace_path_text_from_path(&workspace_root()));
+        return Ok(default_composer_attachment_workspace_path());
     };
-    Ok(workspace_snapshot
-        .task_projects
-        .iter()
-        .find(|project| project.id == owner_project_id)
-        .map(|project| project.path.clone())
-        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root())))
+    Ok(
+        workspace_task_project_for_project_id(workspace_snapshot, owner_project_id)
+            .map(|project| project.path.clone())
+            .unwrap_or_else(default_composer_attachment_workspace_path),
+    )
+}
+
+/// Returns the fallback workspace path used by composer attachment staging.
+/// 返回输入区附件暂存使用的回退工作区路径。
+///
+/// # Returns
+/// 返回值
+/// The normalized process workspace root path used when no project path resolves.
+/// 当无法解析项目路径时使用的规范化进程工作区根路径。
+fn default_composer_attachment_workspace_path() -> String {
+    normalized_workspace_path_text_from_path(&workspace_root())
 }
 
 /// Stages local paths for a resolved workspace path and converts them to service DTOs.
@@ -189,4 +200,185 @@ fn stage_composer_attachment_paths_for_workspace(
         .map(|path| stage_attachment_file(workspace_path, path))
         .map(|result| result.map(|attachment| composer_attachment_summary_from_core(&attachment)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{ServiceShellHost, SharedServiceBridgeState, create_service_bridge_state};
+    use vulcan_workbench_model::{SessionId, SessionState, SessionSummary, TaskProjectSummary};
+    use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
+
+    /// Test shell host used by attachment staging path-resolution tests.
+    /// 附件暂存路径解析测试使用的测试宿主壳。
+    struct AttachmentStagingTestShellHost;
+
+    impl ServiceShellHost for AttachmentStagingTestShellHost {
+        /// Rejects host file-manager use in attachment staging tests.
+        /// 在附件暂存测试中拒绝使用宿主文件管理器。
+        fn open_path(&self, _path: &str) -> Result<(), String> {
+            Err(String::from(
+                "attachment staging tests do not open host paths",
+            ))
+        }
+
+        /// Rejects host browser use in attachment staging tests.
+        /// 在附件暂存测试中拒绝使用宿主浏览器。
+        fn open_url(&self, _url: &str) -> Result<(), String> {
+            Err(String::from(
+                "attachment staging tests do not open host URLs",
+            ))
+        }
+    }
+
+    /// Builds service state with one retained workspace snapshot.
+    /// 构建带有单个保留工作区快照的服务状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `workspace_snapshot` is the retained workspace snapshot under test.
+    /// `workspace_snapshot` 是测试中的保留工作区快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Shared service state containing the supplied workspace snapshot.
+    /// 返回包含给定工作区快照的共享服务状态。
+    fn service_state_with_workspace_snapshot(
+        workspace_snapshot: WorkspaceSnapshot,
+    ) -> SharedServiceBridgeState {
+        // state stores the minimal bridge state required by attachment staging.
+        // state 保存附件暂存所需的最小 bridge 状态。
+        let state = create_service_bridge_state(Arc::new(AttachmentStagingTestShellHost));
+        // guard mutates the retained workspace snapshot before the test reads it.
+        // guard 在测试读取前写入保留工作区快照。
+        let mut guard = state.lock().expect("test service state lock must be valid");
+        guard.workspace_snapshot = Some(workspace_snapshot);
+        drop(guard);
+        state
+    }
+
+    /// Builds a workspace snapshot with one project and one session.
+    /// 构建包含一个项目与一个会话的工作区快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the retained conversation id.
+    /// `session_id` 是保留的会话标识。
+    /// `project_id` is the project id stored on that session.
+    /// `project_id` 是写入该会话的项目标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A workspace snapshot suitable for attachment staging path tests.
+    /// 返回适用于附件暂存路径测试的工作区快照。
+    fn workspace_snapshot_for_attachment_staging(
+        session_id: SessionId,
+        project_id: Option<String>,
+    ) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                "project-a",
+                "Project A",
+                r"D:\projects\project-a",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                project_id,
+                "附件暂存测试会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Verifies conversation-owned attachment staging resolves the owning project path.
+    /// 验证会话所属附件暂存会解析到所属项目路径。
+    #[test]
+    fn composer_attachment_workspace_path_resolves_conversation_project() {
+        // session_id identifies the conversation supplied to the staging path resolver.
+        // session_id 标识传给暂存路径解析器的会话。
+        let session_id = SessionId::new_v4();
+        // conversation_id stores the WebUI conversation id text.
+        // conversation_id 保存 WebUI 会话标识文本。
+        let conversation_id = session_id.to_string();
+        // state contains a session project id with boundary whitespace to preserve trim behavior.
+        // state 包含带边界空白的会话项目标识，用于保持 trim 行为。
+        let state =
+            service_state_with_workspace_snapshot(workspace_snapshot_for_attachment_staging(
+                session_id,
+                Some(String::from(" project-a ")),
+            ));
+
+        assert_eq!(
+            composer_attachment_workspace_path(&state, None, Some(&conversation_id))
+                .expect("conversation project should resolve to a workspace path"),
+            r"D:\projects\project-a"
+        );
+    }
+
+    /// Verifies explicit project ids resolve through the backend project snapshot.
+    /// 验证明示项目标识会通过后端项目快照解析。
+    #[test]
+    fn composer_attachment_workspace_path_resolves_explicit_project_id() {
+        // session_id identifies the retained session in the workspace fixture.
+        // session_id 标识工作区夹具中的保留会话。
+        let session_id = SessionId::new_v4();
+        // state owns the project snapshot used by the staging resolver.
+        // state 持有暂存解析器使用的项目快照。
+        let state = service_state_with_workspace_snapshot(
+            workspace_snapshot_for_attachment_staging(session_id, Some(String::from("project-a"))),
+        );
+
+        assert_eq!(
+            composer_attachment_workspace_path(&state, Some(" project-a "), None)
+                .expect("explicit project should resolve to a workspace path"),
+            r"D:\projects\project-a"
+        );
+    }
+
+    /// Verifies blank conversation project ids fall back to the workspace root.
+    /// 验证空白会话项目标识会回退到工作区根目录。
+    #[test]
+    fn composer_attachment_workspace_path_falls_back_for_blank_conversation_project() {
+        // session_id identifies the conversation carrying a blank project id.
+        // session_id 标识携带空白项目标识的会话。
+        let session_id = SessionId::new_v4();
+        // conversation_id stores the WebUI conversation id text.
+        // conversation_id 保存 WebUI 会话标识文本。
+        let conversation_id = session_id.to_string();
+        // state keeps the blank project id so the fallback branch is observable.
+        // state 保留空白项目标识，以便观察回退分支。
+        let state = service_state_with_workspace_snapshot(
+            workspace_snapshot_for_attachment_staging(session_id, Some(String::from("   "))),
+        );
+
+        assert_eq!(
+            composer_attachment_workspace_path(&state, None, Some(&conversation_id))
+                .expect("blank conversation project should resolve through fallback"),
+            default_composer_attachment_workspace_path()
+        );
+    }
 }

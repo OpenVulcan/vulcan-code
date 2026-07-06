@@ -38,14 +38,8 @@ pub async fn load_session_hydration_snapshot_for_project_created_at(
         session_id,
     )
     .await?;
-    load_session_hydration_snapshot_from_locator(
-        controller,
-        session_id,
-        requested_limit,
-        locator,
-        default_session_hydration_window_source_preference(),
-    )
-    .await
+    load_session_hydration_snapshot_from_locator(controller, session_id, requested_limit, locator)
+        .await
 }
 
 /// Lazily loads a display-complete transcript window by deterministic session identity.
@@ -82,14 +76,8 @@ pub async fn load_session_display_hydration_snapshot_for_project_created_at(
         session_id,
     )
     .await?;
-    load_session_hydration_snapshot_from_locator(
-        controller,
-        session_id,
-        requested_limit,
-        locator,
-        default_session_hydration_window_source_preference(),
-    )
-    .await
+    load_session_hydration_snapshot_from_locator(controller, session_id, requested_limit, locator)
+        .await
 }
 
 /// Builds a session hydration snapshot from an already resolved segmented locator.
@@ -115,24 +103,17 @@ async fn load_session_hydration_snapshot_from_locator(
     session_id: SessionId,
     requested_limit: usize,
     locator: Option<StoredSessionLocatorRow>,
-    source_preference: SegmentedWindowSourcePreference,
 ) -> Result<SessionHydrationSnapshot, String> {
     let requested_limit = requested_limit.clamp(1, SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
     let compactions = Vec::new();
-    let runtime_state_row = None;
-    let target_turn_count = resolve_initial_hydration_turn_count(
-        requested_limit,
-        &compactions,
-        runtime_state_row.as_ref(),
-        locator.as_ref(),
-    );
+    let target_turn_count =
+        resolve_initial_hydration_turn_count(requested_limit, &compactions, locator.as_ref());
     let segmented_window = load_segmented_window_messages(
         &controller,
         locator.as_ref(),
         session_id,
         None,
         target_turn_count,
-        source_preference,
     )?;
     let (
         has_more_history,
@@ -156,9 +137,7 @@ async fn load_session_hydration_snapshot_from_locator(
     let runtime_state =
         match load_segmented_runtime_state(&controller, locator.as_ref(), session_id)? {
             Some(runtime_state) => Some(runtime_state),
-            None => {
-                hydrate_session_runtime_state(session_id, runtime_state_row, &full_messages).await?
-            }
+            None => hydrate_session_runtime_state(session_id, &full_messages).await?,
         }
         .map(|mut runtime_state| {
             if let Some(boundary_conversation_state) = boundary_conversation_state {

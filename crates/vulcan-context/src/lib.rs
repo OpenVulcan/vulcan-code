@@ -123,6 +123,50 @@ impl Default for ContextBudgetSeverity {
     }
 }
 
+impl ContextBudgetSeverity {
+    /// Returns the stable machine-facing key for this context-budget severity.
+    /// 返回该上下文预算严重级别的稳定机器可读键。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `self` is the resolved context-budget severity bucket.
+    /// `self` 是已解析的上下文预算严重级别分桶。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A stable kebab-case key suitable for serialized workbench state and CSS selectors.
+    /// 返回适合序列化工作台状态与 CSS 选择器使用的稳定 kebab-case 键。
+    pub const fn stable_key(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Warning => "warning",
+            Self::CompactSoon => "compact-soon",
+            Self::Overflow => "overflow",
+        }
+    }
+
+    /// Returns the user-facing Chinese label for this context-budget severity.
+    /// 返回该上下文预算严重级别面向用户的中文标签。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `self` is the resolved context-budget severity bucket.
+    /// `self` 是已解析的上下文预算严重级别分桶。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A concise Chinese label used by diagnostics, previews, and workbench tooltips.
+    /// 返回供诊断、预览与工作台提示浮层使用的简短中文标签。
+    pub const fn display_label(self) -> &'static str {
+        match self {
+            Self::Healthy => "正常",
+            Self::Warning => "预警",
+            Self::CompactSoon => "建议压缩",
+            Self::Overflow => "预算溢出",
+        }
+    }
+}
+
 /// Structured context-budget snapshot reused by execution previews, compaction checks, and runtime summaries.
 /// 供执行预览、压缩检查与运行时摘要复用的结构化上下文预算快照。
 #[derive(Debug, Clone)]
@@ -253,12 +297,7 @@ impl ContextBudgetSnapshot {
     /// Builds one compact diagnostics note describing the current budget state.
     /// 构建一条描述当前预算状态的紧凑诊断说明。
     pub fn summary_note(&self) -> String {
-        let severity_label = match self.severity {
-            ContextBudgetSeverity::Healthy => "正常",
-            ContextBudgetSeverity::Warning => "预警",
-            ContextBudgetSeverity::CompactSoon => "建议压缩",
-            ContextBudgetSeverity::Overflow => "预算溢出",
-        };
+        let severity_label = self.severity.display_label();
         let baseline_label = if self.baseline_matches_active_runtime {
             "基线匹配"
         } else {
@@ -326,4 +365,50 @@ fn provider_usage_label(usage: &ProviderUsageSnapshot) -> String {
         .map(|value| value.to_string())
         .unwrap_or_else(|| String::from("?"));
     format!("最近实测 输入 {input} / 输出 {output} / 推理 {reasoning} / 总计 {total}")
+}
+
+#[cfg(test)]
+mod tests {
+    //! Shared context primitive tests.
+    //! 共享上下文基础类型测试。
+
+    use super::*;
+
+    /// Verifies context-budget severity keys and labels stay centralized.
+    /// 验证上下文预算严重级别键与标签保持集中定义。
+    #[test]
+    fn context_budget_severity_keys_and_labels_are_stable() {
+        let cases = [
+            (ContextBudgetSeverity::Healthy, "healthy", "正常"),
+            (ContextBudgetSeverity::Warning, "warning", "预警"),
+            (
+                ContextBudgetSeverity::CompactSoon,
+                "compact-soon",
+                "建议压缩",
+            ),
+            (ContextBudgetSeverity::Overflow, "overflow", "预算溢出"),
+        ];
+
+        for (severity, key, label) in cases {
+            assert_eq!(severity.stable_key(), key);
+            assert_eq!(severity.display_label(), label);
+        }
+    }
+
+    /// Verifies context-budget usage percent owns progress-bar clamping.
+    /// 验证上下文预算占用百分比自身负责进度条上下界裁剪。
+    #[test]
+    fn context_budget_usage_percent_is_clamped() {
+        let low = ContextBudgetSnapshot {
+            usage_ratio: -0.25,
+            ..ContextBudgetSnapshot::default()
+        };
+        let high = ContextBudgetSnapshot {
+            usage_ratio: 1.25,
+            ..ContextBudgetSnapshot::default()
+        };
+
+        assert_eq!(low.usage_percent(), 0.0);
+        assert_eq!(high.usage_percent(), 100.0);
+    }
 }

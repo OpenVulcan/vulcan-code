@@ -8,10 +8,7 @@ use serde_json::Value;
 
 use crate::conversation_protocol::SessionConversationState;
 
-use super::{
-    SegmentPolicy, SegmentedSessionEventKind, SegmentedSessionMetadata, SubagentAgentKind,
-    SubagentAgentProfile, SubagentSpawnedBy,
-};
+use super::{SegmentPolicy, SegmentedSessionEventKind, SegmentedSessionMetadata};
 
 /// Overwrite-only state document stored next to segmented JSONL files.
 /// 存放在分段 JSONL 旁边的覆盖式状态文档。
@@ -136,60 +133,6 @@ pub(in crate::workspace_store) struct SegmentedSessionForkRequest {
     /// Target title-source key.
     /// 目标标题来源键。
     pub target_title_source: String,
-}
-
-/// Child task session creation request.
-/// 子任务会话创建请求。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::workspace_store) struct SegmentedTaskSessionCreateRequest {
-    /// Child task session identifier.
-    /// 子任务会话标识。
-    pub task_session_id: String,
-    /// Parent event sequence that started the task when known.
-    /// 已知时记录的启动该任务的父事件序号。
-    pub parent_start_seq: Option<u64>,
-    /// Agent source kind for this child task.
-    /// 当前子任务的代理来源类型。
-    pub agent_kind: SubagentAgentKind,
-    /// Agent profile details for this child task.
-    /// 当前子任务的代理画像详情。
-    pub agent_profile: SubagentAgentProfile,
-    /// Parent-side spawn information.
-    /// 父侧派生信息。
-    pub spawned_by: SubagentSpawnedBy,
-    /// Creation timestamp for this child task.
-    /// 当前子任务的创建时间戳。
-    pub created_at: String,
-    /// Initial task status label.
-    /// 初始任务状态标签。
-    pub status: String,
-    /// Segment rollover policy.
-    /// 分段滚动策略。
-    pub segment_policy: SegmentPolicy,
-}
-
-/// Parent-link update request for one child task session.
-/// 某个子任务会话的父会话关联更新请求。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(in crate::workspace_store) struct SegmentedTaskLinkUpdate {
-    /// Child task session identifier.
-    /// 子任务会话标识。
-    pub task_session_id: String,
-    /// Update timestamp.
-    /// 更新时间戳。
-    pub timestamp: String,
-    /// Current task status label.
-    /// 当前任务状态标签。
-    pub status: String,
-    /// Whether this update is terminal and should close the parent task mirror.
-    /// 当前更新是否为终态并应关闭父任务镜像。
-    pub terminal: bool,
-    /// Additional parent-link payload details.
-    /// 附加的父关联载荷详情。
-    pub payload: Value,
-    /// Optional display turn index carried into parent segment metadata.
-    /// 写入父分段元数据的可选展示轮次索引。
-    pub turn_index: Option<i64>,
 }
 
 /// Main session metadata patch with explicit optional updates.
@@ -338,18 +281,6 @@ pub(in crate::workspace_store) struct SegmentedSessionReplayResult {
     pub updated_at: Option<String>,
 }
 
-/// Tool-detail page read from segmented JSONL files.
-/// 从分段 JSONL 文件读取出的工具详情页。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(in crate::workspace_store) struct SegmentedSessionToolDetailWindow {
-    /// Tool-detail lines in forward display order.
-    /// 按正向展示顺序排列的工具详情行。
-    pub lines: Vec<SegmentedSessionEventLine>,
-    /// Whether older matching tool-detail lines exist before this page.
-    /// 当前页之前是否仍存在更早的匹配工具详情行。
-    pub has_more_detail: bool,
-}
-
 /// Transcript turn window read from segmented JSONL files.
 /// 从分段 JSONL 文件读取出的转录轮次窗口。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -369,9 +300,6 @@ pub(in crate::workspace_store) struct SegmentedSessionCatalogEntry {
     /// Absolute segmented session directory path.
     /// 分段会话目录的绝对路径。
     pub session_dir: PathBuf,
-    /// Whether the directory was found below archived_sessions.
-    /// 该目录是否位于 archived_sessions 下。
-    pub archived: bool,
     /// Normalized metadata read from metadata.json.
     /// 从 metadata.json 读取并归一化后的元数据。
     pub metadata: SegmentedSessionMetadata,

@@ -111,17 +111,17 @@ fn control_loop(
             }
         }
         if Instant::now() >= next_frame_at {
-            if let Ok((rows, cols, frame)) = read_screen_text(session.output) {
-                if frame != last_frame {
-                    frame_seq = frame_seq.saturating_add(1);
-                    last_frame = frame.clone();
-                    emit_event(&HelperEvent::Frame {
-                        seq: frame_seq,
-                        rows,
-                        cols,
-                        text: frame,
-                    })?;
-                }
+            if let Ok((rows, cols, frame)) = read_screen_text(session.output)
+                && frame.as_str() != last_frame.as_str()
+            {
+                frame_seq = frame_seq.saturating_add(1);
+                last_frame = frame.clone();
+                emit_event(&HelperEvent::Frame {
+                    seq: frame_seq,
+                    rows,
+                    cols,
+                    text: frame,
+                })?;
             }
             next_frame_at = Instant::now() + Duration::from_millis(100);
         }
@@ -149,17 +149,17 @@ fn emit_current_frame(
     last_frame: &mut String,
     frame_seq: &mut u64,
 ) -> Result<(), String> {
-    if let Ok((rows, cols, frame)) = read_screen_text(output) {
-        if frame != *last_frame {
-            *frame_seq = frame_seq.saturating_add(1);
-            *last_frame = frame.clone();
-            emit_event(&HelperEvent::Frame {
-                seq: *frame_seq,
-                rows,
-                cols,
-                text: frame,
-            })?;
-        }
+    if let Ok((rows, cols, frame)) = read_screen_text(output)
+        && frame.as_str() != last_frame.as_str()
+    {
+        *frame_seq = frame_seq.saturating_add(1);
+        *last_frame = frame.clone();
+        emit_event(&HelperEvent::Frame {
+            seq: *frame_seq,
+            rows,
+            cols,
+            text: frame,
+        })?;
     }
     Ok(())
 }

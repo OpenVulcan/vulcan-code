@@ -43,6 +43,17 @@ interface AskQuestionDialogProps {
   onSubmit: (requestId: string, answers: string[][]) => Promise<void>;
 }
 
+// AskQuestionDialogAnchorBounds stores viewport offsets for the active conversation panel.
+// AskQuestionDialogAnchorBounds 保存当前会话面板相对视口的左右偏移。
+interface AskQuestionDialogAnchorBounds {
+  // Left viewport offset in CSS pixels.
+  // 视口左侧偏移，单位为 CSS 像素。
+  left: number;
+  // Right viewport offset in CSS pixels.
+  // 视口右侧偏移，单位为 CSS 像素。
+  right: number;
+}
+
 // AskQuestionDraft stores one editable answer draft.
 // AskQuestionDraft 保存单个可编辑答案草稿。
 interface AskQuestionDraft {
@@ -124,6 +135,9 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
   // descriptionId links the custom dialog description to assistive technology.
   // descriptionId 将自定义对话框说明关联给辅助技术。
   const descriptionId = React.useId();
+  // anchorBounds keeps the Ask bar horizontally aligned with the active conversation panel.
+  // anchorBounds 保持 Ask 面板与当前会话面板横向对齐。
+  const [anchorBounds, setAnchorBounds] = React.useState<AskQuestionDialogAnchorBounds | null>(null);
 
   React.useEffect(() => {
     setActiveIndex(0);
@@ -171,6 +185,47 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     });
     return () => window.cancelAnimationFrame(focusFrame);
   }, [activeQuestion, request?.id]);
+
+  React.useLayoutEffect(() => {
+    if (!request) {
+      setAnchorBounds(null);
+      return;
+    }
+    let frameId: number | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    // scheduleMeasure batches layout reads behind the browser frame boundary.
+    // scheduleMeasure 将布局读取合并到浏览器帧边界之后执行。
+    const scheduleMeasure = () => {
+      if (frameId !== null) {
+        return;
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        const nextBounds = readAskQuestionDialogAnchorBounds();
+        setAnchorBounds((current) => (
+          askQuestionDialogAnchorBoundsEqual(current, nextBounds) ? current : nextBounds
+        ));
+      });
+    };
+    const anchorElement = askQuestionDialogAnchorElement();
+    scheduleMeasure();
+    if (anchorElement && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(scheduleMeasure);
+      resizeObserver.observe(anchorElement);
+      const shellElement = anchorElement.closest(".workspace-resizable-body-shell");
+      if (shellElement instanceof HTMLElement) {
+        resizeObserver.observe(shellElement);
+      }
+    }
+    window.addEventListener("resize", scheduleMeasure);
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [request?.id]);
 
   // updateDraft applies one immutable change to a draft row.
   // updateDraft 对单个草稿行应用一次不可变更新。
@@ -365,6 +420,12 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
     }
   }, [activeOptionIndex, advanceQuestion, busy, handleReject, handleSubmit, moveOption, moveQuestion, stage, toggleRenderedOption]);
 
+  // overlayStyle constrains the fixed Ask bar to the active conversation panel.
+  // overlayStyle 将固定定位的 Ask 面板限制在当前会话面板范围内。
+  const overlayStyle: React.CSSProperties = anchorBounds
+    ? { left: anchorBounds.left, right: anchorBounds.right }
+    : { left: 0, right: 0 };
+
   if (!request || questionCount === 0 || !activeQuestion || !activeDraft) {
     return null;
   }
@@ -391,12 +452,15 @@ export function AskQuestionDialog(props: AskQuestionDialogProps) {
 
   return (
     <TooltipProvider>
-      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+      <div
+        className="pointer-events-none fixed bottom-4 z-50 flex justify-center px-4"
+        style={overlayStyle}
+      >
         <section
           aria-describedby={descriptionId}
           aria-labelledby={titleId}
           aria-modal="true"
-          className="pointer-events-auto max-h-[min(420px,calc(100vh-2rem))] w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-border/80 bg-popover p-0 text-[13px] text-popover-foreground shadow-2xl outline-none"
+          className="pointer-events-auto max-h-[min(420px,calc(100vh-2rem))] w-full max-w-[760px] overflow-hidden rounded-2xl border border-border/80 bg-popover p-0 text-[13px] text-popover-foreground shadow-2xl outline-none"
           onKeyDown={handleDialogKeyDown}
           ref={questionBarRef}
           role="dialog"
@@ -535,6 +599,47 @@ function AskQuestionProgress(props: {
       </Button>
     </div>
   );
+}
+
+// askQuestionDialogAnchorElement returns the current main conversation panel used as the positioning anchor.
+// askQuestionDialogAnchorElement 返回用于定位的当前主会话面板。
+function askQuestionDialogAnchorElement(): HTMLElement | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  return document.querySelector<HTMLElement>(".workspace-main-panel");
+}
+
+// readAskQuestionDialogAnchorBounds reads viewport offsets for the current conversation panel.
+// readAskQuestionDialogAnchorBounds 读取当前会话面板相对视口的左右偏移。
+function readAskQuestionDialogAnchorBounds(): AskQuestionDialogAnchorBounds | null {
+  const anchorElement = askQuestionDialogAnchorElement();
+  if (!anchorElement || typeof window === "undefined") {
+    return null;
+  }
+  const rect = anchorElement.getBoundingClientRect();
+  if (rect.width <= 0) {
+    return null;
+  }
+  return {
+    left: Math.max(0, Math.round(rect.left)),
+    right: Math.max(0, Math.round(window.innerWidth - rect.right)),
+  };
+}
+
+// askQuestionDialogAnchorBoundsEqual compares nullable panel bounds without triggering redundant renders.
+// askQuestionDialogAnchorBoundsEqual 比较可空面板边界，避免触发冗余渲染。
+function askQuestionDialogAnchorBoundsEqual(
+  left: AskQuestionDialogAnchorBounds | null,
+  right: AskQuestionDialogAnchorBounds | null,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return left.left === right.left && left.right === right.right;
 }
 
 // AskQuestionOptionRow renders one compact numbered option or inline custom-answer editor.

@@ -103,10 +103,7 @@ pub(super) fn controller_runtime_and_visible_session_project_from_state(
         .workspace_snapshot
         .as_ref()
         .ok_or_else(|| String::from("工作区快照尚未加载，无法归档会话。"))?;
-    let session = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|candidate| candidate.id == session_id)
+    let session = workspace_session_summary_for_session(workspace_snapshot, session_id)
         .cloned()
         .ok_or_else(|| format!("未找到要归档的会话：{session_id}"))?;
     let project_id = session
@@ -225,7 +222,7 @@ pub(super) fn archived_conversation_summary_from_session(
         last_updated_at: session.updated_at.clone(),
         unread: false,
         attention: None,
-        project_id: session.project_id.clone(),
+        project_id: session_summary_project_id_owned(session),
         fork_source: conversation_fork_source_summary_from_session(session),
     }
 }
@@ -465,4 +462,49 @@ fn sync_selected_conversation_fields_for_retained_workbench(
         .iter()
         .find(|entry| entry.conversation_id == conversation_id)
         .and_then(|entry| entry.context_injection.clone());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one session summary for archived conversation projection tests.
+    /// 为归档会话投影测试构建单个会话摘要。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` is the optional project id stored on the session.
+    /// `project_id` 是写入会话的可选项目标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A completed session summary with the supplied project id.
+    /// 返回携带给定项目标识的已完成会话摘要。
+    fn archived_projection_session(project_id: Option<String>) -> SessionSummary {
+        SessionSummary::new(
+            SessionId::new_v4(),
+            project_id,
+            "归档投影测试会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )
+    }
+
+    /// Verifies archived conversation summaries do not expose blank project ids.
+    /// 验证归档会话摘要不会暴露空白项目标识。
+    #[test]
+    fn archived_conversation_summary_ignores_blank_project_id() {
+        // session stores a blank project id that should be filtered before UI projection.
+        // session 保存一个投影到 UI 前应被过滤的空白项目标识。
+        let session = archived_projection_session(Some(String::from("   ")));
+
+        // summary is the WebUI sidebar projection built from the archived session.
+        // summary 是从归档会话构建出的 WebUI 侧栏投影。
+        let summary = archived_conversation_summary_from_session(&session);
+
+        assert_eq!(summary.project_id, None);
+    }
 }

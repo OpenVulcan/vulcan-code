@@ -2,6 +2,8 @@
 //! Git diff 搜索 input 辅助逻辑。
 
 use super::*;
+use crate::git::diff::load_webui_selected_workspace_unified_diff;
+use crate::git::selection::WebuiWorkspaceDiffSelection;
 
 #[derive(Clone)]
 pub(crate) struct WebuiDiffSearchInput {
@@ -19,6 +21,21 @@ pub(crate) struct WebuiDiffSearchInput {
     pub(crate) notices: Vec<String>,
 }
 
+/// Loads the complete diff input using the selected WebUI diff request context.
+/// 使用已解析的 WebUI diff 选择上下文加载完整 diff 输入。
+pub(crate) fn load_webui_workspace_diff_search_input_for_selection(
+    repository_root: &Path,
+    selection: &WebuiWorkspaceDiffSelection,
+) -> Result<WebuiDiffSearchInput, String> {
+    load_webui_workspace_diff_search_input(
+        repository_root,
+        selection.request.mode,
+        selection.selected_base_branch.as_deref(),
+        selection.selected_compare_branch.as_deref(),
+        selection.selected_commit_hash.as_deref(),
+    )
+}
+
 /// Loads the complete diff input used by backend summary search.
 /// 加载后端摘要搜索使用的完整 diff 输入。
 pub(crate) fn load_webui_workspace_diff_search_input(
@@ -28,48 +45,15 @@ pub(crate) fn load_webui_workspace_diff_search_input(
     selected_compare_branch: Option<&str>,
     selected_commit_hash: Option<&str>,
 ) -> Result<WebuiDiffSearchInput, String> {
-    let mut notices = Vec::new();
-    let mut sections = Vec::new();
-    match mode {
-        WebuiWorkspaceDiffMode::Unstaged => {
-            let unstaged_diff = load_webui_unstaged_git_diff(repository_root)?;
-            if !unstaged_diff.trim().is_empty() {
-                sections.push(unstaged_diff);
-            }
-            let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices)?;
-            if !untracked_diff.trim().is_empty() {
-                sections.push(untracked_diff);
-            }
-        }
-        WebuiWorkspaceDiffMode::Staged => {
-            let staged_diff = load_webui_staged_git_diff(repository_root)?;
-            if !staged_diff.trim().is_empty() {
-                sections.push(staged_diff);
-            }
-        }
-        WebuiWorkspaceDiffMode::Commit => {
-            if let Some(commit_hash) = selected_commit_hash {
-                let commit_diff = load_webui_commit_git_diff(repository_root, commit_hash)?;
-                if !commit_diff.trim().is_empty() {
-                    sections.push(commit_diff);
-                }
-            } else {
-                notices.push(String::from("当前仓库没有可搜索的提交记录。"));
-            }
-        }
-        WebuiWorkspaceDiffMode::Branch => match (selected_base_branch, selected_compare_branch) {
-            (Some(base_branch), Some(compare_branch)) => {
-                let branch_diff =
-                    load_webui_branch_git_diff(repository_root, compare_branch, base_branch)?;
-                if !branch_diff.trim().is_empty() {
-                    sections.push(branch_diff);
-                }
-            }
-            _ => notices.push(String::from("当前仓库无法解析用于分支对比的分支。")),
-        },
-    }
-
-    let unified_diff = sections.join("\n");
+    let loaded_diff = load_webui_selected_workspace_unified_diff(
+        repository_root,
+        mode,
+        selected_base_branch,
+        selected_compare_branch,
+        selected_commit_hash,
+        "当前仓库没有可搜索的提交记录。",
+    )?;
+    let unified_diff = loaded_diff.unified_diff;
     let summaries = webui_unified_diff_file_summaries(&unified_diff);
     let indexed_files = webui_unified_diff_search_index(&unified_diff, &summaries);
     let raw_line_count = webui_unified_diff_line_count(&unified_diff);
@@ -77,6 +61,6 @@ pub(crate) fn load_webui_workspace_diff_search_input(
         unified_diff,
         indexed_files,
         raw_line_count,
-        notices,
+        notices: loaded_diff.notices,
     })
 }

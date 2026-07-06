@@ -33,14 +33,6 @@ pub(crate) fn serialize_provider_usage_to_json(
     serde_json::to_string(&usage).ok()
 }
 
-/// Restores one provider usage snapshot from compact JSON payload text.
-/// 从紧凑 JSON 文本载荷中恢复一份 Provider 用量快照。
-pub(crate) fn parse_provider_usage_from_json(raw: &str) -> Option<ProviderUsageSnapshot> {
-    serde_json::from_str::<ProviderUsageSnapshot>(raw)
-        .ok()
-        .filter(ProviderUsageSnapshot::has_any_tokens)
-}
-
 /// Returns the observed provider input-token count when the provider reported enough usage data.
 /// 当 Provider 返回了足够的用量数据时，返回实测输入 Token 数。
 #[cfg(test)]
@@ -79,8 +71,7 @@ mod tests {
 
     use super::{
         calibrated_input_token_estimate, latest_provider_usage_from_conversation_state,
-        observed_input_tokens_from_usage, parse_provider_usage_from_json,
-        serialize_provider_usage_to_json,
+        observed_input_tokens_from_usage, serialize_provider_usage_to_json,
     };
     use crate::conversation_protocol::{
         SessionConversationMessage, SessionConversationPayload, SessionConversationState,
@@ -189,10 +180,10 @@ mod tests {
         );
     }
 
-    /// Serializes and restores concrete usage snapshots while skipping empty placeholders.
-    /// 仅在存在具体 Token 数量时序列化并恢复用量快照，同时跳过空占位值。
+    /// Serializes concrete usage snapshots while skipping empty placeholders.
+    /// 仅在存在具体 Token 数量时序列化用量快照，同时跳过空占位值。
     #[test]
-    fn provider_usage_json_roundtrip_skips_empty_snapshots() {
+    fn provider_usage_json_serialization_skips_empty_snapshots() {
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(2048),
             output_tokens: Some(256),
@@ -204,11 +195,13 @@ mod tests {
 
         let raw = serialize_provider_usage_to_json(Some(&usage))
             .expect("usage with concrete token counts should serialize");
-        assert_eq!(parse_provider_usage_from_json(&raw), Some(usage));
+        let serialized_value: serde_json::Value =
+            serde_json::from_str(&raw).expect("usage JSON should remain valid");
+        assert_eq!(serialized_value["input_tokens"], 2048);
+        assert_eq!(serialized_value["output_tokens"], 256);
         assert!(
             serialize_provider_usage_to_json(Some(&ProviderUsageSnapshot::default())).is_none()
         );
-        assert!(parse_provider_usage_from_json("{}").is_none());
     }
 
     /// Prefers latest observed provider input usage over host estimates when both values are available.

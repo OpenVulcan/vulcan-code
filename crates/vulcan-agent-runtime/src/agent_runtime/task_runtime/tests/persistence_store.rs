@@ -173,6 +173,13 @@ async fn list_agents_uses_hydrated_registry_for_persisted_active_agent() {
     task_runtime
         .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
         .expect("session hydration should restore persisted subagents");
+    let restored_registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read after hydration");
+    let restored_entry = restored_registry
+        .get("persisted-review")
+        .expect("hydrated registry entry should exist");
+    assert_eq!(restored_entry.prompt_source.as_deref(), Some("core"));
     let result = task_runtime
         .invoke_list_agents(root_session_id, json!({}))
         .await
@@ -1245,4 +1252,95 @@ async fn app_shutdown_stops_active_subagents_and_persists_metadata() {
         metadata.last_result_summary.as_deref(),
         Some(STOPPED_TASK_RESULT_SUMMARY)
     );
+}
+
+/// Verifies a late running snapshot cannot reopen a completed persisted task.
+/// 验证迟到的运行中快照不能重新打开已完成的持久化任务。
+#[test]
+fn late_running_snapshot_does_not_reopen_completed_task() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        public_task_id: String::from("completed-worker"),
+        prompt: String::from("complete once"),
+        description: Some(String::from("Completed worker")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("complete once"),
+        display_title: String::from("Completed worker"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let completed_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-completed")),
+        final_output_text: String::from("completed result"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &completed_outcome)
+        .expect("completed outcome should store");
+
+    let running_outcome = TaskExecutionOutcome {
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        ..completed_outcome.clone()
+    };
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+        .expect("late running update should be ignored");
+
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let metadata = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load")
+        .expect("metadata should exist");
+    assert_eq!(metadata.status, TaskSessionStatus::Completed);
+    assert_eq!(
+        metadata.last_result_summary.as_deref(),
+        Some("completed result")
+    );
+    let root_metadata = serde_json::from_reader::<_, Value>(BufReader::new(
+        std::fs::File::open(temp_dir.path().join("metadata.json"))
+            .expect("root metadata should open"),
+    ))
+    .expect("root metadata should parse");
+    assert_eq!(root_metadata["tasks"][0]["status"], "completed");
+    let sessions = task_runtime
+        .sessions
+        .read()
+        .expect("task sessions should read");
+    let record = sessions
+        .get(&task_id)
+        .expect("completed record should remain present");
+    assert_eq!(record.last_status, "completed");
+    assert_eq!(record.last_result_text, "completed result");
+    drop(sessions);
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read");
+    let entry = registry
+        .get("completed-worker")
+        .expect("completed worker should remain registered");
+    assert_eq!(entry.status, SubagentStatus::Completed);
+    assert_eq!(entry.result_summary.as_deref(), Some("completed result"));
 }

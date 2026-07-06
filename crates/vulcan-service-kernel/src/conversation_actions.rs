@@ -205,45 +205,27 @@ pub(crate) fn emit_pending_question_changed_delta(
         guard.workbench.revision = generation;
         guard.workbench.pending_question = pending_question.clone();
         guard.workbench.pending_questions = pending_questions.clone();
-        let attention_updates = guard
-            .workbench
-            .conversations
-            .iter()
-            .filter_map(|conversation| {
-                let session_id = conversation.id.parse::<SessionId>().ok()?;
-                let session_plan_mode = guard
-                    .workspace_snapshot
-                    .as_ref()
-                    .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
-                    .and_then(|runtime_state| {
-                        session_plan_mode_summary_from_runtime_state(Some(runtime_state))
-                    });
-                let updated_at = if conversation.last_updated_at.is_empty() {
-                    None
-                } else {
-                    Some(conversation.last_updated_at.clone())
-                };
-                Some((
-                    conversation.id.clone(),
-                    conversation_attention_summary_for_session(
-                        session_id,
-                        &guard.workbench.pending_questions,
-                        session_plan_mode.as_ref(),
-                        conversation.unread,
-                        updated_at,
-                    ),
-                ))
-            })
-            .collect::<Vec<_>>();
-        for (conversation_id, attention) in attention_updates {
-            if let Some(conversation) = guard
-                .workbench
-                .conversations
-                .iter_mut()
-                .find(|candidate| candidate.id == conversation_id)
-            {
-                conversation.attention = attention;
-            }
+        let ServiceBridgeState {
+            workspace_snapshot,
+            workbench,
+            ..
+        } = &mut *guard;
+        let workspace_snapshot = workspace_snapshot.as_ref();
+        for conversation in &mut workbench.conversations {
+            let Ok(session_id) = conversation.id.parse::<SessionId>() else {
+                continue;
+            };
+            let session_plan_mode = workspace_snapshot
+                .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                .and_then(|runtime_state| {
+                    session_plan_mode_summary_from_runtime_state(Some(runtime_state))
+                });
+            refresh_conversation_attention_summary(
+                conversation,
+                session_id,
+                &pending_questions,
+                session_plan_mode.as_ref(),
+            );
         }
         WorkbenchDeltaEnvelope {
             generation,

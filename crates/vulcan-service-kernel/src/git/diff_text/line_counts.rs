@@ -1,7 +1,25 @@
 //! Git diff text line counts helpers.
 //! Git diff 文本 line counts 辅助逻辑。
 
+use super::super::selection::WebuiWorkspaceDiffSelection;
 use super::*;
+
+/// Annotates file summaries using the selected WebUI diff request context.
+/// 使用已解析的 WebUI diff 选择上下文标注文件摘要行数。
+pub(crate) fn annotate_webui_diff_file_line_counts_for_selection(
+    repository_root: &Path,
+    selection: &WebuiWorkspaceDiffSelection,
+    summaries: &mut [WebuiWorkspaceDiffFileSummary],
+) {
+    annotate_webui_diff_file_line_counts(
+        repository_root,
+        selection.request.mode,
+        selection.selected_base_branch.as_deref(),
+        selection.selected_compare_branch.as_deref(),
+        selection.selected_commit_hash.as_deref(),
+        summaries,
+    );
+}
 
 pub(crate) fn annotate_webui_diff_file_line_counts(
     repository_root: &Path,
@@ -142,6 +160,66 @@ pub(crate) fn webui_git_merge_base(
 /// 单次行数元数据命令传入的 pathspec 数量。
 const WEBUI_DIFF_LINE_COUNT_PATH_CHUNK_SIZE: usize = 256;
 
+/// Loads blob ids from one chunked Git metadata command.
+/// 通过单个分块 Git 元数据命令加载 blob id。
+fn webui_git_blob_ids_from_metadata_command(
+    repository_root: &Path,
+    paths: &[String],
+    command_args_before_paths: &[&str],
+    metadata_blob_id: fn(&str) -> Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut blob_ids = BTreeMap::new();
+    for chunk in paths.chunks(WEBUI_DIFF_LINE_COUNT_PATH_CHUNK_SIZE) {
+        let mut args = command_args_before_paths
+            .iter()
+            .map(|argument| (*argument).to_string())
+            .collect::<Vec<_>>();
+        args.extend(chunk.iter().cloned());
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let Ok(output) = run_webui_git_command(repository_root, &arg_refs) else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        for entry in output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+        {
+            let text = String::from_utf8_lossy(entry);
+            let Some((metadata, path)) = text.split_once('\t') else {
+                continue;
+            };
+            let Some(oid) = metadata_blob_id(metadata) else {
+                continue;
+            };
+            blob_ids.insert(path.to_string(), oid.to_string());
+        }
+    }
+    blob_ids
+}
+
+/// Extracts a stage-zero index blob id from `git ls-files -s` metadata.
+/// 从 `git ls-files -s` 元数据中提取 stage-zero 索引 blob id。
+fn webui_git_index_metadata_blob_id(metadata: &str) -> Option<&str> {
+    let mut metadata_parts = metadata.split_whitespace();
+    let _mode = metadata_parts.next()?;
+    let oid = metadata_parts.next()?;
+    let stage = metadata_parts.next()?;
+    if stage == "0" { Some(oid) } else { None }
+}
+
+/// Extracts a blob id from `git ls-tree -r` metadata.
+/// 从 `git ls-tree -r` 元数据中提取 blob id。
+fn webui_git_revision_metadata_blob_id(metadata: &str) -> Option<&str> {
+    let mut metadata_parts = metadata.split_whitespace();
+    let _mode = metadata_parts.next()?;
+    let kind = metadata_parts.next()?;
+    let oid = metadata_parts.next()?;
+    if kind == "blob" { Some(oid) } else { None }
+}
+
 /// Counts worktree lines for many paths without spawning Git per file.
 /// 在不为每个文件启动 Git 的情况下批量统计工作区行数。
 pub(crate) fn webui_worktree_line_counts(
@@ -192,46 +270,12 @@ pub(crate) fn webui_git_index_blob_ids(
     repository_root: &Path,
     paths: &[String],
 ) -> BTreeMap<String, String> {
-    let mut blob_ids = BTreeMap::new();
-    for chunk in paths.chunks(WEBUI_DIFF_LINE_COUNT_PATH_CHUNK_SIZE) {
-        let mut args = vec![
-            String::from("ls-files"),
-            String::from("-s"),
-            String::from("-z"),
-            String::from("--"),
-        ];
-        args.extend(chunk.iter().cloned());
-        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-        let Ok(output) = run_webui_git_command(repository_root, &arg_refs) else {
-            continue;
-        };
-        if !output.status.success() {
-            continue;
-        }
-        for entry in output
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|entry| !entry.is_empty())
-        {
-            let text = String::from_utf8_lossy(entry);
-            let Some((metadata, path)) = text.split_once('\t') else {
-                continue;
-            };
-            let mut metadata_parts = metadata.split_whitespace();
-            let _mode = metadata_parts.next();
-            let Some(oid) = metadata_parts.next() else {
-                continue;
-            };
-            let Some(stage) = metadata_parts.next() else {
-                continue;
-            };
-            if stage != "0" {
-                continue;
-            }
-            blob_ids.insert(path.to_string(), oid.to_string());
-        }
-    }
-    blob_ids
+    webui_git_blob_ids_from_metadata_command(
+        repository_root,
+        paths,
+        &["ls-files", "-s", "-z", "--"],
+        webui_git_index_metadata_blob_id,
+    )
 }
 
 /// Loads revision blob ids for many paths.
@@ -241,47 +285,12 @@ pub(crate) fn webui_git_revision_blob_ids(
     revision: &str,
     paths: &[String],
 ) -> BTreeMap<String, String> {
-    let mut blob_ids = BTreeMap::new();
-    for chunk in paths.chunks(WEBUI_DIFF_LINE_COUNT_PATH_CHUNK_SIZE) {
-        let mut args = vec![
-            String::from("ls-tree"),
-            String::from("-r"),
-            String::from("-z"),
-            revision.to_string(),
-            String::from("--"),
-        ];
-        args.extend(chunk.iter().cloned());
-        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-        let Ok(output) = run_webui_git_command(repository_root, &arg_refs) else {
-            continue;
-        };
-        if !output.status.success() {
-            continue;
-        }
-        for entry in output
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|entry| !entry.is_empty())
-        {
-            let text = String::from_utf8_lossy(entry);
-            let Some((metadata, path)) = text.split_once('\t') else {
-                continue;
-            };
-            let mut metadata_parts = metadata.split_whitespace();
-            let _mode = metadata_parts.next();
-            let Some(kind) = metadata_parts.next() else {
-                continue;
-            };
-            let Some(oid) = metadata_parts.next() else {
-                continue;
-            };
-            if kind != "blob" {
-                continue;
-            }
-            blob_ids.insert(path.to_string(), oid.to_string());
-        }
-    }
-    blob_ids
+    webui_git_blob_ids_from_metadata_command(
+        repository_root,
+        paths,
+        &["ls-tree", "-r", "-z", revision, "--"],
+        webui_git_revision_metadata_blob_id,
+    )
 }
 
 /// Counts lines for path-to-blob mappings through one batched cat-file call.
@@ -372,5 +381,66 @@ pub(crate) fn webui_line_count_from_bytes(bytes: &[u8]) -> usize {
         newline_count
     } else {
         newline_count + 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies index metadata only accepts stage-zero blobs.
+    /// 验证索引元数据只接受 stage-zero blob。
+    #[test]
+    fn webui_git_index_metadata_blob_id_accepts_stage_zero_only() {
+        assert_eq!(
+            webui_git_index_metadata_blob_id("100644 abcdef123456 0"),
+            Some("abcdef123456")
+        );
+        assert_eq!(
+            webui_git_index_metadata_blob_id("100644 abcdef123456 1"),
+            None
+        );
+        assert_eq!(
+            webui_git_index_metadata_blob_id("100644 abcdef123456"),
+            None
+        );
+    }
+
+    /// Verifies revision metadata only accepts tree blob entries.
+    /// 验证修订元数据只接受树中的 blob 条目。
+    #[test]
+    fn webui_git_revision_metadata_blob_id_accepts_blob_entries_only() {
+        assert_eq!(
+            webui_git_revision_metadata_blob_id("100644 blob fedcba654321"),
+            Some("fedcba654321")
+        );
+        assert_eq!(
+            webui_git_revision_metadata_blob_id("040000 tree fedcba654321"),
+            None
+        );
+        assert_eq!(
+            webui_git_revision_metadata_blob_id("100644 fedcba654321"),
+            None
+        );
+    }
+
+    /// Verifies cat-file batch parsing counts only blob payload lines.
+    /// 验证 cat-file 批量输出解析只统计 blob 载荷行数。
+    #[test]
+    fn parse_webui_git_cat_file_line_counts_counts_blob_payloads() {
+        let output = concat!(
+            "111111 blob 7\n",
+            "one\ntwo\n",
+            "222222 tree 4\n",
+            "skip\n",
+            "333333 blob 5\n",
+            "last\n"
+        );
+
+        let line_counts = parse_webui_git_cat_file_line_counts(output.as_bytes());
+
+        assert_eq!(line_counts.get("111111"), Some(&2));
+        assert_eq!(line_counts.get("222222"), None);
+        assert_eq!(line_counts.get("333333"), Some(&1));
     }
 }

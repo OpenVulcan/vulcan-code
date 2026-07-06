@@ -159,16 +159,30 @@ fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() 
         thinking_output: None,
         conversation_state: Some(SessionConversationState {
             messages: Vec::new(),
-            records: vec![SessionConversationRecord {
-                id: String::from("canonical-user-prompt"),
-                kind: SessionMessageKind::User,
-                record_kind: SessionMessageRecordKind::Transcript,
-                visible: true,
-                title: String::from("用户指令"),
-                body: prompt.to_string(),
-                metadata: None,
-                created_at: String::from("1"),
-            }],
+            records: vec![
+                // hidden-terminal-runtime-record represents a runtime-only row that must not enter the display cache.
+                // hidden-terminal-runtime-record 表示不得进入显示缓存的仅运行态记录。
+                SessionConversationRecord {
+                    id: String::from("hidden-terminal-runtime-record"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: false,
+                    title: String::from("内部摘要"),
+                    body: String::from("hidden terminal runtime record"),
+                    metadata: None,
+                    created_at: String::from("0"),
+                },
+                SessionConversationRecord {
+                    id: String::from("canonical-user-prompt"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::from("用户指令"),
+                    body: prompt.to_string(),
+                    metadata: None,
+                    created_at: String::from("1"),
+                },
+            ],
             continuation: Default::default(),
         }),
         provider_request_count: 1,
@@ -199,6 +213,16 @@ fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() 
         messages
             .iter()
             .all(|message| !message.id.contains("subagent-prompt"))
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.id != "hidden-terminal-runtime-record")
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.body.contains("hidden terminal runtime record"))
     );
     assert!(
         messages
@@ -449,6 +473,43 @@ fn subagent_surface_conversation_state_preserves_display_only_agent_messages() {
     }));
 }
 
+/// Verifies DelegateStarted cache state exposes the subagent before the runtime registry refresh lands.
+/// 验证 DelegateStarted 缓存状态会在运行时注册表刷新落地前展示子代理。
+#[test]
+fn delegate_started_cached_state_enters_navigation_before_registry_refresh() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    let task_states = vec![SubagentTaskPanelState {
+        task_id: task_session_id,
+        public_task_id: String::from("slow-worker"),
+        parent_session_id,
+        subagent_label: String::from("慢速子代理"),
+        description: Some(String::from("等待 30 秒")),
+        run_state: SubagentTaskRunState::Running,
+        result_text: String::new(),
+        conversation_state: None,
+    }];
+    cache_test_subagent_surface_detail_states(&mut guard, &task_states);
+    guard
+        .session_subagent_navigation_rounds
+        .insert(parent_session_id);
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .clone();
+
+    let navigation = subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)
+        .expect("DelegateStarted cache should expose running subagent navigation");
+
+    assert_eq!(navigation.tasks.len(), 1);
+    assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
+    assert_eq!(navigation.tasks[0].label, "慢速子代理");
+    assert_eq!(navigation.tasks[0].run_state, "running");
+    assert!(navigation.tasks[0].is_running);
+}
+
 /// Verifies a live detached listener keeps the parent subagent navigation visible after the parent stream finishes.
 /// 验证父级流结束后，实时分离监听器仍会让父级子代理导航保持可见。
 #[test]
@@ -467,11 +528,7 @@ fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
         conversation_state: None,
     }];
     cache_test_subagent_surface_detail_states(&mut guard, &task_states);
-    seed_test_live_subagent_registry_from_panel_states(
-        &mut guard,
-        parent_session_id,
-        &task_states,
-    );
+    seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_session_id, &task_states);
     guard
         .session_subagent_navigation_rounds
         .insert(parent_session_id);
@@ -693,11 +750,7 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
         },
     ];
     cache_test_subagent_surface_detail_states(&mut guard, &task_states);
-    seed_test_live_subagent_registry_from_panel_states(
-        &mut guard,
-        parent_session_id,
-        &task_states,
-    );
+    seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_session_id, &task_states);
     guard
         .session_subagent_navigation_rounds
         .insert(parent_session_id);
@@ -733,11 +786,7 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
             .remove(&task_state.task_id);
     }
     cache_test_subagent_surface_detail_states(&mut guard, &task_states);
-    seed_test_live_subagent_registry_from_panel_states(
-        &mut guard,
-        parent_session_id,
-        &task_states,
-    );
+    seed_test_live_subagent_registry_from_panel_states(&mut guard, parent_session_id, &task_states);
 
     let finished_tasks = running_webui_subagent_task_states_for_tree_from_cache(
         &mut guard,
@@ -1288,4 +1337,50 @@ fn pending_subagent_usage_segments_drain_once_and_merge_into_turn_stats() {
         stats.usage_segments[0].kind,
         SessionTurnUsageSegmentKind::SubagentTask
     );
+}
+
+/// Verifies multiple detached subagent completions render as one blank-line-separated mailbox prompt.
+/// 验证多条分离子代理完成消息会渲染为一个使用空行分隔的 mailbox 提示词。
+#[test]
+fn subagent_completion_mailbox_prompt_joins_multiple_inputs() {
+    let parent_session_id = SessionId::new_v4();
+    let first_task_session_id = SessionId::new_v4();
+    let second_task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let first_event =
+        test_delegate_finished_event(first_task_session_id, "image-a", "生成完成：a.jpg");
+    let second_event =
+        test_delegate_finished_event(second_task_session_id, "image-b", "生成完成：b.jpg");
+
+    assert!(
+        enqueue_webui_session_mailbox_input_if_needed(
+            &state,
+            parent_session_id,
+            &first_event,
+            true,
+            false,
+        )
+        .expect("first mailbox input should enqueue")
+    );
+    assert!(
+        enqueue_webui_session_mailbox_input_if_needed(
+            &state,
+            parent_session_id,
+            &second_event,
+            true,
+            false,
+        )
+        .expect("second mailbox input should enqueue")
+    );
+
+    let mailbox_prompt = webui_session_mailbox_input_from_kernel(&state, parent_session_id, None)
+        .expect("mailbox prompt should read")
+        .expect("mailbox prompt should exist");
+
+    assert!(mailbox_prompt.contains("生成完成：a.jpg"));
+    assert!(mailbox_prompt.contains("生成完成：b.jpg"));
+    assert_eq!(mailbox_prompt.matches("<agent_message>").count(), 2);
+    assert!(mailbox_prompt.contains("</agent_message>\n\n<agent_message>"));
 }

@@ -23,6 +23,7 @@ use test_support::*;
 mod active_session_state_tests;
 mod ai_capabilities_tests;
 mod conversation_selection_tests;
+mod conversation_tool_detail_tests;
 mod detached_subagent_tests;
 mod goal_todolist_tests;
 mod mailbox_tests;

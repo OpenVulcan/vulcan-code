@@ -6,9 +6,12 @@ use super::*;
 fn runtime_log_backup_before_compaction_copies_sources_and_keeps_latest_five() {
     let root =
         test_root("runtime_log_backup_before_compaction_copies_sources_and_keeps_latest_five");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let messages = vec![test_message(
         "m-user-1",
         SessionMessageKind::User,
@@ -92,9 +95,12 @@ fn runtime_log_backup_before_compaction_copies_sources_and_keeps_latest_five() {
 #[test]
 fn runtime_log_sync_appends_tail_when_prefix_matches() {
     let root = test_root("runtime_log_sync_appends_tail_when_prefix_matches");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let first_messages = vec![test_message(
         "m-user-1",
         SessionMessageKind::User,
@@ -138,9 +144,12 @@ fn runtime_log_sync_appends_tail_when_prefix_matches() {
 #[test]
 fn runtime_log_sync_rebuilds_when_prefix_mismatches() {
     let root = test_root("runtime_log_sync_rebuilds_when_prefix_mismatches");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let first_state = conversation_state_from_session_messages(&[test_message(
         "m-user-1",
         SessionMessageKind::User,
@@ -177,9 +186,12 @@ fn runtime_log_sync_rebuilds_when_prefix_mismatches() {
 #[test]
 fn runtime_log_sync_preserves_audit_events_when_rebuilding() {
     let root = test_root("runtime_log_sync_preserves_audit_events_when_rebuilding");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let first_state = conversation_state_from_session_messages(&[test_message(
         "m-user-1",
         SessionMessageKind::User,
@@ -371,9 +383,12 @@ fn runtime_log_sync_preserves_audit_events_when_rebuilding() {
 #[test]
 fn compacted_runtime_log_sync_prunes_pre_compaction_provider_checkpoints() {
     let root = test_root("compacted_runtime_log_sync_prunes_pre_compaction_provider_checkpoints");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let first_state = conversation_state_from_session_messages(&[test_message(
         "m-user-1",
         SessionMessageKind::User,

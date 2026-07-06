@@ -5,8 +5,9 @@ use super::*;
 #[test]
 fn read_event_window_projects_back_to_session_messages() {
     let root = test_root("read_event_window_projects_back_to_session_messages");
-    let session_dir = create_segmented_session(
+    let session_dir = create_segmented_session_in_location(
         &root,
+        false,
         test_session_request(SegmentPolicy {
             max_lines: 3,
             max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
@@ -41,10 +42,12 @@ fn read_event_window_projects_back_to_session_messages() {
     ];
     append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
 
-    let active_tail =
-        read_segmented_session_active_tail(&session_dir, 1).expect("read active tail");
-    assert_eq!(active_tail.len(), 1);
-    assert_eq!(active_tail[0].payload["message_id"], "m-assistant-2");
+    // Read the current newest event through the same backward event-window path used by lazy paging.
+    // 通过懒分页使用的同一反向事件窗口路径读取当前最新事件。
+    let latest_window =
+        read_segmented_session_event_window(&session_dir, None, 1).expect("read latest window");
+    assert_eq!(latest_window.len(), 1);
+    assert_eq!(latest_window[0].payload["message_id"], "m-assistant-2");
 
     let window =
         read_segmented_session_event_window(&session_dir, Some(4), 2).expect("read event window");
@@ -67,9 +70,12 @@ fn read_event_window_projects_back_to_session_messages() {
 #[test]
 fn read_turn_window_preserves_complete_display_turns() {
     let root = test_root("read_turn_window_preserves_complete_display_turns");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let messages = vec![
         test_message(
             "m-user-1",
@@ -159,9 +165,12 @@ fn read_turn_window_preserves_complete_display_turns() {
 #[test]
 fn write_state_overwrites_without_touching_segment_lines() {
     let root = test_root("write_state_overwrites_without_touching_segment_lines");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let before_lines = read_segment_event_lines(&session_dir.join("s001.jsonl"))
         .expect("read lines before state overwrite");
 
@@ -191,9 +200,12 @@ fn write_state_overwrites_without_touching_segment_lines() {
 #[test]
 fn write_state_preserves_existing_session_boundary_partition() {
     let root = test_root("write_state_preserves_existing_session_boundary_partition");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
 
     replace_session_boundary_state(
         &session_dir,

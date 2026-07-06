@@ -22,10 +22,7 @@ use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::provider_capabilities::resolve_provider_api_key;
 use crate::provider_config::ProviderConfigurationFile;
 use std::sync::Arc;
-use vulcan_core::types::{
-    ConversationMessage as CoreConversationMessage,
-    ConversationSnapshot as CoreConversationSnapshot,
-};
+use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Safe runtime default turn budget used when no explicit max-turn override is configured.
@@ -52,7 +49,6 @@ pub(crate) fn execute_provider_prompt_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
@@ -66,7 +62,6 @@ pub(crate) fn execute_provider_prompt_stream(
         active_agent,
         system_preamble,
         prompt,
-        request_history,
         core_snapshot,
         task_runtime,
         token_budget_runtime,
@@ -85,7 +80,6 @@ pub(crate) fn execute_provider_prompt_capture_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
@@ -98,7 +92,6 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         active_agent,
         system_preamble,
         prompt,
-        request_history,
         core_snapshot,
         task_runtime,
         token_budget_runtime,
@@ -117,7 +110,6 @@ fn execute_provider_prompt_stream_with_capture_mode(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
-    request_history: Vec<CoreConversationMessage>,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
@@ -198,7 +190,6 @@ fn execute_provider_prompt_stream_with_capture_mode(
         &preparation.execution_mode,
         system_preamble,
         prompt,
-        request_history,
         core_snapshot,
         temperature,
         max_turns,

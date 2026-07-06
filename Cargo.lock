@@ -6013,6 +6013,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-hello"
+version = "0.1.0"
+
+[[package]]
 name = "vulcan-hooks"
 version = "0.1.0"
 dependencies = [

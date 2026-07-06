@@ -23,28 +23,23 @@ pub(crate) fn composer_attachment_capabilities(
 ) -> Vec<ComposerAttachmentCapabilitySummary> {
     let capabilities =
         active_workbench_model_capabilities(provider_configuration, ai_tool_configuration);
-    [
-        ConversationAttachmentKind::Image,
-        ConversationAttachmentKind::Video,
-        ConversationAttachmentKind::Audio,
-        ConversationAttachmentKind::Pdf,
-    ]
-    .into_iter()
-    .map(|kind| {
-        let native = capabilities
-            .as_ref()
-            .is_some_and(|capabilities| capabilities.supports_attachment_kind(kind.clone()));
-        let enabled = capabilities
-            .as_ref()
-            .is_some_and(|capabilities| capabilities.allows_staged_attachment_kind(kind.clone()));
-        ComposerAttachmentCapabilitySummary {
-            kind: kind.modality_name().to_string(),
-            label: composer_attachment_kind_label(&kind).to_string(),
-            enabled,
-            native,
-            bridged: enabled && !native,
-            accept: composer_attachment_kind_accept(&kind).to_string(),
-        }
-    })
-    .collect()
+    composer_attachment_kinds()
+        .into_iter()
+        .map(|kind| {
+            let native = capabilities
+                .as_ref()
+                .is_some_and(|capabilities| capabilities.supports_attachment_kind(kind.clone()));
+            let enabled = capabilities.as_ref().is_some_and(|capabilities| {
+                capabilities.allows_staged_attachment_kind(kind.clone())
+            });
+            ComposerAttachmentCapabilitySummary {
+                kind: kind.modality_name().to_string(),
+                label: composer_attachment_kind_label(&kind).to_string(),
+                enabled,
+                native,
+                bridged: enabled && !native,
+                accept: composer_attachment_kind_accept(&kind).to_string(),
+            }
+        })
+        .collect()
 }

@@ -18,6 +18,47 @@ fn workspace_file_child_path_rejects_outside_root() {
     let _ = std::fs::remove_dir_all(outside);
 }
 
+/// Verifies parent projection uses the shared workspace boundary check.
+/// 验证父路径投影会使用共享工作区边界检查。
+#[test]
+fn workspace_file_parent_inside_root_uses_workspace_boundary() {
+    let root = test_workspace_file_temp_dir("parent-root");
+    let outside = test_workspace_file_temp_dir("parent-outside");
+    let nested = root.join("nested");
+    let outside_child = outside.join("child");
+
+    assert_eq!(workspace_file_parent_inside_root(&root, &root), None);
+    assert_eq!(
+        workspace_file_parent_inside_root(&root, &nested),
+        Some(root.clone())
+    );
+    assert_eq!(
+        workspace_file_parent_inside_root(&root, &outside_child),
+        None
+    );
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
+/// Verifies relative path projection keeps root and nested child semantics.
+/// 验证相对路径投影会保持根目录与嵌套子路径语义。
+#[test]
+fn workspace_file_relative_path_text_projects_root_and_children() {
+    // Root path used by the relative projection examples.
+    // 相对路径投影示例使用的根路径。
+    let root = test_workspace_file_temp_dir("relative-path");
+    // Nested child path that exercises multi-component slash joining.
+    // 用于覆盖多级组件斜杠拼接的嵌套子路径。
+    let nested = root.join("DATA").join("yycfg").join("中文配置.xls");
+
+    assert_eq!(workspace_file_relative_path_text(&root, &root), "");
+    assert_eq!(
+        workspace_file_relative_path_text(&root, &nested),
+        String::from("DATA/yycfg/中文配置.xls")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies dot-name filtering can hide and reveal dot-prefixed code files.
 /// 验证点名称过滤可以隐藏和显示点开头代码文件。
 #[test]
@@ -59,9 +100,98 @@ fn workspace_file_kind_classifies_code_media_and_other_files() {
         WorkspaceFileEntryKind::Video
     );
     assert_eq!(
+        workspace_file_kind_from_path(Path::new("diagram.svg")),
+        WorkspaceFileEntryKind::Image
+    );
+    assert_eq!(
+        workspace_file_kind_from_path(Path::new("Dockerfile")),
+        WorkspaceFileEntryKind::Code
+    );
+    assert_eq!(
+        workspace_file_kind_from_path(Path::new("AGENTS.md")),
+        WorkspaceFileEntryKind::Code
+    );
+    assert_eq!(
         workspace_file_kind_from_path(Path::new("capture.raw")),
         WorkspaceFileEntryKind::Other
     );
+}
+
+/// Verifies media preview filters are mapped by media kind.
+/// 验证媒体预览过滤器会按媒体类别映射。
+#[test]
+fn workspace_file_media_kind_allowed_maps_media_filters() {
+    let image_only = WorkspaceFileFilterOptions {
+        allow_images: true,
+        allow_videos: false,
+        ..WorkspaceFileFilterOptions::default()
+    };
+    let video_only = WorkspaceFileFilterOptions {
+        allow_images: false,
+        allow_videos: true,
+        ..WorkspaceFileFilterOptions::default()
+    };
+
+    assert!(workspace_file_media_kind_allowed(
+        &WorkspaceFileEntryKind::Image,
+        &image_only
+    ));
+    assert!(!workspace_file_media_kind_allowed(
+        &WorkspaceFileEntryKind::Video,
+        &image_only
+    ));
+    assert!(workspace_file_media_kind_allowed(
+        &WorkspaceFileEntryKind::Video,
+        &video_only
+    ));
+    assert!(!workspace_file_media_kind_allowed(
+        &WorkspaceFileEntryKind::Image,
+        &video_only
+    ));
+    assert!(!workspace_file_media_kind_allowed(
+        &WorkspaceFileEntryKind::Code,
+        &image_only
+    ));
+}
+
+/// Verifies workspace file MIME types come from the same metadata as extension classification.
+/// 验证工作区文件 MIME 类型与扩展名分类来自同一份元数据。
+#[test]
+fn workspace_file_mime_type_uses_extension_metadata() {
+    assert_eq!(
+        workspace_file_mime_type(Path::new("diagram.svg"), &WorkspaceFileEntryKind::Image),
+        Some(String::from("image/svg+xml"))
+    );
+    assert_eq!(
+        workspace_file_mime_type(Path::new("Cargo.toml"), &WorkspaceFileEntryKind::Code),
+        Some(String::from("text/plain"))
+    );
+    assert_eq!(
+        workspace_file_mime_type(Path::new("Dockerfile"), &WorkspaceFileEntryKind::Code),
+        Some(String::from("text/plain"))
+    );
+    assert_eq!(
+        workspace_file_mime_type(Path::new("capture.raw"), &WorkspaceFileEntryKind::Other),
+        None
+    );
+}
+
+/// Verifies workspace file summaries reuse path metadata for kind, extension, and MIME.
+/// 验证工作区文件摘要会复用路径元数据生成类别、扩展名和 MIME。
+#[test]
+fn workspace_file_entry_summary_projects_path_metadata() {
+    let root = test_workspace_file_temp_dir("path-metadata-summary");
+    let diagram = root.join("diagram.svg");
+    std::fs::write(&diagram, "<svg />\n").expect("write svg file");
+
+    let summary =
+        workspace_file_entry_summary(&root, &diagram, &WorkspaceFileFilterOptions::default())
+            .expect("svg summary should be visible");
+
+    assert_eq!(summary.kind, WorkspaceFileEntryKind::Image);
+    assert_eq!(summary.extension, Some(String::from("svg")));
+    assert_eq!(summary.mime_type, Some(String::from("image/svg+xml")));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Verifies non-preview files are visible unless the dedicated filter is enabled.
@@ -90,11 +220,71 @@ fn workspace_file_entry_summary_filters_non_preview_files_only_when_requested() 
 
     assert_eq!(default_file_summary.kind, WorkspaceFileEntryKind::Other);
     assert_eq!(
+        default_file_summary.relative_path,
+        String::from("DATA/yycfg/中文配置.xls")
+    );
+    assert_eq!(
         default_directory_summary.kind,
         WorkspaceFileEntryKind::Directory
     );
     assert!(workspace_file_entry_summary(&root, &spreadsheet, &filters).is_none());
     assert!(workspace_file_entry_summary(&root, &root.join("DATA"), &filters).is_none());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies hidden descendants do not make preview-only directories visible.
+/// 验证隐藏后代不会让仅预览过滤下的目录变为可见。
+#[test]
+fn workspace_file_entry_summary_ignores_hidden_preview_descendants() {
+    let root = test_workspace_file_temp_dir("hidden-descendant-filter");
+    let directory = root.join("visible-parent");
+    std::fs::create_dir_all(&directory).expect("create visible parent directory");
+    let hidden_file = directory.join(".hidden.rs");
+    std::fs::write(&hidden_file, "fn hidden() {}\n").expect("write hidden descendant");
+    let filters = WorkspaceFileFilterOptions {
+        filter_non_preview_files: true,
+        ..WorkspaceFileFilterOptions::default()
+    };
+
+    assert!(workspace_file_entry_summary(&root, &directory, &filters).is_none());
+    let reveal_dot_filters = WorkspaceFileFilterOptions {
+        ignore_dot_names: false,
+        ..filters
+    };
+    assert!(workspace_file_entry_summary(&root, &directory, &reveal_dot_filters).is_some());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies the shared walker applies ignore files and optional depth consistently.
+/// 验证共享遍历器会一致应用忽略文件与可选深度限制。
+#[test]
+fn workspace_file_walk_builder_applies_ignore_and_depth() {
+    let root = test_workspace_file_temp_dir("walk-builder");
+    std::fs::write(root.join(".ignore"), "ignored.txt\n").expect("write ignore file");
+    std::fs::write(root.join("visible.rs"), "fn visible() {}\n").expect("write visible file");
+    std::fs::write(root.join("ignored.txt"), "ignored\n").expect("write ignored file");
+    let nested_directory = root.join("nested");
+    std::fs::create_dir_all(&nested_directory).expect("create nested directory");
+    std::fs::write(nested_directory.join("inner.rs"), "fn inner() {}\n").expect("write inner file");
+
+    let walked_names =
+        workspace_file_walk_builder(&root, &WorkspaceFileFilterOptions::default(), Some(1))
+            .build()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.depth() > 0)
+            .filter_map(|entry| {
+                entry
+                    .path()
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>();
+
+    assert!(walked_names.contains(&String::from("visible.rs")));
+    assert!(walked_names.contains(&String::from("nested")));
+    assert!(!walked_names.contains(&String::from("ignored.txt")));
+    assert!(!walked_names.contains(&String::from("inner.rs")));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -138,6 +328,28 @@ fn workspace_file_read_code_response_decodes_gb18030_text() {
 
     assert_eq!(response.encoding.as_deref(), Some("gb18030"));
     assert_eq!(response.content.as_deref(), Some(source));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies media responses reuse shared file metadata without reading content.
+/// 验证媒体响应复用共享文件元数据且不读取内容。
+#[test]
+fn workspace_file_media_response_uses_metadata_shell() {
+    let root = test_workspace_file_temp_dir("media-read");
+    let file = root.join("preview.png");
+    std::fs::write(&file, [137, 80, 78, 71]).expect("write png header");
+    let metadata = std::fs::metadata(&file).expect("png metadata");
+
+    let response =
+        workspace_file_media_response(&root, &file, &metadata, WorkspaceFileEntryKind::Image);
+
+    assert_eq!(response.kind, WorkspaceFileEntryKind::Image);
+    assert_eq!(response.mime_type.as_deref(), Some("image/png"));
+    assert_eq!(response.size_bytes, 4);
+    assert_eq!(response.content, None);
+    assert_eq!(response.encoding, None);
+    assert_eq!(response.line_count, None);
+    assert!(!response.truncated);
     let _ = std::fs::remove_dir_all(root);
 }
 

@@ -1,8 +1,6 @@
 //! Workspace persistence write-path helpers extracted from the main workspace store module.
 //! 从主工作台存储模块中抽取的写入持久化路径辅助实现。
 
-#![allow(dead_code)]
-
 mod deletion;
 mod edit_fork;
 mod index;
@@ -21,14 +19,13 @@ use super::segmented_session_store::{
     append_segmented_session_message_tail, append_segmented_session_message_update,
     archive_segmented_session_by_created_date, archive_segmented_session_by_id,
     create_segmented_session_in_location, delete_segmented_session_by_created_date,
-    delete_segmented_session_by_id, find_segmented_session_directory,
-    find_segmented_session_directory_by_id, fork_segmented_session_directory,
-    patch_segmented_session_metadata, rebuild_runtime_log_from_conversation_state,
-    repair_segmented_session_display_if_needed, replay_segmented_session_context,
-    restore_segmented_session_by_created_date, segmented_session_directory,
-    state_document_from_runtime_state, sync_runtime_log_from_compacted_conversation_state,
-    sync_runtime_log_from_conversation_state, truncate_segmented_session_before_message,
-    write_segmented_session_fork_source, write_state,
+    find_segmented_session_directory, find_segmented_session_directory_by_id,
+    fork_segmented_session_directory, patch_segmented_session_metadata,
+    rebuild_runtime_log_from_conversation_state, repair_segmented_session_display_if_needed,
+    replay_segmented_session_context, restore_segmented_session_by_created_date,
+    segmented_session_directory, state_document_from_runtime_state,
+    sync_runtime_log_from_compacted_conversation_state, sync_runtime_log_from_conversation_state,
+    truncate_segmented_session_before_message, write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -54,7 +51,7 @@ pub use session_lifecycle::{
     archive_project_sessions, archive_project_with_sessions, archive_single_session,
     archive_single_session_for_project, persist_single_session_addon_state_update,
     remove_project_after_archiving_sessions, rename_single_session_metadata,
-    restore_project_with_sessions, restore_single_session,
+    restore_project_with_sessions,
 };
 pub use snapshot::{
     append_single_session_transcript_suffix, persist_single_session_runtime_state_update,

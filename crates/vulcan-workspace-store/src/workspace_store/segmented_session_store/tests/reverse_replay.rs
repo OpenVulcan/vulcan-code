@@ -10,7 +10,8 @@ fn reverse_scan_finds_latest_compaction_anchor_and_suffix() {
         max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
     };
     let session_dir =
-        create_segmented_session(&root, test_session_request(policy)).expect("create session");
+        create_segmented_session_in_location(&root, false, test_session_request(policy))
+            .expect("create session");
     let summary_message = serde_json::to_value(test_message(
         "summary-message",
         SessionMessageKind::Assistant,
@@ -71,7 +72,8 @@ fn reverse_scan_without_anchor_returns_all_events_in_forward_order() {
         max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
     };
     let session_dir =
-        create_segmented_session(&root, test_session_request(policy)).expect("create session");
+        create_segmented_session_in_location(&root, false, test_session_request(policy))
+            .expect("create session");
     append_segmented_session_events(
         &session_dir,
         &[
@@ -109,9 +111,12 @@ fn reverse_scan_without_anchor_returns_all_events_in_forward_order() {
 #[test]
 fn reverse_scan_captures_turn_context_and_rollback_markers() {
     let root = test_root("reverse_scan_captures_turn_context_and_rollback_markers");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let compressed_message = serde_json::to_value(test_message(
         "compressed-assistant",
         SessionMessageKind::Assistant,
@@ -180,9 +185,12 @@ fn reverse_scan_captures_turn_context_and_rollback_markers() {
 #[test]
 fn replay_segmented_context_applies_compaction_suffix_and_rollback() {
     let root = test_root("replay_segmented_context_applies_compaction_suffix_and_rollback");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
     let summary_user = serde_json::to_value(test_message(
         "summary-user",
         SessionMessageKind::User,

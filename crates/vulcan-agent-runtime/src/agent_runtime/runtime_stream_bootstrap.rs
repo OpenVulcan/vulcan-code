@@ -19,10 +19,7 @@ use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use std::sync::Arc;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::controller::VulcanCoreController;
-use vulcan_core::types::{
-    ConversationMessage as CoreConversationMessage,
-    ConversationSnapshot as CoreConversationSnapshot,
-};
+use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Bootstrap payload that captures the fully prepared runtime turn before provider streaming begins.
@@ -61,9 +58,6 @@ pub(crate) struct RuntimeStreamBootstrap {
     /// Effective system preamble sent to the provider transport layer.
     /// 发送给 Provider 传输层的生效系统前导语。
     pub system_preamble: String,
-    /// Provider-visible history reconstructed from canonical conversation messages.
-    /// 从规范会话消息重建得到的 Provider 可见历史记录。
-    pub request_history: Vec<CoreConversationMessage>,
     /// Canonical conversation snapshot handed to `vulcan-core`.
     /// 交给 `vulcan-core` 的规范会话快照。
     pub core_snapshot: CoreConversationSnapshot,
@@ -116,7 +110,6 @@ pub(crate) async fn bootstrap_runtime_stream(
     let RuntimeBootstrapCore {
         system_preamble,
         prompt_layers,
-        request_history,
         core_snapshot,
         core_controller,
         lowering_repair_events,
@@ -126,7 +119,7 @@ pub(crate) async fn bootstrap_runtime_stream(
         format!(
             "session={} history={} lowering_repairs={} elapsed_ms={}",
             preparation.session_id,
-            request_history.len(),
+            core_snapshot.messages.len(),
             lowering_repair_events.len(),
             after_precheck_unix_millis().saturating_sub(core_started_at)
         ),
@@ -170,7 +163,6 @@ pub(crate) async fn bootstrap_runtime_stream(
         discovery_errors,
         warnings,
         system_preamble,
-        request_history,
         core_snapshot,
         core_controller,
         lowering_repair_events,

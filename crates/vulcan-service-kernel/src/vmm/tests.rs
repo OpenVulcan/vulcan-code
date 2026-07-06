@@ -3,8 +3,11 @@
 
 use super::*;
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_service_runtime::vmm_management::VmmWorkbenchAction;
 use vulcan_vmm::{ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget};
+use vulcan_workbench_model::{SessionId, SessionState, SessionSummary};
+use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 /// Builds a default VMM action request for parser unit tests.
 /// 为解析器单元测试构建默认 VMM 动作请求。
@@ -182,6 +185,67 @@ fn vmm_config_layer_from_draft_omits_transport_fields_for_project_layer() {
     assert_eq!(layer.user_id, Some(7));
     assert_eq!(layer.project_id, Some(11));
     assert_eq!(layer.injection_tag.as_deref(), Some("PROJECT_TAG"));
+}
+
+/// Verifies selected-session VMM snapshots ignore blank project ids before scope fallback.
+/// 验证选中会话的 VMM 快照会先忽略空白项目标识再执行作用域回退。
+#[test]
+fn vmm_memory_snapshot_ignores_blank_selected_session_project_id() {
+    // session_id identifies the selected conversation in the VMM snapshot.
+    // session_id 标识 VMM 快照中的选中会话。
+    let session_id = SessionId::new_v4();
+    // workspace contains a blank-id project after the valid fallback project.
+    // workspace 在有效回退项目之后包含空白标识项目。
+    let workspace = WorkspaceSnapshot {
+        task_projects: vec![
+            TaskProjectSummary::new(
+                "project-a",
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                vec![session_id],
+            ),
+            TaskProjectSummary::new(
+                "   ",
+                "Blank Project",
+                "D:/blank-project",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            ),
+        ],
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            Some(String::from("   ")),
+            "VMM 快照测试会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    let snapshot = vmm_memory_snapshot(&workspace, &ProviderConfigurationFile::default(), None);
+
+    assert_eq!(snapshot.selected_project_id.as_deref(), Some("project-a"));
 }
 
 /// Verifies static profile snapshots group active nodes by target and date.

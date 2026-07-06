@@ -19,13 +19,13 @@ pub(super) fn resize_console(output: HANDLE, rows: u16, cols: u16) -> Result<(),
     let cols = cols.clamp(1, 500) as i16;
     let size = COORD { X: cols, Y: rows };
     let ok_buffer = unsafe { SetConsoleScreenBufferSize(output, size) } != 0;
-    let mut rect = SMALL_RECT {
+    let rect = SMALL_RECT {
         Left: 0,
         Top: 0,
         Right: cols.saturating_sub(1),
         Bottom: rows.saturating_sub(1),
     };
-    let ok_window = unsafe { SetConsoleWindowInfo(output, 1, &mut rect) } != 0;
+    let ok_window = unsafe { SetConsoleWindowInfo(output, 1, &rect) } != 0;
     if ok_buffer || ok_window {
         Ok(())
     } else {

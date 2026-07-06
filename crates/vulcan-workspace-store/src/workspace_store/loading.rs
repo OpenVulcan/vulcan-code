@@ -274,27 +274,6 @@ pub(super) fn sanitize_loaded_runtime_state_for_fresh_process(
     runtime_state.active_precheck_turn_id.take().is_some()
 }
 
-/// Builds the default empty workspace snapshot used before any real project has been added.
-/// 构建在尚未添加任何真实项目之前使用的默认空工作台快照。
-pub(super) fn build_empty_workspace_snapshot() -> WorkspaceSnapshot {
-    WorkspaceSnapshot {
-        task_projects: Vec::new(),
-        archived_task_projects: Vec::new(),
-        sessions: Vec::new(),
-        archived_sessions: Vec::new(),
-        session_messages: BTreeMap::new(),
-        archived_session_messages: BTreeMap::new(),
-        session_compactions: BTreeMap::new(),
-        archived_session_compactions: BTreeMap::new(),
-        session_runtime_state: BTreeMap::new(),
-        archived_session_runtime_state: BTreeMap::new(),
-        session_run_phases: BTreeMap::new(),
-        expanded_task_projects: BTreeSet::new(),
-        selected_session: SessionId::nil(),
-        hydrated_session_ids: BTreeSet::new(),
-    }
-}
-
 /// Ensures a project summary exists and owns the provided session id exactly once.
 /// 确保项目摘要存在，并且只拥有一次给定会话标识。
 pub(super) fn ensure_project_summary_for_session(
@@ -319,26 +298,4 @@ pub(super) fn ensure_project_summary_for_session(
         None,
         vec![session_id],
     ));
-}
-
-/// Clears all workspace business tables so the application can rebuild from a clean empty state.
-/// 清空全部工作台业务表，以便应用从干净的空状态重新开始。
-async fn clear_workspace_storage(controller: &ControllerRuntimeHandle) -> Result<(), String> {
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-DELETE FROM projects;
-DELETE FROM workspace_session_index;
-DELETE FROM app_metadata WHERE key = 'workspace.collapsed_task_projects';
-"#,
-            Vec::<ControllerSqliteValue>::new(),
-        )
-        .await
-        .map_err(|error| format!("清理旧原型工作台数据失败：{error}"))?;
-    clear_all_segmented_session_roots(&controller.data_root)?;
-
-    Ok(())
 }

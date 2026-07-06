@@ -5,9 +5,12 @@ use super::*;
 #[test]
 fn create_session_writes_metadata_state_and_first_segment() {
     let root = test_root("create_session_writes_metadata_state_and_first_segment");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create segmented session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create segmented session");
 
     assert!(session_dir.join(SEGMENTED_METADATA_FILE).exists());
     assert!(session_dir.join(SEGMENTED_STATE_FILE).exists());
@@ -38,7 +41,8 @@ fn task_store_locator_finds_session_directory_by_created_at() {
     let session_id = request.session_id.clone();
     let project_tag = request.project_tag.clone();
     let created_at = request.created_at.clone();
-    let session_dir = create_segmented_session(&root, request).expect("create segmented session");
+    let session_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create segmented session");
 
     let located = find_segmented_session_directory_for_task_store_created_at(
         &root,
@@ -56,13 +60,17 @@ fn task_store_locator_finds_session_directory_by_created_at() {
 #[test]
 fn task_mirror_rows_load_from_resolved_session_directory() {
     let root = test_root("task_mirror_rows_load_from_resolved_session_directory");
-    let session_dir =
-        create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
-            .expect("create segmented session");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create segmented session");
     let task_session_id = Uuid::new_v4();
-    let mut task_request = test_task_session_request();
-    task_request.task_session_id = task_session_id.to_string();
-    create_segmented_task_session(&session_dir, task_request).expect("create task session");
+    // Keep the generated UUID string stable across fixture writing and mirror assertions.
+    // 在写入夹具与镜像断言之间保持生成的 UUID 字符串稳定。
+    let task_session_id_text = task_session_id.to_string();
+    write_legacy_task_session_fixture(&session_dir, &task_session_id_text);
 
     let mirrors =
         crate::workspace_store::load_segmented_session_task_mirrors_from_directory(&session_dir)
@@ -82,7 +90,8 @@ fn fork_session_directory_rewrites_structural_identity() {
     let target_session_id = Uuid::new_v4().to_string();
     let mut request = test_session_request(SegmentPolicy::default());
     request.session_id = source_session_id.clone();
-    let source_dir = create_segmented_session(&root, request).expect("create segmented session");
+    let source_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create segmented session");
     let source_runtime_state = SessionRuntimeStateEntry {
         active_provider_id: Some(String::from("source-provider")),
         updated_at: "2026-06-06T10:00:00Z".to_string(),
@@ -133,8 +142,7 @@ fn fork_session_directory_rewrites_structural_identity() {
     let source_runtime_lines = read_runtime_log_lines(&source_dir)
         .expect("read source runtime lines")
         .expect("source runtime exists");
-    let source_task_dir = create_segmented_task_session(&source_dir, test_task_session_request())
-        .expect("create source task");
+    let source_task_dir = write_legacy_task_session_fixture(&source_dir, "task-alpha");
     assert!(source_task_dir.ends_with("task/task-alpha"));
     let source_task_runtime_state = SessionRuntimeStateEntry {
         active_provider_id: Some(String::from("task-provider")),

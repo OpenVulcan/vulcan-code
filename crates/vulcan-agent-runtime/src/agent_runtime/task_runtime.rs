@@ -681,6 +681,39 @@ pub struct TaskRuntime {
     max_depth: usize,
 }
 
+/// Debug-only input for seeding one resident subagent registry entry.
+/// 用于播种一条常驻子代理注册表条目的仅调试输入。
+#[cfg(debug_assertions)]
+pub struct DebugSubagentRegistryEntrySeed {
+    /// Root session that owns the seeded child-agent tree.
+    /// 拥有待播种子代理树的根会话。
+    pub root_session_id: SessionId,
+    /// Parent session that should own the seeded child task.
+    /// 应拥有待播种子任务的父会话。
+    pub parent_session_id: SessionId,
+    /// Stable internal task-session identifier.
+    /// 稳定的内部任务会话标识。
+    pub task_id: SessionId,
+    /// User-facing public task identifier.
+    /// 面向用户展示的公开任务标识。
+    pub public_task_id: String,
+    /// Display title used by registry and navigation surfaces.
+    /// 注册表与导航界面使用的展示标题。
+    pub display_title: String,
+    /// Optional task description shown in child-agent surfaces.
+    /// 子代理界面中展示的可选任务描述。
+    pub description: Option<String>,
+    /// Optional subagent label attached to the seeded task.
+    /// 附加到待播种任务上的可选子代理标签。
+    pub subagent: Option<String>,
+    /// Runtime status assigned to the seeded task.
+    /// 分配给待播种任务的运行时状态。
+    pub status: TaskSessionStatus,
+    /// Optional final result summary for terminal seeded tasks.
+    /// 终态播种任务的可选最终结果摘要。
+    pub result_summary: Option<String>,
+}
+
 impl Default for TaskRuntime {
     /// Builds one empty task runtime with the default recursion guardrail.
     /// 构建一份带默认递归防护的空任务运行时。

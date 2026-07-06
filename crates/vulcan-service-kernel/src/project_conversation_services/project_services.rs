@@ -337,12 +337,7 @@ pub(super) fn controller_runtime_and_active_project_from_state(
         .workspace_snapshot
         .as_ref()
         .ok_or_else(|| String::from("工作区快照尚未加载，无法处理项目。"))?;
-    let project = workspace_snapshot
-        .task_projects
-        .iter()
-        .find(|project| project.id == project_id)
-        .cloned()
-        .ok_or_else(|| format!("未找到要{action_label}的项目：{project_id}"))?;
+    let project = active_project_from_workspace(workspace_snapshot, project_id, action_label)?;
     let project_sessions = project
         .session_ids
         .iter()
@@ -355,6 +350,32 @@ pub(super) fn controller_runtime_and_active_project_from_state(
         })
         .collect::<Vec<_>>();
     Ok((controller_runtime, project, project_sessions))
+}
+
+/// Resolves one active workspace project for a project-level action.
+/// 为项目级操作解析单个活动工作区项目。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains active project summaries.
+/// `workspace_snapshot` 包含活动项目摘要。
+/// `project_id` is the requested project identifier.
+/// `project_id` 是请求的项目标识。
+/// `action_label` labels the user-facing error.
+/// `action_label` 标记面向用户的错误信息。
+///
+/// # Returns
+/// 返回值
+/// The matching active project summary.
+/// 返回匹配的活动项目摘要。
+fn active_project_from_workspace(
+    workspace_snapshot: &WorkspaceSnapshot,
+    project_id: &str,
+    action_label: &str,
+) -> Result<TaskProjectSummary, String> {
+    workspace_task_project_for_project_id(workspace_snapshot, project_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到要{action_label}的项目：{project_id}"))
 }
 
 /// Returns the retained workbench snapshot after a no-op project archive command.
@@ -519,4 +540,106 @@ pub(super) fn archive_project_sessions_in_retained_state(
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     Ok(guard.workbench.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+    use vulcan_workbench_model::SessionId;
+
+    /// Builds one workspace snapshot from active project rows.
+    /// 使用活动项目行构建一个工作区快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_projects` contains the active project rows visible to project actions.
+    /// `task_projects` 包含项目操作可见的活动项目行。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A workspace snapshot with only the supplied active projects populated.
+    /// 返回仅填充给定活动项目的工作区快照。
+    fn workspace_snapshot_with_projects(
+        task_projects: Vec<TaskProjectSummary>,
+    ) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            task_projects,
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: SessionId::nil(),
+            hydrated_session_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Builds one project summary for active-project resolver tests.
+    /// 为活动项目解析器测试构建单个项目摘要。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `project_id` is the persisted project identifier.
+    /// `project_id` 是持久化项目标识。
+    /// `title` is the displayed project title.
+    /// `title` 是项目展示标题。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A task project summary without nested sessions.
+    /// 返回不包含嵌套会话的任务项目摘要。
+    fn project_summary(project_id: &str, title: &str) -> TaskProjectSummary {
+        TaskProjectSummary::new(
+            project_id,
+            title,
+            format!("D:/workspace/{project_id}"),
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// Resolves active projects through the shared workspace project lookup.
+    /// 通过共享工作区项目查找解析活动项目。
+    #[test]
+    fn active_project_from_workspace_resolves_active_project() {
+        // Workspace snapshot containing one active project row.
+        // 包含一个活动项目行的工作区快照。
+        let workspace_snapshot =
+            workspace_snapshot_with_projects(vec![project_summary("project-a", "Project A")]);
+
+        // Resolved project returned by the project action helper.
+        // 项目操作辅助函数返回的已解析项目。
+        let project = active_project_from_workspace(&workspace_snapshot, "project-a", "移除")
+            .expect("active project should resolve through shared lookup");
+
+        assert_eq!(project.id, "project-a");
+        assert_eq!(project.title, "Project A");
+    }
+
+    /// Rejects blank project identifiers instead of matching blank project rows.
+    /// 拒绝空白项目标识，而不是匹配空白项目行。
+    #[test]
+    fn active_project_from_workspace_rejects_blank_project_id() {
+        // Workspace snapshot containing a malformed blank active project row.
+        // 包含一个异常空白活动项目行的工作区快照。
+        let workspace_snapshot =
+            workspace_snapshot_with_projects(vec![project_summary("   ", "Blank Project")]);
+
+        // Error emitted by the shared blank-project-id semantics.
+        // 共享空白项目标识语义返回的错误。
+        let error = active_project_from_workspace(&workspace_snapshot, "   ", "移除")
+            .expect_err("blank project id should be rejected by shared lookup");
+
+        assert!(error.contains("未找到要移除的项目"));
+    }
 }
