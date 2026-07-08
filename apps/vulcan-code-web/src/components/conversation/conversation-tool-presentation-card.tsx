@@ -33,6 +33,7 @@ import {
   type FileChangePresentation,
   type SubagentOrchestrationAgent,
   type SubagentOrchestrationPresentation,
+  type SubagentUsageSummary,
   type ToolPresentation,
   type ToolPresentationDisplayState,
 } from "@/components/conversation/conversation-tool-presentations";
@@ -179,6 +180,11 @@ function SubagentOrchestrationPresentationCard(props: {
   // canExpand prevents empty status rows from opening an empty detail area.
   // canExpand 避免空状态列表行展开出空详情区域。
   const canExpand = subagentPresentationHasExpandableDetail(hydratedPresentation);
+  // waitUsageSummary keeps consumed wait_agent child usage visible before expansion.
+  // waitUsageSummary 让 wait_agent 已消费的子智能体消耗在展开前也可见。
+  const waitUsageSummary = hydratedPresentation.operation === "wait"
+    ? subagentPresentationUsageSummary(hydratedPresentation)
+    : null;
   return (
     <div className={cn("tool-presentation-card subagent-orchestration", canExpand && expanded && "expanded")}>
       <button
@@ -200,6 +206,11 @@ function SubagentOrchestrationPresentationCard(props: {
           )
         ) : null}
       </button>
+      {waitUsageSummary ? (
+        <div className="subagent-orchestration-compact-usage">
+          <SubagentUsageChip summary={waitUsageSummary} t={t} />
+        </div>
+      ) : null}
       <ConversationMeasuredCollapse collapseId={`subagent:${presentation.id}`} expanded={canExpand && expanded}>
         <SubagentOrchestrationDetail presentation={hydratedPresentation} t={t} />
       </ConversationMeasuredCollapse>
@@ -215,8 +226,7 @@ function subagentPresentationHasExpandableDetail(
   presentation: SubagentOrchestrationPresentation,
 ): boolean {
   if (
-    presentation.operation === "collect"
-    && presentation.collectKind === "status"
+    presentation.operation === "list_agents"
     && presentation.agentsKnown
     && presentation.agents.length === 0
     && !presentation.result
@@ -264,13 +274,7 @@ function SubagentOrchestrationDetail(props: {
         {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
         <div className="subagent-orchestration-meta">
           <span>{t("conversation.subagent.detail.status")}</span>
-          <strong>
-            {presentation.timedOut
-              ? t("conversation.subagent.detail.waitTimedOut")
-              : presentation.interrupted
-                ? t("conversation.subagent.detail.waitInterrupted")
-              : t("conversation.subagent.detail.waitCompleted")}
-          </strong>
+          <strong>{subagentWaitStatusText(presentation, t)}</strong>
         </div>
         {presentation.result ? (
           <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
@@ -296,9 +300,25 @@ function SubagentOrchestrationDetail(props: {
       </div>
     );
   }
-  if (presentation.operation === "collect") {
-    const emptyOpenAgentStatus = presentation.collectKind === "status"
-      && presentation.agentsKnown
+  if (presentation.operation === "agent_orchestration_info") {
+    return (
+      <div className="subagent-orchestration-detail">
+        {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
+        {presentation.result ? (
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+        ) : null}
+        {presentation.agents.length ? (
+          <div className="subagent-orchestration-agent-list">
+            {presentation.agents.map((agent) => (
+              <SubagentOrchestrationAgentRow agent={agent} key={agent.id} t={t} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  if (presentation.operation === "list_agents") {
+    const emptyOpenAgentStatus = presentation.agentsKnown
       && presentation.agents.length === 0
       && !presentation.result
       && !presentation.note;
@@ -327,13 +347,20 @@ function SubagentOrchestrationDetail(props: {
   // showResult controls whether model-facing dispatch acknowledgements are visible.
   // showResult 控制是否展示面向模型的调度确认内容。
   const showResult = Boolean(resultText);
-  // showStoppedCount records whether the stop count adds useful information to the control row.
-  // showStoppedCount 记录停止数量是否为控制行补充了有效信息。
-  const showStoppedCount = presentation.operation === "control"
+  // showStoppedCount records whether the stop count adds useful information to close or interrupt rows.
+  // showStoppedCount 记录停止数量是否为关闭或停止行补充了有效信息。
+  const showStoppedCount = (presentation.operation === "close" || presentation.operation === "interrupt")
     && presentation.stoppedCount > 0;
   // hasVisibleBody records whether the expanded area has user-facing content.
   // hasVisibleBody 记录展开区是否存在面向用户的内容。
-  const hasVisibleBody = Boolean(presentation.prompt || presentation.effectivePrompt || presentation.debugSummary || showResult || presentation.operation === "control");
+  const hasVisibleBody = Boolean(
+    presentation.prompt
+    || presentation.effectivePrompt
+    || presentation.debugSummary
+    || showResult
+    || presentation.operation === "close"
+    || presentation.operation === "interrupt",
+  );
   return (
     <div className="subagent-orchestration-detail">
       {presentation.queued !== null && presentation.queued !== undefined ? (
@@ -358,9 +385,9 @@ function SubagentOrchestrationDetail(props: {
       {resultText ? (
         <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={resultText} />
       ) : null}
-      {presentation.operation === "control" ? (
+      {presentation.operation === "close" || presentation.operation === "interrupt" ? (
         <>
-          {presentation.closedCount > 0 || presentation.closedAgents.length > 0 ? (
+          {presentation.operation === "close" && (presentation.closedCount > 0 || presentation.closedAgents.length > 0) ? (
             <div className="subagent-orchestration-meta">
               <span>{t("conversation.subagent.detail.closedCount")}</span>
               <strong>{presentation.closedCount}</strong>
@@ -406,11 +433,32 @@ function SubagentOrchestrationAgentRow(props: {
       {props.agent.debugSummary ? (
         <SubagentInlineTextLine label={props.t("conversation.subagent.detail.debug")} text={props.agent.debugSummary} />
       ) : null}
+      {props.agent.usageSummary ? (
+        <SubagentUsageChip summary={props.agent.usageSummary} t={props.t} />
+      ) : null}
       {props.agent.result ? (
         <pre className="subagent-orchestration-text">{compactSubagentText(props.agent.result)}</pre>
       ) : (
         <div className="subagent-orchestration-empty">{props.t("conversation.subagent.detail.noResult")}</div>
       )}
+    </div>
+  );
+}
+
+// SubagentUsageChip renders one compact child-agent usage row.
+// SubagentUsageChip 渲染一条紧凑子智能体消耗统计行。
+function SubagentUsageChip(props: {
+  // Aggregated child-agent usage.
+  // 聚合后的子智能体消耗。
+  summary: SubagentUsageSummary;
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string;
+}) {
+  return (
+    <div className="subagent-orchestration-usage">
+      <Bot aria-hidden="true" size={13} />
+      <span>{subagentUsageSummaryText(props.summary, props.t)}</span>
     </div>
   );
 }
@@ -463,9 +511,11 @@ function subagentOperationLabel(
 ): string {
   if (presentation.operation === "wait") return t("conversation.subagent.detail.wait");
   if (presentation.operation === "message") return t("conversation.subagent.detail.message");
-  if (presentation.operation === "collect") return subagentCollectionLabel(presentation, t);
+  if (presentation.operation === "agent_orchestration_info") return t("conversation.subagent.detail.templateCollection");
+  if (presentation.operation === "list_agents") return t("conversation.subagent.detail.statusCollection");
   if (presentation.operation === "feedback") return t("conversation.subagent.detail.feedback");
-  if (presentation.operation === "control") return t("conversation.subagent.detail.control");
+  if (presentation.operation === "close") return t("conversation.subagent.detail.closeControl");
+  if (presentation.operation === "interrupt") return t("conversation.subagent.detail.interruptControl");
   return t("conversation.subagent.call");
 }
 
@@ -480,21 +530,23 @@ function subagentSummaryText(
   t: (key: TranslationKey) => string,
 ): string {
   if (presentation.operation === "wait") {
-    return presentation.timedOut
-      ? t("conversation.subagent.detail.waitTimedOut")
-      : presentation.interrupted
-        ? t("conversation.subagent.detail.waitInterrupted")
-      : t("conversation.subagent.detail.waitCompleted");
+    return subagentWaitStatusText(presentation, t);
   }
-  if (presentation.operation === "collect") {
+  if (presentation.operation === "agent_orchestration_info") {
     if (!presentation.agentsKnown) {
-      return subagentCollectionLabel(presentation, t);
+      return t("conversation.subagent.detail.templateCollection");
     }
     if (presentation.agents.length === 0) {
-      if (presentation.collectKind === "status") {
-        return t("conversation.subagent.detail.noOpenAgents");
-      }
-      return subagentCollectionLabel(presentation, t);
+      return t("conversation.subagent.detail.templateCollection");
+    }
+    return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
+  }
+  if (presentation.operation === "list_agents") {
+    if (!presentation.agentsKnown) {
+      return t("conversation.subagent.detail.statusCollection");
+    }
+    if (presentation.agents.length === 0) {
+      return t("conversation.subagent.detail.noOpenAgents");
     }
     return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
   }
@@ -504,21 +556,24 @@ function subagentSummaryText(
   if (presentation.operation === "message") {
     return presentation.target ?? presentation.title;
   }
-  if (presentation.operation === "control") {
+  if (presentation.operation === "close") {
     if (presentation.closedCount > 0) {
       return `${presentation.closedCount} ${t("conversation.subagent.detail.closedAgents")}`;
     }
+    return presentation.target ?? t("conversation.subagent.detail.closeControl");
+  }
+  if (presentation.operation === "interrupt") {
     if (presentation.stoppedCount > 0) {
       return presentation.target ?? `${presentation.stoppedCount}`;
     }
-    return presentation.target ?? t("conversation.subagent.detail.control");
+    return presentation.target ?? t("conversation.subagent.detail.interruptControl");
   }
   return presentation.title;
 }
 
-// subagentCollectionLabel chooses the display label for template and live-status queries.
-// subagentCollectionLabel 为模板查询与实时状态查询选择展示文案。
-function subagentCollectionLabel(
+// subagentWaitStatusText maps wait_agent activity to a non-misleading compact label.
+// subagentWaitStatusText 将 wait_agent 活动映射为不误导的紧凑文案。
+function subagentWaitStatusText(
   // Presentation model.
   // 展示模型。
   presentation: SubagentOrchestrationPresentation,
@@ -526,9 +581,82 @@ function subagentCollectionLabel(
   // 翻译辅助函数。
   t: (key: TranslationKey) => string,
 ): string {
-  return presentation.collectKind === "templates"
-    ? t("conversation.subagent.detail.templateCollection")
-    : t("conversation.subagent.detail.statusCollection");
+  if (presentation.timedOut) {
+    return t("conversation.subagent.detail.waitTimedOut");
+  }
+  if (presentation.interrupted) {
+    return t("conversation.subagent.detail.waitInterrupted");
+  }
+  if (presentation.terminalEventReceived) {
+    return t("conversation.subagent.detail.waitCompleted");
+  }
+  return t("conversation.subagent.detail.waitPending");
+}
+
+// subagentUsageSummaryText formats child-agent usage without regular-turn group labels.
+// subagentUsageSummaryText 格式化不带常规回合分组文案的子智能体消耗。
+function subagentUsageSummaryText(
+  // Aggregated child-agent usage.
+  // 聚合后的子智能体消耗。
+  summary: SubagentUsageSummary,
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string {
+  const parts = [
+    formatSubagentUsageTranslation(t("conversation.stats.providerCalls"), summary.providerCallCount),
+    formatSubagentUsageTranslation(t("conversation.stats.toolCalls"), summary.toolCallCount),
+  ];
+  if (summary.totalTokens > 0) {
+    parts.push(formatSubagentUsageTranslation(t("conversation.stats.totalTokens"), summary.totalTokens));
+  }
+  if (summary.cachedInputTokens > 0) {
+    parts.push(formatSubagentUsageTranslation(t("conversation.stats.cachedTokensCompact"), summary.cachedInputTokens));
+  }
+  return parts.join(" · ");
+}
+
+// subagentPresentationUsageSummary aggregates visible child-agent usage rows.
+// subagentPresentationUsageSummary 聚合可见子智能体行的消耗统计。
+function subagentPresentationUsageSummary(
+  // Presentation model.
+  // 展示模型。
+  presentation: SubagentOrchestrationPresentation,
+): SubagentUsageSummary | null {
+  const summary: SubagentUsageSummary = {
+    providerCallCount: 0,
+    toolCallCount: 0,
+    totalTokens: 0,
+    cachedInputTokens: 0,
+  };
+  for (const agent of presentation.agents) {
+    if (!agent.usageSummary) {
+      continue;
+    }
+    summary.providerCallCount += agent.usageSummary.providerCallCount;
+    summary.toolCallCount += agent.usageSummary.toolCallCount;
+    summary.totalTokens += agent.usageSummary.totalTokens;
+    summary.cachedInputTokens += agent.usageSummary.cachedInputTokens;
+  }
+  return summary.providerCallCount > 0
+    || summary.toolCallCount > 0
+    || summary.totalTokens > 0
+    || summary.cachedInputTokens > 0
+    ? summary
+    : null;
+}
+
+// formatSubagentUsageTranslation injects a count into a simple i18n template.
+// formatSubagentUsageTranslation 向简单国际化模板注入数量。
+function formatSubagentUsageTranslation(
+  // Template containing the count placeholder.
+  // 包含数量占位符的模板。
+  template: string,
+  // Count value to inject.
+  // 需要注入的数量。
+  count: number,
+): string {
+  return template.replaceAll("{count}", String(count));
 }
 
 // compactSubagentText limits inline subagent text to keep transcript rows light.

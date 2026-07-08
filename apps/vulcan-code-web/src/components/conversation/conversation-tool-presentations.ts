@@ -34,6 +34,7 @@ export type {
   FileChangePresentation,
   SubagentOrchestrationAgent,
   SubagentOrchestrationPresentation,
+  SubagentUsageSummary,
   ToolPresentation,
   ToolPresentationDisplayState,
   ToolPresentationResolveOptions,

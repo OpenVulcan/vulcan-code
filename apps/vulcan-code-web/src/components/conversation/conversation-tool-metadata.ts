@@ -270,6 +270,8 @@ function defaultTurnStatsTranslation(key: TranslationKey): string {
       return "{count} tokens";
     case "conversation.stats.cachedTokens":
       return "Cache hit {count}";
+    case "conversation.stats.cachedTokensCompact":
+      return "Cache {count} tokens";
     case "conversation.stats.outputSpeed":
       return "{speed}/s";
     case "conversation.stats.group.regular":

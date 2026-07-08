@@ -244,10 +244,7 @@ export interface SubagentOrchestrationPresentation {
   detailRef?: ConversationDetailRef;
   // Normalized orchestration operation.
   // 规范化调度操作类型。
-  operation: "create" | "message" | "wait" | "collect" | "control" | "feedback";
-  // Collection display subtype for template queries versus live status queries.
-  // 模板查询与实时状态查询的集合展示子类型。
-  collectKind?: "templates" | "status" | null;
+  operation: "create" | "message" | "wait" | "agent_orchestration_info" | "list_agents" | "close" | "interrupt" | "feedback";
   // Compact title shown in the row.
   // 紧凑行中展示的标题。
   title: string;
@@ -281,17 +278,20 @@ export interface SubagentOrchestrationPresentation {
   // Whether a wait_agent call ended because the parent turn was interrupted.
   // wait_agent 调用是否因为父级回合被打断而结束。
   interrupted?: boolean | null;
+  // Whether a wait_agent call received a terminal child-agent event.
+  // wait_agent 调用是否已收到子智能体终态事件。
+  terminalEventReceived?: boolean;
   // Listed child-agent status rows.
   // 已列出的子代理状态行。
   agents: SubagentOrchestrationAgent[];
   // Whether the listed child-agent rows came from a known runtime payload.
   // 已列出的子代理状态行是否来自明确的运行时载荷。
   agentsKnown: boolean;
-  // Stopped subagent task ids from control calls.
-  // 控制调用返回的已停止任务会话标识。
+  // Stopped subagent task ids from close or interrupt calls.
+  // 关闭或停止调用返回的已停止任务会话标识。
   stoppedTaskIds: string[];
-  // Stopped task count reported by control calls.
-  // 控制调用返回的已停止任务数量。
+  // Stopped task count reported by close or interrupt calls.
+  // 关闭或停止调用返回的已停止任务数量。
   stoppedCount: number;
   // Closed child-agent public ids from close calls.
   // 关闭调用返回的已关闭子智能体公开标识。
@@ -319,9 +319,29 @@ export interface SubagentOrchestrationAgent {
   // Optional terminal status summary.
   // 可选终态状态摘要。
   result?: string | null;
+  // Optional usage summary collected from child-agent usage segments.
+  // 从子智能体用量分段收集到的可选消耗摘要。
+  usageSummary?: SubagentUsageSummary | null;
   // Optional runtime debug summary for this listed child agent.
   // 该已列出子代理的可选运行时调试摘要。
   debugSummary?: string | null;
+}
+
+// SubagentUsageSummary contains compact usage accounting for one child-agent result.
+// SubagentUsageSummary 包含单个子智能体结果的紧凑消耗统计。
+export interface SubagentUsageSummary {
+  // Provider call count.
+  // Provider 调用次数。
+  providerCallCount: number;
+  // Tool call count.
+  // 工具调用次数。
+  toolCallCount: number;
+  // Total token count.
+  // 总 token 数。
+  totalTokens: number;
+  // Cached input token count.
+  // 缓存命中的输入 token 数。
+  cachedInputTokens: number;
 }
 
 // ToolPresentation is the union of all recognized custom tool displays.

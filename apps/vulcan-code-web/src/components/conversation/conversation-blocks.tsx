@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  Bot,
   BrainCircuit,
   ChevronDown,
   ChevronRight,
@@ -19,7 +20,11 @@ import {
   useConversationMeasuredExpansion,
 } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
-import { metadataString } from "@/components/conversation/conversation-metadata";
+import {
+  metadataString,
+  metadataValue,
+  numberMetadata,
+} from "@/components/conversation/conversation-metadata";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
@@ -411,17 +416,21 @@ export function TurnStatsBlock(props: {
   // block 包含紧凑轮次统计载荷。
   block: ConversationDisplayBlock;
 }) {
+  const { t } = useI18n();
   const turnKind = metadataString(props.block.rawMetadata, [
     "turn_stats.turn_kind",
     "turnStats.turnKind",
   ]);
   const subagentStats = turnKind?.trim().toLowerCase() === "subagent_feedback";
+  const summary = subagentStats
+    ? ((subagentTurnStatsSummary(props.block.rawMetadata, t) ?? props.block.summary) || props.block.title)
+    : (props.block.summary || props.block.title);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div className={cn("turn-stats-row", props.block.status ?? "completed", subagentStats && "subagent")}>
-          <span aria-hidden="true">{turnStatsIcon(props.block.status)}</span>
-          <strong>{props.block.summary || props.block.title}</strong>
+          {subagentStats ? <Bot aria-hidden="true" size={13} /> : <span aria-hidden="true">{turnStatsIcon(props.block.status)}</span>}
+          <strong>{summary}</strong>
         </div>
       </TooltipTrigger>
       <TooltipContent className="turn-stats-tooltip" side="right" sideOffset={8}>
@@ -478,4 +487,61 @@ function turnStatsIcon(status?: string): string {
   if (status === "failed") return "!";
   if (status === "stopped") return "■";
   return "◔";
+}
+
+// subagentTurnStatsSummary formats child-agent stats as a display-only usage chip.
+// subagentTurnStatsSummary 将子智能体统计格式化为仅显示的消耗胶囊。
+function subagentTurnStatsSummary(
+  // Raw metadata attached to the turn-stats display block.
+  // turn-stats 展示块携带的原始元数据。
+  metadata: unknown,
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string | null {
+  const stats = turnStatsMetadataObject(metadata);
+  if (!stats) {
+    return null;
+  }
+  const providerCallCount = numberMetadata(stats.provider_call_count ?? stats.providerCallCount);
+  const toolCallCount = numberMetadata(stats.tool_call_count ?? stats.toolCallCount);
+  const totalTokens = numberMetadata(stats.total_tokens ?? stats.totalTokens);
+  const cachedInputTokens = numberMetadata(stats.cached_input_tokens ?? stats.cachedInputTokens);
+  const parts = [
+    formatStatsTemplate(t("conversation.stats.providerCalls"), providerCallCount),
+    formatStatsTemplate(t("conversation.stats.toolCalls"), toolCallCount),
+  ];
+  if (totalTokens > 0) {
+    parts.push(formatStatsTemplate(t("conversation.stats.totalTokens"), totalTokens));
+  }
+  if (cachedInputTokens > 0) {
+    parts.push(formatStatsTemplate(t("conversation.stats.cachedTokensCompact"), cachedInputTokens));
+  }
+  return parts.join(" · ");
+}
+
+// turnStatsMetadataObject resolves structured turn statistics from block metadata.
+// turnStatsMetadataObject 从块元数据中解析结构化轮次统计。
+function turnStatsMetadataObject(
+  // Raw metadata attached to the display block.
+  // 展示块携带的原始元数据。
+  metadata: unknown,
+): Record<string, unknown> | null {
+  const value = metadataValue(metadata, ["turn_stats", "turnStats"]);
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+// formatStatsTemplate injects a count into a simple statistics template.
+// formatStatsTemplate 向简单统计模板注入数量。
+function formatStatsTemplate(
+  // Template containing a count placeholder.
+  // 包含数量占位符的模板。
+  template: string,
+  // Count value to render.
+  // 需要渲染的数量。
+  count: number,
+): string {
+  return template.replaceAll("{count}", String(count));
 }

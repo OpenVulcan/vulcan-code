@@ -370,6 +370,11 @@
   color: var(--foreground);
 }
 
+.turn-stats-row.subagent svg {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
 .turn-stats-row strong {
   min-width: 0;
   overflow: hidden;

@@ -332,6 +332,34 @@
   line-height: 1.45;
 }
 
+.subagent-orchestration-usage {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 7%, var(--muted));
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.subagent-orchestration-usage svg {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.subagent-orchestration-usage span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .subagent-orchestration-inline-text {
   min-width: 0;
   color: var(--muted-foreground);

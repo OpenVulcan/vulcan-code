@@ -331,11 +331,19 @@ pub(super) fn normalize_tool_result_metadata(
             serde_json::Value::String(tool_name.to_string()),
         );
     }
-    if let Some(host_result) = raw_visible_host_result(event_metadata) {
-        object.insert(String::from("host_result"), host_result.clone());
+    if let Some(host_result) = visible_host_result_metadata(event_metadata) {
+        object.insert(String::from("host_result"), host_result);
     }
     object.insert(String::from("result"), serde_json::Value::Object(result));
     serde_json::Value::Object(object)
+}
+
+/// Returns the host-result metadata that is safe to attach to the visible tool row.
+/// 返回可安全附加到可见工具行的宿主结果元数据。
+fn visible_host_result_metadata(metadata: Option<&serde_json::Value>) -> Option<serde_json::Value> {
+    raw_visible_host_result(metadata)
+        .cloned()
+        .or_else(|| compact_subagent_wait_host_result(metadata))
 }
 
 /// Returns compact host results that WebUI specialized cards need without opening the raw tool modal.
@@ -366,6 +374,84 @@ pub(super) fn raw_host_result_kind_is_visible(kind: Option<&str>) -> bool {
         kind,
         Some("change_set" | "ask" | "command_run" | "plan_artifact")
     )
+}
+
+/// Builds a statistics-only host result for wait_agent without copying large child output text.
+/// 为 wait_agent 构建仅包含统计信息的宿主结果，避免复制大段子智能体输出正文。
+fn compact_subagent_wait_host_result(
+    metadata: Option<&serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let metadata = metadata?;
+    let host_result = metadata
+        .get("host_result")
+        .or_else(|| metadata.get("hostResult"))
+        .filter(|host_result| {
+            host_result.get("kind").and_then(serde_json::Value::as_str) == Some("subagent_wait")
+        })
+        .or_else(|| {
+            (metadata.get("kind").and_then(serde_json::Value::as_str) == Some("subagent_wait")
+                && metadata.get("payload").is_some())
+            .then_some(metadata)
+        })?;
+    let payload = host_result.get("payload")?.as_object()?;
+    if payload.get("tool").and_then(serde_json::Value::as_str) != Some("wait_agent") {
+        return None;
+    }
+    let agents = payload
+        .get("agents")
+        .and_then(serde_json::Value::as_array)?;
+    let compact_agents = agents
+        .iter()
+        .filter_map(compact_subagent_wait_agent_usage)
+        .collect::<Vec<_>>();
+    if compact_agents.is_empty() {
+        return None;
+    }
+    let mut compact_payload = serde_json::Map::new();
+    compact_payload.insert(String::from("tool"), json!("wait_agent"));
+    for key in [
+        "activity_status",
+        "timed_out",
+        "interrupted",
+        "timeout_ms",
+        "pending_event_count",
+        "terminal_event_count",
+        "message_event_count",
+        "status_event_count",
+    ] {
+        if let Some(value) = payload.get(key) {
+            compact_payload.insert(String::from(key), value.clone());
+        }
+    }
+    compact_payload.insert(String::from("agents"), json!(compact_agents));
+    Some(json!({
+        "kind": "subagent_wait",
+        "payload": compact_payload,
+    }))
+}
+
+/// Extracts the minimal per-agent fields needed for parent-turn usage accounting.
+/// 提取父级轮次用量统计所需的最小单智能体字段。
+fn compact_subagent_wait_agent_usage(agent: &serde_json::Value) -> Option<serde_json::Value> {
+    let agent = agent.as_object()?;
+    let usage_segments = agent
+        .get("usage_segments")
+        .filter(|usage_segments| usage_segments.is_array())?;
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "agent_id",
+        "subagent_task_id",
+        "execution_id",
+        "kind",
+        "status",
+        "display_title",
+    ] {
+        if let Some(value) = agent.get(key) {
+            compact.insert(String::from(key), value.clone());
+        }
+    }
+    compact.insert(String::from("usage_segments"), usage_segments.clone());
+    Some(serde_json::Value::Object(compact))
 }
 
 /// Attaches one compact tool result to an existing visible tool-call record.

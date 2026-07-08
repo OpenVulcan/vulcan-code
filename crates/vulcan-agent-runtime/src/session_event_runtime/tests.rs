@@ -918,6 +918,223 @@ fn tool_result_projection_preserves_command_run_rtk_host_result() {
     );
 }
 
+/// Verifies wait_agent keeps child usage metadata on the visible tool row without copying child output text.
+/// 验证 wait_agent 会在可见工具行保留子智能体用量元数据，同时不复制子智能体输出正文。
+#[test]
+fn tool_result_projection_preserves_compact_subagent_wait_usage() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    let started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · call-wait · wait_agent",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-wait",
+        "tool_name": "wait_agent",
+        "arguments": {
+            "target": "reviewer"
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3170",
+        &started,
+    ));
+    let finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-wait",
+        "## Result ID\n\n`tool-result-call-wait`\n\n## Tool Result\n\nreviewer [completed]: large child output",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-wait",
+        "tool_result_id": "tool-result-call-wait",
+        "tool_name": "wait_agent",
+        "display_state": "completed",
+        "host_result": {
+            "kind": "subagent_wait",
+            "payload": {
+                "tool": "wait_agent",
+                "message": "Subagent terminal result received.",
+                "activity_status": "terminal_update",
+                "terminal_event_count": 1,
+                "message_event_count": 0,
+                "status_event_count": 0,
+                "result": "reviewer [completed]: large child output",
+                "agents": [{
+                    "agent_id": "reviewer",
+                    "subagent_task_id": "22222222-2222-2222-2222-222222222222",
+                    "execution_id": "exec-1",
+                    "kind": "completed",
+                    "status": "completed",
+                    "display_title": "reviewer",
+                    "result": "large child output",
+                    "usage_segments": [{
+                        "kind": "subagent_task",
+                        "trigger": "reviewer",
+                        "execution_profile": null,
+                        "provider_id": "deepseek",
+                        "model_id": "deepseek-v4-pro",
+                        "provider_call_count": 2,
+                        "tool_call_count": 1,
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "reasoning_tokens": 3,
+                        "total_tokens": 123,
+                        "cached_input_tokens": 50,
+                        "cache_creation_input_tokens": null
+                    }]
+                }]
+            }
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3171",
+        &finished,
+    ));
+
+    let tool_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+        .expect("wait_agent tool call record should remain visible");
+    let metadata = tool_record.metadata.as_ref().expect("wait metadata");
+    let host_payload = metadata
+        .get("host_result")
+        .and_then(|host_result| host_result.get("payload"))
+        .expect("compact host payload should be retained");
+    assert_eq!(
+        metadata
+            .get("host_result")
+            .and_then(|host_result| host_result.get("kind"))
+            .and_then(serde_json::Value::as_str),
+        Some("subagent_wait")
+    );
+    assert_eq!(
+        host_payload.get("tool").and_then(serde_json::Value::as_str),
+        Some("wait_agent")
+    );
+    assert_eq!(
+        host_payload
+            .get("activity_status")
+            .and_then(serde_json::Value::as_str),
+        Some("terminal_update")
+    );
+    assert_eq!(
+        host_payload
+            .get("terminal_event_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert!(host_payload.get("result").is_none());
+    assert!(host_payload.get("message").is_none());
+    let agent = host_payload
+        .get("agents")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|agents| agents.first())
+        .expect("compact agent should be retained");
+    assert!(agent.get("result").is_none());
+    assert_eq!(
+        agent
+            .get("usage_segments")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|segments| segments.first())
+            .and_then(|segment| segment.get("total_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        Some(123)
+    );
+}
+
+/// Verifies wait_agent child usage contributes to the parent turn usage groups.
+/// 验证 wait_agent 子智能体用量会并入父级轮次用量分组。
+#[test]
+fn terminal_report_groups_compact_wait_agent_child_usage() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "3180", "等待智能体");
+    let started = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "工具调用 · call-wait-stats · wait_agent",
+        "## Tool Call",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-wait-stats",
+        "tool_name": "wait_agent",
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3181",
+        &started,
+    ));
+    let finished = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-wait-stats",
+        "## Result ID\n\n`tool-result-call-wait-stats`\n\n## Tool Result\n\nworker [completed]: ok",
+    )
+    .with_metadata(Some(json!({
+        "tool_call_id": "call-wait-stats",
+        "tool_result_id": "tool-result-call-wait-stats",
+        "tool_name": "wait_agent",
+        "display_state": "completed",
+        "host_result": {
+            "kind": "subagent_wait",
+            "payload": {
+                "tool": "wait_agent",
+                "agents": [{
+                    "agent_id": "worker",
+                    "subagent_task_id": "22222222-2222-2222-2222-222222222222",
+                    "execution_id": "exec-2",
+                    "kind": "completed",
+                    "status": "completed",
+                    "usage_segments": [{
+                        "kind": "subagent_task",
+                        "trigger": "worker",
+                        "execution_profile": null,
+                        "provider_id": "deepseek",
+                        "model_id": "deepseek-v4-pro",
+                        "provider_call_count": 1,
+                        "tool_call_count": 0,
+                        "input_tokens": 80,
+                        "output_tokens": 10,
+                        "reasoning_tokens": 1,
+                        "total_tokens": 91,
+                        "cached_input_tokens": 30,
+                        "cache_creation_input_tokens": null
+                    }]
+                }]
+            }
+        }
+    })));
+    assert!(append_runtime_event_projection_to_state(
+        &mut runtime_state,
+        session_id,
+        "3182",
+        &finished,
+    ));
+    let report = usage_report(session_id, "已收到。", 40, 4, 0, 44, Some(12));
+
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "3183", &report);
+
+    let turn_stats = latest_turn_stats(&runtime_state);
+    assert_eq!(turn_stats.total_tokens, 44);
+    let subagent_group = turn_stats
+        .usage_groups
+        .iter()
+        .find(|group| group.kind == vulcan_workbench_model::SessionTurnUsageGroupKind::Subagent)
+        .expect("wait_agent child usage should be retained");
+    assert_eq!(subagent_group.provider_call_count, 1);
+    assert_eq!(subagent_group.input_tokens, 80);
+    assert_eq!(subagent_group.output_tokens, 10);
+    assert_eq!(subagent_group.reasoning_tokens, 1);
+    assert_eq!(subagent_group.total_tokens, 91);
+    assert_eq!(subagent_group.cached_input_tokens, Some(30));
+}
+
 /// Verifies RTK display projection requires the explicit structured status marker.
 /// 验证 RTK 展示投影必须依赖显式结构化状态标记。
 #[test]

@@ -3,6 +3,7 @@ import type { ToolExecutionConversationBlock } from "@/components/conversation/c
 import type {
   SubagentOrchestrationAgent,
   SubagentOrchestrationPresentation,
+  SubagentUsageSummary,
   ToolPresentationDisplayState,
 } from "./types";
 import {
@@ -35,38 +36,41 @@ export function resolveSubagentOrchestrationPresentation(
 ): SubagentOrchestrationPresentation | null {
   const toolName = fixedToolName(blocks);
   const hostKind = fixedHostKind(blocks);
-  const operation = subagentOperation(toolName, hostKind, blocks.some((block) => Boolean(block.subagentTaskId)));
+  const payloadHint = fixedHostPayload(blocks) ?? firstBodyJsonObject(blocks);
+  const operation = subagentOperation(toolName, hostKind, blocks.some((block) => Boolean(block.subagentTaskId)), payloadHint);
   if (!operation) {
     return null;
   }
   const args = firstArgumentsObject(blocks);
   const payload = subagentOperationPayload(operation, blocks);
   const title = subagentPresentationTitle(operation, args, payload, toolName);
-  const operationHasAgents = operation === "collect" || operation === "wait";
+  const operationHasAgents = operation === "agent_orchestration_info" || operation === "list_agents" || operation === "wait";
+  const operationClosesAgents = operation === "close";
+  const operationStopsAgents = operation === "close" || operation === "interrupt";
   return {
     agents: operationHasAgents ? subagentAgents(payload, blocks) : [],
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : true,
-    collectKind: operation === "collect" ? subagentCollectKind(toolName, hostKind, payload) : null,
     debugSummary: subagentDebugSummary(payload?.debug),
     detailRef,
     effectivePrompt: stringValue(payload?.prompt),
     id: subagentPresentationId(blocks, operation, title),
     kind: "subagent_orchestration",
-    note: stringValue(payload?.note) ?? (operation === "wait" || operation === "collect" ? stringValue(payload?.message) : null),
+    note: stringValue(payload?.note) ?? (operation === "wait" || operation === "agent_orchestration_info" || operation === "list_agents" ? stringValue(payload?.message) : null),
     operation,
     prompt: subagentPrompt(operation, args, payload),
     queued: booleanValue(payload?.queued),
     deliveryMode: stringValue(payload?.delivery_mode ?? payload?.deliveryMode),
     result: subagentResult(operation, payload),
     state: displayState,
-    closedAgents: operation === "control" ? closedAgents(payload) : [],
-    closedCount: operation === "control" ? closedAgentCount(payload) : 0,
-    clearedMessageCount: operation === "control" ? clearedMessageCount(payload) : null,
-    stoppedCount: operation === "control" ? stoppedTaskCount(payload) : 0,
-    stoppedTaskIds: operation === "control" ? stoppedTaskIds(payload) : [],
+    closedAgents: operationClosesAgents ? closedAgents(payload) : [],
+    closedCount: operationClosesAgents ? closedAgentCount(payload) : 0,
+    clearedMessageCount: operationClosesAgents ? clearedMessageCount(payload) : null,
+    stoppedCount: operationStopsAgents ? stoppedTaskCount(payload) : 0,
+    stoppedTaskIds: operationStopsAgents ? stoppedTaskIds(payload) : [],
     target: subagentTarget(args, payload),
     timedOut: operation === "wait" ? booleanValue(payload?.timed_out ?? payload?.timedOut) : null,
     interrupted: operation === "wait" ? booleanValue(payload?.interrupted) : null,
+    terminalEventReceived: operation === "wait" ? subagentWaitTerminalEventReceived(payload) : false,
     title,
   };
 }
@@ -101,10 +105,15 @@ function mergeSubagentPayload(
   // 已验证的运行时载荷。
   payload: Record<string, unknown>,
 ): SubagentOrchestrationPresentation {
-  const operationHasAgents = presentation.operation === "collect" || presentation.operation === "wait";
+  const operationHasAgents = presentation.operation === "agent_orchestration_info" || presentation.operation === "list_agents" || presentation.operation === "wait";
+  const agents = operationHasAgents
+    ? mergeSubagentAgents(presentation.agents, subagentAgents(payload, []))
+    : presentation.agents;
+  const operationClosesAgents = presentation.operation === "close";
+  const operationStopsAgents = presentation.operation === "close" || presentation.operation === "interrupt";
   return {
     ...presentation,
-    agents: operationHasAgents ? subagentAgents(payload, []) : presentation.agents,
+    agents,
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : presentation.agentsKnown,
     debugSummary: subagentDebugSummary(payload.debug) ?? presentation.debugSummary,
     effectivePrompt: stringValue(payload.prompt) ?? presentation.effectivePrompt,
@@ -113,11 +122,11 @@ function mergeSubagentPayload(
     queued: booleanValue(payload.queued) ?? presentation.queued,
     deliveryMode: stringValue(payload.delivery_mode ?? payload.deliveryMode) ?? presentation.deliveryMode,
     result: subagentResult(presentation.operation, payload) ?? presentation.result,
-    closedAgents: presentation.operation === "control" ? closedAgents(payload) : presentation.closedAgents,
-    closedCount: presentation.operation === "control" ? closedAgentCount(payload) : presentation.closedCount,
-    clearedMessageCount: presentation.operation === "control" ? clearedMessageCount(payload) : presentation.clearedMessageCount,
-    stoppedCount: presentation.operation === "control" ? stoppedTaskCount(payload) : presentation.stoppedCount,
-    stoppedTaskIds: presentation.operation === "control" ? stoppedTaskIds(payload) : presentation.stoppedTaskIds,
+    closedAgents: operationClosesAgents ? closedAgents(payload) : presentation.closedAgents,
+    closedCount: operationClosesAgents ? closedAgentCount(payload) : presentation.closedCount,
+    clearedMessageCount: operationClosesAgents ? clearedMessageCount(payload) : presentation.clearedMessageCount,
+    stoppedCount: operationStopsAgents ? stoppedTaskCount(payload) : presentation.stoppedCount,
+    stoppedTaskIds: operationStopsAgents ? stoppedTaskIds(payload) : presentation.stoppedTaskIds,
     target: presentation.target ?? stringValue(payload.target),
     timedOut: presentation.operation === "wait"
       ? booleanValue(payload.timed_out ?? payload.timedOut) ?? presentation.timedOut
@@ -125,7 +134,35 @@ function mergeSubagentPayload(
     interrupted: presentation.operation === "wait"
       ? booleanValue(payload.interrupted) ?? presentation.interrupted
       : presentation.interrupted,
+    terminalEventReceived: presentation.operation === "wait"
+      ? subagentWaitTerminalEventReceived(payload) || presentation.terminalEventReceived
+      : presentation.terminalEventReceived,
   };
+}
+
+// mergeSubagentAgents keeps visible usage metadata when hydrated detail omits host-only usage.
+// mergeSubagentAgents 在详情补水缺少宿主专用消耗时保留可见记录中的消耗信息。
+function mergeSubagentAgents(
+  // Existing visible agent rows.
+  // 现有可见智能体行。
+  existingAgents: SubagentOrchestrationAgent[],
+  // Newly hydrated agent rows.
+  // 新补水得到的智能体行。
+  incomingAgents: SubagentOrchestrationAgent[],
+): SubagentOrchestrationAgent[] {
+  if (incomingAgents.length === 0) {
+    return existingAgents;
+  }
+  return incomingAgents.map((agent) => {
+    if (agent.usageSummary) {
+      return agent;
+    }
+    const existing = existingAgents.find((candidate) => candidate.id === agent.id)
+      ?? existingAgents.find((candidate) => candidate.name === agent.name);
+    return existing?.usageSummary
+      ? { ...agent, usageSummary: existing.usageSummary }
+      : agent;
+  });
 }
 
 // subagentOperationPayload resolves the payload that matches the current subagent operation.
@@ -160,19 +197,23 @@ function subagentPayloadMatchesOperation(
   if (operation === "wait") {
     return "message" in payload || "timed_out" in payload || "timedOut" in payload || "interrupted" in payload;
   }
-  if (operation === "collect") {
+  if (operation === "agent_orchestration_info" || operation === "list_agents") {
     return Array.isArray(payload.agents);
   }
-  if (operation === "control") {
-    return "stopped_count" in payload
-      || "stoppedCount" in payload
-      || "stopped_subagent_task_ids" in payload
-      || "stoppedSubagentTaskIds" in payload
-      || "closed" in payload
+  if (operation === "close") {
+    return "closed" in payload
       || "closed_count" in payload
       || "closedCount" in payload
       || "closed_agents" in payload
-      || "closedAgents" in payload;
+      || "closedAgents" in payload
+      || "cleared_message_count" in payload
+      || "clearedMessageCount" in payload;
+  }
+  if (operation === "interrupt") {
+    return "stopped_count" in payload
+      || "stoppedCount" in payload
+      || "stopped_subagent_task_ids" in payload
+      || "stoppedSubagentTaskIds" in payload;
   }
   if (operation === "message") {
     return "message" in payload
@@ -206,14 +247,20 @@ function subagentOperation(
   // Whether the normalized transcript row carries a child subagent task id.
   // 规范化转录行是否携带子代理任务标识。
   hasSubagentTaskId: boolean,
+  // Optional payload hint used to classify legacy subagent control rows.
+  // 用于分类旧式子代理控制行的可选载荷线索。
+  payloadHint: Record<string, unknown> | null,
 ): SubagentOrchestrationPresentation["operation"] | null {
   const normalized = toolName ? normalizeToolName(toolName) : null;
   if (normalized === "spawn_agent") return "create";
   if (normalized === "send_message" || hostKind === "subagent_message") return "message";
   if (normalized === "wait_agent" || hostKind === "subagent_wait") return "wait";
-  if (normalized === "list_agents" || normalized === "agent_orchestration_info" || hostKind === "subagent_status") return "collect";
+  if (normalized === "agent_orchestration_info") return "agent_orchestration_info";
+  if (normalized === "list_agents" || hostKind === "subagent_status") return "list_agents";
   if (normalized === "subagent_feedback" || hostKind === "subagent_feedback") return "feedback";
-  if (normalized === "interrupt_agent" || normalized === "close_agent" || hostKind === "subagent_control") return "control";
+  if (normalized === "close_agent") return "close";
+  if (normalized === "interrupt_agent") return "interrupt";
+  if (hostKind === "subagent_control") return subagentControlOperation(payloadHint);
   if (hostKind === "subagent_task" || hasSubagentTaskId) return "create";
   return null;
 }
@@ -305,7 +352,7 @@ function subagentPresentationTitle(
   if (operation === "wait") {
     return toolName ?? "wait_agent";
   }
-  if (operation === "collect") {
+  if (operation === "agent_orchestration_info" || operation === "list_agents") {
     return stringValue(payload?.tool) ?? toolName ?? "subagent";
   }
   if (operation === "feedback") {
@@ -347,23 +394,26 @@ function subagentPrompt(
   return null;
 }
 
-// subagentCollectKind resolves collection rows into template or live-status displays.
-// subagentCollectKind 将集合类行解析为模板查询或实时状态查询展示。
-function subagentCollectKind(
-  // Tool name from the visible row.
-  // 可见行中的工具名。
-  toolName: string | null,
-  // Host result kind from metadata.
-  // 元数据中的宿主结果类型。
-  hostKind: string | null,
+// subagentControlOperation resolves legacy control rows into concrete operations.
+// subagentControlOperation 将旧式控制行解析为具体操作。
+function subagentControlOperation(
   // Host or body payload.
   // 宿主或正文载荷。
   payload: Record<string, unknown> | null,
-): "templates" | "status" | null {
-  const normalized = normalizeSubagentToolIdentity(toolName)
-    ?? normalizeSubagentToolIdentity(stringValue(payload?.tool));
-  if (normalized === "agent_orchestration_info") return "templates";
-  if (normalized === "list_agents" || hostKind === "subagent_status") return "status";
+): "close" | "interrupt" | null {
+  const normalized = normalizeSubagentToolIdentity(stringValue(payload?.tool));
+  if (normalized === "close_agent") {
+    return "close";
+  }
+  if (normalized === "interrupt_agent") {
+    return "interrupt";
+  }
+  if (closedAgentCount(payload) > 0 || closedAgents(payload).length > 0 || clearedMessageCount(payload) !== null) {
+    return "close";
+  }
+  if (stoppedTaskCount(payload) > 0 || stoppedTaskIds(payload).length > 0) {
+    return "interrupt";
+  }
   return null;
 }
 
@@ -413,8 +463,8 @@ function subagentTarget(
     ?? stringValue(payload?.task_id ?? payload?.taskId);
 }
 
-// subagentAgentsKnown returns whether a collect payload definitively carries an agents array.
-// subagentAgentsKnown 返回 collect 载荷是否明确携带 agents 数组。
+// subagentAgentsKnown returns whether a listing payload definitively carries an agents array.
+// subagentAgentsKnown 返回列表载荷是否明确携带 agents 数组。
 function subagentAgentsKnown(
   // Host or body payload.
   // 宿主或正文载荷。
@@ -449,9 +499,86 @@ function subagentAgents(
       name,
       result: subagentAgentStatusResult(agent) ?? stringValue(agent?.result) ?? stringValue(agent?.error) ?? fallbackResultFromBlocks(blocks),
       status: subagentAgentStatusText(agent) ?? stringValue(agent?.status) ?? "unknown",
+      usageSummary: subagentUsageSummary(agent),
       debugSummary: subagentDebugSummary(agent?.debug),
     };
   });
+}
+
+// subagentWaitTerminalEventReceived checks the wait_agent contract for terminal child events.
+// subagentWaitTerminalEventReceived 根据 wait_agent 契约检查是否收到子智能体终态事件。
+function subagentWaitTerminalEventReceived(
+  // Host or body payload.
+  // 宿主或正文载荷。
+  payload: Record<string, unknown> | null,
+): boolean {
+  const terminalEventCount = numberValue(payload?.terminal_event_count ?? payload?.terminalEventCount);
+  if (terminalEventCount !== null && terminalEventCount > 0) {
+    return true;
+  }
+  const activityStatus = stringValue(payload?.activity_status ?? payload?.activityStatus)?.toLowerCase();
+  if (activityStatus === "terminal_update") {
+    return true;
+  }
+  return arrayValue(payload?.agents).some((rawAgent) => {
+    const agent = objectValue(rawAgent);
+    return booleanValue(agent?.terminal) === true || subagentAgentHasTerminalState(agent);
+  });
+}
+
+// subagentAgentHasTerminalState recognizes terminal wait_agent rows from compact agent state.
+// subagentAgentHasTerminalState 根据紧凑智能体状态识别 wait_agent 终态行。
+function subagentAgentHasTerminalState(
+  // Parsed agent payload.
+  // 已解析的智能体载荷。
+  agent: Record<string, unknown> | null,
+): boolean {
+  const status = stringValue(agent?.status ?? agent?.kind ?? agent?.task_status ?? agent?.taskStatus ?? agent?.execution_status ?? agent?.executionStatus)
+    ?.toLowerCase();
+  return status === "completed" || status === "failed" || status === "stopped" || status === "errored";
+}
+
+// subagentUsageSummary folds child-agent usage segments into one compact display summary.
+// subagentUsageSummary 将子智能体用量分段折叠为一条紧凑展示统计。
+function subagentUsageSummary(
+  // Parsed agent payload.
+  // 已解析的代理载荷。
+  agent: Record<string, unknown> | null,
+): SubagentUsageSummary | null {
+  const segments = arrayValue(agent?.usage_segments ?? agent?.usageSegments);
+  if (segments.length === 0) {
+    return null;
+  }
+  const summary: SubagentUsageSummary = {
+    providerCallCount: 0,
+    toolCallCount: 0,
+    totalTokens: 0,
+    cachedInputTokens: 0,
+  };
+  for (const rawSegment of segments) {
+    const segment = objectValue(rawSegment);
+    if (!segment) {
+      continue;
+    }
+    summary.providerCallCount += Math.max(0, numberValue(segment.provider_call_count ?? segment.providerCallCount) ?? 0);
+    summary.toolCallCount += Math.max(0, numberValue(segment.tool_call_count ?? segment.toolCallCount) ?? 0);
+    summary.cachedInputTokens += Math.max(0, numberValue(segment.cached_input_tokens ?? segment.cachedInputTokens) ?? 0);
+    const totalTokens = numberValue(segment.total_tokens ?? segment.totalTokens);
+    if (totalTokens !== null && totalTokens > 0) {
+      summary.totalTokens += totalTokens;
+      continue;
+    }
+    const inputTokens = Math.max(0, numberValue(segment.input_tokens ?? segment.inputTokens) ?? 0);
+    const outputTokens = Math.max(0, numberValue(segment.output_tokens ?? segment.outputTokens) ?? 0);
+    const reasoningTokens = Math.max(0, numberValue(segment.reasoning_tokens ?? segment.reasoningTokens) ?? 0);
+    summary.totalTokens += inputTokens + outputTokens + reasoningTokens;
+  }
+  return summary.providerCallCount > 0
+    || summary.toolCallCount > 0
+    || summary.totalTokens > 0
+    || summary.cachedInputTokens > 0
+    ? summary
+    : null;
 }
 
 // subagentAgentStatusText formats Codex-style agent_status values for rows.
