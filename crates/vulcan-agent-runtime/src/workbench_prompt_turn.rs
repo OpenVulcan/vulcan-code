@@ -26,7 +26,7 @@ use vulcan_workbench_model::{
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
 use crate::{
-    ExecutionPreparationRequest, ExecutionPromptPurpose,
+    ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage,
     agent_runtime::{
         context_injection_runtime::{
             collect_builtin_manual_injection_ops_and_sanitized_prompt,
@@ -97,6 +97,9 @@ pub struct SharedPromptTurnStart {
     /// Optional model-only guidance appended after visible-user prompt handling.
     /// 可选的仅模型可见引导，会在可见用户提示处理后追加。
     pub hidden_model_guidance: Option<String>,
+    /// Provider-visible agent messages carried by this turn without becoming user prompts.
+    /// 本回合携带但不会变成用户提示词的 Provider 可见智能体消息。
+    pub provider_visible_agent_messages: Vec<ExecutionProviderVisibleAgentMessage>,
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
@@ -132,6 +135,10 @@ impl fmt::Debug for SharedPromptTurnStart {
             .field("workspace_path", &self.workspace_path)
             .field("source", &self.source)
             .field("prompt", &self.prompt)
+            .field(
+                "provider_visible_agent_messages",
+                &self.provider_visible_agent_messages.len(),
+            )
             .field("attachments", &self.attachments)
             .field("execution_mode", &self.execution_mode)
             .field("reasoning_effort", &self.reasoning_effort)
@@ -188,6 +195,9 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// Optional hidden host guidance appended only to the provider-facing prompt.
     /// 仅追加到 Provider 可见提示词中的可选宿主隐藏引导。
     pub hidden_model_guidance: Option<&'a str>,
+    /// Provider-visible agent messages carried by this turn without becoming user prompts.
+    /// 本回合携带但不会变成用户提示词的 Provider 可见智能体消息。
+    pub provider_visible_agent_messages: Vec<ExecutionProviderVisibleAgentMessage>,
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
@@ -238,6 +248,9 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Optional hidden host guidance appended only to the provider-facing prompt.
     /// 仅追加到 Provider 可见提示词中的可选宿主隐藏引导。
     pub hidden_model_guidance: Option<&'a str>,
+    /// Provider-visible agent messages carried by this turn without becoming user prompts.
+    /// 本回合携带但不会变成用户提示词的 Provider 可见智能体消息。
+    pub provider_visible_agent_messages: Vec<ExecutionProviderVisibleAgentMessage>,
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
@@ -355,6 +368,7 @@ pub fn begin_shared_prompt_turn(
                 prompt_entry_id: input.prompt_entry_id,
                 prompt: input.prompt,
                 hidden_model_guidance: input.hidden_model_guidance,
+                provider_visible_agent_messages: input.provider_visible_agent_messages,
                 attachments: input.attachments,
                 append_canonical_user_message: input.append_canonical_user_message,
                 append_visible_user_prompt_record: input.append_visible_user_prompt_record,
@@ -499,6 +513,7 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             .map(str::trim)
             .filter(|guidance| !guidance.is_empty())
             .map(str::to_string),
+        provider_visible_agent_messages: input.provider_visible_agent_messages,
         attachments: start_attachments,
         execution_mode: input.execution_mode,
         reasoning_effort: input.reasoning_effort,
@@ -740,12 +755,16 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         },
         runtime_policy,
         execution_agent_id: None,
-        agent_system_prompt_override: None,
+        agent_prompt_snapshot: None,
+        subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: input.start.session_title,
         workspace_path: input.start.workspace_path,
         prompt: request_prompt,
+        provider_visible_agent_messages: input.start.provider_visible_agent_messages,
         conversation_state: runtime_state.conversation_state.clone(),
+        context_compaction_policy: None,
+        context_budget_override: None,
         execution_mode: input.start.execution_mode,
         temperature: runtime_state.active_temperature,
         reasoning_effort: input
@@ -759,6 +778,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,
         tool_request_rejection_tool_ids: Vec::new(),
+        tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose,
         project_prompt_skills: input.project_configuration.prompt_skills,
         session_prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),

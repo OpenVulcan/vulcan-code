@@ -32,6 +32,27 @@ export interface WorkbenchDeltaSignal {
   envelopes: WorkbenchDeltaEnvelope[];
 }
 
+// StopConversationRunChoice is the user decision for running child agents.
+// StopConversationRunChoice 是用户对运行中智能体的停止决策。
+export type StopConversationRunChoice = "main_only" | "main_and_subagents";
+
+// StopConversationRunAgentPromptItem is shown in the stop confirmation dialog.
+// StopConversationRunAgentPromptItem 展示在停止确认对话框中。
+export interface StopConversationRunAgentPromptItem {
+  // Stable child task session id.
+  // 稳定的子任务会话标识。
+  taskId: string;
+  // Human-facing child agent label.
+  // 面向用户的智能体标签。
+  label: string;
+}
+
+// RequestStopConversationRunChoice asks the user how to handle running child agents.
+// RequestStopConversationRunChoice 询问用户如何处理运行中的智能体。
+export type RequestStopConversationRunChoice = (
+  agents: StopConversationRunAgentPromptItem[],
+) => Promise<StopConversationRunChoice | null>;
+
 // conversationHistoryCursorFromWindow converts one service-retained body window into UI cursor state.
 // conversationHistoryCursorFromWindow 将单个服务端保留正文窗口转换为 UI 游标状态。
 export function conversationHistoryCursorFromWindow(

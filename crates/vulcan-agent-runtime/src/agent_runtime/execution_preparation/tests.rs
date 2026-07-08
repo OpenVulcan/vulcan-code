@@ -23,9 +23,11 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
+use vulcan_hooks::{SystemPromptHookBlock, SystemPromptHookPhase};
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_session_core::{
-    ExecutionRuntimePolicy, ExecutionScope, SessionNodeId, ToolExposureSnapshot,
+    CapabilityPolicyMode, CapabilityPolicySnapshot, ExecutionRuntimePolicy, ExecutionScope,
+    SessionNodeId, ToolExposureSnapshot,
 };
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
@@ -112,6 +114,32 @@ fn execution_tool_exposure_filters_native_ids_with_global_selectors() {
     );
 }
 
+/// Verifies explicit empty allow-only mode blocks regular tools instead of falling back to all tools.
+/// 验证显式空仅允许模式会阻止普通工具，而不是回退成开放全部工具。
+#[test]
+fn execution_tool_exposure_empty_allow_only_hides_regular_tools() {
+    let snapshot = ToolExposureSnapshot {
+        policy: CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::AllowOnly,
+            selectors: Vec::new(),
+        },
+        ..ToolExposureSnapshot::default()
+    };
+    let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
+
+    let filtered = filter_native_tool_ids(
+        vec![
+            String::from("shell_command"),
+            String::from("vulcan_file_read"),
+            String::from(GET_GOAL_TOOL_ID),
+            String::from(TODOLIST_TOOL_ID),
+        ],
+        &selectors,
+    );
+
+    assert_eq!(filtered, vec![GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID]);
+}
+
 /// Verifies request-scoped selectors cannot hide universal Goal and todolist native tools.
 /// 验证请求级选择器无法隐藏通用 Goal 与 todolist 原生工具。
 #[test]
@@ -143,6 +171,44 @@ fn execution_tool_exposure_keeps_universal_goal_and_todolist_tools() {
             &exposure,
         ));
     }
+}
+
+/// Verifies request-forced hidden tools can remove an explicitly allowed universal todolist.
+/// 验证请求级强制隐藏工具能移除已被显式允许的通用 todolist。
+#[test]
+fn request_hidden_tools_remove_universal_todolist_after_exposure() {
+    let config = test_provider_config();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &config,
+        &AgentProfileCatalog::default(),
+        None,
+        Some(configured_mcp_runtime_access(&config)),
+    );
+    let mut request = test_execution_preparation_request();
+    request.tool_exposure_override.allowed_tools = vec![String::from(TODOLIST_TOOL_ID)];
+    request
+        .tool_request_hidden_tool_ids
+        .push(String::from(TODOLIST_TOOL_ID));
+
+    let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        .expect("preparation should resolve with explicitly allowed request-hidden todolist");
+
+    assert!(
+        !prepared
+            .preparation
+            .tool_descriptors
+            .iter()
+            .any(|descriptor| descriptor.id == TODOLIST_TOOL_ID),
+        "request-hidden todolist must not remain visible to the provider"
+    );
+    assert!(
+        !prepared
+            .tool_snapshot
+            .resolved_tool_definitions
+            .iter()
+            .any(|definition| definition.descriptor.id == TODOLIST_TOOL_ID),
+        "request-hidden todolist must not remain executable"
+    );
 }
 
 /// Verifies LuaSkills JSON overrides filter direct and implicit entries without TaskRuntime-side cloning.
@@ -408,6 +474,54 @@ fn prepare_execution_keeps_tools_for_cache_preserving_context_compaction_purpose
     );
 }
 
+/// Verifies TaskSession runtime policy strips request-carried hook and VMM side-effect inputs.
+/// 验证 TaskSession 运行时策略会剥离请求携带的 hook 与 VMM 副作用输入。
+#[test]
+fn prepare_execution_clears_side_effect_inputs_for_task_session_policy() {
+    let config = test_provider_config();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &config,
+        &AgentProfileCatalog::default(),
+        None,
+        Some(configured_mcp_runtime_access(&config)),
+    );
+    let mut request = test_execution_preparation_request();
+    request.runtime_policy = ExecutionRuntimePolicy::task_session();
+    request.execution_scope = ExecutionScope::TaskSession {
+        root_session_id: SessionNodeId::from(Uuid::new_v4()),
+        task_session_id: SessionNodeId::from(request.session_id),
+    };
+    request.system_prompt_hook_blocks = vec![SystemPromptHookBlock {
+        tag: String::from("vmm_profile"),
+        description: String::from("Profile details"),
+        content: String::from("User memory that must not enter a child agent."),
+        source: Some(String::from("test")),
+        phase: SystemPromptHookPhase::FirstSession,
+    }];
+    request.project_vmm = VmmConfigLayer {
+        enabled: Some(true),
+        grpc_target: Some(String::from("127.0.0.1:19090")),
+        precheck_enabled: Some(true),
+        memory_writeback_enabled: Some(true),
+        ai_tools_enabled: Some(true),
+        ..VmmConfigLayer::default()
+    };
+    request.session_vmm = VmmConfigLayer {
+        visible_memory_injection: Some(true),
+        implicit_memory_turns: Some(7),
+        profile_refresh_turns: Some(1),
+        session_compact_recall: Some(true),
+        ..VmmConfigLayer::default()
+    };
+
+    let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        .expect("TaskSession preparation should resolve");
+
+    assert!(prepared.preparation.system_prompt_hook_blocks.is_empty());
+    assert_eq!(prepared.preparation.project_vmm, VmmConfigLayer::default());
+    assert_eq!(prepared.preparation.session_vmm, VmmConfigLayer::default());
+}
+
 /// Builds one provider configuration that can resolve a provider blueprint without touching the network.
 /// 构建一份无需访问网络即可解析 Provider 蓝图的供应商配置。
 fn test_provider_config() -> ProviderConfigurationFile {
@@ -493,12 +607,16 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         },
         runtime_policy: ExecutionRuntimePolicy::main_session(),
         execution_agent_id: None,
-        agent_system_prompt_override: None,
+        agent_prompt_snapshot: None,
+        subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: String::from("测试会话"),
         workspace_path: String::from(r"D:\workspace"),
         prompt: String::from("请规划当前任务"),
+        provider_visible_agent_messages: Vec::new(),
         conversation_state: SessionConversationState::default(),
+        context_compaction_policy: None,
+        context_budget_override: None,
         execution_mode: String::from("Build"),
         temperature: None,
         reasoning_effort: ReasoningEffortLevel::Off,
@@ -507,6 +625,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,
         tool_request_rejection_tool_ids: Vec::new(),
+        tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
         project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
         session_prompt_skill_overrides: BTreeMap::new(),

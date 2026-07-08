@@ -48,6 +48,13 @@ pub(crate) fn build_webui_prompt_intervention(
                     })
                     .count()
                     > 0;
+                if !entries.is_empty()
+                    && let Err(error) = emit_pending_prompts_changed_delta(&app, &state, session_id)
+                {
+                    eprintln!(
+                        "[webui-service] guided prompt queue delta emit failed after runtime intervention: {error}"
+                    );
+                }
                 let mailbox_changed = match append_webui_mailbox_intervention_messages(
                     &state, session_id, controller,
                 ) {
@@ -105,16 +112,8 @@ pub(crate) fn append_webui_mailbox_intervention_messages(
     }
     let mut appended = 0usize;
     for input in inputs {
-        let message = webui_agent_message_from_turn_input(session_id, &input);
-        controller.append_agent_message(vulcan_core::controller::AgentMessageAppendRequest {
-            message_type: message.message_type,
-            task_name: message.task_name,
-            sender: message.sender,
-            recipient: message.recipient,
-            payload: message.payload,
-            trigger_turn: message.trigger_turn,
-            metadata: message.metadata,
-        });
+        let message = webui_provider_visible_agent_message_from_turn_input(session_id, &input)?;
+        controller.append_agent_message(message.to_core_append_request());
         appended = appended.saturating_add(1);
     }
     sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
@@ -123,32 +122,6 @@ pub(crate) fn append_webui_mailbox_intervention_messages(
         format!("session={session_id} appended={appended}"),
     );
     Ok(appended > 0)
-}
-
-/// Host-side normalized representation of one mailbox agent message.
-/// 单条 mailbox 代理消息的宿主侧规范化表示。
-struct WebuiMailboxAgentMessage {
-    /// Stable model-visible message type.
-    /// 稳定的模型可见消息类型。
-    message_type: String,
-    /// Logical task name attached to the child-agent message.
-    /// 绑定到子代理消息的逻辑任务名称。
-    task_name: String,
-    /// Logical sender name attached to the child-agent message.
-    /// 绑定到子代理消息的逻辑发送方名称。
-    sender: String,
-    /// Logical recipient name attached to the child-agent message.
-    /// 绑定到子代理消息的逻辑接收方名称。
-    recipient: String,
-    /// Model-visible payload text.
-    /// 模型可见载荷文本。
-    payload: String,
-    /// Whether this message may wake an idle parent turn.
-    /// 该消息是否允许唤醒空闲父级回合。
-    trigger_turn: bool,
-    /// Host-only metadata for UI and diagnostics.
-    /// 供 UI 与诊断使用的宿主侧元数据。
-    metadata: Option<Value>,
 }
 
 /// Renders one queued WebUI mailbox input as a Codex-compatible inter-agent message.
@@ -165,11 +138,13 @@ struct WebuiMailboxAgentMessage {
 /// 返回值
 /// Provider-visible inter-agent message text.
 /// Provider 可见的代理间消息文本。
+#[cfg(test)]
 pub(crate) fn webui_agent_message_text_from_turn_input(
     parent_session_id: SessionId,
     input: &TurnInput,
 ) -> String {
-    let message = webui_agent_message_from_turn_input(parent_session_id, input);
+    let message = webui_provider_visible_agent_message_from_turn_input(parent_session_id, input)
+        .expect("valid mailbox input should render as an agent message");
     vulcan_core::types::ConversationPayload::render_agent_message_text(
         &message.message_type,
         &message.task_name,
@@ -178,12 +153,12 @@ pub(crate) fn webui_agent_message_text_from_turn_input(
     )
 }
 
-/// Builds one typed inter-agent message from a queued WebUI mailbox input.
-/// 从一条排队的 WebUI mailbox 输入构建类型化代理间消息。
-fn webui_agent_message_from_turn_input(
+/// Builds one provider-visible typed inter-agent message from a queued WebUI mailbox input.
+/// 从一条排队的 WebUI mailbox 输入构建 Provider 可见类型化代理间消息。
+pub(crate) fn webui_provider_visible_agent_message_from_turn_input(
     parent_session_id: SessionId,
     input: &TurnInput,
-) -> WebuiMailboxAgentMessage {
+) -> Result<ExecutionProviderVisibleAgentMessage, String> {
     let mailbox_event = input
         .payload
         .get("mailbox_event")
@@ -198,30 +173,44 @@ fn webui_agent_message_from_turn_input(
         .or_else(|| event_payload.get("public_id"))
         .or_else(|| input.payload.get("task_id"))
         .and_then(Value::as_str)
-        .unwrap_or("subagent")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "mailbox input `{}` 缺少 task_name/public_id/task_id，无法构建智能体消息。",
+                input.input_id
+            )
+        })?
         .to_string();
     let payload = mailbox_event_payload_text(event_payload);
-    let status = event_payload
-        .get("status")
+    if payload.trim().is_empty() {
+        return Err(format!(
+            "mailbox input `{}` 的消息载荷为空，无法构建智能体消息。",
+            input.input_id
+        ));
+    }
+    let terminal_status = input
+        .payload
+        .get("delivery_status")
+        .or_else(|| event_payload.get("status"))
         .or_else(|| event_payload.get("execution_status"))
         .or_else(|| mailbox_event.get("kind"))
         .and_then(Value::as_str)
-        .unwrap_or("completed");
-    let message_type = if matches!(
-        status,
-        "completed" | "failed" | "cancelled" | "canceled" | "stopped"
-    ) {
+        .and_then(canonical_subagent_mailbox_terminal_status_label);
+    let message_type = if terminal_status.is_some() {
         String::from("FINAL_ANSWER")
     } else {
         String::from("MESSAGE")
     };
-    WebuiMailboxAgentMessage {
+    Ok(ExecutionProviderVisibleAgentMessage {
+        delivery_id: input.input_id.clone(),
         message_type,
         task_name: task_name.clone(),
         sender: task_name,
         recipient: format!("parent:{parent_session_id}"),
         payload,
         trigger_turn: input.trigger_turn,
+        timestamp_ms: input.timestamp_ms,
         metadata: Some(json!({
             "input_id": input.input_id,
             "node_id": input.node_id.to_string(),
@@ -229,7 +218,7 @@ fn webui_agent_message_from_turn_input(
             "timestamp_ms": input.timestamp_ms,
             "mailbox_event": mailbox_event,
         })),
-    }
+    })
 }
 
 /// Extracts model-visible payload text from one mailbox event.

@@ -132,6 +132,9 @@ pub struct SubagentCatalogSummary {
     /// Human-readable notice for the current catalog state.
     /// 当前目录状态的人类可读提示。
     pub notice: String,
+    /// Public tool ids that child agents cannot execute directly.
+    /// 智能体不能直接执行的公开工具标识。
+    pub child_agent_forbidden_tool_ids: Vec<String>,
     /// Merged agent and expert definition rows.
     /// 合并后的智能体与专家定义行。
     pub definitions: Vec<SubagentDefinitionSummary>,

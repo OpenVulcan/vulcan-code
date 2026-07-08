@@ -54,6 +54,28 @@ fn single_enabled_model_provider_configuration() -> (ProviderConfigurationFile, 
     (configuration, provider.id.clone(), model_id)
 }
 
+/// Verifies the WebUI agent catalog summary exposes the shared child-agent forbidden tools.
+/// 验证 WebUI 智能体目录摘要会暴露共享的智能体禁用工具。
+#[test]
+fn subagent_catalog_summary_projects_child_forbidden_tools() {
+    let summary = subagent_catalog_summary_from_catalog(
+        &vulcan_task_session::SubagentCatalog::default(),
+        &ProviderConfigurationFile::default(),
+    );
+    let expected = vulcan_session_core::child_agent_forbidden_tool_ids()
+        .iter()
+        .map(|tool_id| (*tool_id).to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(summary.child_agent_forbidden_tool_ids, expected);
+    assert!(
+        summary
+            .child_agent_forbidden_tool_ids
+            .contains(&String::from("todolist")),
+        "agent catalog summary must keep todolist hidden from agent tool configuration"
+    );
+}
+
 /// Builds one loaded definition with a saved fixed-model pair.
 /// 构建一个带已保存固定模型组合的已加载定义。
 fn loaded_definition_with_fixed_model(

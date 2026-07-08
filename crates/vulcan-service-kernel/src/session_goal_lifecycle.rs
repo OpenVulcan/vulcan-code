@@ -15,7 +15,7 @@ use vulcan_service_api::SessionGoalSummary;
 use vulcan_workbench_model::{
     PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource, SessionId,
     SessionRuntimeStateEntry, SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus,
-    SessionTurnUsageSegment,
+    SessionTurnUsageGroupKind, SessionTurnUsageSegment,
 };
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,

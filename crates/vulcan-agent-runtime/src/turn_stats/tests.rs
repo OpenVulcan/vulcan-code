@@ -1,5 +1,6 @@
 use serde_json::json;
 use vulcan_core::types::ProviderUsageSnapshot;
+use vulcan_workbench_model::SessionTurnUsageGroupKind;
 
 use super::*;
 use crate::conversation_protocol::{SessionConversationMessage, SessionConversationToolCall};
@@ -65,6 +66,26 @@ fn turn_stats_record(id: &str, created_at: &str) -> SessionConversationRecord {
     }
 }
 
+/// Builds one child-agent feedback statistics record embedded in a parent turn.
+/// 构建一条嵌入父回合中的智能体反馈统计记录。
+fn subagent_turn_stats_record(id: &str, created_at: &str) -> SessionConversationRecord {
+    let mut record = turn_stats_record(id, created_at);
+    record.title = String::from("智能体统计 · worker");
+    record.metadata = Some(json!({
+        "turn_stats": {
+            "turn_kind": "subagent_feedback",
+            "status": "completed",
+            "provider_call_count": 1,
+            "tool_call_count": 0,
+            "input_tokens": 100,
+            "output_tokens": 5,
+            "reasoning_tokens": 0,
+            "total_tokens": 105
+        }
+    }));
+    record
+}
+
 /// Builds one canonical user message with the provided local identifier and text.
 /// 使用指定本地标识与文本构建一条规范用户消息。
 fn user_message(id: &str, text: &str) -> SessionConversationMessage {
@@ -103,6 +124,102 @@ fn assistant_message(
                 .collect(),
         },
     }
+}
+
+/// Verifies the shared usage-segment merger accumulates every statistics field.
+/// 验证共享用量分段聚合器会累加所有统计字段。
+#[test]
+fn usage_segment_merger_accumulates_all_statistics_fields() {
+    let mut stats = SessionTurnStats {
+        provider_call_count: 1,
+        tool_call_count: 2,
+        input_tokens: 3,
+        output_tokens: 4,
+        reasoning_tokens: 5,
+        total_tokens: 12,
+        cached_input_tokens: Some(7),
+        cache_creation_input_tokens: Some(8),
+        ..SessionTurnStats::default()
+    };
+    let segment = SessionTurnUsageSegment {
+        kind: SessionTurnUsageSegmentKind::SubagentTask,
+        trigger: None,
+        execution_profile: None,
+        provider_id: None,
+        model_id: None,
+        provider_call_count: 10,
+        tool_call_count: 20,
+        input_tokens: 30,
+        output_tokens: 40,
+        reasoning_tokens: 50,
+        total_tokens: 120,
+        cached_input_tokens: Some(70),
+        cache_creation_input_tokens: Some(80),
+    };
+
+    merge_usage_segment_into_turn_stats(&mut stats, &segment);
+
+    assert_eq!(stats.provider_call_count, 11);
+    assert_eq!(stats.tool_call_count, 22);
+    assert_eq!(stats.input_tokens, 33);
+    assert_eq!(stats.output_tokens, 44);
+    assert_eq!(stats.reasoning_tokens, 55);
+    assert_eq!(stats.total_tokens, 132);
+    assert_eq!(stats.cached_input_tokens, Some(77));
+    assert_eq!(stats.cache_creation_input_tokens, Some(88));
+    assert_eq!(stats.usage_groups.len(), 1);
+    assert_eq!(
+        stats.usage_groups[0].kind,
+        SessionTurnUsageGroupKind::Subagent
+    );
+    assert_eq!(stats.usage_groups[0].provider_call_count, 10);
+    assert_eq!(stats.usage_groups[0].total_tokens, 120);
+}
+
+/// Verifies parent user-turn explicit child-agent segments stay out of aggregate totals.
+/// 验证父级用户轮次中的显式智能体分段不会进入顶层聚合总数。
+#[test]
+fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
+    let mut stats = SessionTurnStats {
+        turn_kind: SessionTurnStatsKind::UserTurn,
+        provider_call_count: 1,
+        input_tokens: 10,
+        output_tokens: 3,
+        total_tokens: 13,
+        ..SessionTurnStats::default()
+    };
+    let segment = SessionTurnUsageSegment {
+        kind: SessionTurnUsageSegmentKind::SubagentTask,
+        trigger: Some(String::from("worker-a")),
+        execution_profile: None,
+        provider_id: Some(String::from("deepseek")),
+        model_id: Some(String::from("deepseek-v4-pro")),
+        provider_call_count: 1,
+        tool_call_count: 0,
+        input_tokens: 100,
+        output_tokens: 25,
+        reasoning_tokens: 5,
+        total_tokens: 130,
+        cached_input_tokens: Some(40),
+        cache_creation_input_tokens: None,
+    };
+
+    merge_explicit_usage_segment_into_turn_stats(&mut stats, &segment);
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 10);
+    assert_eq!(stats.output_tokens, 3);
+    assert_eq!(stats.reasoning_tokens, 0);
+    assert_eq!(stats.total_tokens, 13);
+    assert_eq!(stats.cached_input_tokens, None);
+    assert_eq!(stats.usage_groups.len(), 1);
+    assert_eq!(
+        stats.usage_groups[0].kind,
+        SessionTurnUsageGroupKind::Subagent
+    );
+    assert_eq!(stats.usage_groups[0].provider_call_count, 1);
+    assert_eq!(stats.usage_groups[0].input_tokens, 100);
+    assert_eq!(stats.usage_groups[0].total_tokens, 130);
 }
 
 /// Verifies an unaligned current turn never inherits historical canonical usage or tool calls.
@@ -149,6 +266,105 @@ fn current_turn_stats_do_not_inherit_historical_canonical_messages() {
     assert_eq!(stats.output_tokens, 0);
     assert_eq!(stats.total_tokens, 0);
     assert_eq!(stats.cached_input_tokens, None);
+}
+
+/// Verifies assistant-only terminal TaskSession reports can still build live usage stats.
+/// 验证只有终态助手消息的智能体报告仍能构建实时用量统计。
+#[test]
+fn current_turn_stats_use_terminal_assistant_when_no_user_record_exists() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![assistant_message(
+            "session-1-protocol-assistant-2001",
+            ProviderUsageSnapshot {
+                input_tokens: Some(31),
+                output_tokens: Some(2),
+                reasoning_tokens: Some(1),
+                total_tokens: Some(34),
+                cached_input_tokens: Some(7),
+                ..ProviderUsageSnapshot::default()
+            },
+            false,
+        )],
+        records: vec![summary_record(closing_record_id, "2002")],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        Some(1),
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 31);
+    assert_eq!(stats.output_tokens, 2);
+    assert_eq!(stats.reasoning_tokens, 1);
+    assert_eq!(stats.total_tokens, 34);
+    assert_eq!(stats.cached_input_tokens, Some(7));
+}
+
+/// Verifies turn-triggering agent messages bound fallback stats to the current feedback turn.
+/// 验证触发轮次的智能体消息会把 fallback 统计限定到当前反馈轮次。
+#[test]
+fn current_turn_stats_use_triggering_agent_message_when_no_user_record_exists() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "上一轮"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(1000),
+                    output_tokens: Some(200),
+                    total_tokens: Some(1200),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+            SessionConversationMessage {
+                id: String::from("session-1-agent-message-2000"),
+                payload: SessionConversationPayload::AgentMessage {
+                    message_type: String::from("completed"),
+                    task_name: String::from("agent-a"),
+                    sender: String::from("agent-a"),
+                    recipient: String::from("parent"),
+                    payload: String::from("完成"),
+                    trigger_turn: true,
+                    metadata: None,
+                },
+            },
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(40),
+                    output_tokens: Some(12),
+                    total_tokens: Some(52),
+                    cached_input_tokens: Some(16),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![summary_record(closing_record_id, "2002")],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        Some(1),
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 40);
+    assert_eq!(stats.output_tokens, 12);
+    assert_eq!(stats.total_tokens, 52);
+    assert_eq!(stats.cached_input_tokens, Some(16));
 }
 
 /// Verifies display/runtime layer separation does not map the current record to the first historical user.
@@ -424,6 +640,65 @@ fn compacted_current_turn_stats_align_by_user_record_timestamp() {
     assert_eq!(stats.cached_input_tokens, Some(10));
 }
 
+/// Verifies child-agent feedback stats do not truncate the owning parent turn duration.
+/// 验证智能体反馈统计不会截断所属父回合的耗时范围。
+#[test]
+fn parent_turn_stats_ignore_subagent_feedback_stats_as_boundary() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "上一轮"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(1000),
+                    output_tokens: Some(200),
+                    total_tokens: Some(1200),
+                    cached_input_tokens: Some(800),
+                    ..ProviderUsageSnapshot::default()
+                },
+                true,
+            ),
+            user_message("session-1-protocol-user-2000", "当前调度智能体"),
+            assistant_message(
+                "session-1-protocol-assistant-2001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(70),
+                    output_tokens: Some(14),
+                    total_tokens: Some(84),
+                    cached_input_tokens: Some(21),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-previous", "1000", "上一轮"),
+            summary_record("summary-previous", "1500"),
+            turn_stats_record("stats-previous", "1600"),
+            user_record("user-current", "2000", "当前调度智能体"),
+            subagent_turn_stats_record("subagent-stats-current", "5000"),
+            summary_record(closing_record_id, "12000"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 70);
+    assert_eq!(stats.output_tokens, 14);
+    assert_eq!(stats.total_tokens, 84);
+    assert_eq!(stats.cached_input_tokens, Some(21));
+    assert_eq!(stats.duration_ms, Some(10_000));
+}
+
 /// Verifies embedded compaction usage segments are aggregated into a normal user turn.
 /// 验证嵌入式压缩用量分段会聚合进普通用户轮次。
 #[test]
@@ -491,6 +766,17 @@ fn user_turn_stats_merge_embedded_context_compaction_segment() {
         stats.usage_segments[1].kind,
         SessionTurnUsageSegmentKind::ContextCompaction
     );
+    assert_eq!(stats.usage_groups.len(), 2);
+    assert_eq!(
+        stats.usage_groups[0].kind,
+        SessionTurnUsageGroupKind::Regular
+    );
+    assert_eq!(stats.usage_groups[0].total_tokens, 52);
+    assert_eq!(
+        stats.usage_groups[1].kind,
+        SessionTurnUsageGroupKind::ContextCompaction
+    );
+    assert_eq!(stats.usage_groups[1].total_tokens, 26);
 }
 
 /// Verifies assistant provider retries remain visible when compaction usage is embedded.
@@ -672,4 +958,10 @@ fn context_compaction_turn_stats_can_be_built_from_explicit_segment_only() {
         stats.usage_segments[0].kind,
         SessionTurnUsageSegmentKind::ContextCompaction
     );
+    assert_eq!(stats.usage_groups.len(), 1);
+    assert_eq!(
+        stats.usage_groups[0].kind,
+        SessionTurnUsageGroupKind::ContextCompaction
+    );
+    assert_eq!(stats.usage_groups[0].cache_creation_input_tokens, Some(10));
 }

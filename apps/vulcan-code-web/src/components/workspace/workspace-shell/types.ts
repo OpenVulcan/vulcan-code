@@ -314,7 +314,7 @@ export interface WorkspaceShellProps {
   }) => Promise<boolean>;
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
-  onForkConversation: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean>;
+  onForkConversation: (conversationId: string) => Promise<boolean>;
   // Loads hidden tool details for transcript rows.
   // 为转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;

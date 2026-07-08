@@ -24,12 +24,12 @@ use super::{
     emit_service_event_with_trace, merge_runtime_state_records_into_display_messages,
     owning_project_id_for_session, persist_workspace_session_update,
     replace_conversation_messages_in_workbench_window,
-    replace_display_messages_with_runtime_state_records, spawn_service_task,
+    replace_task_display_messages_with_runtime_state_records, spawn_service_task,
     spawn_workspace_session_runtime_state_persist_task,
     spawn_workspace_session_transcript_persist_task, sync_hydrated_session_dialogue_ready_marker,
-    webui_trace, webui_trace_if_slow, webui_turn_completion_gate_from_state,
-    workbench_surface_matches_conversation, workspace_session_summary_for_session,
-    workspace_snapshot_contains_regular_session,
+    task_display_prompt_anchor_from_workspace, webui_trace, webui_trace_if_slow,
+    webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
+    workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
 };
 
 /// Applies one streamed conversation checkpoint to retained workspace memory.
@@ -69,6 +69,7 @@ pub(super) fn apply_conversation_checkpoint(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let cached_task_prompt_anchor = cached_subagent_task_prompt_anchor(&guard, session_id);
         let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
@@ -101,10 +102,14 @@ pub(super) fn apply_conversation_checkpoint(
                     &runtime_state_snapshot,
                 );
             } else {
-                replace_display_messages_with_runtime_state_records(
+                let task_prompt_anchor =
+                    task_display_prompt_anchor_from_workspace(workspace, session_id)
+                        .or(cached_task_prompt_anchor);
+                replace_task_display_messages_with_runtime_state_records(
                     workspace,
                     session_id,
                     &runtime_state_snapshot,
+                    task_prompt_anchor.as_deref(),
                 );
             }
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
@@ -211,39 +216,62 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-        let now = current_unix_millis_text();
-        let (is_success, runtime_state_snapshot) = {
-            let runtime_state = workspace
-                .session_runtime_state
-                .entry(session_id)
-                .or_insert_with(|| SessionRuntimeStateEntry {
-                    updated_at: now.clone(),
-                    ..SessionRuntimeStateEntry::default()
-                });
-            let apply_result =
-                apply_terminal_execution_report_to_state(runtime_state, session_id, &now, report);
-            // runtime_state_snapshot is the authoritative state after terminal report application for display projection.
-            // runtime_state_snapshot 是终态报告应用后的权威状态，用于显示层投影。
-            let runtime_state_snapshot = runtime_state.clone();
-            (apply_result.is_success, runtime_state_snapshot)
+        let cached_task_prompt_anchor = cached_subagent_task_prompt_anchor(&guard, session_id);
+        let (is_success, runtime_state_snapshot, display_messages) = {
+            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
+            let now = current_unix_millis_text();
+            let task_prompt_anchor =
+                task_display_prompt_anchor_from_workspace(workspace, session_id)
+                    .or(cached_task_prompt_anchor);
+            let (is_success, runtime_state_snapshot) = {
+                let runtime_state = workspace
+                    .session_runtime_state
+                    .entry(session_id)
+                    .or_insert_with(|| SessionRuntimeStateEntry {
+                        updated_at: now.clone(),
+                        ..SessionRuntimeStateEntry::default()
+                    });
+                let apply_result = apply_terminal_execution_report_to_state(
+                    runtime_state,
+                    session_id,
+                    &now,
+                    report,
+                );
+                // runtime_state_snapshot is the authoritative state after terminal report application for display projection.
+                // runtime_state_snapshot 是终态报告应用后的权威状态，用于显示层投影。
+                let runtime_state_snapshot = runtime_state.clone();
+                (apply_result.is_success, runtime_state_snapshot)
+            };
+            replace_task_display_messages_with_runtime_state_records(
+                workspace,
+                session_id,
+                &runtime_state_snapshot,
+                task_prompt_anchor.as_deref(),
+            );
+            workspace.session_run_phases.insert(
+                session_id,
+                if is_success {
+                    SessionRunPhase::Ready
+                } else {
+                    SessionRunPhase::Failed
+                },
+            );
+            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
+            let display_messages = workspace
+                .session_messages
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default();
+            (is_success, runtime_state_snapshot, display_messages)
         };
-        replace_display_messages_with_runtime_state_records(
-            workspace,
-            session_id,
-            &runtime_state_snapshot,
-        );
-        workspace.session_run_phases.insert(
-            session_id,
-            if is_success {
-                SessionRunPhase::Ready
-            } else {
-                SessionRunPhase::Failed
-            },
-        );
-        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
+        if let Some(cache_entry) = guard.subagent_surface_detail_cache.get_mut(&session_id) {
+            cache_entry.messages = display_messages;
+            cache_entry.task_state.conversation_state =
+                Some(runtime_state_snapshot.conversation_state.clone());
+            cache_entry.last_access_ms = current_unix_millis_value();
+        }
         is_success
     };
     webui_trace(
@@ -260,6 +288,35 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
         ),
     );
     Ok((session_id, is_success))
+}
+
+/// Returns the cached child-task prompt anchor retained by the subagent detail surface.
+/// 返回子代理详情界面缓存中保留的子任务提示词锚点。
+///
+/// # Parameters
+/// 参数
+/// `state` is the retained service bridge state that may contain a subagent detail cache entry.
+/// `state` 是可能包含子代理详情缓存条目的保留服务桥状态。
+/// `session_id` selects the child TaskSession whose prompt anchor is needed.
+/// `session_id` 选择需要提示词锚点的子 TaskSession。
+///
+/// # Returns
+/// 返回值
+/// A non-empty cached task description when available.
+/// 当存在非空任务描述时返回缓存锚点。
+fn cached_subagent_task_prompt_anchor(
+    state: &ServiceBridgeState,
+    session_id: SessionId,
+) -> Option<String> {
+    state
+        .subagent_surface_detail_cache
+        .get(&session_id)?
+        .task_state
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 /// Applies the terminal execution report to retained memory and emits the updated workbench view.

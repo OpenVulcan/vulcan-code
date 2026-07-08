@@ -266,6 +266,7 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
                 prompt_entry_id: format!("webui-goal-continuation-{}", SessionId::new_v4()),
                 prompt: "Continue working toward the active thread goal.",
                 hidden_model_guidance: None,
+                provider_visible_agent_messages: Vec::new(),
                 attachments: Vec::new(),
                 append_canonical_user_message: false,
                 append_visible_user_prompt_record: false,

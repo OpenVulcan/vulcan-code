@@ -232,18 +232,47 @@ function SubagentOrchestrationDetail(props: {
   if (presentation.operation === "wait") {
     return (
       <div className="subagent-orchestration-detail">
+        {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
         <div className="subagent-orchestration-meta">
           <span>{t("conversation.subagent.detail.status")}</span>
           <strong>
             {presentation.timedOut
               ? t("conversation.subagent.detail.waitTimedOut")
+              : presentation.interrupted
+                ? t("conversation.subagent.detail.waitInterrupted")
               : t("conversation.subagent.detail.waitCompleted")}
           </strong>
         </div>
+        {presentation.result ? (
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+        ) : null}
+        {presentation.agents.length ? (
+          <div className="subagent-orchestration-agent-list">
+            {presentation.agents.map((agent) => (
+              <SubagentOrchestrationAgentRow agent={agent} key={agent.id} t={t} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  if (presentation.operation === "feedback") {
+    return (
+      <div className="subagent-orchestration-detail">
+        {presentation.result ? (
+          <SubagentTextBlock label={t("conversation.subagent.detail.result")} text={presentation.result} />
+        ) : (
+          <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.noResult")}</div>
+        )}
       </div>
     );
   }
   if (presentation.operation === "collect") {
+    const emptyOpenAgentStatus = presentation.collectKind === "status"
+      && presentation.agentsKnown
+      && presentation.agents.length === 0
+      && !presentation.result
+      && !presentation.note;
     return (
       <div className="subagent-orchestration-detail">
         {presentation.note ? <div className="subagent-orchestration-note">{presentation.note}</div> : null}
@@ -256,6 +285,9 @@ function SubagentOrchestrationDetail(props: {
               <SubagentOrchestrationAgentRow agent={agent} key={agent.id} t={t} />
             ))}
           </div>
+        ) : null}
+        {emptyOpenAgentStatus ? (
+          <div className="subagent-orchestration-empty">{t("conversation.subagent.detail.noOpenAgents")}</div>
         ) : null}
       </div>
     );
@@ -402,9 +434,10 @@ function subagentOperationLabel(
 ): string {
   if (presentation.operation === "wait") return t("conversation.subagent.detail.wait");
   if (presentation.operation === "message") return t("conversation.subagent.detail.message");
-  if (presentation.operation === "collect") return t("conversation.subagent.detail.collection");
+  if (presentation.operation === "collect") return subagentCollectionLabel(presentation, t);
+  if (presentation.operation === "feedback") return t("conversation.subagent.detail.feedback");
   if (presentation.operation === "control") return t("conversation.subagent.detail.control");
-  return presentation.state === "running" ? t("conversation.subagent.calling") : t("conversation.subagent.call");
+  return t("conversation.subagent.call");
 }
 
 // subagentSummaryText returns a terse row summary.
@@ -420,16 +453,24 @@ function subagentSummaryText(
   if (presentation.operation === "wait") {
     return presentation.timedOut
       ? t("conversation.subagent.detail.waitTimedOut")
+      : presentation.interrupted
+        ? t("conversation.subagent.detail.waitInterrupted")
       : t("conversation.subagent.detail.waitCompleted");
   }
   if (presentation.operation === "collect") {
     if (!presentation.agentsKnown) {
-      return t("conversation.subagent.detail.collection");
+      return subagentCollectionLabel(presentation, t);
     }
     if (presentation.agents.length === 0) {
-      return t("conversation.subagent.detail.collection");
+      if (presentation.collectKind === "status") {
+        return t("conversation.subagent.detail.noOpenAgents");
+      }
+      return subagentCollectionLabel(presentation, t);
     }
     return `${presentation.agents.length} ${t("conversation.subagent.detail.agent")}`;
+  }
+  if (presentation.operation === "feedback") {
+    return t("conversation.subagent.detail.openFeedback");
   }
   if (presentation.operation === "message") {
     return presentation.target ?? presentation.title;
@@ -444,6 +485,21 @@ function subagentSummaryText(
     return presentation.target ?? t("conversation.subagent.detail.control");
   }
   return presentation.title;
+}
+
+// subagentCollectionLabel chooses the display label for template and live-status queries.
+// subagentCollectionLabel 为模板查询与实时状态查询选择展示文案。
+function subagentCollectionLabel(
+  // Presentation model.
+  // 展示模型。
+  presentation: SubagentOrchestrationPresentation,
+  // Translation helper.
+  // 翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): string {
+  return presentation.collectKind === "templates"
+    ? t("conversation.subagent.detail.templateCollection")
+    : t("conversation.subagent.detail.statusCollection");
 }
 
 // compactSubagentText limits inline subagent text to keep transcript rows light.

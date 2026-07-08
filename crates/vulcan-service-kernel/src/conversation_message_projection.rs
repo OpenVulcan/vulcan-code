@@ -210,18 +210,15 @@ mod tests {
         assert_eq!(messages[0].body, "visible answer");
     }
 
-    /// Verifies internal inter-agent prompts render as friendly display-only messages.
-    /// 验证内部智能体间提示词会渲染成友好的仅显示消息。
+    /// Verifies internal inter-agent prompts stay hidden from the display projection.
+    /// 验证内部智能体间提示词会在显示投影中保持隐藏。
     #[test]
-    fn conversation_messages_project_inter_agent_injection_as_display_note() {
+    fn conversation_messages_filter_inter_agent_injection_without_projection() {
         let conversation_id = SessionId::new_v4().to_string();
-        let task_id = SessionId::new_v4();
         let mut internal_message = SessionMessageEntry::new(
             SessionMessageKind::User,
             "用户指令",
-            format!(
-                "[Inter-agent messages]\n\nMessage 1 from parent to {task_id} via send_message at 1780000000000:\n请用中文重新输出结论。\n"
-            ),
+            "<agent_message>\n  <message_type>MESSAGE</message_type>\n  <task_name>worker-a</task_name>\n  <sender>parent:root</sender>\n  <payload>请用中文重新输出结论。</payload>\n</agent_message>",
         )
         .with_runtime_metadata("internal-message", "1780000000001");
         internal_message.metadata = Some(json!({
@@ -234,19 +231,6 @@ mod tests {
         let messages =
             conversation_messages_from_session(&conversation_id, &[internal_message], false);
 
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].body, "请用中文重新输出结论。");
-        assert_eq!(
-            messages[0].record_kind.as_deref(),
-            Some(SessionMessageRecordKind::DisplayNote.as_persisted_key())
-        );
-        assert_eq!(
-            messages[0]
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("tool"))
-                .and_then(Value::as_str),
-            Some("send_message")
-        );
+        assert!(messages.is_empty());
     }
 }

@@ -4,6 +4,26 @@
 use super::*;
 use std::sync::{Arc, Mutex};
 
+/// Returns active surface messages and fails the test on registry projection errors.
+/// 返回活动界面消息，并在注册表投影错误时让测试失败。
+fn active_surface_messages_from_workspace_and_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Vec<SessionMessageEntry> {
+    super::active_surface_messages_from_workspace_and_state(guard, workspace_snapshot)
+        .expect("subagent active surface messages should project")
+}
+
+/// Returns cached subagent navigation and fails the test on registry projection errors.
+/// 返回缓存智能体导航，并在注册表投影错误时让测试失败。
+fn subagent_navigation_snapshot_from_cached_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Option<SubagentNavigationSnapshot> {
+    super::subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot)
+        .expect("cached subagent navigation projection should succeed")
+}
+
 /// Builds a sidebar conversation summary for one test session.
 /// 为一个测试会话构建侧栏会话摘要。
 ///

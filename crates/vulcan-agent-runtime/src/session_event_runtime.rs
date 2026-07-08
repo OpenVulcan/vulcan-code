@@ -6,20 +6,23 @@ use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageKind, SessionMessageRecordKind,
-    SessionRuntimeStateEntry, SessionTurnStatsKind, SessionTurnStatsStatus,
-    SessionTurnUsageSegment,
+    SessionRuntimeStateEntry, SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus,
+    SessionTurnUsageSegment, SessionTurnUsageSegmentKind,
 };
 
 use crate::{
     ExecutionRunReport,
     agent_runtime::events::{RuntimeEvent, RuntimeEventKind},
     conversation_protocol::{
-        SessionConversationPayload, SessionConversationRecord, SessionConversationState,
-        append_assistant_text_message, append_record, append_record_body_delta,
+        SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
+        SessionConversationState, append_record, append_record_body_delta,
         append_user_text_message,
     },
     skills::{SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput},
-    turn_stats::build_session_turn_stats_from_state_with_segments,
+    turn_stats::{
+        build_session_turn_stats_from_state_with_segments,
+        merge_explicit_usage_segment_into_turn_stats, merge_usage_segment_into_turn_stats,
+    },
 };
 
 /// Local identifiers for records created while one streaming run is active.

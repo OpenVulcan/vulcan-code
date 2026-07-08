@@ -454,6 +454,7 @@ pub(super) async fn service_submit_conversation_prompt(
                 ),
                 prompt: &prompt,
                 hidden_model_guidance: hidden_model_guidance.as_deref(),
+                provider_visible_agent_messages: Vec::new(),
                 attachments,
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,

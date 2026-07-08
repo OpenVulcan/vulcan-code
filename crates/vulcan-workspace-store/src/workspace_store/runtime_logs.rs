@@ -1,4 +1,93 @@
+use super::segmented_session_store::{
+    append_segmented_session_message_update, read_runtime_conversation_state,
+    replay_segmented_session_context, sync_runtime_log_from_conversation_state,
+};
 use super::*;
+use crate::conversation_protocol::conversation_state_to_session_messages;
+
+/// Syncs provider-facing runtime JSONL for an already resolved segmented session directory.
+/// 为已经解析出的分段会话目录同步 Provider 可见 runtime JSONL。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the main-session or task-session directory that owns the runtime files.
+/// `session_dir` 是拥有 runtime 文件的主会话或子任务会话目录。
+/// `conversation_state` is the canonical provider-facing conversation state.
+/// `conversation_state` 是规范的 Provider 可见会话状态。
+/// `updated_at` is written to new or rebuilt runtime log lines.
+/// `updated_at` 会写入新增或重建的 runtime 日志行。
+///
+/// # Returns
+/// 返回值
+/// Returns `Ok(())` after the runtime log is synchronized.
+/// runtime 日志同步完成后返回 `Ok(())`。
+pub fn sync_segmented_session_runtime_log_from_conversation_state(
+    session_dir: &std::path::Path,
+    conversation_state: &SessionConversationState,
+    updated_at: &str,
+) -> Result<(), String> {
+    sync_runtime_log_from_conversation_state(session_dir, conversation_state, updated_at)?;
+    Ok(())
+}
+
+/// Reads provider-facing runtime JSONL for an already resolved segmented session directory.
+/// 读取已经解析出的分段会话目录中的 Provider 可见 runtime JSONL。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the main-session or task-session directory that owns the runtime files.
+/// `session_dir` 是拥有 runtime 文件的主会话或子任务会话目录。
+///
+/// # Returns
+/// 返回值
+/// Returns the canonical runtime conversation state when runtime files exist.
+/// 当 runtime 文件存在时返回规范运行态会话状态。
+pub fn read_segmented_session_runtime_conversation_state(
+    session_dir: &std::path::Path,
+) -> Result<Option<SessionConversationState>, String> {
+    read_runtime_conversation_state(session_dir)
+}
+
+/// Reads display transcript state from an already resolved segmented session directory.
+/// 从已经解析出的分段会话目录读取展示转录状态。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the main-session or task-session directory that owns display segments.
+/// `session_dir` 是拥有展示分段的主会话或子任务会话目录。
+///
+/// # Returns
+/// 返回值
+/// Returns replayed display conversation state when display rows exist.
+/// 当展示行存在时返回重放后的展示会话状态。
+pub fn read_segmented_session_display_conversation_state(
+    session_dir: &std::path::Path,
+) -> Result<Option<SessionConversationState>, String> {
+    Ok(replay_segmented_session_context(session_dir)?.map(|replay| replay.conversation_state))
+}
+
+/// Syncs display transcript segments from a canonical conversation state for a resolved directory.
+/// 为已解析目录根据规范会话状态同步展示转录分段。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the main-session or task-session directory that owns display segments.
+/// `session_dir` 是拥有展示分段的主会话或子任务会话目录。
+/// `conversation_state` is the canonical display-capable conversation state.
+/// `conversation_state` 是可投影展示记录的规范会话状态。
+///
+/// # Returns
+/// 返回值
+/// Returns `Ok(())` after display transcript rows are appended or rewritten.
+/// 展示转录行追加或重写完成后返回 `Ok(())`。
+pub fn sync_segmented_session_display_from_conversation_state(
+    session_dir: &std::path::Path,
+    conversation_state: &SessionConversationState,
+) -> Result<(), String> {
+    let messages = conversation_state_to_session_messages(conversation_state);
+    append_segmented_session_message_update(session_dir, &messages)?;
+    Ok(())
+}
 
 /// Persists the current segmented context state document for an existing session directory.
 /// 为已有会话目录持久化当前分段上下文状态文档。

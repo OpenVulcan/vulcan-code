@@ -4,6 +4,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use super::*;
+use crate::session_hydration::is_missing_segmented_session_file_error;
 use vulcan_agent_runtime::agent_runtime::task_runtime::TaskRuntime;
 use vulcan_session_core::{SubagentRegistryEntry, SubagentStatus};
 
@@ -61,11 +62,12 @@ pub(crate) fn refresh_webui_subagent_navigation_round_visibility(
     Ok(())
 }
 
-/// Reprojects subagent navigation and emits a focused navigation delta.
-/// 重新投影子代理导航并发出聚焦的导航增量。
-pub(crate) fn emit_webui_subagent_navigation_changed_delta(
+/// Reprojects subagent navigation for one parent conversation and emits a focused navigation delta.
+/// 为单个父会话重新投影子代理导航并发出聚焦导航增量。
+pub(crate) fn emit_webui_subagent_navigation_changed_delta_for_parent(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
+    parent_session_id: SessionId,
 ) -> Result<Option<SubagentNavigationSnapshot>, String> {
     let (generation, parent_conversation_id, subagent_navigation) = {
         let mut guard = state
@@ -75,19 +77,31 @@ pub(crate) fn emit_webui_subagent_navigation_changed_delta(
             .workspace_snapshot
             .clone()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        let selected_parent_conversation_id = (workspace_snapshot.selected_session
-            != SessionId::nil())
-        .then(|| workspace_snapshot.selected_session.to_string());
-        let subagent_navigation =
-            subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot);
+        let selected_session_id = workspace_snapshot.selected_session;
+        let focused_parent_session_id = if parent_session_id == SessionId::nil() {
+            selected_session_id
+        } else {
+            parent_session_id
+        };
+        let use_active_panel = focused_parent_session_id == selected_session_id;
+        let subagent_navigation = subagent_navigation_snapshot_for_parent_from_cached_state(
+            &mut guard,
+            focused_parent_session_id,
+            use_active_panel,
+        )?;
         let parent_conversation_id = subagent_navigation
             .as_ref()
             .map(|navigation| navigation.parent_conversation_id.clone())
-            .or(selected_parent_conversation_id);
+            .or_else(|| {
+                (focused_parent_session_id != SessionId::nil())
+                    .then(|| focused_parent_session_id.to_string())
+            });
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
-        guard.workbench.subagent_navigation = subagent_navigation.clone();
+        if use_active_panel {
+            guard.workbench.subagent_navigation = subagent_navigation.clone();
+        }
         (generation, parent_conversation_id, subagent_navigation)
     };
     emit_service_event_with_trace(
@@ -283,8 +297,8 @@ where
         let trace_surface_started_at = current_unix_millis_value();
         let (surface_messages, subagent_navigation) = match subagent_navigation_refresh_mode {
             SubagentNavigationRefreshMode::Rebuild => (
-                active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
-                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
+                active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)?,
+                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)?,
             ),
             SubagentNavigationRefreshMode::Preserve => {
                 let subagent_navigation = guard.workbench.subagent_navigation.clone();
@@ -563,9 +577,14 @@ pub(crate) fn restore_webui_subagent_registry_for_session_hydration(
     agent_runtime
         .task_runtime
         .ensure_task_session_store_root(parent_session_id, session_dir)?;
-    agent_runtime
+    match agent_runtime
         .task_runtime
         .restore_persisted_subagent_registry_for_parent_tree(parent_session_id)
+    {
+        Ok(()) => Ok(()),
+        Err(error) if is_missing_segmented_session_file_error(&error) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Stores one loaded subagent detail in the service cache and mirrors its messages into the workspace snapshot.
@@ -589,10 +608,12 @@ pub(crate) fn cache_webui_subagent_surface_detail_for_task(
 ) {
     let now = current_unix_millis_value();
     if let Some(conversation_state) = task_state.conversation_state.clone() {
+        let task_prompt_anchor = task_state.description.as_deref();
         replace_webui_subagent_task_conversation_state(
             workspace_snapshot,
             task_state.task_id,
             conversation_state,
+            task_prompt_anchor,
         );
     }
     let messages = display_session_messages_from_workspace(workspace_snapshot, task_state.task_id)
@@ -600,7 +621,12 @@ pub(crate) fn cache_webui_subagent_surface_detail_for_task(
             task_state
                 .conversation_state
                 .as_ref()
-                .map(conversation_state_to_session_messages)
+                .map(|conversation_state| {
+                    display_messages_from_task_conversation_state(
+                        conversation_state,
+                        task_state.description.as_deref(),
+                    )
+                })
                 .unwrap_or_default()
         });
     let _ = parent_session_id;
@@ -658,7 +684,8 @@ pub(crate) fn load_webui_unclosed_subagent_surface_preload(
     for entry in &entries {
         let direct_parent_session_id = entry.parent_session_id.as_uuid();
         let state =
-            subagent_task_panel_state_from_registry_entry_for_preload(store.as_ref(), entry);
+            subagent_task_panel_state_from_registry_entry_for_preload(store.as_ref(), entry)
+                .map_err(|error| format!("failed to load subagent panel detail: {error}"))?;
         states_by_parent
             .entry(direct_parent_session_id)
             .or_default()
@@ -706,7 +733,7 @@ pub(crate) fn load_webui_unclosed_subagent_surface_preload(
 fn subagent_task_panel_state_from_registry_entry_for_preload(
     store: Option<&SegmentedTaskSessionStore>,
     entry: &SubagentRegistryEntry,
-) -> SubagentTaskPanelState {
+) -> Result<SubagentTaskPanelState, vulcan_session_core::SessionStoreError> {
     let parent_session_id = entry.parent_session_id.as_uuid();
     let metadata_state = SubagentTaskPanelState {
         task_id: entry.session_id.as_uuid(),
@@ -719,16 +746,25 @@ fn subagent_task_panel_state_from_registry_entry_for_preload(
         conversation_state: None,
     };
     let detailed_state = store
-        .and_then(|store| {
+        .map(|store| {
             subagent_task_panel_state_detail_from_segmented_task_session_store(
                 store,
                 entry.session_id,
             )
         })
-        .filter(|state| state.parent_session_id == parent_session_id);
+        .transpose()?
+        .flatten();
+    if let Some(state) = detailed_state.as_ref()
+        && state.parent_session_id != parent_session_id
+    {
+        return Err(vulcan_session_core::SessionStoreError::new(format!(
+            "TaskSession `{}` parent mismatch: registry parent `{}`, persisted parent `{}`.",
+            entry.session_id, parent_session_id, state.parent_session_id
+        )));
+    }
     // The mirror owns visibility; the task detail owns replayable transcript data.
     // 镜像记录负责可见性；任务详情负责可复放的转录数据。
-    match detailed_state {
+    let state = match detailed_state {
         Some(mut state) => {
             if state.public_task_id.is_empty() {
                 state.public_task_id = metadata_state.public_task_id.clone();
@@ -746,7 +782,8 @@ fn subagent_task_panel_state_from_registry_entry_for_preload(
             state
         }
         None => metadata_state,
-    }
+    };
+    Ok(state)
 }
 
 /// Converts a persisted parent reference into the WebUI session id represented by that parent.

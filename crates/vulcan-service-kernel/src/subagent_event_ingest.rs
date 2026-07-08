@@ -27,17 +27,6 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
     else {
         return Ok(true);
     };
-    let usage_segments = if is_finished {
-        match subagent_usage_segments_from_runtime_metadata(metadata) {
-            Ok(usage_segments) => usage_segments,
-            Err(error) => {
-                eprintln!("[webui-service] subagent usage segment parse failed: {error}");
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
     webui_trace(
         "subagent_runtime_event_ingest",
         format!(
@@ -61,13 +50,6 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
             guard
                 .detached_subagent_task_listeners
                 .remove(&normalized.task_id);
-            if !usage_segments.is_empty() {
-                guard
-                    .pending_subagent_usage_segments
-                    .entry(parent_session_id)
-                    .or_default()
-                    .extend(usage_segments);
-            }
         }
         normalized
     };
@@ -76,16 +58,24 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         format!(
             "parent={parent_session_id} task={} run_state={} has_conversation_state={} result_chars={} terminal={is_finished}",
             normalized_state.task_id,
-            subagent_run_state_key(normalized_state.run_state),
+            normalized_state.run_state.metadata_key(),
             normalized_state.conversation_state.is_some(),
             normalized_state.result_text.chars().count()
         ),
     );
 
-    let message_window_event = {
+    let message_window_events = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let parent_conversation_id = parent_session_id.to_string();
+        let before_parent_visible_messages = guard
+            .workbench
+            .messages
+            .iter()
+            .filter(|message| message.conversation_id == parent_conversation_id)
+            .cloned()
+            .collect::<Vec<_>>();
         let conversation_id = normalized_state.task_id.to_string();
         let before_visible_messages = guard
             .workbench
@@ -94,7 +84,15 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
             .filter(|message| message.conversation_id == conversation_id)
             .cloned()
             .collect::<Vec<_>>();
-        let (projected_messages, cached_messages) = {
+        let suppress_feedback_entry = is_finished
+            && (parent_active_turn_will_consume_subagent_feedback(&guard, parent_session_id)
+                || parent_wait_agent_will_display_subagent_feedback(
+                    &guard,
+                    parent_session_id,
+                    &normalized_state,
+                    metadata,
+                ));
+        let (projected_messages, cached_messages, parent_projected_messages, parent_changed) = {
             let workspace = guard
                 .workspace_snapshot
                 .as_mut()
@@ -112,12 +110,36 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
                 );
             }
             if let Some(conversation_state) = normalized_state.conversation_state.clone() {
+                let task_prompt_anchor = prompt
+                    .as_deref()
+                    .or(normalized_state.description.as_deref());
                 replace_webui_subagent_task_conversation_state(
                     workspace,
                     normalized_state.task_id,
                     conversation_state,
+                    task_prompt_anchor,
                 );
             }
+            let parent_changed = if is_finished {
+                append_webui_subagent_feedback_records_if_missing(
+                    workspace,
+                    parent_session_id,
+                    metadata,
+                    &normalized_state,
+                    suppress_feedback_entry,
+                )?
+            } else {
+                false
+            };
+            let parent_messages = if parent_changed {
+                workspace
+                    .session_messages
+                    .get(&parent_session_id)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let messages = workspace
                 .session_messages
                 .get(&normalized_state.task_id)
@@ -126,6 +148,12 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
             (
                 conversation_messages_from_session(&conversation_id, messages.as_slice(), false),
                 messages,
+                conversation_messages_from_session(
+                    &parent_conversation_id,
+                    parent_messages.as_slice(),
+                    false,
+                ),
+                parent_changed,
             )
         };
         let cache_access_ms = current_unix_millis_value();
@@ -138,6 +166,7 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
             },
         );
         prune_webui_subagent_surface_detail_cache(&mut guard, cache_access_ms);
+        let mut message_window_events = Vec::new();
         if let Some(message_patch) = build_conversation_messages_patched_delta(
             &conversation_id,
             before_visible_messages.as_slice(),
@@ -151,22 +180,42 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
                 &conversation_id,
                 projected_messages,
             );
-            Some(WorkbenchDeltaEnvelope {
+            message_window_events.push(WorkbenchDeltaEnvelope {
                 generation,
                 delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
-            })
-        } else {
-            None
+            });
         }
+        if parent_changed
+            && workbench_surface_matches_conversation(&guard.workbench, &parent_conversation_id)
+            && let Some(message_patch) = build_conversation_messages_patched_delta(
+                &parent_conversation_id,
+                before_parent_visible_messages.as_slice(),
+                parent_projected_messages.as_slice(),
+            )
+        {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            let generation = guard.workbench_generation;
+            guard.workbench.revision = generation;
+            replace_conversation_messages_in_workbench_window(
+                &mut guard.workbench.messages,
+                &parent_conversation_id,
+                parent_projected_messages,
+            );
+            message_window_events.push(WorkbenchDeltaEnvelope {
+                generation,
+                delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+            });
+        }
+        message_window_events
     };
-    if let Some(event) = message_window_event {
+    for event in message_window_events {
         emit_service_event_with_trace(
             app,
             "subagent_messages_patch_emit",
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }
-    emit_webui_subagent_navigation_changed_delta(app, state)?;
+    emit_webui_subagent_navigation_changed_delta_for_parent(app, state, parent_session_id)?;
     if is_finished {
         webui_trace(
             "subagent_runtime_event_projection_finished",
@@ -188,34 +237,129 @@ fn terminal_webui_subagent_task_state(mut state: SubagentTaskPanelState) -> Suba
     state
 }
 
-/// Drains pending child-agent usage segments for one parent session exactly once.
-/// 对单个父会话的一组待聚合子代理用量分段执行一次性取走。
-pub(crate) fn take_pending_webui_subagent_usage_segments(
-    state: &SharedServiceBridgeState,
+/// Appends parent-visible child-agent feedback rows without adding anything to provider context.
+/// 追加父会话可见的智能体反馈记录，同时不向 Provider 上下文添加任何内容。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the retained parent transcript state.
+/// `workspace_snapshot` 持有保留的父级转录状态。
+/// `parent_session_id` identifies the parent transcript that should show the feedback.
+/// `parent_session_id` 标识需要展示反馈的父级转录。
+/// `metadata` is the delegate-finished metadata that carries usage and mailbox payloads.
+/// `metadata` 是携带用量和 mailbox 载荷的委派完成元数据。
+/// `state` is the normalized child panel state used for labels and result text.
+/// `state` 是用于标签与结果文本的规范化子面板状态。
+/// `suppress_feedback_entry` skips the feedback card when wait_agent already displays the result.
+/// `suppress_feedback_entry` 在 wait_agent 已展示结果时跳过反馈卡片。
+///
+/// # Returns
+/// 返回值
+/// `true` when new display rows were appended.
+/// 当追加了新的显示行时返回 `true`。
+fn append_webui_subagent_feedback_records_if_missing(
+    workspace_snapshot: &mut WorkspaceSnapshot,
     parent_session_id: SessionId,
-) -> Result<Vec<SessionTurnUsageSegment>, String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    Ok(guard
-        .pending_subagent_usage_segments
-        .remove(&parent_session_id)
-        .unwrap_or_default())
+    metadata: &Value,
+    state: &SubagentTaskPanelState,
+    suppress_feedback_entry: bool,
+) -> Result<bool, String> {
+    let now = current_unix_millis_text();
+    let task_id_text = state.task_id.to_string();
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(parent_session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    let execution_id = subagent_feedback_execution_id_from_tool_metadata(metadata)?;
+    if runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .any(|record| {
+            subagent_feedback_record_matches(
+                record.metadata.as_ref(),
+                &task_id_text,
+                execution_id.as_str(),
+            )
+        })
+    {
+        return Ok(false);
+    }
+
+    let display_records =
+        subagent_feedback_display_records_from_tool_metadata(parent_session_id, metadata, state)?;
+    if !suppress_feedback_entry {
+        append_webui_session_message_entry_to_state(
+            runtime_state,
+            parent_session_id,
+            display_records.feedback_entry,
+        );
+    }
+    append_webui_session_message_entry_to_state(
+        runtime_state,
+        parent_session_id,
+        display_records.stats_entry,
+    );
+
+    let runtime_state_snapshot = runtime_state.clone();
+    merge_runtime_state_records_into_display_messages(
+        workspace_snapshot,
+        parent_session_id,
+        &runtime_state_snapshot,
+    );
+    Ok(true)
 }
 
-/// Parses parent-turn usage segments from one task-session delegate metadata payload.
-/// 从一份 task-session 委派元数据载荷解析父会话回合用量分段。
-fn subagent_usage_segments_from_runtime_metadata(
+/// Returns whether an active parent turn should keep child feedback out of display-only rows.
+/// 返回活动父级回合是否应阻止智能体反馈生成独立显示行。
+///
+/// # Parameters
+/// 参数
+/// `state` is the locked service state that owns runtime kernels.
+/// `state` 是持有运行时内核的已加锁服务状态。
+/// `parent_session_id` identifies the parent conversation.
+/// `parent_session_id` 标识父级会话。
+///
+/// # Returns
+/// 返回值
+/// `true` while the parent turn can still receive the feedback through wait_agent or runtime mailbox flow.
+/// 当父级回合仍可通过 wait_agent 或运行时 mailbox 流程接收该反馈时返回 `true`。
+fn parent_active_turn_will_consume_subagent_feedback(
+    state: &ServiceBridgeState,
+    parent_session_id: SessionId,
+) -> bool {
+    webui_session_kernel_has_active_turn(state, parent_session_id)
+        || webui_session_has_active_run(state, parent_session_id)
+}
+
+/// Returns whether wait_agent will display the child feedback inside its own tool result.
+/// 返回 wait_agent 是否会在自身工具结果中展示智能体反馈。
+fn parent_wait_agent_will_display_subagent_feedback(
+    state: &ServiceBridgeState,
+    parent_session_id: SessionId,
+    subagent_state: &SubagentTaskPanelState,
     metadata: &Value,
-) -> Result<Vec<SessionTurnUsageSegment>, String> {
-    let Some(payload) = task_session_payload_from_tool_metadata(metadata) else {
-        return Ok(Vec::new());
-    };
-    let Some(usage_segments) = payload.get("usage_segments") else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value::<Vec<SessionTurnUsageSegment>>(usage_segments.clone())
-        .map_err(|error| format!("invalid task-session usage_segments payload: {error}"))
+) -> bool {
+    state
+        .parent_sessions_waiting_for_subagents
+        .contains(&parent_session_id)
+        || state
+            .session_runtime_kernels
+            .get(&parent_session_id)
+            .is_some_and(SessionRuntimeKernel::has_wait_scopes)
+        || subagent_feedback_execution_id_from_tool_metadata(metadata)
+            .ok()
+            .is_some_and(|execution_id| {
+                webui_subagent_mailbox_input_consumed_for_execution(
+                    state,
+                    parent_session_id,
+                    subagent_state.task_id,
+                    execution_id.as_str(),
+                )
+            })
 }
 
 /// Seeds one child task transcript with its initial prompt when no child transcript exists yet.
@@ -318,98 +462,192 @@ fn build_webui_subagent_task_prompt_message(
 ///
 /// # Returns
 /// 返回值
-/// The child task id when one visible message was appended.
-/// 当成功追加一条可见消息时返回子任务标识。
+/// The child task id when one visible message was appended, `None` for unrelated or duplicate events.
+/// 当成功追加一条可见消息时返回子任务标识；无关事件或重复事件返回 `None`。
 pub(crate) fn append_webui_subagent_send_message_from_event_if_needed(
     workspace_snapshot: &mut WorkspaceSnapshot,
     event: &RuntimeEvent,
-) -> Option<SessionId> {
+) -> Result<Option<SessionId>, String> {
     if event.kind != RuntimeEventKind::ToolFinished {
-        return None;
+        return Ok(None);
     }
-    let metadata = event.metadata.as_ref()?;
-    let payload = metadata
-        .get("host_result")
-        .filter(|host_result| {
-            host_result.get("kind").and_then(Value::as_str) == Some("subagent_message")
-        })
-        .and_then(|host_result| host_result.get("payload"))?;
-    if payload.get("tool").and_then(Value::as_str) != Some("send_message") {
-        return None;
-    }
-    if payload.get("target").and_then(Value::as_str) == Some("root") {
-        return None;
-    }
-    let task_id = payload
-        .get(SUBAGENT_TASK_ID_KEY)
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<SessionId>().ok())?;
-    let message = payload
-        .get("message")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())?;
-    let tool_call_id = subagent_send_message_tool_call_id(event, metadata)?;
-    let message_id = format!("session-{task_id}-subagent-send-message-{tool_call_id}");
-    let duplicate_message_id = message_id.clone();
+    let Some(metadata) = event.metadata.as_ref() else {
+        return Ok(None);
+    };
+    let Some(projection) =
+        subagent_send_message_projection_from_tool_metadata(metadata, &event.title)?
+    else {
+        return Ok(None);
+    };
+    let task_id = projection.task_session_id;
+    let duplicate_message_id = projection.message_id.clone();
     let appended = append_webui_subagent_session_message_if_missing(
         workspace_snapshot,
         task_id,
         |entry| entry.id == duplicate_message_id,
-        || build_webui_subagent_send_message(payload, task_id, message, message_id),
+        || build_webui_subagent_send_message(projection),
     );
     if !appended {
-        return None;
+        return Ok(None);
     }
-    Some(task_id)
+    Ok(Some(task_id))
+}
+
+/// Extracts a terminal child execution consumed by a synchronous `send_message` result.
+/// 提取已由同步 `send_message` 结果消费的终态子执行。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime tool-finished event being projected.
+/// `event` 是正在投影的运行时工具完成事件。
+///
+/// # Returns
+/// 返回值
+/// Child task id plus execution id when the parent tool result already exposed a terminal child result.
+/// 当父级工具结果已经暴露终态子结果时，返回子任务标识与执行标识。
+pub(crate) fn terminal_subagent_send_message_resume_from_event(
+    event: &RuntimeEvent,
+) -> Result<Option<(SessionId, String)>, String> {
+    if event.kind != RuntimeEventKind::ToolFinished {
+        return Ok(None);
+    }
+    let Some(metadata) = event.metadata.as_ref() else {
+        return Ok(None);
+    };
+    let Some(host_result) = metadata.get("host_result").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    if host_result.get("kind").and_then(Value::as_str) != Some("subagent_message") {
+        return Ok(None);
+    }
+    let Some(payload) = host_result
+        .get("payload")
+        .filter(|payload| payload.is_object())
+    else {
+        return Ok(None);
+    };
+    if payload.get("tool").and_then(Value::as_str) != Some(SEND_MESSAGE_TOOL) {
+        return Ok(None);
+    }
+    if payload.get("target").and_then(Value::as_str) == Some("root") {
+        return Ok(None);
+    }
+    let Some(status) = payload
+        .get("resumed_execution_status")
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    if canonical_subagent_mailbox_terminal_status_label(status).is_none() {
+        return Ok(None);
+    }
+    let task_id_text = payload
+        .get(SUBAGENT_TASK_ID_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            String::from("terminal send_message resume payload is missing task_session_id")
+        })?;
+    let task_session_id = task_id_text.parse::<SessionId>().map_err(|error| {
+        format!(
+            "terminal send_message resume payload has invalid task_session_id `{task_id_text}`: {error}"
+        )
+    })?;
+    let execution_id = payload
+        .get("resumed_execution_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            String::from("terminal send_message resume payload is missing resumed_execution_id")
+        })?
+        .to_string();
+    Ok(Some((task_session_id, execution_id)))
+}
+
+/// Extracts child executions already consumed by a synchronous `wait_agent` result.
+/// 提取已由同步 `wait_agent` 结果消费的子执行。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime tool-finished event being projected.
+/// `event` 是正在投影的运行时工具完成事件。
+///
+/// # Returns
+/// 返回值
+/// Child task ids plus execution ids that should not be injected again through the idle mailbox.
+/// 返回不应再通过空闲 mailbox 注入的子任务标识与执行标识。
+pub(crate) fn terminal_subagent_wait_consumed_executions_from_event(
+    event: &RuntimeEvent,
+) -> Result<Vec<(SessionId, String)>, String> {
+    if event.kind != RuntimeEventKind::ToolFinished {
+        return Ok(Vec::new());
+    }
+    let Some(metadata) = event.metadata.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let Some(host_result) = metadata.get("host_result").and_then(Value::as_object) else {
+        return Ok(Vec::new());
+    };
+    if host_result.get("kind").and_then(Value::as_str) != Some("subagent_wait") {
+        return Ok(Vec::new());
+    }
+    let Some(payload) = host_result
+        .get("payload")
+        .filter(|payload| payload.is_object())
+    else {
+        return Ok(Vec::new());
+    };
+    if payload.get("tool").and_then(Value::as_str) != Some(WAIT_AGENT_TOOL) {
+        return Ok(Vec::new());
+    }
+    let Some(agents) = payload.get("agents").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut consumed = Vec::new();
+    for agent in agents {
+        let Some(agent) = agent.as_object() else {
+            continue;
+        };
+        let Some(task_id_text) = agent
+            .get(SUBAGENT_TASK_ID_KEY)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(execution_id) = agent
+            .get("execution_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let task_session_id = task_id_text.parse::<SessionId>().map_err(|error| {
+            format!(
+                "wait_agent consumed payload has invalid task_session_id `{task_id_text}`: {error}"
+            )
+        })?;
+        consumed.push((task_session_id, execution_id.to_string()));
+    }
+    Ok(consumed)
 }
 
 /// Builds one display-only child transcript row from a parent-to-child send_message payload.
 /// 根据父级发往子任务的 send_message 载荷构建一条仅显示的子转录行。
 fn build_webui_subagent_send_message(
-    payload: &Value,
-    task_id: SessionId,
-    message: &str,
-    message_id: String,
+    projection: SubagentSendMessageProjection,
 ) -> SessionMessageEntry {
     let now = current_unix_millis_text();
-    let mut entry = SessionMessageEntry::new(SessionMessageKind::User, "智能体消息", message)
-        .with_runtime_metadata(message_id, now);
+    let mut entry =
+        SessionMessageEntry::new(SessionMessageKind::User, "智能体消息", &projection.message)
+            .with_runtime_metadata(projection.message_id, now);
     entry.record_kind = SessionMessageRecordKind::DisplayNote;
-    entry.metadata = Some(json!({
-        "display_note": true,
-        "kind": "subagent_message",
-        "tool": "send_message",
-        "parent_session_id": payload.get("parent_session_id").cloned(),
-        "target": payload.get("target").cloned(),
-        (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
-        "delivery_mode": payload.get("delivery_mode").cloned(),
-        "queued": payload.get("queued").cloned(),
-        "interrupted": payload.get("interrupted").cloned(),
-    }));
+    entry.metadata = Some(projection.display_metadata);
     entry
-}
-
-/// Resolves the stable tool-call id used to de-duplicate a projected send_message prompt.
-/// 解析用于去重投影 send_message 提示词的稳定工具调用标识。
-fn subagent_send_message_tool_call_id(event: &RuntimeEvent, metadata: &Value) -> Option<String> {
-    metadata
-        .get("tool_call_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| parse_tool_finished_event_title_call_id(&event.title))
-}
-
-/// Parses the standard runtime tool-finished title into a tool-call id.
-/// 将标准运行时工具完成标题解析为工具调用标识。
-fn parse_tool_finished_event_title_call_id(title: &str) -> Option<String> {
-    let mut segments = title.split(" · ");
-    match (segments.next(), segments.next()) {
-        (Some("工具返回"), Some(tool_call_id)) if !tool_call_id.trim().is_empty() => {
-            Some(tool_call_id.trim().to_string())
-        }
-        _ => None,
-    }
 }
 
 /// Appends the canonical stopped notice to a child task transcript when it is missing.
@@ -456,8 +694,13 @@ pub(crate) fn attach_webui_task_session_metadata_to_parent_tool_message(
         parent_session_id,
         payload,
     );
-    let execution_status =
-        task_session_execution_status_from_tool_metadata(metadata).unwrap_or("running");
+    let Some(execution_status) = task_session_execution_status_from_tool_metadata(metadata) else {
+        webui_trace(
+            "subagent_parent_tool_metadata_status_missing",
+            format!("parent={parent_session_id}"),
+        );
+        return;
+    };
     if message_ids.is_empty() {
         let task_id = payload
             .get(SUBAGENT_TASK_ID_KEY)

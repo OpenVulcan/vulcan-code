@@ -3,6 +3,64 @@
 
 use super::*;
 
+/// Requested stop behavior for a WebUI conversation run.
+/// WebUI 会话运行请求的停止行为。
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StopConversationRunMode {
+    /// Ask the caller for confirmation when live child agents are still running.
+    /// 当仍有运行中智能体时要求调用方先确认。
+    AskIfRunningSubagents,
+    /// Stop only the main conversation run and leave child agents running.
+    /// 只停止主会话运行，并保留智能体继续运行。
+    MainOnly,
+    /// Stop the main conversation run and every running child agent.
+    /// 停止主会话运行以及所有运行中的智能体。
+    MainAndSubagents,
+}
+
+impl Default for StopConversationRunMode {
+    fn default() -> Self {
+        Self::AskIfRunningSubagents
+    }
+}
+
+/// RPC response returned by one conversation stop request.
+/// 单次会话停止请求返回的 RPC 响应。
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum StopConversationRunResponse {
+    /// The stop request finished and carries the rebuilt workbench snapshot.
+    /// 停止请求已完成，并携带重建后的工作台快照。
+    Stopped {
+        /// Full workbench snapshot after the stop mutation.
+        /// 停止变更后的完整工作台快照。
+        workbench: Box<WorkbenchSnapshot>,
+    },
+    /// The stop request needs a user decision before mutating runtime state.
+    /// 停止请求需要用户决策后才能修改运行态。
+    NeedsConfirmation {
+        /// Running child agents that make the stop choice ambiguous.
+        /// 导致停止选择存在歧义的运行中智能体列表。
+        running_subagents: Vec<StopConversationRunSubagentSummary>,
+    },
+}
+
+/// User-facing summary for a running child agent during stop confirmation.
+/// 停止确认期间展示给用户的运行中智能体摘要。
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct StopConversationRunSubagentSummary {
+    /// Direct parent conversation id for the child agent task.
+    /// 智能体任务的直接父会话标识。
+    pub(crate) parent_conversation_id: String,
+    /// Stable child task session id.
+    /// 稳定的子任务会话标识。
+    pub(crate) task_id: String,
+    /// User-facing child agent label.
+    /// 面向用户的智能体标签。
+    pub(crate) label: String,
+}
+
 /// Starts prompt-based compaction for the selected WebUI conversation.
 /// 为当前选中的 WebUI 会话启动提示词式上下文压缩。
 pub(crate) async fn service_compact_selected_conversation_context(
@@ -139,7 +197,8 @@ pub(crate) async fn service_compact_selected_conversation_context(
 pub(crate) async fn service_stop_conversation_run(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
+    mode: Option<StopConversationRunMode>,
+) -> Result<StopConversationRunResponse, String> {
     let (
         controller_runtime,
         agent_runtime,
@@ -149,10 +208,27 @@ pub(crate) async fn service_stop_conversation_run(
         logs,
     ) = runtime_parts_from_state(&state)?;
     let selected_session_id = selected_session_id_from_state(&state)?;
+    let mode = mode.unwrap_or_default();
     webui_trace(
         "stop_conversation_requested",
-        format!("session={selected_session_id}"),
+        format!("session={selected_session_id} mode={mode:?}"),
     );
+    let preflight_running_subagent_task_states = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, selected_session_id)
+    };
+    if mode == StopConversationRunMode::AskIfRunningSubagents
+        && !preflight_running_subagent_task_states.is_empty()
+    {
+        return Ok(StopConversationRunResponse::NeedsConfirmation {
+            running_subagents: stop_conversation_running_subagent_summaries(
+                &preflight_running_subagent_task_states,
+            ),
+        });
+    }
+    let stop_running_subagents = mode == StopConversationRunMode::MainAndSubagents;
     let active_task = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -175,7 +251,7 @@ pub(crate) async fn service_stop_conversation_run(
             mark_webui_session_stop_requested_in_workspace(workspace, selected_session_id);
         },
     )?;
-    let running_subagent_task_states = {
+    let running_subagent_task_states = if stop_running_subagents {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -184,11 +260,13 @@ pub(crate) async fn service_stop_conversation_run(
             &workspace_snapshot,
             selected_session_id,
         )
+    } else {
+        Vec::new()
     };
     webui_trace(
         "stop_conversation_state",
         format!(
-            "session={selected_session_id} had_active_kernel_turn={had_active_kernel_turn} had_active_stream_task={had_active_stream_task} running_subagents={}",
+            "session={selected_session_id} had_active_kernel_turn={had_active_kernel_turn} had_active_stream_task={had_active_stream_task} stop_running_subagents={stop_running_subagents} running_subagents={}",
             running_subagent_task_states.len()
         ),
     );
@@ -281,7 +359,62 @@ pub(crate) async fn service_stop_conversation_run(
             }
         });
     }
-    Ok(workbench)
+    Ok(StopConversationRunResponse::Stopped {
+        workbench: Box::new(workbench),
+    })
+}
+
+/// Converts running child-agent states into the confirmation dialog payload.
+/// 将运行中的智能体状态转换为确认弹窗载荷。
+fn stop_conversation_running_subagent_summaries(
+    running_subagent_task_states: &[(SessionId, SubagentTaskPanelState)],
+) -> Vec<StopConversationRunSubagentSummary> {
+    running_subagent_task_states
+        .iter()
+        .map(
+            |(direct_parent_session_id, state)| StopConversationRunSubagentSummary {
+                parent_conversation_id: direct_parent_session_id.to_string(),
+                task_id: state.task_id.to_string(),
+                label: state.subagent_label.clone(),
+            },
+        )
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies stop confirmation summaries preserve backend task identity and labels.
+    /// 验证停止确认摘要会保留后端任务身份与标签。
+    #[test]
+    fn stop_conversation_running_subagent_summaries_preserve_task_identity() {
+        let parent_session_id = SessionId::new_v4();
+        let task_id = SessionId::new_v4();
+        let states = vec![(
+            parent_session_id,
+            SubagentTaskPanelState {
+                task_id,
+                public_task_id: String::from("agent-alpha"),
+                parent_session_id,
+                subagent_label: String::from("agent-alpha"),
+                description: Some(String::from("running task")),
+                run_state: SubagentTaskRunState::Running,
+                result_text: String::new(),
+                conversation_state: None,
+            },
+        )];
+
+        let summaries = stop_conversation_running_subagent_summaries(&states);
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].parent_conversation_id,
+            parent_session_id.to_string()
+        );
+        assert_eq!(summaries[0].task_id, task_id.to_string());
+        assert_eq!(summaries[0].label, "agent-alpha");
+    }
 }
 
 /// Stops one live command session and rebuilds the WebUI workbench snapshot.

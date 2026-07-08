@@ -174,6 +174,70 @@ fn run_user_turn_streaming_reuses_host_preseeded_user_prompt() {
     });
 }
 
+/// Starts a streaming provider turn from a preseeded agent message without adding a user prompt.
+/// 从已预播种的智能体消息启动流式 Provider 回合，不追加用户提示词。
+#[test]
+fn run_seeded_turn_streaming_uses_preseeded_agent_message() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let adapter = MockStreamingProviderAdapter::new(vec![(
+            vec![ProviderTurnDelta::Output {
+                delta: String::from("收到智能体结果。"),
+            }],
+            ProviderTurnResponse {
+                assistant_text: String::from("收到智能体结果。"),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("resp-seeded-1")),
+                provider_message_state: None,
+                tool_calls: Vec::new(),
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        let executor = MockToolExecutor::new();
+        let mut controller =
+            VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default());
+        controller.append_agent_message(AgentMessageAppendRequest {
+            message_type: String::from("FINAL_ANSWER"),
+            task_name: String::from("quick_agent"),
+            sender: String::from("quick_agent"),
+            recipient: String::from("parent"),
+            payload: String::from("abc"),
+            trigger_turn: true,
+            metadata: None,
+        });
+
+        let result = controller
+            .run_seeded_turn_streaming_with_checkpoints_and_interventions(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                |_, _| {},
+                |_| false,
+            )
+            .await
+            .expect("run seeded streaming turn");
+
+        assert_eq!(result.provider_turns_executed, 1);
+        assert_eq!(controller.snapshot().messages.len(), 2);
+        assert_eq!(
+            controller
+                .snapshot()
+                .messages
+                .iter()
+                .filter(|message| matches!(message.payload, ConversationPayload::UserText { .. }))
+                .count(),
+            0
+        );
+        let built_requests = adapter.built_requests();
+        assert_eq!(built_requests.len(), 1);
+        assert!(matches!(
+            &built_requests[0].history[0].payload,
+            ConversationPayload::AgentMessage { payload, .. } if payload == "abc"
+        ));
+    });
+}
+
 /// Stops the host-owned loop with a controller error once the configured provider-turn budget has been exhausted.
 /// 一旦达到已配置的 Provider 回合预算上限，就以控制器错误终止宿主自有循环。
 #[test]

@@ -1849,25 +1849,7 @@ fn policy_snapshot_from_legacy_lists(
     allowed: Vec<String>,
     disabled: Vec<String>,
 ) -> CapabilityPolicySnapshot {
-    let allowed = normalized_string_list(allowed);
-    let disabled = normalized_string_list(disabled);
-    if !allowed.is_empty() {
-        let disabled_set = normalized_string_set(&disabled);
-        return CapabilityPolicySnapshot {
-            mode: CapabilityPolicyMode::AllowOnly,
-            selectors: allowed
-                .into_iter()
-                .filter(|selector| !disabled_set.contains(&normalized_selector_key(selector)))
-                .collect(),
-        };
-    }
-    if !disabled.is_empty() {
-        return CapabilityPolicySnapshot {
-            mode: CapabilityPolicyMode::DenyOnly,
-            selectors: disabled,
-        };
-    }
-    CapabilityPolicySnapshot::default()
+    vulcan_session_core::capability_policy_from_selector_lists(allowed, disabled)
 }
 
 /// Applies a unified tool policy to the legacy exposure lists used by older call sites.
@@ -1876,41 +1858,13 @@ fn apply_tool_policy_to_exposure(
     snapshot: &mut ToolExposureSnapshot,
     policy: CapabilityPolicySnapshot,
 ) {
-    snapshot.policy = normalized_policy_snapshot(policy);
-    match snapshot.policy.mode {
-        CapabilityPolicyMode::All => {
-            snapshot.allowed_tools.clear();
-            snapshot.disabled_tools.clear();
-        }
-        CapabilityPolicyMode::AllowOnly => {
-            snapshot.allowed_tools = snapshot.policy.selectors.clone();
-            snapshot.disabled_tools.clear();
-        }
-        CapabilityPolicyMode::DenyOnly => {
-            snapshot.allowed_tools.clear();
-            snapshot.disabled_tools = snapshot.policy.selectors.clone();
-        }
-    }
+    vulcan_session_core::apply_tool_capability_policy(snapshot, policy);
 }
 
 /// Applies a unified prompt-skill policy to the legacy prompt-skill lists.
 /// 将统一提示词技能策略应用到旧提示词技能列表。
 fn apply_prompt_skill_policy(snapshot: &mut PromptSkillSnapshot, policy: CapabilityPolicySnapshot) {
-    snapshot.policy = normalized_policy_snapshot(policy);
-    match snapshot.policy.mode {
-        CapabilityPolicyMode::All => {
-            snapshot.enabled.clear();
-            snapshot.disabled.clear();
-        }
-        CapabilityPolicyMode::AllowOnly => {
-            snapshot.enabled = snapshot.policy.selectors.clone();
-            snapshot.disabled.clear();
-        }
-        CapabilityPolicyMode::DenyOnly => {
-            snapshot.enabled.clear();
-            snapshot.disabled = snapshot.policy.selectors.clone();
-        }
-    }
+    vulcan_session_core::apply_prompt_skill_capability_policy(snapshot, policy);
 }
 
 /// Normalizes one tool exposure snapshot in place.
@@ -1930,6 +1884,7 @@ fn normalize_tool_exposure(snapshot: &mut ToolExposureSnapshot) {
         let policy = std::mem::take(&mut snapshot.policy);
         apply_tool_policy_to_exposure(snapshot, policy);
     }
+    vulcan_session_core::sanitize_child_agent_tool_exposure(snapshot);
 }
 
 /// Collects legacy generic, LuaSkills, and MCP tool selectors for policy migration.
@@ -2112,32 +2067,6 @@ fn normalized_string_list(values: Vec<String>) -> Vec<String> {
         }
     }
     normalized
-}
-
-/// Normalizes one selector policy snapshot.
-/// 规范化单个选择器策略快照。
-fn normalized_policy_snapshot(mut policy: CapabilityPolicySnapshot) -> CapabilityPolicySnapshot {
-    policy.selectors = normalized_string_list(std::mem::take(&mut policy.selectors));
-    if policy.mode == CapabilityPolicyMode::All {
-        policy.selectors.clear();
-    }
-    policy
-}
-
-/// Builds a normalized lookup set for selector conflict removal.
-/// 构建用于移除选择器冲突的规范化查找集合。
-fn normalized_string_set(values: &[String]) -> std::collections::BTreeSet<String> {
-    values
-        .iter()
-        .map(|value| normalized_selector_key(value))
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
-/// Builds the canonical comparison key for one selector.
-/// 构建单个选择器的规范化比较键。
-fn normalized_selector_key(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
 }
 
 /// Returns a non-empty trimmed owned string.
@@ -3046,10 +2975,10 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Verifies legacy deny-only sidecar maps are not parsed as empty modern policies.
-    /// 验证旧版仅禁用 sidecar 映射不会被解析为空的新版策略。
+    /// Verifies legacy deny-only sidecar maps drop parent-owned child-agent tools.
+    /// 验证旧版仅禁用 sidecar 映射会移除父会话拥有的智能体禁用工具。
     #[test]
-    fn sidecar_legacy_deny_tool_policy_maps_to_deny_only() {
+    fn sidecar_legacy_deny_tool_policy_drops_child_forbidden_tools() {
         let root = std::env::temp_dir().join(format!(
             "vulcan-subagent-sidecar-deny-test-{}-{}",
             std::process::id(),
@@ -3076,10 +3005,11 @@ mod tests {
 
         assert_eq!(
             definition.tool_exposure.policy.mode,
-            CapabilityPolicyMode::DenyOnly
+            CapabilityPolicyMode::All
         );
-        assert_eq!(definition.tool_exposure.disabled_tools, vec!["spawn_agent"]);
+        assert!(definition.tool_exposure.policy.selectors.is_empty());
         assert!(definition.tool_exposure.allowed_tools.is_empty());
+        assert!(definition.tool_exposure.disabled_tools.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3476,6 +3406,56 @@ mod tests {
         assert!(!written_markdown.contains("enabled:"));
         assert!(!written_markdown.contains("remoteUrl:"));
         assert!(!written_markdown.contains("sourceHash:"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies persisted empty allow-only tool policy keeps the no-tool semantics after reload.
+    /// 验证持久化的空仅允许工具策略在重新加载后仍保持无工具语义。
+    #[test]
+    fn write_user_definition_preserves_empty_allow_only_tool_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-empty-allow-tool-policy-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let user_root = root.join("user");
+        let source_file = PathBuf::from("empty-tools.md");
+        let mut definition = parse_subagent_definition_text(
+            &source_file,
+            "---\nname: Empty Tools\nenabled: true\n---\nRun without regular tools.",
+            SubagentDefinitionScope::User,
+        )
+        .expect("definition should parse");
+        definition.tool_exposure.policy = CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::AllowOnly,
+            selectors: Vec::new(),
+        };
+
+        write_user_subagent_definition(&user_root, &definition).expect("definition should write");
+        let sidecar_path =
+            user_subagent_sidecar_path(&user_root, "empty-tools").expect("sidecar path");
+        let sidecar_text =
+            fs::read_to_string(sidecar_path).expect("written sidecar should be readable");
+        let catalog = load_subagent_catalog_from_roots(PathBuf::new(), user_root.clone());
+        let parsed = catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "empty-tools")
+            .expect("written definition should load");
+
+        assert!(sidecar_text.contains("toolPolicy:"));
+        assert!(sidecar_text.contains("mode: allow_only"));
+        assert_eq!(
+            parsed.tool_exposure.policy.mode,
+            CapabilityPolicyMode::AllowOnly
+        );
+        assert!(parsed.tool_exposure.policy.selectors.is_empty());
+        assert!(parsed.tool_exposure.allowed_tools.is_empty());
+        assert!(parsed.tool_exposure.disabled_tools.is_empty());
 
         let _ = fs::remove_dir_all(root);
     }

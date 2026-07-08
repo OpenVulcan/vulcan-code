@@ -1,5 +1,13 @@
 use super::*;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
+use vulcan_core::controller::{
+    AgentMessageAppendRequest, DisplayRecordAppendRequest, VulcanCoreController,
+};
+use vulcan_core::types::{
+    ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
+    ConversationRecord as CoreConversationRecord, TranscriptRecordKind as CoreTranscriptRecordKind,
+    TranscriptRole as CoreTranscriptRole,
+};
 
 /// Delivery mode selected by send_message.
 /// `send_message` 选择的投递模式。
@@ -37,6 +45,32 @@ impl InterAgentDeliveryMode {
             Self::Queue => "queue",
             Self::Interrupt => "interrupt",
         }
+    }
+}
+
+/// Result of immediately resuming a child agent for one delivered message.
+/// 单次消息投递后立即续跑子代理得到的结果。
+#[derive(Debug, Clone)]
+struct InterAgentImmediateResumeResult {
+    /// Concrete child execution id that processed the delivered message.
+    /// 处理本次投递消息的具体子执行标识。
+    execution_id: String,
+    /// Status produced by that resumed child execution.
+    /// 该次子执行产出的状态。
+    execution_status: TaskExecutionStatus,
+    /// Final or status text returned by the resumed child execution.
+    /// 该次子执行返回的最终文本或状态文本。
+    result_text: String,
+}
+
+impl InterAgentImmediateResumeResult {
+    /// Returns whether the resumed execution already reached a terminal status.
+    /// 返回本次续跑执行是否已经到达终态。
+    const fn is_terminal(&self) -> bool {
+        matches!(
+            self.execution_status,
+            TaskExecutionStatus::Completed | TaskExecutionStatus::Stopped
+        )
     }
 }
 
@@ -87,24 +121,29 @@ impl TaskRuntime {
         } else {
             Vec::new()
         };
-        self.enqueue_inter_agent_message(
+        let delivery_id = self.enqueue_inter_agent_message(
             current_session_id,
             target_session_id,
+            target.agent_id.clone(),
             parsed.message.clone(),
         )?;
 
-        if !self.task_has_active_or_starting_run(target_session_id)? {
+        let immediate_resume = if !self.task_has_active_or_starting_run(target_session_id)? {
             self.resume_idle_agent_from_inbox(current_session_id, &target)
-                .await?;
-        }
+                .await?
+        } else {
+            None
+        };
 
         Ok(build_inter_agent_message_tool_result(
             SEND_MESSAGE_TOOL,
             current_session_id,
             &target,
             &parsed.message,
+            &delivery_id,
             parsed.delivery_mode,
             &stopped_task_ids,
+            immediate_resume.as_ref(),
         ))
     }
 
@@ -219,19 +258,26 @@ impl TaskRuntime {
     /// `author_session_id` 是发送方会话标识。
     /// `target_task_id` is the target child task id.
     /// `target_task_id` 是目标子任务标识。
+    /// `target_agent_id` is the caller-facing target child-agent id.
+    /// `target_agent_id` 是调用方面向的目标智能体标识。
     /// `content` is the message body.
     /// `content` 是消息正文。
     fn enqueue_inter_agent_message(
         &self,
         author_session_id: SessionId,
         target_task_id: SessionId,
+        target_agent_id: String,
         content: String,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
+        let created_at_ms = current_unix_millis_u64();
+        let delivery_id = format!("subagent-message-{target_task_id}-{}", Uuid::new_v4());
         let message = QueuedInterAgentMessage {
+            delivery_id: delivery_id.clone(),
             author_session_id,
             target_task_id,
+            target_agent_id,
             content,
-            created_at_ms: current_unix_millis_u64(),
+            created_at_ms,
         };
         self.agent_inboxes
             .write()
@@ -239,7 +285,7 @@ impl TaskRuntime {
             .entry(target_task_id)
             .or_default()
             .push_back(message);
-        Ok(())
+        Ok(delivery_id)
     }
 
     /// Takes every queued message for one child-agent inbox.
@@ -434,11 +480,11 @@ impl TaskRuntime {
     /// `current_session_id` 是调用 `send_message` 的直接父级。
     /// `target` is the known target child-agent entry.
     /// `target` 是已知目标子代理条目。
-    pub(super) async fn resume_idle_agent_from_inbox(
+    async fn resume_idle_agent_from_inbox(
         self: &Arc<Self>,
         current_session_id: SessionId,
         target: &SubagentRegistryEntry,
-    ) -> Result<(), String> {
+    ) -> Result<Option<InterAgentImmediateResumeResult>, String> {
         let backend = self
             .backend_for_session(current_session_id)
             .ok_or_else(|| {
@@ -449,7 +495,7 @@ impl TaskRuntime {
             })?;
         let target_task_id = SessionId::from(target.session_id);
         let messages = self.take_inter_agent_messages(target_task_id)?;
-        let prompt = format_inter_agent_messages(&messages);
+        let prompt = format_inter_agent_messages_for_model(&messages);
         let parsed_args = match parse_task_tool_arguments(json!({
             "task_id": target.agent_id,
             "prompt": prompt,
@@ -476,7 +522,7 @@ impl TaskRuntime {
                     ));
                 }
             };
-        let invocation = match prepare_task_execution_request(
+        let mut invocation = match prepare_task_execution_request(
             self,
             current_session_id,
             resolved_identifier,
@@ -492,6 +538,8 @@ impl TaskRuntime {
                 ));
             }
         };
+        append_inter_agent_agent_messages_to_snapshot(&mut invocation.snapshot, &messages);
+        append_inter_agent_display_records_to_snapshot(&mut invocation.snapshot, &messages);
         let outcome = match backend(invocation.clone()).await {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -516,7 +564,11 @@ impl TaskRuntime {
         } else {
             self.store_task_outcome(current_session_id, &invocation, &outcome)?;
         }
-        Ok(())
+        Ok(Some(InterAgentImmediateResumeResult {
+            execution_id: invocation.execution_id,
+            execution_status: outcome.execution_status,
+            result_text: outcome.final_output_text,
+        }))
     }
 
     /// Resumes a just-settled child agent when queue-mode messages arrived too late for in-turn injection.
@@ -596,18 +648,9 @@ pub(super) fn build_child_agent_prompt_intervention(
         if messages.is_empty() {
             return false;
         }
-        let prompt = format_inter_agent_messages(&messages);
-        if controller.append_interjected_user_turn(&prompt).is_some() {
-            return true;
-        }
-        let restored_error = task_runtime.restore_inter_agent_messages_front_after_failure(
-            task_id,
-            messages,
-            "prompt_intervention",
-            String::from("The child-agent stream could not accept an injected user turn."),
-        );
-        eprintln!("[subagent-agent-control] {restored_error}");
-        false
+        append_inter_agent_agent_messages_to_controller(controller, &messages);
+        append_inter_agent_display_records_to_controller(controller, &messages);
+        true
     })
 }
 
@@ -702,8 +745,8 @@ pub(super) fn is_root_agent_target(target: &str) -> bool {
     matches!(target.trim(), "root" | "/root" | "/")
 }
 
-/// Formats queued inter-agent messages as one replay-safe injected user turn.
-/// 将排队的代理间消息格式化为一个可回放安全的插入用户回合。
+/// Formats queued inter-agent messages as the model text of their typed runtime messages.
+/// 将排队的代理间消息格式化为其类型化运行时消息的模型文本。
 ///
 /// # Parameters
 /// 参数
@@ -712,21 +755,341 @@ pub(super) fn is_root_agent_target(target: &str) -> bool {
 ///
 /// # Returns
 /// 返回值
-/// A single prompt containing every queued message in delivery order.
-/// 按投递顺序包含所有排队消息的单条提示词。
-fn format_inter_agent_messages(messages: &[QueuedInterAgentMessage]) -> String {
-    let mut prompt = String::from("[Inter-agent messages]\n");
-    for (index, message) in messages.iter().enumerate() {
-        prompt.push_str(&format!(
-            "\nMessage {} from {} to {} via send_message at {}:\n{}\n",
-            index + 1,
-            message.author_session_id,
-            message.target_task_id,
-            message.created_at_ms,
-            message.content
-        ));
+/// A single prompt containing every typed agent message in delivery order.
+/// 按投递顺序包含所有类型化智能体消息的单条提示词。
+fn format_inter_agent_messages_for_model(messages: &[QueuedInterAgentMessage]) -> String {
+    messages
+        .iter()
+        .map(inter_agent_message_model_text)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Appends provider-visible typed messages for delivered parent-to-child messages to a live controller.
+/// 将已投递的父到子消息作为 Provider 可见类型化消息追加到实时控制器。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the child-agent core snapshot being updated.
+/// `controller` 持有正在更新的子智能体核心快照。
+/// `messages` are the delivered inter-agent messages.
+/// `messages` 是已投递的智能体间消息。
+fn append_inter_agent_agent_messages_to_controller(
+    controller: &mut VulcanCoreController,
+    messages: &[QueuedInterAgentMessage],
+) {
+    for message in messages {
+        controller.append_agent_message(inter_agent_message_append_request(message));
     }
-    prompt
+}
+
+/// Appends provider-visible typed messages for delivered parent-to-child messages to a stored snapshot.
+/// 将已投递的父到子消息作为 Provider 可见类型化消息追加到已存储快照。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the child-agent core snapshot used for the next run.
+/// `snapshot` 是下一次运行使用的子智能体核心快照。
+/// `messages` are the delivered inter-agent messages.
+/// `messages` 是已投递的智能体间消息。
+fn append_inter_agent_agent_messages_to_snapshot(
+    snapshot: &mut CoreConversationSnapshot,
+    messages: &[QueuedInterAgentMessage],
+) {
+    for message in messages {
+        let message_id = inter_agent_message_id(message);
+        let message_exists = snapshot
+            .messages
+            .iter()
+            .any(|existing| existing.id == message_id);
+        if !message_exists {
+            snapshot.messages.push(CoreConversationMessage {
+                id: message_id,
+                payload: inter_agent_message_payload(message),
+            });
+        }
+        let record_id = inter_agent_agent_record_id(message);
+        if snapshot
+            .records
+            .iter()
+            .any(|existing| existing.id == record_id)
+        {
+            continue;
+        }
+        snapshot.records.push(CoreConversationRecord {
+            id: record_id,
+            role: CoreTranscriptRole::Assistant,
+            record_kind: CoreTranscriptRecordKind::Visible,
+            visible: false,
+            title: String::from("智能体消息"),
+            body: inter_agent_message_model_text(message),
+            metadata: Some(inter_agent_agent_message_metadata(message)),
+            created_at: message.created_at_ms.to_string(),
+        });
+    }
+}
+
+/// Builds a controller append request for one typed parent-to-child message.
+/// 为单条父到子类型化消息构建控制器追加请求。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// A provider-visible agent-message append request.
+/// 一条 Provider 可见智能体消息追加请求。
+fn inter_agent_message_append_request(
+    message: &QueuedInterAgentMessage,
+) -> AgentMessageAppendRequest {
+    AgentMessageAppendRequest {
+        message_type: String::from("MESSAGE"),
+        task_name: message.target_agent_id.clone(),
+        sender: inter_agent_message_sender(message),
+        recipient: message.target_agent_id.clone(),
+        payload: message.content.clone(),
+        trigger_turn: true,
+        metadata: Some(inter_agent_agent_message_metadata(message)),
+    }
+}
+
+/// Builds the canonical payload for one typed parent-to-child message.
+/// 为单条父到子类型化消息构建规范载荷。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// A canonical provider-visible conversation payload.
+/// 一个规范的 Provider 可见会话载荷。
+fn inter_agent_message_payload(message: &QueuedInterAgentMessage) -> CoreConversationPayload {
+    CoreConversationPayload::AgentMessage {
+        message_type: String::from("MESSAGE"),
+        task_name: message.target_agent_id.clone(),
+        sender: inter_agent_message_sender(message),
+        recipient: message.target_agent_id.clone(),
+        payload: message.content.clone(),
+        trigger_turn: true,
+        metadata: Some(inter_agent_agent_message_metadata(message)),
+    }
+}
+
+/// Renders one typed parent-to-child message as provider-compatible text.
+/// 将单条父到子类型化消息渲染为 Provider 兼容文本。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// The model text produced by the shared `AgentMessage` envelope.
+/// 共享 `AgentMessage` 信封产生的模型文本。
+fn inter_agent_message_model_text(message: &QueuedInterAgentMessage) -> String {
+    CoreConversationPayload::render_agent_message_text(
+        "MESSAGE",
+        &message.target_agent_id,
+        &inter_agent_message_sender(message),
+        &message.content,
+    )
+}
+
+/// Returns the logical sender for one parent-to-child message.
+/// 返回单条父到子消息的逻辑发送方。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// A stable parent-scoped sender label.
+/// 稳定的父级作用域发送方标签。
+fn inter_agent_message_sender(message: &QueuedInterAgentMessage) -> String {
+    format!("parent:{}", message.author_session_id)
+}
+
+/// Returns the stable canonical message id for one delivered message.
+/// 返回单条已投递消息的稳定规范消息标识。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// A message id derived from the delivery id.
+/// 基于投递标识派生的消息标识。
+fn inter_agent_message_id(message: &QueuedInterAgentMessage) -> String {
+    format!("agent-message-{}", message.delivery_id)
+}
+
+/// Returns the stable hidden transcript record id for one delivered message.
+/// 返回单条已投递消息的稳定隐藏转录记录标识。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// A transcript record id derived from the delivery id.
+/// 基于投递标识派生的转录记录标识。
+fn inter_agent_agent_record_id(message: &QueuedInterAgentMessage) -> String {
+    format!("agent-record-{}", message.delivery_id)
+}
+
+/// Builds host-only metadata for a typed parent-to-child message.
+/// 为父到子类型化消息构建宿主侧元数据。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// Metadata linking the provider-visible message to the display delivery record.
+/// 将 Provider 可见消息关联到显示投递记录的元数据。
+fn inter_agent_agent_message_metadata(message: &QueuedInterAgentMessage) -> Value {
+    json!({
+        "kind": "subagent_message",
+        "tool": SEND_MESSAGE_TOOL,
+        "delivery_id": message.delivery_id.clone(),
+        "parent_session_id": message.author_session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): message.target_task_id.to_string(),
+        "target": message.target_agent_id.clone(),
+        "created_at_ms": message.created_at_ms,
+    })
+}
+
+/// Appends display-only records for delivered parent-to-child messages to a live controller.
+/// 将已投递的父到子消息作为仅显示记录追加到实时控制器。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the child-agent core snapshot being updated.
+/// `controller` 持有正在更新的子智能体核心快照。
+/// `messages` are the delivered inter-agent messages.
+/// `messages` 是已投递的智能体间消息。
+fn append_inter_agent_display_records_to_controller(
+    controller: &mut VulcanCoreController,
+    messages: &[QueuedInterAgentMessage],
+) {
+    for message in messages {
+        let _ = controller.append_display_record(inter_agent_display_record_request(message));
+    }
+}
+
+/// Appends display-only records for delivered parent-to-child messages to a stored snapshot.
+/// 将已投递的父到子消息作为仅显示记录追加到已存储快照。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the child-agent core snapshot used for the next run.
+/// `snapshot` 是下一次运行使用的子智能体核心快照。
+/// `messages` are the delivered inter-agent messages.
+/// `messages` 是已投递的智能体间消息。
+fn append_inter_agent_display_records_to_snapshot(
+    snapshot: &mut CoreConversationSnapshot,
+    messages: &[QueuedInterAgentMessage],
+) {
+    for message in messages {
+        if snapshot
+            .records
+            .iter()
+            .any(|record| record.id == message.delivery_id)
+        {
+            continue;
+        }
+        snapshot
+            .records
+            .push(inter_agent_display_conversation_record(message));
+    }
+}
+
+/// Builds one controller display-record request for a parent-to-child message.
+/// 为一条父到子消息构建控制器显示记录请求。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// A display-only append request that does not alter provider-visible history.
+/// 不改变 Provider 可见历史的仅显示追加请求。
+fn inter_agent_display_record_request(
+    message: &QueuedInterAgentMessage,
+) -> DisplayRecordAppendRequest {
+    DisplayRecordAppendRequest {
+        record_id: Some(message.delivery_id.clone()),
+        role: CoreTranscriptRole::User,
+        title: String::from("智能体消息"),
+        body: message.content.clone(),
+        metadata: Some(inter_agent_display_record_metadata(message)),
+    }
+}
+
+/// Builds one core conversation record for a parent-to-child message.
+/// 为一条父到子消息构建核心会话记录。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// A projection-only record retained outside provider-visible history.
+/// 保留在 Provider 可见历史之外的仅投影记录。
+fn inter_agent_display_conversation_record(
+    message: &QueuedInterAgentMessage,
+) -> CoreConversationRecord {
+    CoreConversationRecord {
+        id: message.delivery_id.clone(),
+        role: CoreTranscriptRole::User,
+        record_kind: CoreTranscriptRecordKind::ProjectionOnly,
+        visible: true,
+        title: String::from("智能体消息"),
+        body: message.content.clone(),
+        metadata: Some(inter_agent_display_record_metadata(message)),
+        created_at: message.created_at_ms.to_string(),
+    }
+}
+
+/// Builds shared display metadata for a parent-to-child message.
+/// 为一条父到子消息构建共享显示元数据。
+///
+/// # Parameters
+/// 参数
+/// `message` is the delivered inter-agent message.
+/// `message` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// Host-only metadata that links display records with the delivery event.
+/// 将显示记录与投递事件关联起来的宿主侧元数据。
+fn inter_agent_display_record_metadata(message: &QueuedInterAgentMessage) -> Value {
+    json!({
+        "display_note": true,
+        "kind": "subagent_message",
+        "tool": SEND_MESSAGE_TOOL,
+        "delivery_id": message.delivery_id.clone(),
+        "parent_session_id": message.author_session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): message.target_task_id.to_string(),
+        "created_at_ms": message.created_at_ms,
+    })
 }
 
 /// Builds the structured tool result for inter-agent message delivery.
@@ -742,10 +1105,14 @@ fn format_inter_agent_messages(messages: &[QueuedInterAgentMessage]) -> String {
 /// `target` 是解析出的目标子代理条目。
 /// `message` is the delivered message body.
 /// `message` 是已投递消息正文。
+/// `delivery_id` is the stable id shared by runtime delivery and display records.
+/// `delivery_id` 是运行时投递与显示记录共享的稳定标识。
 /// `delivery_mode` records whether this delivery queued or interrupted.
 /// `delivery_mode` 记录本次投递是排队还是插队。
 /// `stopped_task_ids` lists active tasks stopped before interrupt delivery.
 /// `stopped_task_ids` 列出插队投递前停止的活动任务。
+/// `immediate_resume` reports a child turn that was synchronously resumed by this delivery.
+/// `immediate_resume` 描述本次投递同步续跑得到的子回合结果。
 ///
 /// # Returns
 /// 返回值
@@ -756,9 +1123,14 @@ fn build_inter_agent_message_tool_result(
     current_session_id: SessionId,
     target: &SubagentRegistryEntry,
     message: &str,
+    delivery_id: &str,
     delivery_mode: InterAgentDeliveryMode,
     stopped_task_ids: &[SessionId],
+    immediate_resume: Option<&InterAgentImmediateResumeResult>,
 ) -> VulcanToolInvocationResult {
+    let delivery_status = immediate_resume
+        .map(|result| result.execution_status.as_str())
+        .unwrap_or("queued");
     let model_payload = json!({
         "ok": true,
         "target": target.agent_id,
@@ -766,19 +1138,29 @@ fn build_inter_agent_message_tool_result(
         "queued": true,
         "delivery_mode": delivery_mode.as_str(),
         "interrupted": delivery_mode.interrupts_current_task(),
-        "status": target.status,
+        "delivery_status": delivery_status,
+        "message": inter_agent_message_delivery_model_hint(immediate_resume),
     });
+    let model_payload = if let Some(immediate_resume) = immediate_resume {
+        inter_agent_message_tool_result_with_resume_model_payload(model_payload, immediate_resume)
+    } else {
+        model_payload
+    };
     let host_payload = json!({
         "tool": tool_name,
         "parent_session_id": current_session_id.to_string(),
         "target": target.agent_id,
         (SUBAGENT_TASK_ID_KEY): target.session_id.to_string(),
+        "delivery_id": delivery_id,
         "message": message,
         "queued": true,
         "delivery_mode": delivery_mode.as_str(),
         "interrupted": delivery_mode.interrupts_current_task(),
         (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        "status": target.status,
+        "target_status_before_delivery": target.status,
+        "delivery_status": delivery_status,
+        "resumed_execution_id": immediate_resume.map(|result| result.execution_id.as_str()),
+        "resumed_execution_status": immediate_resume.map(|result| result.execution_status.as_str()),
     });
     VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
         VulcanToolHostResult {
@@ -786,6 +1168,49 @@ fn build_inter_agent_message_tool_result(
             payload: host_payload,
         },
     )
+}
+
+/// Builds the model-facing delivery hint for a `send_message` result.
+/// 构建 `send_message` 结果中面向模型的投递提示。
+fn inter_agent_message_delivery_model_hint(
+    immediate_resume: Option<&InterAgentImmediateResumeResult>,
+) -> &'static str {
+    match immediate_resume {
+        Some(result) if result.is_terminal() => {
+            "The child agent processed this message immediately. Use `result`; do not wait for another mailbox turn for this delivery."
+        }
+        Some(_) => {
+            "The child agent accepted this message and is still running. Do not report a final child result from assumptions; wait for child-agent feedback."
+        }
+        None => {
+            "The message was queued for the child agent. Do not report a final child result from assumptions; wait for child-agent feedback."
+        }
+    }
+}
+
+/// Adds immediate child execution result fields to the model-facing payload.
+/// 将立即完成的子执行结果字段加入面向模型的载荷。
+fn inter_agent_message_tool_result_with_resume_model_payload(
+    mut model_payload: Value,
+    immediate_resume: &InterAgentImmediateResumeResult,
+) -> Value {
+    if let Some(object) = model_payload.as_object_mut() {
+        object.insert(
+            String::from("resumed_execution_id"),
+            Value::String(immediate_resume.execution_id.clone()),
+        );
+        object.insert(
+            String::from("execution_status"),
+            Value::String(immediate_resume.execution_status.as_str().to_string()),
+        );
+        if immediate_resume.is_terminal() {
+            object.insert(
+                String::from("result"),
+                Value::String(immediate_resume.result_text.clone()),
+            );
+        }
+    }
+    model_payload
 }
 
 /// Builds the structured tool result for a child-to-root message.

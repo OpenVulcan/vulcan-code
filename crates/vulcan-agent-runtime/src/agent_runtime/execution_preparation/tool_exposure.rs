@@ -161,6 +161,9 @@ pub(crate) fn ai_tool_configuration_for_execution_request(
 /// 按工具族拆分的规范化请求级选择器。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ToolExposureSelectorState {
+    /// Whether global allow-list mode is active even when the selector set is empty.
+    /// 即使选择器集合为空，全局仅允许模式是否仍处于激活状态。
+    global_allow_active: bool,
     /// Global public tool allow selectors.
     /// 全局公开工具允许选择器。
     global_allowed: BTreeSet<String>,
@@ -199,8 +202,10 @@ impl ToolExposureSelectorState {
     pub(crate) fn from_snapshot(snapshot: &ToolExposureSnapshot) -> Self {
         let luaskills_override = lua_selector_override_from_value(&snapshot.luaskills_overrides);
         let mcp_override = mcp_selector_override_from_value(&snapshot.mcp_server_overrides);
-        let (policy_allowed, policy_disabled) = selector_sets_from_policy(snapshot);
+        let (policy_allowed, policy_disabled, global_allow_active) =
+            selector_sets_from_policy(snapshot);
         Self {
+            global_allow_active,
             global_allowed: policy_allowed,
             global_disabled: policy_disabled,
             luaskills_allowed: normalized_tool_selector_set(&luaskills_override.allowed),
@@ -226,6 +231,12 @@ impl ToolExposureSelectorState {
         ai_tool_kind_matches_any_selector(kind, &self.ai_disabled_raw)
     }
 
+    /// Returns whether global allow-list mode is active for this request.
+    /// 返回当前请求是否启用了全局仅允许模式。
+    fn has_global_allow(&self) -> bool {
+        self.global_allow_active
+    }
+
     /// Returns whether LuaSkills-specific allow selectors are active for this request.
     /// 返回当前请求是否启用了 LuaSkills 专属允许选择器。
     fn has_luaskills_allow(&self) -> bool {
@@ -243,22 +254,27 @@ impl ToolExposureSelectorState {
 /// 从统一策略或旧版列表构建全局允许与禁用选择器集合。
 fn selector_sets_from_policy(
     snapshot: &ToolExposureSnapshot,
-) -> (BTreeSet<String>, BTreeSet<String>) {
+) -> (BTreeSet<String>, BTreeSet<String>, bool) {
     if snapshot.policy.mode == CapabilityPolicyMode::All && snapshot.policy.selectors.is_empty() {
+        let allowed = normalized_tool_selector_set(&snapshot.allowed_tools);
+        let allow_active = !allowed.is_empty();
         return (
-            normalized_tool_selector_set(&snapshot.allowed_tools),
+            allowed,
             normalized_tool_selector_set(&snapshot.disabled_tools),
+            allow_active,
         );
     }
     match snapshot.policy.mode {
-        CapabilityPolicyMode::All => (BTreeSet::new(), BTreeSet::new()),
+        CapabilityPolicyMode::All => (BTreeSet::new(), BTreeSet::new(), false),
         CapabilityPolicyMode::AllowOnly => (
             normalized_tool_selector_set(&snapshot.policy.selectors),
             BTreeSet::new(),
+            true,
         ),
         CapabilityPolicyMode::DenyOnly => (
             BTreeSet::new(),
             normalized_tool_selector_set(&snapshot.policy.selectors),
+            false,
         ),
     }
 }
@@ -413,7 +429,7 @@ pub(crate) fn filter_native_tool_ids(
             if tool_selector_matches(&selectors.global_disabled, &[tool_id.as_str()]) {
                 return false;
             }
-            selectors.global_allowed.is_empty()
+            !selectors.has_global_allow()
                 || tool_selector_matches(&selectors.global_allowed, &[tool_id.as_str()])
         })
         .collect()
@@ -433,7 +449,7 @@ pub(crate) fn filter_luaskills_entries(
             {
                 return false;
             }
-            (selectors.global_allowed.is_empty() && selectors.luaskills_allowed.is_empty())
+            (!selectors.has_global_allow() && !selectors.has_luaskills_allow())
                 || luaskills_entry_matches_any(entry, &selectors.global_allowed)
                 || luaskills_entry_matches_any(entry, &selectors.luaskills_allowed)
         })
@@ -454,7 +470,7 @@ pub(crate) fn filter_luaskill_prompt_entries(
             {
                 return false;
             }
-            (selectors.global_allowed.is_empty() && selectors.luaskills_allowed.is_empty())
+            (!selectors.has_global_allow() && !selectors.has_luaskills_allow())
                 || lua_prompt_entry_matches_any(entry, &selectors.global_allowed)
                 || lua_prompt_entry_matches_any(entry, &selectors.luaskills_allowed)
         })
@@ -478,7 +494,7 @@ fn filter_mcp_tool_bindings(
             {
                 return false;
             }
-            let no_allow = selectors.global_allowed.is_empty()
+            let no_allow = !selectors.has_global_allow()
                 && selectors.mcp_tool_allowed.is_empty()
                 && selectors.mcp_server_allowed.is_empty();
             no_allow
@@ -572,7 +588,7 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
     if tool_selector_matches(&selectors.global_disabled, &[id, name, description]) {
         return false;
     }
-    if selectors.global_allowed.is_empty() {
+    if !selectors.has_global_allow() {
         return true;
     }
     if tool_selector_matches(&selectors.global_allowed, &[id, name, description]) {

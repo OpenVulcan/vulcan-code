@@ -200,6 +200,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
                 prompt_entry_id: entry.id.clone(),
                 prompt: &prompt_text,
                 hidden_model_guidance: entry.hidden_model_guidance.as_deref(),
+                provider_visible_agent_messages: Vec::new(),
                 attachments: entry.attachments,
                 append_canonical_user_message: entry.source.persists_canonical_user_message(),
                 append_visible_user_prompt_record: entry

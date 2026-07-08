@@ -724,7 +724,7 @@ pub(crate) fn stop_webui_session_work(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     had_active_kernel_turn: bool,
-    had_running_subagents: bool,
+    stopped_running_subagents: bool,
 ) -> Result<bool, String> {
     let now = current_unix_millis_text();
     let had_pending_precheck = workspace_snapshot
@@ -742,7 +742,7 @@ pub(crate) fn stop_webui_session_work(
         had_pending_precheck || runtime_state.active_precheck_turn_id.is_some();
     let cleared_system_queue = clear_internal_pending_prompt_queue_for_stop(runtime_state);
     if !had_active_kernel_turn
-        && !had_running_subagents
+        && !stopped_running_subagents
         && !had_pending_precheck
         && !cleared_system_queue
     {
@@ -750,10 +750,19 @@ pub(crate) fn stop_webui_session_work(
     }
     runtime_state.active_precheck_turn_id = None;
     runtime_state.updated_at = now.clone();
-    let stop_body = if had_active_kernel_turn {
-        "已按用户请求停止当前 AI 调用、运行中的子代理以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
-    } else {
-        "已按用户请求停止当前会话的子代理与系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
+    let stop_body = match (had_active_kernel_turn, stopped_running_subagents) {
+        (true, true) => {
+            "已按用户请求停止当前 AI 调用、运行中的智能体以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
+        }
+        (true, false) => {
+            "已按用户请求停止当前 AI 调用以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
+        }
+        (false, true) => {
+            "已按用户请求停止当前会话运行中的智能体以及系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
+        }
+        (false, false) => {
+            "已按用户请求停止当前会话系统内部等待任务；尚未真正执行的排队消息已恢复到可再次插入状态。"
+        }
     };
     append_webui_session_message_entry_to_state(
         runtime_state,

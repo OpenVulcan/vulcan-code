@@ -115,14 +115,23 @@ impl TaskRuntime {
         // 工具级跟踪用于区分模型等待耗时和子代理自身执行耗时。
         let trace_started_at = current_unix_millis_u64();
         let timeout_ms = wait_agent_timeout_ms(&args)?.unwrap_or(WAIT_AGENT_DEFAULT_TIMEOUT_MS);
+        let target_selectors = wait_agent_target_selectors(&args)?;
+        let explicit_targets = !target_selectors.is_empty();
+        let wait_target_session_ids =
+            self.wait_agent_target_session_ids(current_session_id, &target_selectors)?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         let parent_thread_id = SessionNodeId::from(current_session_id);
         let mut mailbox_activity_rx = self.subscribe_subagent_mailbox_activity();
         let mut parent_input_activity_rx = self.subscribe_parent_input_activity();
         let mut waiting_logged = false;
+        let mut collected_events = Vec::new();
+        let mut satisfied_target_session_ids = BTreeSet::new();
         task_runtime_trace(
             "subagent_wait_agent_start",
-            format!("parent={current_session_id} timeout_ms={timeout_ms}"),
+            format!(
+                "parent={current_session_id} timeout_ms={timeout_ms} explicit_targets={explicit_targets} target_count={}",
+                wait_target_session_ids.len()
+            ),
         );
         loop {
             if self.take_parent_input_activity_for_parent(parent_thread_id)? {
@@ -136,21 +145,44 @@ impl TaskRuntime {
                 );
                 return Ok(result);
             }
-            if self.has_subagent_events_for_parent(parent_thread_id)? {
-                let result =
-                    build_wait_agent_activity_tool_result(current_session_id, timeout_ms, false);
+            let actionable_events =
+                self.take_matching_subagent_events_for_parent(parent_thread_id, |event| {
+                    wait_agent_mailbox_event_is_actionable(event.kind)
+                        && wait_target_session_ids.contains(&event.child_thread_id)
+                })?;
+            if !actionable_events.is_empty() {
+                for event in actionable_events {
+                    satisfied_target_session_ids.insert(event.child_thread_id);
+                    collected_events.push(event);
+                }
+            }
+            let wait_complete = !collected_events.is_empty()
+                && (!explicit_targets
+                    || wait_target_session_ids.is_subset(&satisfied_target_session_ids));
+            if wait_complete {
+                let result = build_wait_agent_activity_tool_result(
+                    current_session_id,
+                    timeout_ms,
+                    false,
+                    collected_events.as_slice(),
+                );
                 task_runtime_trace(
                     "subagent_wait_agent_return",
                     format!(
-                        "parent={current_session_id} source=queued_mailbox elapsed_ms={}",
+                        "parent={current_session_id} source=queued_mailbox events={} elapsed_ms={}",
+                        collected_events.len(),
                         current_unix_millis_u64().saturating_sub(trace_started_at)
                     ),
                 );
                 return Ok(result);
             }
             if tokio::time::Instant::now() >= deadline {
-                let result =
-                    build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                let result = build_wait_agent_activity_tool_result(
+                    current_session_id,
+                    timeout_ms,
+                    true,
+                    collected_events.as_slice(),
+                );
                 task_runtime_trace(
                     "subagent_wait_agent_timeout",
                     format!(
@@ -174,7 +206,7 @@ impl TaskRuntime {
             tokio::select! {
                 changed = mailbox_activity_rx.changed() => {
                     if changed.is_err() {
-                        let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                        let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true, collected_events.as_slice());
                         task_runtime_trace(
                             "subagent_wait_agent_timeout",
                             format!(
@@ -198,7 +230,7 @@ impl TaskRuntime {
                         return Ok(result);
                     }
                     if changed.is_err() {
-                        let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                        let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true, collected_events.as_slice());
                         task_runtime_trace(
                             "subagent_wait_agent_timeout",
                             format!(
@@ -210,7 +242,7 @@ impl TaskRuntime {
                     }
                 }
                 _ = tokio::time::sleep(remaining) => {
-                    let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true);
+                    let result = build_wait_agent_activity_tool_result(current_session_id, timeout_ms, true, collected_events.as_slice());
                     task_runtime_trace(
                         "subagent_wait_agent_timeout",
                         format!(
@@ -222,6 +254,98 @@ impl TaskRuntime {
                 }
             }
         }
+    }
+
+    /// Resolves wait_agent targets to child session ids owned by the current parent.
+    /// 将 wait_agent 目标解析为当前父级拥有的子会话标识。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the direct parent session that invoked wait_agent.
+    /// `current_session_id` 是调用 wait_agent 的直接父会话。
+    /// `target_selectors` are explicit model-provided agent ids, or empty for live-agent default waiting.
+    /// `target_selectors` 是模型显式提供的智能体标识；为空时表示默认等待运行中的智能体。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Session ids whose mailbox events may satisfy this wait call.
+    /// 可满足本次等待调用的会话标识集合。
+    fn wait_agent_target_session_ids(
+        &self,
+        current_session_id: SessionId,
+        target_selectors: &[String],
+    ) -> Result<BTreeSet<SessionNodeId>, String> {
+        if target_selectors.is_empty() {
+            return self.wait_agent_running_target_session_ids(current_session_id);
+        }
+        self.wait_agent_explicit_target_session_ids(current_session_id, target_selectors)
+    }
+
+    /// Resolves the default wait scope to currently running open child agents.
+    /// 将默认等待范围解析为当前正在运行且未关闭的子智能体。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the direct parent session that invoked wait_agent.
+    /// `current_session_id` 是调用 wait_agent 的直接父会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Running child session ids that may produce the next relevant mailbox event.
+    /// 可能产生下一条相关 mailbox 事件的运行中子会话标识。
+    fn wait_agent_running_target_session_ids(
+        &self,
+        current_session_id: SessionId,
+    ) -> Result<BTreeSet<SessionNodeId>, String> {
+        let parent_session_id = SessionNodeId::from(current_session_id);
+        Ok(self
+            .subagent_registry_snapshot()?
+            .list_for_parent(parent_session_id)
+            .into_iter()
+            .filter(|entry| entry.status.is_running())
+            .map(|entry| entry.session_id)
+            .collect())
+    }
+
+    /// Resolves explicit wait_agent selectors against open child agents.
+    /// 根据未关闭子智能体解析显式 wait_agent 选择器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the direct parent session that invoked wait_agent.
+    /// `current_session_id` 是调用 wait_agent 的直接父会话。
+    /// `target_selectors` are canonical child-agent ids.
+    /// `target_selectors` 是规范化后的子智能体标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact child session ids requested by the model.
+    /// 模型请求的精确子会话标识集合。
+    fn wait_agent_explicit_target_session_ids(
+        &self,
+        current_session_id: SessionId,
+        target_selectors: &[String],
+    ) -> Result<BTreeSet<SessionNodeId>, String> {
+        let parent_session_id = SessionNodeId::from(current_session_id);
+        let registry = self.subagent_registry_snapshot()?;
+        let mut session_ids = BTreeSet::new();
+        for target in target_selectors {
+            let entry = registry.get(target).ok_or_else(|| {
+                format!("Unknown child agent `{target}` for parent session `{current_session_id}`.")
+            })?;
+            if entry.parent_session_id != parent_session_id {
+                return Err(format!(
+                    "Child agent `{target}` does not belong to parent session `{current_session_id}`."
+                ));
+            }
+            if entry.status == SubagentStatus::Archived {
+                return Err(format!(
+                    "Child agent `{target}` is already closed and cannot be waited on."
+                ));
+            }
+            session_ids.insert(entry.session_id);
+        }
+        Ok(session_ids)
     }
 
     /// Lists known child agents for the current direct parent without touching execution state.

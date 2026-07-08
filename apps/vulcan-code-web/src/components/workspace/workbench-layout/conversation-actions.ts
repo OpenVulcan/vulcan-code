@@ -17,6 +17,8 @@ import {
   stopSubagentTask,
   submitConversationPrompt,
   submitUserPromptEdit,
+  type StopConversationRunMode,
+  type StopConversationRunResponse,
 } from "@/service/conversation-actions-service";
 import {
   listWorkbenchModelSecondaryRoutes,
@@ -45,7 +47,12 @@ import type {
 } from "@/types";
 import type { TranslationKey } from "@/i18n-messages";
 import { toast } from "sonner";
-import { webuiClickTrace } from "./types";
+import {
+  webuiClickTrace,
+  type RequestStopConversationRunChoice,
+  type StopConversationRunAgentPromptItem,
+  type StopConversationRunChoice,
+} from "./types";
 
 // WorkbenchConversationActionsOptions groups selected conversation state and async service bridges.
 // WorkbenchConversationActionsOptions 归组选中会话状态与异步服务桥接。
@@ -84,6 +91,9 @@ interface WorkbenchConversationActionsOptions {
   // Latest workbench snapshot for callbacks that should not close over stale state.
   // 供回调读取最新工作台快照，避免闭包过期。
   workbenchStateRef: React.MutableRefObject<WorkbenchSnapshot>;
+  // Asks the user whether running child agents should be stopped together.
+  // 询问用户是否要同时停止运行中的智能体。
+  requestStopConversationRunChoice: RequestStopConversationRunChoice;
   // Monotonic subagent route request sequence.
   // 单调递增的子代理路由请求序号。
   subagentNavigationRequestSeqRef: React.MutableRefObject<number>;
@@ -109,6 +119,7 @@ export function useWorkbenchConversationActions(options: WorkbenchConversationAc
     setSelectedConversationId,
     selectedConversationIdRef,
     workbenchStateRef,
+    requestStopConversationRunChoice,
     subagentNavigationRequestSeqRef,
     inflightSubagentOpenRequestRef,
     subagentSurfaceMessageCacheRef,
@@ -177,16 +188,32 @@ const handleInsertPendingPrompt = React.useCallback(async (entryId: string): Pro
 const handleStopConversationRun = React.useCallback(async (): Promise<boolean> => {
   webuiClickTrace("conversation.stop.invoke");
   try {
-    const snapshot = await stopConversationRun();
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    let response = await stopConversationRun("ask_if_running_subagents");
+    if (!response) {
+      return false;
     }
-    return Boolean(snapshot);
+    if (response.status === "needs_confirmation") {
+      const choice = await requestStopConversationRunChoice(
+        stopConversationRunPromptItems(response),
+      );
+      if (!choice) {
+        return false;
+      }
+      response = await stopConversationRun(stopConversationRunModeFromChoice(choice));
+      if (!response) {
+        return false;
+      }
+    }
+    if (response.status === "stopped") {
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, response.workbench));
+      return true;
+    }
+    return false;
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, []);
+}, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, setWorkbenchState]);
 
 // handleCompactSelectedConversationContext starts manual compaction from slash commands.
 // handleCompactSelectedConversationContext 从斜杠指令启动手动上下文压缩。
@@ -301,7 +328,7 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
     }
     const message = nextError instanceof Error ? nextError.message : String(nextError);
     webuiClickTrace("subagent.open.error", { parentConversationId, taskId, message });
-    if (message.includes("不可恢复") || message.includes("没有找到可打开的子代理任务")) {
+    if (message.includes("不可恢复") || message.includes("没有找到可打开的智能体任务")) {
       return false;
     }
     toast.error(message);
@@ -482,14 +509,13 @@ const handleSubmitUserPromptEdit = React.useCallback(async (request: {
 
 // handleForkConversation creates a persisted copy of the current conversation and opens it.
 // handleForkConversation 创建当前会话的持久化副本并打开。
-const handleForkConversation = React.useCallback(async (conversationId: string, beforeMessageId?: string | null): Promise<boolean> => {
+const handleForkConversation = React.useCallback(async (conversationId: string): Promise<boolean> => {
   const sourceConversation = workbenchStateRef.current.conversations.find((conversation) => conversation.id === conversationId);
   const sourceTitle = sourceConversation?.title.trim() || translate("console.newConversation");
   try {
     const snapshot = await forkConversation({
       conversationId,
       title: `${sourceTitle}${translate("conversation.action.forkTitleSuffix")}`,
-      beforeMessageId: beforeMessageId ?? null,
     });
     if (snapshot) {
       // Validate the service-selected fork before mirroring it into local sidebar state.
@@ -567,6 +593,23 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleSelectWorkbenchReasoningEffort,
     handleSelectWorkbenchThinkingDisplayMode,
   };
+}
+
+// stopConversationRunPromptItems normalizes backend running-agent payloads for the dialog.
+// stopConversationRunPromptItems 将后端运行中智能体载荷归一化给弹窗使用。
+function stopConversationRunPromptItems(
+  response: Extract<StopConversationRunResponse, { status: "needs_confirmation" }>,
+): StopConversationRunAgentPromptItem[] {
+  return response.running_subagents.map((agent) => ({
+    taskId: agent.task_id,
+    label: agent.label || agent.task_id,
+  }));
+}
+
+// stopConversationRunModeFromChoice converts a UI decision into the backend stop mode.
+// stopConversationRunModeFromChoice 将界面决策转换为后端停止模式。
+function stopConversationRunModeFromChoice(choice: StopConversationRunChoice): StopConversationRunMode {
+  return choice === "main_and_subagents" ? "main_and_subagents" : "main_only";
 }
 
 // formatConversationActionTranslation replaces named placeholders in localized workbench action messages.

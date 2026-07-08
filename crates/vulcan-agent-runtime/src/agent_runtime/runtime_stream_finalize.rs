@@ -45,6 +45,8 @@ pub(crate) fn apply_latest_request_snapshot(
             capabilities: &preparation.model_blueprint.capabilities,
             reasoning: &preparation.model_blueprint.reasoning,
             request_snapshot,
+            compaction_policy: preparation.context_compaction_policy,
+            context_budget_override: preparation.context_budget_override,
             observed_usage,
             estimator: token_estimator,
         },
@@ -108,6 +110,7 @@ pub(crate) fn build_failure_execution_report(
     preparation: ExecutionPreparation,
     provider_request_count: usize,
     last_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
+    cumulative_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
     mcp_discovery_rows: Vec<String>,
     mcp_discovery_errors: Vec<String>,
     warnings: Vec<String>,
@@ -120,6 +123,7 @@ pub(crate) fn build_failure_execution_report(
         Some(preparation),
         provider_request_count,
         last_successful_provider_usage,
+        cumulative_successful_provider_usage,
         mcp_discovery_rows,
         mcp_discovery_errors,
         warnings,
@@ -143,6 +147,7 @@ pub(crate) fn build_success_execution_report(
     warnings: Vec<String>,
     controller_events: Vec<CoreControllerEvent>,
     last_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
+    cumulative_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
 ) -> ExecutionRunReport {
     ExecutionRunReport::success(
         session_id,
@@ -156,6 +161,7 @@ pub(crate) fn build_success_execution_report(
         warnings,
         controller_events,
         last_successful_provider_usage,
+        cumulative_successful_provider_usage,
     )
 }
 
@@ -183,6 +189,8 @@ pub(crate) fn build_failure_terminal_events(
     apply_latest_wire_request_json(&mut preparation, stream_state.latest_wire_request_json());
     let last_safe_conversation_state = stream_state.take_final_conversation_state();
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
+    let cumulative_successful_provider_usage =
+        stream_state.take_cumulative_successful_provider_usage();
     stream_state.controller_mut().mark_failed(error.clone());
     events.push(ExecutionStreamEvent::RuntimeEvent {
         session_id,
@@ -194,6 +202,7 @@ pub(crate) fn build_failure_terminal_events(
             preparation,
             stream_state.provider_request_count(),
             last_successful_provider_usage,
+            cumulative_successful_provider_usage,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -230,6 +239,8 @@ pub(crate) fn build_success_terminal_events(
 
     let normalized_output = normalize_assistant_output(stream_state.take_assistant_output());
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
+    let cumulative_successful_provider_usage =
+        stream_state.take_cumulative_successful_provider_usage();
     events.push(ExecutionStreamEvent::RuntimeEvent {
         session_id,
         event: build_output_completed_event(&normalized_output),
@@ -247,6 +258,7 @@ pub(crate) fn build_success_terminal_events(
             warnings,
             stream_state.controller().events().to_vec(),
             last_successful_provider_usage,
+            cumulative_successful_provider_usage,
         ),
     ));
     events
@@ -283,7 +295,8 @@ mod tests {
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
             agent_kind: String::from("内置"),
-            agent_system_prompt_override: None,
+            agent_prompt_snapshot: None,
+            subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
@@ -327,6 +340,8 @@ mod tests {
             provider_request_snapshot_json: None,
             provider_wire_request_json: None,
             context_budget: None,
+            context_compaction_policy: None,
+            context_budget_override: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,

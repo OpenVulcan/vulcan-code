@@ -153,7 +153,7 @@ pub(super) fn build_wait_agent_tool_candidate(
             id: String::from(WAIT_AGENT_TOOL),
             name: String::from(WAIT_AGENT_TOOL),
             description: String::from(
-                "Wait for a mailbox update from any live agent, including queued messages and final-status notifications. The wait also ends early when new user input is steered into the active turn. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, or a timeout summary if no activity arrives before the deadline.",
+                "Wait for one or more child-agent results or messages. Use target/targets when the surrounding task expects specific agents; omit them to wait for currently running open child agents only. The wait also ends early when interrupting user input is steered into the active turn. Returns the claimed child-agent feedback, an interruption summary, or a timeout summary.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -354,6 +354,15 @@ pub(super) fn wait_agent_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "target": {
+                "type": "string",
+                "description": "Optional child-agent task name or agent id to wait for."
+            },
+            "targets": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Optional child-agent task names or agent ids to wait for. The wait completes after each requested target has produced a message or terminal result."
+            },
             "timeout_ms": {
                 "type": "integer",
                 "minimum": WAIT_AGENT_MIN_TIMEOUT_MS,
@@ -634,7 +643,7 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
         ));
     }
     let model = string_field(&map, &["model"]);
-    let (agent_mode, fork_turns) = spawn_agent_internal_mode_and_fork(&creation_mode);
+    let agent_mode = spawn_agent_internal_mode(&creation_mode);
     let mut task_args = serde_json::Map::new();
     task_args.insert(String::from("prompt"), Value::String(prompt));
     task_args.insert(String::from("task_id"), Value::String(task_id.clone()));
@@ -656,12 +665,11 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
             }),
         );
     }
-    task_args.insert(String::from("fork_turns"), Value::String(fork_turns));
     Ok(Value::Object(task_args))
 }
 
-/// Resolves the internal TaskSession mode and fork selector for one creation mode.
-/// 为单个创建模式解析内部 TaskSession 模式与上下文派生选择器。
+/// Resolves the internal TaskSession mode for one creation mode.
+/// 为单个创建模式解析内部 TaskSession 模式。
 ///
 /// # Parameters
 /// 参数
@@ -670,14 +678,14 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
 ///
 /// # Returns
 /// 返回值
-/// A pair of internal mode and fork selector strings.
-/// 内部模式与派生选择器字符串对。
-pub(super) fn spawn_agent_internal_mode_and_fork(creation_mode: &str) -> (String, String) {
+/// The internal TaskSession mode string.
+/// 内部 TaskSession 模式字符串。
+pub(super) fn spawn_agent_internal_mode(creation_mode: &str) -> String {
     match creation_mode {
-        "mirror" => (String::from(SUBAGENT_MODE_MIRROR), String::from("all")),
-        "agent" => (String::from(SUBAGENT_MODE_EXPERT), String::from("none")),
-        "custom" | "default" => (String::from(SUBAGENT_MODE_DEFAULT), String::from("none")),
-        _ => (String::from(SUBAGENT_MODE_DEFAULT), String::from("none")),
+        "mirror" => String::from(SUBAGENT_MODE_MIRROR),
+        "agent" => String::from(SUBAGENT_MODE_EXPERT),
+        "custom" | "default" => String::from(SUBAGENT_MODE_DEFAULT),
+        _ => String::from(SUBAGENT_MODE_DEFAULT),
     }
 }
 
@@ -774,15 +782,15 @@ pub(super) fn subagent_tool_timeout_ms(args: &Value) -> Option<u64> {
     integer_field(map, &["timeout_ms"])
 }
 
-/// Parses wait_agent arguments using the Vulcan timeout-only contract.
-/// 按 Vulcan 仅支持 timeout 的契约解析 wait_agent 参数。
+/// Parses wait_agent arguments using the Vulcan target-aware wait contract.
+/// 按 Vulcan 支持目标选择的等待契约解析 wait_agent 参数。
 pub(super) fn wait_agent_timeout_ms(args: &Value) -> Result<Option<u64>, String> {
     let Some(object) = args.as_object() else {
         return Err(String::from("wait_agent arguments must be a JSON object."));
     };
     let unsupported_keys = object
         .keys()
-        .filter(|key| key.as_str() != "timeout_ms")
+        .filter(|key| !matches!(key.as_str(), "timeout_ms" | "target" | "targets"))
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
@@ -805,6 +813,38 @@ pub(super) fn wait_agent_timeout_ms(args: &Value) -> Result<Option<u64>, String>
         }
     }
     Ok(timeout_ms)
+}
+
+/// Parses explicit wait_agent target selectors while retaining the canonical task text.
+/// 解析 wait_agent 显式目标选择器，同时保留规范化任务文本。
+///
+/// # Parameters
+/// 参数
+/// `args` is the JSON object passed to wait_agent.
+/// `args` 是传给 wait_agent 的 JSON 对象。
+///
+/// # Returns
+/// 返回值
+/// A sorted unique selector list, or an empty list for live-agent default waiting.
+/// 返回排序去重后的选择器列表；空列表表示默认等待运行中的智能体。
+pub(super) fn wait_agent_target_selectors(args: &Value) -> Result<Vec<String>, String> {
+    let Some(object) = args.as_object() else {
+        return Err(String::from("wait_agent arguments must be a JSON object."));
+    };
+    let mut targets = Vec::new();
+    if let Some(value) = object.get("target") {
+        append_string_values(&mut targets, value);
+    }
+    if let Some(value) = object.get("targets") {
+        append_string_values(&mut targets, value);
+    }
+    let mut normalized_targets = targets
+        .iter()
+        .map(|target| normalize_public_task_identifier(target))
+        .collect::<Result<Vec<_>, _>>()?;
+    normalized_targets.sort();
+    normalized_targets.dedup();
+    Ok(normalized_targets)
 }
 
 /// Builds one compact JSON status payload for a native subagent registry entry.
@@ -1056,24 +1096,49 @@ pub(super) fn build_subagent_registry_status_tool_result(
 ///
 /// # Returns
 /// 返回值
-/// A tool result that deliberately omits child-agent output text.
-/// 一个刻意不包含子代理输出正文的工具结果。
+/// A tool result that carries the child-agent feedback claimed by this wait call.
+/// 一个携带本次等待调用已认领子代理反馈的工具结果。
 pub(super) fn build_wait_agent_activity_tool_result(
     current_session_id: SessionId,
     timeout_ms: u64,
     timed_out: bool,
+    events: &[SubagentMailboxEvent],
 ) -> VulcanToolInvocationResult {
-    let activity = if timed_out {
-        WaitAgentActivityResult::timed_out()
+    let (message, activity_status) = if timed_out {
+        (
+            WaitAgentActivityResult::timed_out().message,
+            "timeout".to_string(),
+        )
     } else {
-        WaitAgentActivityResult::completed()
+        wait_agent_activity_message(events)
     };
+    let event_summaries = wait_agent_event_summaries(events);
+    let terminal_event_count = events
+        .iter()
+        .filter(|event| wait_agent_mailbox_event_is_terminal(event.kind))
+        .count();
+    let message_event_count = events
+        .iter()
+        .filter(|event| event.kind == SubagentMailboxEventKind::Message)
+        .count();
+    let status_event_count = events
+        .iter()
+        .filter(|event| event.kind == SubagentMailboxEventKind::Started)
+        .count();
+    let feedback_text = wait_agent_feedback_text(events);
     let payload = json!({
         "tool": WAIT_AGENT_TOOL,
         "parent_session_id": current_session_id.to_string(),
-        "message": activity.message,
-        "timed_out": activity.timed_out,
+        "message": message,
+        "activity_status": activity_status,
+        "result": feedback_text,
+        "timed_out": timed_out,
         "timeout_ms": timeout_ms,
+        "pending_event_count": events.len(),
+        "terminal_event_count": terminal_event_count,
+        "message_event_count": message_event_count,
+        "status_event_count": status_event_count,
+        "agents": event_summaries,
     });
     VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
         VulcanToolHostResult {
@@ -1081,6 +1146,245 @@ pub(super) fn build_wait_agent_activity_tool_result(
             payload,
         },
     )
+}
+
+/// Builds the model-visible wait summary for claimed child-agent feedback.
+/// 构建已认领子代理反馈的模型可见等待摘要。
+///
+/// # Parameters
+/// 参数
+/// `events` are the internal mailbox events that woke this wait call.
+/// `events` 是唤醒本次等待调用的内部 mailbox 事件。
+///
+/// # Returns
+/// 返回值
+/// A human-readable message and a stable machine-readable status label.
+/// 返回人类可读消息与稳定机器可读状态标签。
+fn wait_agent_activity_message(events: &[SubagentMailboxEvent]) -> (String, String) {
+    if events
+        .iter()
+        .any(|event| wait_agent_mailbox_event_is_terminal(event.kind))
+    {
+        return (
+            String::from("Subagent terminal result received."),
+            String::from("terminal_update"),
+        );
+    }
+    if events
+        .iter()
+        .any(|event| event.kind == SubagentMailboxEventKind::Message)
+    {
+        return (
+            String::from("Subagent message received."),
+            String::from("message_update"),
+        );
+    }
+    if events
+        .iter()
+        .any(|event| event.kind == SubagentMailboxEventKind::Started)
+    {
+        return (
+            String::from("Subagent status changed."),
+            String::from("status_update"),
+        );
+    }
+    (
+        WaitAgentActivityResult::completed().message,
+        String::from("mailbox_activity"),
+    )
+}
+
+/// Converts internal mailbox events into compact diagnostics for wait_agent.
+/// 将内部 mailbox 事件转换为 `wait_agent` 使用的紧凑诊断信息。
+///
+/// # Parameters
+/// 参数
+/// `events` are the mailbox events claimed by wait_agent.
+/// `events` 是被 `wait_agent` 认领的 mailbox 事件。
+///
+/// # Returns
+/// 返回值
+/// JSON summaries that include exact child execution ids and feedback text when present.
+/// 返回包含精确子执行标识及可用反馈文本的 JSON 摘要。
+fn wait_agent_event_summaries(events: &[SubagentMailboxEvent]) -> Vec<Value> {
+    events
+        .iter()
+        .map(|event| {
+            let payload = event.payload.as_object();
+            let public_id = payload
+                .and_then(|payload| payload.get("public_id"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let status = payload
+                .and_then(|payload| payload.get("status"))
+                .or_else(|| payload.and_then(|payload| payload.get("task_status")))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let display_title = payload
+                .and_then(|payload| payload.get("display_title"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let execution_id = wait_agent_payload_text(&event.payload, &["execution_id"]);
+            let result =
+                wait_agent_payload_text(&event.payload, &["result_text", "result", "message"]);
+            let error = wait_agent_payload_text(&event.payload, &["error_text", "error"]);
+            json!({
+                "agent_id": public_id.clone().unwrap_or_else(|| event.child_thread_id.to_string()),
+                "subagent_task_id": event.child_thread_id.to_string(),
+                "execution_id": execution_id,
+                "display_title": display_title,
+                "kind": wait_agent_mailbox_event_kind_label(event.kind),
+                "status": status,
+                "result": result,
+                "error": error,
+                "terminal": wait_agent_mailbox_event_is_terminal(event.kind),
+                "result_available": wait_agent_event_has_result_payload(&event.payload),
+            })
+        })
+        .collect()
+}
+
+/// Builds a plain text feedback block from claimed wait_agent events.
+/// 从已认领的 wait_agent 事件构建纯文本反馈块。
+///
+/// # Parameters
+/// 参数
+/// `events` are the mailbox events consumed by wait_agent.
+/// `events` 是 `wait_agent` 消费的 mailbox 事件。
+///
+/// # Returns
+/// 返回值
+/// A joined feedback string, or `null` when no feedback text exists.
+/// 返回合并后的反馈文本；没有反馈文本时返回 `null`。
+fn wait_agent_feedback_text(events: &[SubagentMailboxEvent]) -> Value {
+    let lines = events
+        .iter()
+        .filter_map(|event| {
+            let feedback =
+                wait_agent_payload_text(&event.payload, &["result_text", "result", "message"])
+                    .or_else(|| {
+                        wait_agent_payload_text(&event.payload, &["error_text", "error"])
+                    })?;
+            let name = wait_agent_payload_text(&event.payload, &["display_title"])
+                .or_else(|| wait_agent_payload_text(&event.payload, &["public_id"]))
+                .unwrap_or_else(|| event.child_thread_id.to_string());
+            Some(format!(
+                "{name} [{}]: {feedback}",
+                wait_agent_mailbox_event_kind_label(event.kind)
+            ))
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        Value::Null
+    } else {
+        Value::String(lines.join("\n"))
+    }
+}
+
+/// Reads a non-empty string field from one wait_agent event payload.
+/// 从单个 wait_agent 事件载荷读取非空字符串字段。
+///
+/// # Parameters
+/// 参数
+/// `payload` is the structured mailbox event payload.
+/// `payload` 是结构化 mailbox 事件载荷。
+/// `keys` are the ordered field names to inspect.
+/// `keys` 是按顺序检查的字段名。
+///
+/// # Returns
+/// 返回值
+/// The first non-empty text value, if present.
+/// 返回首个非空文本值。
+fn wait_agent_payload_text(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| payload.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Returns whether a mailbox event carries terminal child-agent state.
+/// 返回 mailbox 事件是否携带终态子代理状态。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the mailbox event kind.
+/// `kind` 是 mailbox 事件类型。
+///
+/// # Returns
+/// 返回值
+/// `true` for completed, failed, or stopped events.
+/// 对完成、失败或停止事件返回 `true`。
+pub(super) fn wait_agent_mailbox_event_is_terminal(kind: SubagentMailboxEventKind) -> bool {
+    matches!(
+        kind,
+        SubagentMailboxEventKind::Completed
+            | SubagentMailboxEventKind::Failed
+            | SubagentMailboxEventKind::Stopped
+    )
+}
+
+/// Returns whether a mailbox event should satisfy wait_agent.
+/// 返回 mailbox 事件是否应满足 wait_agent 等待。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the mailbox event kind.
+/// `kind` 是 mailbox 事件类型。
+///
+/// # Returns
+/// 返回值
+/// `true` for child messages and terminal child-agent results.
+/// 对智能体消息与终态智能体结果返回 `true`。
+pub(super) fn wait_agent_mailbox_event_is_actionable(kind: SubagentMailboxEventKind) -> bool {
+    kind == SubagentMailboxEventKind::Message || wait_agent_mailbox_event_is_terminal(kind)
+}
+
+/// Returns the stable JSON label for one mailbox event kind.
+/// 返回单个 mailbox 事件类型的稳定 JSON 标签。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the mailbox event kind.
+/// `kind` 是 mailbox 事件类型。
+///
+/// # Returns
+/// 返回值
+/// A snake_case label matching the serialized event contract.
+/// 返回与序列化事件契约一致的 snake_case 标签。
+fn wait_agent_mailbox_event_kind_label(kind: SubagentMailboxEventKind) -> &'static str {
+    match kind {
+        SubagentMailboxEventKind::Started => "started",
+        SubagentMailboxEventKind::Message => "message",
+        SubagentMailboxEventKind::Completed => "completed",
+        SubagentMailboxEventKind::Failed => "failed",
+        SubagentMailboxEventKind::Stopped => "stopped",
+    }
+}
+
+/// Returns whether an event payload contains a non-empty result-like field.
+/// 返回事件载荷是否包含非空结果类字段。
+///
+/// # Parameters
+/// 参数
+/// `payload` is the structured mailbox event payload.
+/// `payload` 是结构化 mailbox 事件载荷。
+///
+/// # Returns
+/// 返回值
+/// `true` when a visible result, error, or message payload exists.
+/// 存在可见结果、错误或消息载荷时返回 `true`。
+fn wait_agent_event_has_result_payload(payload: &Value) -> bool {
+    ["result_text", "result", "error_text", "error", "message"]
+        .iter()
+        .any(|key| {
+            payload.get(key).is_some_and(|value| {
+                value
+                    .as_str()
+                    .map(|text| !text.trim().is_empty())
+                    .unwrap_or(!value.is_null())
+            })
+        })
 }
 
 /// Builds a model-visible user-steer interruption result for `wait_agent`.

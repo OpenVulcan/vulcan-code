@@ -411,10 +411,15 @@ export function TurnStatsBlock(props: {
   // block 包含紧凑轮次统计载荷。
   block: ConversationDisplayBlock;
 }) {
+  const turnKind = metadataString(props.block.rawMetadata, [
+    "turn_stats.turn_kind",
+    "turnStats.turnKind",
+  ]);
+  const subagentStats = turnKind?.trim().toLowerCase() === "subagent_feedback";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className={`turn-stats-row ${props.block.status ?? "completed"}`}>
+        <div className={cn("turn-stats-row", props.block.status ?? "completed", subagentStats && "subagent")}>
           <span aria-hidden="true">{turnStatsIcon(props.block.status)}</span>
           <strong>{props.block.summary || props.block.title}</strong>
         </div>

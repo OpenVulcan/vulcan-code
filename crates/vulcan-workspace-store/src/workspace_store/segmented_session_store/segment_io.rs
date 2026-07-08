@@ -62,17 +62,6 @@ pub(in crate::workspace_store) fn read_segment_event_lines_tolerant(
     Ok(lines)
 }
 
-/// Repairs malformed segmented JSONL files while holding the shared append lock.
-/// 在持有共享追加锁时修复格式损坏的分段 JSONL 文件。
-pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed(
-    session_dir: &Path,
-) -> Result<bool, String> {
-    let _guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
-    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)
-}
-
 /// Repairs malformed segmented JSONL files when the caller already owns the append lock.
 /// 当调用方已经持有追加锁时修复格式损坏的分段 JSONL 文件。
 pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed_locked(

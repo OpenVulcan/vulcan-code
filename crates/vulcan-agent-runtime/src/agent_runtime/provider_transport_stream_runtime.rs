@@ -8,6 +8,7 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
     PreparedProviderTransportEntryInputs, PreparedProviderTransportRuntimeInputs,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStartMode;
 use crate::agent_runtime::provider_transport_request_budget::{
     BudgetCheckedStreamingAdapter, ProviderRequestBudgetGuard,
 };
@@ -60,6 +61,7 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     controller_config: CoreControllerConfig,
     core_snapshot: CoreConversationSnapshot,
     prompt: String,
+    turn_start_mode: ProviderTransportTurnStartMode,
     provider_factory: F,
     runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
     provider_label: String,
@@ -125,26 +127,48 @@ where
                 let attempt_result = {
                     let checkpoint_sender = attempt_sender.clone();
                     let prompt_intervention = prompt_intervention.clone();
-                    let run_future = controller.run_user_turn_streaming_with_checkpoints_and_interventions(
-                        &provider_adapter,
-                        &tool_executor,
-                        &tool_policy,
-                        controller_prompt.clone(),
-                        move |snapshot, usage| {
-                            let _ = checkpoint_sender.send(Ok(
-                                ProviderStreamDelta::FinalConversationState(
-                                    core_snapshot_to_session_conversation_state(snapshot),
-                                    usage.cloned(),
-                                ),
-                            ));
-                        },
-                        move |controller| {
-                            prompt_intervention
-                                .as_ref()
-                                .map(|intervention| intervention(session_id, controller))
-                                .unwrap_or(false)
-                        },
-                    );
+                    let checkpoint = move |
+                        snapshot: &CoreConversationSnapshot,
+                        usage: Option<&vulcan_core::types::ProviderUsageSnapshot>,
+                    | {
+                        let _ = checkpoint_sender.send(Ok(
+                            ProviderStreamDelta::FinalConversationState(
+                                core_snapshot_to_session_conversation_state(snapshot),
+                                usage.cloned(),
+                            ),
+                        ));
+                    };
+                    let intervention = move |controller: &mut VulcanCoreController| {
+                        prompt_intervention
+                            .as_ref()
+                            .map(|intervention| intervention(session_id, controller))
+                            .unwrap_or(false)
+                    };
+                    let run_future = async {
+                        match turn_start_mode {
+                            ProviderTransportTurnStartMode::UserPrompt => {
+                                controller.run_user_turn_streaming_with_checkpoints_and_interventions(
+                                    &provider_adapter,
+                                    &tool_executor,
+                                    &tool_policy,
+                                    controller_prompt.clone(),
+                                    checkpoint,
+                                    intervention,
+                                )
+                                .await
+                            }
+                            ProviderTransportTurnStartMode::SeededProviderInput => {
+                                controller.run_seeded_turn_streaming_with_checkpoints_and_interventions(
+                                    &provider_adapter,
+                                    &tool_executor,
+                                    &tool_policy,
+                                    checkpoint,
+                                    intervention,
+                                )
+                                .await
+                            }
+                        }
+                    };
                     tokio::pin!(run_future);
                     loop {
                         tokio::select! {
@@ -280,6 +304,7 @@ where
                 provider_id,
                 model_id,
                 prompt,
+                turn_start_mode,
                 request_headers,
                 controller_config,
             },
@@ -311,6 +336,7 @@ where
         controller_config,
         core_snapshot,
         prompt,
+        turn_start_mode,
         move |live_sender| provider_factory(live_sender, adapter_inputs.clone()),
         runtime_bridge,
         provider_label,

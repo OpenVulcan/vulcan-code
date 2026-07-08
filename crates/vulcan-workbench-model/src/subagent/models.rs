@@ -1,8 +1,8 @@
 use super::*;
 
-/// Canonical user-facing stop summary reused by subagent cards, panels, and WebUI projections.
-/// 供子代理卡片、面板与 WebUI 投影共同复用的规范用户可见停止摘要。
-pub const SUBAGENT_TASK_STOPPED_SUMMARY_TEXT: &str = "子代理已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。";
+/// Canonical user-facing stop summary reused by agent cards, panels, and WebUI projections.
+/// 供智能体卡片、面板与 WebUI 投影共同复用的规范用户可见停止摘要。
+pub const SUBAGENT_TASK_STOPPED_SUMMARY_TEXT: &str = "智能体已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。";
 
 /// Lifecycle states used by one cached subagent task panel.
 /// 单个已缓存子代理任务面板使用的生命周期状态。
@@ -28,6 +28,17 @@ impl SubagentTaskRunState {
     /// 返回当前面板状态是否仍表示一个处于活动运行中的子代理。
     pub fn is_running(self) -> bool {
         matches!(self, Self::Running)
+    }
+
+    /// Returns the stable metadata key used by display and persistence records.
+    /// 返回显示与持久化记录使用的稳定元数据键。
+    pub const fn metadata_key(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+        }
     }
 }
 

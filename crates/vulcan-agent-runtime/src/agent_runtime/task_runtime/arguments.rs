@@ -13,11 +13,6 @@ pub(super) fn parse_task_tool_arguments(args: Value) -> Result<TaskToolInvocatio
             "agent_mode `expert` requires subagent_profile_id.",
         ));
     }
-    if parsed.agent_mode.as_deref() == Some(SUBAGENT_MODE_EXPERT)
-        && parsed.fork_turns.as_deref() != Some("none")
-    {
-        parsed.fork_turns = Some(String::from("none"));
-    }
     Ok(parsed)
 }
 
@@ -719,39 +714,7 @@ fn capability_policy_from_legacy_lists(
     allowed: Vec<String>,
     disabled: Vec<String>,
 ) -> CapabilityPolicySnapshot {
-    if !allowed.is_empty() {
-        let disabled_set = normalized_selector_set(&disabled);
-        return CapabilityPolicySnapshot {
-            mode: CapabilityPolicyMode::AllowOnly,
-            selectors: allowed
-                .into_iter()
-                .filter(|selector| !disabled_set.contains(&normalized_selector_key(selector)))
-                .collect(),
-        };
-    }
-    if !disabled.is_empty() {
-        return CapabilityPolicySnapshot {
-            mode: CapabilityPolicyMode::DenyOnly,
-            selectors: disabled,
-        };
-    }
-    CapabilityPolicySnapshot::default()
-}
-
-/// Builds normalized selector lookup keys.
-/// 构建规范化选择器查找键集合。
-fn normalized_selector_set(values: &[String]) -> BTreeSet<String> {
-    values
-        .iter()
-        .map(|value| normalized_selector_key(value))
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
-/// Builds a normalized comparison key for one selector.
-/// 为单个选择器构建规范化比较键。
-fn normalized_selector_key(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+    vulcan_session_core::capability_policy_from_selector_lists(allowed, disabled)
 }
 
 /// Merges an incoming resume invocation without clearing stored explicit task configuration.
@@ -851,49 +814,6 @@ pub(super) fn normalize_subagent_creation_mode(value: Option<&str>) -> Result<St
             "creation_mode must be `default`, `mirror`, `agent`, or `custom`; received `{other}`."
         )),
     }
-}
-
-/// Resolves the effective internal fork selector for a subagent run.
-/// 解析子代理运行使用的内部上下文派生选择器。
-pub(super) fn effective_spawn_agent_fork_turns(
-    agent_mode: Option<&str>,
-    agent_id: Option<&str>,
-    fork_turns: Option<&str>,
-) -> Result<String, String> {
-    if agent_mode == Some(SUBAGENT_MODE_MIRROR) {
-        return Ok(String::from("all"));
-    }
-    if agent_mode == Some(SUBAGENT_MODE_EXPERT)
-        || agent_id.is_some_and(|value| !value.trim().is_empty())
-    {
-        return Ok(String::from("none"));
-    }
-    Ok(normalize_spawn_agent_fork_turns(fork_turns)?.unwrap_or_else(|| String::from("none")))
-}
-
-/// Normalizes an internal fork selector before it reaches execution.
-/// 在进入执行层前规范化内部上下文派生选择器。
-pub(super) fn normalize_spawn_agent_fork_turns(
-    fork_turns: Option<&str>,
-) -> Result<Option<String>, String> {
-    let Some(fork_turns) = fork_turns.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    if fork_turns.eq_ignore_ascii_case("none") {
-        return Ok(Some(String::from("none")));
-    }
-    if fork_turns.eq_ignore_ascii_case("all") {
-        return Ok(Some(String::from("all")));
-    }
-    let turn_count = fork_turns.parse::<usize>().map_err(|_| {
-        String::from("internal fork_turns must be `none`, `all`, or a positive integer string")
-    })?;
-    if turn_count == 0 {
-        return Err(String::from(
-            "internal fork_turns must be `none`, `all`, or a positive integer string",
-        ));
-    }
-    Ok(Some(turn_count.to_string()))
 }
 
 /// Builds one compact prompt preview that can serve as a last-resort task title fallback.

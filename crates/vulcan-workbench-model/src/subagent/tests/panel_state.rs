@@ -51,6 +51,7 @@ fn builds_panel_state_from_task_session_metadata() {
     };
 
     let state = subagent_task_panel_state_from_task_session(&metadata, Some(&context), None)
+        .expect("panel state should build")
         .expect("panel state");
 
     assert_eq!(state.parent_session_id, root_session_id.as_uuid());
@@ -115,7 +116,8 @@ fn loads_panel_states_from_segmented_task_session_store() {
     let states = subagent_task_panel_states_from_segmented_task_session_store(
         &store,
         root_session_id.as_uuid(),
-    );
+    )
+    .expect("load panel states");
 
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].task_id, task_session_id.as_uuid());
@@ -126,11 +128,90 @@ fn loads_panel_states_from_segmented_task_session_store() {
 
     let detail =
         subagent_task_panel_state_detail_from_segmented_task_session_store(&store, task_session_id)
+            .expect("load detail state")
             .expect("detail state");
     assert_eq!(detail.result_text, "完整结果");
     assert!(subagent_task_panel_state_has_recoverable_conversation(
         &detail
     ));
+}
+
+/// Verifies corrupted task context is reported instead of silently downgrading the detail panel.
+/// 验证损坏的子任务上下文会显式报错，而不是静默降级详情面板。
+#[test]
+fn detail_load_reports_corrupted_task_context() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
+    let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let metadata = panel_test_metadata(
+        root_session_id,
+        task_session_id,
+        "broken-context-task",
+        "损坏上下文智能体",
+        10,
+    );
+    store
+        .create_task_session(metadata)
+        .expect("create task session");
+    let task_root = temp_dir.path().join("task");
+    let task_dir = std::fs::read_dir(&task_root)
+        .expect("read task root")
+        .next()
+        .expect("task directory exists")
+        .expect("read task directory")
+        .path();
+    std::fs::write(task_dir.join("state.json"), "{").expect("write corrupted state");
+
+    let error =
+        subagent_task_panel_state_detail_from_segmented_task_session_store(&store, task_session_id)
+            .expect_err("corrupted state should be reported");
+
+    assert!(error.to_string().contains("EOF"));
+}
+
+/// Verifies invalid embedded conversation state is reported instead of being dropped.
+/// 验证无效的内嵌会话状态会显式报错，而不是被静默丢弃。
+#[test]
+fn detail_load_reports_invalid_context_conversation_state() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let store = vulcan_task_session::SegmentedTaskSessionStore::new(temp_dir.path());
+    let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+    let metadata = panel_test_metadata(
+        root_session_id,
+        task_session_id,
+        "invalid-conversation-state-task",
+        "无效过程智能体",
+        10,
+    );
+    store
+        .create_task_session(metadata)
+        .expect("create task session");
+    store
+        .save_context(SessionContextDocument {
+            schema_version: 1,
+            node_id: task_session_id,
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            system_prompt_layers: Vec::new(),
+            conversation_state: json!({
+                "records": "not-an-array",
+                "messages": []
+            }),
+            compaction_anchor: None,
+            context_budget_fingerprint: None,
+            tool_catalog_snapshot: Value::Null,
+            provider_request_preview: None,
+        })
+        .expect("save malformed conversation state context");
+
+    let error =
+        subagent_task_panel_state_detail_from_segmented_task_session_store(&store, task_session_id)
+            .expect_err("invalid conversation_state should be reported");
+
+    assert!(error.to_string().contains("conversation_state is invalid"));
 }
 
 /// Verifies archived TaskSessions are omitted from the unclosed subagent list restored at startup.
@@ -168,7 +249,8 @@ fn segmented_task_session_store_omits_archived_panel_states() {
     let states = subagent_task_panel_states_from_segmented_task_session_store(
         &store,
         root_session_id.as_uuid(),
-    );
+    )
+    .expect("load panel states");
 
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].task_id, open_task_session_id.as_uuid());
@@ -266,6 +348,27 @@ fn merges_subagent_task_panel_cache_from_segmented_and_live_states() {
             .get(&segmented_task_id)
             .map(|state| state.result_text.as_str()),
         Some("segmented result")
+    );
+}
+
+/// Verifies stale running states without a persisted terminal snapshot are marked stopped instead of completed.
+/// 验证没有持久化终态快照的陈旧运行态会标记为已停止，而不是伪装成已完成。
+#[test]
+fn stale_running_state_without_live_runtime_becomes_stopped() {
+    let parent_session_id = SessionId::new_v4();
+    let task_id = SessionId::new_v4();
+    let running_state =
+        test_subagent_state(parent_session_id, task_id, SubagentTaskRunState::Running);
+
+    let normalized = normalize_subagent_task_panel_state(&running_state, false, None);
+
+    assert_eq!(normalized.run_state, SubagentTaskRunState::Stopped);
+
+    let merged = merge_subagent_task_panel_cache(&BTreeMap::new(), vec![running_state], |_| false);
+
+    assert_eq!(
+        merged.get(&task_id).map(|state| state.run_state),
+        Some(SubagentTaskRunState::Stopped)
     );
 }
 

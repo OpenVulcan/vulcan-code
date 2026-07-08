@@ -64,7 +64,7 @@ pub(super) async fn service_open_subagent_panel(
         })?;
     let task_session_id = task_id
         .parse::<SessionId>()
-        .map_err(|error| format!("invalid subagent task id '{task_id}': {error}"))?;
+        .map_err(|error| format!("invalid agent task id '{task_id}': {error}"))?;
     webui_trace(
         "open_subagent_panel_requested",
         format!("parent={parent_session_id} task={task_session_id}"),
@@ -94,7 +94,7 @@ pub(super) async fn service_open_subagent_panel(
                 format!("parent={parent_session_id} task={task_session_id} source=registry"),
             );
             return Err(String::from(
-                "子智能体会话尚未完成初始化，或该智能体已经关闭。",
+                "智能体会话尚未完成初始化，或该智能体已经关闭。",
             ));
         };
         build_subagent_panel_route_response_for_task_locked(
@@ -103,7 +103,7 @@ pub(super) async fn service_open_subagent_panel(
             resolved_parent_session_id,
             task_session_id,
         )
-    };
+    }?;
     webui_trace_if_slow(
         "open_subagent_panel_cache_slow",
         cache_open_started_at,
@@ -187,7 +187,7 @@ fn build_subagent_panel_route_response_for_task_locked(
     workspace_snapshot: &WorkspaceSnapshot,
     parent_session_id: SessionId,
     task_session_id: SessionId,
-) -> SubagentPanelRouteResponse {
+) -> Result<SubagentPanelRouteResponse, String> {
     let previous_active_panel = guard.active_subagent_panel;
     let previous_subagent_navigation = guard.workbench.subagent_navigation.clone();
     let previous_messages = guard.workbench.messages.clone();
@@ -241,7 +241,7 @@ pub(super) async fn service_stop_subagent_task(
         })?;
     let task_session_id = task_id
         .parse::<SessionId>()
-        .map_err(|error| format!("invalid subagent task id '{task_id}': {error}"))?;
+        .map_err(|error| format!("invalid agent task id '{task_id}': {error}"))?;
     webui_trace(
         "stop_subagent_requested",
         format!("parent={parent_session_id} task={task_session_id}"),
@@ -350,7 +350,7 @@ pub(super) async fn service_stop_subagent_task(
             resolved_parent_session_id,
             task_session_id,
         )
-    };
+    }?;
     emit_subagent_navigation_delta_from_route_response(&app, &response);
     if !stopped_parent_session_ids.is_empty() {
         let state_for_persist = state.clone();
@@ -406,7 +406,7 @@ pub(super) async fn service_close_subagent_task(
         })?;
     let task_session_id = task_id
         .parse::<SessionId>()
-        .map_err(|error| format!("invalid subagent task id '{task_id}': {error}"))?;
+        .map_err(|error| format!("invalid agent task id '{task_id}': {error}"))?;
     let (resolved_parent_session_id, public_task_id) = {
         let guard = state
             .lock()
@@ -417,9 +417,7 @@ pub(super) async fn service_close_subagent_task(
             task_session_id,
         )?
         .ok_or_else(|| {
-            format!(
-                "subagent task `{task_session_id}` is not open under parent `{parent_session_id}`"
-            )
+            format!("agent task `{task_session_id}` is not open under parent `{parent_session_id}`")
         })?;
         (entry.parent_session_id.as_uuid(), entry.agent_id)
     };
@@ -457,7 +455,7 @@ pub(super) async fn service_close_subagent_task(
             .clone()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
         build_subagent_panel_route_response_locked(&mut guard, &workspace_snapshot)
-    };
+    }?;
     emit_subagent_navigation_delta_from_route_response(&app, &response);
     Ok(response)
 }
@@ -469,40 +467,14 @@ fn closed_subagent_task_ids_from_close_result(
     // 运行时 close_agent 调用结果。
     result: &VulcanToolInvocationResult,
 ) -> Result<Vec<SessionId>, String> {
-    let payload = result
+    let host_result = result
         .host_result
         .as_ref()
-        .filter(|host_result| host_result.kind == "subagent_control")
-        .map(|host_result| &host_result.payload)
         .ok_or_else(|| String::from("close_agent did not return a subagent_control host result"))?;
-    let matched_agents = payload
-        .get("matched_agents")
-        .and_then(Value::as_array)
-        .ok_or_else(|| String::from("close_agent host result is missing matched_agents"))?;
-    let closed_task_ids = matched_agents
-        .iter()
-        .map(|agent| {
-            agent
-                .get(SUBAGENT_TASK_ID_KEY)
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    String::from("close_agent matched agent is missing subagent_task_id")
-                })
-                .and_then(|task_id| {
-                    task_id.parse::<SessionId>().map_err(|error| {
-                        format!(
-                            "close_agent returned invalid subagent_task_id `{task_id}`: {error}"
-                        )
-                    })
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if closed_task_ids.is_empty() {
-        return Err(String::from(
-            "close_agent did not report any closed subagent tasks",
-        ));
-    }
-    Ok(closed_task_ids)
+    let projection =
+        subagent_close_agent_projection_from_host_result(&host_result.kind, &host_result.payload)?
+            .ok_or_else(|| String::from("close_agent did not return a close_agent host result"))?;
+    Ok(projection.matched_task_ids)
 }
 
 /// Enqueues stopped child-agent notifications into each owning parent mailbox once.

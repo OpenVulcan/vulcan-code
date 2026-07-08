@@ -78,6 +78,7 @@ async fn build_runtime_stream_launch_from_prepared_input(
                 Some(preparation_for_failure),
                 0,
                 None,
+                None,
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

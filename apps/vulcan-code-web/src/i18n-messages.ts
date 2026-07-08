@@ -181,7 +181,14 @@ export type TranslationKey =
   | "conversation.stats.totalTokens"
   | "conversation.stats.cachedTokens"
   | "conversation.stats.outputSpeed"
+  | "conversation.stats.group.regular"
+  | "conversation.stats.group.subagent"
+  | "conversation.stats.group.contextCompaction"
   | "conversation.subagent.stopTask"
+  | "conversation.stopWithAgents.title"
+  | "conversation.stopWithAgents.description"
+  | "conversation.stopWithAgents.mainOnly"
+  | "conversation.stopWithAgents.all"
   | "conversation.process.header"
   | "conversation.process.stoppedAfter"
   | "conversation.process.stopped"
@@ -693,12 +700,18 @@ export type TranslationKey =
   | "conversation.subagent.detail.message"
   | "conversation.subagent.detail.wait"
   | "conversation.subagent.detail.waitCompleted"
+  | "conversation.subagent.detail.waitInterrupted"
   | "conversation.subagent.detail.waitTimedOut"
   | "conversation.subagent.detail.collection"
+  | "conversation.subagent.detail.templateCollection"
+  | "conversation.subagent.detail.statusCollection"
+  | "conversation.subagent.detail.feedback"
+  | "conversation.subagent.detail.openFeedback"
   | "conversation.subagent.detail.count"
   | "conversation.subagent.detail.completed"
   | "conversation.subagent.detail.timeout"
   | "conversation.subagent.detail.noAgents"
+  | "conversation.subagent.detail.noOpenAgents"
   | "conversation.subagent.enabled"
   | "conversation.subagent.disabled"
   | "conversation.subagent.detail.agent"
@@ -1151,7 +1164,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.settings": "设置",
     "area.chat.description": "项目会话、消息流与模型输入区",
     "area.skills.description": "LuaSkills、工具能力与技能包",
-    "area.agents.description": "子代理、专家画像与调度提示词",
+    "area.agents.description": "智能体、专家画像与调度提示词",
     "area.memory.description": "VMM 用户、项目与会话记忆",
     "area.settings.description": "项目、模型、工具、诊断与系统设置",
     "feature.status.available": "可用",
@@ -1316,7 +1329,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.stats.totalTokens": "{count} tokens",
     "conversation.stats.cachedTokens": "缓存命中 {count}",
     "conversation.stats.outputSpeed": "{speed}/s",
+    "conversation.stats.group.regular": "常规 {count} tokens",
+    "conversation.stats.group.subagent": "智能体 {count} tokens",
+    "conversation.stats.group.contextCompaction": "压缩 {count} tokens",
     "conversation.subagent.stopTask": "停止",
+    "conversation.stopWithAgents.title": "停止当前会话？",
+    "conversation.stopWithAgents.description": "当前还有 {count} 个智能体正在工作。请选择只停止主会话，还是同时停止这些智能体。",
+    "conversation.stopWithAgents.mainOnly": "只停止主会话",
+    "conversation.stopWithAgents.all": "同时停止智能体",
     "conversation.process.header": "处理过程",
     "conversation.process.stoppedAfter": "你在 {duration} 后停止了",
     "conversation.process.stopped": "你已停止本轮工作",
@@ -1806,8 +1826,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.userPrompt.copy": "复制用户提示词",
     "conversation.userPrompt.edit": "编辑用户提示词",
     "conversation.subagent.schedule": "智能体信息",
-    "conversation.subagent.call": "调用子代理",
-    "conversation.subagent.calling": "正在调用智能体",
+    "conversation.subagent.call": "创建智能体",
+    "conversation.subagent.calling": "创建智能体",
     "conversation.subagent.state.running": "运行中",
     "conversation.subagent.state.stopped": "已停止",
     "conversation.subagent.state.failed": "失败",
@@ -1822,12 +1842,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.message": "智能体消息",
     "conversation.subagent.detail.wait": "等待智能体消息",
     "conversation.subagent.detail.waitCompleted": "已收到智能体消息",
+    "conversation.subagent.detail.waitInterrupted": "等待已被打断",
     "conversation.subagent.detail.waitTimedOut": "等待超时",
-    "conversation.subagent.detail.collection": "智能体状态列表",
+    "conversation.subagent.detail.collection": "查询智能体状态列表",
+    "conversation.subagent.detail.templateCollection": "查询智能体模板列表",
+    "conversation.subagent.detail.statusCollection": "查询智能体状态列表",
+    "conversation.subagent.detail.feedback": "智能体返回处理结果",
+    "conversation.subagent.detail.openFeedback": "点击展开",
     "conversation.subagent.detail.count": "数量",
     "conversation.subagent.detail.completed": "是否完成",
     "conversation.subagent.detail.timeout": "超时时间",
     "conversation.subagent.detail.noAgents": "没有可见智能体。",
+    "conversation.subagent.detail.noOpenAgents": "当前无未关闭的智能体。",
     "conversation.subagent.enabled": "已启用",
     "conversation.subagent.disabled": "已停用",
     "conversation.subagent.detail.agent": "智能体",
@@ -2243,7 +2269,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.source.unknown": "未记录来源",
     "skills.sidebar.luaDetail": "{count} 个技能包",
     "skills.sidebar.agentDetail": "{count} 个提示词技能",
-    "skills.sidebar.subagentDetail": "{count} 个子代理定义",
+    "skills.sidebar.subagentDetail": "{count} 个智能体定义",
     "skills.header.luaDetail": "总技能数 {total} · 显示工具数 {visible} · 隐式工具数 {implicit}",
     "skills.header.agentDetail": "总技能数 {total} · 已启用 {enabled} · 加载警告 {warnings}",
     "skills.header.subagentDetail": "总定义数 {total} · 已启用 {enabled} · 加载警告 {warnings}",
@@ -2283,7 +2309,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "area.settings": "Settings",
     "area.chat.description": "Project sessions, message stream, and model input",
     "area.skills.description": "LuaSkills, tool capability, and skill packages",
-    "area.agents.description": "Subagents, expert profiles, and delegation prompts",
+    "area.agents.description": "Agents, expert profiles, and delegation prompts",
     "area.memory.description": "VMM user, project, and conversation memory",
     "area.settings.description": "Projects, models, tools, diagnostics, and system settings",
     "feature.status.available": "Available",
@@ -2448,7 +2474,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.stats.totalTokens": "{count} tokens",
     "conversation.stats.cachedTokens": "Cache hit {count}",
     "conversation.stats.outputSpeed": "{speed}/s",
+    "conversation.stats.group.regular": "Regular {count} tokens",
+    "conversation.stats.group.subagent": "Agent {count} tokens",
+    "conversation.stats.group.contextCompaction": "Compaction {count} tokens",
     "conversation.subagent.stopTask": "Stop",
+    "conversation.stopWithAgents.title": "Stop the current conversation?",
+    "conversation.stopWithAgents.description": "{count} agent(s) are still working. Choose whether to stop only the main conversation or stop those agents too.",
+    "conversation.stopWithAgents.mainOnly": "Stop main only",
+    "conversation.stopWithAgents.all": "Stop agents too",
     "conversation.process.header": "Process",
     "conversation.process.stoppedAfter": "You stopped after {duration}",
     "conversation.process.stopped": "You stopped this turn",
@@ -2938,28 +2971,34 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.userPrompt.copy": "Copy user prompt",
     "conversation.userPrompt.edit": "Edit user prompt",
     "conversation.subagent.schedule": "Agent info",
-    "conversation.subagent.call": "Subagent call",
-    "conversation.subagent.calling": "Calling subagent",
+    "conversation.subagent.call": "Create agent",
+    "conversation.subagent.calling": "Create agent",
     "conversation.subagent.state.running": "Running",
     "conversation.subagent.state.stopped": "Stopped",
     "conversation.subagent.state.failed": "Failed",
     "conversation.subagent.state.completed": "Standby",
-    "conversation.subagent.detail.createdTask": "Created subagent task",
+    "conversation.subagent.detail.createdTask": "Created agent task",
     "conversation.subagent.detail.name": "Name",
     "conversation.subagent.detail.description": "Description",
     "conversation.subagent.detail.prompt": "Prompt",
     "conversation.subagent.detail.effectivePrompt": "Effective prompt",
     "conversation.subagent.detail.debug": "Debug",
     "conversation.subagent.detail.empty": "No content.",
-    "conversation.subagent.detail.message": "Subagent message",
-    "conversation.subagent.detail.wait": "Waiting for subagent message",
-    "conversation.subagent.detail.waitCompleted": "Subagent message received",
+    "conversation.subagent.detail.message": "Agent message",
+    "conversation.subagent.detail.wait": "Waiting for agent message",
+    "conversation.subagent.detail.waitCompleted": "Agent message received",
+    "conversation.subagent.detail.waitInterrupted": "Wait interrupted",
     "conversation.subagent.detail.waitTimedOut": "Wait timed out",
-    "conversation.subagent.detail.collection": "Subagent status",
+    "conversation.subagent.detail.collection": "Agent status list",
+    "conversation.subagent.detail.templateCollection": "Agent template list",
+    "conversation.subagent.detail.statusCollection": "Agent status list",
+    "conversation.subagent.detail.feedback": "Agent returned result",
+    "conversation.subagent.detail.openFeedback": "Click to expand",
     "conversation.subagent.detail.count": "Count",
     "conversation.subagent.detail.completed": "Completed",
     "conversation.subagent.detail.timeout": "Timeout",
-    "conversation.subagent.detail.noAgents": "No visible subagent.",
+    "conversation.subagent.detail.noAgents": "No visible agent.",
+    "conversation.subagent.detail.noOpenAgents": "No open agents.",
     "conversation.subagent.enabled": "Enabled",
     "conversation.subagent.disabled": "Disabled",
     "conversation.subagent.detail.agent": "Agent",
@@ -2972,7 +3011,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.subagent.detail.deliveryMode": "Delivery mode",
     "conversation.subagent.detail.targetSessions": "Target sessions",
     "conversation.subagent.detail.note": "Note",
-    "conversation.subagent.detail.control": "Subagent control",
+    "conversation.subagent.detail.control": "Agent control",
     "conversation.subagent.detail.stoppedCount": "Stopped count",
     "conversation.subagent.detail.stoppedSessions": "Stopped sessions",
     "conversation.subagent.detail.closedCount": "Closed count",
@@ -3375,7 +3414,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.source.unknown": "No source recorded",
     "skills.sidebar.luaDetail": "{count} skill packages",
     "skills.sidebar.agentDetail": "{count} prompt skills",
-    "skills.sidebar.subagentDetail": "{count} subagent definitions",
+    "skills.sidebar.subagentDetail": "{count} agent definitions",
     "skills.header.luaDetail": "Total skills {total} · Visible tools {visible} · Implicit tools {implicit}",
     "skills.header.agentDetail": "Total skills {total} · Enabled {enabled} · Load warnings {warnings}",
     "skills.header.subagentDetail": "Total definitions {total} · Enabled {enabled} · Load warnings {warnings}",

@@ -210,7 +210,12 @@ pub(super) fn cache_test_subagent_surface_detail_states(
         let messages = state
             .conversation_state
             .as_ref()
-            .map(conversation_state_to_session_messages)
+            .map(|conversation_state| {
+                display_messages_from_task_conversation_state(
+                    conversation_state,
+                    state.description.as_deref(),
+                )
+            })
             .unwrap_or_default();
         guard.subagent_surface_detail_cache.insert(
             state.task_id,
@@ -334,7 +339,6 @@ pub(super) fn test_service_state_with_parent_session(
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -380,6 +384,7 @@ pub(super) fn test_delegate_finished_event(
         "payload": {
             "task_id": public_task_id,
             (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": format!("test-execution-{public_task_id}"),
             "execution_status": "completed",
             "description": "生成图片",
             "subagent": "image-worker",

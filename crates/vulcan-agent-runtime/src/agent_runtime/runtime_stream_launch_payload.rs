@@ -11,8 +11,23 @@ use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::model::SessionId;
 use std::sync::Arc;
 use vulcan_context::RuntimeProviderLoweringRepairEvent;
-use vulcan_core::types::ConversationSnapshot as CoreConversationSnapshot;
+use vulcan_core::types::{
+    ConversationPayload as CoreConversationPayload,
+    ConversationSnapshot as CoreConversationSnapshot,
+};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
+
+/// Turn-start mode used by the host-controlled provider loop.
+/// 宿主控制 Provider 循环使用的回合启动模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeStreamTurnStartMode {
+    /// Start by appending or reusing the user-authored prompt.
+    /// 通过追加或复用用户提示词启动。
+    UserPrompt,
+    /// Start from provider-visible messages already seeded into the snapshot.
+    /// 从已经播种到快照中的 Provider 可见消息启动。
+    SeededProviderInput,
+}
 
 /// Launch payload that captures everything the outer runtime stream needs after preparation and bootstrap have both succeeded.
 /// 捕获准备阶段与启动阶段都成功后外层运行时流所需全部内容的启动载荷。
@@ -26,6 +41,9 @@ pub struct RuntimeStreamLaunch {
     /// Trimmed effective user prompt that will be sent to the provider transport layer.
     /// 将发送给 Provider 传输层的裁剪后生效用户提示词。
     pub(crate) effective_prompt: String,
+    /// Explicit turn-start mode consumed by the provider transport layer.
+    /// Provider 传输层消费的显式回合启动模式。
+    pub(crate) turn_start_mode: RuntimeStreamTurnStartMode,
     /// Updated execution preparation after request-snapshot seeding.
     /// 完成请求快照播种之后的更新执行准备对象。
     pub(crate) preparation: ExecutionPreparation,
@@ -77,12 +95,14 @@ pub(crate) fn build_runtime_stream_launch_payload(
     bootstrap: RuntimeStreamBootstrap,
     task_execution_context: Option<TaskExecutionRuntimeContext>,
 ) -> RuntimeStreamLaunch {
+    let turn_start_mode = runtime_stream_turn_start_mode_for_request(request);
     let effective_prompt =
         controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot);
     RuntimeStreamLaunch {
         task_execution_context,
         session_id: request.session_id,
         effective_prompt,
+        turn_start_mode,
         preparation: bootstrap.preparation,
         active_agent: bootstrap.active_agent,
         task_runtime: bootstrap.task_runtime,
@@ -97,6 +117,18 @@ pub(crate) fn build_runtime_stream_launch_payload(
         core_snapshot: bootstrap.core_snapshot,
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller),
         lowering_repair_events: bootstrap.lowering_repair_events,
+    }
+}
+
+/// Resolves how the provider loop should start the next controller turn.
+/// 解析 Provider 循环应如何启动下一次控制器回合。
+fn runtime_stream_turn_start_mode_for_request(
+    request: &ExecutionPreparationRequest,
+) -> RuntimeStreamTurnStartMode {
+    if request.provider_visible_agent_messages.is_empty() {
+        RuntimeStreamTurnStartMode::UserPrompt
+    } else {
+        RuntimeStreamTurnStartMode::SeededProviderInput
     }
 }
 
@@ -118,14 +150,27 @@ fn controller_effective_prompt_for_launch(
     request: &ExecutionPreparationRequest,
     core_snapshot: &CoreConversationSnapshot,
 ) -> String {
+    if !request.provider_visible_agent_messages.is_empty() {
+        return request
+            .provider_visible_agent_messages
+            .iter()
+            .map(|message| {
+                CoreConversationPayload::render_agent_message_text(
+                    &message.message_type,
+                    &message.task_name,
+                    &message.sender,
+                    &message.payload,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+    }
     let raw_prompt = request.prompt.trim().to_string();
     core_snapshot
         .messages
         .last()
         .and_then(|message| match &message.payload {
-            vulcan_core::types::ConversationPayload::UserText { text, .. } => {
-                Some(text.trim().to_string())
-            }
+            CoreConversationPayload::UserText { text, .. } => Some(text.trim().to_string()),
             _ => None,
         })
         .filter(|text| projected_user_prompt_matches_request(text, &raw_prompt))
@@ -162,6 +207,7 @@ mod tests {
 
     use super::*;
     use crate::agent_runtime::conversation_hooks::ConversationHookRuntime;
+    use crate::agent_runtime::execution_models::ExecutionProviderVisibleAgentMessage;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::agent_runtime::runtime_stream_bootstrap_core::build_runtime_bootstrap_core;
     use crate::conversation_protocol::SessionConversationState;
@@ -192,7 +238,8 @@ mod tests {
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
             agent_kind: String::from("内置"),
-            agent_system_prompt_override: None,
+            agent_prompt_snapshot: None,
+            subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
@@ -236,6 +283,8 @@ mod tests {
             provider_request_snapshot_json: None,
             provider_wire_request_json: None,
             context_budget: None,
+            context_compaction_policy: None,
+            context_budget_override: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,
@@ -261,12 +310,16 @@ mod tests {
             },
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
             execution_agent_id: None,
-            agent_system_prompt_override: None,
+            agent_prompt_snapshot: None,
+            subagent_prompt_context: None,
             task_session_store_root: None,
             session_title: String::from("测试会话"),
             workspace_path: String::from(r"D:\workspace"),
             prompt: String::from("  请分析主入口文件  "),
+            provider_visible_agent_messages: Vec::new(),
             conversation_state: SessionConversationState::default(),
+            context_compaction_policy: None,
+            context_budget_override: None,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
             reasoning_effort: crate::provider_config::ReasoningEffortLevel::Off,
@@ -275,6 +328,7 @@ mod tests {
             tool_request_rejection_reason: None,
             tool_request_rejection_all_tools: false,
             tool_request_rejection_tool_ids: Vec::new(),
+            tool_request_hidden_tool_ids: Vec::new(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             project_prompt_skills: Default::default(),
             session_prompt_skill_overrides: Default::default(),
@@ -354,6 +408,10 @@ mod tests {
         let launch = build_runtime_stream_launch_payload(&request, build_test_bootstrap(), None);
 
         assert_eq!(launch.session_id, request.session_id);
+        assert_eq!(
+            launch.turn_start_mode,
+            RuntimeStreamTurnStartMode::UserPrompt
+        );
         assert_eq!(launch.effective_prompt, "请分析主入口文件");
         assert_eq!(launch.discovery_rows, vec![String::from("mcp-row")]);
         assert_eq!(launch.discovery_errors, vec![String::from("mcp-error")]);
@@ -364,6 +422,69 @@ mod tests {
             1
         );
         assert!(launch.stream_state.controller().events().is_empty());
+    }
+
+    /// Uses seeded agent messages as the controller turn start without creating a user prompt.
+    /// 使用已播种智能体消息作为控制器回合起点，不创建用户提示词。
+    #[test]
+    fn launch_payload_uses_seeded_agent_messages_without_user_prompt() {
+        let mut request = build_test_request();
+        request.prompt.clear();
+        request.provider_visible_agent_messages = vec![ExecutionProviderVisibleAgentMessage {
+            delivery_id: String::from("delivery-1"),
+            message_type: String::from("FINAL_ANSWER"),
+            task_name: String::from("quick_agent"),
+            sender: String::from("quick_agent"),
+            recipient: String::from("parent:00000000-0000-0000-0000-000000000000"),
+            payload: String::from("abc"),
+            trigger_turn: true,
+            timestamp_ms: 1,
+            metadata: None,
+        }];
+        let mut preparation = build_test_preparation();
+        preparation.model_blueprint.capabilities.input_modalities = vec![String::from("text")];
+        let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None)
+            .expect("runtime bootstrap core should seed agent messages");
+        assert!(matches!(
+            runtime_core.core_snapshot.messages.last().map(|message| &message.payload),
+            Some(CoreConversationPayload::AgentMessage { payload, .. }) if payload == "abc"
+        ));
+        let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
+            system_preamble,
+            core_snapshot,
+            core_controller,
+            ..
+        } = runtime_core;
+        let bootstrap = RuntimeStreamBootstrap {
+            preparation,
+            active_agent: None,
+            task_runtime: Arc::new(TaskRuntime::new()),
+            token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
+                std::env::temp_dir(),
+            )),
+            tools_manager: VulcanToolsManager::default(),
+            resolved_tool_definitions: Vec::new(),
+            discovery_events: Vec::new(),
+            discovery_rows: Vec::new(),
+            discovery_errors: Vec::new(),
+            warnings: Vec::new(),
+            system_preamble,
+            core_snapshot,
+            core_controller,
+            lowering_repair_events: Vec::new(),
+        };
+
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap, None);
+
+        assert_eq!(
+            launch.turn_start_mode,
+            RuntimeStreamTurnStartMode::SeededProviderInput
+        );
+        assert!(launch.effective_prompt.contains("<agent_message>"));
+        assert_eq!(
+            launch.stream_state.controller().snapshot().messages.len(),
+            1
+        );
     }
 
     /// Uses projected latest user text as the controller prompt so attachment bridge text does not duplicate the raw user message.
@@ -485,6 +606,7 @@ mod tests {
                 prompt_entry_id: String::from("prompt-entry-1"),
                 prompt,
                 hidden_model_guidance: None,
+                provider_visible_agent_messages: Vec::new(),
                 attachments: vec![attachment],
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,

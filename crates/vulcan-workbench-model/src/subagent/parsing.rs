@@ -10,7 +10,7 @@ pub fn parse_subagent_task_panel_payload(
     let task_id = task_session_internal_id_from_payload(payload)?;
     let run_state = subagent_run_state_from_execution_status(
         payload.get("execution_status").and_then(Value::as_str),
-    );
+    )?;
     let description = payload
         .get("description")
         .and_then(Value::as_str)

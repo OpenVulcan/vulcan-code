@@ -80,11 +80,13 @@ fn loads_nested_panel_states_from_segmented_task_session_store() {
     let root_states = subagent_task_panel_states_from_segmented_task_session_store(
         &store,
         root_session_id.as_uuid(),
-    );
+    )
+    .expect("load root states");
     let nested_states = subagent_task_panel_states_from_segmented_task_session_store(
         &store,
         parent_task_session_id.as_uuid(),
-    );
+    )
+    .expect("load nested states");
 
     assert_eq!(root_states.len(), 1);
     assert_eq!(root_states[0].task_id, parent_task_session_id.as_uuid());
@@ -127,7 +129,7 @@ fn restores_completed_panel_state_from_segmented_task_session_store() {
             "task-result",
             task_session_id,
             1,
-            vulcan_session_core::SessionEventKind::TaskFeedback,
+            vulcan_session_core::SessionEventKind::TaskTerminal,
             20,
             json!({ "result": "latest event image result" }),
         ))
@@ -136,7 +138,8 @@ fn restores_completed_panel_state_from_segmented_task_session_store() {
     let states = subagent_task_panel_states_from_segmented_task_session_store(
         &store,
         root_session_id.as_uuid(),
-    );
+    )
+    .expect("load states");
 
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].task_id, task_session_id.as_uuid());
@@ -148,6 +151,7 @@ fn restores_completed_panel_state_from_segmented_task_session_store() {
 
     let detail =
         subagent_task_panel_state_detail_from_segmented_task_session_store(&store, task_session_id)
+            .expect("load detail state")
             .expect("detail state");
     assert_eq!(detail.result_text, "latest event image result");
 }

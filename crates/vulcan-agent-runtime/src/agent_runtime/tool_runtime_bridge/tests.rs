@@ -809,6 +809,90 @@ fn streaming_tool_executor_does_not_reject_when_scope_is_empty() {
     )));
 }
 
+/// Verifies scoped policy rejection only blocks the listed tool identifiers.
+/// 验证限定范围的策略拒绝只会阻止列出的工具标识。
+#[test]
+fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
+    let (manager, definitions) = build_demo_manager();
+    let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+        Arc::new(manager),
+        &definitions,
+        Uuid::nil(),
+        "Build",
+    ));
+    let (sender, mut receiver): (
+        ProviderLiveDeltaSender,
+        tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+    ) = tokio::sync::mpsc::unbounded_channel();
+    let executor = StreamingRuntimeToolExecutor::new(
+        runtime_bridge,
+        sender,
+        Some(String::from(
+            "This tool is reserved for the parent session.",
+        )),
+        false,
+        vec![String::from("failing_tool")],
+    );
+    let rejected_request = ToolInvocationRequest {
+        tool_call_id: String::from("scoped-rejected-call-1"),
+        tool_name: String::from("failing_tool"),
+        arguments: json!({ "query": "must be rejected before the failing body runs" }),
+    };
+    let allowed_request = ToolInvocationRequest {
+        tool_call_id: String::from("scoped-allowed-call-1"),
+        tool_name: String::from("demo_tool"),
+        arguments: json!({ "path": "src/main.rs" }),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    let rejected_result = runtime
+        .block_on(executor.execute_tool(&rejected_request))
+        .expect("scoped policy rejection should return a normal tool result");
+    let allowed_result = runtime
+        .block_on(executor.execute_tool(&allowed_request))
+        .expect("unlisted tool should execute normally");
+    let events = drain_live_events(&mut receiver);
+
+    assert!(!rejected_result.is_error);
+    assert!(
+        rejected_result
+            .model_output
+            .contains("Tool request rejected by runtime policy")
+    );
+    assert_eq!(
+        rejected_result
+            .host_result
+            .as_ref()
+            .and_then(|value| value.get("payload"))
+            .and_then(|payload| payload.get("status"))
+            .and_then(serde_json::Value::as_str),
+        Some("rejected")
+    );
+    assert!(!allowed_result.is_error);
+    assert_eq!(
+        allowed_result
+            .host_result
+            .as_ref()
+            .and_then(|value| value.get("kind"))
+            .and_then(serde_json::Value::as_str),
+        Some("change_set")
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                ProviderStreamDelta::RuntimeEvent(runtime_event)
+                    if runtime_event.kind == RuntimeEventKind::ToolFinished
+            ))
+            .count(),
+        2
+    );
+}
+
 /// Verifies the streaming executor yields the tool-start event before the actual tool body begins.
 /// 验证流式执行器会在真实工具主体开始前先产出工具开始事件。
 #[test]

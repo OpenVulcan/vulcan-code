@@ -25,8 +25,12 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             &request.invocation_config.provider_model,
         )?;
     }
+    let fixed_parent_controller_config = request
+        .controller_config
+        .as_ref()
+        .unwrap_or(&base_controller_config);
     let mut resolved_config = task_runtime.resolve_task_session_config_for_execution(
-        &base_controller_config,
+        fixed_parent_controller_config,
         &request.invocation_config,
     )?;
     if !provider_model_has_override(&request.invocation_config.provider_model) {
@@ -41,7 +45,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         ),
     );
     let running_controller_config = build_task_controller_config(
-        &base_controller_config,
+        fixed_parent_controller_config,
         request.controller_config.clone(),
         &request.description,
         &request.subagent,
@@ -101,7 +105,8 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     let background_task_runtime = Arc::clone(&task_runtime);
     let background_request = request.clone();
     let background_resolved_config = resolved_config.clone();
-    let background_running_controller_config = running_controller_config.clone();
+    let child_completion_controller_config = running_controller_config.clone();
+    let stopped_controller_config = running_controller_config.clone();
     let compaction_runtime_context = context.clone();
     let running_outcome = build_running_task_execution_outcome(
         task_id,
@@ -131,7 +136,6 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             &background_resolved_config,
         )
         .await?;
-        let task_controller_config = core_controller_config_from_child_launch(&launch);
         let mut terminal_report = None;
         let config = launch
             .task_execution_context
@@ -162,14 +166,30 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 background_request.task_id
             )
         })?;
-        let should_compact_context = report
+        let budget_should_compact = report
             .preparation
             .as_ref()
             .and_then(|preparation| preparation.context_budget.as_ref())
             .is_some_and(|context_budget| context_budget.should_compact());
+        let provider_limit_should_compact =
+            task_provider_request_limit_should_compact_after_current_report(
+                &background_task_runtime,
+                background_request.root_session_id,
+                background_request.task_id,
+                &background_resolved_config.effective_config.context_compaction,
+                report.provider_request_count,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "[task-session-store] provider-request compaction check failed for task `{}`: {error}",
+                    background_request.public_task_id
+                );
+                false
+            });
+        let should_compact_context = budget_should_compact || provider_limit_should_compact;
         let outcome = task_execution_outcome_from_report(
             &background_request,
-            task_controller_config,
+            child_completion_controller_config,
             background_resolved_config,
             report,
         )?;
@@ -247,7 +267,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 .unwrap_or_else(|| request.snapshot.clone());
                 let outcome = build_stopped_task_execution_outcome(
                     task_id,
-                    background_running_controller_config,
+                    stopped_controller_config.clone(),
                     resolved_config,
                     stopped_snapshot,
                 );
@@ -317,7 +337,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
                 .unwrap_or_else(|| request.snapshot.clone());
                 let outcome = build_stopped_task_execution_outcome(
                     task_id,
-                    background_running_controller_config,
+                    stopped_controller_config,
                     resolved_config,
                     stopped_snapshot,
                 );
@@ -405,6 +425,182 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         ),
     );
     Ok(running_outcome)
+}
+
+/// Determines whether a task session crossed the provider-request compaction threshold after the current run.
+/// 判断子代理会话在当前执行后是否达到 Provider 请求数压缩阈值。
+///
+/// # Parameters
+/// 参数
+/// `task_runtime` owns the segmented TaskSession store roots.
+/// `task_runtime` 持有分段 TaskSession 存储根目录。
+/// `root_session_id` identifies the root workspace session that owns the task store.
+/// `root_session_id` 标识拥有子任务存储的根工作区会话。
+/// `task_id` identifies the child task session being measured.
+/// `task_id` 标识正在计量的子代理会话。
+/// `policy` is the resolved context-compaction policy for this child session.
+/// `policy` 是该子代理会话解析后的上下文压缩策略。
+/// `current_provider_requests` is the provider request count reported by the just-finished run.
+/// `current_provider_requests` 是刚完成执行报告中的 Provider 请求次数。
+///
+/// # Returns
+/// 返回值
+/// `true` when automatic compaction is enabled and the cumulative count reaches the configured limit.
+/// 当自动压缩启用且累计次数达到配置阈值时返回 `true`。
+fn task_provider_request_limit_should_compact_after_current_report(
+    task_runtime: &TaskRuntime,
+    root_session_id: SessionId,
+    task_id: SessionId,
+    policy: &ContextCompactionPolicySnapshot,
+    current_provider_requests: usize,
+) -> Result<bool, String> {
+    if !task_provider_request_limit_is_enabled(policy) {
+        return Ok(false);
+    }
+    let previous_provider_requests =
+        task_provider_requests_since_latest_compaction(task_runtime, root_session_id, task_id)?;
+    Ok(task_provider_request_limit_reached(
+        policy,
+        previous_provider_requests.saturating_add(current_provider_requests),
+    ))
+}
+
+/// Loads the provider request count accumulated after the latest completed task-context compaction.
+/// 加载最近一次子代理上下文压缩完成后累计的 Provider 请求次数。
+///
+/// # Parameters
+/// 参数
+/// `task_runtime` owns the segmented TaskSession store roots.
+/// `task_runtime` 持有分段 TaskSession 存储根目录。
+/// `root_session_id` identifies the root workspace session that owns the task store.
+/// `root_session_id` 标识拥有子任务存储的根工作区会话。
+/// `task_id` identifies the child task session being measured.
+/// `task_id` 标识正在计量的子代理会话。
+///
+/// # Returns
+/// 返回值
+/// The sum of persisted provider turns after the latest completed compaction marker.
+/// 返回最近一次完成压缩标记后的持久化 Provider 轮次数总和。
+pub(super) fn task_provider_requests_since_latest_compaction(
+    task_runtime: &TaskRuntime,
+    root_session_id: SessionId,
+    task_id: SessionId,
+) -> Result<usize, String> {
+    let Some(store) = task_runtime.task_session_store_for_root(root_session_id)? else {
+        return Ok(0);
+    };
+    let events = store
+        .load_events(SessionNodeId::from(task_id))
+        .map_err(|error| error.message)?;
+    Ok(task_provider_requests_since_latest_compaction_event(
+        &events,
+    ))
+}
+
+/// Sums provider requests from task events after the latest completed compaction marker.
+/// 汇总最近一次完成压缩标记后的子任务事件 Provider 请求数。
+///
+/// # Parameters
+/// 参数
+/// `events` are the persisted events loaded for one TaskSession node.
+/// `events` 是为单个子代理节点加载的持久化事件。
+///
+/// # Returns
+/// 返回值
+/// The provider turn count represented by task lifecycle events after the last compaction marker.
+/// 返回最近一次压缩标记后由子任务生命周期事件表示的 Provider 轮次数。
+pub(super) fn task_provider_requests_since_latest_compaction_event(
+    events: &[SessionEventRecord],
+) -> usize {
+    let start_index = events
+        .iter()
+        .rposition(task_event_is_completed_context_compaction_marker)
+        .map(|index| index.saturating_add(1))
+        .unwrap_or(0);
+    events[start_index..]
+        .iter()
+        .filter_map(task_event_provider_turns_executed)
+        .sum()
+}
+
+/// Determines whether one task event is a completed context-compaction marker.
+/// 判断单个子任务事件是否为已完成的上下文压缩标记。
+///
+/// # Parameters
+/// 参数
+/// `event` is the persisted TaskSession event being inspected.
+/// `event` 是正在检查的持久化子代理事件。
+///
+/// # Returns
+/// 返回值
+/// `true` when the event marks a completed context compaction pass.
+/// 当事件标记一次已完成的上下文压缩时返回 `true`。
+fn task_event_is_completed_context_compaction_marker(event: &SessionEventRecord) -> bool {
+    matches!(event.kind, SessionEventKind::RuntimeMarker)
+        && event
+            .payload
+            .get("context_compaction_status")
+            .and_then(Value::as_str)
+            == Some("completed")
+}
+
+/// Extracts the persisted provider-turn count from one TaskSession lifecycle event.
+/// 从单个子代理生命周期事件中提取持久化 Provider 轮次数。
+///
+/// # Parameters
+/// 参数
+/// `event` is the persisted TaskSession event being inspected.
+/// `event` 是正在检查的持久化子代理事件。
+///
+/// # Returns
+/// 返回值
+/// The provider-turn count stored by terminal task status events.
+/// 返回终态子任务状态事件保存的 Provider 轮次数。
+fn task_event_provider_turns_executed(event: &SessionEventRecord) -> Option<usize> {
+    let count = event.payload.get("provider_turns_executed")?.as_u64()?;
+    usize::try_from(count).ok()
+}
+
+/// Determines whether the provider-request count reaches the resolved compaction limit.
+/// 判断 Provider 请求数是否达到解析后的压缩阈值。
+///
+/// # Parameters
+/// 参数
+/// `policy` is the resolved context-compaction policy for this child session.
+/// `policy` 是该子代理会话解析后的上下文压缩策略。
+/// `provider_requests` is the count accumulated after the latest completed compaction.
+/// `provider_requests` 是最近一次完成压缩后累计的请求次数。
+///
+/// # Returns
+/// 返回值
+/// `true` when automatic compaction is enabled and a positive request limit has been reached.
+/// 当自动压缩启用且正数请求阈值已达到时返回 `true`。
+pub(super) fn task_provider_request_limit_reached(
+    policy: &ContextCompactionPolicySnapshot,
+    provider_requests: usize,
+) -> bool {
+    task_provider_request_limit_is_enabled(policy)
+        && policy
+            .max_provider_requests
+            .is_some_and(|limit| provider_requests >= limit)
+}
+
+/// Determines whether provider-request based context compaction is configured.
+/// 判断是否已配置基于 Provider 请求次数的上下文压缩。
+///
+/// # Parameters
+/// 参数
+/// `policy` is the resolved context-compaction policy for this child session.
+/// `policy` 是该子代理会话解析后的上下文压缩策略。
+///
+/// # Returns
+/// 返回值
+/// `true` when automatic compaction is enabled and a positive request limit exists.
+/// 当自动压缩启用且存在正数请求阈值时返回 `true`。
+pub(super) fn task_provider_request_limit_is_enabled(
+    policy: &ContextCompactionPolicySnapshot,
+) -> bool {
+    policy.auto_compaction_enabled && policy.max_provider_requests.is_some_and(|limit| limit > 0)
 }
 
 /// Resumes queued child-agent messages after the current active-run guard has been dropped.

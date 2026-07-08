@@ -364,6 +364,12 @@
   color: var(--muted-foreground);
 }
 
+.turn-stats-row.subagent {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--muted));
+  color: var(--foreground);
+}
+
 .turn-stats-row strong {
   min-width: 0;
   overflow: hidden;

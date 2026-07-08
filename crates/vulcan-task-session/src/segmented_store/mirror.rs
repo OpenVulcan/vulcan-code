@@ -44,7 +44,7 @@ pub(super) fn append_main_session_task_link_event(
         "task/{}",
         sanitize_file_component(&event.task_session_id.to_string())
     );
-    let task_metadata_file = format!("{task_dir}/{SEGMENTED_METADATA_FILE}");
+    let task_metadata_file = format!("{task_dir}/{SEGMENTED_TASK_METADATA_FILE}");
     let task_projection = main_session_task_metadata_projection(root_session_dir, &task_dir)
         .map_err(|error| {
             SessionStoreError::new(format!(
@@ -60,6 +60,18 @@ pub(super) fn append_main_session_task_link_event(
         TaskInvocationEventKind::TaskCompleted => "subagent_task_completed",
         _ => "subagent_task_event_linked",
     };
+    let mut payload = json!({
+        "task_session_id": event.task_session_id,
+        "task_dir": task_dir,
+        "task_active_segment": task_active_segment,
+        "task_metadata_file": task_metadata_file,
+        "agent_kind": task_projection.agent_kind.clone(),
+        "agent_profile": task_projection.agent_profile.clone(),
+        "line_count": task_projection.line_count,
+        "task_invocation_event": event,
+        "status": event.status
+    });
+    backfill_main_task_link_payload_sequence(&mut payload, next_seq);
     append_segment_event(
         SegmentEventAppendTarget {
             dir: root_session_dir,
@@ -71,17 +83,7 @@ pub(super) fn append_main_session_task_link_event(
         SegmentEventAppendRequest {
             kind: kind.to_string(),
             timestamp: event.timestamp_ms.to_string(),
-            payload: json!({
-            "task_session_id": event.task_session_id,
-            "task_dir": task_dir,
-            "task_active_segment": task_active_segment,
-            "task_metadata_file": task_metadata_file,
-            "agent_kind": task_projection.agent_kind.clone(),
-            "agent_profile": task_projection.agent_profile.clone(),
-            "line_count": task_projection.line_count,
-            "task_invocation_event": event,
-            "status": event.status
-            }),
+            payload,
             turn_index: None,
         },
     )?;
@@ -101,18 +103,38 @@ pub(super) fn append_main_session_task_link_event(
     Ok(true)
 }
 
+/// Backfills the root JSONL sequence into the nested task-invocation payload.
+/// 将根 JSONL 序号回填到嵌套的子任务调用载荷中。
+///
+/// # Parameters
+/// 参数
+/// `payload` is the mutable root task-link payload.
+/// `payload` 是可变的根任务关联载荷。
+/// `assigned_sequence` is the root JSONL sequence assigned by the segmented store.
+/// `assigned_sequence` 是分段存储分配的根 JSONL 序号。
+fn backfill_main_task_link_payload_sequence(payload: &mut Value, assigned_sequence: u64) {
+    if let Some(task_invocation_event) = payload
+        .get_mut("task_invocation_event")
+        .and_then(Value::as_object_mut)
+    {
+        task_invocation_event.insert(String::from("sequence"), json!(assigned_sequence));
+    }
+}
+
 /// Returns the next root-session sequence after the highest persisted segment line.
 /// 返回已持久化根会话分段行最大序号之后的下一个序号。
 fn next_main_session_sequence_after_existing_lines(
     root_session_dir: &Path,
     segments: &[SegmentMetadata],
 ) -> Result<u64, SessionStoreError> {
-    Ok(read_segment_lines(root_session_dir, segments)?
-        .into_iter()
-        .map(|line| line.seq)
-        .max()
-        .map(|seq| seq.saturating_add(1))
-        .unwrap_or(0))
+    Ok(
+        read_segment_lines_with_owned_append_lock(root_session_dir, segments)?
+            .into_iter()
+            .map(|line| line.seq)
+            .max()
+            .map(|seq| seq.saturating_add(1))
+            .unwrap_or(0),
+    )
 }
 
 /// Refreshes the root metadata task mirror from a saved child metadata document without appending a parent event.
@@ -201,20 +223,21 @@ fn main_session_task_metadata_projection(
     root_session_dir: &Path,
     task_dir: &str,
 ) -> Result<TaskMetadataProjection, SessionStoreError> {
-    let metadata = read_required_task_metadata_document(
+    let task_metadata = read_required_task_metadata_document(
         &root_session_dir
             .join(task_dir)
-            .join(SEGMENTED_METADATA_FILE),
+            .join(SEGMENTED_TASK_METADATA_FILE),
     )?;
+    let main_metadata = read_task_main_segment_metadata(&root_session_dir.join(task_dir))?;
     Ok(TaskMetadataProjection {
-        active_segment: metadata.active_segment,
-        line_count: metadata
+        active_segment: main_metadata.active_segment,
+        line_count: main_metadata
             .segments
             .iter()
             .map(|segment| segment.line_count)
             .sum(),
-        agent_kind: metadata.agent_kind,
-        agent_profile: metadata.agent_profile,
+        agent_kind: task_metadata.agent_kind,
+        agent_profile: task_metadata.agent_profile,
     })
 }
 
@@ -239,7 +262,7 @@ fn refresh_main_session_task_mirror(
         "task/{}",
         sanitize_file_component(&event.task_session_id.to_string())
     );
-    let task_metadata_file = format!("{task_dir}/{SEGMENTED_METADATA_FILE}");
+    let task_metadata_file = format!("{task_dir}/{SEGMENTED_TASK_METADATA_FILE}");
     let existing_index = tasks.iter().position(|task| {
         task.get("session_id")
             .and_then(Value::as_str)
@@ -487,7 +510,9 @@ fn main_session_task_invocation_events_by_task(
         let Some(value) = line.payload.get("task_invocation_event").cloned() else {
             continue;
         };
-        let event = serde_json::from_value::<TaskInvocationEvent>(value).map_err(to_store_error)?;
+        let mut event =
+            serde_json::from_value::<TaskInvocationEvent>(value).map_err(to_store_error)?;
+        event.sequence = line.seq;
         events_by_task.insert(event.task_session_id, event);
     }
     Ok(events_by_task)

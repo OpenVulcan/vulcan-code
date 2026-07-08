@@ -164,6 +164,10 @@ pub(crate) fn subagent_catalog_summary_from_catalog(
             enabled_count,
             catalog.errors.len()
         ),
+        child_agent_forbidden_tool_ids: vulcan_session_core::child_agent_forbidden_tool_ids()
+            .iter()
+            .map(|tool_id| (*tool_id).to_string())
+            .collect(),
         definitions: catalog
             .definitions
             .iter()
@@ -271,25 +275,61 @@ fn subagent_definition_summary(
         tool_policy_mode: capability_policy_mode_key(definition.tool_exposure.policy.mode)
             .to_string(),
         tool_policy_tools: definition.tool_exposure.policy.selectors.clone(),
-        allowed_tool_count: definition.tool_exposure.allowed_tools.len(),
-        disabled_tool_count: definition.tool_exposure.disabled_tools.len(),
-        enabled_prompt_skill_count: definition.prompt_skills.enabled.len(),
-        disabled_prompt_skill_count: definition.prompt_skills.disabled.len(),
+        allowed_tool_count: capability_policy_allowed_selectors(&definition.tool_exposure.policy)
+            .len(),
+        disabled_tool_count: capability_policy_denied_selectors(&definition.tool_exposure.policy)
+            .len(),
+        enabled_prompt_skill_count: capability_policy_allowed_selectors(
+            &definition.prompt_skills.policy,
+        )
+        .len(),
+        disabled_prompt_skill_count: capability_policy_denied_selectors(
+            &definition.prompt_skills.policy,
+        )
+        .len(),
         prompt_skill_policy_mode: capability_policy_mode_key(definition.prompt_skills.policy.mode)
             .to_string(),
         prompt_skill_policy_skills: definition.prompt_skills.policy.selectors.clone(),
         provider_model: subagent_provider_model_summary(definition, provider_configuration),
         system_prompt: definition.system_prompt.clone(),
         system_prompt_append: definition.system_prompt_append.clone(),
-        allowed_tools: definition.tool_exposure.allowed_tools.clone(),
-        disabled_tools: definition.tool_exposure.disabled_tools.clone(),
+        allowed_tools: capability_policy_allowed_selectors(&definition.tool_exposure.policy),
+        disabled_tools: capability_policy_denied_selectors(&definition.tool_exposure.policy),
         allowed_ai_capabilities: Vec::new(),
         disabled_ai_capabilities: Vec::new(),
         luaskills_overrides: definition.tool_exposure.luaskills_overrides.clone(),
         mcp_server_overrides: definition.tool_exposure.mcp_server_overrides.clone(),
-        enabled_prompt_skills: definition.prompt_skills.enabled.clone(),
-        disabled_prompt_skills: definition.prompt_skills.disabled.clone(),
+        enabled_prompt_skills: capability_policy_allowed_selectors(
+            &definition.prompt_skills.policy,
+        ),
+        disabled_prompt_skills: capability_policy_denied_selectors(
+            &definition.prompt_skills.policy,
+        ),
         capability_diagnostics: subagent_capability_diagnostics(definition),
+    }
+}
+
+/// Returns the allowed selectors represented by one capability policy.
+/// 返回单个能力策略表示的允许选择器。
+fn capability_policy_allowed_selectors(
+    policy: &vulcan_session_core::CapabilityPolicySnapshot,
+) -> Vec<String> {
+    match policy.mode {
+        vulcan_session_core::CapabilityPolicyMode::AllowOnly => policy.selectors.clone(),
+        vulcan_session_core::CapabilityPolicyMode::All
+        | vulcan_session_core::CapabilityPolicyMode::DenyOnly => Vec::new(),
+    }
+}
+
+/// Returns the denied selectors represented by one capability policy.
+/// 返回单个能力策略表示的禁用选择器。
+fn capability_policy_denied_selectors(
+    policy: &vulcan_session_core::CapabilityPolicySnapshot,
+) -> Vec<String> {
+    match policy.mode {
+        vulcan_session_core::CapabilityPolicyMode::DenyOnly => policy.selectors.clone(),
+        vulcan_session_core::CapabilityPolicyMode::All
+        | vulcan_session_core::CapabilityPolicyMode::AllowOnly => Vec::new(),
     }
 }
 
@@ -413,12 +453,18 @@ fn subagent_capability_diagnostics(
             "当前智能体已禁用，不会暴露给模型，也不能被 spawn_agent 解析。",
         ));
     }
-    if definition.tool_exposure.allowed_tools.is_empty()
-        && definition.tool_exposure.disabled_tools.is_empty()
+    let allowed_tools = capability_policy_allowed_selectors(&definition.tool_exposure.policy);
+    let disabled_tools = capability_policy_denied_selectors(&definition.tool_exposure.policy);
+    let enabled_prompt_skills =
+        capability_policy_allowed_selectors(&definition.prompt_skills.policy);
+    let disabled_prompt_skills =
+        capability_policy_denied_selectors(&definition.prompt_skills.policy);
+    if allowed_tools.is_empty()
+        && disabled_tools.is_empty()
         && definition.tool_exposure.luaskills_overrides.is_null()
         && definition.tool_exposure.mcp_server_overrides.is_null()
-        && definition.prompt_skills.enabled.is_empty()
-        && definition.prompt_skills.disabled.is_empty()
+        && enabled_prompt_skills.is_empty()
+        && disabled_prompt_skills.is_empty()
     {
         diagnostics.push(String::from(
             "未声明额外限制；最终能力仍由系统策略、LuaSkills 状态、MCP 连接和运行时工具快照决定。",
@@ -428,16 +474,16 @@ fn subagent_capability_diagnostics(
             "已声明能力策略；最终可见能力会继续受系统策略、LuaSkills 状态和 MCP 连接过滤。",
         ));
     }
-    if !definition.tool_exposure.allowed_tools.is_empty() {
+    if !allowed_tools.is_empty() {
         diagnostics.push(format!(
             "配置允许工具 {} 个；不存在或被系统禁用的工具不会进入最终工具集。",
-            definition.tool_exposure.allowed_tools.len()
+            allowed_tools.len()
         ));
     }
-    if !definition.prompt_skills.enabled.is_empty() {
+    if !enabled_prompt_skills.is_empty() {
         diagnostics.push(format!(
             "配置启用 Prompt Skills {} 个；不存在或被全局禁用的技能不会进入最终提示词组合。",
-            definition.prompt_skills.enabled.len()
+            enabled_prompt_skills.len()
         ));
     }
     diagnostics
@@ -555,5 +601,56 @@ pub(crate) fn luaskill_tool_registration_state_help(
         PersistedLuaSkillToolRegistrationState::Disabled => {
             "禁用：工具不会注册给模型，也不应被宿主调度调用。"
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capability_policy_allowed_selectors, capability_policy_denied_selectors};
+    use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
+
+    /// Verifies allow-only policy projection derives only allowed selectors.
+    /// 验证仅允许策略投影只派生允许选择器。
+    #[test]
+    fn capability_policy_projection_derives_allowed_selectors() {
+        let policy = CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::AllowOnly,
+            selectors: vec![String::from("shell_command")],
+        };
+
+        assert_eq!(
+            capability_policy_allowed_selectors(&policy),
+            vec![String::from("shell_command")]
+        );
+        assert!(capability_policy_denied_selectors(&policy).is_empty());
+    }
+
+    /// Verifies deny-only policy projection derives only denied selectors.
+    /// 验证仅禁用策略投影只派生禁用选择器。
+    #[test]
+    fn capability_policy_projection_derives_denied_selectors() {
+        let policy = CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::DenyOnly,
+            selectors: vec![String::from("ask")],
+        };
+
+        assert!(capability_policy_allowed_selectors(&policy).is_empty());
+        assert_eq!(
+            capability_policy_denied_selectors(&policy),
+            vec![String::from("ask")]
+        );
+    }
+
+    /// Verifies all policy projection exposes no selector list.
+    /// 验证 all 策略投影不会暴露选择器列表。
+    #[test]
+    fn capability_policy_projection_hides_all_mode_selectors() {
+        let policy = CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::All,
+            selectors: vec![String::from("stale")],
+        };
+
+        assert!(capability_policy_allowed_selectors(&policy).is_empty());
+        assert!(capability_policy_denied_selectors(&policy).is_empty());
     }
 }

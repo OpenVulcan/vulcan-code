@@ -242,9 +242,9 @@ pub(super) async fn dispatch_service_rpc(
             )
             .await,
         ),
-        "service_stop_conversation_run" => {
-            rpc_json_result(service_stop_conversation_run(app, state).await)
-        }
+        "service_stop_conversation_run" => rpc_json_result(
+            service_stop_conversation_run(app, state, rpc_optional_param(&params, "mode")?).await,
+        ),
         "service_stop_command_session" => rpc_json_result(
             service_stop_command_session(
                 app,

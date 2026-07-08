@@ -46,14 +46,7 @@ pub fn build_session_turn_stats_from_state_with_segments(
         .position(|record| record.id == closing_record_id)?;
     let boundary_index = records[..closing_index]
         .iter()
-        .rposition(|record| {
-            matches!(
-                record.record_kind,
-                SessionMessageRecordKind::SummaryOutput
-                    | SessionMessageRecordKind::TurnTerminated
-                    | SessionMessageRecordKind::TurnStats
-            )
-        })
+        .rposition(record_closes_parent_turn_boundary)
         .map(|index| index + 1)
         .unwrap_or(0);
     let start_index = records[boundary_index..=closing_index]
@@ -72,21 +65,22 @@ pub fn build_session_turn_stats_from_state_with_segments(
         .iter()
         .filter(|record| record_starts_user_turn(record))
         .count();
-    let turn_start_message_index = turn_start_user_record
-        .and_then(|user_record| {
-            canonical_turn_start_message_index(
-                conversation_state,
-                visible_user_record_count_before_turn,
-                user_record,
-            )
-        })
-        .unwrap_or(conversation_state.messages.len());
+    let turn_start_message_index = match turn_start_user_record {
+        Some(user_record) => canonical_turn_start_message_index(
+            conversation_state,
+            visible_user_record_count_before_turn,
+            user_record,
+        )
+        .unwrap_or(conversation_state.messages.len()),
+        None => fallback_turn_start_message_index_without_user_record(conversation_state),
+    };
     let turn_messages = &conversation_state.messages[turn_start_message_index..];
 
     let mut stats = SessionTurnStats {
         status,
         turn_kind,
         usage_segments: Vec::new(),
+        usage_groups: Vec::new(),
         provider_call_count: 0,
         tool_call_count: 0,
         input_tokens: 0,
@@ -108,6 +102,7 @@ pub fn build_session_turn_stats_from_state_with_segments(
         provider_id: None,
         model_id: None,
         provider_call_count: 0,
+        tool_call_count: 0,
         input_tokens: 0,
         output_tokens: 0,
         reasoning_tokens: 0,
@@ -198,13 +193,15 @@ pub fn build_session_turn_stats_from_state_with_segments(
         || assistant_segment.output_tokens > 0
         || assistant_segment.reasoning_tokens > 0
         || assistant_segment.total_tokens > 0
+        || assistant_segment.tool_call_count > 0
         || assistant_segment.cached_input_tokens.is_some()
         || assistant_segment.cache_creation_input_tokens.is_some()
     {
+        stats.merge_usage_segment_group(&assistant_segment);
         stats.usage_segments.push(assistant_segment);
     }
     for segment in explicit_usage_segments.drain(..) {
-        merge_usage_segment_into_stats(&mut stats, &segment);
+        merge_explicit_usage_segment_into_turn_stats(&mut stats, &segment);
         stats.usage_segments.push(segment);
     }
 
@@ -247,25 +244,63 @@ pub fn build_session_turn_stats_from_state_with_segments(
 
 /// Merges one explicit usage segment into aggregate turn statistics.
 /// 将一个显式用量分段合并到聚合轮次统计中。
-fn merge_usage_segment_into_stats(stats: &mut SessionTurnStats, segment: &SessionTurnUsageSegment) {
-    stats.provider_call_count = stats
-        .provider_call_count
-        .saturating_add(segment.provider_call_count);
-    stats.input_tokens = stats.input_tokens.saturating_add(segment.input_tokens);
-    stats.output_tokens = stats.output_tokens.saturating_add(segment.output_tokens);
-    stats.reasoning_tokens = stats
-        .reasoning_tokens
-        .saturating_add(segment.reasoning_tokens);
-    stats.total_tokens = stats.total_tokens.saturating_add(segment.total_tokens);
-    if let Some(cached_input_tokens) = segment.cached_input_tokens {
-        let accumulated = stats.cached_input_tokens.unwrap_or(0);
-        stats.cached_input_tokens = Some(accumulated.saturating_add(cached_input_tokens));
+///
+/// # Parameters
+/// 参数
+/// `stats` is the aggregate turn-statistics snapshot being updated.
+/// `stats` 是正在更新的聚合轮次统计快照。
+/// `segment` is one provider, tool, or child-agent usage segment.
+/// `segment` 是单个 Provider、工具或智能体用量分段。
+pub fn merge_usage_segment_into_turn_stats(
+    stats: &mut SessionTurnStats,
+    segment: &SessionTurnUsageSegment,
+) {
+    stats.merge_usage_segment(segment);
+}
+
+/// Merges one explicit usage segment while preserving parent-turn ownership boundaries.
+/// 合并一个显式用量分段，同时保留父级轮次归属边界。
+///
+/// # Parameters
+/// 参数
+/// `stats` is the aggregate turn-statistics snapshot being updated.
+/// `stats` 是正在更新的聚合轮次统计快照。
+/// `segment` is one explicit provider, tool, compaction, or child-agent usage segment.
+/// `segment` 是单个显式 Provider、工具、压缩或智能体用量分段。
+pub fn merge_explicit_usage_segment_into_turn_stats(
+    stats: &mut SessionTurnStats,
+    segment: &SessionTurnUsageSegment,
+) {
+    if stats.turn_kind == SessionTurnStatsKind::UserTurn
+        && segment.kind == SessionTurnUsageSegmentKind::SubagentTask
+    {
+        stats.merge_usage_segment_group(segment);
+        return;
     }
-    if let Some(cache_creation_input_tokens) = segment.cache_creation_input_tokens {
-        let accumulated = stats.cache_creation_input_tokens.unwrap_or(0);
-        stats.cache_creation_input_tokens =
-            Some(accumulated.saturating_add(cache_creation_input_tokens));
+    stats.merge_usage_segment(segment);
+}
+
+/// Returns whether one record closes a parent conversation turn for statistics slicing.
+/// 返回单条记录是否为父会话统计切片的轮次闭合边界。
+fn record_closes_parent_turn_boundary(record: &SessionConversationRecord) -> bool {
+    match record.record_kind {
+        SessionMessageRecordKind::SummaryOutput | SessionMessageRecordKind::TurnTerminated => true,
+        SessionMessageRecordKind::TurnStats => !record_is_subagent_feedback_turn_stats(record),
+        _ => false,
     }
+}
+
+/// Returns whether one turn-statistics record is only child-agent feedback accounting.
+/// 返回单条轮次统计记录是否只是智能体反馈用量记录。
+fn record_is_subagent_feedback_turn_stats(record: &SessionConversationRecord) -> bool {
+    record.record_kind == SessionMessageRecordKind::TurnStats
+        && record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("turn_stats"))
+            .and_then(|turn_stats| turn_stats.get("turn_kind"))
+            .and_then(Value::as_str)
+            .is_some_and(|turn_kind| turn_kind == "subagent_feedback")
 }
 
 /// Returns whether one visible transcript row starts a user-authored turn.
@@ -409,6 +444,56 @@ fn canonical_user_message_indexes_for_turn_mapping(
         user_message_indexes
     } else {
         protocol_user_indexes
+    }
+}
+
+/// Resolves a turn start from canonical messages when no visible user record exists.
+/// 当不存在可见用户记录时，从规范消息中解析轮次起点。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the canonical conversation state used for statistics.
+/// `conversation_state` 是用于统计的规范会话状态。
+///
+/// # Returns
+/// 返回值
+/// The best canonical message index for the current turn, or `messages.len()` when no provider-visible turn exists.
+/// 返回当前轮次的最佳规范消息下标；若不存在 Provider 可见轮次则返回 `messages.len()`。
+fn fallback_turn_start_message_index_without_user_record(
+    conversation_state: &SessionConversationState,
+) -> usize {
+    if let Some(index) = conversation_state
+        .messages
+        .iter()
+        .rposition(canonical_message_starts_provider_turn)
+    {
+        return index;
+    }
+    conversation_state
+        .messages
+        .iter()
+        .rposition(assistant_payload_contributes_to_turn_stats)
+        .unwrap_or(conversation_state.messages.len())
+}
+
+/// Returns whether one canonical message can start a provider-visible turn.
+/// 返回一条规范消息是否能开启 Provider 可见轮次。
+///
+/// # Parameters
+/// 参数
+/// `message` is the canonical message being inspected.
+/// `message` 是正在检查的规范消息。
+///
+/// # Returns
+/// 返回值
+/// `true` when the message is user text or a turn-triggering inter-agent message.
+/// 当消息是用户文本或触发轮次的智能体消息时返回 `true`。
+fn canonical_message_starts_provider_turn(message: &SessionConversationMessage) -> bool {
+    match &message.payload {
+        SessionConversationPayload::UserText { .. } => true,
+        SessionConversationPayload::AgentMessage { trigger_turn, .. } => *trigger_turn,
+        SessionConversationPayload::Assistant { .. }
+        | SessionConversationPayload::ToolResult { .. } => false,
     }
 }
 

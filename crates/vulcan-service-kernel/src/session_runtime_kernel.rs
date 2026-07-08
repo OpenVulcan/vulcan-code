@@ -105,6 +105,91 @@ pub(crate) fn sync_webui_session_runtime_kernel_to_workspace_state(
     runtime_state.updated_at = now;
 }
 
+/// Builds the stable parent mailbox input id for one child-agent execution.
+/// 为单次子代理执行构建稳定的父级 mailbox 输入标识。
+///
+/// # Parameters
+/// 参数
+/// `parent_session_id` identifies the parent WebUI session.
+/// `parent_session_id` 标识父级 WebUI 会话。
+/// `task_id` identifies the child task session.
+/// `task_id` 标识子任务会话。
+/// `execution_id` identifies the concrete child execution.
+/// `execution_id` 标识具体子执行。
+///
+/// # Returns
+/// 返回值
+/// The stable mailbox input id used by enqueue and consume paths.
+/// 返回入队与消费路径共用的稳定 mailbox 输入标识。
+fn subagent_mailbox_input_id(
+    parent_session_id: SessionId,
+    task_id: SessionId,
+    execution_id: &str,
+) -> String {
+    format!("subagent-mailbox-{parent_session_id}-{task_id}-{execution_id}")
+}
+
+/// Marks a child-agent execution mailbox input as consumed before it is enqueued.
+/// 在子代理执行 mailbox 输入入队之前将其标记为已消费。
+///
+/// # Parameters
+/// 参数
+/// `state` owns session runtime kernels.
+/// `state` 持有会话运行时内核。
+/// `parent_session_id` identifies the parent WebUI session.
+/// `parent_session_id` 标识父级 WebUI 会话。
+/// `task_id` identifies the child task session.
+/// `task_id` 标识子任务会话。
+/// `execution_id` identifies the concrete child execution.
+/// `execution_id` 标识具体子执行。
+///
+/// # Returns
+/// 返回值
+/// `true` when the consume marker was newly inserted.
+/// 新增消费标记时返回 `true`。
+pub(crate) fn consume_webui_subagent_mailbox_input_for_execution(
+    state: &mut ServiceBridgeState,
+    parent_session_id: SessionId,
+    task_id: SessionId,
+    execution_id: &str,
+) -> bool {
+    let execution_id = execution_id.trim();
+    if execution_id.is_empty() {
+        return false;
+    }
+    let input_id = subagent_mailbox_input_id(parent_session_id, task_id, execution_id);
+    let consumed = session_runtime_kernel_mut(state, parent_session_id)
+        .input_queue_mut()
+        .mark_input_consumed(input_id.clone());
+    sync_webui_session_runtime_kernel_to_workspace_state(state, parent_session_id);
+    webui_trace(
+        "subagent_mailbox_input_preconsumed",
+        format!(
+            "parent={parent_session_id} task={task_id} input_id={input_id} consumed={consumed}"
+        ),
+    );
+    consumed
+}
+
+/// Returns whether one child-agent execution mailbox input was already consumed by wait_agent.
+/// 返回某次智能体执行的 mailbox 输入是否已被 wait_agent 消费。
+pub(crate) fn webui_subagent_mailbox_input_consumed_for_execution(
+    state: &ServiceBridgeState,
+    parent_session_id: SessionId,
+    task_id: SessionId,
+    execution_id: &str,
+) -> bool {
+    let execution_id = execution_id.trim();
+    if execution_id.is_empty() {
+        return false;
+    }
+    let input_id = subagent_mailbox_input_id(parent_session_id, task_id, execution_id);
+    state
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .is_some_and(|kernel| kernel.input_queue().is_input_consumed(&input_id))
+}
+
 /// Captures the parent session turn binding for a detached WebUI subagent task.
 /// 为一个 WebUI 分离子代理任务捕获父会话回合绑定。
 ///
@@ -193,6 +278,67 @@ pub(crate) fn start_webui_session_kernel_user_turn(
     start_webui_session_kernel_turn(state, session_id, turn_id, ActiveTurnKind::UserPrompt)
 }
 
+/// Returns whether one parent session is actively waiting inside wait_agent.
+/// 返回一个父会话是否正处于 wait_agent 主动等待状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns WebUI runtime coordination state.
+/// `state` 持有 WebUI 运行时协调状态。
+/// `session_id` identifies the parent WebUI session.
+/// `session_id` 标识父级 WebUI 会话。
+///
+/// # Returns
+/// 返回值
+/// `true` only when a wait_agent invocation is currently registered as waiting.
+/// 仅当当前已注册 wait_agent 等待调用时返回 `true`。
+fn webui_session_wait_agent_is_waiting(state: &ServiceBridgeState, session_id: SessionId) -> bool {
+    state
+        .parent_sessions_waiting_for_subagents
+        .contains(&session_id)
+        || state
+            .session_runtime_kernels
+            .get(&session_id)
+            .is_some_and(SessionRuntimeKernel::has_wait_scopes)
+}
+
+/// Notifies an active wait_agent invocation about a real parent-side interruption.
+/// 向活跃 wait_agent 调用通知真实的父级插队或停止事件。
+///
+/// # Parameters
+/// 参数
+/// `state` owns WebUI runtime coordination state and the agent runtime bridge.
+/// `state` 持有 WebUI 运行时协调状态与智能体运行时桥。
+/// `session_id` identifies the parent WebUI session.
+/// `session_id` 标识父级 WebUI 会话。
+/// `reason` describes the interruption source for diagnostics.
+/// `reason` 描述用于诊断的打断来源。
+///
+/// # Returns
+/// 返回值
+/// `true` when a currently waiting wait_agent invocation was notified.
+/// 当当前等待中的 wait_agent 调用已被通知时返回 `true`。
+pub(crate) fn notify_webui_wait_agent_parent_interruption_if_waiting(
+    state: &ServiceBridgeState,
+    session_id: SessionId,
+    reason: &str,
+) -> bool {
+    if !webui_session_wait_agent_is_waiting(state, session_id) {
+        return false;
+    }
+    if let Some(agent_runtime) = state.agent_runtime.as_ref() {
+        agent_runtime
+            .task_runtime
+            .notify_parent_input_activity(SessionNodeId::from(session_id));
+        webui_trace(
+            "wait_agent_parent_interruption_notified",
+            format!("session={session_id} reason={reason}"),
+        );
+        return true;
+    }
+    false
+}
+
 /// Starts one WebUI turn in the session runtime kernel.
 /// 在会话运行时内核中启动一个 WebUI 回合。
 ///
@@ -219,11 +365,6 @@ pub(crate) fn start_webui_session_kernel_turn(
 ) -> Result<(), String> {
     if kind == ActiveTurnKind::UserPrompt {
         clear_webui_session_wait_agent_coordination(state, session_id, "new_user_turn");
-        if let Some(agent_runtime) = state.agent_runtime.as_ref() {
-            agent_runtime
-                .task_runtime
-                .notify_parent_input_activity(SessionNodeId::from(session_id));
-        }
     }
     let kernel = session_runtime_kernel_mut(state, session_id);
     let turn = kernel
@@ -295,6 +436,7 @@ pub(crate) fn stop_webui_session_kernel_generation(
     state: &mut ServiceBridgeState,
     session_id: SessionId,
 ) -> bool {
+    let notify_wait_agent = webui_session_wait_agent_is_waiting(state, session_id);
     let Some(kernel) = state.session_runtime_kernels.get_mut(&session_id) else {
         return false;
     };
@@ -307,21 +449,25 @@ pub(crate) fn stop_webui_session_kernel_generation(
                 turn.turn_id, turn.generation
             ),
         );
-        clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation");
-        if let Some(agent_runtime) = state.agent_runtime.as_ref() {
-            agent_runtime
-                .task_runtime
-                .notify_parent_input_activity(SessionNodeId::from(session_id));
+        if notify_wait_agent {
+            notify_webui_wait_agent_parent_interruption_if_waiting(
+                state,
+                session_id,
+                "stop_generation",
+            );
         }
+        clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation");
         sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
         true
     } else {
-        clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation_idle");
-        if let Some(agent_runtime) = state.agent_runtime.as_ref() {
-            agent_runtime
-                .task_runtime
-                .notify_parent_input_activity(SessionNodeId::from(session_id));
+        if notify_wait_agent {
+            notify_webui_wait_agent_parent_interruption_if_waiting(
+                state,
+                session_id,
+                "stop_generation_idle",
+            );
         }
+        clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation_idle");
         sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
         false
     }
@@ -627,6 +773,20 @@ pub(crate) enum SubagentMailboxEnqueueRejection {
         /// 当前代际是否已经显式停止。
         stopped: bool,
     },
+    /// The child-agent event did not carry an explicit terminal delivery status.
+    /// 子代理事件没有携带明确的终态投递状态。
+    InvalidTerminalStatus {
+        /// Raw status text found on the mailbox event, if any.
+        /// mailbox 事件中找到的原始状态文本，如果存在。
+        status: Option<String>,
+    },
+    /// The child-agent event did not carry a valid per-execution identifier.
+    /// 智能体事件没有携带有效的单次执行标识。
+    InvalidExecutionId {
+        /// Raw execution id value found on the task payload, if any.
+        /// task 载荷中找到的原始执行标识，如果存在。
+        execution_id: Option<String>,
+    },
 }
 
 impl SubagentMailboxEnqueueRejection {
@@ -636,6 +796,8 @@ impl SubagentMailboxEnqueueRejection {
         match self {
             Self::ParentMismatch { .. } => "parent_mismatch",
             Self::GenerationClosed { .. } => "generation_closed",
+            Self::InvalidTerminalStatus { .. } => "invalid_terminal_status",
+            Self::InvalidExecutionId { .. } => "invalid_execution_id",
         }
     }
 
@@ -653,8 +815,119 @@ impl SubagentMailboxEnqueueRejection {
             } => format!(
                 "generation_closed source_generation={source_generation} current_generation={current_generation} stopped={stopped}"
             ),
+            Self::InvalidTerminalStatus { status } => match status {
+                Some(status) => format!("invalid_terminal_status status={status}"),
+                None => String::from("invalid_terminal_status status=<missing>"),
+            },
+            Self::InvalidExecutionId { execution_id } => match execution_id {
+                Some(execution_id) => format!("invalid_execution_id execution_id={execution_id}"),
+                None => String::from("invalid_execution_id execution_id=<missing>"),
+            },
         }
     }
+}
+
+/// Extracts the required per-execution identifier for mailbox delivery.
+/// 提取 mailbox 投递所必需的单次执行标识。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the original child-agent event metadata.
+/// `metadata` 是原始智能体事件元数据。
+///
+/// # Returns
+/// 返回值
+/// The trimmed execution id or a hard rejection for malformed events.
+/// 返回清理后的执行标识，或对畸形事件给出硬拒绝。
+fn subagent_mailbox_execution_id_for_enqueue(
+    metadata: &Value,
+) -> Result<String, SubagentMailboxEnqueueRejection> {
+    let execution_id_value = metadata
+        .get("payload")
+        .filter(|payload| payload.is_object())
+        .and_then(|payload| payload.get("execution_id"));
+    let Some(execution_id_value) = execution_id_value else {
+        return Err(SubagentMailboxEnqueueRejection::InvalidExecutionId { execution_id: None });
+    };
+    let Some(execution_id) = execution_id_value.as_str() else {
+        return Err(SubagentMailboxEnqueueRejection::InvalidExecutionId {
+            execution_id: Some(execution_id_value.to_string()),
+        });
+    };
+    let execution_id = execution_id.trim();
+    if execution_id.is_empty() {
+        return Err(SubagentMailboxEnqueueRejection::InvalidExecutionId {
+            execution_id: Some(String::new()),
+        });
+    }
+    Ok(execution_id.to_string())
+}
+
+/// Normalizes an explicit child-agent mailbox terminal status.
+/// 规范化明确的智能体 mailbox 终态状态。
+///
+/// # Parameters
+/// 参数
+/// `status` is the raw status text carried by the child-agent event.
+/// `status` 是智能体事件携带的原始状态文本。
+///
+/// # Returns
+/// 返回值
+/// A canonical terminal status label when the input is terminal.
+/// 当输入为终态时返回规范终态标签。
+pub(crate) fn canonical_subagent_mailbox_terminal_status_label(
+    status: &str,
+) -> Option<&'static str> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "completed" | "complete" | "success" | "succeeded" => Some("completed"),
+        "failed" | "error" | "errored" => Some("failed"),
+        "stopped" | "cancelled" | "canceled" | "aborted" => Some("stopped"),
+        _ => None,
+    }
+}
+
+/// Extracts the explicit terminal status used for parent mailbox delivery.
+/// 提取用于父级 mailbox 投递的明确终态状态。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the original child-agent event metadata.
+/// `metadata` 是原始智能体事件元数据。
+/// `mailbox_event` is the normalized mailbox event copied into the parent queue.
+/// `mailbox_event` 是复制进父级队列的规范 mailbox 事件。
+///
+/// # Returns
+/// 返回值
+/// The canonical terminal status or a hard rejection for malformed events.
+/// 返回规范终态状态，或对畸形事件给出硬拒绝。
+fn subagent_mailbox_terminal_status_for_enqueue(
+    metadata: &Value,
+    mailbox_event: &Value,
+) -> Result<&'static str, SubagentMailboxEnqueueRejection> {
+    let event_payload = mailbox_event
+        .get("payload")
+        .filter(|payload| payload.is_object());
+    let status = mailbox_event
+        .get("delivery_status")
+        .or_else(|| mailbox_event.get("status"))
+        .or_else(|| mailbox_event.get("execution_status"))
+        .or_else(|| event_payload.and_then(|payload| payload.get("status")))
+        .or_else(|| event_payload.and_then(|payload| payload.get("execution_status")))
+        .or_else(|| mailbox_event.get("kind"))
+        .or_else(|| {
+            metadata
+                .get("payload")
+                .and_then(|payload| payload.get("execution_status"))
+        })
+        .and_then(Value::as_str);
+    let Some(status) = status else {
+        return Err(SubagentMailboxEnqueueRejection::InvalidTerminalStatus { status: None });
+    };
+    canonical_subagent_mailbox_terminal_status_label(status).ok_or_else(|| {
+        SubagentMailboxEnqueueRejection::InvalidTerminalStatus {
+            status: Some(status.to_string()),
+        }
+    })
 }
 
 /// Enqueues one subagent completion event into the parent session kernel mailbox.
@@ -703,6 +976,14 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         .parent_sessions_waiting_for_subagents
         .contains(&parent_session_id);
     let kernel = session_runtime_kernel_mut(state, parent_session_id);
+    let deliver_to_active_parent_turn = kernel.active_turn().is_some()
+        && !kernel.has_wait_scopes()
+        && kernel.input_queue().delivery_phase() != MailboxDeliveryPhase::Closed;
+    if deliver_to_active_parent_turn {
+        kernel
+            .input_queue_mut()
+            .accept_mailbox_delivery_for_current_turn();
+    }
     // Terminal child-agent messages should wake an idle parent unless wait_agent owns delivery.
     // 终态子代理消息应唤醒空闲父会话，除非当前由 wait_agent 接管投递。
     let trigger_parent_turn = !parent_is_waiting_for_subagents && !kernel.has_wait_scopes();
@@ -733,8 +1014,35 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         .and_then(|payload| payload.get("subagent_mailbox_event"))
         .cloned()
         .unwrap_or_else(|| metadata.clone());
+    let terminal_status =
+        match subagent_mailbox_terminal_status_for_enqueue(metadata, &mailbox_event) {
+            Ok(status) => status,
+            Err(rejection) => {
+                webui_trace(
+                    "subagent_mailbox_input_rejected_terminal_status",
+                    format!(
+                        "parent={parent_session_id} task={task_id} {}",
+                        rejection.diagnostic()
+                    ),
+                );
+                return SubagentMailboxEnqueueOutcome::Rejected(rejection);
+            }
+        };
+    let execution_id = match subagent_mailbox_execution_id_for_enqueue(metadata) {
+        Ok(execution_id) => execution_id,
+        Err(rejection) => {
+            webui_trace(
+                "subagent_mailbox_input_rejected_execution_id",
+                format!(
+                    "parent={parent_session_id} task={task_id} {}",
+                    rejection.diagnostic()
+                ),
+            );
+            return SubagentMailboxEnqueueOutcome::Rejected(rejection);
+        }
+    };
     let parent_turn_id_for_payload = parent_turn_id.clone();
-    let input_id = format!("subagent-mailbox-{parent_session_id}-{task_id}");
+    let input_id = subagent_mailbox_input_id(parent_session_id, task_id, execution_id.as_str());
     let mut input = TurnInput::new(
         input_id.clone(),
         SessionNodeId::from(parent_session_id),
@@ -743,11 +1051,14 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         timestamp_ms,
         json!({
             "task_id": task_id.to_string(),
+            "execution_id": execution_id,
             "parent_session_id": parent_session_id.to_string(),
             "source_generation": source_generation,
             "parent_turn_id": parent_turn_id_for_payload,
             "mailbox_event": mailbox_event,
+            "delivery_status": terminal_status,
             "trigger_parent_turn": trigger_parent_turn,
+            "deliver_to_active_parent_turn": deliver_to_active_parent_turn,
         }),
     );
     if let Some(parent_turn_id) = parent_turn_id.clone() {
@@ -758,12 +1069,14 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
     let outcome = if accepted {
         SubagentMailboxEnqueueOutcome::Queued
     } else {
-        SubagentMailboxEnqueueOutcome::AlreadyPresentOrConsumed { input_id }
+        SubagentMailboxEnqueueOutcome::AlreadyPresentOrConsumed {
+            input_id: input_id.clone(),
+        }
     };
     webui_trace(
         "subagent_mailbox_input_enqueued",
         format!(
-            "parent={parent_session_id} task={task_id} outcome={} generation={source_generation} trigger_parent_turn={trigger_parent_turn}",
+            "parent={parent_session_id} task={task_id} input_id={input_id} outcome={} generation={source_generation} trigger_parent_turn={trigger_parent_turn} deliver_to_active_parent_turn={deliver_to_active_parent_turn}",
             outcome.trace_label()
         ),
     );

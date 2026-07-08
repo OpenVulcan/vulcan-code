@@ -87,7 +87,7 @@ mod run_loop;
 mod tool_execution;
 mod transcript;
 
-pub use transcript::AgentMessageAppendRequest;
+pub use transcript::{AgentMessageAppendRequest, DisplayRecordAppendRequest};
 
 use metadata::*;
 

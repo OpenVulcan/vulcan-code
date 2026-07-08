@@ -78,6 +78,7 @@ pub mod provider_transport_stream_runtime;
 pub mod provider_transport_tool_context;
 pub mod provider_transport_turn_request;
 pub mod provider_transport_wire_capture;
+pub mod provider_visible_agent_messages;
 pub mod question_runtime;
 pub mod runtime;
 pub mod runtime_request_capture;
@@ -104,7 +105,8 @@ pub mod vmm_hooks;
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::ExecutionStreamEvent;
 pub use execution_models::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
+    ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
 };
 pub use runtime::RuntimeFoundation;
 pub use runtime_stream::{stream_runtime_run, stream_runtime_run_with_intervention};

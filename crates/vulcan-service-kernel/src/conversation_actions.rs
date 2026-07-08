@@ -157,19 +157,6 @@ pub(crate) async fn service_fork_conversation(
         fork_title,
     )
     .await?;
-    if let Some(before_message_id) = request
-        .before_message_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        rollback_persisted_session_before_user_prompt(
-            &controller_runtime,
-            fork_result.session.id,
-            before_message_id,
-        )
-        .await?;
-    }
     record_persisted_session_fork_source_marker(
         &controller_runtime,
         fork_result.session.id,

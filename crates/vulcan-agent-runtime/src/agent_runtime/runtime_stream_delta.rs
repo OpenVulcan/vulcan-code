@@ -51,6 +51,12 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Latest successful provider usage emitted by the current provider loop.
     /// 当前 Provider 循环发出的最近一次成功 Provider 用量。
     last_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
+    /// Cumulative successful provider usage for the current runtime stream.
+    /// 当前运行时流中成功 Provider 调用的累计用量。
+    cumulative_successful_provider_usage: Option<CoreProviderUsageSnapshot>,
+    /// Number of successful assistant provider turns already reflected in the cumulative usage.
+    /// 已经计入累计用量的成功助手 Provider 回合数量。
+    cumulative_usage_accounted_assistant_turns: usize,
     /// Terminal provider error captured from the stream, if one has occurred.
     /// 如果已经发生，则保存从流中捕获到的终态 Provider 错误。
     terminal_error: Option<String>,
@@ -71,6 +77,8 @@ impl RuntimeStreamDeltaState {
             provider_request_count: 0,
             final_conversation_state: None,
             last_successful_provider_usage: None,
+            cumulative_successful_provider_usage: None,
+            cumulative_usage_accounted_assistant_turns: 0,
             terminal_error: None,
         }
     }
@@ -129,6 +137,14 @@ impl RuntimeStreamDeltaState {
         &mut self,
     ) -> Option<CoreProviderUsageSnapshot> {
         self.last_successful_provider_usage.take()
+    }
+
+    /// Drains and returns cumulative successful provider usage captured during this stream.
+    /// 提取并返回本次流式执行期间捕获到的成功 Provider 累计用量。
+    pub(crate) fn take_cumulative_successful_provider_usage(
+        &mut self,
+    ) -> Option<CoreProviderUsageSnapshot> {
+        self.cumulative_successful_provider_usage.take()
     }
 
     /// Drains and returns the terminal stream error, if one has been captured.
@@ -226,6 +242,72 @@ impl RuntimeStreamDeltaState {
         events.push(ExecutionStreamEvent::RuntimeEvent { session_id, event });
         events
     }
+
+    /// Records one newly completed successful provider turn usage exactly once.
+    /// 将一个新完成的成功 Provider 回合用量恰好记录一次。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `conversation_state` is the checkpoint state containing successful assistant turns.
+    /// `conversation_state` 是包含成功助手回合的检查点状态。
+    /// `usage` is the latest successful provider usage reported with that checkpoint.
+    /// `usage` 是该检查点携带的最近一次成功 Provider 用量。
+    fn record_successful_provider_usage_checkpoint(
+        &mut self,
+        conversation_state: &SessionConversationState,
+        usage: &CoreProviderUsageSnapshot,
+    ) {
+        let successful_assistant_turns =
+            successful_assistant_provider_turn_count(conversation_state);
+        if successful_assistant_turns <= self.cumulative_usage_accounted_assistant_turns {
+            return;
+        }
+        let cumulative = self
+            .cumulative_successful_provider_usage
+            .get_or_insert_with(CoreProviderUsageSnapshot::default);
+        cumulative.accumulate_from(usage);
+        self.cumulative_usage_accounted_assistant_turns = successful_assistant_turns;
+    }
+}
+
+/// Counts assistant messages that represent completed provider turns in one checkpoint.
+/// 统计一个检查点中代表已完成 Provider 回合的助手消息数量。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the canonical conversation checkpoint to inspect.
+/// `conversation_state` 是需要检查的规范会话检查点。
+///
+/// # Returns
+/// 返回值
+/// The number of assistant messages that carry visible output, reasoning, tools, or usage.
+/// 返回携带可见输出、思考、工具调用或用量的助手消息数量。
+fn successful_assistant_provider_turn_count(
+    conversation_state: &SessionConversationState,
+) -> usize {
+    conversation_state
+        .messages
+        .iter()
+        .filter(|message| match &message.payload {
+            crate::conversation_protocol::SessionConversationPayload::Assistant {
+                text,
+                reasoning,
+                usage,
+                tool_calls,
+                ..
+            } => {
+                !text.trim().is_empty()
+                    || !reasoning.trim().is_empty()
+                    || usage.is_some()
+                    || !tool_calls.is_empty()
+            }
+            crate::conversation_protocol::SessionConversationPayload::UserText { .. }
+            | crate::conversation_protocol::SessionConversationPayload::ToolResult { .. }
+            | crate::conversation_protocol::SessionConversationPayload::AgentMessage { .. } => {
+                false
+            }
+        })
+        .count()
 }
 
 /// Processes one provider-stream item, mutates the loop state in place, and returns the execution events that should be emitted immediately.
@@ -270,6 +352,7 @@ pub(crate) fn process_provider_stream_delta(
             state.final_conversation_state = Some(conversation_state.clone());
             if let Some(usage) = last_successful_provider_usage {
                 state.last_successful_provider_usage = Some(usage.clone());
+                state.record_successful_provider_usage_checkpoint(&conversation_state, &usage);
             }
             vec![ExecutionStreamEvent::ConversationCheckpoint {
                 session_id,
@@ -334,6 +417,52 @@ mod tests {
             additional_params: None,
             request_headers: None,
             continuation: vulcan_core::types::ProviderContinuation::default(),
+        }
+    }
+
+    /// Builds one provider usage snapshot for cumulative accounting tests.
+    /// 为累计统计测试构建一份 Provider 用量快照。
+    fn build_usage_snapshot(
+        input_tokens: usize,
+        output_tokens: usize,
+        reasoning_tokens: usize,
+        total_tokens: usize,
+        cached_input_tokens: usize,
+    ) -> CoreProviderUsageSnapshot {
+        CoreProviderUsageSnapshot {
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            reasoning_tokens: Some(reasoning_tokens),
+            total_tokens: Some(total_tokens),
+            cached_input_tokens: Some(cached_input_tokens),
+            cache_creation_input_tokens: None,
+        }
+    }
+
+    /// Builds one canonical conversation checkpoint with visible successful assistant turns.
+    /// 构建一份包含可见成功助手回合的规范会话检查点。
+    fn build_successful_conversation_state(assistant_texts: &[&str]) -> SessionConversationState {
+        SessionConversationState {
+            messages: assistant_texts
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, text)| crate::conversation_protocol::SessionConversationMessage {
+                        id: format!("assistant-{index}"),
+                        payload:
+                            crate::conversation_protocol::SessionConversationPayload::Assistant {
+                                text: (*text).to_string(),
+                                reasoning: String::new(),
+                                provider_message_id: None,
+                                provider_message_state: None,
+                                usage: None,
+                                tool_calls: Vec::new(),
+                            },
+                    },
+                )
+                .collect(),
+            records: Vec::new(),
+            continuation: Default::default(),
         }
     }
 
@@ -442,6 +571,73 @@ mod tests {
             [ExecutionStreamEvent::ProviderLoweringRepair { event, .. }]
                 if event.repair_id == "repair-1" && event.affected_items == 2
         ));
+    }
+
+    /// Accumulates successful provider usage across provider turns without double-counting duplicate checkpoints.
+    /// 跨 Provider 回合累计成功用量，同时避免重复检查点造成重复计数。
+    #[test]
+    fn final_state_accumulates_provider_usage_once_per_successful_assistant_turn() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state();
+        let usage_one = build_usage_snapshot(20_000, 120, 30, 20_150, 19_500);
+        let usage_two = build_usage_snapshot(22_000, 160, 40, 22_200, 21_200);
+
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        let first_checkpoint = build_successful_conversation_state(&["第一次响应"]);
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::FinalConversationState(
+                first_checkpoint.clone(),
+                Some(usage_one.clone()),
+            )),
+        );
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::FinalConversationState(
+                first_checkpoint,
+                Some(usage_one),
+            )),
+        );
+
+        let _ = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+        let final_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::FinalConversationState(
+                build_successful_conversation_state(&["第一次响应", "第二次响应"]),
+                Some(usage_two),
+            )),
+        );
+        assert!(matches!(
+            final_events.as_slice(),
+            [ExecutionStreamEvent::ConversationCheckpoint {
+                provider_request_count,
+                ..
+            }] if *provider_request_count == 2
+        ));
+
+        let cumulative_usage = state
+            .take_cumulative_successful_provider_usage()
+            .expect("successful provider usage should be accumulated");
+        assert_eq!(cumulative_usage.input_tokens, Some(42_000));
+        assert_eq!(cumulative_usage.output_tokens, Some(280));
+        assert_eq!(cumulative_usage.reasoning_tokens, Some(70));
+        assert_eq!(cumulative_usage.total_tokens, Some(42_350));
+        assert_eq!(cumulative_usage.cached_input_tokens, Some(40_700));
     }
 
     /// Captures terminal errors while final conversation states also emit a safe workbench checkpoint.

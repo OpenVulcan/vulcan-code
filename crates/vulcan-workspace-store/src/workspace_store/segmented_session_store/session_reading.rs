@@ -13,7 +13,10 @@ pub(in crate::workspace_store) fn read_segmented_session_event_window(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    repair_segmented_session_jsonl_files_if_needed(session_dir)?;
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let metadata = read_session_metadata(session_dir)?;
     let cursor = before_seq.unwrap_or(u64::MAX);
     let mut window = Vec::with_capacity(limit);
@@ -47,7 +50,10 @@ pub(in crate::workspace_store) fn read_segmented_session_turn_window(
             has_more_history: false,
         });
     }
-    repair_segmented_session_jsonl_files_if_needed(session_dir)?;
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     let metadata = read_session_metadata(session_dir)?;
     let cursor = before_seq.unwrap_or(u64::MAX);
     // Rollback replacement lines define the durable transcript boundary for display reads.
@@ -107,7 +113,10 @@ pub(in crate::workspace_store) fn segmented_lines_to_session_messages(
 pub(in crate::workspace_store) fn replay_segmented_session_context(
     session_dir: &Path,
 ) -> Result<Option<SegmentedSessionReplayResult>, String> {
-    repair_segmented_session_jsonl_files_if_needed(session_dir)?;
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
     replay_segmented_session_context_without_repair(session_dir)
 }
 

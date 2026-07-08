@@ -56,6 +56,38 @@ impl TaskSessionStatus {
                 | Self::Compacting
         )
     }
+
+    /// Returns whether this status represents a settled execution result.
+    /// 返回该状态是否代表已落定的执行结果。
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Stopped)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskSessionStatus;
+
+    /// Verifies completed, failed, and stopped statuses share the terminal contract.
+    /// 验证完成、失败和停止状态共享同一终态契约。
+    #[test]
+    fn task_session_status_terminal_flags_cover_all_settled_results() {
+        assert!(TaskSessionStatus::Completed.is_terminal());
+        assert!(TaskSessionStatus::Failed.is_terminal());
+        assert!(TaskSessionStatus::Stopped.is_terminal());
+    }
+
+    /// Verifies active and archival statuses are not execution-result terminals.
+    /// 验证活动状态和归档状态不是执行结果终态。
+    #[test]
+    fn task_session_status_terminal_flags_exclude_active_and_archived_states() {
+        assert!(!TaskSessionStatus::Created.is_terminal());
+        assert!(!TaskSessionStatus::Running.is_terminal());
+        assert!(!TaskSessionStatus::WaitingChildren.is_terminal());
+        assert!(!TaskSessionStatus::WaitingFollowup.is_terminal());
+        assert!(!TaskSessionStatus::Compacting.is_terminal());
+        assert!(!TaskSessionStatus::Archived.is_terminal());
+    }
 }
 
 /// Compact task-session summary used by routers and parent indexes.
@@ -189,6 +221,10 @@ pub struct TaskSessionMetadata {
     /// Runtime policy frozen for this task session.
     /// 为该子代理会话固化的运行时策略。
     pub runtime_policy: ExecutionRuntimePolicy,
+    /// Fixed agent prompt captured when the task session was created.
+    /// 创建子代理会话时捕获的固定代理提示词。
+    #[serde(default)]
+    pub agent_prompt_snapshot: Option<String>,
     /// Requested configuration stored for audit.
     /// 为审计保存的请求配置。
     pub requested_config: SessionRequestedConfig,
@@ -270,6 +306,7 @@ impl TaskSessionMetadata {
             status: TaskSessionStatus::Created,
             stop_reason: None,
             runtime_policy: ExecutionRuntimePolicy::task_session(),
+            agent_prompt_snapshot: None,
             requested_config,
             effective_config,
             created_at: timestamp_ms,
@@ -318,9 +355,6 @@ pub enum TaskInvocationEventKind {
     /// Task session was stopped.
     /// 子代理会话已停止。
     TaskStopped,
-    /// Task feedback was appended.
-    /// 子代理反馈已追加。
-    TaskFeedbackAppended,
     /// Task context was compacted.
     /// 子代理上下文已压缩。
     TaskCompacted,
@@ -363,34 +397,4 @@ pub struct TaskInvocationEvent {
     /// Event payload owned by the task-session layer.
     /// 由子代理会话层拥有的事件载荷。
     pub payload: Value,
-}
-
-/// Feedback returned from a task session to its direct parent.
-/// 子代理会话返回给直接父级的反馈。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskFeedback {
-    /// Task session identifier.
-    /// 子代理会话标识符。
-    pub task_session_id: TaskSessionId,
-    /// Task-session terminal or checkpoint status.
-    /// 子代理会话终态或检查点状态。
-    pub status: TaskSessionStatus,
-    /// Optional concise summary.
-    /// 可选的简要摘要。
-    pub summary: Option<String>,
-    /// Optional result text visible to the parent agent.
-    /// 可选的父代理可见结果文本。
-    pub result_text: Option<String>,
-    /// Optional result message identifier inside the task session.
-    /// 可选的子代理会话内部结果消息标识符。
-    pub result_message_id: Option<String>,
-    /// Provider turns executed by the task session.
-    /// 子代理会话已执行的供应商轮次数。
-    pub provider_turns_executed: u64,
-    /// Tool calls processed by the task session.
-    /// 子代理会话已处理的工具调用数。
-    pub tool_calls_processed: u64,
-    /// Last update timestamp in milliseconds.
-    /// 最近更新时间毫秒值。
-    pub updated_at: u64,
 }

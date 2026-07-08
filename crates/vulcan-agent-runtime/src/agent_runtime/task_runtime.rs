@@ -2,13 +2,15 @@
 //! 供宿主管理 task_id 续跑与嵌套子任务执行使用的可恢复任务会话运行时模块。
 
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
-use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
+use crate::agent_runtime::execution_models::{
+    ExecutionAgentPromptSnapshot, ExecutionPreparationRequest, ExecutionRunReport,
+    ExecutionSubagentPromptContext,
+};
 use crate::agent_runtime::execution_preparation::prepare_execution_with_tool_snapshot;
 use crate::agent_runtime::prompt_compaction::{
     PromptCompactionFoundationJobRequest, PromptCompactionStreamEvent,
     stream_prompt_compaction_foundation_job,
 };
-use crate::agent_runtime::prompt_composer_runtime::runtime_prompt_composer_engine;
 use crate::agent_runtime::provider_request_bridge_conversation::{
     build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
 };
@@ -22,11 +24,17 @@ use crate::agent_runtime::tool_runtime_bridge::{
     attach_runtime_event_projection_barrier, cancel_runtime_event_projection_barrier,
     wait_runtime_event_projection_barrier,
 };
-use crate::conversation_protocol::SessionConversationState;
+use crate::conversation_protocol::{SessionConversationRecord, SessionConversationState};
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::model::{SessionId, SessionTurnUsageSegment, SessionTurnUsageSegmentKind};
+use crate::model::{
+    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionTurnStats,
+    SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
+    SessionTurnUsageSegmentKind, build_session_record_message_id,
+};
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
-use crate::tooling::native::TODOLIST_TOOL_ID;
+use crate::turn_stats::{
+    build_session_turn_stats_from_state_with_segments, merge_usage_segment_into_turn_stats,
+};
 use async_stream::stream;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -47,15 +55,11 @@ use tokio::task::AbortHandle;
 use uuid::Uuid;
 use vulcan_context::{ContextCompactionPolicy, conversation_state_to_compaction_source_messages};
 use vulcan_context_compaction::{CompactionPlanInput, plan_context_compaction};
+#[cfg(test)]
+use vulcan_core::types::ConversationPayload as CoreConversationPayload;
 use vulcan_core::types::{
-    ControllerConfig as CoreControllerConfig, ConversationMessage as CoreConversationMessage,
-    ConversationPayload as CoreConversationPayload,
-    ConversationSnapshot as CoreConversationSnapshot,
+    ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     ProviderPromptLayers as CoreProviderPromptLayers,
-};
-use vulcan_prompt_composer::{
-    ModelDescriptor, PersonalitySelection, PromptAssemblyInput, PromptAssemblyMode,
-    PromptAssemblyOutput, ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot,
 };
 use vulcan_session_boundary::{
     InMemorySubagentMailbox, SessionThreadId, SubagentMailbox, SubagentMailboxAgentKind,
@@ -85,6 +89,10 @@ use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
     VulcanToolInvocationResult, VulcanToolSourceKind,
 };
+use vulcan_workspace_store::workspace_store::{
+    sync_segmented_session_display_from_conversation_state,
+    sync_segmented_session_runtime_log_from_conversation_state,
+};
 
 /// Default nested-task depth limit used to prevent unbounded recursive task spawning.
 /// 用于防止无限递归任务派生的默认嵌套任务深度上限。
@@ -97,10 +105,6 @@ const STOPPED_TASK_RESULT_SUMMARY: &str = "The subagent was stopped at the user'
 /// Running inspection summary returned only when the model checks a task that is already active.
 /// 仅当模型检查一条已经运行中的任务时返回的运行中查看摘要。
 const RUNNING_TASK_RESULT_SUMMARY: &str = "This is a running-status acknowledgement, not the subagent's final result. The subagent owns the delegated work now. Do not recreate the same child agent, do not replace the unfinished subagent work with direct main-thread or non-agent tool calls, and do not produce a final answer from assumptions. If coordination requires a status check, use list_agents or wait_agent for the existing child agent.";
-
-/// Windows filesystem path guidance injected into child task prompts to stabilize tool calls.
-/// 注入到子任务提示词中的 Windows 文件系统路径指引，用于稳定工具调用。
-const WINDOWS_TASK_FILESYSTEM_PATH_GUIDANCE: &str = "[Filesystem Paths]\nWhen calling filesystem-oriented tools on Windows, prefer standard absolute Windows paths like C:\\repo\\path. Do not wrap tool arguments in Markdown code fences or extra quotes. When a JSON string needs escaping, keep the semantic path as a normal Windows path and escape backslashes only as required by the transport format.";
 
 mod agent_control;
 mod arguments;
@@ -141,6 +145,18 @@ pub type TaskExecutionFuture =
 pub type TaskExecutionHandler =
     Arc<dyn Fn(TaskExecutionRequest) -> TaskExecutionFuture + Send + Sync>;
 
+/// Explicit source used to initialize a newly created child-agent runtime state.
+/// 用于初始化新建子智能体运行时状态的显式来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskInitialContextSource {
+    /// Start the child agent from an empty runtime conversation state.
+    /// 使用空运行时会话状态启动子智能体。
+    Fresh,
+    /// Clone the latest parent runtime conversation state at creation time.
+    /// 在创建时克隆最新父级运行时会话状态。
+    CloneLatestRuntime,
+}
+
 /// Structured TaskSession arguments used internally by the child-agent tool surface.
 /// 子代理工具面内部使用的结构化 TaskSession 参数。
 #[derive(Debug, Clone, Deserialize)]
@@ -164,9 +180,6 @@ struct TaskToolInvocationArgs {
     /// Optional string catalog id for the requested subagent definition.
     /// 请求的子代理定义可选字符串目录标识。
     subagent_profile_id: Option<String>,
-    /// Optional Vulcan context fork selector for a new subagent.
-    /// 新子代理使用的可选 Vulcan 上下文派生选择器。
-    fork_turns: Option<String>,
     /// Optional inheritance override for the subagent run.
     /// 子代理运行的可选继承覆盖。
     inherit_parent_config: Option<bool>,
@@ -248,6 +261,9 @@ struct TaskSessionRecord {
     /// Fully resolved controller configuration reused when this task is resumed.
     /// 任务续跑时复用的完整控制器配置。
     controller_config: Option<CoreControllerConfig>,
+    /// Fixed parent-runtime agent prompt captured when this task was created.
+    /// 创建该任务时捕获的固定父级运行时代理提示词。
+    agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
     /// Canonical conversation snapshot retained for later resumption.
     /// 为后续续跑保留的规范会话快照。
     snapshot: CoreConversationSnapshot,
@@ -281,6 +297,9 @@ pub struct TaskExecutionRequest {
     /// Stable task identifier for the child or resumed task session.
     /// 子任务或续跑任务会话的稳定任务标识。
     pub task_id: SessionId,
+    /// Stable identifier for this concrete child execution attempt.
+    /// 本次子任务具体执行尝试的稳定标识。
+    pub execution_id: String,
     /// Caller-facing task identifier echoed back to the parent model and host UI.
     /// 回传给父模型与宿主界面的调用方面向任务标识。
     pub public_task_id: String,
@@ -459,12 +478,18 @@ struct ActiveTaskRunEntry {
 /// 等待子代理安全边界消费的一条代理间消息。
 #[derive(Debug, Clone)]
 struct QueuedInterAgentMessage {
+    /// Stable delivery id shared by queue, display records, and host payloads.
+    /// 队列、显示记录与宿主载荷共享的稳定投递标识。
+    delivery_id: String,
     /// Session that authored the message.
     /// 发出该消息的会话标识。
     author_session_id: SessionId,
     /// Target child-agent task session.
     /// 目标子代理任务会话标识。
     target_task_id: SessionId,
+    /// Caller-facing target child-agent id.
+    /// 调用方面向的目标智能体标识。
+    target_agent_id: String,
     /// Human-readable message content.
     /// 人类可读消息正文。
     content: String,
@@ -531,12 +556,12 @@ pub(crate) struct TaskExecutionRuntimeContext {
     /// Parent execution request used as the template for child TaskSession requests.
     /// 用作子代理 TaskSession 请求模板的父级执行请求。
     pub(crate) request_template: ExecutionPreparationRequest,
+    /// Fixed agent prompt captured for child executions spawned from this context.
+    /// 为从该上下文派生的子代理执行捕获的固定代理提示词。
+    pub(crate) agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
     /// Parent canonical snapshot available for context forking into child agents.
     /// 可派生给子代理上下文的父级规范快照。
     pub(crate) parent_snapshot: CoreConversationSnapshot,
-    /// Whether child agents should inherit the subagent orchestration tool family.
-    /// 子代理是否应继承子代理调度工具族。
-    pub(crate) allow_subagent_tools: bool,
 }
 
 impl TaskExecutionRuntimeContext {
@@ -548,13 +573,15 @@ impl TaskExecutionRuntimeContext {
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
         request_template: ExecutionPreparationRequest,
     ) -> Self {
+        let agent_prompt_snapshot =
+            fixed_agent_prompt_snapshot_for_request(&foundation, &request_template);
         Self {
             config,
             foundation,
             luaskills_runtime,
             request_template,
+            agent_prompt_snapshot,
             parent_snapshot: CoreConversationSnapshot::default(),
-            allow_subagent_tools: false,
         }
     }
 
@@ -577,23 +604,34 @@ impl TaskExecutionRuntimeContext {
         self.parent_snapshot = parent_snapshot;
         self
     }
+}
 
-    /// Returns this context with explicit child-agent subagent tool inheritance.
-    /// 返回带显式子代理调度工具继承设置的上下文。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `allow_subagent_tools` controls whether child agents can see the subagent tool family.
-    /// `allow_subagent_tools` 控制子代理是否可以看到子代理工具族。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The updated runtime context.
-    /// 更新后的运行时上下文。
-    pub(crate) fn with_subagent_tools_allowed(mut self, allow_subagent_tools: bool) -> Self {
-        self.allow_subagent_tools = allow_subagent_tools;
-        self
+/// Captures the fixed agent prompt that belongs to one runtime request template.
+/// 捕获一份运行时请求模板所属的固定代理提示词。
+///
+/// # Parameters
+/// 参数
+/// `foundation` is the runtime foundation that owns the built agent definitions.
+/// `foundation` 是持有已构建代理定义的运行时基础架构。
+/// `request_template` is the parent execution request used as the child-template source.
+/// `request_template` 是用作子级模板来源的父级执行请求。
+///
+/// # Returns
+/// 返回值
+/// The request-scoped snapshot when present, otherwise the explicitly selected runtime agent prompt.
+/// 若存在则返回请求级快照，否则返回显式选中运行时代理的提示词。
+fn fixed_agent_prompt_snapshot_for_request(
+    foundation: &RuntimeFoundation,
+    request_template: &ExecutionPreparationRequest,
+) -> Option<ExecutionAgentPromptSnapshot> {
+    if let Some(snapshot) = request_template.agent_prompt_snapshot.clone() {
+        return Some(snapshot);
     }
+    let agent = match request_template.execution_agent_id.as_deref() {
+        Some(agent_id) => foundation.agent_definition(agent_id),
+        None => foundation.active_agent_definition(),
+    }?;
+    ExecutionAgentPromptSnapshot::fixed_parent_runtime(agent.system_prompt.as_str())
 }
 
 /// Guard that unregisters one task-execution context when the owning provider loop exits.

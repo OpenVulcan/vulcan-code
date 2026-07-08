@@ -5,7 +5,8 @@ use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::context_budget::{
-    RequestContextCompactionBudgetSnapshotInput, build_request_context_compaction_budget_snapshot,
+    ContextCompactionPolicy, RequestContextCompactionBudgetSnapshotInput,
+    build_request_context_compaction_budget_snapshot,
 };
 use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::ProviderApiFamily;
@@ -37,6 +38,12 @@ pub(crate) struct ProviderRequestBudgetGuard {
     /// Resolved reasoning controls used to reserve thinking tokens.
     /// 用于预留思考 Token 的已解析推理控制。
     reasoning: ProviderRuntimeReasoningResolution,
+    /// Optional compaction policy resolved for this request.
+    /// 为本次请求解析出的可选压缩策略。
+    context_compaction_policy: Option<ContextCompactionPolicy>,
+    /// Optional request-level input-token budget limit.
+    /// 可选的请求级输入 Token 预算上限。
+    context_budget_override: Option<usize>,
     /// Shared token-budget runtime reused by the real request hot path.
     /// 真实请求热路径复用的共享 Token 预算运行时。
     token_budget_runtime: Arc<TokenBudgetRuntime>,
@@ -51,6 +58,8 @@ impl ProviderRequestBudgetGuard {
         api_family: ProviderApiFamily,
         capabilities: ResolvedModelCapabilities,
         reasoning: ProviderRuntimeReasoningResolution,
+        context_compaction_policy: Option<ContextCompactionPolicy>,
+        context_budget_override: Option<usize>,
         token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
         Self {
@@ -59,6 +68,8 @@ impl ProviderRequestBudgetGuard {
             api_family,
             capabilities,
             reasoning,
+            context_compaction_policy,
+            context_budget_override,
             token_budget_runtime,
         }
     }
@@ -77,6 +88,8 @@ impl ProviderRequestBudgetGuard {
                 capabilities: &self.capabilities,
                 reasoning: &self.reasoning,
                 request_snapshot: snapshot,
+                compaction_policy: self.context_compaction_policy,
+                context_budget_override: self.context_budget_override,
                 observed_usage: None,
                 estimator: self.token_budget_runtime.estimator(),
             },

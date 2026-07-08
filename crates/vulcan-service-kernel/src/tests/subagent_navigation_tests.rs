@@ -2,6 +2,46 @@
 //! subagent navigation tests銆?
 use super::*;
 
+/// Returns the active surface id and fails the test on registry projection errors.
+/// 返回活动界面标识，并在注册表投影错误时让测试失败。
+fn active_surface_session_id_from_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> SessionId {
+    super::active_surface_session_id_from_state(guard, workspace_snapshot)
+        .expect("subagent active surface projection should succeed")
+}
+
+/// Returns active surface messages and fails the test on registry projection errors.
+/// 返回活动界面消息，并在注册表投影错误时让测试失败。
+fn active_surface_messages_from_workspace_and_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Vec<SessionMessageEntry> {
+    super::active_surface_messages_from_workspace_and_state(guard, workspace_snapshot)
+        .expect("subagent active surface messages should project")
+}
+
+/// Returns rebuilt subagent navigation and fails the test on registry projection errors.
+/// 返回重建后的智能体导航，并在注册表投影错误时让测试失败。
+fn subagent_navigation_snapshot_from_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Option<SubagentNavigationSnapshot> {
+    super::subagent_navigation_snapshot_from_state(guard, workspace_snapshot)
+        .expect("subagent navigation projection should succeed")
+}
+
+/// Returns cached subagent navigation and fails the test on registry projection errors.
+/// 返回缓存智能体导航，并在注册表投影错误时让测试失败。
+fn subagent_navigation_snapshot_from_cached_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Option<SubagentNavigationSnapshot> {
+    super::subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot)
+        .expect("cached subagent navigation projection should succeed")
+}
+
 /// Fixed creation timestamp used by segmented navigation preload fixtures.
 /// 鍒嗘瀵艰埅棰勮浇娴嬭瘯澶瑰叿浣跨敤鐨勫浐瀹氬垱寤烘椂闂存埑銆?
 const NAVIGATION_TEST_ROOT_CREATED_AT: &str = "100";
@@ -137,7 +177,6 @@ fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_r
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -263,6 +302,105 @@ fn active_subagent_surface_reads_cached_conversation_detail_without_display_rows
     assert_eq!(preserved_surface_messages, active_surface_messages);
 }
 
+/// Verifies active child surfaces scope cloned runtime state without showing parent history.
+/// 验证活动子界面会裁剪克隆运行态且不会显示父会话历史。
+#[test]
+fn active_subagent_surface_scopes_workspace_runtime_state_without_display_rows() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
+        parent_session_id,
+        task_id: task_session_id,
+    });
+    let task_state = SubagentTaskPanelState {
+        task_id: task_session_id,
+        public_task_id: String::from("clone-runtime-only"),
+        parent_session_id,
+        subagent_label: String::from("clone-runtime-only"),
+        description: None,
+        run_state: SubagentTaskRunState::Completed,
+        result_text: String::new(),
+        conversation_state: None,
+    };
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        &[task_state],
+    );
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot");
+    workspace_snapshot.session_runtime_state.insert(
+        task_session_id,
+        SessionRuntimeStateEntry {
+            conversation_state: SessionConversationState {
+                messages: Vec::new(),
+                records: vec![
+                    SessionConversationRecord {
+                        id: String::from("parent-user"),
+                        kind: SessionMessageKind::User,
+                        record_kind: SessionMessageRecordKind::Transcript,
+                        visible: true,
+                        title: String::from("用户指令"),
+                        body: String::from("Parent prompt should remain runtime only."),
+                        metadata: None,
+                        created_at: String::from("1"),
+                    },
+                    SessionConversationRecord {
+                        id: String::from("parent-assistant"),
+                        kind: SessionMessageKind::Assistant,
+                        record_kind: SessionMessageRecordKind::AssistantOutput,
+                        visible: true,
+                        title: String::from("输出"),
+                        body: String::from("Parent output should remain runtime only."),
+                        metadata: None,
+                        created_at: String::from("2"),
+                    },
+                    SessionConversationRecord {
+                        id: String::from("child-user"),
+                        kind: SessionMessageKind::User,
+                        record_kind: SessionMessageRecordKind::Transcript,
+                        visible: true,
+                        title: String::from("用户指令"),
+                        body: String::from("Run the cloned child task."),
+                        metadata: None,
+                        created_at: String::from("3"),
+                    },
+                    SessionConversationRecord {
+                        id: String::from("child-assistant"),
+                        kind: SessionMessageKind::Assistant,
+                        record_kind: SessionMessageRecordKind::AssistantOutput,
+                        visible: true,
+                        title: String::from("输出"),
+                        body: String::from("Child output only."),
+                        metadata: None,
+                        created_at: String::from("4"),
+                    },
+                ],
+                continuation: Default::default(),
+            },
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    let workspace_snapshot = workspace_snapshot.clone();
+
+    let active_surface_messages =
+        active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot);
+
+    assert_eq!(
+        active_surface_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["child-user", "child-assistant"]
+    );
+    assert!(active_surface_messages.iter().all(|message| {
+        !message.body.contains("Parent prompt") && !message.body.contains("Parent output")
+    }));
+}
+
 /// Verifies unclosed cached subagents remain listed without hijacking the parent-session surface.
 /// 楠岃瘉鏈叧闂紦瀛樺瓙浠ｇ悊鍦ㄤ笉鍔寔鐖朵細璇濈晫闈㈢殑鎯呭喌涓嬩粛浼氫繚鐣欏湪鍒楄〃涓€?
 #[test]
@@ -296,7 +434,6 @@ fn unclosed_subagent_cache_without_visible_round_builds_navigation() {
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -1129,13 +1266,78 @@ fn hydration_preloads_unclosed_subagent_surface_from_segmented_store() {
     task_store
         .create_task_session(metadata)
         .expect("create persisted subagent task session");
-    let child_message = SessionMessageEntry::new(
+    // Restored turn stats model the completed child turn after an application restart.
+    // 恢复统计用于模拟应用重启后的已完成子任务回合。
+    let restored_turn_stats = SessionTurnStats {
+        status: SessionTurnStatsStatus::Completed,
+        turn_kind: SessionTurnStatsKind::UserTurn,
+        provider_call_count: 1,
+        tool_call_count: 0,
+        input_tokens: 31,
+        output_tokens: 4,
+        reasoning_tokens: 2,
+        total_tokens: 37,
+        duration_ms: Some(3587),
+        output_tokens_per_second: Some(1.115),
+        ..SessionTurnStats::default()
+    };
+    // Provider-visible dialogue keeps the child runtime reload equivalent to a main session.
+    // Provider 可见对话让子任务运行态恢复与主会话保持等价。
+    let child_dialogue_message = SessionMessageEntry::new(
         SessionMessageKind::Assistant,
-        "output",
+        "输出",
         "persisted child detail",
     )
-    .with_runtime_metadata("child-output", "1000");
-    let conversation_state = conversation_state_from_session_messages(&[child_message]);
+    .with_runtime_metadata("child-output-message", "1000");
+    // Persisted child context must replay process/output/stat records, not only task metadata.
+    // 持久化子任务上下文必须能复放过程、输出和统计记录，而不只是任务元数据。
+    let mut conversation_state =
+        conversation_state_from_session_messages(&[child_dialogue_message]);
+    conversation_state.records = vec![
+        SessionConversationRecord {
+            id: String::from("restored-hidden-summary"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::SummaryOutput,
+            visible: false,
+            title: String::from("内部摘要"),
+            body: String::from("hidden restored summary"),
+            metadata: None,
+            created_at: String::from("900"),
+        },
+        SessionConversationRecord {
+            id: String::from("restored-thinking-process"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ThinkingOutput,
+            visible: true,
+            title: String::from("思考过程"),
+            body: String::from("restored thinking process"),
+            metadata: None,
+            created_at: String::from("950"),
+        },
+        SessionConversationRecord {
+            id: String::from("restored-child-output"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("输出"),
+            body: String::from("persisted child detail"),
+            metadata: None,
+            created_at: String::from("1000"),
+        },
+        SessionConversationRecord {
+            id: String::from("restored-child-turn-stats"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::TurnStats,
+            visible: true,
+            title: String::from("Turn Stats · completed"),
+            body: restored_turn_stats.detail_body(),
+            metadata: Some(json!({
+                "turn_stats": restored_turn_stats,
+                "turn_closing_record_id": "restored-child-output",
+            })),
+            created_at: String::from("1001"),
+        },
+    ];
     task_store
         .save_context(vulcan_session_core::SessionContextDocument {
             schema_version: 1,
@@ -1205,6 +1407,34 @@ fn hydration_preloads_unclosed_subagent_surface_from_segmented_store() {
             .session_messages
             .contains_key(&task_session_id)
     );
+    let restored_messages = workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("child task transcript should be materialized");
+    assert!(
+        restored_messages
+            .iter()
+            .all(|message| message.id != "restored-hidden-summary")
+    );
+    assert!(restored_messages.iter().any(|message| {
+        message.record_kind == SessionMessageRecordKind::ThinkingOutput
+            && message.body == "restored thinking process"
+    }));
+    assert!(restored_messages.iter().any(|message| {
+        message.record_kind == SessionMessageRecordKind::AssistantOutput
+            && message.body == "persisted child detail"
+    }));
+    let restored_stats = restored_messages
+        .iter()
+        .find(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+        .and_then(|message| message.metadata.as_ref())
+        .and_then(|metadata| metadata.get("turn_stats"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<SessionTurnStats>(value).ok())
+        .expect("restored child turn stats should be displayable");
+    assert_eq!(restored_stats.provider_call_count, 1);
+    assert_eq!(restored_stats.input_tokens, 31);
+    assert_eq!(restored_stats.total_tokens, 37);
     assert!(
         workspace_snapshot
             .hydrated_session_ids
@@ -1226,6 +1456,98 @@ fn hydration_preloads_unclosed_subagent_surface_from_segmented_store() {
             .expect("preloaded subagent should be visible without disk reload");
     assert_eq!(navigation.tasks.len(), 1);
     assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
+}
+
+/// Verifies preload reports a registry/detail parent mismatch instead of hiding it behind registry-only state.
+/// 验证预加载会报告注册表与详情父级不一致，而不是用仅注册表状态隐藏冲突。
+#[test]
+fn hydration_preload_reports_registry_detail_parent_mismatch() {
+    use vulcan_task_session::TaskSessionStore as _;
+
+    let parent_session_id = SessionId::new_v4();
+    let mismatched_parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let project_id = format!("subagent-parent-mismatch-{parent_session_id}");
+    let project_root = TestSegmentedProjectRoot::new(project_id.clone());
+    let session_dir = navigation_test_session_dir(project_root.path(), parent_session_id);
+    std::fs::create_dir_all(&session_dir).expect("create segmented parent session dir");
+    let task_store = vulcan_task_session::SegmentedTaskSessionStore::new(&session_dir);
+    let root_session_node = SessionNodeId::from(parent_session_id);
+    let task_session_node = SessionNodeId::from(task_session_id);
+    create_navigation_test_root_metadata(&session_dir, parent_session_id);
+    let mut metadata = navigation_test_task_metadata(
+        root_session_node,
+        task_session_node,
+        vulcan_session_core::ParentSessionRef::MainSession {
+            root_session_id: root_session_node,
+        },
+        "mismatch-agent",
+        "mismatch agent",
+    );
+    metadata.status = vulcan_task_session::TaskSessionStatus::Completed;
+    task_store
+        .create_task_session(metadata)
+        .expect("create persisted subagent task session");
+
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    guard.agent_runtime = Some(test_agent_runtime_bridge());
+    guard
+        .agent_runtime
+        .as_ref()
+        .expect("agent runtime")
+        .task_runtime
+        .configure_task_session_store_root(parent_session_id, session_dir.clone())
+        .expect("configure task store root");
+    let workspace_snapshot = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![navigation_test_parent_session_summary(
+            parent_session_id,
+            project_root.project_id(),
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: parent_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+    guard.workspace_snapshot = Some(workspace_snapshot.clone());
+    let shared_state = Arc::new(Mutex::new(guard));
+    restore_webui_subagent_registry_for_session_hydration(
+        &shared_state,
+        &workspace_snapshot,
+        parent_session_id,
+    )
+    .expect("session hydration should restore registry from the original parent");
+
+    let mut mismatched_metadata = task_store
+        .load_task_session(task_session_node)
+        .expect("load task metadata")
+        .expect("task metadata exists");
+    mismatched_metadata.parent = vulcan_session_core::ParentSessionRef::MainSession {
+        root_session_id: SessionNodeId::from(mismatched_parent_session_id),
+    };
+    mismatched_metadata.updated_at = 200;
+    task_store
+        .save_task_session(mismatched_metadata)
+        .expect("save mismatched task metadata");
+
+    let error = load_webui_unclosed_subagent_surface_preload(
+        &shared_state,
+        &workspace_snapshot,
+        parent_session_id,
+    )
+    .expect_err("parent mismatch must not be hidden");
+
+    assert!(error.contains("parent mismatch"));
+    assert!(error.contains(&parent_session_id.to_string()));
+    assert!(error.contains(&mismatched_parent_session_id.to_string()));
 }
 
 /// Verifies opening one child detail preserves sibling unclosed subagent navigation rows.
@@ -1468,10 +1790,10 @@ fn hydration_surface_preload_excludes_archived_subagents() {
     );
 }
 
-/// Verifies a terminal child session phase marks stale listener state as completed in navigation.
-/// 楠岃瘉瀛愪細璇濈粓鎬侀樁娈典細鍦ㄥ鑸腑鎶婇檲鏃х洃鍚櫒鐘舵€佹爣璁颁负宸插畬鎴愩€?
+/// Verifies registry terminal status remains visible after a stale listener is suppressed.
+/// 验证陈旧监听器被抑制后，注册表中的终态状态仍然会显示在导航中。
 #[test]
-fn terminal_child_phase_marks_stale_running_subagent_completed_in_navigation() {
+fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut guard = ServiceBridgeState {
@@ -1501,7 +1823,6 @@ fn terminal_child_phase_marks_stale_running_subagent_completed_in_navigation() {
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -1629,7 +1950,6 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -1724,7 +2044,6 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),

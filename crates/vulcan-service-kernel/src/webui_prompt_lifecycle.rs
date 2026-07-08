@@ -58,7 +58,7 @@ use super::{
     sync_hydrated_session_dialogue_ready_marker,
     sync_webui_session_runtime_kernel_to_workspace_state, webui_after_precheck_trace,
     webui_session_has_active_run, webui_session_kernel_has_active_turn,
-    webui_session_mailbox_input_from_kernel, webui_trace, webui_trace_if_slow,
+    webui_session_mailbox_agent_messages_from_kernel, webui_trace, webui_trace_if_slow,
     workspace_path_for_session,
 };
 

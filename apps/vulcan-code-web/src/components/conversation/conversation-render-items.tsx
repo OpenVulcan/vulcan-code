@@ -590,10 +590,7 @@ export function ConversationFinalAssistantMeta(props: {
   onCopyText: (text: string) => Promise<void> | void;
   // Creates a forked copy of the owning conversation.
   // 创建所属会话的分叉副本。
-  onForkConversation?: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean> | boolean;
-  // Optional user message id that marks the first message excluded from the fork.
-  // 可选用户消息标识，表示分叉时第一个被排除的消息。
-  forkBeforeMessageId?: string | null;
+  onForkConversation?: (conversationId: string) => Promise<boolean> | boolean;
 }) {
   const { t } = useI18n();
   const finalAssistantRawText = finalAssistantOutputText(props.item);
@@ -612,7 +609,7 @@ export function ConversationFinalAssistantMeta(props: {
     if (!conversationId) {
       return;
     }
-    await props.onForkConversation?.(conversationId, props.forkBeforeMessageId ?? null);
+    await props.onForkConversation?.(conversationId);
   }, [conversationId, props]);
   return (
     <div className="assistant-final-meta">

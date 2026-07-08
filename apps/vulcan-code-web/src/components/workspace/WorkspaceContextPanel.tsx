@@ -789,7 +789,10 @@ function WorkspaceSubagentPanel(args: {
   );
   // renderItems stores parsed transcript rows for the side-panel child conversation.
   // renderItems 保存侧栏子会话解析后的转录行。
-  const renderItems = React.useMemo(() => projectConversationRenderItems(messages, t), [messages, t]);
+  const renderItems = React.useMemo(
+    () => projectConversationRenderItems(messages, t),
+    [messages, t],
+  );
   // subagentConversation stores the minimal conversation summary consumed by ConversationWorkspace.
   // subagentConversation 保存 ConversationWorkspace 消费的最小会话摘要。
   const subagentConversation = React.useMemo<ConversationSummary | undefined>(() => {

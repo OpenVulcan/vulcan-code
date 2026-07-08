@@ -1,6 +1,29 @@
 use super::*;
+use std::fs;
 use std::io::BufReader;
+use std::path::Path;
 use vulcan_task_session::TaskSessionMetadataInit;
+
+/// Recursively copies one directory tree for directory-isolation tests.
+/// 为目录隔离测试递归复制一棵目录树。
+fn copy_directory_tree_for_test(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).expect("destination directory should be created");
+    for entry_result in fs::read_dir(source).expect("source directory should be readable") {
+        let entry = entry_result.expect("source directory entry should be readable");
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("source directory entry type should be readable")
+            .is_dir()
+        {
+            copy_directory_tree_for_test(&source_path, &destination_path);
+        } else {
+            fs::copy(&source_path, &destination_path)
+                .expect("source file should copy into destination directory");
+        }
+    }
+}
 
 /// Builds one persisted task metadata document for task-runtime tests.
 /// 为任务运行时测试构建单个持久化任务元数据文档。
@@ -118,7 +141,8 @@ fn prepare_task_execution_request_restores_persisted_context_for_resume() {
         .expect("persisted controller config should restore");
     assert_eq!(controller_config.provider_id, "persisted-provider");
     assert_eq!(controller_config.model_id, "persisted-model");
-    assert_eq!(controller_config.system_prompt, "Persisted system prompt");
+    assert!(controller_config.system_prompt.is_empty());
+    assert!(controller_config.prompt_layers.is_empty());
     assert_eq!(request.task_id, task_id);
     assert!(request.is_resumed);
 }
@@ -350,6 +374,7 @@ async fn close_agent_persists_archived_status_for_restored_agent() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("persisted-worker"),
         prompt: String::from("late completed work"),
         description: Some(String::from("Persisted worker")),
@@ -752,6 +777,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -766,22 +792,94 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
     };
     let controller_config = build_test_controller_config("Base prompt");
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
+    let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(100),
+        output_tokens: Some(25),
+        reasoning_tokens: Some(5),
+        total_tokens: Some(130),
+        cached_input_tokens: Some(40),
+        cache_creation_input_tokens: Some(7),
+    };
+    let snapshot = CoreConversationSnapshot {
+        messages: vec![
+            vulcan_core::types::ConversationMessage {
+                id: String::from("user-1"),
+                payload: vulcan_core::types::ConversationPayload::UserText {
+                    text: String::from("review this change"),
+                    attachments: Vec::new(),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("assistant-1"),
+                payload: vulcan_core::types::ConversationPayload::Assistant {
+                    text: String::from("review complete"),
+                    reasoning: String::from("checked"),
+                    provider_message_id: Some(String::from("assistant-provider-1")),
+                    provider_message_state: None,
+                    usage: Some(provider_usage.clone()),
+                    tool_calls: Vec::new(),
+                },
+            },
+        ],
+        records: vec![
+            vulcan_core::types::ConversationRecord {
+                id: String::from("user-record-1"),
+                role: vulcan_core::types::TranscriptRole::User,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("User"),
+                body: String::from("review this change"),
+                metadata: Some(json!({
+                    "canonical_text": "review this change",
+                    "canonical_user_text": "review this change"
+                })),
+                created_at: String::from("1000"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("assistant-record-1"),
+                role: vulcan_core::types::TranscriptRole::Assistant,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("Model output"),
+                body: String::from("review complete"),
+                metadata: Some(json!({
+                    "provider_usage": provider_usage.clone()
+                })),
+                created_at: String::from("1100"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&provider_usage),
+    );
     let outcome = TaskExecutionOutcome {
         task_id,
         controller_config: controller_config.clone(),
         resolved_config,
-        snapshot: CoreConversationSnapshot::default(),
+        snapshot,
         provider_turns_executed: 1,
         tool_calls_processed: 0,
         final_assistant_message_id: Some(String::from("assistant-1")),
         final_output_text: String::from("review complete"),
         execution_status: TaskExecutionStatus::Completed,
-        usage_segments: Vec::new(),
+        usage_segments: vec![usage_segment],
     };
 
     task_runtime
         .store_task_outcome(root_session_id, &invocation, &outcome)
         .expect("task outcome should store");
+    let in_memory_controller_config = task_runtime
+        .sessions
+        .read()
+        .expect("task sessions should be readable")
+        .get(&task_id)
+        .and_then(|record| record.controller_config.clone())
+        .expect("task record should keep a resumable controller config");
+    assert!(in_memory_controller_config.system_prompt.is_empty());
+    assert!(in_memory_controller_config.prompt_layers.is_empty());
 
     let store = SegmentedTaskSessionStore::new(temp_dir.path());
     let metadata = store
@@ -805,6 +903,190 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         .expect("context should exist");
     assert_eq!(context.provider_id.as_deref(), Some("provider"));
     assert_eq!(context.model_id.as_deref(), Some("model"));
+    assert!(
+        context.system_prompt_layers.is_empty(),
+        "default TaskSession context must not persist provider-rendered controller prompts"
+    );
+    let conversation_state: SessionConversationState =
+        serde_json::from_value(context.conversation_state.clone())
+            .expect("task context conversation state should deserialize");
+    let stats_record = conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("task context should include turn stats");
+    let turn_stats: SessionTurnStats = serde_json::from_value(
+        stats_record
+            .metadata
+            .as_ref()
+            .expect("turn stats metadata should exist")["turn_stats"]
+            .clone(),
+    )
+    .expect("turn stats should deserialize");
+    assert_eq!(turn_stats.provider_call_count, 1);
+    assert_eq!(turn_stats.tool_call_count, 0);
+    assert_eq!(turn_stats.input_tokens, 100);
+    assert_eq!(turn_stats.output_tokens, 25);
+    assert_eq!(turn_stats.reasoning_tokens, 5);
+    assert_eq!(turn_stats.total_tokens, 130);
+    assert_eq!(turn_stats.cached_input_tokens, Some(40));
+    assert_eq!(turn_stats.cache_creation_input_tokens, Some(7));
+    assert_eq!(turn_stats.usage_segments.len(), 1);
+    assert_eq!(
+        turn_stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::AssistantResponse
+    );
+
+    let task_dir = store
+        .task_session_directory(SessionNodeId::from(task_id))
+        .expect("task session directory should resolve");
+    // task_main_metadata is the main-session compatible metadata document written beside task segments.
+    // task_main_metadata 是写在子任务分段旁边的主会话兼容元数据文档。
+    let task_main_metadata = serde_json::from_reader::<_, Value>(BufReader::new(
+        std::fs::File::open(task_dir.join("metadata.json"))
+            .expect("task main metadata should open"),
+    ))
+    .expect("task main metadata should parse");
+    assert_eq!(task_main_metadata["session_id"], task_id.to_string());
+    assert_eq!(task_main_metadata["project_id"], "test-project");
+    assert_eq!(task_main_metadata["active_segment"], "s001.jsonl");
+    assert_eq!(task_main_metadata["task_dir"], "task");
+    assert!(
+        task_main_metadata["tasks"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "task metadata should expose nested task mirrors through the main-session tasks array"
+    );
+    assert!(
+        vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors_from_directory(
+            &task_dir,
+        )
+        .expect("task mirror metadata should read")
+        .is_empty(),
+        "main-session task mirror reader should accept TaskSession metadata without a child-specific path"
+    );
+    assert!(
+        vulcan_workspace_store::workspace_store::load_segmented_session_fork_source_from_directory(
+            &task_dir,
+        )
+        .expect("fork source metadata should read")
+        .is_none(),
+        "TaskSession metadata should remain compatible with the main-session fork-source reader"
+    );
+    // task_state_document is the main-session compatible state.json stored inside the task directory.
+    // task_state_document 是保存在子任务目录中的主会话兼容 state.json。
+    let task_state_document = serde_json::from_reader::<_, Value>(BufReader::new(
+        std::fs::File::open(task_dir.join("state.json")).expect("task state should open"),
+    ))
+    .expect("task state should parse");
+    assert_eq!(task_state_document["session_id"], task_id.to_string());
+    assert_eq!(
+        task_state_document["runtime_state"]["active_provider_id"],
+        "provider"
+    );
+    assert_eq!(
+        task_state_document["runtime_state"]["active_model_id"],
+        "model"
+    );
+    assert!(
+        task_state_document["current_context"]["conversation_state"]["messages"]
+            .as_array()
+            .is_some_and(|messages| messages
+                .iter()
+                .any(|message| message["id"] == "assistant-1")),
+        "task state current_context should contain the canonical assistant message"
+    );
+    assert!(task_dir.join("runtime").join("r001.jsonl").exists());
+    assert!(task_dir.join("runtime_metadata.json").exists());
+    assert!(task_dir.join("runtime.index.json").exists());
+    let runtime_conversation_state =
+        vulcan_workspace_store::workspace_store::read_segmented_session_runtime_conversation_state(
+            &task_dir,
+        )
+        .expect("task runtime log should read")
+        .expect("task runtime log should exist");
+    assert!(
+        runtime_conversation_state
+            .messages
+            .iter()
+            .any(|message| message.id == "assistant-1")
+    );
+    assert!(
+        runtime_conversation_state.records.is_empty(),
+        "provider-facing runtime logs must not mix display-only task statistics into model context"
+    );
+    let display_conversation_state =
+        vulcan_workspace_store::workspace_store::read_segmented_session_display_conversation_state(
+            &task_dir,
+        )
+        .expect("task display transcript should replay")
+        .expect("task display transcript should exist");
+    assert!(
+        display_conversation_state
+            .records
+            .iter()
+            .any(|record| record.body == "review complete")
+    );
+    assert!(
+        display_conversation_state
+            .records
+            .iter()
+            .any(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+    );
+    let copied_task_dir = tempfile::tempdir().expect("copied task directory");
+    copy_directory_tree_for_test(&task_dir, copied_task_dir.path());
+    let copied_runtime_conversation_state =
+        vulcan_workspace_store::workspace_store::read_segmented_session_runtime_conversation_state(
+            copied_task_dir.path(),
+        )
+        .expect("copied task runtime log should read")
+        .expect("copied task runtime log should exist");
+    assert!(
+        copied_runtime_conversation_state
+            .messages
+            .iter()
+            .any(|message| message.id == "assistant-1"),
+        "copied TaskSession directory should load through the main runtime reader without its parent directory"
+    );
+    let copied_display_conversation_state =
+        vulcan_workspace_store::workspace_store::read_segmented_session_display_conversation_state(
+            copied_task_dir.path(),
+        )
+        .expect("copied task display transcript should replay")
+        .expect("copied task display transcript should exist");
+    assert!(
+        copied_display_conversation_state
+            .records
+            .iter()
+            .any(|record| record.body == "review complete"),
+        "copied TaskSession directory should load through the main display reader without its parent directory"
+    );
+    assert!(
+        copied_display_conversation_state
+            .records
+            .iter()
+            .any(|record| record.record_kind == SessionMessageRecordKind::TurnStats),
+        "copied TaskSession directory should keep turn stats through the main display reader"
+    );
+    let copied_task_segment_text =
+        std::fs::read_to_string(copied_task_dir.path().join("s001.jsonl"))
+            .expect("copied task segment should read after main display replay");
+    assert!(
+        copied_task_segment_text.lines().any(|line| {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("subagent_task_meta")
+        }),
+        "main display replay must not repair away the TaskSession metadata event"
+    );
+
     context.compaction_anchor = Some(String::from("task-summary-existing"));
     context.context_budget_fingerprint = Some(String::from("budget-existing"));
     store
@@ -837,7 +1119,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
     assert!(
         task_events
             .iter()
-            .any(|event| event.kind == SessionEventKind::TaskFeedback)
+            .any(|event| event.kind == SessionEventKind::TaskTerminal)
     );
     let parent_events = store
         .list_task_invocation_events(ParentSessionRef::MainSession {
@@ -864,7 +1146,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
             .expect("root metadata should open"),
     ))
     .expect("root metadata should parse");
-    assert_eq!(root_metadata["tasks"][0]["line_count"], 3);
+    assert_eq!(root_metadata["tasks"][0]["line_count"], 7);
     let registry = task_runtime
         .subagent_registry_snapshot()
         .expect("registry should read");
@@ -872,7 +1154,342 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         .get("agent-review")
         .expect("completed registry entry should exist");
     assert_eq!(entry.segments.len(), 1);
-    assert_eq!(entry.segments[0].line_count, 3);
+    assert_eq!(entry.segments[0].line_count, 7);
+}
+
+/// Verifies cloned task contexts retain runtime messages but drop inherited parent display records.
+/// 验证克隆任务上下文会保留运行时消息，但会丢弃继承的父级显示记录。
+#[test]
+fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        execution_id: String::from("test-execution"),
+        public_task_id: String::from("clone-child"),
+        prompt: String::from("child prompt"),
+        description: Some(String::from("Clone child")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("child prompt"),
+        display_title: String::from("clone-child"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
+    let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(20),
+        output_tokens: Some(5),
+        reasoning_tokens: Some(1),
+        total_tokens: Some(26),
+        cached_input_tokens: None,
+        cache_creation_input_tokens: None,
+    };
+    let snapshot = CoreConversationSnapshot {
+        messages: vec![
+            vulcan_core::types::ConversationMessage {
+                id: String::from("parent-user-100"),
+                payload: vulcan_core::types::ConversationPayload::UserText {
+                    text: String::from("parent prompt"),
+                    attachments: Vec::new(),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("parent-assistant-101"),
+                payload: vulcan_core::types::ConversationPayload::Assistant {
+                    text: String::from("parent answer"),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("child-user-200"),
+                payload: vulcan_core::types::ConversationPayload::UserText {
+                    text: String::from("child prompt"),
+                    attachments: Vec::new(),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("child-assistant-201"),
+                payload: vulcan_core::types::ConversationPayload::Assistant {
+                    text: String::from("child answer"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-child")),
+                    provider_message_state: None,
+                    usage: Some(provider_usage.clone()),
+                    tool_calls: Vec::new(),
+                },
+            },
+        ],
+        records: vec![
+            vulcan_core::types::ConversationRecord {
+                id: String::from("parent-user-record"),
+                role: vulcan_core::types::TranscriptRole::User,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("User"),
+                body: String::from("parent prompt"),
+                metadata: Some(json!({ "canonical_user_text": "parent prompt" })),
+                created_at: String::from("100"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("parent-assistant-record"),
+                role: vulcan_core::types::TranscriptRole::Assistant,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("Assistant"),
+                body: String::from("parent answer"),
+                metadata: None,
+                created_at: String::from("101"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("child-user-record"),
+                role: vulcan_core::types::TranscriptRole::User,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("User"),
+                body: String::from("child prompt"),
+                metadata: Some(json!({ "canonical_user_text": "child prompt" })),
+                created_at: String::from("200"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("child-assistant-record"),
+                role: vulcan_core::types::TranscriptRole::Assistant,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("Assistant"),
+                body: String::from("child answer"),
+                metadata: Some(json!({ "provider_usage": provider_usage.clone() })),
+                created_at: String::from("201"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&provider_usage),
+    );
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config,
+        snapshot,
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("child-assistant-201")),
+        final_output_text: String::from("child answer"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: vec![usage_segment],
+    };
+
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &outcome)
+        .expect("task outcome should store");
+
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let context = store
+        .load_context(SessionNodeId::from(task_id))
+        .expect("context should load")
+        .expect("context should exist");
+    let conversation_state: SessionConversationState =
+        serde_json::from_value(context.conversation_state.clone())
+            .expect("task context conversation state should deserialize");
+
+    assert!(
+        conversation_state
+            .messages
+            .iter()
+            .any(|message| message.id == "parent-user-100"),
+        "task runtime messages should retain inherited parent context"
+    );
+    assert!(
+        conversation_state
+            .records
+            .iter()
+            .all(|record| record.body != "parent prompt" && record.body != "parent answer"),
+        "task display records should not retain inherited parent transcript rows"
+    );
+    assert_eq!(
+        conversation_state
+            .records
+            .first()
+            .map(|record| record.body.as_str()),
+        Some("child prompt")
+    );
+}
+
+/// Verifies explicit task usage fills missing token counts without losing record-derived provider calls.
+/// 验证显式任务用量会补齐缺失 Token，并保留记录推导出的 Provider 调用次数。
+#[test]
+fn store_task_outcome_merges_explicit_usage_without_losing_record_calls() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        execution_id: String::from("test-execution"),
+        public_task_id: String::from("echo_123_agent"),
+        prompt: String::from("reply 123"),
+        description: Some(String::from("Echo task")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("reply 123"),
+        display_title: String::from("echo_123_agent"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
+    let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(42),
+        output_tokens: Some(7),
+        reasoning_tokens: Some(3),
+        total_tokens: Some(52),
+        cached_input_tokens: Some(11),
+        cache_creation_input_tokens: None,
+    };
+    let snapshot = CoreConversationSnapshot {
+        messages: vec![
+            vulcan_core::types::ConversationMessage {
+                id: String::from("user-1"),
+                payload: vulcan_core::types::ConversationPayload::UserText {
+                    text: String::from("reply 123"),
+                    attachments: Vec::new(),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("assistant-1"),
+                payload: vulcan_core::types::ConversationPayload::Assistant {
+                    text: String::from("123"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("assistant-provider-1")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+        ],
+        records: vec![
+            vulcan_core::types::ConversationRecord {
+                id: String::from("user-record-1"),
+                role: vulcan_core::types::TranscriptRole::User,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("User"),
+                body: String::from("reply 123"),
+                metadata: Some(json!({
+                    "canonical_text": "reply 123",
+                    "canonical_user_text": "reply 123"
+                })),
+                created_at: String::from("1000"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("assistant-record-1"),
+                role: vulcan_core::types::TranscriptRole::Assistant,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("Model output"),
+                body: String::from("123"),
+                metadata: None,
+                created_at: String::from("1100"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&provider_usage),
+    );
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config,
+        snapshot,
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-1")),
+        final_output_text: String::from("123"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: vec![usage_segment],
+    };
+
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &outcome)
+        .expect("task outcome should store");
+
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let context = store
+        .load_context(SessionNodeId::from(task_id))
+        .expect("context should load")
+        .expect("context should exist");
+    let conversation_state: SessionConversationState =
+        serde_json::from_value(context.conversation_state.clone())
+            .expect("task context conversation state should deserialize");
+    let stats_record = conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("task context should include turn stats");
+    let turn_stats: SessionTurnStats = serde_json::from_value(
+        stats_record
+            .metadata
+            .as_ref()
+            .expect("turn stats metadata should exist")["turn_stats"]
+            .clone(),
+    )
+    .expect("turn stats should deserialize");
+
+    assert_eq!(turn_stats.provider_call_count, 1);
+    assert_eq!(turn_stats.input_tokens, 42);
+    assert_eq!(turn_stats.output_tokens, 7);
+    assert_eq!(turn_stats.reasoning_tokens, 3);
+    assert_eq!(turn_stats.total_tokens, 52);
+    assert_eq!(turn_stats.cached_input_tokens, Some(11));
+    assert_eq!(turn_stats.usage_segments.len(), 2);
+    assert_eq!(
+        turn_stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::AssistantResponse
+    );
+    assert_eq!(turn_stats.usage_segments[0].provider_call_count, 1);
+    assert_eq!(
+        turn_stats.usage_segments[1].kind,
+        SessionTurnUsageSegmentKind::AssistantResponse
+    );
+    assert_eq!(turn_stats.usage_segments[1].provider_call_count, 0);
+    assert_eq!(turn_stats.usage_segments[1].input_tokens, 42);
+    assert_eq!(turn_stats.usage_groups.len(), 1);
+    assert_eq!(
+        turn_stats.usage_groups[0].kind,
+        vulcan_workbench_model::SessionTurnUsageGroupKind::Regular
+    );
+    assert_eq!(turn_stats.usage_groups[0].input_tokens, 42);
 }
 
 /// Verifies terminal mailbox events are not published before segmented outcome persistence succeeds.
@@ -893,6 +1510,7 @@ fn store_task_outcome_does_not_publish_mailbox_when_persistence_fails() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -967,6 +1585,7 @@ fn store_running_task_does_not_commit_session_when_persistence_fails() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -1034,6 +1653,7 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("image-worker-a"),
         prompt: String::from("generate one image"),
         description: Some(String::from("Generate image")),
@@ -1076,7 +1696,7 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
     ))
     .expect("root metadata should parse");
     assert_eq!(root_metadata["tasks"][0]["status"], "running");
-    assert_eq!(root_metadata["tasks"][0]["line_count"], 2);
+    assert_eq!(root_metadata["tasks"][0]["line_count"], 4);
 
     let registry = task_runtime
         .subagent_registry_snapshot()
@@ -1086,7 +1706,7 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
         .expect("running registry entry should exist");
     assert_eq!(entry.status, SubagentStatus::Running);
     assert_eq!(entry.segments.len(), 1);
-    assert_eq!(entry.segments[0].line_count, 2);
+    assert_eq!(entry.segments[0].line_count, 4);
     assert!(entry.result_summary.is_none());
 }
 
@@ -1107,6 +1727,7 @@ async fn list_agents_restore_preserves_resident_running_registry_entry() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("live-reviewer"),
         prompt: String::from("review live changes"),
         description: Some(String::from("Review live changes")),
@@ -1179,6 +1800,7 @@ async fn app_shutdown_stops_active_subagents_and_persists_metadata() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("shutdown-worker"),
         prompt: String::from("long running work"),
         description: Some(String::from("Shutdown worker")),
@@ -1270,6 +1892,7 @@ fn late_running_snapshot_does_not_reopen_completed_task() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("completed-worker"),
         prompt: String::from("complete once"),
         description: Some(String::from("Completed worker")),
@@ -1343,4 +1966,86 @@ fn late_running_snapshot_does_not_reopen_completed_task() {
         .expect("completed worker should remain registered");
     assert_eq!(entry.status, SubagentStatus::Completed);
     assert_eq!(entry.result_summary.as_deref(), Some("completed result"));
+}
+
+/// Verifies a late running snapshot cannot reopen a failed persisted task.
+/// 验证迟到的运行中快照不能重新打开已失败的持久化任务。
+#[test]
+fn late_running_snapshot_does_not_reopen_failed_task() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        execution_id: String::from("test-execution"),
+        public_task_id: String::from("failed-worker"),
+        prompt: String::from("fail once"),
+        description: Some(String::from("Failed worker")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("fail once"),
+        display_title: String::from("Failed worker"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    task_runtime
+        .mark_task_failure(root_session_id, &invocation, "failed result")
+        .expect("failed outcome should store");
+    let controller_config = build_test_controller_config("Base prompt");
+    let running_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+        .expect("late running update should be ignored");
+
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let metadata = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load")
+        .expect("metadata should exist");
+    assert_eq!(metadata.status, TaskSessionStatus::Failed);
+    assert_eq!(metadata.last_error.as_deref(), Some("failed result"));
+    let root_metadata = serde_json::from_reader::<_, Value>(BufReader::new(
+        std::fs::File::open(temp_dir.path().join("metadata.json"))
+            .expect("root metadata should open"),
+    ))
+    .expect("root metadata should parse");
+    assert_eq!(root_metadata["tasks"][0]["status"], "failed");
+    let sessions = task_runtime
+        .sessions
+        .read()
+        .expect("task sessions should read");
+    let record = sessions
+        .get(&task_id)
+        .expect("failed record should remain present");
+    assert_eq!(record.last_status, "failed");
+    assert_eq!(record.last_result_text, "failed result");
+    drop(sessions);
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read");
+    let entry = registry
+        .get("failed-worker")
+        .expect("failed worker should remain registered");
+    assert_eq!(entry.status, SubagentStatus::Failed);
+    assert_eq!(entry.result_summary.as_deref(), Some("failed result"));
 }

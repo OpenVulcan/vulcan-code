@@ -2,6 +2,11 @@
 //! WebUI 提示词生命周期 pending dispatch 辅助逻辑。
 
 use super::*;
+use crate::notify_webui_wait_agent_parent_interruption_if_waiting;
+
+/// Internal hidden prompt used only to bind mailbox-triggered turn lifecycle records.
+/// 仅用于绑定 mailbox 触发回合生命周期记录的内部隐藏提示。
+const MAILBOX_TRIGGER_INTERNAL_PROMPT: &str = "Mailbox-triggered agent message turn.";
 
 /// Inserts one visible pending prompt and starts dispatch when the selected session can run.
 /// 插入单条可见待发送提示词，并在当前会话可运行时启动分发。
@@ -38,6 +43,16 @@ pub(crate) async fn service_insert_pending_prompt(
         &workspace_path,
         &entry_id,
     )?;
+    {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        notify_webui_wait_agent_parent_interruption_if_waiting(
+            &guard,
+            selected_session_id,
+            "user_interrupt_prompt",
+        );
+    }
     mark_webui_session_waiting_for_guided_prompt_dispatch(
         &mut workspace_snapshot,
         selected_session_id,
@@ -146,10 +161,11 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
     {
         return Ok(false);
     }
-    let Some(prompt_text) = webui_session_mailbox_input_from_kernel(state, session_id, None)?
-    else {
+    let provider_visible_agent_messages =
+        webui_session_mailbox_agent_messages_from_kernel(state, session_id, None)?;
+    if provider_visible_agent_messages.is_empty() {
         return Ok(false);
-    };
+    }
     let mailbox_workspace_started_at = current_unix_millis_value();
     let session_id_text = session_id.to_string();
     let (mut workspace_snapshot, workspace_source) =
@@ -193,8 +209,9 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
                 session_title: &session_title,
                 workspace_path: &workspace_path,
                 prompt_entry_id: format!("webui-mailbox-{}", SessionId::new_v4()),
-                prompt: &prompt_text,
+                prompt: MAILBOX_TRIGGER_INTERNAL_PROMPT,
                 hidden_model_guidance: None,
+                provider_visible_agent_messages: provider_visible_agent_messages.clone(),
                 attachments: Vec::new(),
                 append_canonical_user_message: false,
                 append_visible_user_prompt_record: false,
@@ -220,7 +237,8 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
             ActiveTurnKind::MailboxTriggered,
         )?;
         if let Some(kernel) = guard.session_runtime_kernels.get_mut(&session_id) {
-            let consumed = kernel.input_queue_mut().drain_current_turn_inputs().len();
+            let consumed_inputs = kernel.input_queue_mut().drain_current_turn_inputs();
+            let consumed = consumed_inputs.len();
             webui_trace(
                 "mailbox_turn_inputs_consumed",
                 format!("session={session_id} consumed={consumed}"),
@@ -263,8 +281,8 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
     webui_trace(
         "mailbox_turn_started",
         format!(
-            "session={session_id} prompt_chars={}",
-            prompt_text.chars().count()
+            "session={session_id} agent_messages={}",
+            provider_visible_agent_messages.len()
         ),
     );
     Ok(true)

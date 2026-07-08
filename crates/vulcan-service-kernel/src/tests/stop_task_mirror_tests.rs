@@ -73,6 +73,9 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
     assert!(messages.iter().any(|message| {
         message.visible && message.title == "执行已停止" && message.body.contains("当前 AI 调用")
     }));
+    assert!(messages.iter().any(|message| {
+        message.visible && message.title == "执行已停止" && message.body.contains("运行中的智能体")
+    }));
     let runtime_records = &workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -152,6 +155,11 @@ fn webui_stop_session_work_uses_kernel_active_state_without_stream_handle() {
         .expect("kernel-active stop should be projected");
     assert!(messages.iter().any(|message| {
         message.visible && message.title == "执行已停止" && message.body.contains("当前 AI 调用")
+    }));
+    assert!(messages.iter().all(|message| {
+        !(message.visible
+            && message.title == "执行已停止"
+            && message.body.contains("运行中的智能体"))
     }));
 }
 
@@ -253,6 +261,43 @@ fn task_mirror_completed_status_repairs_projected_card_and_runtime_record() {
     assert_eq!(
         task_session_execution_status_from_tool_metadata(runtime_metadata),
         Some("completed")
+    );
+}
+
+/// Verifies active task mirrors without live runtime are shown as stopped instead of completed.
+/// 验证没有实时运行态的活动任务镜像会显示为已停止，而不是伪装成已完成。
+#[test]
+fn task_mirror_active_status_without_live_runtime_repairs_to_stopped() {
+    let task_id = SessionId::new_v4();
+    let mut messages = vec![test_spawn_agent_tool_message(
+        task_id,
+        "running",
+        SessionMessageRecordKind::ToolCallOutput,
+    )];
+    let mirrors = vec![SessionTaskMirrorSnapshot {
+        task_session_id: task_id,
+        status: String::from("running"),
+        line_count: 3,
+        updated_at: String::from("1780000000000"),
+    }];
+
+    apply_task_mirror_statuses_to_parent_messages(
+        messages.as_mut_slice(),
+        None,
+        mirrors.as_slice(),
+        |_| false,
+    );
+
+    let metadata = messages[0].metadata.as_ref().expect("metadata");
+    assert_eq!(
+        task_session_execution_status_from_tool_metadata(metadata),
+        Some("stopped")
+    );
+    assert_eq!(
+        metadata
+            .get("tool_display_state")
+            .and_then(serde_json::Value::as_str),
+        Some("stopped")
     );
 }
 

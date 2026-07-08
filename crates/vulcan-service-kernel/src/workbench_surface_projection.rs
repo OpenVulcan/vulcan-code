@@ -1,13 +1,11 @@
 //! Workbench surface and subagent navigation projection helpers.
 //! 工作台界面与子代理导航投影辅助逻辑。
 
-use std::collections::BTreeSet;
-
 use super::{
-    ServiceBridgeState, display_messages_from_conversation_state,
-    display_session_messages_from_workspace, subagent_navigation_surface_is_visible,
-    subagent_navigation_task_label, subagent_task_panel_is_openable,
-    subagent_task_panel_state_has_recoverable_conversation, webui_trace,
+    ServiceBridgeState, display_messages_from_task_conversation_state,
+    display_session_messages_from_workspace, stable_display_session_messages_from_workspace,
+    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
+    subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
 };
 use vulcan_service_api::{SubagentNavigationSnapshot, SubagentTaskSummary};
 use vulcan_session_core::{SubagentRegistryEntry, SubagentStatus};
@@ -33,13 +31,13 @@ struct SubagentTaskNavigationProjection {
 pub(super) fn active_surface_session_id_from_state(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
-) -> SessionId {
+) -> Result<SessionId, String> {
     let root_session_id = workspace_snapshot.selected_session;
     let has_visible_round = guard
         .session_subagent_navigation_rounds
         .contains(&root_session_id);
     let normalized_states =
-        authoritative_subagent_tree_states_from_registry(guard, root_session_id);
+        authoritative_subagent_tree_states_from_registry(guard, root_session_id)?;
     let active_panel_belongs_to_root = guard.active_subagent_panel.is_some_and(|selection| {
         normalized_states
             .iter()
@@ -49,7 +47,7 @@ pub(super) fn active_surface_session_id_from_state(
         guard.active_subagent_panel = None;
     }
     if !has_visible_round && !active_panel_belongs_to_root {
-        return root_session_id;
+        return Ok(root_session_id);
     }
     if let Some(selection) = guard.active_subagent_panel
         && active_panel_belongs_to_root
@@ -61,10 +59,10 @@ pub(super) fn active_surface_session_id_from_state(
             webui_subagent_panel_has_recoverable_detail(workspace_snapshot, normalized),
         )
     {
-        return selection.task_id;
+        return Ok(selection.task_id);
     }
     guard.active_subagent_panel = None;
-    root_session_id
+    Ok(root_session_id)
 }
 
 /// Returns transcript messages for the currently active WebUI surface.
@@ -72,9 +70,13 @@ pub(super) fn active_surface_session_id_from_state(
 pub(super) fn active_surface_messages_from_workspace_and_state(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
-) -> Vec<SessionMessageEntry> {
-    let active_session_id = active_surface_session_id_from_state(guard, workspace_snapshot);
-    surface_messages_for_resolved_session(guard, workspace_snapshot, active_session_id)
+) -> Result<Vec<SessionMessageEntry>, String> {
+    let active_session_id = active_surface_session_id_from_state(guard, workspace_snapshot)?;
+    Ok(surface_messages_for_resolved_session(
+        guard,
+        workspace_snapshot,
+        active_session_id,
+    ))
 }
 
 /// Returns the active surface id from preserved navigation without recomputing task lists.
@@ -119,21 +121,69 @@ fn surface_messages_for_resolved_session(
     workspace_snapshot: &WorkspaceSnapshot,
     active_session_id: SessionId,
 ) -> Vec<SessionMessageEntry> {
-    if active_session_id != workspace_snapshot.selected_session
-        && let Some(messages) =
-            display_session_messages_from_workspace(workspace_snapshot, active_session_id)
-        && !messages.is_empty()
-    {
-        return messages;
-    }
-    if active_session_id != workspace_snapshot.selected_session
-        && let Some(state) = webui_subagent_detail_state_by_task_id(guard, active_session_id)
-        && let Some(conversation_state) = state.conversation_state.as_ref()
-    {
-        return display_messages_from_conversation_state(conversation_state);
+    if active_session_id != workspace_snapshot.selected_session {
+        if let Some(messages) =
+            stable_display_session_messages_from_workspace(workspace_snapshot, active_session_id)
+            && !messages.is_empty()
+        {
+            return messages;
+        }
+        let task_prompt_anchor = webui_subagent_detail_state_by_task_id(guard, active_session_id)
+            .and_then(|state| state.description.as_deref());
+        if let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get(&active_session_id)
+        {
+            let messages = display_messages_from_task_conversation_state(
+                &runtime_state.conversation_state,
+                task_prompt_anchor,
+            );
+            if !messages.is_empty() {
+                return messages;
+            }
+        }
+        if let Some(messages) =
+            webui_subagent_detail_cached_messages_by_task_id(guard, active_session_id)
+            && !messages.is_empty()
+        {
+            return messages.clone();
+        }
+        if let Some(state) = webui_subagent_detail_state_by_task_id(guard, active_session_id)
+            && let Some(conversation_state) = state.conversation_state.as_ref()
+        {
+            return display_messages_from_task_conversation_state(
+                conversation_state,
+                state.description.as_deref(),
+            );
+        }
+        return Vec::new();
     }
     display_session_messages_from_workspace(workspace_snapshot, active_session_id)
         .unwrap_or_default()
+}
+
+/// Returns the cached, already scoped child transcript messages for one subagent task.
+/// 返回单个子智能体任务已缓存且已裁剪范围的子转录消息。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the render-only subagent detail cache.
+/// `guard` 持有仅用于渲染的子智能体详情缓存。
+/// `task_id` selects the child task surface.
+/// `task_id` 选择子任务界面。
+///
+/// # Returns
+/// 返回值
+/// Cached display messages when the task detail has been loaded.
+/// 当任务详情已加载时返回缓存显示消息。
+fn webui_subagent_detail_cached_messages_by_task_id(
+    guard: &ServiceBridgeState,
+    task_id: SessionId,
+) -> Option<&Vec<SessionMessageEntry>> {
+    guard
+        .subagent_surface_detail_cache
+        .get(&task_id)
+        .map(|entry| &entry.messages)
 }
 
 /// Returns cached render detail for one subagent task without affecting membership.
@@ -167,7 +217,7 @@ pub(super) fn webui_subagent_panel_has_recoverable_detail(
 pub(super) fn subagent_navigation_snapshot_from_state(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
-) -> Option<SubagentNavigationSnapshot> {
+) -> Result<Option<SubagentNavigationSnapshot>, String> {
     subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot)
 }
 
@@ -176,19 +226,36 @@ pub(super) fn subagent_navigation_snapshot_from_state(
 pub(super) fn subagent_navigation_snapshot_from_cached_state(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
-) -> Option<SubagentNavigationSnapshot> {
+) -> Result<Option<SubagentNavigationSnapshot>, String> {
     let parent_session_id = workspace_snapshot.selected_session;
+    subagent_navigation_snapshot_for_parent_from_cached_state(guard, parent_session_id, true)
+}
+
+/// Builds one subagent navigation snapshot for the requested parent conversation.
+/// 为指定父会话构建一份子代理导航快照。
+///
+/// `use_active_panel` is true only for the currently selected parent surface.
+/// `use_active_panel` 仅在当前选中的父会话界面为真。
+pub(super) fn subagent_navigation_snapshot_for_parent_from_cached_state(
+    guard: &mut ServiceBridgeState,
+    parent_session_id: SessionId,
+    use_active_panel: bool,
+) -> Result<Option<SubagentNavigationSnapshot>, String> {
     if parent_session_id == SessionId::nil() {
-        return None;
+        return Ok(None);
     }
     let has_visible_round = guard
         .session_subagent_navigation_rounds
         .contains(&parent_session_id);
     let normalized_projection =
-        authoritative_subagent_tree_projection_from_registry(guard, parent_session_id);
-    let requested_active_task_id =
-        valid_active_subagent_task_id_for_projection(guard, &normalized_projection);
-    if guard.active_subagent_panel.is_some() && requested_active_task_id.is_none() {
+        authoritative_subagent_tree_projection_from_registry(guard, parent_session_id)?;
+    let requested_active_task_id = use_active_panel
+        .then(|| valid_active_subagent_task_id_for_projection(guard, &normalized_projection))
+        .flatten();
+    if use_active_panel
+        && guard.active_subagent_panel.is_some()
+        && requested_active_task_id.is_none()
+    {
         guard.active_subagent_panel = None;
     }
     let has_active_panel = requested_active_task_id.is_some();
@@ -198,10 +265,10 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
         has_unclosed_subagents,
         has_active_panel,
     ) {
-        return None;
+        return Ok(None);
     }
     if normalized_projection.is_empty() {
-        return None;
+        return Ok(None);
     }
     let active_task_id = requested_active_task_id;
     let tasks = normalized_projection
@@ -214,12 +281,12 @@ pub(super) fn subagent_navigation_snapshot_from_cached_state(
             )
         })
         .collect::<Vec<_>>();
-    Some(SubagentNavigationSnapshot {
+    Ok(Some(SubagentNavigationSnapshot {
         parent_conversation_id: parent_session_id.to_string(),
         active_conversation_id: active_task_id.unwrap_or(parent_session_id).to_string(),
         active_task_id: active_task_id.map(|task_id| task_id.to_string()),
         tasks,
-    })
+    }))
 }
 
 /// Extracts the catalog agent id from an agent.md prompt source.
@@ -270,11 +337,13 @@ pub(super) fn open_subagent_registry_entry_for_task(
 fn authoritative_subagent_tree_states_from_registry(
     guard: &ServiceBridgeState,
     root_parent_session_id: SessionId,
-) -> Vec<SubagentTaskPanelState> {
-    authoritative_subagent_tree_projection_from_registry(guard, root_parent_session_id)
-        .into_iter()
-        .map(|projection| projection.state)
-        .collect()
+) -> Result<Vec<SubagentTaskPanelState>, String> {
+    Ok(
+        authoritative_subagent_tree_projection_from_registry(guard, root_parent_session_id)?
+            .into_iter()
+            .map(|projection| projection.state)
+            .collect(),
+    )
 }
 
 /// Builds panel projections from the authoritative runtime registry for every open task.
@@ -282,26 +351,17 @@ fn authoritative_subagent_tree_states_from_registry(
 fn authoritative_subagent_tree_projection_from_registry(
     guard: &ServiceBridgeState,
     root_parent_session_id: SessionId,
-) -> Vec<SubagentTaskNavigationProjection> {
+) -> Result<Vec<SubagentTaskNavigationProjection>, String> {
     let entries = if let Some(task_runtime) = guard
         .agent_runtime
         .as_ref()
         .map(|runtime| &runtime.task_runtime)
     {
-        match task_runtime.open_subagent_registry_entries_for_parent_tree(root_parent_session_id) {
-            Ok(entries) => entries,
-            Err(error) => {
-                webui_trace(
-                    "subagent_navigation_registry_unavailable",
-                    format!("parent={root_parent_session_id} error={error}"),
-                );
-                Vec::new()
-            }
-        }
+        task_runtime.open_subagent_registry_entries_for_parent_tree(root_parent_session_id)?
     } else {
         Vec::new()
     };
-    let mut projections = entries
+    Ok(entries
         .iter()
         .map(|entry| SubagentTaskNavigationProjection {
             state: subagent_task_panel_state_from_registry_entry(guard, entry),
@@ -309,74 +369,7 @@ fn authoritative_subagent_tree_projection_from_registry(
                 entry.prompt_source.as_deref(),
             ),
         })
-        .collect::<Vec<_>>();
-    if guard
-        .session_subagent_navigation_rounds
-        .contains(&root_parent_session_id)
-    {
-        append_running_cached_subagent_navigation_projections(
-            guard,
-            root_parent_session_id,
-            &mut projections,
-        );
-    }
-    projections
-}
-
-/// Appends running cached child states that were announced before the runtime registry refresh landed.
-/// 追加已宣布但运行时注册表刷新尚未落地的运行中缓存子任务状态。
-///
-/// # Parameters
-/// 参数
-/// `guard` owns the current WebUI render caches.
-/// `guard` 持有当前 WebUI 渲染缓存。
-/// `root_parent_session_id` is the selected parent whose child tree is being projected.
-/// `root_parent_session_id` 是正在投影子树的当前选中父会话。
-/// `projections` contains the authoritative registry rows and receives missing running cache rows.
-/// `projections` 包含权威注册表行，并接收缺失的运行中缓存行。
-fn append_running_cached_subagent_navigation_projections(
-    guard: &ServiceBridgeState,
-    root_parent_session_id: SessionId,
-    projections: &mut Vec<SubagentTaskNavigationProjection>,
-) {
-    let mut projected_task_ids = projections
-        .iter()
-        .map(|projection| projection.state.task_id)
-        .collect::<BTreeSet<_>>();
-    let mut visited_parent_ids = BTreeSet::new();
-    let mut pending_parent_ids = vec![root_parent_session_id];
-    while let Some(parent_session_id) = pending_parent_ids.pop() {
-        if !visited_parent_ids.insert(parent_session_id) {
-            continue;
-        }
-        let projected_child_ids = projections
-            .iter()
-            .filter(|projection| projection.state.parent_session_id == parent_session_id)
-            .map(|projection| projection.state.task_id)
-            .collect::<Vec<_>>();
-        pending_parent_ids.extend(projected_child_ids);
-        let cached_running_states = guard
-            .subagent_surface_detail_cache
-            .values()
-            .filter_map(|entry| {
-                let state = &entry.task_state;
-                (state.parent_session_id == parent_session_id
-                    && state.run_state.is_running()
-                    && !projected_task_ids.contains(&state.task_id))
-                .then(|| state.clone())
-            })
-            .collect::<Vec<_>>();
-        for state in cached_running_states {
-            if !projected_task_ids.insert(state.task_id) {
-                continue;
-            }
-            pending_parent_ids.push(state.task_id);
-            projections.push(SubagentTaskNavigationProjection {
-                state,
-                agent_profile_id: None,
-            });
-        }
-    }
+        .collect::<Vec<_>>())
 }
 
 /// Converts one authoritative registry entry into a renderable WebUI panel state.
@@ -451,19 +444,8 @@ fn subagent_task_summary_from_state(
         label: subagent_navigation_task_label(state),
         description: state.description.clone(),
         agent_profile_id,
-        run_state: subagent_run_state_key(state.run_state).to_string(),
+        run_state: state.run_state.metadata_key().to_string(),
         is_running: state.run_state.is_running(),
         is_active: active_task_id == Some(state.task_id),
-    }
-}
-
-/// Returns the service API run-state key for one shared subagent state.
-/// 返回单个共享子代理状态对应的 service API 运行状态键。
-pub(super) fn subagent_run_state_key(run_state: SubagentTaskRunState) -> &'static str {
-    match run_state {
-        SubagentTaskRunState::Running => "running",
-        SubagentTaskRunState::Completed => "completed",
-        SubagentTaskRunState::Stopped => "stopped",
-        SubagentTaskRunState::Failed => "failed",
     }
 }

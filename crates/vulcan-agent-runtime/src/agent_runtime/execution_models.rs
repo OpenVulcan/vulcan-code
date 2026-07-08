@@ -2,7 +2,7 @@
 //! 供执行器、运行时事件与模块导出复用的共享执行模型类型。
 
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
-use crate::context_budget::ContextBudgetSnapshot;
+use crate::context_budget::{ContextBudgetSnapshot, ContextCompactionPolicy};
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use crate::provider_config::{
@@ -33,6 +33,122 @@ use vulcan_vmm::VmmConfigLayer;
 use vulcan_workbench_model::SessionTurnUsageSegment;
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
+/// Request-scoped agent prompt snapshot consumed by the shared prompt composer.
+/// 由共享提示词组合器消费的请求级代理提示词快照。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionAgentPromptSnapshot {
+    /// Prompt text used as the agent prompt layer.
+    /// 用作代理提示词层的提示词文本。
+    pub text: String,
+    /// Source of this fixed prompt snapshot.
+    /// 该固定提示词快照的来源。
+    pub source: ExecutionAgentPromptSnapshotSource,
+}
+
+/// Source kind for one request-scoped agent prompt snapshot.
+/// 单个请求级代理提示词快照的来源类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionAgentPromptSnapshotSource {
+    /// Fixed parent runtime prompt captured for a child-agent execution.
+    /// 为智能体执行捕获的固定父级运行时提示词。
+    FixedParentRuntime,
+}
+
+impl ExecutionAgentPromptSnapshot {
+    /// Builds one fixed parent-runtime prompt snapshot from non-empty text.
+    /// 从非空文本构建固定父级运行时提示词快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `text` is the captured parent runtime agent prompt text.
+    /// `text` 是捕获到的父级运行时代理提示词文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A fixed prompt snapshot, or `None` when the text is empty after trimming.
+    /// 固定提示词快照；如果去除空白后为空则返回 `None`。
+    pub fn fixed_parent_runtime(text: impl Into<String>) -> Option<Self> {
+        let text = text.into();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(Self {
+            text: trimmed.to_string(),
+            source: ExecutionAgentPromptSnapshotSource::FixedParentRuntime,
+        })
+    }
+
+    /// Returns the prompt-composer source label for this snapshot.
+    /// 返回该快照用于提示词组合器的来源标签。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A stable human-readable diagnostics label.
+    /// 稳定的人类可读诊断标签。
+    pub const fn source_label(&self) -> &'static str {
+        match self.source {
+            ExecutionAgentPromptSnapshotSource::FixedParentRuntime => {
+                "Fixed parent runtime agent prompt snapshot"
+            }
+        }
+    }
+}
+
+/// Provider-visible typed agent message that starts or joins one runtime turn.
+/// 用于启动或加入运行回合的 Provider 可见类型化智能体消息。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutionProviderVisibleAgentMessage {
+    /// Stable delivery identifier shared by mailbox, runtime, and display records.
+    /// 由 mailbox、runtime 与显示记录共享的稳定投递标识。
+    pub delivery_id: String,
+    /// Stable model-visible inter-agent message type.
+    /// 模型可见的稳定智能体间消息类型。
+    pub message_type: String,
+    /// Logical task or agent path associated with the message.
+    /// 该消息关联的逻辑任务或智能体路径。
+    pub task_name: String,
+    /// Logical sender name or path.
+    /// 逻辑发送方名称或路径。
+    pub sender: String,
+    /// Logical recipient name or path.
+    /// 逻辑接收方名称或路径。
+    pub recipient: String,
+    /// Model-visible child-agent result text.
+    /// 模型可见的智能体结果正文。
+    pub payload: String,
+    /// Whether the message may wake an idle parent turn.
+    /// 该消息是否允许唤醒空闲父级回合。
+    pub trigger_turn: bool,
+    /// Unix timestamp in milliseconds used for transcript records.
+    /// 用于转录记录的 Unix 毫秒时间戳。
+    pub timestamp_ms: u64,
+    /// Host-only structured audit data.
+    /// 仅供宿主侧使用的结构化审计数据。
+    pub metadata: Option<Value>,
+}
+
+impl ExecutionProviderVisibleAgentMessage {
+    /// Converts this typed runtime message into a core controller append request.
+    /// 将该类型化运行消息转换为核心控制器追加请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A provider-visible core append request with the same model payload.
+    /// 携带相同模型载荷的 Provider 可见核心追加请求。
+    pub fn to_core_append_request(&self) -> vulcan_core::controller::AgentMessageAppendRequest {
+        vulcan_core::controller::AgentMessageAppendRequest {
+            message_type: self.message_type.clone(),
+            task_name: self.task_name.clone(),
+            sender: self.sender.clone(),
+            recipient: self.recipient.clone(),
+            payload: self.payload.clone(),
+            trigger_turn: self.trigger_turn,
+            metadata: self.metadata.clone(),
+        }
+    }
+}
+
 /// Minimal execution request captured from the current workbench state.
 /// 从当前工作台状态捕获的最小执行请求。
 #[derive(Debug, Clone)]
@@ -49,9 +165,12 @@ pub struct ExecutionPreparationRequest {
     /// Optional agent identifier that should own this execution instead of the globally active agent.
     /// 可选的本次执行代理标识，用于替代全局激活代理。
     pub execution_agent_id: Option<String>,
-    /// Optional request-scoped replacement for the active agent system prompt.
-    /// 可选的请求级激活代理系统提示词替换内容。
-    pub agent_system_prompt_override: Option<String>,
+    /// Optional request-scoped fixed agent prompt snapshot.
+    /// 可选的请求级固定代理提示词快照。
+    pub agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
+    /// Optional child-agent prompt context routed through the shared prompt composer.
+    /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
+    pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
     /// Optional file-domain root for task-session artifacts owned by this execution.
     /// 本次执行拥有的可选子代理会话文件域根目录。
     pub task_session_store_root: Option<PathBuf>,
@@ -64,9 +183,18 @@ pub struct ExecutionPreparationRequest {
     /// Current composer prompt.
     /// 当前提示词输入区内容。
     pub prompt: String,
+    /// Provider-visible typed agent messages seeded before this request reaches the controller.
+    /// 本请求到达控制器前预先播种的 Provider 可见类型化智能体消息。
+    pub provider_visible_agent_messages: Vec<ExecutionProviderVisibleAgentMessage>,
     /// Canonical conversation state reconstructed from the session protocol state.
     /// 从会话协议状态重建出的规范会话状态。
     pub conversation_state: SessionConversationState,
+    /// Optional context-compaction policy resolved for this execution request.
+    /// 为本次执行请求解析出的可选上下文压缩策略。
+    pub context_compaction_policy: Option<ContextCompactionPolicy>,
+    /// Optional request-level input-token budget limit resolved for this execution request.
+    /// 为本次执行请求解析出的可选输入 Token 预算上限。
+    pub context_budget_override: Option<usize>,
     /// Current execution-mode label.
     /// 当前执行模式标签。
     pub execution_mode: String,
@@ -91,6 +219,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional scoped tool ids rejected with `tool_request_rejection_reason`.
     /// 使用 `tool_request_rejection_reason` 拒绝的可选限定工具标识。
     pub tool_request_rejection_tool_ids: Vec<String>,
+    /// Request-scoped public tool ids that must be hidden after normal exposure resolution.
+    /// 正常可见性解析后仍必须按请求隐藏的公开工具标识集合。
+    pub tool_request_hidden_tool_ids: Vec<String>,
     /// Prompt purpose used to choose runtime prompt assembly and tool exposure.
     /// 用于选择运行时提示词装配与工具暴露策略的提示词用途。
     pub prompt_purpose: ExecutionPromptPurpose,
@@ -234,9 +365,12 @@ pub struct ExecutionPreparation {
     /// Active agent kind label.
     /// 当前激活代理类型标签。
     pub agent_kind: String,
-    /// Optional request-scoped replacement for the active agent system prompt.
-    /// 可选的请求级激活代理系统提示词替换内容。
-    pub agent_system_prompt_override: Option<String>,
+    /// Optional request-scoped fixed agent prompt snapshot.
+    /// 可选的请求级固定代理提示词快照。
+    pub agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
+    /// Optional child-agent prompt context routed through the shared prompt composer.
+    /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
+    pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
     /// Validated provider/model runtime blueprint.
     /// 通过校验的 Provider/Model 运行时蓝图。
     pub model_blueprint: ProviderRuntimeBlueprint,
@@ -315,6 +449,12 @@ pub struct ExecutionPreparation {
     /// Optional context-budget snapshot captured from the final provider-facing request shape.
     /// 从最终面向 Provider 的请求形态捕获到的可选上下文预算快照。
     pub context_budget: Option<ContextBudgetSnapshot>,
+    /// Context-compaction policy used when building request budgets and budget guards.
+    /// 构建请求预算与预算守卫时使用的上下文压缩策略。
+    pub context_compaction_policy: Option<ContextCompactionPolicy>,
+    /// Request-level input-token budget limit used when building request budgets and budget guards.
+    /// 构建请求预算与预算守卫时使用的请求级输入 Token 预算上限。
+    pub context_budget_override: Option<usize>,
     /// Optional layered context assembly captured from the final provider-facing request shape.
     /// 从最终面向 Provider 的请求形态捕获到的可选分层上下文装配结果。
     pub context_assembly: Option<ContextAssembly>,
@@ -351,6 +491,34 @@ pub struct ExecutionPreparation {
     /// Usage segments already consumed by internal work before this prepared execution continues.
     /// 本次已准备执行继续前已经由内部工作消耗的用量分段。
     pub embedded_turn_usage_segments: Vec<SessionTurnUsageSegment>,
+}
+
+/// Prompt-composer input describing one child-agent execution.
+/// 描述一次子智能体执行的提示词组合输入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionSubagentPromptContext {
+    /// Stable child-agent identity shown to the model.
+    /// 展示给模型的稳定子智能体身份。
+    pub identity: String,
+    /// Delegated task text attached to this child-agent turn.
+    /// 附着到本次子智能体回合的委托任务文本。
+    pub delegated_task: String,
+    /// Optional parent delegation guidance.
+    /// 可选的父级委托说明。
+    pub delegation: Option<String>,
+    /// Optional functional prompt supplement for custom or profiled agents.
+    /// 自定义或画像智能体使用的可选功能提示词补充。
+    pub functional_system_prompt: Option<String>,
+}
+
+impl ExecutionSubagentPromptContext {
+    /// Returns whether this context should use the functional subagent prompt strategy.
+    /// 返回该上下文是否应使用功能型子智能体提示词策略。
+    pub fn uses_functional_prompt(&self) -> bool {
+        self.functional_system_prompt
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    }
 }
 
 /// Convert a persisted personality selection into prompt-composer input.
@@ -608,6 +776,9 @@ pub struct ExecutionRunReport {
     /// Latest successful provider usage captured by this run, excluding failed or aborted calls.
     /// 本次运行捕获到的最近一次成功 Provider 用量，不包含失败或中止调用。
     pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
+    /// Cumulative successful provider usage captured by this run, excluding failed or aborted calls.
+    /// 本次运行捕获到的成功 Provider 累计用量，不包含失败或中止调用。
+    pub cumulative_successful_provider_usage: Option<ProviderUsageSnapshot>,
     /// Successful MCP discovery summary rows collected during the run.
     /// 运行期间收集到的 MCP 成功发现摘要行集合。
     pub mcp_discovery_rows: Vec<String>,
@@ -643,6 +814,7 @@ impl ExecutionRunReport {
         warnings: Vec<String>,
         controller_events: Vec<CoreControllerEvent>,
         last_successful_provider_usage: Option<ProviderUsageSnapshot>,
+        cumulative_successful_provider_usage: Option<ProviderUsageSnapshot>,
     ) -> Self {
         let embedded_turn_usage_segments = preparation.embedded_turn_usage_segments.clone();
         Self {
@@ -653,6 +825,7 @@ impl ExecutionRunReport {
             conversation_state,
             provider_request_count,
             last_successful_provider_usage,
+            cumulative_successful_provider_usage,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,
@@ -669,6 +842,7 @@ impl ExecutionRunReport {
         preparation: Option<ExecutionPreparation>,
         provider_request_count: usize,
         last_successful_provider_usage: Option<ProviderUsageSnapshot>,
+        cumulative_successful_provider_usage: Option<ProviderUsageSnapshot>,
         mcp_discovery_rows: Vec<String>,
         mcp_discovery_errors: Vec<String>,
         warnings: Vec<String>,
@@ -688,6 +862,7 @@ impl ExecutionRunReport {
             conversation_state,
             provider_request_count,
             last_successful_provider_usage,
+            cumulative_successful_provider_usage,
             mcp_discovery_rows,
             mcp_discovery_errors,
             warnings,

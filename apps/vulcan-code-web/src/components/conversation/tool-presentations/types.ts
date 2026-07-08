@@ -244,7 +244,10 @@ export interface SubagentOrchestrationPresentation {
   detailRef?: ConversationDetailRef;
   // Normalized orchestration operation.
   // 规范化调度操作类型。
-  operation: "create" | "message" | "wait" | "collect" | "control";
+  operation: "create" | "message" | "wait" | "collect" | "control" | "feedback";
+  // Collection display subtype for template queries versus live status queries.
+  // 模板查询与实时状态查询的集合展示子类型。
+  collectKind?: "templates" | "status" | null;
   // Compact title shown in the row.
   // 紧凑行中展示的标题。
   title: string;
@@ -275,6 +278,9 @@ export interface SubagentOrchestrationPresentation {
   // Whether a wait_agent call ended by timeout.
   // wait_agent 调用是否因超时结束。
   timedOut?: boolean | null;
+  // Whether a wait_agent call ended because the parent turn was interrupted.
+  // wait_agent 调用是否因为父级回合被打断而结束。
+  interrupted?: boolean | null;
   // Listed child-agent status rows.
   // 已列出的子代理状态行。
   agents: SubagentOrchestrationAgent[];

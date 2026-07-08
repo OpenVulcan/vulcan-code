@@ -17,6 +17,7 @@ use crate::agent_runtime::provider_system_update_lowering::{
     ProviderSystemUpdateLoweringPolicy, lower_provider_system_update,
     provider_system_update_repair_event,
 };
+use crate::agent_runtime::provider_visible_agent_messages::append_provider_visible_agent_messages_to_core_snapshot;
 use crate::context_budget::{
     RequestContextCompactionBudgetSnapshotInput, build_request_context_compaction_budget_snapshot,
 };
@@ -128,6 +129,10 @@ pub(crate) fn build_runtime_bootstrap_core(
             &preparation.runtime_system_updates,
             system_update_policy,
         )?;
+    append_provider_visible_agent_messages_to_core_snapshot(
+        &mut core_snapshot,
+        &request.provider_visible_agent_messages,
+    )?;
     let core_controller = VulcanCoreController::new(
         build_core_controller_config_with_layers(
             preparation,
@@ -191,6 +196,7 @@ pub(crate) async fn seed_runtime_request_snapshot(
         system_preamble,
         prompt_layers,
         request.prompt.trim(),
+        &request.provider_visible_agent_messages,
         resolved_tool_definitions,
         runtime_max_turns,
     )
@@ -216,6 +222,8 @@ pub(crate) async fn seed_runtime_request_snapshot(
                     capabilities: &preparation.model_blueprint.capabilities,
                     reasoning: &preparation.model_blueprint.reasoning,
                     request_snapshot: &request_snapshot,
+                    compaction_policy: preparation.context_compaction_policy,
+                    context_budget_override: preparation.context_budget_override,
                     observed_usage: observed_usage.as_ref(),
                     estimator: token_estimator,
                 },

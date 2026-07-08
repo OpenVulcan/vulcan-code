@@ -381,6 +381,7 @@ pub(crate) fn is_missing_segmented_session_file_error(error: &str) -> bool {
         || error.contains("s000001.jsonl"))
         && (error.contains("os error 3")
             || error.contains("os error 2")
+            || error.contains("Required JSON file does not exist")
             || error.contains("系统找不到指定的路径")
             || error.contains("The system cannot find the path specified")
             || error.contains("No such file or directory"))

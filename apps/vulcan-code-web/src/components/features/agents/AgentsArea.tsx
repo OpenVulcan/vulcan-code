@@ -291,7 +291,7 @@ export function AgentsArea(props: {
       <div className="skill-page-body agent-skill-page-body">
         <section className="skill-toolbar agent-catalog-toolbar" aria-label={text("智能体目录操作", "Agent catalog actions")}>
           <div className="agent-catalog-toolbar-heading">
-            <p>{text("管理 Vulcan Code Agent 运行时消费的用户级子智能体 Markdown 文件。", "Manage user-level subagent Markdown files consumed by the Vulcan Code Agent runtime.")}</p>
+            <p>{text("管理 Vulcan Code Agent 运行时消费的用户级智能体 Markdown 文件。", "Manage user-level agent Markdown files consumed by the Vulcan Code Agent runtime.")}</p>
             <div className="agent-catalog-toolbar-actions">
               <button aria-label={text("新增智能体", "New agent")} className="agent-catalog-icon-button" disabled={busyAction !== null} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} title={text("新增智能体", "New agent")} type="button">
                 <Plus size={15} />
@@ -306,10 +306,10 @@ export function AgentsArea(props: {
           </div>
           <div className="agent-catalog-filter-row">
             <input
-              aria-label={text("搜索子智能体", "Search subagents")}
+              aria-label={text("搜索智能体", "Search agents")}
               className="agent-catalog-search-input"
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder={text("搜索子智能体...", "Search subagents...")}
+              placeholder={text("搜索智能体...", "Search agents...")}
               type="search"
               value={searchQuery}
             />
@@ -852,9 +852,18 @@ function AgentCapabilityPolicyTable(props: {
   // filterText stores the current local search query.
   // filterText 保存当前本地搜索条件。
   const [filterText, setFilterText] = React.useState("")
+  // selectableItemIds stores selectors that are still valid choices in this policy table.
+  // selectableItemIds 保存当前策略表中仍然可选的选择器。
+  const selectableItemIds = React.useMemo(() => new Set(props.options.map((option) => option.id)), [props.options])
+  // selectedPolicyItems removes stale or forbidden selectors that are no longer selectable.
+  // selectedPolicyItems 移除已经不可选的过期或禁用选择器。
+  const selectedPolicyItems = React.useMemo(
+    () => props.selectedItems.filter((item) => selectableItemIds.has(item)),
+    [props.selectedItems, selectableItemIds],
+  )
   // selectedSet accelerates selected selector lookup.
   // selectedSet 加速已选择选择器查询。
-  const selectedSet = React.useMemo(() => new Set(props.selectedItems), [props.selectedItems])
+  const selectedSet = React.useMemo(() => new Set(selectedPolicyItems), [selectedPolicyItems])
   // visibleOptions applies the local search filter to known tools.
   // visibleOptions 对已知工具应用本地搜索过滤。
   const visibleOptions = React.useMemo(() => {
@@ -876,7 +885,7 @@ function AgentCapabilityPolicyTable(props: {
       <div className="agent-tool-policy-toolbar">
         <div>
           <strong>{props.title}</strong>
-          <span>{agentPolicyModeSummary(props.mode, props.selectedItems.length, locale)}</span>
+          <span>{agentPolicyModeSummary(props.mode, selectedPolicyItems.length, locale)}</span>
         </div>
         <div className="skill-tool-segmented agent-tool-policy-mode" role="group" aria-label={props.title}>
           <button
@@ -938,7 +947,7 @@ function AgentCapabilityPolicyTable(props: {
                   disabled={props.disabled || props.mode === "all"}
                   type="checkbox"
                   onChange={(event) => {
-                    props.onSelectedItemsChange(setPolicyItemSelection(props.selectedItems, option.id, event.target.checked))
+                    props.onSelectedItemsChange(setPolicyItemSelection(selectedPolicyItems, option.id, event.target.checked))
                   }}
                 />
                 <span>{policySelectionLabel(props.mode, locale)}</span>
@@ -1570,9 +1579,10 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
   // optionMap keeps one row per persisted tool id.
   // optionMap 确保每个持久化工具标识只保留一行。
   const optionMap = new Map<string, AgentCapabilityPolicyOption>()
+  const forbiddenToolSelectors = agentForbiddenToolSelectorSet(workbench.subagentCatalog.childAgentForbiddenToolIds ?? [])
   workbench.hostTools?.nativeTools?.forEach((tool) => {
     const toolId = tool.id.trim()
-    if (toolId.length === 0) {
+    if (toolId.length === 0 || isAgentToolForbidden(toolId, forbiddenToolSelectors)) {
       return
     }
     appendAgentCapabilityPolicyOption(optionMap, {
@@ -1588,7 +1598,7 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
   workbench.luaSkills.skills.forEach((skill) => {
     skill.tools.forEach((tool) => {
       const toolId = tool.canonicalName.trim()
-      if (toolId.length === 0) {
+      if (toolId.length === 0 || isAgentToolForbidden(toolId, forbiddenToolSelectors)) {
         return
       }
       appendAgentCapabilityPolicyOption(optionMap, {
@@ -1603,7 +1613,7 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
   const serverNameById = new Map((workbench.mcpServers ?? []).map((server) => [server.id, server.name || server.id]))
   workbench.mcpTools?.forEach((tool) => {
     const toolId = tool.id.trim()
-    if (toolId.length === 0) {
+    if (toolId.length === 0 || isAgentToolForbidden(toolId, forbiddenToolSelectors)) {
       return
     }
     const serverLabel = serverNameById.get(tool.serverId) ?? tool.serverId
@@ -1622,6 +1632,9 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
       "Saved on this agent, but not resolved in the current workbench snapshot.",
     )
     listFromText(draft.toolPolicyTools).forEach((toolId) => {
+      if (isAgentToolForbidden(toolId, forbiddenToolSelectors)) {
+        return
+      }
       appendAgentCapabilityPolicyOption(optionMap, {
         id: toolId,
         label: toolId,
@@ -1692,6 +1705,30 @@ function appendAgentCapabilityPolicyOption(optionMap: Map<string, AgentCapabilit
   if (!optionMap.has(option.id)) {
     optionMap.set(option.id, option)
   }
+}
+
+// agentForbiddenToolSelectorSet builds a normalized lookup set from backend-projected forbidden tool ids.
+// agentForbiddenToolSelectorSet 根据后端投影的禁用工具标识构建规范化查找集合。
+function agentForbiddenToolSelectorSet(toolIds: string[]): Set<string> {
+  return new Set(toolIds.map(normalizedAgentToolSelectorKey).filter(Boolean))
+}
+
+// isAgentToolForbidden returns whether one selectable tool id is forbidden for agents.
+// isAgentToolForbidden 返回某个可选工具标识是否被智能体禁用。
+function isAgentToolForbidden(toolId: string, forbiddenSelectors: Set<string>): boolean {
+  const normalized = normalizedAgentToolSelectorKey(toolId)
+  return normalized.length > 0 && forbiddenSelectors.has(normalized)
+}
+
+// normalizedAgentToolSelectorKey mirrors the backend selector normalization used for tool policies.
+// normalizedAgentToolSelectorKey 对齐后端工具策略使用的选择器规范化规则。
+function normalizedAgentToolSelectorKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_")
 }
 
 // sortedAgentCategories returns stable category rows for the filter menu.

@@ -1,6 +1,7 @@
 use super::*;
 use crate::conversation_protocol::SessionConversationState;
 use serde_json::json;
+use vulcan_core::types::ProviderUsageSnapshot;
 
 /// Builds one deterministic test session identifier.
 /// 构建一个确定性的测试会话标识。
@@ -8,6 +9,65 @@ fn test_session_id() -> SessionId {
     "11111111-1111-1111-1111-111111111111"
         .parse()
         .expect("test session id should be a valid UUID")
+}
+
+/// Builds one successful terminal report with deterministic provider usage.
+/// 构建一份带确定性 Provider 用量的成功终态报告。
+#[allow(clippy::too_many_arguments)]
+fn usage_report(
+    session_id: SessionId,
+    assistant_output: &str,
+    input_tokens: usize,
+    output_tokens: usize,
+    reasoning_tokens: usize,
+    total_tokens: usize,
+    cached_input_tokens: Option<usize>,
+) -> ExecutionRunReport {
+    let provider_usage = ProviderUsageSnapshot {
+        input_tokens: Some(input_tokens),
+        output_tokens: Some(output_tokens),
+        reasoning_tokens: Some(reasoning_tokens),
+        total_tokens: Some(total_tokens),
+        cached_input_tokens,
+        cache_creation_input_tokens: None,
+    };
+    ExecutionRunReport {
+        session_id,
+        preparation: None,
+        assistant_output: Some(assistant_output.to_string()),
+        thinking_output: None,
+        conversation_state: None,
+        provider_request_count: 1,
+        last_successful_provider_usage: Some(provider_usage.clone()),
+        cumulative_successful_provider_usage: Some(provider_usage),
+        embedded_turn_usage_segments: Vec::new(),
+        mcp_discovery_rows: Vec::new(),
+        mcp_discovery_errors: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+        controller_events: Vec::new(),
+    }
+}
+
+/// Extracts the latest visible turn-statistics metadata from a runtime state.
+/// 从运行态中提取最近一条可见轮次统计元数据。
+fn latest_turn_stats(
+    runtime_state: &SessionRuntimeStateEntry,
+) -> vulcan_workbench_model::SessionTurnStats {
+    let stats_record = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .rev()
+        .find(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("turn stats record should exist");
+    let stats_value = stats_record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("turn_stats"))
+        .expect("turn stats metadata should exist")
+        .clone();
+    serde_json::from_value(stats_value).expect("turn stats metadata should deserialize")
 }
 
 /// Verifies canonical checkpoints do not replace visible transcript projections.
@@ -217,6 +277,7 @@ fn terminal_report_preserves_streamed_records() {
         conversation_state: Some(SessionConversationState::default()),
         provider_request_count: 1,
         last_successful_provider_usage: None,
+        cumulative_successful_provider_usage: None,
         embedded_turn_usage_segments: Vec::new(),
         mcp_discovery_rows: Vec::new(),
         mcp_discovery_errors: Vec::new(),
@@ -251,6 +312,277 @@ fn terminal_report_preserves_streamed_records() {
         .collect::<Vec<_>>();
     assert!(canonical_texts.contains(&"随便调用两个工具"));
     assert!(canonical_texts.contains(&"报告中的完整输出不应覆盖已流式记录。"));
+}
+
+/// Verifies terminal reports attach provider usage when they append the protocol assistant message.
+/// 验证终态报告追加协议助手消息时会携带 Provider 用量。
+#[test]
+fn terminal_report_attaches_usage_to_appended_assistant_message() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "2100", "只输出 abc");
+    let report = usage_report(session_id, "abc", 31, 2, 1, 34, Some(7));
+
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2101", &report);
+
+    let assistant_usage = runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .find_map(|message| match &message.payload {
+            SessionConversationPayload::Assistant { text, usage, .. } if text == "abc" => {
+                usage.as_ref()
+            }
+            SessionConversationPayload::Assistant { .. }
+            | SessionConversationPayload::UserText { .. }
+            | SessionConversationPayload::ToolResult { .. }
+            | SessionConversationPayload::AgentMessage { .. } => None,
+        })
+        .expect("terminal assistant message should carry usage");
+    assert_eq!(assistant_usage.input_tokens, Some(31));
+    assert_eq!(assistant_usage.output_tokens, Some(2));
+    assert_eq!(assistant_usage.reasoning_tokens, Some(1));
+    assert_eq!(assistant_usage.total_tokens, Some(34));
+    assert_eq!(assistant_usage.cached_input_tokens, Some(7));
+
+    let turn_stats = latest_turn_stats(&runtime_state);
+    assert_eq!(turn_stats.provider_call_count, 1);
+    assert_eq!(turn_stats.input_tokens, 31);
+    assert_eq!(turn_stats.output_tokens, 2);
+    assert_eq!(turn_stats.reasoning_tokens, 1);
+    assert_eq!(turn_stats.total_tokens, 34);
+    assert_eq!(turn_stats.cached_input_tokens, Some(7));
+}
+
+/// Verifies child-agent usage embedded in a parent terminal report stays display-separated.
+/// 验证父级终态报告内嵌的智能体用量会保持显示分离。
+#[test]
+fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "2150", "创建智能体");
+    let mut report = usage_report(session_id, "智能体完成。", 31, 2, 1, 34, Some(7));
+    report
+        .embedded_turn_usage_segments
+        .push(SessionTurnUsageSegment {
+            kind: SessionTurnUsageSegmentKind::SubagentTask,
+            trigger: Some(String::from("worker-a")),
+            execution_profile: None,
+            provider_id: Some(String::from("deepseek")),
+            model_id: Some(String::from("deepseek-v4-pro")),
+            provider_call_count: 1,
+            tool_call_count: 0,
+            input_tokens: 100,
+            output_tokens: 25,
+            reasoning_tokens: 5,
+            total_tokens: 130,
+            cached_input_tokens: Some(40),
+            cache_creation_input_tokens: None,
+        });
+
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2151", &report);
+
+    let turn_stats = latest_turn_stats(&runtime_state);
+    assert_eq!(turn_stats.provider_call_count, 1);
+    assert_eq!(turn_stats.input_tokens, 31);
+    assert_eq!(turn_stats.output_tokens, 2);
+    assert_eq!(turn_stats.reasoning_tokens, 1);
+    assert_eq!(turn_stats.total_tokens, 34);
+    assert_eq!(turn_stats.cached_input_tokens, Some(7));
+    assert_eq!(turn_stats.usage_segments.len(), 2);
+    let subagent_group = turn_stats
+        .usage_groups
+        .iter()
+        .find(|group| group.kind == vulcan_workbench_model::SessionTurnUsageGroupKind::Subagent)
+        .expect("subagent usage group should be retained");
+    assert_eq!(subagent_group.provider_call_count, 1);
+    assert_eq!(subagent_group.input_tokens, 100);
+    assert_eq!(subagent_group.output_tokens, 25);
+    assert_eq!(subagent_group.reasoning_tokens, 5);
+    assert_eq!(subagent_group.total_tokens, 130);
+    assert_eq!(subagent_group.cached_input_tokens, Some(40));
+}
+
+/// Verifies terminal reports fill missing usage on an existing terminal protocol message.
+/// 验证终态报告会为已有终态协议消息补齐缺失用量。
+#[test]
+fn terminal_report_attaches_usage_to_existing_assistant_message() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "2200", "只输出 xyz");
+    runtime_state
+        .conversation_state
+        .messages
+        .push(SessionConversationMessage {
+            id: String::from("existing-assistant-message"),
+            payload: SessionConversationPayload::Assistant {
+                text: String::from("xyz"),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: None,
+                tool_calls: Vec::new(),
+            },
+        });
+    let report = usage_report(session_id, "xyz", 13, 5, 0, 18, None);
+
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2201", &report);
+
+    let assistant_messages = runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .filter_map(|message| match &message.payload {
+            SessionConversationPayload::Assistant { text, usage, .. } if text == "xyz" => {
+                Some(usage)
+            }
+            SessionConversationPayload::Assistant { .. }
+            | SessionConversationPayload::UserText { .. }
+            | SessionConversationPayload::ToolResult { .. }
+            | SessionConversationPayload::AgentMessage { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(assistant_messages.len(), 1);
+    let usage = assistant_messages[0]
+        .as_ref()
+        .expect("existing assistant message should receive usage");
+    assert_eq!(usage.input_tokens, Some(13));
+    assert_eq!(usage.output_tokens, Some(5));
+    assert_eq!(usage.total_tokens, Some(18));
+
+    let turn_stats = latest_turn_stats(&runtime_state);
+    assert_eq!(turn_stats.provider_call_count, 1);
+    assert_eq!(turn_stats.input_tokens, 13);
+    assert_eq!(turn_stats.output_tokens, 5);
+    assert_eq!(turn_stats.total_tokens, 18);
+}
+
+/// Verifies terminal reports still project provider usage when canonical messages lost per-message usage.
+/// 验证规范消息丢失逐消息用量时，终态报告仍会投影 Provider 用量。
+#[test]
+fn terminal_report_backfills_usage_when_checkpoint_messages_lack_usage() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "2300", "只输出 123");
+    let report = ExecutionRunReport {
+        session_id,
+        preparation: None,
+        assistant_output: None,
+        thinking_output: None,
+        conversation_state: Some(SessionConversationState {
+            messages: vec![SessionConversationMessage {
+                id: String::from("checkpoint-assistant-without-usage"),
+                payload: SessionConversationPayload::Assistant {
+                    text: String::from("123"),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            }],
+            records: Vec::new(),
+            continuation: Default::default(),
+        }),
+        provider_request_count: 1,
+        last_successful_provider_usage: Some(ProviderUsageSnapshot {
+            input_tokens: Some(101),
+            output_tokens: Some(3),
+            reasoning_tokens: Some(2),
+            total_tokens: Some(106),
+            cached_input_tokens: Some(40),
+            cache_creation_input_tokens: None,
+        }),
+        cumulative_successful_provider_usage: None,
+        embedded_turn_usage_segments: Vec::new(),
+        mcp_discovery_rows: Vec::new(),
+        mcp_discovery_errors: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+        controller_events: Vec::new(),
+    };
+
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2301", &report);
+
+    let turn_stats = latest_turn_stats(&runtime_state);
+    assert_eq!(turn_stats.provider_call_count, 1);
+    assert_eq!(turn_stats.input_tokens, 101);
+    assert_eq!(turn_stats.output_tokens, 3);
+    assert_eq!(turn_stats.reasoning_tokens, 2);
+    assert_eq!(turn_stats.total_tokens, 106);
+    assert_eq!(turn_stats.cached_input_tokens, Some(40));
+    assert_eq!(turn_stats.usage_segments.len(), 1);
+    assert_eq!(
+        turn_stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::AssistantResponse
+    );
+    assert_eq!(turn_stats.usage_segments[0].provider_call_count, 0);
+}
+
+/// Verifies multi-call terminal reports use cumulative usage when checkpoint messages lost per-call usage.
+/// 验证多次调用终态报告在检查点消息丢失逐调用用量时会使用累计用量。
+#[test]
+fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
+    let session_id = test_session_id();
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "2400", "连续调用工具后总结");
+    let report = ExecutionRunReport {
+        session_id,
+        preparation: None,
+        assistant_output: None,
+        thinking_output: None,
+        conversation_state: Some(SessionConversationState {
+            messages: vec![SessionConversationMessage {
+                id: String::from("checkpoint-final-assistant-without-usage"),
+                payload: SessionConversationPayload::Assistant {
+                    text: String::from("完成"),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            }],
+            records: Vec::new(),
+            continuation: Default::default(),
+        }),
+        provider_request_count: 7,
+        last_successful_provider_usage: Some(ProviderUsageSnapshot {
+            input_tokens: Some(26_442),
+            output_tokens: Some(171),
+            reasoning_tokens: Some(20),
+            total_tokens: Some(26_633),
+            cached_input_tokens: Some(25_856),
+            cache_creation_input_tokens: None,
+        }),
+        cumulative_successful_provider_usage: Some(ProviderUsageSnapshot {
+            input_tokens: Some(185_094),
+            output_tokens: Some(1_197),
+            reasoning_tokens: Some(140),
+            total_tokens: Some(186_431),
+            cached_input_tokens: Some(180_992),
+            cache_creation_input_tokens: None,
+        }),
+        embedded_turn_usage_segments: Vec::new(),
+        mcp_discovery_rows: Vec::new(),
+        mcp_discovery_errors: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+        controller_events: Vec::new(),
+    };
+
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2401", &report);
+
+    let turn_stats = latest_turn_stats(&runtime_state);
+    assert_eq!(turn_stats.provider_call_count, 7);
+    assert_eq!(turn_stats.input_tokens, 185_094);
+    assert_eq!(turn_stats.output_tokens, 1_197);
+    assert_eq!(turn_stats.reasoning_tokens, 140);
+    assert_eq!(turn_stats.total_tokens, 186_431);
+    assert_eq!(turn_stats.cached_input_tokens, Some(180_992));
+    assert_eq!(turn_stats.usage_groups.len(), 1);
+    assert_eq!(turn_stats.usage_groups[0].provider_call_count, 7);
+    assert_eq!(turn_stats.usage_groups[0].input_tokens, 185_094);
 }
 
 /// Verifies a tool result projection preserves runtime event order instead of mutating the stored transcript order.

@@ -41,6 +41,20 @@ impl TaskRuntime {
             .take_events_for_parent(parent_thread_id)
     }
 
+    /// Takes queued subagent mailbox events for one parent when the event matches a caller predicate.
+    /// 按调用方谓词取出单个父级下匹配的子代理 mailbox 事件。
+    pub(super) fn take_matching_subagent_events_for_parent<Matches>(
+        &self,
+        parent_thread_id: SessionThreadId,
+        matches: Matches,
+    ) -> Result<Vec<SubagentMailboxEvent>, String>
+    where
+        Matches: FnMut(&SubagentMailboxEvent) -> bool,
+    {
+        self.subagent_mailbox
+            .take_matching_events_for_parent(parent_thread_id, matches)
+    }
+
     /// Returns whether one parent thread has queued subagent mailbox events.
     /// 返回单个父线程是否存在排队的子代理 mailbox 事件。
     pub fn has_subagent_events_for_parent(

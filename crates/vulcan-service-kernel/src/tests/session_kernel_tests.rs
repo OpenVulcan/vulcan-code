@@ -2,6 +2,9 @@
 //! session kernel tests。
 
 use super::*;
+use vulcan_session_boundary::{
+    SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
+};
 
 /// Verifies the WebUI session kernel helper enforces one active turn.
 /// 验证 WebUI 会话内核辅助函数会强制单活动回合。
@@ -52,6 +55,74 @@ fn webui_session_kernel_user_turn_clears_wait_agent_coordination() {
             .expect("kernel should exist")
             .wait_scope_count(),
         0
+    );
+}
+
+/// Verifies starting a normal user turn does not pre-seed wait_agent interruption.
+/// 验证普通用户回合启动不会预置 wait_agent 打断信号。
+#[tokio::test]
+async fn webui_session_kernel_user_turn_does_not_preinterrupt_wait_agent() {
+    let session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(session_id);
+    state.agent_runtime = Some(test_agent_runtime_bridge());
+    let task_runtime = state
+        .agent_runtime
+        .as_ref()
+        .expect("agent runtime should be installed")
+        .task_runtime
+        .clone();
+
+    start_webui_session_kernel_user_turn(&mut state, session_id, "turn-a")
+        .expect("kernel turn should start");
+    let wait_result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        task_runtime.invoke_wait_agent(session_id, serde_json::json!({ "timeout_ms": 10000 })),
+    )
+    .await;
+
+    assert!(wait_result.is_err());
+}
+
+/// Verifies stopping an active waiting turn interrupts the active wait_agent call.
+/// 验证停止活跃等待回合会打断正在等待的 wait_agent 调用。
+#[tokio::test]
+async fn webui_session_kernel_stop_interrupts_active_wait_agent() {
+    let session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(session_id);
+    state.agent_runtime = Some(test_agent_runtime_bridge());
+    let task_runtime = state
+        .agent_runtime
+        .as_ref()
+        .expect("agent runtime should be installed")
+        .task_runtime
+        .clone();
+    start_webui_session_kernel_user_turn(&mut state, session_id, "turn-a")
+        .expect("kernel turn should start");
+    state
+        .parent_sessions_waiting_for_subagents
+        .insert(session_id);
+    session_runtime_kernel_mut(&mut state, session_id)
+        .register_wait_scope("wait-a", Vec::<String>::new(), 10)
+        .expect("wait scope should register");
+
+    let wait_task = tokio::spawn(async move {
+        task_runtime
+            .invoke_wait_agent(session_id, serde_json::json!({ "timeout_ms": 10000 }))
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+    assert!(stop_webui_session_kernel_generation(&mut state, session_id));
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), wait_task)
+        .await
+        .expect("wait task should be woken")
+        .expect("wait task should not panic")
+        .expect("wait_agent should return a tool result");
+
+    assert_eq!(result.model_output["interrupted"], true);
+    assert_eq!(
+        result.model_output["message"],
+        serde_json::json!("Wait interrupted by new input.")
     );
 }
 
@@ -122,6 +193,69 @@ fn webui_session_kernel_finish_clears_active_turn() {
     );
 }
 
+/// Verifies lifecycle terminal status parsing accepts only explicit known statuses.
+/// 验证生命周期终态状态解析只接受显式已知状态。
+#[test]
+fn session_lifecycle_terminal_status_requires_explicit_known_status() {
+    let completed_event = test_terminal_boundary_event(serde_json::json!({
+        "status": "completed"
+    }));
+    let failed_event = test_terminal_boundary_event(serde_json::json!({
+        "status": "failed"
+    }));
+    let missing_status_event = test_terminal_boundary_event(serde_json::json!({}));
+    let unknown_status_event = test_terminal_boundary_event(serde_json::json!({
+        "status": "stopped"
+    }));
+
+    assert_eq!(
+        session_lifecycle_terminal_status_from_event(&completed_event)
+            .expect("completed status should parse"),
+        SessionTurnTerminalStatus::Completed
+    );
+    assert_eq!(
+        session_lifecycle_terminal_status_from_event(&failed_event)
+            .expect("failed status should parse"),
+        SessionTurnTerminalStatus::Failed
+    );
+    assert!(
+        session_lifecycle_terminal_status_from_event(&missing_status_event)
+            .expect_err("missing status must not default to completed")
+            .contains("missing payload.status")
+    );
+    assert!(
+        session_lifecycle_terminal_status_from_event(&unknown_status_event)
+            .expect_err("unknown status must not default to failed or completed")
+            .contains("unknown payload.status")
+    );
+}
+
+/// Builds a turn-completed session boundary event for lifecycle parsing tests.
+/// 为生命周期解析测试构建回合完成会话边界事件。
+///
+/// # Parameters
+/// 参数
+/// `payload` is attached as the terminal event payload.
+/// `payload` 会作为终态事件载荷写入。
+///
+/// # Returns
+/// 返回值
+/// A terminal boundary event with a stable test turn id.
+/// 返回带稳定测试轮次标识的终态边界事件。
+fn test_terminal_boundary_event(payload: serde_json::Value) -> SessionBoundaryEvent {
+    SessionBoundaryEvent::new(
+        "terminal-test",
+        SessionNodeId::from(SessionId::new_v4()),
+        1,
+        SessionBoundaryEventKind::TurnCompleted,
+        SessionEventScope::Turn,
+        SessionEventVisibility::Hidden,
+        10,
+    )
+    .with_turn_id("turn-a")
+    .with_payload(payload)
+}
+
 /// Verifies stopping a WebUI session kernel generation clears the active turn and marks stopped.
 /// 验证停止 WebUI 会话内核代际会清理活动回合并标记停止。
 #[test]
@@ -176,6 +310,7 @@ fn webui_stream_event_generation_gate_rejects_stopped_generation() {
 fn restored_kernel_subagent_metadata(result: &str) -> serde_json::Value {
     serde_json::json!({
         "payload": {
+            "execution_id": format!("restored-kernel-{result}"),
             "subagent_mailbox_event": {
                 "kind": "completed",
                 "payload": {
@@ -260,7 +395,8 @@ fn persisted_session_kernel_restores_consumed_mailbox_cursor() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut state = test_service_state_with_parent_session(parent_session_id);
-    let input_id = format!("subagent-mailbox-{parent_session_id}-{task_session_id}");
+    let input_id =
+        format!("subagent-mailbox-{parent_session_id}-{task_session_id}-restored-kernel-waited");
 
     assert!(
         enqueue_webui_subagent_mailbox_input(

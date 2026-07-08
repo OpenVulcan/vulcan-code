@@ -101,13 +101,12 @@ pub(crate) fn apply_task_mirror_statuses_to_parent_messages<F>(
             task_mirror.status.as_str(),
             is_task_live_running(task_mirror.task_session_id),
         );
-        let payload = json!({
-            "task_id": task_mirror.task_session_id.to_string(),
-            (SUBAGENT_TASK_ID_KEY): task_mirror.task_session_id.to_string(),
-            "execution_status": execution_status,
-            "line_count": task_mirror.line_count,
-            "updated_at": task_mirror.updated_at,
-        });
+        let mirror_update = task_session_mirror_display_metadata_update(
+            task_mirror.task_session_id,
+            execution_status.as_str(),
+            task_mirror.line_count,
+            task_mirror.updated_at.as_str(),
+        );
         let message_ids = find_task_session_tool_message_ids_for_payload(
             messages.iter(),
             runtime_state
@@ -115,26 +114,18 @@ pub(crate) fn apply_task_mirror_statuses_to_parent_messages<F>(
                 .map(|state| state.conversation_state.records.iter())
                 .into_iter()
                 .flatten(),
-            &payload,
+            &mirror_update.payload,
         );
         if message_ids.is_empty() {
             continue;
         }
-        let metadata_update = task_session_display_metadata_update(
-            json!({
-                "tool_name": "spawn_agent",
-                "kind": SUBAGENT_TASK_KIND,
-                "payload": payload,
-            }),
-            execution_status.as_str(),
-        );
         let live_running_override = execution_status == "running";
         for message_id in message_ids {
             apply_task_mirror_metadata_update_to_parent_rows(
                 messages,
                 runtime_state.as_deref_mut(),
                 &message_id,
-                &metadata_update,
+                &mirror_update.metadata_update,
                 live_running_override,
             );
         }
@@ -442,93 +433,6 @@ pub(crate) fn task_session_record_kind_can_display_status(
     )
 }
 
-/// Builds display metadata with every status alias kept in sync.
-/// 构建显示元数据，并保持所有状态别名同步。
-///
-/// # Parameters
-/// 参数
-/// `metadata_update` is the base task-session metadata update.
-/// `metadata_update` 是基础 task-session 元数据更新。
-/// `execution_status` is the canonical runtime-derived display state.
-/// `execution_status` 是运行时推导出的规范显示状态。
-///
-/// # Returns
-/// 返回值
-/// Metadata update with top-level and payload-level display states aligned.
-/// 返回顶层与 payload 层显示状态已对齐的元数据更新。
-pub(crate) fn task_session_display_metadata_update(
-    mut metadata_update: Value,
-    execution_status: &str,
-) -> Value {
-    let Some(object) = metadata_update.as_object_mut() else {
-        return json!({
-            "tool_name": "spawn_agent",
-            "kind": SUBAGENT_TASK_KIND,
-            "display_state": execution_status,
-            "tool_display_state": execution_status,
-        });
-    };
-    object.insert(
-        String::from("display_state"),
-        Value::String(execution_status.to_string()),
-    );
-    object.insert(
-        String::from("tool_display_state"),
-        Value::String(execution_status.to_string()),
-    );
-    if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
-        payload.insert(
-            String::from("execution_status"),
-            Value::String(execution_status.to_string()),
-        );
-    }
-    if let Some(host_payload) = object
-        .get_mut("host_result")
-        .and_then(Value::as_object_mut)
-        .and_then(|host_result| host_result.get_mut("payload"))
-        .and_then(Value::as_object_mut)
-    {
-        host_payload.insert(
-            String::from("execution_status"),
-            Value::String(execution_status.to_string()),
-        );
-    }
-    metadata_update
-}
-
-/// Merges task-mirror display metadata while allowing live running state to override stale terminal payloads.
-/// 合并任务镜像展示元数据，并允许实时运行态覆盖陈旧终态载荷。
-///
-/// # Parameters
-/// 参数
-/// `current_metadata` is the metadata already attached to the parent tool card.
-/// `current_metadata` 是父级工具卡片已有的元数据。
-/// `metadata_update` is the task-mirror-derived display metadata.
-/// `metadata_update` 是从任务镜像推导出的展示元数据。
-/// `live_running_override` indicates that the host runtime still owns active task work.
-/// `live_running_override` 表示宿主运行时仍持有活动任务。
-///
-/// # Returns
-/// 返回值
-/// Merged metadata for the parent tool card.
-/// 返回父级工具卡片的合并后元数据。
-pub(crate) fn merge_task_mirror_tool_display_metadata(
-    current_metadata: Option<Value>,
-    metadata_update: Value,
-    live_running_override: bool,
-) -> Option<Value> {
-    if !live_running_override {
-        return merge_tool_display_metadata(current_metadata, Some(metadata_update));
-    }
-    match (current_metadata, metadata_update) {
-        (Some(Value::Object(mut current_object)), Value::Object(update_object)) => {
-            current_object.extend(update_object);
-            Some(Value::Object(current_object))
-        }
-        (_, update) => Some(update),
-    }
-}
-
 /// Resolves display status for one task mirror, letting live runtime state win over stale metadata.
 /// 为单条任务镜像解析展示状态，并让实时运行态覆盖陈旧元数据。
 ///
@@ -554,8 +458,8 @@ pub(crate) fn normalized_task_mirror_execution_status(
         "failed" | "error" | "errored" => String::from("failed"),
         "stopped" | "cancelled" | "canceled" | "aborted" => String::from("stopped"),
         "completed" | "complete" | "success" | "succeeded" => String::from("completed"),
-        "running" | "created" | "pending" | "in_progress" => String::from("completed"),
-        _ => String::from("completed"),
+        "running" | "created" | "pending" | "in_progress" => String::from("stopped"),
+        _ => String::from("stopped"),
     }
 }
 
@@ -758,6 +662,7 @@ pub(crate) fn replace_webui_subagent_task_conversation_state(
     workspace_snapshot: &mut WorkspaceSnapshot,
     task_id: SessionId,
     conversation_state: vulcan_agent_runtime::conversation_protocol::SessionConversationState,
+    task_prompt_anchor: Option<&str>,
 ) {
     let now = current_unix_millis_text();
     let runtime_state = workspace_snapshot
@@ -770,10 +675,11 @@ pub(crate) fn replace_webui_subagent_task_conversation_state(
     runtime_state.conversation_state = conversation_state;
     runtime_state.updated_at = now;
     let runtime_state_snapshot = runtime_state.clone();
-    replace_display_messages_with_runtime_state_records(
+    replace_task_display_messages_with_runtime_state_records(
         workspace_snapshot,
         task_id,
         &runtime_state_snapshot,
+        task_prompt_anchor,
     );
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
 }

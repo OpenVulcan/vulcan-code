@@ -172,6 +172,12 @@ pub(crate) fn latest_session_turn_stats_from_state(
 /// Converts one turn-statistics snapshot into Codex-compatible goal usage tokens.
 /// 将一份轮次统计转换为 Codex 兼容的目标用量 Token。
 pub(crate) fn goal_token_delta_for_turn_stats(stats: &SessionTurnStats) -> Option<i64> {
+    if stats.turn_kind == SessionTurnStatsKind::SubagentFeedback {
+        return None;
+    }
+    if !stats.usage_groups.is_empty() {
+        return goal_token_delta_for_turn_usage_groups(stats);
+    }
     let input_tokens = stats.input_tokens;
     let cached_input_tokens = stats.cached_input_tokens.unwrap_or_default();
     let output_tokens = stats.output_tokens.saturating_add(stats.reasoning_tokens);
@@ -182,6 +188,40 @@ pub(crate) fn goal_token_delta_for_turn_stats(stats: &SessionTurnStats) -> Optio
         return Some(i64::try_from(delta).unwrap_or(i64::MAX));
     }
     (stats.total_tokens > 0).then(|| i64::try_from(stats.total_tokens).unwrap_or(i64::MAX))
+}
+
+/// Calculates goal tokens from first-class usage groups while excluding child-agent work.
+/// 从一等用量分组计算目标预算 Token，同时排除智能体工作。
+fn goal_token_delta_for_turn_usage_groups(stats: &SessionTurnStats) -> Option<i64> {
+    let mut input_tokens = 0usize;
+    let mut cached_input_tokens = 0usize;
+    let mut output_tokens = 0usize;
+    let mut reasoning_tokens = 0usize;
+    let mut total_tokens = 0usize;
+    let mut has_goal_accounted_group = false;
+    for group in &stats.usage_groups {
+        if group.kind == SessionTurnUsageGroupKind::Subagent {
+            continue;
+        }
+        has_goal_accounted_group = true;
+        input_tokens = input_tokens.saturating_add(group.input_tokens);
+        cached_input_tokens =
+            cached_input_tokens.saturating_add(group.cached_input_tokens.unwrap_or_default());
+        output_tokens = output_tokens.saturating_add(group.output_tokens);
+        reasoning_tokens = reasoning_tokens.saturating_add(group.reasoning_tokens);
+        total_tokens = total_tokens.saturating_add(group.total_tokens);
+    }
+    if !has_goal_accounted_group {
+        return None;
+    }
+    let delta = input_tokens
+        .saturating_sub(cached_input_tokens)
+        .saturating_add(output_tokens)
+        .saturating_add(reasoning_tokens);
+    if delta > 0 {
+        return Some(i64::try_from(delta).unwrap_or(i64::MAX));
+    }
+    (total_tokens > 0).then(|| i64::try_from(total_tokens).unwrap_or(i64::MAX))
 }
 
 /// Marks an active goal with the terminal status implied by a failed run.

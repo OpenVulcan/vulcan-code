@@ -108,6 +108,9 @@ pub struct TaskSessionResolvedConfig {
     /// Effective configuration used by execution.
     /// 执行使用的有效配置。
     pub effective_config: SessionEffectiveConfig,
+    /// Functional system prompt layers owned by this task session after resolution.
+    /// 解析后由当前子代理会话自身拥有的功能性系统提示词层。
+    pub functional_system_prompt_layers: Vec<String>,
     /// Runtime policy enforced for task sessions.
     /// 对子代理会话强制执行的运行时策略。
     pub runtime_policy: ExecutionRuntimePolicy,
@@ -147,12 +150,21 @@ impl TaskSessionConfigResolver {
         effective_config.inherit_parent_config = inherit_parent_config;
         effective_config.subagent_profile_id = profile_id.clone();
         effective_config.subagent_mode = input.invocation.subagent_mode.clone();
+        let mut functional_system_prompt_layers = Vec::new();
 
         if let Some(profile) = input.profile.as_ref() {
-            Self::apply_profile(&mut effective_config, profile);
+            Self::apply_profile(
+                &mut effective_config,
+                &mut functional_system_prompt_layers,
+                profile,
+            );
         }
 
-        Self::apply_invocation(&mut effective_config, &input.invocation);
+        Self::apply_invocation(
+            &mut effective_config,
+            &mut functional_system_prompt_layers,
+            &input.invocation,
+        );
 
         let runtime_policy =
             Self::resolve_runtime_policy(input.profile.as_ref(), &input.invocation);
@@ -162,13 +174,18 @@ impl TaskSessionConfigResolver {
         TaskSessionResolvedConfig {
             requested_config,
             effective_config,
+            functional_system_prompt_layers,
             runtime_policy,
         }
     }
 
     /// Applies profile-level overrides to an effective configuration.
     /// 将配置级覆盖应用到有效配置。
-    fn apply_profile(config: &mut SessionEffectiveConfig, profile: &SubagentProfile) {
+    fn apply_profile(
+        config: &mut SessionEffectiveConfig,
+        functional_system_prompt_layers: &mut Vec<String>,
+        profile: &SubagentProfile,
+    ) {
         overlay_provider_model(&mut config.provider_model, &profile.provider_model);
         overlay_tool_exposure(&mut config.tool_exposure, &profile.tool_exposure);
         overlay_prompt_skills(&mut config.prompt_skills, &profile.prompt_skills);
@@ -177,17 +194,23 @@ impl TaskSessionConfigResolver {
 
         if let Some(base_system_prompt) = profile.base_system_prompt.as_ref() {
             config.system_prompt_layers.push(base_system_prompt.clone());
+            functional_system_prompt_layers.push(base_system_prompt.clone());
         }
         if let Some(system_prompt_append) = profile.system_prompt_append.as_ref() {
             config
                 .system_prompt_layers
                 .push(system_prompt_append.clone());
+            functional_system_prompt_layers.push(system_prompt_append.clone());
         }
     }
 
     /// Applies invocation-level overrides to an effective configuration.
     /// 将调用级覆盖应用到有效配置。
-    fn apply_invocation(config: &mut SessionEffectiveConfig, invocation: &TaskInvocationConfig) {
+    fn apply_invocation(
+        config: &mut SessionEffectiveConfig,
+        functional_system_prompt_layers: &mut Vec<String>,
+        invocation: &TaskInvocationConfig,
+    ) {
         overlay_provider_model(&mut config.provider_model, &invocation.provider_model);
         overlay_tool_exposure(&mut config.tool_exposure, &invocation.tool_exposure);
         overlay_prompt_skills(&mut config.prompt_skills, &invocation.prompt_skills);
@@ -200,11 +223,14 @@ impl TaskSessionConfigResolver {
         if let Some(system_prompt) = invocation.system_prompt.as_ref() {
             config.system_prompt_layers.clear();
             config.system_prompt_layers.push(system_prompt.clone());
+            functional_system_prompt_layers.clear();
+            functional_system_prompt_layers.push(system_prompt.clone());
         }
         if let Some(system_prompt_append) = invocation.system_prompt_append.as_ref() {
             config
                 .system_prompt_layers
                 .push(system_prompt_append.clone());
+            functional_system_prompt_layers.push(system_prompt_append.clone());
         }
     }
 
@@ -269,9 +295,13 @@ fn overlay_runtime_policy(
     }
 }
 
-/// Enforces the TaskSession projection-isolation boundary after all overrides.
-/// 在所有覆盖之后强制执行 TaskSession 投影隔离边界。
+/// Enforces the TaskSession side-effect isolation boundary after all overrides.
+/// 在所有覆盖之后强制执行 TaskSession 副作用隔离边界。
 fn enforce_task_session_projection_boundary(target: &mut ExecutionRuntimePolicy) {
+    target.hooks_enabled = false;
+    target.vmm_enabled = false;
+    target.memory_recall_enabled = false;
+    target.memory_writeback_enabled = false;
     target.database_projection_enabled = false;
 }
 
@@ -298,15 +328,13 @@ fn overlay_tool_exposure(target: &mut ToolExposureSnapshot, overlay: &ToolExposu
     if overlay.policy.mode != vulcan_session_core::CapabilityPolicyMode::All
         || !overlay.policy.selectors.is_empty()
     {
-        target.policy = overlay.policy.clone();
-        target.allowed_tools = overlay.allowed_tools.clone();
-        target.disabled_tools = overlay.disabled_tools.clone();
-    }
-    if !overlay.allowed_tools.is_empty() {
-        target.allowed_tools = overlay.allowed_tools.clone();
-    }
-    if !overlay.disabled_tools.is_empty() {
-        target.disabled_tools = overlay.disabled_tools.clone();
+        vulcan_session_core::apply_tool_capability_policy(target, overlay.policy.clone());
+    } else if !overlay.allowed_tools.is_empty() || !overlay.disabled_tools.is_empty() {
+        let policy = vulcan_session_core::capability_policy_from_selector_lists(
+            overlay.allowed_tools.clone(),
+            overlay.disabled_tools.clone(),
+        );
+        vulcan_session_core::apply_tool_capability_policy(target, policy);
     }
     if !overlay.luaskills_overrides.is_null() {
         target.luaskills_overrides = overlay.luaskills_overrides.clone();
@@ -322,15 +350,13 @@ fn overlay_prompt_skills(target: &mut PromptSkillSnapshot, overlay: &PromptSkill
     if overlay.policy.mode != vulcan_session_core::CapabilityPolicyMode::All
         || !overlay.policy.selectors.is_empty()
     {
-        target.policy = overlay.policy.clone();
-        target.enabled = overlay.enabled.clone();
-        target.disabled = overlay.disabled.clone();
-    }
-    if !overlay.enabled.is_empty() {
-        target.enabled = overlay.enabled.clone();
-    }
-    if !overlay.disabled.is_empty() {
-        target.disabled = overlay.disabled.clone();
+        vulcan_session_core::apply_prompt_skill_capability_policy(target, overlay.policy.clone());
+    } else if !overlay.enabled.is_empty() || !overlay.disabled.is_empty() {
+        let policy = vulcan_session_core::capability_policy_from_selector_lists(
+            overlay.enabled.clone(),
+            overlay.disabled.clone(),
+        );
+        vulcan_session_core::apply_prompt_skill_capability_policy(target, policy);
     }
 }
 

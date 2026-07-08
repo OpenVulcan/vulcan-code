@@ -44,6 +44,9 @@ import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout
 import {
   copyText,
   webuiClickTrace,
+  type RequestStopConversationRunChoice,
+  type StopConversationRunAgentPromptItem,
+  type StopConversationRunChoice,
   type WorkbenchDeltaSignal,
 } from "@/components/workspace/workbench-layout/types";
 import { useConversationHydration } from "@/components/workspace/workbench-layout/conversation-hydration";
@@ -278,6 +281,12 @@ export function WorkbenchLayout(props: {
   // inflightSubagentOpenRequestRef coalesces duplicate backend open commands for the same route.
   // inflightSubagentOpenRequestRef 合并同一路由的重复后端打开命令。
   const inflightSubagentOpenRequestRef = React.useRef<InflightSubagentOpenRequest | null>(null);
+  // stopConversationChoiceResolverRef resolves the pending main-run stop dialog decision.
+  // stopConversationChoiceResolverRef 解析待处理的主会话停止弹窗决策。
+  const stopConversationChoiceResolverRef = React.useRef<((choice: StopConversationRunChoice | null) => void) | null>(null);
+  // stopConversationAgents stores the running agents shown in the stop confirmation dialog.
+  // stopConversationAgents 保存停止确认弹窗展示的运行中智能体。
+  const [stopConversationAgents, setStopConversationAgents] = React.useState<StopConversationRunAgentPromptItem[] | null>(null);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(null);
@@ -620,6 +629,25 @@ export function WorkbenchLayout(props: {
     mergeWorkbenchWithLocalCaches,
   });
 
+  // requestStopConversationRunChoice opens the stop decision dialog and resolves with the user's choice.
+  // requestStopConversationRunChoice 打开停止决策弹窗，并用用户选择完成 Promise。
+  const requestStopConversationRunChoice = React.useCallback<RequestStopConversationRunChoice>((agents) => new Promise((resolve) => {
+    if (stopConversationChoiceResolverRef.current) {
+      stopConversationChoiceResolverRef.current(null);
+    }
+    stopConversationChoiceResolverRef.current = resolve;
+    setStopConversationAgents(agents);
+  }), []);
+
+  // resolveStopConversationRunChoice closes the stop decision dialog with one explicit choice.
+  // resolveStopConversationRunChoice 使用一个明确选择关闭停止决策弹窗。
+  const resolveStopConversationRunChoice = React.useCallback((choice: StopConversationRunChoice | null) => {
+    const resolver = stopConversationChoiceResolverRef.current;
+    stopConversationChoiceResolverRef.current = null;
+    setStopConversationAgents(null);
+    resolver?.(choice);
+  }, []);
+
   const {
     handleSubmitConversationPrompt,
     handleInsertPendingPrompt,
@@ -650,6 +678,7 @@ export function WorkbenchLayout(props: {
     setSelectedConversationId,
     selectedConversationIdRef,
     workbenchStateRef,
+    requestStopConversationRunChoice,
     subagentNavigationRequestSeqRef,
     inflightSubagentOpenRequestRef,
     subagentSurfaceMessageCacheRef,
@@ -1070,6 +1099,7 @@ export function WorkbenchLayout(props: {
         removeProjectSubmitting={removeProjectSubmitting}
         removeProjectTarget={removeProjectTarget}
         renameTarget={renameTarget}
+        stopConversationAgents={stopConversationAgents}
         workbench={workbenchState}
         onBrowseProjectDirectories={browseProjectDirectories}
         onCancelArchiveProject={() => {
@@ -1085,11 +1115,13 @@ export function WorkbenchLayout(props: {
           }
         }}
         onCancelRename={() => setRenameTarget(null)}
+        onCancelStopConversationRun={() => resolveStopConversationRunChoice(null)}
         onConfirmArchiveProject={handleArchiveProjectConfirm}
         onConfirmProjectFolder={handleConfirmProjectFolder}
         onConfirmProjectIcon={handleProjectIconConfirm}
         onConfirmRemoveProject={handleRemoveProjectConfirm}
         onConfirmRename={handleRenameConfirm}
+        onConfirmStopConversationRun={resolveStopConversationRunChoice}
         onExecuteAttachmentCleanup={executeProjectAttachmentCleanup}
         onLoadAgentSkillOverrides={loadProjectAgentSkillOverrides}
         onLoadVmmDraft={loadProjectVmmConfig}

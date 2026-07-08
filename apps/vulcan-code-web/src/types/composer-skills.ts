@@ -581,6 +581,9 @@ export interface SubagentCatalogSummary {
   // Human-readable notice for the current catalog state.
   // 当前目录状态的人类可读提示。
   notice: string;
+  // Public tool ids that agents cannot execute directly.
+  // 智能体不能直接执行的公开工具标识。
+  childAgentForbiddenToolIds: string[];
   // Merged subagent and expert definition rows.
   // 合并后的子代理与专家定义行。
   definitions: SubagentDefinitionSummary[];

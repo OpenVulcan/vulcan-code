@@ -300,7 +300,7 @@ fn retained_hydrated_session_messages_response(
     {
         workspace_snapshot.selected_session = parsed_session_id;
         let subagent_navigation =
-            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)?;
         guard.workspace_snapshot = Some(workspace_snapshot);
         subagent_navigation
     } else {
@@ -903,8 +903,8 @@ pub(super) async fn load_hydrated_session_workbench(
             &refreshed_snapshot,
         );
         (
-            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
-            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot),
+            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot)?,
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot)?,
             guard.session_goal_summaries.clone(),
             hydrated_windows,
             guard.webui_preloaded_unclosed_subagent_roots.clone(),

@@ -91,31 +91,194 @@ pub(crate) fn merge_runtime_state_records_into_display_messages(
     set_display_session_messages(workspace_snapshot, session_id, merged_messages);
 }
 
-/// Replaces the display transcript with the canonical records owned by one runtime dialogue state.
-/// 使用单个运行态对话状态拥有的规范记录替换显示层转录。
+/// Replaces a TaskSession display transcript with records owned by the delegated child task.
+/// 使用委派给子智能体的任务自有记录替换 TaskSession 显示转录。
 ///
 /// # Parameters
 /// 参数
-/// `workspace_snapshot` is the workspace snapshot whose display layer will be rewritten.
-/// `workspace_snapshot` 是显示层将被重写的工作区快照。
-/// `session_id` selects the session that owns both the runtime records and display rows.
-/// `session_id` 选择同时拥有运行态记录与显示行的会话。
-/// `runtime_state` is the runtime state providing the authoritative display records.
-/// `runtime_state` 是提供权威显示记录的运行态。
-pub(crate) fn replace_display_messages_with_runtime_state_records(
+/// `workspace_snapshot` is the workspace snapshot whose child display layer will be rewritten.
+/// `workspace_snapshot` 是需要重写子显示层的工作区快照。
+/// `session_id` selects the child TaskSession that owns the display transcript.
+/// `session_id` 选择拥有显示转录的子 TaskSession。
+/// `runtime_state` is the cloned-or-fresh child runtime state returned by the controller.
+/// `runtime_state` 是控制器返回的克隆或全新子运行态。
+/// `task_prompt_anchor` is the exact child task prompt used to separate inherited parent runtime records from child-owned display records.
+/// `task_prompt_anchor` 是用于区分继承父运行态记录与子任务自有显示记录的精确任务提示词。
+pub(crate) fn replace_task_display_messages_with_runtime_state_records(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
+    task_prompt_anchor: Option<&str>,
 ) {
-    let mut messages = display_messages_from_conversation_state(&runtime_state.conversation_state);
-    if let Some(existing_messages) = workspace_snapshot.session_messages.get(&session_id) {
-        for existing_message in existing_messages {
-            if session_message_is_display_only_agent_message(existing_message) {
-                push_display_session_message_once(&mut messages, existing_message.clone());
-            }
-        }
-    }
+    let messages = display_messages_from_task_conversation_state(
+        &runtime_state.conversation_state,
+        task_prompt_anchor,
+    );
+    let messages = merge_task_display_messages_with_existing_send_message_notes(
+        workspace_snapshot,
+        session_id,
+        messages,
+    );
     set_display_session_messages(workspace_snapshot, session_id, messages);
+}
+
+/// Returns the seeded child-task prompt currently retained in the display layer.
+/// 返回当前显示层中保留的已播种子任务提示词。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the workspace snapshot that may contain a provisional child prompt row.
+/// `workspace_snapshot` 是可能包含临时子任务提示词行的工作区快照。
+/// `session_id` selects the child TaskSession display transcript.
+/// `session_id` 选择子 TaskSession 显示转录。
+///
+/// # Returns
+/// 返回值
+/// The prompt body when a provisional subagent prompt row exists.
+/// 当临时子代理提示词行存在时返回其正文。
+pub(crate) fn task_display_prompt_anchor_from_workspace(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<String> {
+    workspace_snapshot
+        .session_messages
+        .get(&session_id)?
+        .iter()
+        .find(|message| session_message_is_seeded_subagent_task_prompt(message))
+        .map(|message| message.body.clone())
+}
+
+/// Projects one child TaskSession conversation state into display rows scoped to the delegated task.
+/// 将单个子 TaskSession 会话状态投影为限定在委派任务范围内的显示行。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the child runtime state that may include inherited parent context records.
+/// `conversation_state` 是可能包含继承父上下文记录的子运行态。
+/// `task_prompt_anchor` is the child task prompt that starts the user-visible child transcript.
+/// `task_prompt_anchor` 是开启用户可见子转录的子任务提示词。
+///
+/// # Returns
+/// 返回值
+/// Display messages beginning at the child task prompt when the anchor is available.
+/// 当锚点可用时返回从子任务提示词开始的显示消息。
+pub(crate) fn display_messages_from_task_conversation_state(
+    conversation_state: &SessionConversationState,
+    task_prompt_anchor: Option<&str>,
+) -> Vec<SessionMessageEntry> {
+    let messages = conversation_state_to_session_messages(conversation_state);
+    let scoped_messages =
+        task_scoped_display_messages_from_prompt_anchor(messages, task_prompt_anchor);
+    filter_display_session_messages(scoped_messages)
+}
+
+/// Drops inherited parent display rows before the child task prompt.
+/// 丢弃子任务提示词之前继承自父级的显示行。
+///
+/// # Parameters
+/// 参数
+/// `messages` are display rows projected from the complete child runtime state.
+/// `messages` 是从完整子运行态投影出的显示行。
+/// `task_prompt_anchor` is the normalized child prompt boundary when known.
+/// `task_prompt_anchor` 是已知情况下的归一化子提示词边界。
+///
+/// # Returns
+/// 返回值
+/// The child-owned display window, falling back to the latest visible child user prompt.
+/// 返回子任务自有显示窗口；无法匹配锚点时回退到最新可见子用户提示。
+fn task_scoped_display_messages_from_prompt_anchor(
+    messages: Vec<SessionMessageEntry>,
+    task_prompt_anchor: Option<&str>,
+) -> Vec<SessionMessageEntry> {
+    let start_index = normalized_task_prompt_anchor(task_prompt_anchor)
+        .and_then(|anchor| task_prompt_anchor_start_index(messages.as_slice(), anchor.as_str()))
+        .or_else(|| latest_visible_user_transcript_start_index(messages.as_slice()));
+    let Some(start_index) = start_index else {
+        return messages;
+    };
+    messages.into_iter().skip(start_index).collect()
+}
+
+/// Returns the display row index that exactly matches the child task prompt anchor.
+/// 返回与子任务提示词锚点精确匹配的显示行索引。
+///
+/// # Parameters
+/// 参数
+/// `messages` are candidate display rows projected from the child runtime state.
+/// `messages` 是从子运行态投影出的候选显示行。
+/// `anchor` is the normalized prompt boundary to find.
+/// `anchor` 是需要查找的归一化提示词边界。
+///
+/// # Returns
+/// 返回值
+/// The latest matching visible user transcript row index.
+/// 返回最新匹配的可见用户转录行索引。
+fn task_prompt_anchor_start_index(messages: &[SessionMessageEntry], anchor: &str) -> Option<usize> {
+    messages.iter().rposition(|message| {
+        message.kind == SessionMessageKind::User
+            && message.record_kind == SessionMessageRecordKind::Transcript
+            && normalized_task_prompt_anchor(Some(message.body.as_str())).as_deref() == Some(anchor)
+    })
+}
+
+/// Returns the latest visible user transcript index for anchorless child display scoping.
+/// 返回无锚点子显示裁剪可使用的最新可见用户转录索引。
+///
+/// # Parameters
+/// 参数
+/// `messages` are candidate display rows projected from the child runtime state.
+/// `messages` 是从子运行态投影出的候选显示行。
+///
+/// # Returns
+/// 返回值
+/// The latest visible user transcript row index when one exists.
+/// 存在时返回最新可见用户转录行索引。
+fn latest_visible_user_transcript_start_index(messages: &[SessionMessageEntry]) -> Option<usize> {
+    messages.iter().rposition(|message| {
+        message.kind == SessionMessageKind::User
+            && message.record_kind == SessionMessageRecordKind::Transcript
+    })
+}
+
+/// Normalizes a task prompt boundary for exact display-scope matching.
+/// 归一化任务提示词边界用于精确显示范围匹配。
+///
+/// # Parameters
+/// 参数
+/// `value` is the candidate prompt text.
+/// `value` 是候选提示词文本。
+///
+/// # Returns
+/// 返回值
+/// A trimmed non-empty prompt anchor.
+/// 返回裁剪后的非空提示词锚点。
+fn normalized_task_prompt_anchor(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Returns whether one display row is the provisional child-task prompt seeded before runtime completion.
+/// 判断单条显示行是否为运行完成前播种的临时子任务提示词。
+///
+/// # Parameters
+/// 参数
+/// `message` is the display row to inspect.
+/// `message` 是需要检查的显示行。
+///
+/// # Returns
+/// 返回值
+/// `true` when the row was created by the subagent prompt seeding path.
+/// 当该行由子代理提示词播种路径创建时返回 `true`。
+fn session_message_is_seeded_subagent_task_prompt(message: &SessionMessageEntry) -> bool {
+    message.id.contains("-subagent-prompt-")
+        || message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("runtime_id"))
+            .and_then(Value::as_str)
+            .is_some_and(|runtime_id| runtime_id.contains("-subagent-prompt-"))
 }
 
 /// Writes display transcript rows while omitting empty retained entries.
@@ -143,7 +306,70 @@ fn set_display_session_messages(
     }
 }
 
-const INTER_AGENT_MESSAGES_HEADER: &str = "[Inter-agent messages]";
+/// Merges retained parent-to-child send_message notes into a rebuilt child display window.
+/// 将已保留的父到子 send_message 显示记录合并回重建后的子显示窗口。
+fn merge_task_display_messages_with_existing_send_message_notes(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    mut messages: Vec<SessionMessageEntry>,
+) -> Vec<SessionMessageEntry> {
+    let Some(existing_messages) = workspace_snapshot.session_messages.get(&session_id) else {
+        return messages;
+    };
+    for existing_message in existing_messages
+        .iter()
+        .filter(|message| session_message_is_subagent_send_message_display_note(message))
+    {
+        insert_display_session_message_by_created_at(&mut messages, existing_message.clone());
+    }
+    filter_display_session_messages(messages)
+}
+
+/// Inserts one display row near its original creation timestamp while preserving de-duplication.
+/// 按原始创建时间插入一条显示记录，同时保持去重语义。
+fn insert_display_session_message_by_created_at(
+    messages: &mut Vec<SessionMessageEntry>,
+    message: SessionMessageEntry,
+) {
+    if messages.iter().any(|existing| {
+        existing.id == message.id
+            || (session_message_is_subagent_send_message_display_note(existing)
+                && session_message_is_subagent_send_message_display_note(&message)
+                && existing.body.trim() == message.body.trim())
+    }) {
+        return;
+    }
+    let insert_at = messages
+        .iter()
+        .position(|existing| session_message_created_after(existing, &message));
+    match insert_at {
+        Some(index) => messages.insert(index, message),
+        None => messages.push(message),
+    }
+}
+
+/// Returns whether the first message was created after the second message.
+/// 返回第一条消息是否晚于第二条消息创建。
+fn session_message_created_after(
+    existing: &SessionMessageEntry,
+    candidate: &SessionMessageEntry,
+) -> bool {
+    match (
+        session_message_created_at_millis(existing),
+        session_message_created_at_millis(candidate),
+    ) {
+        (Some(existing_created_at), Some(candidate_created_at)) => {
+            existing_created_at > candidate_created_at
+        }
+        _ => false,
+    }
+}
+
+/// Parses one message creation timestamp as Unix milliseconds.
+/// 将单条消息创建时间解析为 Unix 毫秒。
+fn session_message_created_at_millis(message: &SessionMessageEntry) -> Option<i128> {
+    message.created_at.trim().parse::<i128>().ok()
+}
 
 /// Keeps only transcript entries intended for normal user-facing display.
 /// 仅保留用于常规用户可见显示的转录条目。
@@ -170,9 +396,6 @@ pub(crate) fn session_message_is_display_visible(message: &SessionMessageEntry) 
 /// Projects one transcript row into zero or more user-facing display rows.
 /// 将单条转录行投影为零条或多条面向用户的显示行。
 fn project_display_session_message(message: SessionMessageEntry) -> Vec<SessionMessageEntry> {
-    if let Some(messages) = project_internal_inter_agent_message_injection(&message) {
-        return messages;
-    }
     session_message_is_display_visible(&message)
         .then_some(message)
         .into_iter()
@@ -187,112 +410,13 @@ fn push_display_session_message_once(
 ) {
     if display_messages.iter().any(|existing| {
         existing.id == message.id
-            || (session_message_is_display_only_agent_message(existing)
-                && session_message_is_display_only_agent_message(&message)
+            || (session_message_is_subagent_send_message_display_note(existing)
+                && session_message_is_subagent_send_message_display_note(&message)
                 && existing.body.trim() == message.body.trim())
     }) {
         return;
     }
     display_messages.push(message);
-}
-
-/// Returns whether one display row is the UI-only form of a parent-to-child agent message.
-/// 返回单条显示行是否为父级发给子智能体消息的仅 UI 形态。
-fn session_message_is_display_only_agent_message(message: &SessionMessageEntry) -> bool {
-    message.record_kind == SessionMessageRecordKind::DisplayNote
-        && message
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("kind"))
-            .and_then(Value::as_str)
-            == Some("subagent_message")
-        && message
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("tool"))
-            .and_then(Value::as_str)
-            == Some("send_message")
-}
-
-/// Projects one internal parent-to-child injection prompt into friendly display rows.
-/// 将一条内部父到子注入提示词投影成友好的显示行。
-fn project_internal_inter_agent_message_injection(
-    message: &SessionMessageEntry,
-) -> Option<Vec<SessionMessageEntry>> {
-    let payloads = parse_inter_agent_message_payloads(message.body.trim_start())?;
-    let source_id = if message.id.trim().is_empty() {
-        format!("inter-agent-message-{}", message.created_at)
-    } else {
-        message.id.clone()
-    };
-    let created_at = message.created_at.clone();
-    let messages = payloads
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, payload)| {
-            let payload = payload.trim();
-            if payload.is_empty() {
-                return None;
-            }
-            let mut entry = SessionMessageEntry::new(
-                SessionMessageKind::User,
-                "智能体消息",
-                payload.to_string(),
-            )
-            .with_runtime_metadata(
-                format!("{source_id}-display-message-{}", index + 1),
-                created_at.clone(),
-            );
-            entry.record_kind = SessionMessageRecordKind::DisplayNote;
-            entry.metadata = Some(json!({
-                "display_note": true,
-                "kind": "subagent_message",
-                "tool": "send_message",
-                "source": "inter_agent_messages",
-                "message_index": index + 1,
-            }));
-            Some(entry)
-        })
-        .collect::<Vec<_>>();
-    Some(messages)
-}
-
-/// Parses the child-agent inbox prompt generated by the runtime into message payloads.
-/// 将运行时生成的子智能体 inbox 提示词解析为消息正文集合。
-fn parse_inter_agent_message_payloads(body: &str) -> Option<Vec<String>> {
-    let body = body.trim_start();
-    if !body.starts_with(INTER_AGENT_MESSAGES_HEADER) {
-        return None;
-    }
-    let normalized = body.replace("\r\n", "\n");
-    let mut payloads = Vec::new();
-    let mut current_payload: Option<Vec<String>> = None;
-    for line in normalized.lines().skip(1) {
-        if inter_agent_message_header_line(line) {
-            if let Some(lines) = current_payload.take() {
-                payloads.push(lines.join("\n"));
-            }
-            current_payload = Some(Vec::new());
-            continue;
-        }
-        if let Some(lines) = current_payload.as_mut() {
-            lines.push(line.to_string());
-        }
-    }
-    if let Some(lines) = current_payload {
-        payloads.push(lines.join("\n"));
-    }
-    Some(payloads)
-}
-
-/// Returns whether one line is the generated delimiter before an inter-agent message payload.
-/// 返回单行文本是否为代理间消息正文前的生成分隔行。
-fn inter_agent_message_header_line(line: &str) -> bool {
-    line.starts_with("Message ")
-        && line.contains(" from ")
-        && line.contains(" to ")
-        && line.contains(" via send_message at ")
-        && line.ends_with(':')
 }
 
 /// Removes legacy persisted Goal internal prompts that were incorrectly stored as user messages.
@@ -342,7 +466,7 @@ pub(crate) fn session_message_is_internal_agent_message_injection(
     message: &SessionMessageEntry,
 ) -> bool {
     let body = message.body.trim_start();
-    body.starts_with("<agent_message>") || body.starts_with(INTER_AGENT_MESSAGES_HEADER)
+    body.starts_with("<agent_message>")
 }
 
 #[cfg(test)]

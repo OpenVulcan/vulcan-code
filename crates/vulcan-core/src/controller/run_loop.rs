@@ -198,8 +198,8 @@ impl VulcanCoreController {
         executor: &E,
         policy: &P,
         user_prompt: impl Into<String>,
-        mut on_safe_checkpoint: F,
-        mut on_before_next_provider_turn: I,
+        on_safe_checkpoint: F,
+        on_before_next_provider_turn: I,
     ) -> Result<ControllerRunResult, CoreError>
     where
         A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
@@ -221,6 +221,82 @@ impl VulcanCoreController {
         if self.should_append_user_turn(trimmed_prompt) {
             self.append_user_turn(trimmed_prompt, Vec::new());
         }
+        self.run_provider_tool_streaming_loop(
+            adapter,
+            executor,
+            policy,
+            on_safe_checkpoint,
+            on_before_next_provider_turn,
+        )
+        .await
+    }
+
+    /// Runs one streaming turn from provider-visible input that has already been appended to the canonical snapshot.
+    /// 从已经追加到规范快照的 Provider 可见输入运行一次流式回合。
+    pub async fn run_seeded_turn_streaming_with_checkpoints_and_interventions<A, E, P, F, I>(
+        &mut self,
+        adapter: &A,
+        executor: &E,
+        policy: &P,
+        on_safe_checkpoint: F,
+        on_before_next_provider_turn: I,
+    ) -> Result<ControllerRunResult, CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+        F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
+        I: FnMut(&mut Self) -> bool + Send,
+    {
+        self.ensure_seeded_provider_turn()?;
+        self.run_provider_tool_streaming_loop(
+            adapter,
+            executor,
+            policy,
+            on_safe_checkpoint,
+            on_before_next_provider_turn,
+        )
+        .await
+    }
+
+    /// Ensures the snapshot already contains a provider-visible message that can start a seeded turn.
+    /// 确认快照中已经存在可启动播种回合的 Provider 可见消息。
+    fn ensure_seeded_provider_turn(&mut self) -> Result<(), CoreError> {
+        let has_seeded_provider_input = matches!(
+            self.snapshot.messages.last().map(|message| &message.payload),
+            Some(ConversationPayload::UserText { text, .. }) if !text.trim().is_empty()
+        ) || matches!(
+            self.snapshot.messages.last().map(|message| &message.payload),
+            Some(ConversationPayload::AgentMessage { payload, .. }) if !payload.trim().is_empty()
+        );
+        if has_seeded_provider_input {
+            return Ok(());
+        }
+
+        let error = CoreError::InvalidState {
+            message: String::from("控制器无法执行缺少 Provider 可见输入的播种回合。"),
+        };
+        self.mark_failed(error.to_string());
+        Err(error)
+    }
+
+    /// Runs the shared streaming provider/tool loop after the turn's opening input has been prepared.
+    /// 在回合起始输入准备完成后运行共享的流式 Provider/工具循环。
+    async fn run_provider_tool_streaming_loop<A, E, P, F, I>(
+        &mut self,
+        adapter: &A,
+        executor: &E,
+        policy: &P,
+        mut on_safe_checkpoint: F,
+        mut on_before_next_provider_turn: I,
+    ) -> Result<ControllerRunResult, CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+        F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
+        I: FnMut(&mut Self) -> bool + Send,
+    {
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
 

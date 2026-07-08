@@ -79,16 +79,16 @@ pub(super) fn build_spawn_agent_invocation_result(
 /// Returns whether a runtime task record can be read without launching another backend execution.
 /// 返回运行时任务记录是否可直接读取而无需再次启动后端执行。
 pub(super) fn task_session_record_has_cached_status(record: &TaskSessionRecord) -> bool {
-    matches!(record.last_status.as_str(), "completed" | "stopped")
+    match task_session_status_from_record_status(record.last_status.as_str()) {
+        Ok(status) => status.is_terminal(),
+        Err(_) => false,
+    }
 }
 
 /// Returns whether persisted task metadata can be read without launching another backend execution.
 /// 返回持久化任务元数据是否可直接读取而无需再次启动后端执行。
 pub(super) fn task_session_metadata_has_cached_status(status: TaskSessionStatus) -> bool {
-    matches!(
-        status,
-        TaskSessionStatus::Completed | TaskSessionStatus::Stopped
-    )
+    status.is_terminal()
 }
 
 /// Builds one cached task result from the in-memory task registry.

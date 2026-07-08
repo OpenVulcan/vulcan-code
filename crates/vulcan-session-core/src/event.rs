@@ -31,9 +31,9 @@ pub enum SessionEventKind {
     /// Task invocation index event.
     /// 子代理调用索引事件。
     TaskInvocation,
-    /// Task feedback event.
-    /// 子代理反馈事件。
-    TaskFeedback,
+    /// Task terminal lifecycle event.
+    /// 子代理终态生命周期事件。
+    TaskTerminal,
     /// Runtime status marker event.
     /// 运行时状态标记事件。
     RuntimeMarker,

@@ -364,7 +364,7 @@ fn select_conversation_in_retained_state(
     let messages =
         retained_selected_conversation_messages(&workspace_snapshot, session_id, conversation_id);
     let subagent_navigation =
-        subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+        subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)?;
     let hydrated_windows = hydrated_conversation_window_summaries(
         &guard.hydrated_conversation_windows,
         &guard.webui_preloaded_unclosed_subagent_roots,

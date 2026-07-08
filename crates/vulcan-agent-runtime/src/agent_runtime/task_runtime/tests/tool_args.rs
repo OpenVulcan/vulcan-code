@@ -152,8 +152,7 @@ fn spawn_agent_arguments_map_to_task_session_arguments() {
             "provider_model": {
                 "provider_id": "provider",
                 "model_id": "model-a"
-            },
-            "fork_turns": "none"
+            }
         })
     );
 }
@@ -171,60 +170,6 @@ fn spawn_agent_arguments_reject_fork_turns() {
 
     assert!(error.contains("unsupported keys"));
     assert!(error.contains("fork_turns"));
-}
-
-/// Verifies fork_turns numeric mode keeps the suffix from the last N user turns.
-/// 验证 fork_turns 数字模式会保留最后 N 个用户回合开始的后缀。
-#[test]
-fn fork_turns_numeric_truncates_snapshot_to_recent_user_turns() {
-    let snapshot = CoreConversationSnapshot {
-        messages: vec![
-            vulcan_core::types::ConversationMessage {
-                id: String::from("u1"),
-                payload: CoreConversationPayload::UserText {
-                    text: String::from("first"),
-                    attachments: Vec::new(),
-                },
-            },
-            vulcan_core::types::ConversationMessage {
-                id: String::from("a1"),
-                payload: CoreConversationPayload::Assistant {
-                    text: String::from("first answer"),
-                    reasoning: String::new(),
-                    provider_message_id: None,
-                    provider_message_state: None,
-                    usage: None,
-                    tool_calls: Vec::new(),
-                },
-            },
-            vulcan_core::types::ConversationMessage {
-                id: String::from("u2"),
-                payload: CoreConversationPayload::UserText {
-                    text: String::from("second"),
-                    attachments: Vec::new(),
-                },
-            },
-            vulcan_core::types::ConversationMessage {
-                id: String::from("a2"),
-                payload: CoreConversationPayload::Assistant {
-                    text: String::from("second answer"),
-                    reasoning: String::new(),
-                    provider_message_id: None,
-                    provider_message_state: None,
-                    usage: None,
-                    tool_calls: Vec::new(),
-                },
-            },
-        ],
-        records: Vec::new(),
-        continuation: Default::default(),
-    };
-
-    let truncated = truncate_snapshot_to_last_user_turns(snapshot, 1);
-
-    assert_eq!(truncated.messages.len(), 2);
-    assert_eq!(truncated.messages[0].id, "u2");
-    assert_eq!(truncated.messages[1].id, "a2");
 }
 
 /// Verifies spawn_agent exposes the Vulcan task_name/message required schema.
@@ -265,7 +210,7 @@ fn spawn_agent_arguments_map_agent_mode_to_profile_binding() {
     assert_eq!(mapped["agent_mode"], SUBAGENT_MODE_EXPERT);
     assert_eq!(mapped["subagent_profile_id"], "engineering/code-reviewer");
     assert_eq!(mapped["task_id"], "audit-worker");
-    assert_eq!(mapped["fork_turns"], "none");
+    assert!(mapped.get("fork_turns").is_none());
 }
 
 /// Rejects agent-mode spawn_agent calls that omit the string agent id.
@@ -294,7 +239,7 @@ fn spawn_agent_arguments_allow_mirror_without_agent_id() {
     .expect("mirror spawn should not require agent_id");
 
     assert_eq!(mapped["agent_mode"], SUBAGENT_MODE_MIRROR);
-    assert_eq!(mapped["fork_turns"], "all");
+    assert!(mapped.get("fork_turns").is_none());
     assert!(mapped.get("subagent_profile_id").is_none());
 }
 
@@ -312,7 +257,7 @@ fn spawn_agent_arguments_map_custom_system_prompt() {
 
     assert_eq!(mapped["agent_mode"], SUBAGENT_MODE_DEFAULT);
     assert_eq!(mapped["system_prompt"], "You are a focused reviewer.");
-    assert_eq!(mapped["fork_turns"], "none");
+    assert!(mapped.get("fork_turns").is_none());
 }
 
 /// Rejects legacy subagent profile and non-Vulcan override arguments from the core spawn tool.
@@ -401,28 +346,42 @@ fn spawn_agent_arguments_reject_alias_only_message() {
     assert!(error.contains("message"));
 }
 
-/// Verifies wait_agent follows the Vulcan timeout-only schema.
-/// 验证 wait_agent 遵循 Vulcan 仅 timeout 参数的 Schema。
+/// Verifies wait_agent follows the Vulcan target-aware schema.
+/// 验证 wait_agent 遵循 Vulcan 支持目标选择的 Schema。
 #[test]
-fn wait_agent_schema_exposes_timeout_only() {
+fn wait_agent_schema_exposes_targets_and_timeout() {
     let schema = wait_agent_args_schema();
     let properties = schema["properties"]
         .as_object()
         .expect("wait_agent properties should be an object");
 
+    assert!(properties.contains_key("target"));
+    assert!(properties.contains_key("targets"));
     assert!(properties.contains_key("timeout_ms"));
     assert!(!properties.contains_key("task_name"));
     assert_eq!(properties["timeout_ms"]["minimum"], json!(10_000));
     assert_eq!(properties["timeout_ms"]["maximum"], json!(3_600_000));
 }
 
-/// Rejects legacy targeted wait arguments from the core wait tool.
-/// 拒绝核心 wait 工具中的旧目标等待参数。
+/// Accepts canonical wait targets while rejecting legacy aliases.
+/// 接受规范等待目标，同时拒绝旧别名。
 #[test]
-fn wait_agent_arguments_reject_legacy_target() {
+fn wait_agent_arguments_accept_targets_and_reject_legacy_aliases() {
+    let targets = wait_agent_target_selectors(&json!({
+        "target": "agent-review",
+        "targets": ["agent-check", "agent-review"],
+        "timeout_ms": 10_000
+    }))
+    .expect("canonical wait targets should parse");
+
+    assert_eq!(
+        targets,
+        vec![String::from("agent-check"), String::from("agent-review")]
+    );
+
     let error = wait_agent_timeout_ms(&json!({
         "task_name": "agent-review",
-        "timeout_ms": 1000
+        "timeout_ms": 10_000
     }))
     .expect_err("legacy wait target should be rejected");
 

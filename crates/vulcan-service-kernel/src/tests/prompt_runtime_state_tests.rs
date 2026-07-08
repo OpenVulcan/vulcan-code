@@ -546,6 +546,70 @@ fn latest_session_turn_stats_includes_embedded_compaction_usage_segments() {
     );
 }
 
+/// Verifies display-only child-agent feedback never contributes to parent goal accounting.
+/// 验证仅展示的智能体反馈不会计入父会话目标预算。
+#[test]
+fn goal_token_delta_ignores_subagent_feedback_stats() {
+    let stats = SessionTurnStats {
+        turn_kind: SessionTurnStatsKind::SubagentFeedback,
+        input_tokens: 100,
+        output_tokens: 25,
+        reasoning_tokens: 5,
+        total_tokens: 130,
+        cached_input_tokens: Some(40),
+        ..SessionTurnStats::default()
+    };
+
+    assert_eq!(goal_token_delta_for_turn_stats(&stats), None);
+}
+
+/// Verifies mixed usage groups charge only regular work to the parent session goal.
+/// 验证混合用量分组只把常规工作计入父会话目标预算。
+#[test]
+fn goal_token_delta_ignores_subagent_usage_groups_inside_regular_stats() {
+    let mut stats = SessionTurnStats {
+        turn_kind: SessionTurnStatsKind::UserTurn,
+        provider_call_count: 2,
+        input_tokens: 330,
+        output_tokens: 34,
+        total_tokens: 364,
+        cached_input_tokens: Some(140),
+        ..SessionTurnStats::default()
+    };
+    stats.merge_usage_segment_group(&SessionTurnUsageSegment {
+        kind: SessionTurnUsageSegmentKind::AssistantResponse,
+        trigger: None,
+        execution_profile: None,
+        provider_id: None,
+        model_id: None,
+        provider_call_count: 1,
+        tool_call_count: 0,
+        input_tokens: 30,
+        output_tokens: 4,
+        reasoning_tokens: 0,
+        total_tokens: 34,
+        cached_input_tokens: Some(10),
+        cache_creation_input_tokens: None,
+    });
+    stats.merge_usage_segment_group(&SessionTurnUsageSegment {
+        kind: SessionTurnUsageSegmentKind::SubagentTask,
+        trigger: None,
+        execution_profile: None,
+        provider_id: None,
+        model_id: None,
+        provider_call_count: 1,
+        tool_call_count: 0,
+        input_tokens: 300,
+        output_tokens: 30,
+        reasoning_tokens: 0,
+        total_tokens: 330,
+        cached_input_tokens: Some(130),
+        cache_creation_input_tokens: None,
+    });
+
+    assert_eq!(goal_token_delta_for_turn_stats(&stats), Some(24));
+}
+
 /// Verifies runtime-only compaction sources do not become display fallback rows.
 /// 验证仅运行态压缩来源不会变成显示层回退行。
 #[test]

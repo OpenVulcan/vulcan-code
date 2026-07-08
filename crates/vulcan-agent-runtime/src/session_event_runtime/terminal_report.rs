@@ -65,6 +65,10 @@ pub fn apply_terminal_execution_report_to_state(
         status,
         Some(report.provider_request_count),
         SessionTurnStatsKind::UserTurn,
+        report
+            .cumulative_successful_provider_usage
+            .as_ref()
+            .or(report.last_successful_provider_usage.as_ref()),
         report.embedded_turn_usage_segments.clone(),
     );
     runtime_state.updated_at = now.to_string();
@@ -185,22 +189,90 @@ fn ensure_terminal_success_assistant_message(
     if runtime_state
         .conversation_state
         .messages
-        .iter()
+        .iter_mut()
         .rev()
-        .any(|message| {
-            matches!(
-                &message.payload,
-                SessionConversationPayload::Assistant { text, .. } if text.trim() == assistant_output
-            )
-        })
+        .any(|message| terminal_assistant_message_accepts_usage(message, assistant_output, report))
     {
         return;
     }
-    append_assistant_text_message(
-        &mut runtime_state.conversation_state,
-        format!("session-{session_id}-protocol-assistant-{now}"),
-        assistant_output.to_string(),
+    append_terminal_assistant_text_message(
+        runtime_state,
+        session_id,
+        now,
+        assistant_output,
+        report,
     );
+}
+
+/// Returns whether the message is the terminal assistant output and attaches missing usage.
+/// 判断消息是否为终态助手输出，并在缺失时补入用量信息。
+///
+/// # Parameters
+/// 参数
+/// `message` is one mutable canonical conversation message from the current session.
+/// `message` 是当前会话中的一条可变规范会话消息。
+/// `assistant_output` is the terminal assistant text reported by the runtime.
+/// `assistant_output` 是运行时报告的终态助手文本。
+/// `report` carries the authoritative latest successful provider usage for this run.
+/// `report` 携带本次运行最近一次成功 Provider 调用的权威用量。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` when this message is the terminal assistant output.
+/// 当该消息就是终态助手输出时返回 `true`。
+fn terminal_assistant_message_accepts_usage(
+    message: &mut SessionConversationMessage,
+    assistant_output: &str,
+    report: &ExecutionRunReport,
+) -> bool {
+    let SessionConversationPayload::Assistant { text, usage, .. } = &mut message.payload else {
+        return false;
+    };
+    if text.trim() != assistant_output {
+        return false;
+    }
+    if usage.is_none() {
+        *usage = report.last_successful_provider_usage.clone();
+    }
+    true
+}
+
+/// Appends the terminal assistant protocol message with the run usage attached.
+/// 追加携带本次运行用量的终态助手协议消息。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the session runtime state that owns canonical messages.
+/// `runtime_state` 是拥有规范消息的会话运行态。
+/// `session_id` selects the session receiving the assistant output.
+/// `session_id` 选择接收助手输出的会话。
+/// `now` is the current Unix-millis timestamp text.
+/// `now` 是当前 Unix 毫秒时间戳文本。
+/// `assistant_output` is the normalized terminal assistant text.
+/// `assistant_output` 是规范化后的终态助手文本。
+/// `report` carries the latest successful provider usage for this run.
+/// `report` 携带本次运行最近一次成功 Provider 用量。
+fn append_terminal_assistant_text_message(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    assistant_output: &str,
+    report: &ExecutionRunReport,
+) {
+    runtime_state
+        .conversation_state
+        .messages
+        .push(SessionConversationMessage {
+            id: format!("session-{session_id}-protocol-assistant-{now}"),
+            payload: SessionConversationPayload::Assistant {
+                text: assistant_output.to_string(),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: report.last_successful_provider_usage.clone(),
+                tool_calls: Vec::new(),
+            },
+        });
 }
 
 /// Appends the same hidden summary record produced by the shared session-derived skill chain.
@@ -286,16 +358,23 @@ fn append_terminal_turn_stats_record(
     status: SessionTurnStatsStatus,
     provider_request_count_override: Option<usize>,
     turn_kind: SessionTurnStatsKind,
+    provider_usage_fallback: Option<&vulcan_core::types::ProviderUsageSnapshot>,
     usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Option<String> {
-    let turn_stats = build_session_turn_stats_from_state_with_segments(
+    let mut turn_stats = build_session_turn_stats_from_state_with_segments(
         &runtime_state.conversation_state,
         closing_record_id,
         status,
         provider_request_count_override,
         turn_kind,
-        usage_segments,
+        Vec::new(),
     )?;
+    merge_terminal_provider_usage_fallback(
+        &mut turn_stats,
+        provider_request_count_override,
+        provider_usage_fallback,
+    );
+    merge_terminal_explicit_usage_segments(&mut turn_stats, usage_segments);
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -318,6 +397,77 @@ fn append_terminal_turn_stats_record(
         },
     );
     Some(record_id)
+}
+
+/// Merges authoritative provider usage when transcript messages did not retain token usage.
+/// 当转录消息没有保留 Token 用量时，合并终态报告中的权威 Provider 用量。
+fn merge_terminal_provider_usage_fallback(
+    turn_stats: &mut SessionTurnStats,
+    provider_request_count_override: Option<usize>,
+    provider_usage_fallback: Option<&vulcan_core::types::ProviderUsageSnapshot>,
+) {
+    if terminal_turn_stats_has_token_usage(turn_stats) {
+        return;
+    }
+    let Some(provider_usage) = provider_usage_fallback else {
+        return;
+    };
+    remove_empty_assistant_usage_segments(turn_stats);
+    let provider_call_count = provider_request_count_override
+        .filter(|count| *count > 0)
+        .unwrap_or(1);
+    let mut segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::AssistantResponse,
+        provider_call_count,
+        Some(provider_usage),
+    );
+    if turn_stats.provider_call_count > 0 {
+        segment.provider_call_count = 0;
+    }
+    merge_usage_segment_into_turn_stats(turn_stats, &segment);
+    turn_stats.usage_segments.push(segment);
+}
+
+/// Removes call-only assistant segments before inserting the authoritative provider-usage segment.
+/// 插入权威 Provider 用量分段前，移除只有调用次数的空助手分段。
+fn remove_empty_assistant_usage_segments(turn_stats: &mut SessionTurnStats) {
+    turn_stats.usage_segments.retain(|segment| {
+        !(segment.kind == SessionTurnUsageSegmentKind::AssistantResponse
+            && segment.input_tokens == 0
+            && segment.output_tokens == 0
+            && segment.reasoning_tokens == 0
+            && segment.total_tokens == 0
+            && segment.tool_call_count == 0
+            && segment.cached_input_tokens.is_none()
+            && segment.cache_creation_input_tokens.is_none())
+    });
+}
+
+/// Merges explicit embedded usage segments after the normal assistant-response usage is settled.
+/// 在常规助手响应统计稳定后，合并显式嵌入的用量分段。
+fn merge_terminal_explicit_usage_segments(
+    turn_stats: &mut SessionTurnStats,
+    usage_segments: Vec<SessionTurnUsageSegment>,
+) {
+    for segment in usage_segments {
+        merge_explicit_usage_segment_into_turn_stats(turn_stats, &segment);
+        turn_stats.usage_segments.push(segment);
+    }
+}
+
+/// Returns whether one terminal statistics snapshot already contains concrete token usage.
+/// 判断终态统计快照是否已经包含明确 Token 用量。
+fn terminal_turn_stats_has_token_usage(turn_stats: &SessionTurnStats) -> bool {
+    turn_stats.input_tokens > 0
+        || turn_stats.output_tokens > 0
+        || turn_stats.reasoning_tokens > 0
+        || turn_stats.total_tokens > 0
+        || turn_stats
+            .cached_input_tokens
+            .is_some_and(|cached_input_tokens| cached_input_tokens > 0)
+        || turn_stats
+            .cache_creation_input_tokens
+            .is_some_and(|cache_creation_input_tokens| cache_creation_input_tokens > 0)
 }
 
 /// Appends one hidden derived session record with the same metadata shape used by the workbench.

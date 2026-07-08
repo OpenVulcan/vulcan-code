@@ -14,13 +14,34 @@ pub(super) fn task_session_status_from_execution_status(
 
 /// Converts a host payload status label into the persisted TaskSession status.
 /// 将宿主载荷中的状态标签转换为持久化 TaskSession 状态。
-pub(super) fn task_session_status_from_execution_status_text(status: &str) -> TaskSessionStatus {
+pub(super) fn task_session_status_from_execution_status_text(
+    status: &str,
+) -> Result<TaskSessionStatus, String> {
     match status {
-        "running" => TaskSessionStatus::Running,
-        "completed" => TaskSessionStatus::Completed,
-        "stopped" => TaskSessionStatus::Stopped,
-        "failed" => TaskSessionStatus::Failed,
-        _ => TaskSessionStatus::Running,
+        "running" => Ok(TaskSessionStatus::Running),
+        "completed" => Ok(TaskSessionStatus::Completed),
+        "stopped" => Ok(TaskSessionStatus::Stopped),
+        "failed" => Ok(TaskSessionStatus::Failed),
+        other => Err(format!("Unknown TaskSession execution status `{other}`.")),
+    }
+}
+
+/// Parses one in-memory TaskSession record status without applying fallback semantics.
+/// 解析一条内存 TaskSession 记录状态，且不应用兜底语义。
+pub(super) fn task_session_status_from_record_status(
+    status: &str,
+) -> Result<TaskSessionStatus, String> {
+    match status {
+        "created" => Ok(TaskSessionStatus::Created),
+        "running" => Ok(TaskSessionStatus::Running),
+        "waiting_children" => Ok(TaskSessionStatus::WaitingChildren),
+        "waiting_followup" => Ok(TaskSessionStatus::WaitingFollowup),
+        "completed" => Ok(TaskSessionStatus::Completed),
+        "failed" => Ok(TaskSessionStatus::Failed),
+        "stopped" => Ok(TaskSessionStatus::Stopped),
+        "compacting" => Ok(TaskSessionStatus::Compacting),
+        "archived" => Ok(TaskSessionStatus::Archived),
+        other => Err(format!("Unknown TaskSession record status `{other}`.")),
     }
 }
 
@@ -35,11 +56,7 @@ pub(super) fn resolve_persisted_task_session_status(
     {
         return TaskSessionStatus::Archived;
     }
-    if matches!(
-        current_status,
-        TaskSessionStatus::Completed | TaskSessionStatus::Stopped
-    ) && incoming_status.is_active()
-    {
+    if current_status.is_terminal() && incoming_status.is_active() {
         return current_status;
     }
     incoming_status
@@ -111,8 +128,9 @@ pub(super) fn task_invocation_event_kind_for_status(
 /// 将任务状态转换为节点本地事件类型。
 pub(super) fn task_session_event_kind_for_status(status: TaskSessionStatus) -> SessionEventKind {
     match status {
-        TaskSessionStatus::Completed | TaskSessionStatus::Stopped => SessionEventKind::TaskFeedback,
-        TaskSessionStatus::Failed => SessionEventKind::RuntimeMarker,
+        TaskSessionStatus::Completed | TaskSessionStatus::Failed | TaskSessionStatus::Stopped => {
+            SessionEventKind::TaskTerminal
+        }
         _ => SessionEventKind::RuntimeMarker,
     }
 }
@@ -145,11 +163,8 @@ pub(super) fn core_controller_config_to_effective_config(
         ..Default::default()
     };
     config.context_compaction.auto_compaction_enabled = true;
-    if !controller_config.system_prompt.trim().is_empty() {
-        config
-            .system_prompt_layers
-            .push(controller_config.system_prompt.clone());
-    }
+    // Controller system_prompt is a provider-rendered preamble, not an inheritable agent prompt source.
+    // Controller system_prompt 是面向 Provider 渲染后的前导语，不是可继承的代理提示词来源。
     config
 }
 
@@ -175,6 +190,7 @@ pub(super) fn task_state_event_payload(
     json!({
         "task_id": record.public_task_id,
         (SUBAGENT_TASK_ID_KEY): record.task_id.to_string(),
+        "execution_id": invocation.execution_id.clone(),
         "root_session_id": record.origin_session_id.to_string(),
         "direct_parent_session_id": invocation.current_session_id.to_string(),
         "parent_task_id": record.parent_task_id.map(|value| value.to_string()),
@@ -187,6 +203,7 @@ pub(super) fn task_state_event_payload(
         "provider_turns_executed": outcome.map(|value| value.provider_turns_executed).unwrap_or(0),
         "tool_calls_processed": outcome.map(|value| value.tool_calls_processed).unwrap_or(0),
         "final_assistant_message_id": outcome.and_then(|value| value.final_assistant_message_id.clone()),
+        "usage_segments": outcome.map(|value| value.usage_segments.as_slice()).unwrap_or(&[]),
         "subagent_mailbox_event": subagent_mailbox_event,
     })
 }
@@ -234,6 +251,7 @@ pub(super) fn build_subagent_mailbox_payload(
     json!({
         "child_thread_id": invocation.task_id.to_string(),
         "public_id": invocation.public_task_id,
+        "execution_id": invocation.execution_id.clone(),
         "parent_thread_id": invocation.current_session_id.to_string(),
         "root_session_id": invocation.root_session_id.to_string(),
         "parent_task_id": invocation.parent_task_id.map(|value| value.to_string()),
@@ -252,6 +270,7 @@ pub(super) fn build_subagent_mailbox_payload(
         "provider_turns_executed": outcome.map(|value| value.provider_turns_executed).unwrap_or(0),
         "tool_calls_processed": outcome.map(|value| value.tool_calls_processed).unwrap_or(0),
         "final_assistant_message_id": outcome.and_then(|value| value.final_assistant_message_id.clone()),
+        "usage_segments": outcome.map(|value| value.usage_segments.as_slice()).unwrap_or(&[]),
     })
 }
 

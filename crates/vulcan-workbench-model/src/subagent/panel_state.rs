@@ -10,14 +10,19 @@ pub fn subagent_navigation_task_label(state: &SubagentTaskPanelState) -> String 
     String::from("智能体")
 }
 
-/// Converts one persisted execution-status string into the canonical subagent run state.
-/// 将一条持久化 execution-status 字符串转换为规范子代理运行状态。
-pub fn subagent_run_state_from_execution_status(status: Option<&str>) -> SubagentTaskRunState {
-    match status.unwrap_or("completed") {
-        "running" => SubagentTaskRunState::Running,
-        "stopped" => SubagentTaskRunState::Stopped,
-        "failed" => SubagentTaskRunState::Failed,
-        _ => SubagentTaskRunState::Completed,
+/// Converts one explicit persisted execution-status string into the canonical subagent run state.
+/// 将一条明确存在的持久化 execution-status 字符串转换为规范子代理运行状态。
+pub fn subagent_run_state_from_execution_status(
+    status: Option<&str>,
+) -> Option<SubagentTaskRunState> {
+    match status.map(str::trim).filter(|value| !value.is_empty())? {
+        "created" | "running" | "waiting_children" | "waiting_followup" | "compacting" => {
+            Some(SubagentTaskRunState::Running)
+        }
+        "completed" | "archived" => Some(SubagentTaskRunState::Completed),
+        "stopped" => Some(SubagentTaskRunState::Stopped),
+        "failed" => Some(SubagentTaskRunState::Failed),
+        _ => None,
     }
 }
 
@@ -54,17 +59,29 @@ pub fn subagent_run_state_from_task_session_status(
 ///
 /// # Returns
 /// 返回值
-/// A display-ready subagent panel state, or `None` when the metadata has no direct parent.
-/// 返回可直接显示的子代理面板状态；若元数据没有直接父级则返回 `None`。
+/// A display-ready subagent panel state, `None` when the metadata has no direct parent, or a parse error.
+/// 返回可直接显示的子代理面板状态；若元数据没有直接父级则返回 `None`，解析失败则返回错误。
 pub fn subagent_task_panel_state_from_task_session(
     metadata: &TaskSessionMetadata,
     context: Option<&SessionContextDocument>,
     latest_event_payload: Option<&Value>,
-) -> Option<SubagentTaskPanelState> {
-    let parent_session_id = parent_session_id_from_task_session_parent(&metadata.parent)?;
-    let conversation_state = context.and_then(|document| {
-        serde_json::from_value::<SessionConversationState>(document.conversation_state.clone()).ok()
-    });
+) -> Result<Option<SubagentTaskPanelState>, SessionStoreError> {
+    let Some(parent_session_id) = parent_session_id_from_task_session_parent(&metadata.parent)
+    else {
+        return Ok(None);
+    };
+    let conversation_state = match context {
+        Some(document) => Some(
+            serde_json::from_value::<SessionConversationState>(document.conversation_state.clone())
+                .map_err(|error| {
+                    SessionStoreError::new(format!(
+                        "TaskSession `{}` context conversation_state is invalid: {error}",
+                        metadata.task_session_id
+                    ))
+                })?,
+        ),
+        None => None,
+    };
     let result_text = latest_event_payload
         .and_then(|payload| payload.get("result"))
         .and_then(Value::as_str)
@@ -79,7 +96,7 @@ pub fn subagent_task_panel_state_from_task_session(
         None,
     );
 
-    Some(SubagentTaskPanelState {
+    Ok(Some(SubagentTaskPanelState {
         task_id: metadata.task_session_id.as_uuid(),
         public_task_id: metadata.public_task_id.clone(),
         parent_session_id,
@@ -88,7 +105,7 @@ pub fn subagent_task_panel_state_from_task_session(
         run_state: subagent_run_state_from_task_session_status(metadata.status),
         result_text,
         conversation_state,
-    })
+    }))
 }
 
 /// Loads direct child panel states from a segmented TaskSession store without reading every task event.
@@ -103,23 +120,34 @@ pub fn subagent_task_panel_state_from_task_session(
 ///
 /// # Returns
 /// 返回值
-/// A best-effort list of display-ready child panel states; unreadable items are skipped.
-/// 返回可直接显示的子代理面板状态列表；无法读取的条目会被跳过。
+/// A list of display-ready child panel states, or the first storage read error.
+/// 返回可直接显示的子代理面板状态列表；若存储读取失败则返回首个错误。
 pub fn subagent_task_panel_states_from_segmented_task_session_store(
     store: &SegmentedTaskSessionStore,
     parent_session_id: SessionId,
-) -> Vec<SubagentTaskPanelState> {
-    let Some(parent) = subagent_parent_ref_from_task_session_store(store, parent_session_id) else {
-        return Vec::new();
-    };
-    store
-        .list_child_task_sessions(parent)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|metadata| metadata.status != TaskSessionStatus::Archived)
-        .filter_map(|metadata| subagent_task_panel_state_from_task_session(&metadata, None, None))
-        .filter(|state| state.parent_session_id == parent_session_id)
-        .collect()
+) -> Result<Vec<SubagentTaskPanelState>, SessionStoreError> {
+    let parent = subagent_parent_ref_from_task_session_store(store, parent_session_id)?;
+    let mut states = Vec::new();
+    for metadata in store.list_child_task_sessions(parent)? {
+        if metadata.status == TaskSessionStatus::Archived {
+            continue;
+        }
+        let Some(state) = subagent_task_panel_state_from_task_session(&metadata, None, None)?
+        else {
+            return Err(SessionStoreError::new(format!(
+                "TaskSession `{}` has no direct parent.",
+                metadata.task_session_id
+            )));
+        };
+        if state.parent_session_id != parent_session_id {
+            return Err(SessionStoreError::new(format!(
+                "TaskSession `{}` parent mismatch: expected `{}`, got `{}`.",
+                metadata.task_session_id, parent_session_id, state.parent_session_id
+            )));
+        }
+        states.push(state);
+    }
+    Ok(states)
 }
 
 /// Normalizes one cached panel state against the shared live runtime fact and an optional terminal persisted snapshot.
@@ -158,12 +186,7 @@ pub fn normalize_subagent_task_panel_state(
     }
 
     let mut normalized_state = state.clone();
-    normalized_state.run_state =
-        if normalized_state.result_text.trim() == SUBAGENT_TASK_STOPPED_SUMMARY_TEXT.trim() {
-            SubagentTaskRunState::Stopped
-        } else {
-            SubagentTaskRunState::Completed
-        };
+    normalized_state.run_state = SubagentTaskRunState::Stopped;
     normalized_state
 }
 

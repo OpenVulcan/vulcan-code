@@ -49,7 +49,7 @@ pub use config_resolver::{
     TaskSessionResolvedConfig,
 };
 pub use model::{
-    TaskFeedback, TaskInvocationEvent, TaskInvocationEventKind, TaskSessionId, TaskSessionMetadata,
+    TaskInvocationEvent, TaskInvocationEventKind, TaskSessionId, TaskSessionMetadata,
     TaskSessionMetadataInit, TaskSessionMirrorSummary, TaskSessionStatus, TaskSessionSummary,
 };
 pub use profile::SubagentProfile;
@@ -128,10 +128,10 @@ mod tests {
         assert!(!resolved.runtime_policy.database_projection_enabled);
     }
 
-    /// Verifies explicit TaskSession runtime overrides cannot enable database projection.
-    /// 验证明示 TaskSession 运行时覆盖无法启用数据库投影。
+    /// Verifies explicit TaskSession runtime overrides cannot enable parent-session side effects.
+    /// 验证明示 TaskSession 运行时覆盖无法启用父会话副作用。
     #[test]
-    fn task_session_runtime_overrides_keep_projection_forbidden() {
+    fn task_session_runtime_overrides_keep_side_effects_forbidden() {
         let mut profile = SubagentProfile::new("memory-agent", "Memory agent");
         profile.runtime_policy = ExecutionRuntimePolicyRequest {
             hooks_enabled: Some(true),
@@ -157,9 +157,9 @@ mod tests {
         });
 
         assert!(!resolved.runtime_policy.hooks_enabled);
-        assert!(resolved.runtime_policy.vmm_enabled);
+        assert!(!resolved.runtime_policy.vmm_enabled);
         assert!(!resolved.runtime_policy.memory_recall_enabled);
-        assert!(resolved.runtime_policy.memory_writeback_enabled);
+        assert!(!resolved.runtime_policy.memory_writeback_enabled);
         assert!(!resolved.runtime_policy.database_projection_enabled);
     }
 

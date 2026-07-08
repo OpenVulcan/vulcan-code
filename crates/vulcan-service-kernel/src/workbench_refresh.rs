@@ -201,8 +201,8 @@ async fn refresh_workbench_snapshot_with_selected_session(
             &refreshed_snapshot,
         );
         (
-            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
-            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot),
+            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot)?,
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot)?,
             guard.session_goal_summaries.clone(),
             hydrated_conversation_window_summaries(
                 &guard.hydrated_conversation_windows,

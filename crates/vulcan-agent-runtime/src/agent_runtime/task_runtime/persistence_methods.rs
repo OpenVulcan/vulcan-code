@@ -313,6 +313,33 @@ impl TaskRuntime {
         Ok(())
     }
 
+    /// Mirrors one prepared in-memory TaskSession record into the runtime registry before UI projection.
+    /// 在 UI 投影前，将一条已准备好的内存 TaskSession 记录同步到运行时注册表。
+    pub(super) fn upsert_prepared_task_registry_entry(
+        &self,
+        task_id: SessionId,
+    ) -> Result<(), String> {
+        let record = self
+            .sessions
+            .read()
+            .map_err(|_| {
+                String::from(
+                    "The task session registry is locked and cannot mirror the prepared child agent.",
+                )
+            })?
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!("Prepared child-agent task `{task_id}` is missing from the session registry.")
+            })?;
+        let status = task_session_status_from_record_status(record.last_status.as_str())?;
+        self.upsert_subagent_registry_entry(
+            &record,
+            status,
+            task_record_registry_result_summary(&record, status),
+        )
+    }
+
     /// Builds the next task-session record without mutating the in-memory session map.
     /// 构建下一条任务会话记录，但不修改内存会话表。
     fn build_task_outcome_record(
@@ -326,6 +353,10 @@ impl TaskRuntime {
         })?;
         let now = current_unix_millis_text();
         let status = outcome.execution_status.as_str().to_string();
+        let resume_controller_config = task_controller_config_for_resume_snapshot(
+            &outcome.controller_config,
+            &outcome.resolved_config,
+        );
         let mut record = sessions
             .get(&invocation.task_id)
             .cloned()
@@ -340,10 +371,7 @@ impl TaskRuntime {
                     subagent: invocation.subagent.clone(),
                     invocation_config: invocation.invocation_config.clone(),
                     display_title: invocation.display_title.clone(),
-                    controller_config: invocation
-                        .controller_config
-                        .clone()
-                        .or_else(|| Some(outcome.controller_config.clone())),
+                    controller_config: Some(resume_controller_config.clone()),
                     snapshot: invocation.snapshot.clone(),
                     last_prompt: invocation.prompt.clone(),
                     last_status: String::from("created"),
@@ -351,7 +379,7 @@ impl TaskRuntime {
             });
         debug_assert_eq!(record.task_id, invocation.task_id);
         let _ = &record.created_at;
-        record.controller_config = Some(outcome.controller_config.clone());
+        record.controller_config = Some(resume_controller_config);
         record.snapshot = outcome.snapshot.clone();
         record.last_prompt = invocation.prompt.clone();
         record.last_result_text = outcome.final_output_text.clone();
@@ -564,19 +592,39 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
     ) -> Result<(), String> {
         let created_status = status_name_for_task_session_status(TaskSessionStatus::Created);
-        let mut sessions = self.sessions.write().map_err(|_| {
-            String::from(
-                "The task session registry is locked and cannot discard the pre-start child agent.",
-            )
-        })?;
-        let should_remove = sessions.get(&invocation.task_id).is_some_and(|record| {
-            record.public_task_id == invocation.public_task_id
-                && record.origin_session_id == invocation.root_session_id
-                && record.parent_task_id == invocation.parent_task_id
-                && record.last_status == created_status
-        });
-        if should_remove {
-            sessions.remove(&invocation.task_id);
+        let removed_public_task_id = {
+            let mut sessions = self.sessions.write().map_err(|_| {
+                String::from(
+                    "The task session registry is locked and cannot discard the pre-start child agent.",
+                )
+            })?;
+            let should_remove = sessions.get(&invocation.task_id).is_some_and(|record| {
+                record.public_task_id == invocation.public_task_id
+                    && record.origin_session_id == invocation.root_session_id
+                    && record.parent_task_id == invocation.parent_task_id
+                    && record.last_status == created_status
+            });
+            if should_remove {
+                sessions
+                    .remove(&invocation.task_id)
+                    .map(|record| record.public_task_id)
+            } else {
+                None
+            }
+        };
+        if let Some(public_task_id) = removed_public_task_id {
+            let mut registry = self.subagent_registry.write().map_err(|_| {
+                String::from(
+                    "The subagent registry is locked and cannot discard the pre-start child agent.",
+                )
+            })?;
+            let should_remove = registry.get(&public_task_id).is_some_and(|entry| {
+                entry.session_id == SessionNodeId::from(invocation.task_id)
+                    && entry.status == SubagentStatus::Created
+            });
+            if should_remove {
+                registry.remove(&public_task_id);
+            }
         }
         Ok(())
     }
@@ -696,6 +744,10 @@ impl TaskRuntime {
                             timestamp_ms: now_ms,
                         });
                     metadata.description = record.description.clone();
+                    metadata.agent_prompt_snapshot = record
+                        .agent_prompt_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.text.clone());
                     store
                         .create_task_session(metadata.clone())
                         .map_err(|error| error.message)?;
@@ -713,13 +765,17 @@ impl TaskRuntime {
             metadata.inherit_parent_config = resolved_config.effective_config.inherit_parent_config;
             metadata.status = persisted_status;
             metadata.runtime_policy = resolved_config.runtime_policy;
+            metadata.agent_prompt_snapshot = record
+                .agent_prompt_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.text.clone());
             metadata.requested_config = resolved_config.requested_config.clone();
             metadata.effective_config = resolved_config.effective_config.clone();
             metadata.updated_at = now_ms;
             metadata.last_result_summary = result_text.and_then(task_result_summary);
             metadata.last_error = error_text.map(str::to_string);
             store
-                .save_task_session(metadata)
+                .save_task_session(metadata.clone())
                 .map_err(|error| error.message)?;
 
             let event_sequence = now_ms;
@@ -779,6 +835,22 @@ impl TaskRuntime {
                 let previous_context = store
                     .load_context(task_session_id)
                     .map_err(|error| error.message)?;
+                let mut conversation_state = core_snapshot_to_session_conversation_state(snapshot);
+                scope_task_context_display_records_to_prompt(
+                    &mut conversation_state,
+                    invocation.prompt.as_str(),
+                );
+                if let Some(outcome) = outcome {
+                    append_task_context_turn_stats_record(
+                        &mut conversation_state,
+                        record.task_id,
+                        now_ms,
+                        status,
+                        outcome,
+                    );
+                }
+                let conversation_state_value =
+                    serde_json::to_value(&conversation_state).unwrap_or(Value::Null);
                 store
                     .save_context(SessionContextDocument {
                         schema_version: 1,
@@ -786,11 +858,11 @@ impl TaskRuntime {
                         provider_id: Some(controller_config.provider_id.clone()),
                         model_id: Some(controller_config.model_id.clone()),
                         reasoning_effort: None,
-                        system_prompt_layers: vec![controller_config.system_prompt.clone()],
-                        conversation_state: serde_json::to_value(
-                            core_snapshot_to_session_conversation_state(snapshot),
-                        )
-                        .unwrap_or(Value::Null),
+                        system_prompt_layers: resolved_config
+                            .effective_config
+                            .system_prompt_layers
+                            .clone(),
+                        conversation_state: conversation_state_value,
                         compaction_anchor: previous_context
                             .as_ref()
                             .and_then(|context| context.compaction_anchor.clone()),
@@ -800,6 +872,21 @@ impl TaskRuntime {
                         tool_catalog_snapshot: Value::Null,
                         provider_request_preview: None,
                     })
+                    .map_err(|error| error.message)?;
+                let task_session_directory = store
+                    .task_session_directory(task_session_id)
+                    .map_err(|error| error.message)?;
+                sync_segmented_session_display_from_conversation_state(
+                    &task_session_directory,
+                    &conversation_state,
+                )?;
+                sync_segmented_session_runtime_log_from_conversation_state(
+                    &task_session_directory,
+                    &conversation_state,
+                    &now_ms.to_string(),
+                )?;
+                store
+                    .save_task_session(metadata.clone())
                     .map_err(|error| error.message)?;
             }
 
@@ -1053,4 +1140,344 @@ fn merge_persisted_subagent_entry_without_status_overwrite(
     if existing.segments.is_empty() {
         existing.segments = persisted.segments;
     }
+}
+
+/// Keeps inherited provider context while trimming task display records to the delegated prompt.
+/// 保留继承的 Provider 上下文，同时将任务显示记录裁剪到被委派的提示词之后。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the task conversation state produced from the controller snapshot.
+/// `conversation_state` 是从控制器快照转换出的任务会话状态。
+/// `prompt` is the child task prompt that opens the task-owned display transcript.
+/// `prompt` 是开启任务自有显示转录的子任务提示词。
+fn scope_task_context_display_records_to_prompt(
+    conversation_state: &mut SessionConversationState,
+    prompt: &str,
+) {
+    let Some(start_index) =
+        task_context_display_record_start_index(conversation_state.records.as_slice(), prompt)
+    else {
+        return;
+    };
+    if start_index > 0 {
+        conversation_state.records = conversation_state.records.split_off(start_index);
+    }
+}
+
+/// Resolves the first task-owned display record for one persisted child transcript.
+/// 解析单份持久化子转录中的第一条任务自有显示记录。
+///
+/// # Parameters
+/// 参数
+/// `records` are display records converted from the child controller snapshot.
+/// `records` 是从子控制器快照转换出的显示记录。
+/// `prompt` is the exact delegated task prompt.
+/// `prompt` 是精确的委派任务提示词。
+///
+/// # Returns
+/// 返回值
+/// The latest visible user record matching the prompt, or the latest visible user record as a fallback.
+/// 返回与提示词匹配的最新可见用户记录；无法匹配时回退到最新可见用户记录。
+fn task_context_display_record_start_index(
+    records: &[SessionConversationRecord],
+    prompt: &str,
+) -> Option<usize> {
+    let normalized_prompt = normalized_task_context_prompt(prompt)?;
+    records
+        .iter()
+        .rposition(|record| {
+            task_context_display_record_matches_prompt(record, normalized_prompt.as_str())
+        })
+        .or_else(|| {
+            records
+                .iter()
+                .rposition(task_context_record_starts_visible_user_turn)
+        })
+}
+
+/// Returns whether one display record is the task prompt anchor.
+/// 判断单条显示记录是否为任务提示词锚点。
+///
+/// # Parameters
+/// 参数
+/// `record` is the candidate display record.
+/// `record` 是候选显示记录。
+/// `normalized_prompt` is the trimmed task prompt text.
+/// `normalized_prompt` 是裁剪后的任务提示词文本。
+///
+/// # Returns
+/// 返回值
+/// `true` when the visible user record carries the same canonical prompt.
+/// 当可见用户记录携带相同规范提示词时返回 `true`。
+fn task_context_display_record_matches_prompt(
+    record: &SessionConversationRecord,
+    normalized_prompt: &str,
+) -> bool {
+    task_context_record_starts_visible_user_turn(record)
+        && task_context_record_user_text(record)
+            .and_then(normalized_task_context_prompt)
+            .as_deref()
+            == Some(normalized_prompt)
+}
+
+/// Returns whether one display record opens a user-authored task turn.
+/// 判断单条显示记录是否开启用户编写的任务轮次。
+///
+/// # Parameters
+/// 参数
+/// `record` is the display record to inspect.
+/// `record` 是需要检查的显示记录。
+///
+/// # Returns
+/// 返回值
+/// `true` when the record is a visible user transcript row.
+/// 当记录是可见用户转录行时返回 `true`。
+fn task_context_record_starts_visible_user_turn(record: &SessionConversationRecord) -> bool {
+    if record.kind != SessionMessageKind::User
+        || record.record_kind != SessionMessageRecordKind::Transcript
+        || !record.visible
+    {
+        return false;
+    }
+    record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("starts_user_turn"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Reads the canonical user text from a task display record.
+/// 从任务显示记录中读取规范用户文本。
+///
+/// # Parameters
+/// 参数
+/// `record` is the visible user transcript record.
+/// `record` 是可见用户转录记录。
+///
+/// # Returns
+/// 返回值
+/// The canonical text when metadata or body provides one.
+/// 当元数据或正文提供文本时返回规范文本。
+fn task_context_record_user_text(record: &SessionConversationRecord) -> Option<&str> {
+    record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| {
+            metadata
+                .get("canonical_user_text")
+                .or_else(|| metadata.get("canonical_text"))
+        })
+        .and_then(Value::as_str)
+        .or(Some(record.body.as_str()))
+}
+
+/// Normalizes one task prompt for exact display-boundary matching.
+/// 归一化单条任务提示词，用于精确匹配显示边界。
+///
+/// # Parameters
+/// 参数
+/// `value` is the prompt-like text.
+/// `value` 是类似提示词的文本。
+///
+/// # Returns
+/// 返回值
+/// A trimmed non-empty prompt string.
+/// 返回裁剪后的非空提示词字符串。
+fn normalized_task_context_prompt(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Appends terminal turn statistics to the persisted child-agent context document.
+/// 向持久化的子代理上下文文档追加终态轮次统计。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the child-agent conversation state being persisted.
+/// `conversation_state` 是正在持久化的子代理会话状态。
+/// `task_id` identifies the child task session that owns the generated records.
+/// `task_id` 标识拥有生成记录的子任务会话。
+/// `now_ms` is the persistence timestamp shared with the task state event.
+/// `now_ms` 是与任务状态事件共用的持久化时间戳。
+/// `status` is the terminal task status being saved.
+/// `status` 是正在保存的终态任务状态。
+/// `outcome` carries provider counts, tool counts, usage segments, and final output.
+/// `outcome` 携带 Provider 次数、工具次数、用量分段与最终输出。
+fn append_task_context_turn_stats_record(
+    conversation_state: &mut SessionConversationState,
+    task_id: SessionId,
+    now_ms: u64,
+    status: TaskSessionStatus,
+    outcome: &TaskExecutionOutcome,
+) {
+    if outcome
+        .final_assistant_message_id
+        .as_deref()
+        .is_some_and(|final_message_id| {
+            conversation_state.records.iter().any(|record| {
+                record.record_kind == SessionMessageRecordKind::TurnStats
+                    && record
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("task_final_assistant_message_id"))
+                        .and_then(Value::as_str)
+                        == Some(final_message_id)
+            })
+        })
+    {
+        return;
+    }
+    let now = now_ms.to_string();
+    let summary_record_id =
+        build_session_record_message_id(task_id, now.as_str(), conversation_state.records.len());
+    conversation_state.records.push(SessionConversationRecord {
+        id: summary_record_id.clone(),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::SummaryOutput,
+        visible: false,
+        title: String::from("Summary"),
+        body: outcome.final_output_text.clone(),
+        metadata: Some(json!({ "preview": outcome.final_output_text.clone() })),
+        created_at: now.clone(),
+    });
+    let status = match status {
+        TaskSessionStatus::Failed => SessionTurnStatsStatus::Failed,
+        TaskSessionStatus::Stopped => SessionTurnStatsStatus::Stopped,
+        _ => SessionTurnStatsStatus::Completed,
+    };
+    let record_turn_stats = build_session_turn_stats_from_state_with_segments(
+        conversation_state,
+        summary_record_id.as_str(),
+        status,
+        Some(outcome.provider_turns_executed),
+        SessionTurnStatsKind::UserTurn,
+        Vec::new(),
+    );
+    let task_context_usage_segments = task_context_usage_segments_from_outcome(outcome);
+    let turn_stats = if record_turn_stats
+        .as_ref()
+        .is_some_and(task_turn_stats_has_token_usage)
+        || task_context_usage_segments.is_empty()
+    {
+        record_turn_stats
+    } else if let Some(record_turn_stats) = record_turn_stats {
+        Some(merge_task_usage_segments_into_record_stats(
+            record_turn_stats,
+            task_context_usage_segments,
+        ))
+    } else {
+        build_session_turn_stats_from_state_with_segments(
+            conversation_state,
+            summary_record_id.as_str(),
+            status,
+            None,
+            SessionTurnStatsKind::UserTurn,
+            task_context_usage_segments,
+        )
+    };
+    let Some(turn_stats) = turn_stats else {
+        return;
+    };
+    let stats_record_id =
+        build_session_record_message_id(task_id, now.as_str(), conversation_state.records.len());
+    conversation_state.records.push(SessionConversationRecord {
+        id: stats_record_id,
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::TurnStats,
+        visible: true,
+        title: format!("Turn Stats · {}", turn_stats.status.label()),
+        body: turn_stats.detail_body(),
+        metadata: Some(json!({
+            "turn_stats": turn_stats,
+            "turn_closing_record_id": summary_record_id,
+            "task_final_assistant_message_id": outcome.final_assistant_message_id,
+        })),
+        created_at: now,
+    });
+}
+
+/// Returns whether one turn-statistics snapshot contains concrete token usage.
+/// 返回单个轮次统计快照是否包含明确的 Token 用量。
+///
+/// # Parameters
+/// 参数
+/// `stats` is the turn-statistics snapshot being inspected.
+/// `stats` 是正在检查的轮次统计快照。
+///
+/// # Returns
+/// 返回值
+/// `true` when any aggregated token field is non-zero.
+/// 当任意聚合 Token 字段非零时返回 `true`。
+fn task_turn_stats_has_token_usage(stats: &SessionTurnStats) -> bool {
+    stats.input_tokens > 0
+        || stats.output_tokens > 0
+        || stats.reasoning_tokens > 0
+        || stats.total_tokens > 0
+        || stats.cached_input_tokens.is_some_and(|value| value > 0)
+        || stats
+            .cache_creation_input_tokens
+            .is_some_and(|value| value > 0)
+}
+
+/// Converts parent-facing task usage segments into task-local turn-stat segments.
+/// 将面向父会话的任务用量分段转换为子任务本地轮次统计分段。
+///
+/// # Parameters
+/// 参数
+/// `outcome` is the persisted task execution outcome containing parent-facing usage.
+/// `outcome` 是包含面向父会话用量的持久化任务执行结果。
+///
+/// # Returns
+/// 返回值
+/// Task-local usage segments where child-agent work is represented as normal assistant work.
+/// 返回子任务本地用量分段，其中智能体工作会表示为普通助手工作。
+fn task_context_usage_segments_from_outcome(
+    outcome: &TaskExecutionOutcome,
+) -> Vec<SessionTurnUsageSegment> {
+    outcome
+        .usage_segments
+        .iter()
+        .cloned()
+        .map(|mut segment| {
+            if segment.kind == SessionTurnUsageSegmentKind::SubagentTask {
+                segment.kind = SessionTurnUsageSegmentKind::AssistantResponse;
+            }
+            segment
+        })
+        .collect()
+}
+
+/// Merges explicit task usage into record-derived stats while preserving record-derived call counts.
+/// 将显式任务用量合并进记录推导统计，同时保留记录推导出的调用次数。
+///
+/// # Parameters
+/// 参数
+/// `stats` is the record-derived statistics snapshot that may lack token counts.
+/// `stats` 是可能缺少 Token 数的记录推导统计快照。
+/// `usage_segments` are explicit usage segments reported by the completed child execution.
+/// `usage_segments` 是子代理执行完成后报告的显式用量分段。
+///
+/// # Returns
+/// 返回值
+/// A merged statistics snapshot that fills token fields without inflating call counts.
+/// 返回补齐 Token 字段且不会放大调用次数的合并统计快照。
+fn merge_task_usage_segments_into_record_stats(
+    mut stats: SessionTurnStats,
+    mut usage_segments: Vec<SessionTurnUsageSegment>,
+) -> SessionTurnStats {
+    let record_has_provider_calls = stats.provider_call_count > 0;
+    let record_has_tool_calls = stats.tool_call_count > 0;
+    for segment in &mut usage_segments {
+        if record_has_provider_calls {
+            segment.provider_call_count = 0;
+        }
+        if record_has_tool_calls {
+            segment.tool_call_count = 0;
+        }
+        merge_usage_segment_into_turn_stats(&mut stats, segment);
+    }
+    stats.usage_segments.extend(usage_segments);
+    stats
 }

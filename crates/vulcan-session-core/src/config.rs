@@ -34,6 +34,148 @@ pub struct CapabilityPolicySnapshot {
     pub selectors: Vec<String>,
 }
 
+/// Parses a stable capability policy mode key.
+/// 解析稳定的能力策略模式键。
+pub fn parse_capability_policy_mode_key(mode: &str) -> Option<CapabilityPolicyMode> {
+    match mode.trim() {
+        "all" => Some(CapabilityPolicyMode::All),
+        "allow_only" | "allowOnly" => Some(CapabilityPolicyMode::AllowOnly),
+        "deny_only" | "denyOnly" => Some(CapabilityPolicyMode::DenyOnly),
+        _ => None,
+    }
+}
+
+/// Normalizes one capability policy snapshot.
+/// 规范化单个能力策略快照。
+pub fn normalize_capability_policy_snapshot(
+    mut policy: CapabilityPolicySnapshot,
+) -> CapabilityPolicySnapshot {
+    policy.selectors = normalized_capability_selector_list(std::mem::take(&mut policy.selectors));
+    if policy.mode == CapabilityPolicyMode::All {
+        policy.selectors.clear();
+    }
+    policy
+}
+
+/// Builds a capability policy from a mode key, selectors, or fallback allow/deny lists.
+/// 通过模式键、选择器或回退允许/禁止列表构建能力策略。
+pub fn capability_policy_from_mode_or_selector_lists(
+    mode: Option<&str>,
+    selectors: Vec<String>,
+    fallback_allowed: Vec<String>,
+    fallback_disabled: Vec<String>,
+) -> CapabilityPolicySnapshot {
+    if let Some(mode) = mode.and_then(parse_capability_policy_mode_key) {
+        return normalize_capability_policy_snapshot(CapabilityPolicySnapshot { mode, selectors });
+    }
+    capability_policy_from_selector_lists(fallback_allowed, fallback_disabled)
+}
+
+/// Builds a capability policy from allow and deny selector lists.
+/// 通过允许与禁止选择器列表构建能力策略。
+pub fn capability_policy_from_selector_lists(
+    allowed: Vec<String>,
+    disabled: Vec<String>,
+) -> CapabilityPolicySnapshot {
+    let allowed = normalized_capability_selector_list(allowed);
+    let disabled = normalized_capability_selector_list(disabled);
+    if !allowed.is_empty() {
+        let disabled_set = capability_selector_key_set(&disabled);
+        return CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::AllowOnly,
+            selectors: allowed
+                .into_iter()
+                .filter(|selector| !disabled_set.contains(&capability_selector_key(selector)))
+                .collect(),
+        };
+    }
+    if !disabled.is_empty() {
+        return CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::DenyOnly,
+            selectors: disabled,
+        };
+    }
+    CapabilityPolicySnapshot::default()
+}
+
+/// Applies a capability policy to a tool exposure snapshot and its mirror lists.
+/// 将能力策略应用到工具可见性快照及其镜像列表。
+pub fn apply_tool_capability_policy(
+    snapshot: &mut ToolExposureSnapshot,
+    policy: CapabilityPolicySnapshot,
+) {
+    snapshot.policy = normalize_capability_policy_snapshot(policy);
+    match snapshot.policy.mode {
+        CapabilityPolicyMode::All => {
+            snapshot.allowed_tools.clear();
+            snapshot.disabled_tools.clear();
+        }
+        CapabilityPolicyMode::AllowOnly => {
+            snapshot.allowed_tools = snapshot.policy.selectors.clone();
+            snapshot.disabled_tools.clear();
+        }
+        CapabilityPolicyMode::DenyOnly => {
+            snapshot.allowed_tools.clear();
+            snapshot.disabled_tools = snapshot.policy.selectors.clone();
+        }
+    }
+}
+
+/// Applies a capability policy to a prompt-skill snapshot and its mirror lists.
+/// 将能力策略应用到提示词技能快照及其镜像列表。
+pub fn apply_prompt_skill_capability_policy(
+    snapshot: &mut PromptSkillSnapshot,
+    policy: CapabilityPolicySnapshot,
+) {
+    snapshot.policy = normalize_capability_policy_snapshot(policy);
+    match snapshot.policy.mode {
+        CapabilityPolicyMode::All => {
+            snapshot.enabled.clear();
+            snapshot.disabled.clear();
+        }
+        CapabilityPolicyMode::AllowOnly => {
+            snapshot.enabled = snapshot.policy.selectors.clone();
+            snapshot.disabled.clear();
+        }
+        CapabilityPolicyMode::DenyOnly => {
+            snapshot.enabled.clear();
+            snapshot.disabled = snapshot.policy.selectors.clone();
+        }
+    }
+}
+
+/// Normalizes selector text while preserving first occurrence order.
+/// 规范化选择器文本并保留首次出现顺序。
+fn normalized_capability_selector_list(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !normalized.iter().any(|existing| existing == trimmed) {
+            normalized.push(trimmed.to_string());
+        }
+    }
+    normalized
+}
+
+/// Builds a normalized selector lookup set.
+/// 构建规范化的选择器查找集合。
+fn capability_selector_key_set(values: &[String]) -> std::collections::BTreeSet<String> {
+    values
+        .iter()
+        .map(|value| capability_selector_key(value))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+/// Builds a normalized selector comparison key.
+/// 构建规范化的选择器比较键。
+fn capability_selector_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
 /// Provider and model snapshot selected for one session node.
 /// 单个会话节点选定的供应商与模型快照。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -233,5 +375,83 @@ impl Default for SessionEffectiveConfig {
             context_compaction: ContextCompactionPolicySnapshot::default(),
             extra: Value::Null,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CapabilityPolicyMode, CapabilityPolicySnapshot, PromptSkillSnapshot, ToolExposureSnapshot,
+        apply_prompt_skill_capability_policy, apply_tool_capability_policy,
+        capability_policy_from_mode_or_selector_lists, capability_policy_from_selector_lists,
+    };
+
+    /// Verifies allow-only selector policies trim entries, dedupe entries, and remove denied duplicates.
+    /// 验证仅允许选择器策略会裁剪条目、去重条目并移除同时被禁用的重复项。
+    #[test]
+    fn capability_policy_from_selector_lists_normalizes_allow_only() {
+        let policy = capability_policy_from_selector_lists(
+            vec![
+                String::from(" shell_command "),
+                String::from("shell_command"),
+                String::from("todolist"),
+            ],
+            vec![String::from("TODOLIST")],
+        );
+
+        assert_eq!(policy.mode, CapabilityPolicyMode::AllowOnly);
+        assert_eq!(policy.selectors, vec![String::from("shell_command")]);
+    }
+
+    /// Verifies explicit all mode clears selectors and ignores fallback lists.
+    /// 验证显式 all 模式会清空选择器并忽略回退列表。
+    #[test]
+    fn capability_policy_from_mode_or_selector_lists_prefers_explicit_mode() {
+        let policy = capability_policy_from_mode_or_selector_lists(
+            Some("all"),
+            vec![String::from("shell_command")],
+            vec![String::from("todolist")],
+            vec![String::from("ask")],
+        );
+
+        assert_eq!(policy, CapabilityPolicySnapshot::default());
+    }
+
+    /// Verifies applying a tool policy updates the legacy mirror lists consistently.
+    /// 验证应用工具策略时会一致更新旧版镜像列表。
+    #[test]
+    fn apply_tool_capability_policy_updates_mirror_lists() {
+        let mut snapshot = ToolExposureSnapshot::default();
+
+        apply_tool_capability_policy(
+            &mut snapshot,
+            CapabilityPolicySnapshot {
+                mode: CapabilityPolicyMode::DenyOnly,
+                selectors: vec![String::from("ask")],
+            },
+        );
+
+        assert!(snapshot.allowed_tools.is_empty());
+        assert_eq!(snapshot.disabled_tools, vec![String::from("ask")]);
+        assert_eq!(snapshot.policy.mode, CapabilityPolicyMode::DenyOnly);
+    }
+
+    /// Verifies applying a prompt-skill policy updates the legacy mirror lists consistently.
+    /// 验证应用提示词技能策略时会一致更新旧版镜像列表。
+    #[test]
+    fn apply_prompt_skill_capability_policy_updates_mirror_lists() {
+        let mut snapshot = PromptSkillSnapshot::default();
+
+        apply_prompt_skill_capability_policy(
+            &mut snapshot,
+            CapabilityPolicySnapshot {
+                mode: CapabilityPolicyMode::AllowOnly,
+                selectors: vec![String::from("reviewer")],
+            },
+        );
+
+        assert_eq!(snapshot.enabled, vec![String::from("reviewer")]);
+        assert!(snapshot.disabled.is_empty());
+        assert_eq!(snapshot.policy.mode, CapabilityPolicyMode::AllowOnly);
     }
 }

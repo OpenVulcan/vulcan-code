@@ -3,12 +3,15 @@
 
 use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_stream;
+use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStartMode;
 use crate::agent_runtime::runtime_stream_delta::process_provider_stream_delta;
 use crate::agent_runtime::runtime_stream_finalize::{
     build_failure_terminal_events, build_success_terminal_events,
 };
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
-use crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch;
+use crate::agent_runtime::runtime_stream_launch_payload::{
+    RuntimeStreamLaunch, RuntimeStreamTurnStartMode,
+};
 use crate::model::SessionId;
 use crate::provider_config::ProviderConfigurationFile;
 use async_stream::stream;
@@ -106,6 +109,12 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let session_id = launch.session_id;
         let task_execution_context = launch.task_execution_context;
         let effective_prompt = launch.effective_prompt;
+        let turn_start_mode = match launch.turn_start_mode {
+            RuntimeStreamTurnStartMode::UserPrompt => ProviderTransportTurnStartMode::UserPrompt,
+            RuntimeStreamTurnStartMode::SeededProviderInput => {
+                ProviderTransportTurnStartMode::SeededProviderInput
+            }
+        };
         let preparation = launch.preparation;
         let active_agent = launch.active_agent;
         let task_runtime = launch.task_runtime;
@@ -147,6 +156,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             active_agent.as_ref(),
             &system_preamble,
             &effective_prompt,
+            turn_start_mode,
             core_snapshot,
             task_runtime,
             token_budget_runtime.clone(),

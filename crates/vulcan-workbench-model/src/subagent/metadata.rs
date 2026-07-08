@@ -1,4 +1,308 @@
 use super::*;
+use crate::{
+    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
+};
+use vulcan_context::SessionMessageKind;
+
+/// Canonical host-result kind for child-agent control operations.
+/// 智能体控制操作的规范宿主结果类型。
+const SUBAGENT_CONTROL_KIND: &str = "subagent_control";
+
+/// Structured display projection for one parent-to-child `send_message` tool result.
+/// 父级发往子智能体的 `send_message` 工具结果对应的结构化显示投影。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentSendMessageProjection {
+    /// Stable child task session id that receives the visible message row.
+    /// 接收可见消息行的稳定子任务会话标识。
+    pub task_session_id: SessionId,
+    /// Stable display record id used to de-duplicate the projected row.
+    /// 用于去重该投影行的稳定显示记录标识。
+    pub message_id: String,
+    /// User-visible message text sent to the child agent.
+    /// 发送给子智能体的用户可见消息文本。
+    pub message: String,
+    /// Display-only metadata preserved on the child transcript row.
+    /// 保存在子会话转录行上的仅显示元数据。
+    pub display_metadata: Value,
+}
+
+/// Structured close-agent projection parsed from one `subagent_control` host result.
+/// 从单个 `subagent_control` 宿主结果解析出的结构化关闭智能体投影。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentCloseAgentProjection {
+    /// Task sessions that the close_agent call archived through matched registry entries.
+    /// `close_agent` 通过匹配注册表条目归档的任务会话集合。
+    pub matched_task_ids: Vec<SessionId>,
+    /// Active task sessions that were stopped while closing the target tree.
+    /// 关闭目标树时被停止的活动任务会话集合。
+    pub stopped_task_ids: Vec<SessionId>,
+    /// Union of matched and stopped task sessions that UI caches should remove.
+    /// UI 缓存需要移除的匹配与停止任务会话并集。
+    pub affected_task_ids: Vec<SessionId>,
+}
+
+/// Parent-visible display records generated from one completed child-agent execution.
+/// 从一次已完成智能体执行生成的父会话可见显示记录。
+#[derive(Debug, Clone)]
+pub struct SubagentFeedbackDisplayRecords {
+    /// Stable child execution id used to de-duplicate feedback rows.
+    /// 用于反馈行去重的稳定智能体执行标识。
+    pub execution_id: String,
+    /// Display-only feedback card row that keeps child-agent result text in metadata.
+    /// 将智能体结果文本保存在元数据中的仅显示反馈卡片行。
+    pub feedback_entry: SessionMessageEntry,
+    /// Display-only statistics row that contains the child-agent turn usage.
+    /// 包含智能体轮次用量的仅显示统计行。
+    pub stats_entry: SessionMessageEntry,
+}
+
+/// Task mirror metadata update parts used to repair a parent spawn-agent tool card.
+/// 用于修复父级 spawn-agent 工具卡片的任务镜像元数据更新部件。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskSessionMirrorDisplayMetadataUpdate {
+    /// Payload used to locate the matching parent task-card records.
+    /// 用于定位匹配父级任务卡片记录的载荷。
+    pub payload: Value,
+    /// Metadata update written back to matching projected and canonical rows.
+    /// 写回匹配投影行与规范行的元数据更新。
+    pub metadata_update: Value,
+}
+
+/// Builds the parent-visible feedback rows for one completed child-agent execution.
+/// 为一次已完成智能体执行构建父会话可见反馈行。
+///
+/// # Parameters
+/// 参数
+/// `parent_session_id` identifies the parent transcript that owns the display rows.
+/// `parent_session_id` 标识拥有这些显示行的父级转录。
+/// `metadata` is the delegate-finished metadata that carries the child execution payload.
+/// `metadata` 是携带智能体执行载荷的委派完成元数据。
+/// `state` is the normalized child panel state used for labels and visible result text.
+/// `state` 是用于标签与可见结果文本的规范化智能体面板状态。
+///
+/// # Returns
+/// 返回值
+/// The two display records and their de-duplication execution id.
+/// 返回两条显示记录及其去重执行标识。
+pub fn subagent_feedback_display_records_from_tool_metadata(
+    parent_session_id: SessionId,
+    metadata: &Value,
+    state: &SubagentTaskPanelState,
+) -> Result<SubagentFeedbackDisplayRecords, String> {
+    let execution_id = subagent_feedback_execution_id_from_tool_metadata(metadata)?;
+    let usage_segments = subagent_feedback_usage_segments_from_tool_metadata(metadata)?;
+    let status = subagent_feedback_stats_status(state.run_state);
+    let turn_stats = subagent_feedback_turn_stats(status, usage_segments);
+    let task_id_text = state.task_id.to_string();
+    let result_text = state.result_text.trim();
+    let feedback_payload = json!({
+        "tool": "subagent_feedback",
+        (SUBAGENT_TASK_ID_KEY): task_id_text,
+        "execution_id": execution_id.clone(),
+        "task_id": state.public_task_id.clone(),
+        "subagent": state.subagent_label.clone(),
+        "run_state": state.run_state.metadata_key(),
+        "result": result_text,
+    });
+    let mut feedback_entry = SessionMessageEntry::new(
+        SessionMessageKind::Assistant,
+        "智能体返回处理结果",
+        "智能体返回处理结果",
+    );
+    feedback_entry.record_kind = SessionMessageRecordKind::DisplayNote;
+    feedback_entry.metadata = Some(json!({
+        "display_note": true,
+        "tool_name": "subagent_feedback",
+        "display_state": state.run_state.metadata_key(),
+        "tool_display_state": state.run_state.metadata_key(),
+        "kind": "subagent_feedback",
+        "subagent_feedback_record": true,
+        "parent_session_id": parent_session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): state.task_id.to_string(),
+        "execution_id": execution_id.clone(),
+        "task_id": state.public_task_id.clone(),
+        "subagent": state.subagent_label.clone(),
+        "run_state": state.run_state.metadata_key(),
+        "result": result_text,
+        "host_result": {
+            "kind": "subagent_feedback",
+            "tool_name": "subagent_feedback",
+            "payload": feedback_payload,
+        },
+    }));
+
+    let mut stats_entry = SessionMessageEntry::new(
+        SessionMessageKind::Assistant,
+        format!("智能体统计 · {}", state.subagent_label),
+        format!(
+            "智能体：{}\n任务：{}\n\n{}",
+            state.subagent_label,
+            state.public_task_id,
+            turn_stats.detail_body()
+        ),
+    );
+    stats_entry.record_kind = SessionMessageRecordKind::TurnStats;
+    stats_entry.metadata = Some(json!({
+        "kind": "subagent_feedback_stats",
+        "subagent_feedback_record": true,
+        "parent_session_id": parent_session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): state.task_id.to_string(),
+        "execution_id": execution_id.clone(),
+        "task_id": state.public_task_id.clone(),
+        "subagent": state.subagent_label.clone(),
+        "turn_stats": turn_stats,
+    }));
+
+    Ok(SubagentFeedbackDisplayRecords {
+        execution_id,
+        feedback_entry,
+        stats_entry,
+    })
+}
+
+/// Builds the task-session metadata update used by a persisted task mirror.
+/// 构建持久化任务镜像使用的 task-session 元数据更新。
+///
+/// # Parameters
+/// 参数
+/// `task_session_id` is the child task session id restored from the mirror.
+/// `task_session_id` 是从镜像恢复出的智能体任务会话标识。
+/// `execution_status` is the normalized display status selected by the caller.
+/// `execution_status` 是调用方选定的规范展示状态。
+/// `line_count` is the mirrored child segment line count.
+/// `line_count` 是镜像的智能体分段行数。
+/// `updated_at` is the mirrored update timestamp.
+/// `updated_at` 是镜像的更新时间戳。
+///
+/// # Returns
+/// 返回值
+/// Matching payload and status-synchronized metadata update for parent tool-card repair.
+/// 返回用于父级工具卡片修复的匹配载荷与状态同步后的元数据更新。
+pub fn task_session_mirror_display_metadata_update(
+    task_session_id: SessionId,
+    execution_status: &str,
+    line_count: u64,
+    updated_at: &str,
+) -> TaskSessionMirrorDisplayMetadataUpdate {
+    let payload = json!({
+        "task_id": task_session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+        "execution_status": execution_status,
+        "line_count": line_count,
+        "updated_at": updated_at,
+    });
+    let metadata_update = task_session_display_metadata_update(
+        json!({
+            "tool_name": "spawn_agent",
+            "kind": SUBAGENT_TASK_KIND,
+            "payload": payload.clone(),
+        }),
+        execution_status,
+    );
+    TaskSessionMirrorDisplayMetadataUpdate {
+        payload,
+        metadata_update,
+    }
+}
+
+/// Returns whether one metadata slot already belongs to a display-only child-agent feedback row.
+/// 判断单个元数据槽是否已经属于仅显示的智能体反馈行。
+///
+/// # Parameters
+/// 参数
+/// `record_metadata` is the metadata attached to a candidate transcript record.
+/// `record_metadata` 是附着在候选转录记录上的元数据。
+/// `task_id` is the internal child task session id encoded as text.
+/// `task_id` 是文本形式的内部智能体任务会话标识。
+/// `execution_id` is the concrete child execution id to match.
+/// `execution_id` 是需要匹配的具体智能体执行标识。
+///
+/// # Returns
+/// 返回值
+/// `true` when the metadata belongs to the same child execution feedback record.
+/// 当该元数据属于同一次智能体执行反馈记录时返回 `true`。
+pub fn subagent_feedback_record_matches(
+    record_metadata: Option<&Value>,
+    task_id: &str,
+    execution_id: &str,
+) -> bool {
+    record_metadata.is_some_and(|metadata| {
+        metadata
+            .get("subagent_feedback_record")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && metadata.get(SUBAGENT_TASK_ID_KEY).and_then(Value::as_str) == Some(task_id)
+            && metadata.get("execution_id").and_then(Value::as_str) == Some(execution_id)
+    })
+}
+
+/// Reads the concrete child execution id from a delegate-finished metadata payload.
+/// 从委派完成元数据载荷中读取具体智能体执行标识。
+pub fn subagent_feedback_execution_id_from_tool_metadata(
+    metadata: &Value,
+) -> Result<String, String> {
+    let Some(payload) = task_session_payload_from_tool_metadata(metadata) else {
+        return Err(String::from(
+            "subagent feedback metadata is missing the task payload.",
+        ));
+    };
+    let Some(execution_id) = payload
+        .get("execution_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(String::from(
+            "subagent feedback metadata is missing execution_id.",
+        ));
+    };
+    Ok(execution_id.to_string())
+}
+
+/// Parses child-agent usage segments from one delegate-finished metadata payload.
+/// 从单条委派完成元数据载荷中解析智能体用量分段。
+fn subagent_feedback_usage_segments_from_tool_metadata(
+    metadata: &Value,
+) -> Result<Vec<SessionTurnUsageSegment>, String> {
+    let Some(payload) = task_session_payload_from_tool_metadata(metadata) else {
+        return Ok(Vec::new());
+    };
+    let Some(usage_segments) = payload.get("usage_segments") else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value::<Vec<SessionTurnUsageSegment>>(usage_segments.clone())
+        .map_err(|error| format!("failed to parse subagent feedback usage segments: {error}"))
+}
+
+/// Maps one child-agent panel state into the terminal status used by display-only statistics.
+/// 将单个智能体面板状态映射为仅显示统计使用的终态状态。
+fn subagent_feedback_stats_status(run_state: SubagentTaskRunState) -> SessionTurnStatsStatus {
+    match run_state {
+        SubagentTaskRunState::Failed => SessionTurnStatsStatus::Failed,
+        SubagentTaskRunState::Stopped => SessionTurnStatsStatus::Stopped,
+        SubagentTaskRunState::Running | SubagentTaskRunState::Completed => {
+            SessionTurnStatsStatus::Completed
+        }
+    }
+}
+
+/// Builds one display-only statistics object from child-agent usage segments.
+/// 根据智能体用量分段构建一份仅显示的统计对象。
+fn subagent_feedback_turn_stats(
+    status: SessionTurnStatsStatus,
+    usage_segments: Vec<SessionTurnUsageSegment>,
+) -> SessionTurnStats {
+    let mut stats = SessionTurnStats {
+        status,
+        turn_kind: SessionTurnStatsKind::SubagentFeedback,
+        ..SessionTurnStats::default()
+    };
+    for segment in usage_segments {
+        stats.merge_usage_segment(&segment);
+        stats.usage_segments.push(segment);
+    }
+    stats
+}
 
 /// Returns the structured task-session payload attached to one direct or host-result tool metadata object when the result belongs to the host-managed subagent surface.
 /// 当结果属于宿主管理的子代理工具面时，返回直接元数据或 host-result 元数据中附带的结构化 task-session 载荷。
@@ -25,6 +329,275 @@ pub fn task_session_payload_from_tool_metadata(metadata: &Value) -> Option<&Valu
                 .flatten()
         })
         .filter(|payload| payload.is_object())
+}
+
+/// Parses one completed tool metadata object into a close-agent projection when it carries a close_agent host result.
+/// 当已完成工具元数据携带 close_agent 宿主结果时，将其解析为关闭智能体投影。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the completed runtime tool metadata that may contain a `subagent_control` host result.
+/// `metadata` 是可能包含 `subagent_control` 宿主结果的已完成运行时工具元数据。
+///
+/// # Returns
+/// 返回值
+/// A close-agent projection, `None` for unrelated metadata, or an error for malformed identified close_agent payloads.
+/// 返回关闭智能体投影；无关元数据返回 `None`；已识别 close_agent 载荷损坏时返回错误。
+pub fn subagent_close_agent_projection_from_tool_metadata(
+    metadata: &Value,
+) -> Result<Option<SubagentCloseAgentProjection>, String> {
+    let Some(host_result) = metadata.get("host_result").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let Some(kind) = host_result.get("kind").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if kind != SUBAGENT_CONTROL_KIND {
+        return Ok(None);
+    }
+    let payload = host_result
+        .get("payload")
+        .filter(|payload| payload.is_object())
+        .ok_or_else(|| String::from("subagent_control host result is missing object payload"))?;
+    subagent_close_agent_projection_from_host_result(kind, payload)
+}
+
+/// Parses one host-result kind and payload pair into a close-agent projection.
+/// 将一组宿主结果类型与载荷解析为关闭智能体投影。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the host-result kind reported by the runtime tool result.
+/// `kind` 是运行时工具结果报告的宿主结果类型。
+/// `payload` is the host-result payload reported by close_agent.
+/// `payload` 是 close_agent 报告的宿主结果载荷。
+///
+/// # Returns
+/// 返回值
+/// A close-agent projection, `None` for non-close subagent controls, or an error for malformed close_agent payloads.
+/// 返回关闭智能体投影；非 close 控制结果返回 `None`；close_agent 载荷损坏时返回错误。
+pub fn subagent_close_agent_projection_from_host_result(
+    kind: &str,
+    payload: &Value,
+) -> Result<Option<SubagentCloseAgentProjection>, String> {
+    if kind != SUBAGENT_CONTROL_KIND {
+        return Ok(None);
+    }
+    let tool_name = payload
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("subagent_control payload is missing tool"))?;
+    if tool_name != CLOSE_AGENT_TOOL {
+        return Ok(None);
+    }
+    let matched_agents = payload
+        .get("matched_agents")
+        .and_then(Value::as_array)
+        .ok_or_else(|| String::from("close_agent host result is missing matched_agents"))?;
+    let matched_task_ids = matched_agents
+        .iter()
+        .map(|agent| subagent_task_id_from_payload_value(agent, "close_agent matched agent"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if matched_task_ids.is_empty() {
+        return Err(String::from(
+            "close_agent did not report any closed agent tasks",
+        ));
+    }
+    let stopped_task_values = payload
+        .get(STOPPED_SUBAGENT_TASK_IDS_KEY)
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            String::from("close_agent host result is missing stopped_subagent_task_ids")
+        })?;
+    let stopped_task_ids = stopped_task_values
+        .iter()
+        .map(|task_id| subagent_task_id_from_scalar_value(task_id, STOPPED_SUBAGENT_TASK_IDS_KEY))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut affected_task_ids = BTreeSet::new();
+    affected_task_ids.extend(matched_task_ids.iter().copied());
+    affected_task_ids.extend(stopped_task_ids.iter().copied());
+    Ok(Some(SubagentCloseAgentProjection {
+        matched_task_ids,
+        stopped_task_ids,
+        affected_task_ids: affected_task_ids.into_iter().collect(),
+    }))
+}
+
+/// Parses one parent-to-child `send_message` host-result metadata object into a visible child transcript projection.
+/// 将一份父级发往子智能体的 `send_message` 宿主结果元数据解析为可见子转录投影。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the completed tool event metadata that may contain a `subagent_message` host result.
+/// `metadata` 是可能包含 `subagent_message` 宿主结果的已完成工具事件元数据。
+/// `event_title` is the runtime event title used only for legacy display-id recovery.
+/// `event_title` 是仅用于旧显示标识恢复的运行时事件标题。
+///
+/// # Returns
+/// 返回值
+/// A parsed projection for child-targeted `send_message`, `None` for unrelated metadata, or an error for malformed identified payloads.
+/// 对子智能体目标的 `send_message` 返回解析后的投影；无关元数据返回 `None`；已识别载荷损坏时返回错误。
+pub fn subagent_send_message_projection_from_tool_metadata(
+    metadata: &Value,
+    event_title: &str,
+) -> Result<Option<SubagentSendMessageProjection>, String> {
+    let Some(host_result) = metadata.get("host_result").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    if host_result.get("kind").and_then(Value::as_str) != Some("subagent_message") {
+        return Ok(None);
+    }
+    let payload = host_result
+        .get("payload")
+        .filter(|payload| payload.is_object())
+        .ok_or_else(|| String::from("subagent_message host result is missing object payload"))?;
+    let tool_name = payload
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("subagent_message payload is missing tool"))?;
+    if tool_name != SEND_MESSAGE_TOOL {
+        return Ok(None);
+    }
+    if payload.get("target").and_then(Value::as_str) == Some("root") {
+        return Ok(None);
+    }
+    let task_id_text = payload
+        .get(SUBAGENT_TASK_ID_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("subagent send_message payload is missing task_session_id"))?;
+    let task_session_id = task_id_text.parse::<SessionId>().map_err(|error| {
+        format!(
+            "subagent send_message payload has invalid task_session_id `{task_id_text}`: {error}"
+        )
+    })?;
+    let message = payload
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| String::from("subagent send_message payload is missing message"))?
+        .to_string();
+    let message_id =
+        subagent_send_message_display_record_id_from_metadata(payload, metadata, event_title)
+            .ok_or_else(|| String::from("subagent send_message payload is missing delivery id"))?;
+    let display_metadata = json!({
+        "display_note": true,
+        "kind": "subagent_message",
+        "tool": SEND_MESSAGE_TOOL,
+        "parent_session_id": payload.get("parent_session_id").cloned(),
+        "target": payload.get("target").cloned(),
+        (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+        "delivery_id": payload.get("delivery_id").cloned(),
+        "delivery_mode": payload.get("delivery_mode").cloned(),
+        "queued": payload.get("queued").cloned(),
+        "interrupted": payload.get("interrupted").cloned(),
+    });
+    Ok(Some(SubagentSendMessageProjection {
+        task_session_id,
+        message_id,
+        message,
+        display_metadata,
+    }))
+}
+
+/// Returns whether one display row is a UI-only parent-to-child send_message note.
+/// 返回单条显示行是否为仅 UI 使用的父级到子智能体 send_message 记录。
+///
+/// # Parameters
+/// 参数
+/// `message` is the display transcript row to classify.
+/// `message` 是需要分类的显示转录行。
+///
+/// # Returns
+/// 返回值
+/// `true` when the row matches the canonical subagent send_message display-note metadata.
+/// 当该行符合规范智能体 send_message display note 元数据时返回 `true`。
+pub fn session_message_is_subagent_send_message_display_note(
+    message: &SessionMessageEntry,
+) -> bool {
+    message.record_kind == SessionMessageRecordKind::DisplayNote
+        && message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("kind"))
+            .and_then(Value::as_str)
+            == Some("subagent_message")
+        && message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool"))
+            .and_then(Value::as_str)
+            == Some(SEND_MESSAGE_TOOL)
+}
+
+/// Resolves the stable display record id used to de-duplicate a projected `send_message` prompt.
+/// 解析用于去重投影 `send_message` 提示词的稳定显示记录标识。
+fn subagent_send_message_display_record_id_from_metadata(
+    payload: &Value,
+    metadata: &Value,
+    event_title: &str,
+) -> Option<String> {
+    if let Some(delivery_id) = payload
+        .get("delivery_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(delivery_id.to_string());
+    }
+    metadata
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| parse_tool_finished_event_title_call_id(event_title))
+}
+
+/// Parses the standard runtime tool-finished title into a tool-call id.
+/// 将标准运行时工具完成标题解析为工具调用标识。
+fn parse_tool_finished_event_title_call_id(title: &str) -> Option<String> {
+    let mut segments = title.split(" · ");
+    match (segments.next(), segments.next()) {
+        (Some("工具返回"), Some(tool_call_id)) if !tool_call_id.trim().is_empty() => {
+            Some(tool_call_id.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Parses the canonical child task id from one object payload.
+/// 从单个对象载荷中解析规范子任务标识。
+fn subagent_task_id_from_payload_value(value: &Value, label: &str) -> Result<SessionId, String> {
+    let Some(task_id) = value
+        .get(SUBAGENT_TASK_ID_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(format!("{label} is missing subagent_task_id"));
+    };
+    task_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("{label} has invalid subagent_task_id `{task_id}`: {error}"))
+}
+
+/// Parses the canonical child task id from one scalar payload value.
+/// 从单个标量载荷值中解析规范子任务标识。
+fn subagent_task_id_from_scalar_value(value: &Value, label: &str) -> Result<SessionId, String> {
+    let Some(task_id) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(format!("{label} contains a non-string task id"));
+    };
+    task_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("{label} contains invalid task id `{task_id}`: {error}"))
 }
 
 /// Returns the caller-facing task identifier stored inside one task-session payload when available.
@@ -185,7 +758,7 @@ pub fn task_session_tool_display_label(
     if let Some(public_task_id) = public_task_id {
         return public_task_id.to_string();
     }
-    String::from("子代理")
+    String::from("智能体")
 }
 
 /// Injects one display-only execution state flag into tool-card metadata.
@@ -215,6 +788,60 @@ pub fn attach_tool_display_state_to_metadata(
         Value::String(state.to_string()),
     );
     Some(Value::Object(metadata_object))
+}
+
+/// Builds task-session display metadata with every status alias kept in sync.
+/// 构建 task-session 显示元数据，并保持所有状态别名同步。
+///
+/// # Parameters
+/// 参数
+/// `metadata_update` is the base task-session metadata update.
+/// `metadata_update` 是基础 task-session 元数据更新。
+/// `execution_status` is the canonical display state derived by the caller.
+/// `execution_status` 是调用方推导出的规范显示状态。
+///
+/// # Returns
+/// 返回值
+/// Metadata update with top-level and payload-level display states aligned.
+/// 返回顶层与 payload 层显示状态已对齐的元数据更新。
+pub fn task_session_display_metadata_update(
+    mut metadata_update: Value,
+    execution_status: &str,
+) -> Value {
+    let Some(object) = metadata_update.as_object_mut() else {
+        return json!({
+            "tool_name": "spawn_agent",
+            "kind": SUBAGENT_TASK_KIND,
+            "display_state": execution_status,
+            "tool_display_state": execution_status,
+        });
+    };
+    object.insert(
+        String::from("display_state"),
+        Value::String(execution_status.to_string()),
+    );
+    object.insert(
+        String::from("tool_display_state"),
+        Value::String(execution_status.to_string()),
+    );
+    if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+        payload.insert(
+            String::from("execution_status"),
+            Value::String(execution_status.to_string()),
+        );
+    }
+    if let Some(host_payload) = object
+        .get_mut("host_result")
+        .and_then(Value::as_object_mut)
+        .and_then(|host_result| host_result.get_mut("payload"))
+        .and_then(Value::as_object_mut)
+    {
+        host_payload.insert(
+            String::from("execution_status"),
+            Value::String(execution_status.to_string()),
+        );
+    }
+    metadata_update
 }
 
 /// Shallow-merges one tool-call metadata object with a later tool-result or delegate metadata object.
@@ -247,6 +874,12 @@ pub fn merge_tool_display_metadata(
                 (Some(call_rank), Some(result_rank)) if result_rank > call_rank => {
                     task_session_payload_from_metadata_object(&tool_result_object).cloned()
                 }
+                (Some(_), None) => {
+                    task_session_payload_from_metadata_object(&tool_call_object).cloned()
+                }
+                (None, Some(_)) => {
+                    task_session_payload_from_metadata_object(&tool_result_object).cloned()
+                }
                 _ => None,
             };
             tool_call_object.extend(tool_result_object);
@@ -263,6 +896,39 @@ pub fn merge_tool_display_metadata(
         (None, Some(metadata)) => Some(metadata),
         (Some(_), Some(metadata)) => Some(metadata),
         (None, None) => None,
+    }
+}
+
+/// Merges task-mirror display metadata while allowing live running state to override stale terminal payloads.
+/// 合并任务镜像展示元数据，并允许实时运行态覆盖陈旧终态载荷。
+///
+/// # Parameters
+/// 参数
+/// `current_metadata` is the metadata already attached to the parent tool card.
+/// `current_metadata` 是父级工具卡片已有的元数据。
+/// `metadata_update` is the task-mirror-derived display metadata.
+/// `metadata_update` 是从任务镜像推导出的展示元数据。
+/// `live_running_override` indicates that the host runtime still owns active task work.
+/// `live_running_override` 表示宿主运行时仍持有活动任务。
+///
+/// # Returns
+/// 返回值
+/// Merged metadata for the parent tool card.
+/// 返回父级工具卡片的合并后元数据。
+pub fn merge_task_mirror_tool_display_metadata(
+    current_metadata: Option<Value>,
+    metadata_update: Value,
+    live_running_override: bool,
+) -> Option<Value> {
+    if !live_running_override {
+        return merge_tool_display_metadata(current_metadata, Some(metadata_update));
+    }
+    match (current_metadata, metadata_update) {
+        (Some(Value::Object(mut current_object)), Value::Object(update_object)) => {
+            current_object.extend(update_object);
+            Some(Value::Object(current_object))
+        }
+        (_, update) => Some(update),
     }
 }
 
@@ -301,9 +967,9 @@ fn task_session_payload_execution_rank_from_metadata_object(
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
     Some(match execution_status {
-        "running" | "created" => 0,
-        "completed" | "stopped" | "failed" => 2,
-        _ => 1,
+        "created" | "running" | "waiting_children" | "waiting_followup" | "compacting" => 0,
+        "completed" | "stopped" | "failed" | "archived" => 2,
+        _ => return None,
     })
 }
 
@@ -325,11 +991,14 @@ pub fn task_session_message_match_score(metadata: &Value, payload: &Value) -> us
     let payload_internal_task_id = task_session_internal_id_from_payload(payload);
     let metadata_internal_task_id = task_session_payload_from_tool_metadata(metadata)
         .and_then(task_session_internal_id_from_payload);
-    if payload_internal_task_id
-        .zip(metadata_internal_task_id)
-        .is_some_and(|(left, right)| left == right)
+    if let (Some(payload_internal_task_id), Some(metadata_internal_task_id)) =
+        (payload_internal_task_id, metadata_internal_task_id)
     {
-        return usize::MAX;
+        return if payload_internal_task_id == metadata_internal_task_id {
+            usize::MAX
+        } else {
+            0
+        };
     }
     if task_session_public_id_from_payload(payload)
         .zip(task_session_declared_task_id_from_tool_metadata(metadata))
@@ -468,8 +1137,8 @@ fn update_task_session_best_match(
 ///
 /// # Returns
 /// 返回值
-/// A metadata object with `execution_status` and `tool_display_state` set to `stopped`.
-/// 返回将 `execution_status` 与 `tool_display_state` 设置为 `stopped` 的元数据对象。
+/// A metadata object with `execution_id`, `execution_status`, and `tool_display_state` set for stopped delivery.
+/// 返回为停止投递设置 `execution_id`、`execution_status` 与 `tool_display_state` 的元数据对象。
 pub fn build_stopped_task_session_metadata(
     existing_metadata: Option<&Value>,
     state_snapshot: Option<&SubagentTaskPanelState>,
@@ -497,12 +1166,14 @@ pub fn build_stopped_task_session_metadata(
         .map(str::to_string)
         .or_else(|| state_snapshot.map(|state| state.public_task_id.clone()))
         .unwrap_or_else(|| task_id.to_string());
+    let execution_id = format!("stopped-{task_id}-{updated_at}");
     let metadata = json!({
         "tool_name": "spawn_agent",
         "kind": SUBAGENT_TASK_KIND,
         "payload": {
             "task_id": public_task_id,
             (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
+            "execution_id": execution_id,
             "execution_status": "stopped",
             "prompt": prompt,
             "description": description,
@@ -519,6 +1190,7 @@ pub fn build_stopped_task_session_metadata(
             "payload": {
                 "task_id": task_id.to_string(),
                 (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
+                "execution_id": execution_id,
                 "execution_status": "stopped",
                 "result": stop_summary,
                 "updated_at": updated_at,

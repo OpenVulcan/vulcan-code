@@ -499,9 +499,11 @@ fn run_service_bootstrap(
         guard.startup = startup.clone();
         guard.agent_runtime = Some(agent_runtime.clone());
         let surface_messages =
-            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot);
+            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)
+                .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         let subagent_navigation =
-            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)
+                .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         let hydrated_conversation_windows = hydrated_conversation_window_summaries(
             &guard.hydrated_conversation_windows,
             &guard.webui_preloaded_unclosed_subagent_roots,

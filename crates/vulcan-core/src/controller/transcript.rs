@@ -27,6 +27,27 @@ pub struct AgentMessageAppendRequest {
     pub metadata: Option<Value>,
 }
 
+/// Request object used to append one transcript-only display record.
+/// 用于追加一条仅转录显示记录的请求对象。
+#[derive(Debug, Clone)]
+pub struct DisplayRecordAppendRequest {
+    /// Optional stable record id provided by the host.
+    /// 宿主提供的可选稳定记录标识。
+    pub record_id: Option<String>,
+    /// Transcript role used by the display projection.
+    /// 显示投影使用的转录角色。
+    pub role: TranscriptRole,
+    /// Display title for the transcript row.
+    /// 转录行使用的显示标题。
+    pub title: String,
+    /// Display body for the transcript row.
+    /// 转录行使用的显示正文。
+    pub body: String,
+    /// Host-only metadata that should not enter the provider message window.
+    /// 不应进入 Provider 消息窗口的宿主侧元数据。
+    pub metadata: Option<Value>,
+}
+
 impl VulcanCoreController {
     /// Appends one user-authored prompt into the canonical message window and durable record stream.
     /// 将一条用户输入追加到规范消息窗口与持久化记录流中。
@@ -175,7 +196,7 @@ impl VulcanCoreController {
             role: TranscriptRole::Assistant,
             record_kind: TranscriptRecordKind::Visible,
             visible: false,
-            title: String::from("子代理消息"),
+            title: String::from("智能体消息"),
             body: model_text,
             metadata,
             created_at: timestamp,
@@ -183,16 +204,54 @@ impl VulcanCoreController {
         message_id
     }
 
+    /// Appends one display-only transcript record without changing provider-visible history.
+    /// 追加一条仅显示转录记录，不改变 Provider 可见历史。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `request` carries the stable record id, display text, role, and host metadata.
+    /// `request` 携带稳定记录标识、显示文本、角色与宿主元数据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The generated or supplied record id, or `None` when the display text is blank.
+    /// 返回生成或传入的记录标识；若显示文本为空则返回 `None`。
+    pub fn append_display_record(&mut self, request: DisplayRecordAppendRequest) -> Option<String> {
+        if request.title.trim().is_empty() && request.body.trim().is_empty() {
+            return None;
+        }
+        let record_id = request
+            .record_id
+            .unwrap_or_else(|| self.next_local_id("display-record"));
+        let timestamp = current_unix_millis_text();
+        self.snapshot.records.push(ConversationRecord {
+            id: record_id.clone(),
+            role: request.role,
+            record_kind: TranscriptRecordKind::ProjectionOnly,
+            visible: true,
+            title: request.title,
+            body: request.body,
+            metadata: request.metadata,
+            created_at: timestamp,
+        });
+        Some(record_id)
+    }
+
     /// Returns whether the controller still needs to append one new user turn instead of reusing the host-preseeded latest user prompt.
     /// 返回控制器当前是否仍需追加一条新的用户回合，而不是复用宿主已预播种的最新用户提示词。
     pub(super) fn should_append_user_turn(&self, prompt: &str) -> bool {
-        !matches!(
+        let prompt = prompt.trim();
+        let latest_user_matches = matches!(
             self.snapshot.messages.last(),
             Some(ConversationMessage {
                 payload: ConversationPayload::UserText { text, .. },
                 ..
             }) if text.trim() == prompt
-        )
+        );
+        if latest_user_matches {
+            return false;
+        }
+        trailing_agent_messages_prompt(&self.snapshot.messages).as_deref() != Some(prompt)
     }
 
     /// Appends one provider assistant turn into the canonical message window and the durable record stream.
@@ -308,4 +367,31 @@ impl VulcanCoreController {
             self.snapshot.continuation = next;
         }
     }
+}
+
+/// Renders the contiguous trailing typed agent messages as one provider prompt.
+/// 将末尾连续的类型化智能体消息渲染为一段 Provider 提示词。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the canonical provider-visible conversation window.
+/// `messages` 是规范的 Provider 可见会话窗口。
+///
+/// # Returns
+/// 返回值
+/// The joined model text when the tail contains at least one agent message.
+/// 当尾部至少包含一条智能体消息时返回拼接后的模型文本。
+fn trailing_agent_messages_prompt(messages: &[ConversationMessage]) -> Option<String> {
+    let mut rendered_messages = Vec::new();
+    for message in messages.iter().rev() {
+        let Some(model_text) = message.payload.agent_message_model_text() else {
+            break;
+        };
+        rendered_messages.push(model_text);
+    }
+    if rendered_messages.is_empty() {
+        return None;
+    }
+    rendered_messages.reverse();
+    Some(rendered_messages.join("\n\n"))
 }

@@ -142,7 +142,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   featureAreas: [
     { id: "chat", label: "Workspace", description: "Project conversations, message stream, and model input", status: "Available" },
     { id: "skills", label: "Skills", description: "LuaSkills, tool capabilities, and skill packages", status: "Preview" },
-    { id: "agents", label: "Agents", description: "Subagents, expert profiles, and delegation prompts", status: "Preview" },
+    { id: "agents", label: "Agents", description: "Agents, expert profiles, and delegation prompts", status: "Preview" },
     { id: "memory", label: "Memory", description: "VMM user, project, and conversation memory", status: "Preview" },
     { id: "settings", label: "Settings", description: "Project, model, tool, diagnostics, and system settings", status: "Preview" },
   ],
@@ -206,7 +206,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   subagentCatalog: {
     systemRoot: "D:/openvulcan/vulcan-code/output/resources/subagents",
     userRoot: "C:/Users/20000/.vulcan/agents",
-    notice: "Browser preview mode is showing a sample subagent catalog.",
+    notice: "Browser preview mode is showing a sample agent catalog.",
+    childAgentForbiddenToolIds: [],
     errors: [],
     categories: [
       {

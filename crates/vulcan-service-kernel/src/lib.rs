@@ -29,8 +29,8 @@ use vldb_controller_client::ControllerSqliteValue;
 #[cfg(test)]
 use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 use vulcan_agent_runtime::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport, ExecutionStreamEvent,
-    RuntimePromptIntervention,
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionProviderVisibleAgentMessage,
+    ExecutionRunReport, ExecutionStreamEvent, RuntimePromptIntervention,
     agent_profile::AgentProfileCatalog,
     agent_runtime::{
         context_injection_runtime::{
@@ -125,13 +125,15 @@ use vulcan_session_boundary::{
     SessionLifecycleHook, SessionLifecycleRunner, SessionTurnTerminalStatus,
 };
 use vulcan_session_core::{
-    ActiveTurnKind, SessionNodeId, SessionRuntimeKernel, TurnInput, TurnInputKind,
-    TurnTerminalStatus,
+    ActiveTurnKind, MailboxDeliveryPhase, SessionNodeId, SessionRuntimeKernel, TurnInput,
+    TurnInputKind, TurnTerminalStatus,
 };
-use vulcan_subagent_core::{
-    STOPPED_SUBAGENT_TASK_IDS_KEY, SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND,
-};
+#[cfg(test)]
+use vulcan_subagent_core::SUBAGENT_TASK_KIND;
+use vulcan_subagent_core::{SEND_MESSAGE_TOOL, SUBAGENT_TASK_ID_KEY, WAIT_AGENT_TOOL};
 use vulcan_task_session::SegmentedTaskSessionStore;
+#[cfg(test)]
+use vulcan_workbench_model::SessionTurnStats;
 use vulcan_workbench_model::{
     PendingSessionPromptEntry, PendingSessionPromptSource, SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
     SelectedSubagentTaskPanel, SessionAddonNamespace, SessionAddonState, SessionId,
@@ -139,17 +141,23 @@ use vulcan_workbench_model::{
     SessionPlanModeState, SessionRunPhase, SessionRuntimeControls, SessionRuntimeStateEntry,
     SessionState, SessionSummary, SessionTitleSource, SessionTodolistItem,
     SessionTodolistItemStatus, SessionTodolistState, SessionTurnStatsKind, SessionTurnStatsStatus,
-    SessionTurnUsageSegment, SessionWorkMode, SubagentTaskPanelState, SubagentTaskRunState,
-    TaskProjectSummary, attach_tool_display_state_to_metadata, build_session_record_message_id,
+    SessionTurnUsageSegment, SessionWorkMode, SubagentSendMessageProjection,
+    SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
+    attach_tool_display_state_to_metadata, build_session_record_message_id,
     build_stopped_task_session_metadata, find_task_session_tool_message_id_for_payload,
-    merge_tool_display_metadata, parse_subagent_task_panel_metadata,
-    parse_subagent_task_prompt_metadata, subagent_navigation_round_should_remain_visible,
-    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
+    merge_task_mirror_tool_display_metadata, parse_subagent_task_panel_metadata,
+    parse_subagent_task_prompt_metadata, session_message_is_subagent_send_message_display_note,
+    subagent_close_agent_projection_from_host_result,
+    subagent_close_agent_projection_from_tool_metadata,
+    subagent_feedback_display_records_from_tool_metadata,
+    subagent_feedback_execution_id_from_tool_metadata, subagent_feedback_record_matches,
+    subagent_navigation_round_should_remain_visible, subagent_navigation_surface_is_visible,
+    subagent_navigation_task_label, subagent_send_message_projection_from_tool_metadata,
     subagent_task_panel_is_openable,
     subagent_task_panel_state_detail_from_segmented_task_session_store,
-    subagent_task_panel_state_has_recoverable_conversation,
+    subagent_task_panel_state_has_recoverable_conversation, task_session_display_metadata_update,
     task_session_execution_status_from_tool_metadata, task_session_message_match_score,
-    task_session_payload_from_tool_metadata,
+    task_session_mirror_display_metadata_update, task_session_payload_from_tool_metadata,
 };
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
@@ -375,8 +383,8 @@ use workbench_session_panels::*;
 use workbench_surface_projection::active_surface_session_id_from_state;
 use workbench_surface_projection::{
     active_surface_messages_from_workspace_and_state, open_subagent_registry_entry_for_task,
-    preserved_active_surface_session_id, subagent_navigation_snapshot_from_cached_state,
-    subagent_navigation_snapshot_from_state, subagent_run_state_key,
+    preserved_active_surface_session_id, subagent_navigation_snapshot_for_parent_from_cached_state,
+    subagent_navigation_snapshot_from_cached_state, subagent_navigation_snapshot_from_state,
     surface_messages_for_session_without_subagent_navigation_refresh,
 };
 use workspace_files::{service_workspace_files_list, service_workspace_files_read};
@@ -444,7 +452,6 @@ pub fn create_service_bridge_state(
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),

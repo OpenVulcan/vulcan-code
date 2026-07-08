@@ -1,7 +1,9 @@
 //! Shared provider transport entry-input preparation helpers reused by provider-specific stream entrypoints.
 //! 供各 Provider 专用流式入口复用的共享传输入口输入准备辅助模块。
 
-use crate::agent_runtime::provider_transport_request::ProviderTransportExecutionRequest;
+use crate::agent_runtime::provider_transport_request::{
+    ProviderTransportExecutionRequest, ProviderTransportTurnStartMode,
+};
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::provider_transport_tool_context::{
@@ -33,6 +35,9 @@ pub(crate) struct PreparedProviderTransportEntryInputs {
     /// Final outgoing prompt body forwarded into the host-controlled runtime stream.
     /// 被转发到宿主控制运行时流中的最终出站提示词正文。
     pub(crate) prompt: String,
+    /// Explicit turn-start mode forwarded into the host-controlled runtime stream.
+    /// 被转发到宿主控制运行时流中的显式回合启动模式。
+    pub(crate) turn_start_mode: ProviderTransportTurnStartMode,
     /// Fully cloned request-header map reused by the concrete transport adapter.
     /// 被具体传输适配器复用的完整克隆请求头映射。
     pub(crate) request_headers: HeaderMap,
@@ -100,6 +105,7 @@ fn prepare_provider_transport_entry_inputs(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
+    turn_start_mode: ProviderTransportTurnStartMode,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
@@ -113,6 +119,7 @@ fn prepare_provider_transport_entry_inputs(
         provider_id: provider_id.clone(),
         model_id: model_id.clone(),
         prompt: prompt.to_string(),
+        turn_start_mode,
         request_headers: headers.clone(),
         controller_config: CoreControllerConfig {
             provider_id,
@@ -134,6 +141,7 @@ fn prepare_provider_transport_runtime_inputs(
     model_id: &str,
     system_preamble: &str,
     prompt: &str,
+    turn_start_mode: ProviderTransportTurnStartMode,
     temperature: Option<f64>,
     max_turns: usize,
     headers: &HeaderMap,
@@ -156,6 +164,7 @@ fn prepare_provider_transport_runtime_inputs(
             model_id,
             system_preamble,
             prompt,
+            turn_start_mode,
             temperature,
             max_turns,
             headers,
@@ -201,6 +210,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         execution_mode,
         system_preamble,
         prompt,
+        turn_start_mode,
         core_snapshot,
         temperature,
         max_turns,
@@ -225,6 +235,7 @@ pub(crate) fn prepare_provider_transport_stream_launch(
         model_id.as_str(),
         system_preamble.as_str(),
         prompt.as_str(),
+        turn_start_mode,
         temperature,
         max_turns,
         &headers,
@@ -273,6 +284,7 @@ mod tests {
             "gpt-test",
             "system",
             "prompt",
+            ProviderTransportTurnStartMode::UserPrompt,
             Some(0.2),
             4,
             &HeaderMap::new(),

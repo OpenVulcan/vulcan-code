@@ -119,6 +119,47 @@ pub struct InMemorySubagentMailbox {
     events: Arc<Mutex<VecDeque<SubagentMailboxEvent>>>,
 }
 
+impl InMemorySubagentMailbox {
+    /// Takes queued events for one parent thread that satisfy a caller-provided predicate.
+    /// 按调用方提供的谓词取出单个父线程下匹配的排队事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `parent_thread_id` is the parent thread whose mailbox events are being claimed.
+    /// `parent_thread_id` 是正在认领 mailbox 事件的父线程。
+    /// `matches` decides whether one event should be taken instead of retained.
+    /// `matches` 决定单条事件应被取出还是保留。
+    ///
+    /// # Returns
+    /// 返回值
+    /// FIFO-ordered matching events while non-matching events remain queued.
+    /// 返回按 FIFO 排序的匹配事件，未匹配事件继续留在队列中。
+    pub fn take_matching_events_for_parent<Matches>(
+        &self,
+        parent_thread_id: SessionThreadId,
+        mut matches: Matches,
+    ) -> Result<Vec<SubagentMailboxEvent>, String>
+    where
+        Matches: FnMut(&SubagentMailboxEvent) -> bool,
+    {
+        let mut guard = self
+            .events
+            .lock()
+            .map_err(|error| format!("failed to lock subagent mailbox: {error}"))?;
+        let mut taken = Vec::new();
+        let mut retained = VecDeque::new();
+        while let Some(event) = guard.pop_front() {
+            if event.parent_thread_id == parent_thread_id && matches(&event) {
+                taken.push(event);
+            } else {
+                retained.push_back(event);
+            }
+        }
+        *guard = retained;
+        Ok(taken)
+    }
+}
+
 impl SubagentMailbox for InMemorySubagentMailbox {
     /// Pushes one event into the FIFO queue.
     /// 将一条事件推入 FIFO 队列。

@@ -69,7 +69,7 @@ pub(crate) struct UserPromptEditSubmitRequest {
 /// Conversation fork request sent by the WebUI final-turn action.
 /// WebUI 最终回合操作发送的会话分叉请求。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ConversationForkRequest {
     /// Conversation id that should be copied into a new session.
     /// 需要复制为新会话的会话标识。
@@ -77,9 +77,6 @@ pub(crate) struct ConversationForkRequest {
     /// Localized title assigned to the forked session.
     /// 分配给分叉会话的本地化标题。
     pub(crate) title: String,
-    /// Optional user message id whose previous boundary should become the fork endpoint.
-    /// 可选用户消息标识；其上一边界将成为分叉终点。
-    pub(crate) before_message_id: Option<String>,
 }
 
 /// Session-scoped AI capability configuration save request sent by the WebUI composer dialog.
@@ -248,9 +245,6 @@ pub struct ServiceBridgeState {
     /// Parent sessions currently blocked inside a model-requested wait_agent call.
     /// 当前正阻塞在模型请求的 wait_agent 调用中的父会话集合。
     pub(crate) parent_sessions_waiting_for_subagents: BTreeSet<SessionId>,
-    /// Pending child-agent usage segments waiting to be embedded into each parent turn report.
-    /// 等待嵌入各父会话回合报告的子代理用量分段。
-    pub(crate) pending_subagent_usage_segments: BTreeMap<SessionId, Vec<SessionTurnUsageSegment>>,
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
     pub(crate) active_stream_tasks: BTreeMap<SessionId, ServiceTaskHandle<()>>,
@@ -343,4 +337,24 @@ pub(crate) fn webui_workspace_persist_lock() -> Arc<tokio::sync::Mutex<()>> {
     WEBUI_WORKSPACE_PERSIST_LOCK
         .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies fork requests reject historical message-bound rollback fields.
+    /// 验证 fork 请求会拒绝历史消息绑定回滚字段。
+    #[test]
+    fn conversation_fork_request_rejects_before_message_id() {
+        let error = serde_json::from_value::<ConversationForkRequest>(serde_json::json!({
+            "conversationId": "conversation-a",
+            "title": "Conversation A fork",
+            "beforeMessageId": "message-a"
+        }))
+        .expect_err("fork request should reject message-bound fork fields");
+
+        assert!(error.to_string().contains("unknown field"));
+        assert!(error.to_string().contains("beforeMessageId"));
+    }
 }

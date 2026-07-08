@@ -160,6 +160,63 @@ fn read_turn_window_preserves_complete_display_turns() {
     assert!(!previous_window.has_more_history);
 }
 
+/// Verifies display window loading repairs a malformed JSONL tail before strict projection.
+/// 验证展示窗口加载会在严格投影前修复格式损坏的 JSONL 尾行。
+#[test]
+fn read_turn_window_repairs_corrupt_jsonl_tail_before_loading() {
+    let root = test_root("read_turn_window_repairs_corrupt_jsonl_tail_before_loading");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let messages = vec![
+        test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        ),
+        test_message(
+            "m-assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first answer",
+        ),
+    ];
+    append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+    let segment_path = session_dir.join("s001.jsonl");
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&segment_path)
+        .expect("open segment for corruption");
+    write!(file, "{{\"seq\":999,\"timestamp\":\"broken\"").expect("append corrupt json tail");
+
+    let window =
+        read_segmented_session_turn_window(&session_dir, None, 1).expect("read repaired window");
+
+    assert_eq!(
+        window
+            .lines
+            .iter()
+            .filter_map(|line| line.payload["message_id"].as_str())
+            .collect::<Vec<_>>(),
+        vec!["m-user-1", "m-assistant-1"]
+    );
+    assert!(!window.has_more_history);
+    let text = fs::read_to_string(&segment_path).expect("read repaired segment");
+    assert!(
+        text.lines()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    );
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+            .expect("read repaired metadata");
+    assert_eq!(metadata.next_global_seq, 3);
+    assert_eq!(metadata.segments[0].line_count, 3);
+}
+
 /// Verifies state documents are overwritten independently from JSONL event lines.
 /// 验证状态文档独立于 JSONL 事件行被覆盖写入。
 #[test]

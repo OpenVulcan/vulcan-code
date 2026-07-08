@@ -1,6 +1,9 @@
 //! Shared session protocol models for main sessions and task sessions.
 //! 主会话与子代理会话共享的会话协议模型。
 
+/// Shared child-agent hard policy facts.
+/// 共享智能体硬策略事实。
+pub mod child_agent_policy;
 /// Shared context compaction adapter contracts.
 /// 共享上下文压缩适配器契约。
 pub mod compactor;
@@ -44,6 +47,10 @@ pub mod subagent_registry;
 /// 共享活动回合输入队列与 mailbox 模型。
 pub mod turn_input_queue;
 
+pub use child_agent_policy::{
+    CHILD_AGENT_FORBIDDEN_TOOL_IDS, child_agent_forbidden_tool_ids, child_agent_tool_is_forbidden,
+    sanitize_child_agent_tool_exposure, sanitize_child_agent_tool_policy,
+};
 pub use compactor::{
     SessionContextCompactionError, SessionContextCompactionOutcome,
     SessionContextCompactionRequest, SessionContextCompactor,
@@ -52,6 +59,9 @@ pub use config::{
     CapabilityPolicyMode, CapabilityPolicySnapshot, ContextCompactionPolicyRequest,
     ContextCompactionPolicySnapshot, PromptSkillSnapshot, ProviderModelSnapshot,
     SessionEffectiveConfig, SessionRequestedConfig, ToolExposureSnapshot,
+    apply_prompt_skill_capability_policy, apply_tool_capability_policy,
+    capability_policy_from_mode_or_selector_lists, capability_policy_from_selector_lists,
+    normalize_capability_policy_snapshot, parse_capability_policy_mode_key,
 };
 pub use context::{
     SessionCompactionCheckpoint, SessionContextDocument, SessionContextSnapshot,
@@ -127,7 +137,7 @@ mod tests {
             "event-1",
             node_id,
             7,
-            SessionEventKind::TaskFeedback,
+            SessionEventKind::TaskTerminal,
             123,
             json!({ "summary": "done" }),
         );

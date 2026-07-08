@@ -67,7 +67,8 @@ mod tests {
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
             agent_kind: String::from("内置"),
-            agent_system_prompt_override: None,
+            agent_prompt_snapshot: None,
+            subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
@@ -111,6 +112,8 @@ mod tests {
             provider_request_snapshot_json: None,
             provider_wire_request_json: None,
             context_budget: None,
+            context_compaction_policy: None,
+            context_budget_override: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,

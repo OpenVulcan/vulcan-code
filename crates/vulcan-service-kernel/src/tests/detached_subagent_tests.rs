@@ -2,6 +2,17 @@
 //! detached subagent tests。
 
 use super::*;
+use vulcan_workbench_model::SessionTurnUsageGroupKind;
+
+/// Returns rebuilt subagent navigation and fails the test on registry projection errors.
+/// 返回重建后的智能体导航，并在注册表投影错误时让测试失败。
+fn subagent_navigation_snapshot_from_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Option<SubagentNavigationSnapshot> {
+    super::subagent_navigation_snapshot_from_state(guard, workspace_snapshot)
+        .expect("subagent navigation projection should succeed")
+}
 
 /// Captures emitted service events for projection tests.
 /// 为投影测试捕获已发出的服务事件。
@@ -77,7 +88,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
-        pending_subagent_usage_segments: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
@@ -92,6 +102,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         conversation_state: None,
         provider_request_count: 1,
         last_successful_provider_usage: None,
+        cumulative_successful_provider_usage: None,
         embedded_turn_usage_segments: Vec::new(),
         mcp_discovery_rows: Vec::new(),
         mcp_discovery_errors: Vec::new(),
@@ -136,6 +147,75 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
     );
 }
 
+/// Verifies TaskSession terminal reports project provider usage into live panel turn stats.
+/// 验证智能体终态报告会把 Provider 用量投影到实时面板轮次统计。
+#[test]
+fn task_session_execution_report_fast_path_projects_live_usage_stats() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let provider_usage = ProviderUsageSnapshot {
+        input_tokens: Some(31_295),
+        output_tokens: Some(16),
+        reasoning_tokens: Some(14),
+        total_tokens: Some(31_311),
+        cached_input_tokens: Some(5_888),
+        cache_creation_input_tokens: None,
+    };
+    let report = ExecutionRunReport {
+        session_id: task_session_id,
+        preparation: None,
+        assistant_output: Some(String::from("abcd")),
+        thinking_output: None,
+        conversation_state: None,
+        provider_request_count: 1,
+        last_successful_provider_usage: Some(provider_usage.clone()),
+        cumulative_successful_provider_usage: Some(provider_usage),
+        embedded_turn_usage_segments: Vec::new(),
+        mcp_discovery_rows: Vec::new(),
+        mcp_discovery_errors: Vec::new(),
+        warnings: Vec::new(),
+        error: None,
+        controller_events: Vec::new(),
+    };
+
+    let applied = apply_task_session_execution_report_to_memory(&state, report)
+        .expect("terminal task-session report should apply live usage stats");
+    let messages = applied
+        .workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("task session report should materialize messages");
+    let stats_row = messages
+        .iter()
+        .rev()
+        .find(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("task session should show one turn stats row");
+    let stats: SessionTurnStats = serde_json::from_value(
+        stats_row
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("turn_stats"))
+            .expect("turn stats metadata should exist")
+            .clone(),
+    )
+    .expect("turn stats metadata should parse");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 31_295);
+    assert_eq!(stats.output_tokens, 16);
+    assert_eq!(stats.reasoning_tokens, 14);
+    assert_eq!(stats.total_tokens, 31_311);
+    assert_eq!(stats.cached_input_tokens, Some(5_888));
+    assert_eq!(stats.usage_segments.len(), 1);
+    assert_eq!(
+        stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::AssistantResponse
+    );
+}
+
 /// Verifies a terminal TaskSession report replaces the provisional prompt row with canonical records.
 /// 验证 TaskSession 终态报告会用规范记录替换临时提示词行。
 #[test]
@@ -150,6 +230,48 @@ fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() 
             .as_mut()
             .expect("test workspace snapshot should exist");
         seed_webui_subagent_task_prompt_if_needed(workspace_snapshot, task_session_id, prompt);
+        workspace_snapshot.session_runtime_state.insert(
+            task_session_id,
+            SessionRuntimeStateEntry {
+                conversation_state: SessionConversationState {
+                    messages: Vec::new(),
+                    records: vec![
+                        SessionConversationRecord {
+                            id: String::from("inherited-parent-user"),
+                            kind: SessionMessageKind::User,
+                            record_kind: SessionMessageRecordKind::Transcript,
+                            visible: true,
+                            title: String::from("用户指令"),
+                            body: String::from("Parent visible prompt must stay out."),
+                            metadata: None,
+                            created_at: String::from("0"),
+                        },
+                        SessionConversationRecord {
+                            id: String::from("inherited-parent-output"),
+                            kind: SessionMessageKind::Assistant,
+                            record_kind: SessionMessageRecordKind::AssistantOutput,
+                            visible: true,
+                            title: String::from("输出"),
+                            body: String::from("Parent visible output must stay out."),
+                            metadata: None,
+                            created_at: String::from("0"),
+                        },
+                        SessionConversationRecord {
+                            id: String::from("inherited-parent-stats"),
+                            kind: SessionMessageKind::Assistant,
+                            record_kind: SessionMessageRecordKind::TurnStats,
+                            visible: true,
+                            title: String::from("Turn Stats · completed"),
+                            body: String::from("Parent visible stats must stay out."),
+                            metadata: None,
+                            created_at: String::from("0"),
+                        },
+                    ],
+                    continuation: Default::default(),
+                },
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
     }
     let state = Arc::new(Mutex::new(service_state));
     let report = ExecutionRunReport {
@@ -187,6 +309,7 @@ fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() 
         }),
         provider_request_count: 1,
         last_successful_provider_usage: None,
+        cumulative_successful_provider_usage: None,
         embedded_turn_usage_segments: Vec::new(),
         mcp_discovery_rows: Vec::new(),
         mcp_discovery_errors: Vec::new(),
@@ -229,6 +352,22 @@ fn task_session_terminal_report_replaces_seeded_prompt_with_canonical_records() 
             .iter()
             .any(|message| message.kind == SessionMessageKind::Assistant
                 && message.body.contains("{\"ok\":true}"))
+    );
+    assert!(messages.iter().all(|message| {
+        !message
+            .body
+            .contains("Parent visible prompt must stay out.")
+            && !message
+                .body
+                .contains("Parent visible output must stay out.")
+            && !message.body.contains("Parent visible stats must stay out.")
+    }));
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+            .count(),
+        1
     );
 }
 
@@ -286,10 +425,11 @@ fn task_session_checkpoint_replaces_seeded_prompt_with_runtime_records() {
         .get(&task_session_id)
         .expect("runtime state should exist")
         .clone();
-    replace_display_messages_with_runtime_state_records(
+    replace_task_display_messages_with_runtime_state_records(
         workspace_snapshot,
         task_session_id,
         &runtime_state_snapshot,
+        Some(prompt),
     );
 
     let messages = workspace_snapshot
@@ -343,6 +483,26 @@ fn subagent_surface_conversation_state_replaces_seeded_prompt_without_preserving
         messages: Vec::new(),
         records: vec![
             SessionConversationRecord {
+                id: String::from("hydrated-parent-user"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("Hydrated parent prompt must stay out."),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionConversationRecord {
+                id: String::from("hydrated-parent-stats"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::TurnStats,
+                visible: true,
+                title: String::from("Turn Stats · completed"),
+                body: String::from("Hydrated parent stats must stay out."),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionConversationRecord {
                 id: String::from("canonical-user-prompt"),
                 kind: SessionMessageKind::User,
                 record_kind: SessionMessageRecordKind::Transcript,
@@ -370,6 +530,7 @@ fn subagent_surface_conversation_state_replaces_seeded_prompt_without_preserving
         workspace_snapshot,
         task_session_id,
         canonical_state,
+        Some(prompt),
     );
 
     let messages = workspace_snapshot
@@ -384,12 +545,20 @@ fn subagent_surface_conversation_state_replaces_seeded_prompt_without_preserving
             .iter()
             .all(|message| !message.id.contains("subagent-prompt") && message.body != "stale")
     );
+    assert!(messages.iter().all(|message| {
+        !message
+            .body
+            .contains("Hydrated parent prompt must stay out.")
+            && !message
+                .body
+                .contains("Hydrated parent stats must stay out.")
+    }));
 }
 
-/// Verifies subagent hydration keeps display-only inter-agent prompts while dropping stale records.
-/// 验证子智能体水合会保留仅显示的智能体消息，同时丢弃陈旧记录。
+/// Verifies anchorless cloned child state starts display at the latest child task prompt.
+/// 验证缺少锚点的克隆子状态会从最新子任务提示开始显示。
 #[test]
-fn subagent_surface_conversation_state_preserves_display_only_agent_messages() {
+fn subagent_surface_conversation_state_without_anchor_drops_inherited_parent_history() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -397,43 +566,112 @@ fn subagent_surface_conversation_state_preserves_display_only_agent_messages() {
         .workspace_snapshot
         .as_mut()
         .expect("test workspace snapshot should exist");
-    let mut display_note = SessionMessageEntry::new(
-        SessionMessageKind::User,
-        "智能体消息",
-        "请用中文重新输出结论。",
-    )
-    .with_runtime_metadata("display-note-send-message", "1780000000000");
-    display_note.record_kind = SessionMessageRecordKind::DisplayNote;
-    display_note.metadata = Some(json!({
-        "display_note": true,
-        "kind": "subagent_message",
-        "tool": "send_message",
+    let canonical_state = SessionConversationState {
+        messages: Vec::new(),
+        records: vec![
+            SessionConversationRecord {
+                id: String::from("cloned-parent-user"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from("Parent prompt cloned into runtime only."),
+                metadata: None,
+                created_at: String::from("1"),
+            },
+            SessionConversationRecord {
+                id: String::from("cloned-parent-assistant"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("Parent answer must not be shown in child panel."),
+                metadata: None,
+                created_at: String::from("2"),
+            },
+            SessionConversationRecord {
+                id: String::from("latest-child-prompt"),
+                kind: SessionMessageKind::User,
+                record_kind: SessionMessageRecordKind::Transcript,
+                visible: true,
+                title: String::from("用户指令"),
+                body: String::from(
+                    "Recall inherited runtime context, but do not show parent chat.",
+                ),
+                metadata: None,
+                created_at: String::from("3"),
+            },
+            SessionConversationRecord {
+                id: String::from("latest-child-output"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("Only child-owned display records remain."),
+                metadata: None,
+                created_at: String::from("4"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+
+    replace_webui_subagent_task_conversation_state(
+        workspace_snapshot,
+        task_session_id,
+        canonical_state,
+        None,
+    );
+
+    let messages = workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("scoped child messages should exist");
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["latest-child-prompt", "latest-child-output"]
+    );
+    assert!(messages.iter().all(|message| {
+        !message.body.contains("Parent prompt") && !message.body.contains("Parent answer")
     }));
+}
+
+/// Verifies subagent hydration uses canonical display-only records while dropping stale records.
+/// 验证子智能体水合使用规范仅显示记录，同时丢弃陈旧记录。
+#[test]
+fn subagent_surface_conversation_state_uses_canonical_display_only_agent_messages() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot should exist");
     let stale_record =
         SessionMessageEntry::new(SessionMessageKind::Assistant, "输出", "stale output")
             .with_runtime_metadata("stale-output", "1780000000001");
     workspace_snapshot
         .session_messages
-        .insert(task_session_id, vec![display_note.clone(), stale_record]);
+        .insert(task_session_id, vec![stale_record]);
     let canonical_state = SessionConversationState {
         messages: Vec::new(),
         records: vec![
             SessionConversationRecord {
-                id: String::from("internal-inbox"),
+                id: String::from("display-note-send-message"),
                 kind: SessionMessageKind::User,
-                record_kind: SessionMessageRecordKind::Transcript,
+                record_kind: SessionMessageRecordKind::DisplayNote,
                 visible: true,
-                title: String::from("用户指令"),
-                body: format!(
-                    "[Inter-agent messages]\n\nMessage 1 from parent to {task_session_id} via send_message at 1780000000000:\n请用中文重新输出结论。\n"
-                ),
+                title: String::from("智能体消息"),
+                body: String::from("请用中文重新输出结论。"),
                 metadata: Some(json!({
-                    "source": "user_interrupt",
-                    "starts_user_turn": false,
-                    "turn_process": true,
-                    "editable": false,
+                    "display_note": true,
+                    "kind": "subagent_message",
+                    "tool": "send_message",
+                    "delivery_id": "display-note-send-message",
                 })),
-                created_at: String::from("1780000000002"),
+                created_at: String::from("1780000000000"),
             },
             SessionConversationRecord {
                 id: String::from("canonical-assistant-output"),
@@ -453,6 +691,7 @@ fn subagent_surface_conversation_state_preserves_display_only_agent_messages() {
         workspace_snapshot,
         task_session_id,
         canonical_state,
+        None,
     );
 
     let messages = workspace_snapshot
@@ -468,15 +707,88 @@ fn subagent_surface_conversation_state_preserves_display_only_agent_messages() {
         message.record_kind == SessionMessageRecordKind::AssistantOutput
             && message.body == "已按中文重新输出。"
     }));
-    assert!(!messages.iter().any(|message| {
-        message.body.contains("[Inter-agent messages]") || message.body == "stale output"
-    }));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.body == "stale output")
+    );
 }
 
-/// Verifies DelegateStarted cache state exposes the subagent before the runtime registry refresh lands.
-/// 验证 DelegateStarted 缓存状态会在运行时注册表刷新落地前展示子代理。
+/// Verifies runtime refresh preserves existing parent-to-child visible message notes.
+/// 验证运行态刷新会保留已有的父到子可见消息记录。
 #[test]
-fn delegate_started_cached_state_enters_navigation_before_registry_refresh() {
+fn subagent_surface_conversation_state_preserves_existing_send_message_notes() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot should exist");
+    let mut send_note = SessionMessageEntry::new(
+        SessionMessageKind::User,
+        "智能体消息",
+        "你之前做了什么？请回忆并列出。",
+    )
+    .with_runtime_metadata("delivery-followup-1", "1780000000001");
+    send_note.record_kind = SessionMessageRecordKind::DisplayNote;
+    send_note.metadata = Some(json!({
+        "display_note": true,
+        "kind": "subagent_message",
+        "tool": "send_message",
+        (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+        "delivery_id": "delivery-followup-1",
+    }));
+    let stale_record =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "输出", "stale output")
+            .with_runtime_metadata("stale-output", "1780000000000");
+    workspace_snapshot
+        .session_messages
+        .insert(task_session_id, vec![stale_record, send_note]);
+    let canonical_state = SessionConversationState {
+        messages: Vec::new(),
+        records: vec![SessionConversationRecord {
+            id: String::from("canonical-assistant-output"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("输出"),
+            body: String::from("我只输出过 abcd。"),
+            metadata: None,
+            created_at: String::from("1780000000003"),
+        }],
+        continuation: Default::default(),
+    };
+
+    replace_webui_subagent_task_conversation_state(
+        workspace_snapshot,
+        task_session_id,
+        canonical_state,
+        None,
+    );
+
+    let messages = workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("hydrated child messages should exist");
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["你之前做了什么？请回忆并列出。", "我只输出过 abcd。"]
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.body == "stale output")
+    );
+}
+
+/// Verifies render cache alone does not create subagent navigation membership.
+/// 验证仅有渲染缓存不会创建子代理导航成员关系。
+#[test]
+fn delegate_started_cache_without_registry_does_not_create_navigation_membership() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut guard = test_service_state_with_parent_session(parent_session_id);
@@ -500,14 +812,88 @@ fn delegate_started_cached_state_enters_navigation_before_registry_refresh() {
         .expect("workspace snapshot")
         .clone();
 
-    let navigation = subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)
-        .expect("DelegateStarted cache should expose running subagent navigation");
+    let navigation = subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot);
 
-    assert_eq!(navigation.tasks.len(), 1);
-    assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
-    assert_eq!(navigation.tasks[0].label, "慢速子代理");
-    assert_eq!(navigation.tasks[0].run_state, "running");
-    assert!(navigation.tasks[0].is_running);
+    assert!(
+        navigation.is_none(),
+        "render-only cache must not create subagent navigation membership without a registry entry"
+    );
+}
+
+/// Verifies send_message projection refreshes an already loaded child detail cache.
+/// 验证 send_message 投影会刷新已加载的子代理详情缓存。
+#[test]
+fn send_message_projection_updates_loaded_subagent_detail_cache() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let task_states = vec![SubagentTaskPanelState {
+        task_id: task_session_id,
+        public_task_id: String::from("output_abcd"),
+        parent_session_id,
+        subagent_label: String::from("output_abcd"),
+        description: Some(String::from("输出 abcd")),
+        run_state: SubagentTaskRunState::Completed,
+        result_text: String::from("abcd"),
+        conversation_state: None,
+    }];
+    cache_test_subagent_surface_detail_states(&mut service_state, &task_states);
+    let state = Arc::new(Mutex::new(service_state));
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · call-send-cache",
+        "queued",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "tool_name": "send_message",
+        "tool_call_id": "call-send-cache",
+        "host_result": {
+            "kind": "subagent_message",
+            "payload": {
+                "tool": "send_message",
+                "parent_session_id": parent_session_id.to_string(),
+                "target": "output_abcd",
+                (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+                "delivery_id": "delivery-cache-followup",
+                "message": "你之前做了什么？请回忆并列出。",
+                "queued": true,
+                "delivery_mode": "queue",
+                "interrupted": false
+            }
+        }
+    })));
+
+    let projection_result =
+        append_runtime_event_projection(&app, &state, parent_session_id, &event);
+    assert!(
+        projection_result.is_ok()
+            || projection_result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.contains("controller runtime is not ready")),
+        "send_message projection should only fail in this fixture after in-memory updates"
+    );
+
+    let guard = state.lock().expect("service state lock");
+    let cached_messages = guard
+        .subagent_surface_detail_cache
+        .get(&task_session_id)
+        .expect("loaded child detail cache should remain")
+        .messages
+        .iter()
+        .map(|message| message.body.as_str())
+        .collect::<Vec<_>>();
+    assert!(cached_messages.contains(&"你之前做了什么？请回忆并列出。"));
+    let workspace_messages = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&task_session_id))
+        .expect("workspace child messages should exist")
+        .iter()
+        .map(|message| message.body.as_str())
+        .collect::<Vec<_>>();
+    assert!(workspace_messages.contains(&"你之前做了什么？请回忆并列出。"));
 }
 
 /// Verifies a live detached listener keeps the parent subagent navigation visible after the parent stream finishes.
@@ -630,9 +1016,10 @@ fn terminal_listener_cleanup_emits_non_running_subagent_navigation_delta() {
     }
     refresh_webui_subagent_navigation_round_visibility(&state, parent_session_id)
         .expect("terminal cleanup should refresh navigation visibility");
-    let navigation = emit_webui_subagent_navigation_changed_delta(&app, &state)
-        .expect("terminal cleanup should emit navigation")
-        .expect("active subagent panel should keep navigation mounted");
+    let navigation =
+        emit_webui_subagent_navigation_changed_delta_for_parent(&app, &state, parent_session_id)
+            .expect("terminal cleanup should emit navigation")
+            .expect("active subagent panel should keep navigation mounted");
 
     assert_eq!(navigation.tasks.len(), 1);
     assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
@@ -667,11 +1054,69 @@ fn empty_subagent_navigation_delta_preserves_parent_conversation_id() {
         events: Arc::clone(&emitted_events),
     })]);
 
-    let navigation = emit_webui_subagent_navigation_changed_delta(&app, &state)
-        .expect("empty navigation should emit");
+    let navigation =
+        emit_webui_subagent_navigation_changed_delta_for_parent(&app, &state, parent_session_id)
+            .expect("empty navigation should emit");
 
     assert!(navigation.is_none());
     let expected_parent_conversation_id = parent_session_id.to_string();
+    let events = emitted_events.lock().expect("event sink lock");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ServiceEvent::WorkbenchDelta(envelope)
+            if matches!(
+                &envelope.delta,
+                WorkbenchDelta::SubagentNavigationChanged(delta)
+                    if delta.parent_conversation_id.as_deref()
+                        == Some(expected_parent_conversation_id.as_str())
+                        && delta.subagent_navigation.is_none()
+            )
+    )));
+}
+
+/// Verifies background empty subagent navigation deltas keep their requested parent id.
+/// 验证后台空子智能体导航增量会保留被请求的父会话标识。
+#[test]
+fn background_empty_subagent_navigation_delta_preserves_requested_parent_conversation_id() {
+    let selected_session_id = SessionId::new_v4();
+    let background_parent_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        selected_session_id,
+    )));
+    {
+        let mut guard = state.lock().expect("service state lock");
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .expect("workspace snapshot");
+        workspace.sessions.push(SessionSummary::new(
+            background_parent_session_id,
+            Some(String::from("project-a")),
+            "后台父会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        ));
+        workspace
+            .session_run_phases
+            .insert(background_parent_session_id, SessionRunPhase::Ready);
+    }
+    let emitted_events = Arc::new(Mutex::new(Vec::<ServiceEvent>::new()));
+    let app = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
+        events: Arc::clone(&emitted_events),
+    })]);
+
+    let navigation = emit_webui_subagent_navigation_changed_delta_for_parent(
+        &app,
+        &state,
+        background_parent_session_id,
+    )
+    .expect("background empty navigation should emit");
+
+    assert!(navigation.is_none());
+    let expected_parent_conversation_id = background_parent_session_id.to_string();
     let events = emitted_events.lock().expect("event sink lock");
     assert!(events.iter().any(|event| matches!(
         event,
@@ -838,6 +1283,7 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
         "payload": {
             "task_id": "stale-running-worker",
             (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "test-execution-stale-running-worker",
             "execution_status": "running",
             "description": "生成图片",
             "subagent": "image-worker",
@@ -928,10 +1374,10 @@ fn test_completed_subagent_panel_state(
     }
 }
 
-/// Verifies the final child completion closes a parent hook turn that was awaiting subagents.
-/// 验证最后一个子代理完成后会闭合等待子代理的父级 hook 回合。
+/// Verifies child completion feedback does not close the parent completed-turn hook.
+/// 验证智能体完成反馈不会闭合父级完成回合 hook。
 #[test]
-fn final_subagent_completion_closes_parent_awaiting_hook_turn() {
+fn subagent_completion_feedback_keeps_parent_hook_turn_open() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
@@ -997,20 +1443,34 @@ fn final_subagent_completion_closes_parent_awaiting_hook_turn() {
         );
         assert!(hook_runtime.has_active_turn(parent_session_id));
     }
-
-    let completion_request = maybe_prepare_webui_parent_completion_after_subagent_finished(
-        &state,
-        &runtime,
-        parent_session_id,
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "智能体任务完成。",
     )
-    .expect("completion preparation should not fail");
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "review-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "test-execution-review-worker",
+            "execution_status": "completed",
+            "description": "审核代码",
+            "subagent": "review-worker",
+            "result": "审核完成"
+        }
+    })));
 
-    assert!(completion_request.is_some());
     assert!(
-        !runtime
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("delegate finished should ingest")
+    );
+    assert!(
+        runtime
             .conversation_hook_runtime
             .lock()
-            .expect("conversation hook runtime lock should be available after completion")
+            .expect("conversation hook runtime lock should be available after feedback")
             .has_active_turn(parent_session_id)
     );
 }
@@ -1172,6 +1632,74 @@ fn subagent_completion_queues_session_mailbox_without_wait_agent() {
     );
 }
 
+/// Verifies detached mailbox delivery is idempotent per execution, not per long-lived task.
+/// 验证分离 mailbox 投递按单次执行幂等，而不是按长期任务幂等。
+#[test]
+fn subagent_completion_queues_each_distinct_execution_for_same_task() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let first_event =
+        test_delegate_finished_event(task_session_id, "repeat-agent-run-1", "第一次结果");
+    let second_event =
+        test_delegate_finished_event(task_session_id, "repeat-agent-run-2", "第二次结果");
+
+    let first_queued = enqueue_webui_session_mailbox_input_if_needed(
+        &state,
+        parent_session_id,
+        &first_event,
+        true,
+        false,
+    )
+    .expect("first mailbox input should inspect");
+    let duplicate_first = enqueue_webui_session_mailbox_input_if_needed(
+        &state,
+        parent_session_id,
+        &first_event,
+        true,
+        false,
+    )
+    .expect("duplicate mailbox input should inspect");
+    let second_queued = enqueue_webui_session_mailbox_input_if_needed(
+        &state,
+        parent_session_id,
+        &second_event,
+        true,
+        false,
+    )
+    .expect("second mailbox input should inspect");
+
+    assert!(first_queued);
+    assert!(!duplicate_first);
+    assert!(second_queued);
+    let mailbox_prompt = webui_session_mailbox_input_from_kernel(
+        &state,
+        parent_session_id,
+        Some(&task_session_id.to_string()),
+    )
+    .expect("mailbox prompt should read")
+    .expect("mailbox prompt should exist");
+    assert!(mailbox_prompt.contains("第一次结果"));
+    assert!(mailbox_prompt.contains("第二次结果"));
+    let guard = state.lock().expect("state lock");
+    let kernel = guard
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("parent session kernel should exist");
+    let mailbox_inputs = kernel.input_queue().get_mailbox_input();
+    assert_eq!(mailbox_inputs.len(), 2);
+    assert!(mailbox_inputs.iter().any(|input| {
+        input.payload["execution_id"] == "test-execution-repeat-agent-run-1"
+            && input.payload["mailbox_event"]["payload"]["result"] == "第一次结果"
+    }));
+    assert!(mailbox_inputs.iter().any(|input| {
+        input.payload["execution_id"] == "test-execution-repeat-agent-run-2"
+            && input.payload["mailbox_event"]["payload"]["result"] == "第二次结果"
+    }));
+}
+
 /// Verifies detached subagent completion still enqueues mailbox input while wait_agent is active.
 /// 验证 wait_agent 活跃期间，分离子代理完成仍会加入 mailbox 输入。
 #[test]
@@ -1274,69 +1802,607 @@ fn subagent_completion_after_completed_wait_agent_allows_any_agent() {
     assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
 }
 
-/// Verifies child-agent usage segments are drained once before parent turn statistics aggregate them.
-/// 验证子代理用量分段会在父会话回合统计聚合前被一次性取走。
+/// Verifies child-agent completion appends independent feedback rows instead of parent turn usage.
+/// 验证智能体完成时追加独立反馈记录，而不是写入父回合用量。
 #[test]
-fn pending_subagent_usage_segments_drain_once_and_merge_into_turn_stats() {
+fn subagent_completion_appends_independent_parent_feedback_rows() {
     let parent_session_id = SessionId::new_v4();
-    let mut service_state = test_service_state_with_parent_session(parent_session_id);
-    let mut segment = SessionTurnUsageSegment::from_provider_usage(
-        SessionTurnUsageSegmentKind::SubagentTask,
-        1,
-        Some(&vulcan_core::types::ProviderUsageSnapshot {
-            input_tokens: Some(100),
-            output_tokens: Some(25),
-            reasoning_tokens: Some(5),
-            total_tokens: Some(130),
-            cached_input_tokens: Some(40),
-            cache_creation_input_tokens: None,
-        }),
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "智能体任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "image-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "test-execution-image-worker",
+            "execution_status": "completed",
+            "description": "生成图片",
+            "subagent": "image-worker",
+            "result": "生成完成：a.jpg",
+            "usage_segments": [{
+                "kind": "subagent_task",
+                "trigger": "image-worker",
+                "provider_call_count": 1,
+                "tool_call_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 25,
+                "reasoning_tokens": 5,
+                "total_tokens": 130,
+                "cached_input_tokens": 40
+            }]
+        }
+    })));
+
+    assert!(
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("delegate finished should ingest")
     );
-    segment.trigger = Some(String::from("output-1-100"));
-    service_state
-        .pending_subagent_usage_segments
-        .insert(parent_session_id, vec![segment]);
-    let state = Arc::new(Mutex::new(service_state));
+    assert!(
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("duplicate delegate finished should ingest without appending")
+    );
 
-    let first = take_pending_webui_subagent_usage_segments(&state, parent_session_id)
-        .expect("pending usage segments should drain");
-    let second = take_pending_webui_subagent_usage_segments(&state, parent_session_id)
-        .expect("pending usage segments should stay drained");
+    let guard = state.lock().expect("service state lock");
+    let messages = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
+        .expect("parent should contain display feedback rows");
+    let feedback_rows = messages
+        .iter()
+        .filter(|message| {
+            message.metadata.as_ref().is_some_and(|metadata| {
+                metadata
+                    .get("subagent_feedback_record")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(feedback_rows.len(), 2);
+    let feedback_row = feedback_rows
+        .iter()
+        .find(|message| message.record_kind == SessionMessageRecordKind::DisplayNote)
+        .expect("one feedback row should carry child-agent result metadata");
+    assert_eq!(feedback_row.body, "智能体返回处理结果");
+    assert_eq!(
+        feedback_row
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("host_result"))
+            .and_then(|host_result| host_result.get("payload"))
+            .and_then(|payload| payload.get("result"))
+            .and_then(serde_json::Value::as_str),
+        Some("生成完成：a.jpg")
+    );
+    let stats_row = feedback_rows
+        .iter()
+        .find(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("one feedback row should carry child-agent stats");
+    let stats: SessionTurnStats = serde_json::from_value(
+        stats_row
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("turn_stats"))
+            .expect("stats metadata should exist")
+            .clone(),
+    )
+    .expect("stats metadata should parse");
 
-    assert_eq!(first.len(), 1);
-    assert!(second.is_empty());
-
-    let conversation_state =
-        vulcan_agent_runtime::conversation_protocol::SessionConversationState {
-            messages: Vec::new(),
-            records: vec![
-                vulcan_agent_runtime::conversation_protocol::SessionConversationRecord {
-                    id: String::from("record-summary-1"),
-                    kind: SessionMessageKind::Assistant,
-                    record_kind: SessionMessageRecordKind::SummaryOutput,
-                    visible: true,
-                    title: String::new(),
-                    body: String::from("done"),
-                    metadata: None,
-                    created_at: String::from("1"),
-                },
-            ],
-            continuation: Default::default(),
-        };
-    let stats = latest_session_turn_stats_from_state(&conversation_state, Some(0), first)
-        .expect("explicit subagent usage should produce turn stats");
-
+    assert_eq!(stats.turn_kind, SessionTurnStatsKind::SubagentFeedback);
     assert_eq!(stats.provider_call_count, 1);
     assert_eq!(stats.input_tokens, 100);
     assert_eq!(stats.output_tokens, 25);
     assert_eq!(stats.reasoning_tokens, 5);
     assert_eq!(stats.total_tokens, 130);
     assert_eq!(stats.cached_input_tokens, Some(40));
-    assert_eq!(goal_token_delta_for_turn_stats(&stats), Some(90));
     assert_eq!(
         stats.usage_segments[0].kind,
         SessionTurnUsageSegmentKind::SubagentTask
     );
+    assert_eq!(stats.usage_groups.len(), 1);
+    assert_eq!(
+        stats.usage_groups[0].kind,
+        SessionTurnUsageGroupKind::Subagent
+    );
+    assert_eq!(stats.usage_groups[0].total_tokens, 130);
+    assert_eq!(stats.usage_groups[0].cached_input_tokens, Some(40));
+}
+
+/// Verifies active parent turns suppress child feedback display cards while preserving stats.
+/// 验证活动父回合会抑制智能体反馈显示卡片，同时保留统计。
+#[test]
+fn active_parent_turn_suppresses_subagent_feedback_display_card_and_preserves_stats() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
+        .expect("parent user turn should start");
+    let state = Arc::new(Mutex::new(service_state));
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "智能体任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "image-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "test-execution-image-worker-active",
+            "execution_status": "completed",
+            "description": "生成图片",
+            "subagent": "image-worker",
+            "result": "生成完成：a.jpg",
+            "usage_segments": [{
+                "kind": "subagent_task",
+                "trigger": "image-worker",
+                "provider_call_count": 1,
+                "tool_call_count": 0,
+                "input_tokens": 100,
+                "output_tokens": 25,
+                "reasoning_tokens": 5,
+                "total_tokens": 130,
+                "cached_input_tokens": 40
+            }]
+        }
+    })));
+
+    assert!(
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("delegate finished should ingest")
+    );
+
+    let guard = state.lock().expect("service state lock");
+    let messages = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
+        .expect("parent should contain feedback stats row");
+    let feedback_entry = messages
+        .iter()
+        .find(|message| message.record_kind == SessionMessageRecordKind::DisplayNote);
+    assert!(
+        feedback_entry.is_none(),
+        "active parent turns should consume feedback through wait/mailbox flow instead of inserting a display card"
+    );
+    let stats_row = messages
+        .iter()
+        .find(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("one feedback row should carry child-agent stats");
+    let stats: SessionTurnStats = serde_json::from_value(
+        stats_row
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("turn_stats"))
+            .expect("stats metadata should exist")
+            .clone(),
+    )
+    .expect("stats metadata should parse");
+
+    assert_eq!(stats.turn_kind, SessionTurnStatsKind::SubagentFeedback);
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.total_tokens, 130);
+    assert_eq!(stats.cached_input_tokens, Some(40));
+}
+
+/// Verifies wait_agent-owned feedback suppresses the parent feedback card while preserving child stats.
+/// 验证 wait_agent 接管的反馈会抑制父级反馈卡片，同时保留智能体统计。
+#[test]
+fn wait_agent_feedback_suppresses_parent_feedback_card_and_preserves_stats() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let second_task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    service_state
+        .parent_sessions_waiting_for_subagents
+        .insert(parent_session_id);
+    session_runtime_kernel_mut(&mut service_state, parent_session_id)
+        .register_wait_scope(
+            "wait-agent-active",
+            [
+                task_session_id.to_string(),
+                second_task_session_id.to_string(),
+            ],
+            current_unix_millis_u64(),
+        )
+        .expect("wait scope should register");
+    let state = Arc::new(Mutex::new(service_state));
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "智能体任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "wait-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "test-execution-wait-worker",
+            "execution_status": "completed",
+            "description": "等待反馈",
+            "subagent": "wait-worker",
+            "result": "wait 已拿到正文",
+            "usage_segments": [{
+                "kind": "subagent_task",
+                "trigger": "wait-worker",
+                "provider_call_count": 2,
+                "tool_call_count": 1,
+                "input_tokens": 200,
+                "output_tokens": 50,
+                "reasoning_tokens": 10,
+                "total_tokens": 260,
+                "cached_input_tokens": 80
+            }]
+        }
+    })));
+    let second_event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "第二个智能体任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "wait-worker-b",
+            (SUBAGENT_TASK_ID_KEY): second_task_session_id.to_string(),
+            "execution_id": "test-execution-wait-worker-b",
+            "execution_status": "completed",
+            "description": "等待反馈 B",
+            "subagent": "wait-worker-b",
+            "result": "wait 已拿到第二条正文",
+            "usage_segments": [{
+                "kind": "subagent_task",
+                "trigger": "wait-worker-b",
+                "provider_call_count": 3,
+                "tool_call_count": 0,
+                "input_tokens": 300,
+                "output_tokens": 75,
+                "reasoning_tokens": 15,
+                "total_tokens": 390,
+                "cached_input_tokens": 120
+            }]
+        }
+    })));
+
+    assert!(
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("delegate finished should ingest")
+    );
+    assert!(
+        ingest_webui_subagent_runtime_event(
+            &app,
+            &state,
+            &runtime,
+            parent_session_id,
+            &second_event,
+        )
+        .expect("second delegate finished should ingest")
+    );
+
+    let guard = state.lock().expect("service state lock");
+    let messages = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
+        .expect("parent should contain display feedback stats");
+    let feedback_rows = messages
+        .iter()
+        .filter(|message| {
+            message.metadata.as_ref().is_some_and(|metadata| {
+                metadata
+                    .get("subagent_feedback_record")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(feedback_rows.len(), 2);
+    assert!(
+        !feedback_rows
+            .iter()
+            .any(|message| message.record_kind == SessionMessageRecordKind::DisplayNote)
+    );
+    let parsed_stats = feedback_rows
+        .iter()
+        .filter(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+        .map(|message| {
+            serde_json::from_value::<SessionTurnStats>(
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("turn_stats"))
+                    .expect("stats metadata should exist")
+                    .clone(),
+            )
+            .expect("stats metadata should parse")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(parsed_stats.len(), 2);
+    assert!(
+        parsed_stats
+            .iter()
+            .all(|stats| stats.turn_kind == SessionTurnStatsKind::SubagentFeedback)
+    );
+    assert!(
+        parsed_stats
+            .iter()
+            .any(|stats| stats.provider_call_count == 2
+                && stats.total_tokens == 260
+                && stats.cached_input_tokens == Some(80))
+    );
+    assert!(
+        parsed_stats
+            .iter()
+            .any(|stats| stats.provider_call_count == 3
+                && stats.total_tokens == 390
+                && stats.cached_input_tokens == Some(120))
+    );
+}
+
+/// Verifies feedback consumed by a completed wait_agent still suppresses delayed parent feedback cards.
+/// 验证已完成 wait_agent 消费过的反馈仍会抑制迟到的父级反馈卡片。
+#[test]
+fn consumed_wait_agent_feedback_suppresses_delayed_parent_feedback_card() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    assert!(consume_webui_subagent_mailbox_input_for_execution(
+        &mut service_state,
+        parent_session_id,
+        task_session_id,
+        "delayed-wait-worker-run",
+    ));
+    let state = Arc::new(Mutex::new(service_state));
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "迟到的智能体任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "delayed-wait-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "delayed-wait-worker-run",
+            "execution_status": "completed",
+            "description": "迟到反馈",
+            "subagent": "delayed-wait-worker",
+            "result": "wait 已经展示过这段正文",
+            "usage_segments": [{
+                "kind": "subagent_task",
+                "trigger": "delayed-wait-worker",
+                "provider_call_count": 1,
+                "tool_call_count": 0,
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "reasoning_tokens": 1,
+                "total_tokens": 13,
+                "cached_input_tokens": 4
+            }]
+        }
+    })));
+
+    assert!(
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("delayed delegate finished should ingest")
+    );
+
+    let guard = state.lock().expect("service state lock");
+    let messages = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
+        .expect("parent should contain delayed feedback stats");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.record_kind == SessionMessageRecordKind::DisplayNote)
+    );
+    let stats_row = messages
+        .iter()
+        .find(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("delayed wait-owned feedback should still preserve stats");
+    let stats: SessionTurnStats = serde_json::from_value(
+        stats_row
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("turn_stats"))
+            .expect("stats metadata should exist")
+            .clone(),
+    )
+    .expect("stats metadata should parse");
+    assert_eq!(stats.total_tokens, 13);
+}
+
+/// Verifies feedback deduplication is scoped to one concrete child-agent execution.
+/// 验证反馈去重只作用于一次具体智能体执行。
+#[test]
+fn subagent_feedback_dedupes_by_execution_id_not_task_id_only() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let first_event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "智能体第一次任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "repeat-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "repeat-worker-run-1",
+            "execution_status": "completed",
+            "description": "重复智能体",
+            "subagent": "repeat-worker",
+            "result": "第一次完成",
+            "usage_segments": []
+        }
+    })));
+    let second_event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "智能体第二次任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "repeat-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "repeat-worker-run-2",
+            "execution_status": "completed",
+            "description": "重复智能体",
+            "subagent": "repeat-worker",
+            "result": "第二次完成",
+            "usage_segments": []
+        }
+    })));
+
+    assert!(
+        ingest_webui_subagent_runtime_event(
+            &app,
+            &state,
+            &runtime,
+            parent_session_id,
+            &first_event
+        )
+        .expect("first delegate finished should ingest")
+    );
+    assert!(
+        ingest_webui_subagent_runtime_event(
+            &app,
+            &state,
+            &runtime,
+            parent_session_id,
+            &first_event
+        )
+        .expect("duplicate delegate finished should ingest without appending")
+    );
+    assert!(
+        ingest_webui_subagent_runtime_event(
+            &app,
+            &state,
+            &runtime,
+            parent_session_id,
+            &second_event,
+        )
+        .expect("second execution should append independent feedback")
+    );
+
+    let guard = state.lock().expect("service state lock");
+    let messages = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
+        .expect("parent should contain both execution feedback rows");
+    let feedback_rows = messages
+        .iter()
+        .filter(|message| {
+            message.metadata.as_ref().is_some_and(|metadata| {
+                metadata
+                    .get("subagent_feedback_record")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(feedback_rows.len(), 4);
+    let feedback_results = feedback_rows
+        .iter()
+        .filter_map(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("host_result"))
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("result"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert!(feedback_results.contains(&"第一次完成"));
+    assert!(feedback_results.contains(&"第二次完成"));
+}
+
+/// Verifies malformed child-agent usage data does not append zero-token feedback stats.
+/// 验证格式错误的智能体用量数据不会追加 0-token 反馈统计。
+#[test]
+fn malformed_subagent_feedback_usage_segments_do_not_append_zero_stats() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        parent_session_id,
+    )));
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::DelegateFinished,
+        "智能体完成",
+        "智能体任务完成。",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "kind": SUBAGENT_TASK_KIND,
+        "payload": {
+            "task_id": "bad-usage-worker",
+            (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+            "execution_id": "test-execution-bad-usage-worker",
+            "execution_status": "completed",
+            "description": "返回坏统计",
+            "subagent": "bad-usage-worker",
+            "result": "完成但统计坏了",
+            "usage_segments": {
+                "kind": "subagent_task",
+                "input_tokens": 100
+            }
+        }
+    })));
+
+    let error =
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect_err("malformed usage segments must reject the feedback projection");
+
+    assert!(error.contains("failed to parse subagent feedback usage segments"));
+    let guard = state.lock().expect("service state lock");
+    let feedback_count = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
+        .map(|messages| {
+            messages
+                .iter()
+                .filter(|message| {
+                    message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata
+                            .get("subagent_feedback_record")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(feedback_count, 0);
 }
 
 /// Verifies multiple detached subagent completions render as one blank-line-separated mailbox prompt.

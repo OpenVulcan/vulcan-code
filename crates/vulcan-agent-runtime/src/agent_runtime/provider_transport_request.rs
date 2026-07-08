@@ -16,6 +16,18 @@ use vulcan_core::types::{
 };
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
+/// Provider transport turn-start mode selected by the launch layer.
+/// 启动层选择的 Provider 传输回合启动模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderTransportTurnStartMode {
+    /// The controller should append or reuse the user prompt before dispatch.
+    /// 控制器应在分发前追加或复用用户提示词。
+    UserPrompt,
+    /// The controller should run from provider-visible input already in the snapshot.
+    /// 控制器应从快照中已有的 Provider 可见输入启动。
+    SeededProviderInput,
+}
+
 /// Owned provider transport execution request used to route one prepared runtime turn into the correct provider-specific adapter.
 /// 用于把一份已准备好的运行时回合路由到正确 Provider 专用适配器的自有 Provider 传输执行请求。
 pub(crate) struct ProviderTransportExecutionRequest {
@@ -49,6 +61,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Exact outgoing prompt text for the current controller turn.
     /// 当前控制器回合的精确出站提示词文本。
     pub(crate) prompt: String,
+    /// Explicit turn-start mode for the host-controlled controller loop.
+    /// 宿主控制控制器循环的显式回合启动模式。
+    pub(crate) turn_start_mode: ProviderTransportTurnStartMode,
     /// Canonical conversation snapshot consumed by the host-owned controller loop.
     /// 供宿主自有控制器循环消费的规范会话快照。
     pub(crate) core_snapshot: CoreConversationSnapshot,
@@ -114,6 +129,7 @@ pub(crate) fn build_provider_transport_execution_request(
     execution_mode: &str,
     system_preamble: &str,
     prompt: &str,
+    turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
     temperature: Option<f64>,
     max_turns: usize,
@@ -143,6 +159,7 @@ pub(crate) fn build_provider_transport_execution_request(
         execution_mode: execution_mode.to_string(),
         system_preamble: system_preamble.to_string(),
         prompt: prompt.to_string(),
+        turn_start_mode,
         core_snapshot,
         temperature,
         max_turns,

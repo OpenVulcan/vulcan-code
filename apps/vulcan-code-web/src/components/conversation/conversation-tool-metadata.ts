@@ -16,6 +16,7 @@ const SUBAGENT_HOST_KIND_VALUES = [
   "subagent_control",
   "subagent_status",
   "subagent_wait",
+  "subagent_feedback",
 ] as const;
 
 // SUBAGENT_HOST_KINDS provides constant-time lookup for subagent host kinds.
@@ -102,8 +103,11 @@ export function turnStatsSummary(
       count: String(numberMetadata(stats.tool_call_count ?? stats.toolCallCount)),
     }),
   ];
+  const groupParts = turnStatsUsageGroupSummaries(stats, translate);
   const totalTokens = numberMetadata(stats.total_tokens ?? stats.totalTokens);
-  if (totalTokens > 0) {
+  if (groupParts.length > 0) {
+    parts.push(...groupParts);
+  } else if (totalTokens > 0) {
     parts.push(formatTurnStatsTranslation(translate, "conversation.stats.totalTokens", {
       count: String(totalTokens),
     }));
@@ -123,6 +127,67 @@ export function turnStatsSummary(
   return parts.join(" · ");
 }
 
+// turnStatsUsageGroupSummaries formats first-class regular/agent/compaction usage groups.
+// turnStatsUsageGroupSummaries 格式化一等常规、智能体与压缩用量分组。
+function turnStatsUsageGroupSummaries(
+  // Structured turn-stats object received from metadata.
+  // 从元数据中收到的结构化轮次统计对象。
+  stats: Record<string, unknown>,
+  // Translation helper.
+  // 翻译辅助函数。
+  translate: (key: TranslationKey) => string,
+): string[] {
+  const groupsValue = stats.usage_groups ?? stats.usageGroups;
+  if (!Array.isArray(groupsValue)) {
+    return [];
+  }
+  const summaries: string[] = [];
+  for (const group of groupsValue) {
+    if (!group || typeof group !== "object") {
+      continue;
+    }
+    const groupRecord = group as Record<string, unknown>;
+    const totalTokens = numberMetadata(groupRecord.total_tokens ?? groupRecord.totalTokens);
+    if (totalTokens <= 0) {
+      continue;
+    }
+    const key = turnStatsUsageGroupTranslationKey(groupRecord.kind);
+    if (!key) {
+      continue;
+    }
+    const displayKey = key === "conversation.stats.group.regular"
+      ? "conversation.stats.totalTokens"
+      : key;
+    summaries.push(formatTurnStatsTranslation(translate, displayKey, {
+      count: String(totalTokens),
+    }));
+  }
+  return summaries;
+}
+
+// turnStatsUsageGroupTranslationKey maps serialized usage group kinds to label keys.
+// turnStatsUsageGroupTranslationKey 将序列化用量分组类型映射为标签键。
+function turnStatsUsageGroupTranslationKey(
+  // Serialized group kind from the backend model.
+  // 后端模型中的序列化分组类型。
+  kind: unknown,
+): TranslationKey | null {
+  if (typeof kind !== "string") {
+    return null;
+  }
+  switch (kind.trim().toLowerCase()) {
+    case "regular":
+      return "conversation.stats.group.regular";
+    case "subagent":
+      return "conversation.stats.group.subagent";
+    case "context_compaction":
+    case "contextcompaction":
+      return "conversation.stats.group.contextCompaction";
+    default:
+      return null;
+  }
+}
+
 // isSubagentToolName returns whether one tool name belongs to the built-in subagent tool family.
 // isSubagentToolName 判断单个工具名是否属于内置子代理工具族。
 export function isSubagentToolName(toolName?: string | null): boolean {
@@ -133,7 +198,8 @@ export function isSubagentToolName(toolName?: string | null): boolean {
     || normalized === "wait_agent"
     || normalized === "list_agents"
     || normalized === "interrupt_agent"
-    || normalized === "close_agent";
+    || normalized === "close_agent"
+    || normalized === "subagent_feedback";
 }
 
 // subagentToolDisplayName extracts the visible child-agent name from tool metadata.
@@ -195,6 +261,12 @@ function defaultTurnStatsTranslation(key: TranslationKey): string {
       return "Cache hit {count}";
     case "conversation.stats.outputSpeed":
       return "{speed}/s";
+    case "conversation.stats.group.regular":
+      return "Regular {count} tokens";
+    case "conversation.stats.group.subagent":
+      return "Agent {count} tokens";
+    case "conversation.stats.group.contextCompaction":
+      return "Compaction {count} tokens";
     default:
       return key;
   }

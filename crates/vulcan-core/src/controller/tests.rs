@@ -429,6 +429,62 @@ fn append_agent_message_keeps_transcript_record_hidden() {
     assert!(snapshot.records[0].body.contains("review complete"));
 }
 
+/// Verifies a preseeded typed agent message is not duplicated as a plain user turn.
+/// 验证已预播种的类型化智能体消息不会被重复追加为普通用户回合。
+#[test]
+fn preseeded_agent_message_prompt_reuses_existing_tail() {
+    let mut controller =
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+
+    controller.append_agent_message(AgentMessageAppendRequest {
+        message_type: String::from("MESSAGE"),
+        task_name: String::from("worker-a"),
+        sender: String::from("parent:root"),
+        recipient: String::from("worker-a"),
+        payload: String::from("continue with this context"),
+        trigger_turn: true,
+        metadata: None,
+    });
+
+    let prompt = ConversationPayload::render_agent_message_text(
+        "MESSAGE",
+        "worker-a",
+        "parent:root",
+        "continue with this context",
+    );
+
+    assert!(!controller.should_append_user_turn(&prompt));
+}
+
+/// Verifies display-only records do not enter provider-visible history.
+/// 验证仅显示记录不会进入 Provider 可见历史。
+#[test]
+fn append_display_record_keeps_provider_history_unchanged() {
+    let mut controller =
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+
+    let record_id = controller
+        .append_display_record(DisplayRecordAppendRequest {
+            record_id: Some(String::from("display-agent-message-1")),
+            role: TranscriptRole::User,
+            title: String::from("智能体消息"),
+            body: String::from("请用中文重新输出结论。"),
+            metadata: Some(json!({ "display_note": true, "kind": "subagent_message" })),
+        })
+        .expect("display record should be appended");
+
+    let snapshot = controller.snapshot();
+    assert_eq!(record_id, "display-agent-message-1");
+    assert!(snapshot.messages.is_empty());
+    assert_eq!(snapshot.records.len(), 1);
+    assert!(matches!(
+        snapshot.records[0].record_kind,
+        TranscriptRecordKind::ProjectionOnly
+    ));
+    assert!(snapshot.records[0].visible);
+    assert_eq!(snapshot.records[0].body, "请用中文重新输出结论。");
+}
+
 mod interventions;
 mod loop_flow;
 mod streaming;

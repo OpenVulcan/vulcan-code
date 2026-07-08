@@ -483,7 +483,8 @@ mod tests {
             agent_id: String::from("main"),
             agent_name: String::from("Main Agent"),
             agent_kind: String::from("analysis"),
-            agent_system_prompt_override: None,
+            agent_prompt_snapshot: None,
+            subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("anthropic"),
                 provider_name: String::from("Anthropic"),
@@ -541,6 +542,8 @@ mod tests {
             provider_request_snapshot_json: None,
             provider_wire_request_json: None,
             context_budget: None,
+            context_compaction_policy: None,
+            context_budget_override: None,
             context_assembly: None,
             context_baseline: None,
             context_request_mode: Some(ContextRequestMode::Full {

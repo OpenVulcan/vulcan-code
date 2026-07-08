@@ -815,21 +815,8 @@ fn apply_request_tool_policy(
         request.allowed_tools.clone(),
         request.disabled_tools.clone(),
     );
-    snapshot.policy = policy;
-    match snapshot.policy.mode {
-        vulcan_session_core::CapabilityPolicyMode::All => {
-            snapshot.allowed_tools.clear();
-            snapshot.disabled_tools.clear();
-        }
-        vulcan_session_core::CapabilityPolicyMode::AllowOnly => {
-            snapshot.allowed_tools = snapshot.policy.selectors.clone();
-            snapshot.disabled_tools.clear();
-        }
-        vulcan_session_core::CapabilityPolicyMode::DenyOnly => {
-            snapshot.allowed_tools.clear();
-            snapshot.disabled_tools = snapshot.policy.selectors.clone();
-        }
-    }
+    vulcan_session_core::apply_tool_capability_policy(snapshot, policy);
+    vulcan_session_core::sanitize_child_agent_tool_exposure(snapshot);
     snapshot.allowed_ai_capabilities.clear();
     snapshot.disabled_ai_capabilities.clear();
 }
@@ -846,21 +833,7 @@ fn apply_request_prompt_skill_policy(
         request.enabled_prompt_skills.clone(),
         request.disabled_prompt_skills.clone(),
     );
-    snapshot.policy = policy;
-    match snapshot.policy.mode {
-        vulcan_session_core::CapabilityPolicyMode::All => {
-            snapshot.enabled.clear();
-            snapshot.disabled.clear();
-        }
-        vulcan_session_core::CapabilityPolicyMode::AllowOnly => {
-            snapshot.enabled = snapshot.policy.selectors.clone();
-            snapshot.disabled.clear();
-        }
-        vulcan_session_core::CapabilityPolicyMode::DenyOnly => {
-            snapshot.enabled.clear();
-            snapshot.disabled = snapshot.policy.selectors.clone();
-        }
-    }
+    vulcan_session_core::apply_prompt_skill_capability_policy(snapshot, policy);
 }
 
 /// Builds a capability policy from new request fields or legacy allow/deny lists.
@@ -871,91 +844,12 @@ fn request_capability_policy(
     legacy_allowed: Vec<String>,
     legacy_disabled: Vec<String>,
 ) -> vulcan_session_core::CapabilityPolicySnapshot {
-    if let Some(mode) = mode.and_then(parse_capability_policy_mode) {
-        return normalized_capability_policy_snapshot(
-            mode,
-            normalized_request_text_list(selectors),
-        );
-    }
-    let allowed = normalized_request_text_list(legacy_allowed);
-    let disabled = normalized_request_text_list(legacy_disabled);
-    if !allowed.is_empty() {
-        let disabled_set = normalized_request_text_set(&disabled);
-        return normalized_capability_policy_snapshot(
-            vulcan_session_core::CapabilityPolicyMode::AllowOnly,
-            allowed
-                .into_iter()
-                .filter(|selector| {
-                    !disabled_set.contains(&normalized_request_selector_key(selector))
-                })
-                .collect(),
-        );
-    }
-    if !disabled.is_empty() {
-        return normalized_capability_policy_snapshot(
-            vulcan_session_core::CapabilityPolicyMode::DenyOnly,
-            disabled,
-        );
-    }
-    vulcan_session_core::CapabilityPolicySnapshot::default()
-}
-
-/// Parses a request policy mode key.
-/// 解析请求中的策略模式键。
-fn parse_capability_policy_mode(mode: &str) -> Option<vulcan_session_core::CapabilityPolicyMode> {
-    match mode.trim() {
-        "all" => Some(vulcan_session_core::CapabilityPolicyMode::All),
-        "allow_only" | "allowOnly" => Some(vulcan_session_core::CapabilityPolicyMode::AllowOnly),
-        "deny_only" | "denyOnly" => Some(vulcan_session_core::CapabilityPolicyMode::DenyOnly),
-        _ => None,
-    }
-}
-
-/// Normalizes a capability policy from a mode and selector list.
-/// 根据模式与选择器列表规范化能力策略。
-fn normalized_capability_policy_snapshot(
-    mode: vulcan_session_core::CapabilityPolicyMode,
-    selectors: Vec<String>,
-) -> vulcan_session_core::CapabilityPolicySnapshot {
-    vulcan_session_core::CapabilityPolicySnapshot {
+    vulcan_session_core::capability_policy_from_mode_or_selector_lists(
         mode,
-        selectors: if mode == vulcan_session_core::CapabilityPolicyMode::All {
-            Vec::new()
-        } else {
-            normalized_request_text_list(selectors)
-        },
-    }
-}
-
-/// Normalizes one user-supplied string list by trimming empty entries and preserving first occurrence order.
-/// 通过裁剪空项并保留首次出现顺序来规范化用户提交的字符串列表。
-fn normalized_request_text_list(values: Vec<String>) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for value in values {
-        let Some(trimmed) = non_empty_request_text(&value) else {
-            continue;
-        };
-        if !normalized.iter().any(|existing| existing == &trimmed) {
-            normalized.push(trimmed);
-        }
-    }
-    normalized
-}
-
-/// Builds a normalized lookup set for request selector comparison.
-/// 构建用于请求选择器比较的规范化查找集合。
-fn normalized_request_text_set(values: &[String]) -> std::collections::BTreeSet<String> {
-    values
-        .iter()
-        .map(|value| normalized_request_selector_key(value))
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
-/// Builds the normalized comparison key for one request selector.
-/// 构建单个请求选择器的规范化比较键。
-fn normalized_request_selector_key(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+        selectors,
+        legacy_allowed,
+        legacy_disabled,
+    )
 }
 
 /// Normalizes localized definition metadata from a save request.
@@ -1418,6 +1312,35 @@ mod tests {
             "team.v1/reviewer"
         );
         assert_eq!(normalize_agent_file_name_input(".md"), ".md");
+    }
+
+    /// Verifies saved tool policies drop tools that child agents may never use.
+    /// 验证保存的工具策略会移除智能体绝不能使用的工具。
+    #[test]
+    fn apply_request_tool_policy_sanitizes_child_forbidden_tools() {
+        let request = SubagentDefinitionSaveRequest {
+            tool_policy_mode: Some(String::from("allow_only")),
+            tool_policy_tools: vec![
+                String::from("shell_command"),
+                String::from("todolist"),
+                String::from("ask"),
+            ],
+            ..SubagentDefinitionSaveRequest::default()
+        };
+        let mut snapshot = vulcan_session_core::ToolExposureSnapshot::default();
+
+        apply_request_tool_policy(&mut snapshot, &request);
+
+        assert_eq!(
+            snapshot.policy.mode,
+            vulcan_session_core::CapabilityPolicyMode::AllowOnly
+        );
+        assert_eq!(
+            snapshot.policy.selectors,
+            vec![String::from("shell_command")]
+        );
+        assert_eq!(snapshot.allowed_tools, vec![String::from("shell_command")]);
+        assert!(snapshot.disabled_tools.is_empty());
     }
 
     /// Verifies stale cleanup candidates keep source files but skip generated definitions.

@@ -11,6 +11,7 @@ use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport::{
     build_provider_transport_execution_request, execute_provider_transport_stream,
 };
+use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStartMode;
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::provider_transport_wire_capture::{
@@ -49,6 +50,7 @@ pub(crate) fn execute_provider_prompt_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
+    turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
@@ -62,6 +64,7 @@ pub(crate) fn execute_provider_prompt_stream(
         active_agent,
         system_preamble,
         prompt,
+        turn_start_mode,
         core_snapshot,
         task_runtime,
         token_budget_runtime,
@@ -80,6 +83,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
+    turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
@@ -92,6 +96,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         active_agent,
         system_preamble,
         prompt,
+        turn_start_mode,
         core_snapshot,
         task_runtime,
         token_budget_runtime,
@@ -110,6 +115,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
     active_agent: Option<&RuntimeAgentDefinition>,
     system_preamble: &str,
     prompt: &str,
+    turn_start_mode: ProviderTransportTurnStartMode,
     core_snapshot: CoreConversationSnapshot,
     task_runtime: Arc<TaskRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
@@ -162,6 +168,8 @@ fn execute_provider_prompt_stream_with_capture_mode(
             preparation.model_blueprint.api_family(),
             preparation.model_blueprint.capabilities.clone(),
             preparation.model_blueprint.reasoning.clone(),
+            preparation.context_compaction_policy,
+            preparation.context_budget_override,
             token_budget_runtime,
         )
     });
@@ -190,6 +198,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
         &preparation.execution_mode,
         system_preamble,
         prompt,
+        turn_start_mode,
         core_snapshot,
         temperature,
         max_turns,

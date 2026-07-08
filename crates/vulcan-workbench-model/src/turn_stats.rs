@@ -14,6 +14,9 @@ pub enum SessionTurnStatsKind {
     /// Host-owned context compaction turn.
     /// 宿主拥有的上下文压缩轮次。
     ContextCompaction,
+    /// Display-only subagent feedback accounting row.
+    /// 仅用于显示的智能体反馈统计行。
+    SubagentFeedback,
 }
 
 impl Default for SessionTurnStatsKind {
@@ -38,6 +41,44 @@ pub enum SessionTurnUsageSegmentKind {
     /// Context-compaction request executed before or as the current turn.
     /// 当前轮次之前或内部执行的上下文压缩请求。
     ContextCompaction,
+}
+
+/// Aggregated owner group for one or more usage segments.
+/// 一个或多个用量分段归并后的聚合归属分组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTurnUsageGroupKind {
+    /// Normal assistant work for the current conversation.
+    /// 当前会话中的常规助手工作。
+    Regular,
+    /// Detached child-agent work reported back to the parent conversation.
+    /// 回流到父会话的分离智能体工作。
+    Subagent,
+    /// Context compaction work associated with the turn.
+    /// 与当前轮次关联的上下文压缩工作。
+    ContextCompaction,
+}
+
+impl SessionTurnUsageGroupKind {
+    /// Maps one detailed usage segment kind to its stable aggregate group.
+    /// 将单个明细用量分段类型映射到稳定聚合分组。
+    pub const fn from_segment_kind(kind: SessionTurnUsageSegmentKind) -> Self {
+        match kind {
+            SessionTurnUsageSegmentKind::AssistantResponse => Self::Regular,
+            SessionTurnUsageSegmentKind::SubagentTask => Self::Subagent,
+            SessionTurnUsageSegmentKind::ContextCompaction => Self::ContextCompaction,
+        }
+    }
+
+    /// Returns the human-readable label shown in transcript details.
+    /// 返回转录详情中展示的人类可读标签。
+    pub const fn display_label(self) -> &'static str {
+        match self {
+            Self::Regular => "常规",
+            Self::Subagent => "智能体",
+            Self::ContextCompaction => "压缩",
+        }
+    }
 }
 
 /// Provider usage segment retained for per-turn accounting breakdowns.
@@ -67,6 +108,10 @@ pub struct SessionTurnUsageSegment {
     /// 该分段代表的 Provider 调用次数。
     #[serde(default)]
     pub provider_call_count: usize,
+    /// Tool call count represented by this segment.
+    /// 该分段代表的工具调用次数。
+    #[serde(default)]
+    pub tool_call_count: usize,
     /// Provider-reported input token count.
     /// Provider 报告的输入 Token 数。
     #[serde(default)]
@@ -118,6 +163,7 @@ impl SessionTurnUsageSegment {
             provider_id: None,
             model_id: None,
             provider_call_count,
+            tool_call_count: 0,
             input_tokens,
             output_tokens,
             reasoning_tokens,
@@ -125,6 +171,102 @@ impl SessionTurnUsageSegment {
             cached_input_tokens: usage.and_then(|usage| usage.cached_input_tokens),
             cache_creation_input_tokens: usage.and_then(|usage| usage.cache_creation_input_tokens),
         }
+    }
+}
+
+/// Aggregated usage group retained for first-class regular versus child-agent display.
+/// 为一等常规与智能体展示保留的聚合用量分组。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionTurnUsageGroup {
+    /// Stable group kind used by UI and accounting surfaces.
+    /// 供 UI 与计费统计表面使用的稳定分组类型。
+    pub kind: SessionTurnUsageGroupKind,
+    /// Provider call count represented by this group.
+    /// 该分组代表的 Provider 调用次数。
+    #[serde(default)]
+    pub provider_call_count: usize,
+    /// Tool call count represented by this group.
+    /// 该分组代表的工具调用次数。
+    #[serde(default)]
+    pub tool_call_count: usize,
+    /// Provider-reported input token count for this group.
+    /// 该分组内 Provider 报告的输入 Token 数。
+    #[serde(default)]
+    pub input_tokens: usize,
+    /// Provider-reported output token count for this group.
+    /// 该分组内 Provider 报告的输出 Token 数。
+    #[serde(default)]
+    pub output_tokens: usize,
+    /// Provider-reported reasoning token count for this group.
+    /// 该分组内 Provider 报告的推理 Token 数。
+    #[serde(default)]
+    pub reasoning_tokens: usize,
+    /// Provider-reported total token count for this group.
+    /// 该分组内 Provider 报告的总 Token 数。
+    #[serde(default)]
+    pub total_tokens: usize,
+    /// Optional provider-reported cache-hit input token count for this group.
+    /// 该分组内 Provider 报告的可选缓存命中输入 Token 数。
+    #[serde(default)]
+    pub cached_input_tokens: Option<usize>,
+    /// Optional provider-reported cache-creation input token count for this group.
+    /// 该分组内 Provider 报告的可选缓存写入输入 Token 数。
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<usize>,
+}
+
+impl SessionTurnUsageGroup {
+    /// Builds an empty aggregate group for one group kind.
+    /// 为单个分组类型构建空聚合分组。
+    pub fn empty(kind: SessionTurnUsageGroupKind) -> Self {
+        Self {
+            kind,
+            provider_call_count: 0,
+            tool_call_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            reasoning_tokens: 0,
+            total_tokens: 0,
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+        }
+    }
+
+    /// Merges one usage segment into this group.
+    /// 将单个用量分段合并到当前分组。
+    pub fn merge_segment(&mut self, segment: &SessionTurnUsageSegment) {
+        self.provider_call_count = self
+            .provider_call_count
+            .saturating_add(segment.provider_call_count);
+        self.tool_call_count = self.tool_call_count.saturating_add(segment.tool_call_count);
+        self.input_tokens = self.input_tokens.saturating_add(segment.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(segment.output_tokens);
+        self.reasoning_tokens = self
+            .reasoning_tokens
+            .saturating_add(segment.reasoning_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(segment.total_tokens);
+        if let Some(cached_input_tokens) = segment.cached_input_tokens {
+            let accumulated = self.cached_input_tokens.unwrap_or(0);
+            self.cached_input_tokens = Some(accumulated.saturating_add(cached_input_tokens));
+        }
+        if let Some(cache_creation_input_tokens) = segment.cache_creation_input_tokens {
+            let accumulated = self.cache_creation_input_tokens.unwrap_or(0);
+            self.cache_creation_input_tokens =
+                Some(accumulated.saturating_add(cache_creation_input_tokens));
+        }
+    }
+
+    /// Returns whether the group contains any visible accounting data.
+    /// 返回该分组是否包含任何可展示统计数据。
+    pub fn has_accounting(&self) -> bool {
+        self.provider_call_count > 0
+            || self.tool_call_count > 0
+            || self.input_tokens > 0
+            || self.output_tokens > 0
+            || self.reasoning_tokens > 0
+            || self.total_tokens > 0
+            || self.cached_input_tokens.is_some()
+            || self.cache_creation_input_tokens.is_some()
     }
 }
 
@@ -189,6 +331,10 @@ pub struct SessionTurnStats {
     /// 组成聚合字段的 Provider 用量分段明细。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usage_segments: Vec<SessionTurnUsageSegment>,
+    /// First-class usage groups derived from the detailed usage segments.
+    /// 从明细用量分段派生出的一等用量分组。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_groups: Vec<SessionTurnUsageGroup>,
     /// Number of provider calls aggregated inside the whole turn.
     /// 在整个轮次内聚合得到的 Provider 调用次数。
     #[serde(default)]
@@ -232,6 +378,56 @@ pub struct SessionTurnStats {
 }
 
 impl SessionTurnStats {
+    /// Merges one usage segment into aggregate turn statistics and first-class usage groups.
+    /// 将单个用量分段合并到聚合轮次统计与一等用量分组。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `segment` is one provider, tool, compaction, or child-agent usage segment.
+    /// `segment` 是单个 Provider、工具、压缩或智能体用量分段。
+    pub fn merge_usage_segment(&mut self, segment: &SessionTurnUsageSegment) {
+        self.provider_call_count = self
+            .provider_call_count
+            .saturating_add(segment.provider_call_count);
+        self.tool_call_count = self.tool_call_count.saturating_add(segment.tool_call_count);
+        self.input_tokens = self.input_tokens.saturating_add(segment.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(segment.output_tokens);
+        self.reasoning_tokens = self
+            .reasoning_tokens
+            .saturating_add(segment.reasoning_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(segment.total_tokens);
+        if let Some(cached_input_tokens) = segment.cached_input_tokens {
+            let accumulated = self.cached_input_tokens.unwrap_or(0);
+            self.cached_input_tokens = Some(accumulated.saturating_add(cached_input_tokens));
+        }
+        if let Some(cache_creation_input_tokens) = segment.cache_creation_input_tokens {
+            let accumulated = self.cache_creation_input_tokens.unwrap_or(0);
+            self.cache_creation_input_tokens =
+                Some(accumulated.saturating_add(cache_creation_input_tokens));
+        }
+        self.merge_usage_segment_group(segment);
+    }
+
+    /// Merges one usage segment into the first-class usage groups only.
+    /// 只将单个用量分段合并到一等用量分组。
+    pub fn merge_usage_segment_group(&mut self, segment: &SessionTurnUsageSegment) {
+        let group_kind = SessionTurnUsageGroupKind::from_segment_kind(segment.kind);
+        let group_index = self
+            .usage_groups
+            .iter()
+            .position(|group| group.kind == group_kind);
+        match group_index {
+            Some(index) => self.usage_groups[index].merge_segment(segment),
+            None => {
+                let mut group = SessionTurnUsageGroup::empty(group_kind);
+                group.merge_segment(segment);
+                self.usage_groups.push(group);
+            }
+        }
+        self.usage_groups
+            .retain(SessionTurnUsageGroup::has_accounting);
+    }
+
     /// Returns a compact one-line summary used by transcript chips and lightweight projections.
     /// 返回供转录统计标签与轻量投影使用的紧凑单行摘要。
     pub fn summary_line(&self) -> String {
@@ -252,6 +448,14 @@ impl SessionTurnStats {
             && speed > 0.0
         {
             parts.push(format!("{speed:.1}/s"));
+        }
+        if let Some(subagent_group) = self
+            .usage_groups
+            .iter()
+            .find(|group| group.kind == SessionTurnUsageGroupKind::Subagent)
+            && subagent_group.total_tokens > 0
+        {
+            parts.push(format!("智能体 {}", subagent_group.total_tokens));
         }
         parts.join(" · ")
     }
@@ -282,6 +486,35 @@ impl SessionTurnStats {
         if let Some(cache_creation_input_tokens) = self.cache_creation_input_tokens {
             lines.push(format!("缓存写入 Tokens：{cache_creation_input_tokens}"));
         }
+        if !self.usage_groups.is_empty() {
+            lines.push(String::from("用量分组："));
+            for group in &self.usage_groups {
+                lines.push(format!(
+                    "{}：Provider {}，工具 {}，输入 {}，输出 {}，思考 {}，总 {}",
+                    group.kind.display_label(),
+                    group.provider_call_count,
+                    group.tool_call_count,
+                    group.input_tokens,
+                    group.output_tokens,
+                    group.reasoning_tokens,
+                    group.total_tokens
+                ));
+                if let Some(cached_input_tokens) = group.cached_input_tokens {
+                    lines.push(format!(
+                        "{}缓存命中 Tokens：{}",
+                        group.kind.display_label(),
+                        cached_input_tokens
+                    ));
+                }
+                if let Some(cache_creation_input_tokens) = group.cache_creation_input_tokens {
+                    lines.push(format!(
+                        "{}缓存写入 Tokens：{}",
+                        group.kind.display_label(),
+                        cache_creation_input_tokens
+                    ));
+                }
+            }
+        }
         lines.join("\n")
     }
 }
@@ -310,7 +543,59 @@ mod tests {
 
         assert_eq!(stats.turn_kind, SessionTurnStatsKind::UserTurn);
         assert!(stats.usage_segments.is_empty());
+        assert!(stats.usage_groups.is_empty());
         assert_eq!(stats.provider_call_count, 1);
         assert_eq!(stats.total_tokens, 14);
+    }
+
+    /// Verifies usage segments are grouped as regular and child-agent accounting.
+    /// 验证用量分段会被分组成常规与智能体统计。
+    #[test]
+    fn session_turn_stats_groups_usage_segments_by_owner() {
+        let mut stats = SessionTurnStats::default();
+        stats.merge_usage_segment_group(&SessionTurnUsageSegment {
+            kind: SessionTurnUsageSegmentKind::AssistantResponse,
+            trigger: None,
+            execution_profile: None,
+            provider_id: None,
+            model_id: None,
+            provider_call_count: 1,
+            tool_call_count: 0,
+            input_tokens: 10,
+            output_tokens: 3,
+            reasoning_tokens: 0,
+            total_tokens: 13,
+            cached_input_tokens: Some(4),
+            cache_creation_input_tokens: None,
+        });
+        stats.merge_usage_segment_group(&SessionTurnUsageSegment {
+            kind: SessionTurnUsageSegmentKind::SubagentTask,
+            trigger: None,
+            execution_profile: None,
+            provider_id: None,
+            model_id: None,
+            provider_call_count: 2,
+            tool_call_count: 1,
+            input_tokens: 20,
+            output_tokens: 5,
+            reasoning_tokens: 1,
+            total_tokens: 26,
+            cached_input_tokens: Some(6),
+            cache_creation_input_tokens: None,
+        });
+
+        assert_eq!(stats.usage_groups.len(), 2);
+        assert_eq!(
+            stats.usage_groups[0].kind,
+            SessionTurnUsageGroupKind::Regular
+        );
+        assert_eq!(stats.usage_groups[0].total_tokens, 13);
+        assert_eq!(
+            stats.usage_groups[1].kind,
+            SessionTurnUsageGroupKind::Subagent
+        );
+        assert_eq!(stats.usage_groups[1].provider_call_count, 2);
+        assert_eq!(stats.usage_groups[1].total_tokens, 26);
+        assert_eq!(stats.usage_groups[1].cached_input_tokens, Some(6));
     }
 }

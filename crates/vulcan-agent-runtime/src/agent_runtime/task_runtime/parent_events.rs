@@ -228,7 +228,8 @@ pub(super) fn build_task_host_payload(
     usage_segments: &[SessionTurnUsageSegment],
     updated_at: String,
 ) -> Value {
-    let task_status = task_session_status_from_execution_status_text(execution_status);
+    let task_status = task_session_status_from_execution_status_text(execution_status)
+        .expect("task host payload execution status must be canonical");
     let timestamp_ms = updated_at
         .parse::<u64>()
         .unwrap_or_else(|_| current_unix_millis_u64());
@@ -259,10 +260,15 @@ pub(super) fn build_task_host_payload(
             String::from("final_assistant_message_id"),
             serde_json::json!(final_assistant_message_id),
         );
+        payload.insert(
+            String::from("usage_segments"),
+            serde_json::json!(usage_segments),
+        );
     }
     json!({
         "task_id": invocation.public_task_id.clone(),
         (SUBAGENT_TASK_ID_KEY): invocation.task_id.to_string(),
+        "execution_id": invocation.execution_id.clone(),
         "display_title": invocation.display_title.clone(),
         "status": task_invocation_status_text(invocation.is_resumed),
         "execution_status": execution_status,

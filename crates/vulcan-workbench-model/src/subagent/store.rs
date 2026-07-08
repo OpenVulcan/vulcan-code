@@ -12,25 +12,25 @@ use super::*;
 ///
 /// # Returns
 /// 返回值
-/// The direct parent reference understood by `TaskSessionStore`, or `None` if metadata lookup fails unexpectedly.
-/// 返回 `TaskSessionStore` 能理解的直接父级引用；若元数据读取异常则返回 `None`。
+/// The direct parent reference understood by `TaskSessionStore`.
+/// 返回 `TaskSessionStore` 能理解的直接父级引用。
 pub fn subagent_parent_ref_from_task_session_store<S>(
     store: &S,
     parent_session_id: SessionId,
-) -> Option<ParentSessionRef>
+) -> Result<ParentSessionRef, SessionStoreError>
 where
     S: TaskSessionStore + ?Sized,
 {
     let parent_node_id = SessionNodeId::from(parent_session_id);
     match store.load_task_session(parent_node_id) {
-        Ok(Some(metadata)) => Some(ParentSessionRef::TaskSession {
+        Ok(Some(metadata)) => Ok(ParentSessionRef::TaskSession {
             root_session_id: metadata.root_session_id,
             parent_task_session_id: parent_node_id,
         }),
-        Ok(None) => Some(ParentSessionRef::MainSession {
+        Ok(None) => Ok(ParentSessionRef::MainSession {
             root_session_id: parent_node_id,
         }),
-        Err(_) => None,
+        Err(error) => Err(error),
     }
 }
 
@@ -51,10 +51,12 @@ where
 pub fn subagent_task_panel_state_detail_from_segmented_task_session_store(
     store: &SegmentedTaskSessionStore,
     task_id: SessionNodeId,
-) -> Option<SubagentTaskPanelState> {
-    let metadata = store.load_task_session(task_id).ok().flatten()?;
-    let context = store.load_context(task_id).ok().flatten();
-    let latest_payload = store.load_latest_event_payload(task_id).ok().flatten();
+) -> Result<Option<SubagentTaskPanelState>, SessionStoreError> {
+    let Some(metadata) = store.load_task_session(task_id)? else {
+        return Ok(None);
+    };
+    let context = store.load_context(task_id)?;
+    let latest_payload = store.load_latest_event_payload(task_id)?;
     subagent_task_panel_state_from_task_session(
         &metadata,
         context.as_ref(),

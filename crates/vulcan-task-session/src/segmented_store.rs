@@ -34,6 +34,7 @@ use records::*;
 
 const SEGMENTED_TASK_DIR: &str = "task";
 const SEGMENTED_METADATA_FILE: &str = "metadata.json";
+const SEGMENTED_TASK_METADATA_FILE: &str = "task_metadata.json";
 const SEGMENTED_STATE_FILE: &str = "state.json";
 const DEFAULT_SEGMENT_MAX_LINES: u64 = 3000;
 const DEFAULT_SEGMENT_MAX_BYTES: u64 = 8 * 1024 * 1024;

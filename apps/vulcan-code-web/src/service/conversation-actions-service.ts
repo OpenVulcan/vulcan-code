@@ -69,13 +69,51 @@ export async function saveSessionAiCapabilityConfiguration(
   });
 }
 
+// StopConversationRunMode selects how the backend handles live child agents.
+// StopConversationRunMode 选择后端如何处理仍在运行的智能体。
+export type StopConversationRunMode = "ask_if_running_subagents" | "main_only" | "main_and_subagents";
+
+// StopConversationRunAgentSummary describes one running child agent reported by the backend.
+// StopConversationRunAgentSummary 描述后端报告的一条运行中智能体。
+export interface StopConversationRunAgentSummary {
+  // Direct parent conversation id for this child agent.
+  // 该智能体的直接父会话标识。
+  parent_conversation_id: string;
+  // Stable child task session id.
+  // 稳定的子任务会话标识。
+  task_id: string;
+  // Human-facing child agent label.
+  // 面向用户的智能体标签。
+  label: string;
+}
+
+// StopConversationRunResponse is the tagged response for a stop request.
+// StopConversationRunResponse 是停止请求的带标记响应。
+export type StopConversationRunResponse =
+  | {
+    // The conversation stop completed.
+    // 会话停止已完成。
+    status: "stopped";
+    // Full rebuilt workbench snapshot.
+    // 完整重建后的工作台快照。
+    workbench: WorkbenchSnapshot;
+  }
+  | {
+    // The backend found running agents and needs user confirmation.
+    // 后端发现运行中智能体，需要用户确认。
+    status: "needs_confirmation";
+    // Running child agents that need a stop decision.
+    // 需要停止决策的运行中智能体。
+    running_subagents: StopConversationRunAgentSummary[];
+  };
+
 // stopConversationRun stops the selected backend conversation run.
 // stopConversationRun 停止当前选中的后端会话运行。
-export async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
+export async function stopConversationRun(mode: StopConversationRunMode): Promise<StopConversationRunResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_stop_conversation_run");
+  return serviceClient.request<StopConversationRunResponse>("service_stop_conversation_run", { mode });
 }
 
 // stopCommandSession force-stops one live backend command session.
@@ -283,7 +321,6 @@ export async function submitUserPromptEdit(request: {
 export async function forkConversation(request: {
   conversationId: string;
   title: string;
-  beforeMessageId?: string | null;
 }): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;

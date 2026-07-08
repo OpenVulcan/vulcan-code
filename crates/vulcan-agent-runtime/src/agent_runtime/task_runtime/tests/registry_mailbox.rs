@@ -120,6 +120,7 @@ fn task_runtime_publishes_subagent_mailbox_events() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -146,11 +147,24 @@ fn task_runtime_publishes_subagent_mailbox_events() {
         execution_status: TaskExecutionStatus::Running,
         usage_segments: Vec::new(),
     };
+    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(120),
+            output_tokens: Some(30),
+            reasoning_tokens: Some(10),
+            total_tokens: Some(160),
+            cached_input_tokens: Some(40),
+            cache_creation_input_tokens: None,
+        }),
+    );
     let completed_outcome = TaskExecutionOutcome {
         final_output_text: String::from("review complete"),
         execution_status: TaskExecutionStatus::Completed,
         provider_turns_executed: 1,
         final_assistant_message_id: Some(String::from("assistant-1")),
+        usage_segments: vec![usage_segment],
         ..running_outcome.clone()
     };
 
@@ -174,8 +188,14 @@ fn task_runtime_publishes_subagent_mailbox_events() {
     assert_eq!(events[0].kind, SubagentMailboxEventKind::Completed);
     assert_eq!(events[0].child_thread_id, SessionNodeId::from(task_id));
     assert_eq!(events[0].payload["agent_kind"], "parent_clone");
+    assert_eq!(events[0].payload["execution_id"], "test-execution");
     assert!(events[0].payload.get("agent_profile").is_none());
     assert_eq!(events[0].payload["result_text"], "review complete");
+    assert_eq!(events[0].payload["usage_segments"][0]["input_tokens"], 120);
+    assert_eq!(
+        events[0].payload["usage_segments"][0]["cached_input_tokens"],
+        40
+    );
 }
 
 /// Verifies expert profile invocations are reported as agent-profile subagents.
@@ -191,6 +211,7 @@ fn task_runtime_reports_expert_profile_mailbox_kind() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -240,6 +261,7 @@ fn task_runtime_mirrors_lifecycle_into_subagent_registry() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -320,6 +342,7 @@ fn task_runtime_mirrors_expert_profile_into_subagent_registry() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -376,6 +399,7 @@ fn task_runtime_mirrors_custom_prompt_into_subagent_registry() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("custom-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -428,6 +452,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -460,6 +485,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         current_session_id: task_id,
         root_session_id,
         task_id: nested_task_id,
+        execution_id: String::from("test-execution-nested"),
         public_task_id: String::from("nested-check"),
         prompt: String::from("nested review"),
         description: Some(String::from("Nested review")),
@@ -602,6 +628,7 @@ async fn list_agents_keeps_completed_registry_entries_visible() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -663,6 +690,7 @@ async fn list_agents_does_not_consume_pending_mailbox_updates() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -801,8 +829,10 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         inboxes.insert(
             parent_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                delivery_id: String::from("test-delivery-parent"),
                 author_session_id: root_session_id,
                 target_task_id: parent_task_id,
+                target_agent_id: String::from("parent-review"),
                 content: String::from("queued parent work"),
                 created_at_ms: current_unix_millis_u64(),
             }]),
@@ -810,8 +840,10 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         inboxes.insert(
             child_task_id,
             VecDeque::from([QueuedInterAgentMessage {
+                delivery_id: String::from("test-delivery-child"),
                 author_session_id: parent_task_id,
                 target_task_id: child_task_id,
+                target_agent_id: String::from("child-review"),
                 content: String::from("queued child work"),
                 created_at_ms: current_unix_millis_u64(),
             }]),
@@ -891,6 +923,7 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         current_session_id: root_session_id,
         root_session_id,
         task_id: parent_task_id,
+        execution_id: String::from("test-execution-late"),
         public_task_id: String::from("parent-review"),
         prompt: String::from("late completed work"),
         description: Some(String::from("Parent review")),
@@ -963,6 +996,7 @@ async fn interrupt_agent_reports_completed_status_for_known_completed_agent() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -1055,7 +1089,7 @@ async fn interrupt_agent_rejects_root_self_and_unknown_targets() {
 /// Verifies wait_agent returns an activity acknowledgement instead of child output.
 /// 验证 wait_agent 返回活动确认而不是子代理输出。
 #[tokio::test]
-async fn wait_agent_returns_activity_acknowledgement_without_child_output() {
+async fn wait_agent_returns_consumed_child_feedback() {
     let task_runtime = TaskRuntime::new();
     let root_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
@@ -1064,6 +1098,7 @@ async fn wait_agent_returns_activity_acknowledgement_without_child_output() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -1094,18 +1129,31 @@ async fn wait_agent_returns_activity_acknowledgement_without_child_output() {
         .expect("task outcome should store");
 
     let result = task_runtime
-        .invoke_wait_agent(root_session_id, json!({}))
+        .invoke_wait_agent(root_session_id, json!({ "target": "agent-review" }))
         .await
         .expect("wait_agent should succeed");
 
-    assert_eq!(result.model_output["message"], "Wait completed.");
+    assert_eq!(
+        result.model_output["message"],
+        "Subagent terminal result received."
+    );
+    assert_eq!(result.model_output["activity_status"], "terminal_update");
     assert_eq!(result.model_output["timed_out"], false);
-    assert!(result.model_output.get("agents").is_none());
-    assert!(!result.model_output.to_string().contains("review complete"));
+    assert_eq!(result.model_output["pending_event_count"], 1);
+    assert_eq!(result.model_output["terminal_event_count"], 1);
+    assert_eq!(
+        result.model_output["agents"][0]["execution_id"],
+        "test-execution"
+    );
+    assert_eq!(
+        result.model_output["agents"][0]["result"],
+        "review complete"
+    );
+    assert!(result.model_output.to_string().contains("review complete"));
 }
 
-/// Verifies wait_agent blocks until a terminal parent-mailbox event arrives.
-/// 验证 wait_agent 会阻塞到父级 mailbox 收到终态事件为止。
+/// Verifies wait_agent blocks until a terminal parent-mailbox event arrives and consumes the internal wake event.
+/// 验证 wait_agent 会阻塞到父级 mailbox 收到终态事件，并消费内部唤醒事件。
 #[tokio::test]
 async fn wait_agent_wakes_when_terminal_mailbox_event_arrives() {
     let task_runtime = Arc::new(TaskRuntime::new());
@@ -1116,6 +1164,7 @@ async fn wait_agent_wakes_when_terminal_mailbox_event_arrives() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -1145,6 +1194,20 @@ async fn wait_agent_wakes_when_terminal_mailbox_event_arrives() {
     let notifier_invocation = invocation.clone();
     let notifier_outcome = outcome.clone();
 
+    task_runtime
+        .store_running_task_outcome_in_memory(
+            root_session_id,
+            &invocation,
+            &TaskExecutionOutcome {
+                execution_status: TaskExecutionStatus::Running,
+                final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+                provider_turns_executed: 0,
+                final_assistant_message_id: None,
+                ..outcome.clone()
+            },
+        )
+        .expect("running task should register before waiting");
+
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(25)).await;
         notifier_runtime
@@ -1157,22 +1220,156 @@ async fn wait_agent_wakes_when_terminal_mailbox_event_arrives() {
         .await
         .expect("wait_agent should wake on mailbox");
 
-    assert_eq!(result.model_output["message"], "Wait completed.");
+    assert_eq!(
+        result.model_output["message"],
+        "Subagent terminal result received."
+    );
+    assert_eq!(result.model_output["activity_status"], "terminal_update");
     assert_eq!(result.model_output["timed_out"], false);
-    assert!(!result.model_output.to_string().contains("review complete"));
+    assert_eq!(result.model_output["pending_event_count"], 1);
+    assert_eq!(result.model_output["terminal_event_count"], 1);
+    assert_eq!(
+        result.model_output["agents"][0]["execution_id"],
+        "test-execution"
+    );
+    assert_eq!(
+        result.model_output["agents"][0]["result"],
+        "review complete"
+    );
+    assert!(result.model_output.to_string().contains("review complete"));
 
     let events = task_runtime
         .take_subagent_events_for_parent(SessionNodeId::from(root_session_id))
-        .expect("mailbox should remain readable after wait");
+        .expect("mailbox should be readable after wait");
     assert_eq!(
         events.len(),
-        1,
-        "wait_agent must not consume the child mailbox event"
+        0,
+        "wait_agent must consume its internal wake event so stale events do not wake future waits"
     );
-    assert!(
-        events[0].payload.to_string().contains("review complete"),
-        "mailbox event content must remain available for parent input delivery"
+}
+
+/// Verifies targeted wait_agent does not consume unrelated stale child-agent feedback.
+/// 验证定向 wait_agent 不会消费无关的旧智能体反馈。
+#[tokio::test]
+async fn targeted_wait_agent_retains_unrelated_stale_feedback() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let stale_task_id = Uuid::new_v4();
+    let fresh_task_id = Uuid::new_v4();
+    let controller_config = build_test_controller_config("Base prompt");
+    let stale_invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id: stale_task_id,
+        execution_id: String::from("test-execution-stale"),
+        public_task_id: String::from("stale-agent"),
+        prompt: String::from("stale work"),
+        description: Some(String::from("Stale work")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("stale work"),
+        display_title: String::from("Stale work"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let stale_outcome = TaskExecutionOutcome {
+        task_id: stale_task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(
+            &controller_config,
+            &stale_invocation.invocation_config,
+        ),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-stale")),
+        final_output_text: String::from("STALE_DONE"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &stale_invocation, &stale_outcome)
+        .expect("stale completed task should store");
+
+    let fresh_invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id: fresh_task_id,
+        execution_id: String::from("test-execution-fresh"),
+        public_task_id: String::from("fresh-agent"),
+        prompt: String::from("fresh work"),
+        description: Some(String::from("Fresh work")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("fresh work"),
+        display_title: String::from("Fresh work"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let fresh_completed_outcome = TaskExecutionOutcome {
+        task_id: fresh_task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(
+            &controller_config,
+            &fresh_invocation.invocation_config,
+        ),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-fresh")),
+        final_output_text: String::from("FRESH_DONE"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_running_task_outcome_in_memory(
+            root_session_id,
+            &fresh_invocation,
+            &TaskExecutionOutcome {
+                execution_status: TaskExecutionStatus::Running,
+                final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+                provider_turns_executed: 0,
+                final_assistant_message_id: None,
+                ..fresh_completed_outcome.clone()
+            },
+        )
+        .expect("fresh running task should store before waiting");
+
+    let notifier_runtime = Arc::clone(&task_runtime);
+    let notifier_invocation = fresh_invocation.clone();
+    let notifier_outcome = fresh_completed_outcome.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        notifier_runtime
+            .store_task_outcome(root_session_id, &notifier_invocation, &notifier_outcome)
+            .expect("fresh terminal event should store");
+    });
+
+    let result = task_runtime
+        .invoke_wait_agent(
+            root_session_id,
+            json!({ "target": "fresh-agent", "timeout_ms": 10_000 }),
+        )
+        .await
+        .expect("targeted wait_agent should wake on fresh target");
+
+    assert_eq!(result.model_output["agents"][0]["agent_id"], "fresh-agent");
+    assert_eq!(result.model_output["agents"][0]["result"], "FRESH_DONE");
+    assert!(!result.model_output.to_string().contains("STALE_DONE"));
+
+    let remaining_events = task_runtime
+        .take_subagent_events_for_parent(SessionNodeId::from(root_session_id))
+        .expect("mailbox should be readable after targeted wait");
+    assert_eq!(remaining_events.len(), 1);
+    assert_eq!(
+        remaining_events[0].child_thread_id,
+        SessionNodeId::from(stale_task_id)
     );
+    assert_eq!(remaining_events[0].payload["result_text"], "STALE_DONE");
 }
 
 /// Verifies wait_agent wakes when the parent receives steered user input.
@@ -1227,6 +1424,7 @@ fn task_invocation_result_omits_embedded_conversation_state() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -1239,6 +1437,18 @@ fn task_invocation_result_omits_embedded_conversation_state() {
         controller_config: None,
         is_resumed: false,
     };
+    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(120),
+            output_tokens: Some(30),
+            reasoning_tokens: Some(10),
+            total_tokens: Some(160),
+            cached_input_tokens: Some(40),
+            cache_creation_input_tokens: None,
+        }),
+    );
     let outcome = TaskExecutionOutcome {
         task_id,
         controller_config: build_test_controller_config("Base prompt"),
@@ -1252,7 +1462,7 @@ fn task_invocation_result_omits_embedded_conversation_state() {
         final_assistant_message_id: Some(String::from("assistant-1")),
         final_output_text: String::from("review complete"),
         execution_status: TaskExecutionStatus::Completed,
-        usage_segments: Vec::new(),
+        usage_segments: vec![usage_segment],
     };
 
     let result = build_task_invocation_result(&invocation, &outcome);
@@ -1266,5 +1476,13 @@ fn task_invocation_result_omits_embedded_conversation_state() {
     assert!(
         host_result.payload.get("conversation_state").is_none(),
         "new parent task metadata must not embed child transcripts"
+    );
+    assert_eq!(
+        host_result.payload["usage_segments"][0]["input_tokens"],
+        120
+    );
+    assert_eq!(
+        host_result.payload["subagent_mailbox_event"]["payload"]["usage_segments"][0]["input_tokens"],
+        120
     );
 }

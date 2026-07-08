@@ -5,6 +5,7 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
 use crate::agent_runtime::provider_runtime_dispatch::execute_provider_prompt_capture_stream;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
+use crate::agent_runtime::provider_transport_request::ProviderTransportTurnStartMode;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::agent_runtime::task_runtime::TaskRuntime;
@@ -77,6 +78,14 @@ pub async fn capture_runtime_provider_wire_request(
         launch.active_agent.as_ref(),
         &launch.system_preamble,
         &launch.effective_prompt,
+        match launch.turn_start_mode {
+            crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::UserPrompt => {
+                ProviderTransportTurnStartMode::UserPrompt
+            }
+            crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamTurnStartMode::SeededProviderInput => {
+                ProviderTransportTurnStartMode::SeededProviderInput
+            }
+        },
         launch.core_snapshot,
         launch.task_runtime,
         launch.token_budget_runtime,

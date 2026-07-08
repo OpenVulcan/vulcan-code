@@ -24,12 +24,16 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         },
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
         execution_agent_id: Some(String::from("main")),
-        agent_system_prompt_override: None,
+        agent_prompt_snapshot: None,
+        subagent_prompt_context: None,
         task_session_store_root: None,
         session_title: String::from("Parent session"),
         workspace_path: String::from("D:\\openvulcan\\test-project"),
         prompt: String::from("parent prompt"),
+        provider_visible_agent_messages: Vec::new(),
         conversation_state: SessionConversationState::default(),
+        context_compaction_policy: None,
+        context_budget_override: None,
         execution_mode: String::from("build"),
         temperature: None,
         reasoning_effort: ReasoningEffortLevel::High,
@@ -38,6 +42,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         tool_request_rejection_reason: None,
         tool_request_rejection_all_tools: false,
         tool_request_rejection_tool_ids: Vec::new(),
+        tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
         project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
         session_prompt_skill_overrides: BTreeMap::new(),
@@ -52,6 +57,25 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         session_plan_context: None,
         embedded_turn_usage_segments: Vec::new(),
     }
+}
+
+/// Returns the child-agent hard-disabled public tool ids expected by preparation tests.
+/// 返回准备阶段测试期望的智能体硬禁用公开工具标识。
+fn expected_child_forbidden_tool_ids() -> Vec<String> {
+    vulcan_session_core::child_agent_forbidden_tool_ids()
+        .iter()
+        .map(|tool_id| (*tool_id).to_string())
+        .collect()
+}
+
+/// Verifies child agents cannot use the session todolist progress tool.
+/// 验证智能体不能使用会话 todolist 进度工具。
+#[test]
+fn child_forbidden_tool_ids_include_todolist() {
+    assert!(
+        expected_child_forbidden_tool_ids().contains(&"todolist".to_string()),
+        "child-agent hard-disabled tools must include todolist"
+    );
 }
 
 /// Verifies execution-context registration returns a diagnostic instead of panicking on lock poisoning.
@@ -114,6 +138,7 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
         current_session_id: parent_session_id,
         root_session_id: parent_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -137,6 +162,14 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
         memory_writeback_enabled: false,
         database_projection_enabled: false,
     };
+    resolved_config
+        .effective_config
+        .context_compaction
+        .auto_compaction_enabled = false;
+    resolved_config
+        .effective_config
+        .context_compaction
+        .context_budget = Some(12_000);
 
     let (_, child_request) =
         build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
@@ -149,12 +182,17 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
             task_session_id: SessionNodeId::from(task_id),
         }
     );
+    let child_compaction_policy = child_request
+        .context_compaction_policy
+        .expect("child execution request should carry resolved compaction policy");
+    assert!(!child_compaction_policy.auto);
+    assert_eq!(child_request.context_budget_override, Some(12_000));
 }
 
-/// Verifies ordinary child-agent execution keeps subagent tool schemas but rejects calls by default.
-/// 验证普通子智能体默认保留子智能体工具 Schema，但拒绝调用。
+/// Verifies ordinary child-agent execution hides parent-session tools by default.
+/// 验证普通智能体默认隐藏父会话工具。
 #[test]
-fn task_runtime_preparation_request_rejects_subagent_tools_by_default() {
+fn task_runtime_preparation_request_hides_parent_tools_by_default() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
@@ -174,6 +212,7 @@ fn task_runtime_preparation_request_rejects_subagent_tools_by_default() {
         current_session_id: parent_session_id,
         root_session_id: parent_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -194,116 +233,17 @@ fn task_runtime_preparation_request_rejects_subagent_tools_by_default() {
     let (_, child_request) =
         build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
 
-    for tool_id in [
-        SPAWN_AGENT_TOOL,
-        AGENT_ORCHESTRATION_INFO_TOOL,
-        SEND_MESSAGE_TOOL,
-        WAIT_AGENT_TOOL,
-        INTERRUPT_AGENT_TOOL,
-        CLOSE_AGENT_TOOL,
-        LIST_AGENTS_TOOL,
-        TODOLIST_TOOL_ID,
-    ] {
-        assert!(
-            !child_request
-                .tool_exposure_override
-                .disabled_tools
-                .iter()
-                .any(|disabled_tool| disabled_tool == tool_id),
-            "{tool_id} should stay registered for ordinary child agents"
-        );
-    }
     assert_eq!(
-        child_request.tool_request_rejection_reason.as_deref(),
-        Some(SUBAGENT_REJECTED_TOOL_REASON)
+        child_request.tool_request_hidden_tool_ids,
+        expected_child_forbidden_tool_ids()
     );
+    assert_eq!(child_request.tool_request_rejection_reason, None);
     assert!(!child_request.tool_request_rejection_all_tools);
-    assert_eq!(
-        child_request.tool_request_rejection_tool_ids,
-        vec![
-            SPAWN_AGENT_TOOL.to_string(),
-            AGENT_ORCHESTRATION_INFO_TOOL.to_string(),
-            SEND_MESSAGE_TOOL.to_string(),
-            WAIT_AGENT_TOOL.to_string(),
-            INTERRUPT_AGENT_TOOL.to_string(),
-            CLOSE_AGENT_TOOL.to_string(),
-            LIST_AGENTS_TOOL.to_string(),
-            TODOLIST_TOOL_ID.to_string(),
-        ]
-    );
+    assert!(child_request.tool_request_rejection_tool_ids.is_empty());
 }
 
-/// Verifies clone-style contexts can explicitly retain the subagent tool family for future modes.
-/// 验证克隆风格上下文可为后续模式显式保留子代理工具族。
-#[test]
-fn task_runtime_preparation_request_can_preserve_subagent_tools_when_allowed() {
-    let parent_session_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
-    let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
-        &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
-    );
-    let context = TaskExecutionRuntimeContext::new(
-        provider_config,
-        Arc::new(foundation),
-        None,
-        test_parent_execution_request(parent_session_id),
-    )
-    .with_subagent_tools_allowed(true);
-    let invocation = TaskExecutionRequest {
-        current_session_id: parent_session_id,
-        root_session_id: parent_session_id,
-        task_id,
-        public_task_id: String::from("agent-review"),
-        prompt: String::from("review this change"),
-        description: Some(String::from("Review code")),
-        subagent: Some(String::from("reviewer")),
-        invocation_config: TaskInvocationConfig::main("review this change"),
-        display_title: String::from("Review code (reviewer)"),
-        parent_task_id: None,
-        depth: 1,
-        snapshot: CoreConversationSnapshot::default(),
-        controller_config: None,
-        is_resumed: false,
-    };
-    let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
-        &invocation.invocation_config,
-    );
-
-    let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
-
-    assert!(
-        !child_request
-            .tool_exposure_override
-            .disabled_tools
-            .iter()
-            .any(|disabled_tool| disabled_tool == SPAWN_AGENT_TOOL)
-    );
-    assert!(
-        !child_request
-            .tool_exposure_override
-            .disabled_tools
-            .iter()
-            .any(|disabled_tool| disabled_tool == TODOLIST_TOOL_ID),
-        "todolist must stay registered for child-agent cache stability"
-    );
-    assert_eq!(
-        child_request.tool_request_rejection_reason.as_deref(),
-        Some(SUBAGENT_REJECTED_TOOL_REASON)
-    );
-    assert_eq!(
-        child_request.tool_request_rejection_tool_ids,
-        vec![TODOLIST_TOOL_ID.to_string()]
-    );
-}
-
-/// Verifies mirror child agents preserve tool schemas but reject subagent orchestration calls.
-/// 验证镜像子代理会保留工具 Schema，但拒绝子代理调度调用。
+/// Verifies mirror child agents preserve tool schemas but reject parent-session tool calls.
+/// 验证镜像智能体会保留工具 Schema，但拒绝父会话工具调用。
 #[test]
 fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror() {
     let parent_session_id = Uuid::new_v4();
@@ -327,6 +267,7 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
         current_session_id: parent_session_id,
         root_session_id: parent_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -347,25 +288,7 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
     let (_, child_request) =
         build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
 
-    for tool_id in [
-        SPAWN_AGENT_TOOL,
-        AGENT_ORCHESTRATION_INFO_TOOL,
-        SEND_MESSAGE_TOOL,
-        WAIT_AGENT_TOOL,
-        INTERRUPT_AGENT_TOOL,
-        CLOSE_AGENT_TOOL,
-        LIST_AGENTS_TOOL,
-        TODOLIST_TOOL_ID,
-    ] {
-        assert!(
-            !child_request
-                .tool_exposure_override
-                .disabled_tools
-                .iter()
-                .any(|disabled_tool| disabled_tool == tool_id),
-            "{tool_id} should remain visible for mirror child agents"
-        );
-    }
+    assert!(child_request.tool_request_hidden_tool_ids.is_empty());
     assert_eq!(
         child_request.tool_request_rejection_reason.as_deref(),
         Some(SUBAGENT_REJECTED_TOOL_REASON)
@@ -373,23 +296,14 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
     assert!(!child_request.tool_request_rejection_all_tools);
     assert_eq!(
         child_request.tool_request_rejection_tool_ids,
-        vec![
-            SPAWN_AGENT_TOOL.to_string(),
-            AGENT_ORCHESTRATION_INFO_TOOL.to_string(),
-            SEND_MESSAGE_TOOL.to_string(),
-            WAIT_AGENT_TOOL.to_string(),
-            INTERRUPT_AGENT_TOOL.to_string(),
-            CLOSE_AGENT_TOOL.to_string(),
-            LIST_AGENTS_TOOL.to_string(),
-            TODOLIST_TOOL_ID.to_string(),
-        ]
+        expected_child_forbidden_tool_ids()
     );
 }
 
-/// Verifies default spawn_agent fork keeps messages but clears provider continuation.
-/// 验证 spawn_agent 默认 fork 会保留消息但清空 Provider continuation。
+/// Verifies clone-latest runtime initialization preserves the parent runtime snapshot.
+/// 验证克隆最新运行时初始化会保留父级运行时快照。
 #[test]
-fn spawn_agent_default_fork_clears_parent_continuation() {
+fn spawn_agent_clone_latest_runtime_preserves_parent_snapshot() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
@@ -407,7 +321,18 @@ fn spawn_agent_default_fork_clears_parent_continuation() {
                 attachments: Vec::new(),
             },
         }],
-        records: Vec::new(),
+        records: vec![vulcan_core::types::ConversationRecord {
+            id: String::from("r1"),
+            role: vulcan_core::types::TranscriptRole::Assistant,
+            record_kind: vulcan_core::types::TranscriptRecordKind::Hidden,
+            visible: false,
+            title: String::from("agent feedback"),
+            body: String::from("parent-runtime-record"),
+            metadata: Some(json!({
+                "kind": "subagent_feedback"
+            })),
+            created_at: String::from("1"),
+        }],
         continuation: vulcan_core::types::ProviderContinuation {
             provider_id: Some(String::from("openai")),
             model_id: Some(String::from("gpt-test")),
@@ -426,25 +351,40 @@ fn spawn_agent_default_fork_clears_parent_continuation() {
         .install_execution_context(parent_session_id, context)
         .expect("execution context should install");
 
-    let child_snapshot =
-        initial_spawn_snapshot_for_fork_turns(&task_runtime, parent_session_id, Some("all"))
-            .expect("default spawn_agent fork should use parent context");
+    let child_snapshot = initial_spawn_snapshot_for_context_source(
+        &task_runtime,
+        parent_session_id,
+        TaskInitialContextSource::CloneLatestRuntime,
+    )
+    .expect("clone-latest runtime source should use parent context");
 
     assert_eq!(child_snapshot.messages.len(), 1);
-    assert!(child_snapshot.records.is_empty());
-    assert!(child_snapshot.continuation.provider_id.is_none());
-    assert!(
+    assert_eq!(child_snapshot.records.len(), 1);
+    assert_eq!(child_snapshot.records[0].id, "r1");
+    assert_eq!(child_snapshot.records[0].body, "parent-runtime-record");
+    assert_eq!(
+        child_snapshot.records[0].metadata.as_ref(),
+        Some(&json!({
+            "kind": "subagent_feedback"
+        }))
+    );
+    assert_eq!(
+        child_snapshot.continuation.provider_id.as_deref(),
+        Some("openai")
+    );
+    assert_eq!(
         child_snapshot
             .continuation
             .last_provider_message_id
-            .is_none()
+            .as_deref(),
+        Some("resp_1")
     );
 }
 
-/// Verifies new mirror child tasks append a status user prompt after inherited context.
-/// 验证新建镜像子任务会在继承上下文后追加状态用户提示词。
+/// Verifies new mirror child tasks inherit context without injecting display-only status prompts.
+/// 验证新建镜像子任务继承上下文但不会注入仅用于显示的状态提示词。
 #[test]
-fn spawn_agent_mirror_fork_appends_status_user_prompt() {
+fn spawn_agent_mirror_uses_cloned_runtime_without_status_prompt() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
@@ -479,8 +419,7 @@ fn spawn_agent_mirror_fork_appends_status_user_prompt() {
     let args = parse_task_tool_arguments(json!({
         "prompt": "review this change",
         "task_id": "mirror-review",
-        "agent_mode": SUBAGENT_MODE_MIRROR,
-        "fork_turns": "all"
+        "agent_mode": SUBAGENT_MODE_MIRROR
     }))
     .expect("mirror task arguments should parse");
     let resolved_identifier = ResolvedTaskSessionIdentifier {
@@ -494,20 +433,71 @@ fn spawn_agent_mirror_fork_appends_status_user_prompt() {
         prepare_task_execution_request(&task_runtime, parent_session_id, resolved_identifier, args)
             .expect("mirror task execution request should be prepared");
 
-    assert_eq!(request.snapshot.messages.len(), 2);
+    assert_eq!(request.snapshot.messages.len(), 1);
     assert_eq!(request.snapshot.messages[0].id, "u1");
-    let Some(last_message) = request.snapshot.messages.last() else {
-        panic!("mirror snapshot should contain the appended status prompt");
+}
+
+/// Verifies new task records capture the parent fixed agent prompt used by child runtime launches.
+/// 验证新建任务记录会捕获子代理运行时启动使用的父级固定代理提示词。
+#[test]
+fn spawn_agent_record_captures_parent_agent_prompt_snapshot() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let mut parent_request = test_parent_execution_request(parent_session_id);
+    parent_request.agent_prompt_snapshot =
+        ExecutionAgentPromptSnapshot::fixed_parent_runtime("Parent creation-time agent prompt");
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        parent_request,
+    );
+    let _guard = task_runtime
+        .install_execution_context(parent_session_id, context.clone())
+        .expect("execution context should install");
+    let args = parse_task_tool_arguments(json!({
+        "prompt": "reply only: ok",
+        "task_id": "fixed-prompt-child"
+    }))
+    .expect("default task arguments should parse");
+    let resolved_identifier = ResolvedTaskSessionIdentifier {
+        task_id,
+        public_task_id: String::from("fixed-prompt-child"),
+        is_resumed: false,
+        persisted_metadata: None,
     };
-    assert!(last_message.id.starts_with("mirror-subagent-status-"));
-    assert!(matches!(
-        &last_message.payload,
-        CoreConversationPayload::UserText { text, attachments }
-            if attachments.is_empty()
-                && text.contains("mirror subagent")
-                && text.contains("ordinary available tools")
-                && text.contains("subagent orchestration tools")
-    ));
+
+    let request =
+        prepare_task_execution_request(&task_runtime, parent_session_id, resolved_identifier, args)
+            .expect("default task execution request should be prepared");
+    let record_prompt = task_runtime
+        .sessions
+        .read()
+        .expect("task sessions should be readable")
+        .get(&task_id)
+        .and_then(|record| record.agent_prompt_snapshot.clone())
+        .expect("task record should store the fixed parent prompt");
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Provider rendered preamble"),
+        &request.invocation_config,
+    );
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &request, &resolved_config);
+    let child_prompt = child_request
+        .agent_prompt_snapshot
+        .expect("child launch should receive the fixed parent prompt");
+
+    assert_eq!(record_prompt.text, "Parent creation-time agent prompt");
+    assert_eq!(child_prompt.text, record_prompt.text);
+    assert_ne!(child_prompt.text, "Provider rendered preamble");
 }
 
 /// Verifies expert child tasks always start without parent conversation turns.
@@ -549,8 +539,7 @@ fn spawn_agent_expert_forces_empty_initial_snapshot() {
         "prompt": "review this change",
         "task_id": "expert-review",
         "agent_mode": SUBAGENT_MODE_EXPERT,
-        "subagent_profile_id": "engineering/code-reviewer",
-        "fork_turns": "all"
+        "subagent_profile_id": "engineering/code-reviewer"
     }))
     .expect("expert task arguments should parse");
     let resolved_identifier = ResolvedTaskSessionIdentifier {
@@ -625,21 +614,25 @@ fn spawn_agent_custom_debug_reports_creation_mode() {
     assert!(debug.get("is_resumed").is_none());
 }
 
-/// Verifies spawn_agent fork fails when the parent runtime context is missing.
-/// 验证缺失父级运行时上下文时 spawn_agent fork 会失败。
+/// Verifies clone-latest runtime initialization fails when the parent runtime context is missing.
+/// 验证缺失父级运行时上下文时克隆最新运行时初始化会失败。
 #[test]
-fn spawn_agent_fork_requires_registered_parent_context() {
+fn clone_latest_runtime_requires_registered_parent_context() {
     let task_runtime = TaskRuntime::new();
-    let error = initial_spawn_snapshot_for_fork_turns(&task_runtime, Uuid::new_v4(), Some("all"))
-        .expect_err("default spawn_agent fork should reject missing parent context");
+    let error = initial_spawn_snapshot_for_context_source(
+        &task_runtime,
+        Uuid::new_v4(),
+        TaskInitialContextSource::CloneLatestRuntime,
+    )
+    .expect_err("clone-latest runtime source should reject missing parent context");
 
     assert!(error.contains("registered parent runtime context"));
 }
 
-/// Verifies child execution requests carry the composed TaskSession system prompt override.
-/// 验证子代理执行请求会携带已组合的 TaskSession 系统提示词覆盖。
+/// Verifies child execution requests carry structured subagent prompt context.
+/// 验证子智能体执行请求会携带结构化智能体提示词上下文。
 #[test]
-fn task_runtime_preparation_request_carries_controller_prompt_override() {
+fn task_runtime_preparation_request_carries_subagent_prompt_context() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
@@ -649,16 +642,20 @@ fn task_runtime_preparation_request_carries_controller_prompt_override() {
         None,
         None,
     );
+    let mut parent_request = test_parent_execution_request(parent_session_id);
+    parent_request.agent_prompt_snapshot =
+        ExecutionAgentPromptSnapshot::fixed_parent_runtime("Parent fixed agent prompt");
     let context = TaskExecutionRuntimeContext::new(
         provider_config,
         Arc::new(foundation),
         None,
-        test_parent_execution_request(parent_session_id),
+        parent_request,
     );
     let mut invocation = TaskExecutionRequest {
         current_session_id: parent_session_id,
         root_session_id: parent_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -682,46 +679,189 @@ fn task_runtime_preparation_request_carries_controller_prompt_override() {
     let (_, child_request) =
         build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
 
+    let agent_prompt_snapshot = child_request
+        .agent_prompt_snapshot
+        .expect("child request should carry fixed parent runtime prompt snapshot");
+    assert_eq!(agent_prompt_snapshot.text, "Parent fixed agent prompt");
+    assert_ne!(agent_prompt_snapshot.text, "Composed TaskSession prompt");
     assert_eq!(
-        child_request.agent_system_prompt_override.as_deref(),
-        Some("Composed TaskSession prompt")
+        agent_prompt_snapshot.source,
+        crate::agent_runtime::execution_models::ExecutionAgentPromptSnapshotSource::FixedParentRuntime
     );
+    let subagent_prompt_context = child_request
+        .subagent_prompt_context
+        .expect("child request should carry subagent prompt context");
+    assert_eq!(subagent_prompt_context.identity, "reviewer");
+    assert_eq!(subagent_prompt_context.delegated_task, "Review code");
+    assert!(subagent_prompt_context.functional_system_prompt.is_none());
 }
 
-/// Verifies that Windows child task prompts always include normalized filesystem path guidance.
-/// 验证 Windows 子任务提示词始终包含规范化文件系统路径指引。
+/// Verifies child execution requests do not inherit provider context injection from the parent turn.
+/// 验证子智能体执行请求不会继承父回合的 Provider 上下文注入。
 #[test]
-#[cfg(windows)]
-fn build_task_controller_config_appends_windows_path_guidance() {
-    let base = build_test_controller_config("Base prompt");
-    let description = Some(String::from("Analyze the current repository."));
-    let subagent = Some(String::from("explorer"));
-    let invocation_config = TaskInvocationConfig::main("Analyze the current repository.");
-    let resolved_config = test_resolved_config(&base, &invocation_config);
-
-    let config = build_task_controller_config(
-        &base,
+fn task_runtime_preparation_request_clears_parent_context_injection() {
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
         None,
-        &description,
-        &subagent,
-        &invocation_config,
-        &resolved_config,
+        None,
+    );
+    let mut parent_request = test_parent_execution_request(parent_session_id);
+    parent_request.context_injection = Some(vulcan_core::types::ProviderContextInjection {
+        persistent_blocks: vec![String::from("<memory>parent-only</memory>")],
+        transient_prefix: String::new(),
+        fingerprint: String::from("parent-injection"),
+    });
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        parent_request,
+    );
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        execution_id: String::from("test-execution"),
+        public_task_id: String::from("plain-child"),
+        prompt: String::from("reply ok"),
+        description: Some(String::from("Reply ok")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("reply ok"),
+        display_title: String::from("Reply ok"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
     );
 
-    assert!(config.system_prompt.contains("Subagent identity: explorer"));
-    assert!(
-        config
-            .system_prompt
-            .contains("Delegated task: Analyze the current repository.")
-    );
-    assert!(config.system_prompt.contains("[Filesystem Paths]"));
-    assert!(config.system_prompt.contains(r"C:\repo\path"));
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+
+    assert!(child_request.context_injection.is_none());
 }
 
-/// Verifies stored child-task controller configs are reused without recomposition.
-/// 验证已存储的子任务控制器配置会直接复用而不会重新组合。
+/// Verifies TaskSession requests rebuild child-owned transient runtime state from scratch.
+/// 验证 TaskSession 请求会从零重建子级拥有的临时运行态。
 #[test]
-fn build_task_controller_config_reuses_stored_config() {
+fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
+    let parent_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let provider_config = ProviderConfigurationFile::default();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    let mut parent_request = test_parent_execution_request(parent_session_id);
+    parent_request.tool_request_rejection_reason = Some(String::from("parent rejection"));
+    parent_request.tool_request_rejection_all_tools = true;
+    parent_request
+        .tool_request_rejection_tool_ids
+        .push(String::from("parent_tool"));
+    parent_request
+        .tool_request_hidden_tool_ids
+        .push(String::from("parent_hidden_tool"));
+    parent_request
+        .boundary_events
+        .push(vulcan_session_boundary::SessionBoundaryEvent::new(
+            "parent-boundary",
+            SessionNodeId::from(parent_session_id),
+            1,
+            vulcan_session_boundary::SessionBoundaryEventKind::TurnStarted,
+            vulcan_session_boundary::SessionEventScope::Turn,
+            vulcan_session_boundary::SessionEventVisibility::Hidden,
+            1,
+        ));
+    parent_request
+        .runtime_system_updates
+        .push(vulcan_context::RuntimeSystemUpdateEvent {
+            turn_id: Some(String::from("parent-turn")),
+            update_id: String::from("parent-update"),
+            effective_after_event_id: Some(String::from("parent-boundary")),
+            text: String::from("Parent-only dynamic system update."),
+            trust: vulcan_context::RuntimeSystemUpdateTrust::TrustedHost,
+            lowering_hint: vulcan_context::RuntimeSystemUpdateLoweringHint::Auto,
+            fingerprint: Some(String::from("parent-fingerprint")),
+            source: Some(String::from("parent")),
+        });
+    parent_request.session_goal_context = Some(String::from("Parent goal context"));
+    parent_request.session_plan_context = Some(String::from("Parent plan context"));
+    parent_request
+        .embedded_turn_usage_segments
+        .push(SessionTurnUsageSegment {
+            kind: SessionTurnUsageSegmentKind::ContextCompaction,
+            trigger: Some(String::from("parent")),
+            execution_profile: None,
+            provider_id: None,
+            model_id: None,
+            provider_call_count: 1,
+            tool_call_count: 0,
+            input_tokens: 10,
+            output_tokens: 2,
+            reasoning_tokens: 0,
+            total_tokens: 12,
+            cached_input_tokens: None,
+            cache_creation_input_tokens: None,
+        });
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        parent_request,
+    );
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        execution_id: String::from("test-execution"),
+        public_task_id: String::from("plain-child"),
+        prompt: String::from("reply ok"),
+        description: Some(String::from("Reply ok")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("reply ok"),
+        display_title: String::from("Reply ok"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
+    );
+
+    let (_, child_request) =
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+
+    assert!(child_request.tool_request_rejection_reason.is_none());
+    assert!(!child_request.tool_request_rejection_all_tools);
+    assert!(child_request.tool_request_rejection_tool_ids.is_empty());
+    assert_eq!(
+        child_request.tool_request_hidden_tool_ids,
+        expected_child_forbidden_tool_ids()
+    );
+    assert!(child_request.boundary_events.is_empty());
+    assert!(child_request.runtime_system_updates.is_empty());
+    assert!(child_request.session_goal_context.is_none());
+    assert!(child_request.session_plan_context.is_none());
+    assert!(child_request.embedded_turn_usage_segments.is_empty());
+}
+
+/// Verifies stored child-task controller snapshots keep runtime knobs but not prompt material.
+/// 验证已存储的子任务控制器快照会保留运行参数但不会保留提示词材料。
+#[test]
+fn build_task_controller_config_reuses_stored_controller_state_without_prompt() {
     let base = build_test_controller_config("Base prompt");
     let invocation_config = TaskInvocationConfig::main("Analyze the current repository.");
     let resolved_config = test_resolved_config(&base, &invocation_config);
@@ -747,15 +887,43 @@ fn build_task_controller_config_reuses_stored_config() {
         &resolved_config,
     );
 
-    assert_eq!(config.system_prompt, stored.system_prompt);
-    assert_eq!(config.provider_id, stored.provider_id);
+    assert!(config.system_prompt.is_empty());
+    assert!(config.prompt_layers.is_empty());
+    assert_eq!(config.provider_id, base.provider_id);
+    assert_eq!(config.model_id, base.model_id);
+    assert_eq!(config.temperature, stored.temperature);
     assert_eq!(config.max_turns, stored.max_turns);
+    assert_eq!(config.additional_params, stored.additional_params);
 }
 
-/// Verifies catalog expert prompts invalidate stale stored clone controller configs.
-/// 验证目录专家提示词会让陈旧的已存储克隆控制器配置失效。
+/// Verifies parent controller preambles are not inherited as TaskSession prompt layers.
+/// 验证父级控制器前导语不会作为 TaskSession 提示词层继承。
 #[test]
-fn build_task_controller_config_rebuilds_stored_config_for_expert_profile() {
+fn task_parent_effective_config_ignores_rendered_controller_prompt() {
+    let mut controller_config = build_test_controller_config("Provider rendered preamble");
+    controller_config.system_prompt =
+        String::from("Provider base\n\nProject rules\n\nTool catalog\n\nParent agent prompt");
+
+    let effective_config = core_controller_config_to_effective_config(&controller_config);
+
+    assert_eq!(
+        effective_config.provider_model.provider_id.as_deref(),
+        Some(controller_config.provider_id.as_str())
+    );
+    assert_eq!(
+        effective_config.provider_model.model_id.as_deref(),
+        Some(controller_config.model_id.as_str())
+    );
+    assert!(
+        effective_config.system_prompt_layers.is_empty(),
+        "provider-rendered controller preambles must not be inherited by child-agent prompt config"
+    );
+}
+
+/// Verifies catalog expert prompts are extracted as functional subagent prompt text.
+/// 验证目录专家提示词会提取为功能型智能体提示词文本。
+#[test]
+fn task_functional_system_prompt_extracts_expert_profile_prompt() {
     let base = build_test_controller_config("Base prompt");
     let mut invocation_config =
         TaskInvocationConfig::with_profile("engineering/code-reviewer", "Review code");
@@ -773,38 +941,18 @@ fn build_task_controller_config_rebuilds_stored_config_for_expert_profile() {
         profile: Some(profile),
         invocation: invocation_config.clone(),
     });
-    let stored = CoreControllerConfig {
-        provider_id: String::from("stored-provider"),
-        model_id: String::from("stored-model"),
-        system_prompt: String::from("Stored parent clone prompt"),
-        prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(String::from(
-            "Stored parent clone prompt",
-        )),
-        temperature: Some(0.7),
-        max_turns: 3,
-        additional_params: Some(json!({ "stored": true })),
-        context_injection: None,
-    };
 
-    let config = build_task_controller_config(
-        &base,
-        Some(stored),
-        &Some(String::from("Review code")),
-        &Some(String::from("reviewer")),
-        &invocation_config,
-        &resolved_config,
-    );
+    let prompt = task_functional_system_prompt(&base, &invocation_config, &resolved_config)
+        .expect("expert profile prompt should become functional prompt text");
 
-    assert!(config.system_prompt.contains("Base prompt"));
-    assert!(config.system_prompt.contains("catalog code review expert"));
-    assert!(config.system_prompt.contains("Subagent identity: reviewer"));
-    assert!(!config.system_prompt.contains("Stored parent clone prompt"));
+    assert!(prompt.contains("catalog code review expert"));
+    assert!(!prompt.contains("Base prompt"));
 }
 
-/// Verifies new child-task prompts use the clone-mode prompt composer shape.
-/// 验证新建子任务提示词使用分身模式提示词组合器形态。
+/// Verifies default child-task controller config keeps controller concerns only.
+/// 验证默认子任务控制器配置只保留控制器职责。
 #[test]
-fn build_task_controller_config_uses_subagent_clone_composer() {
+fn build_task_controller_config_does_not_embed_subagent_prompt() {
     let base = build_test_controller_config("Base prompt");
     let description = Some(String::from("Analyze the current repository."));
     let subagent = Some(String::from("explorer"));
@@ -820,50 +968,29 @@ fn build_task_controller_config_uses_subagent_clone_composer() {
         &resolved_config,
     );
 
-    assert!(config.system_prompt.contains("Base prompt"));
-    assert!(config.system_prompt.contains("Subagent identity: explorer"));
-    assert!(
-        config
-            .system_prompt
-            .contains("Delegated task: Analyze the current repository.")
-    );
-    assert!(
-        config
-            .system_prompt
-            .contains("Subagent Developer Instructions")
-    );
+    assert!(config.system_prompt.is_empty());
+    assert!(config.prompt_layers.is_empty());
+    assert!(!config.system_prompt.contains("Subagent identity"));
+    assert!(!config.system_prompt.contains("Delegated task"));
 }
 
-/// Verifies invocation-level system prompt overrides are routed through the clone composer.
-/// 验证调用级系统提示词覆盖会通过分身组合器路由。
+/// Verifies invocation-level system prompt overrides become functional prompt text.
+/// 验证调用级系统提示词覆盖会转为功能型提示词文本。
 #[test]
-fn build_task_controller_config_uses_invocation_system_prompt() {
+fn task_functional_system_prompt_uses_invocation_system_prompt() {
     let base = build_test_controller_config("Base prompt");
-    let description = Some(String::from("Review code"));
-    let subagent = Some(String::from("reviewer"));
     let mut invocation_config = TaskInvocationConfig::main("Review code");
     invocation_config.inherit_parent_config = Some(false);
     invocation_config.system_prompt = Some(String::from("You are a strict code reviewer."));
     invocation_config.system_prompt_append = Some(String::from("Focus only on correctness."));
     let resolved_config = test_resolved_config(&base, &invocation_config);
 
-    let config = build_task_controller_config(
-        &base,
-        None,
-        &description,
-        &subagent,
-        &invocation_config,
-        &resolved_config,
-    );
+    let prompt = task_functional_system_prompt(&base, &invocation_config, &resolved_config)
+        .expect("invocation prompt should become functional prompt text");
 
-    assert!(!config.system_prompt.contains("Base prompt"));
-    assert!(
-        config
-            .system_prompt
-            .contains("You are a strict code reviewer.")
-    );
-    assert!(config.system_prompt.contains("Focus only on correctness."));
-    assert!(config.system_prompt.contains("Subagent identity: reviewer"));
+    assert!(!prompt.contains("Base prompt"));
+    assert!(prompt.contains("You are a strict code reviewer."));
+    assert!(prompt.contains("Focus only on correctness."));
 }
 
 /// Verifies flexible task arguments ignore legacy profile fields and keep supported overrides.
@@ -963,8 +1090,81 @@ fn task_context_compaction_policy_follows_resolved_toggle() {
     );
 }
 
-/// Verifies shared-runtime task report conversion preserves the final assistant message id from the child transcript.
-/// 验证共享运行时任务报告转换会保留子代理转录中的最终助手消息标识。
+/// Verifies provider-request counting starts after the latest completed task compaction marker.
+/// 验证 Provider 请求计数会从最近一次已完成的子任务压缩标记之后开始。
+#[test]
+fn task_provider_request_counter_uses_latest_compaction_boundary() {
+    let node_id = SessionNodeId::from(Uuid::new_v4());
+    let events = vec![
+        SessionEventRecord::new(
+            "before-compaction",
+            node_id,
+            0,
+            SessionEventKind::TaskTerminal,
+            100,
+            json!({ "provider_turns_executed": 2 }),
+        ),
+        SessionEventRecord::new(
+            "compaction",
+            node_id,
+            1,
+            SessionEventKind::RuntimeMarker,
+            101,
+            json!({
+                "context_compaction_status": "completed",
+                "provider_request_count": 99
+            }),
+        ),
+        SessionEventRecord::new(
+            "after-compaction-a",
+            node_id,
+            1,
+            SessionEventKind::TaskTerminal,
+            102,
+            json!({ "provider_turns_executed": 3 }),
+        ),
+        SessionEventRecord::new(
+            "after-compaction-b",
+            node_id,
+            2,
+            SessionEventKind::TaskTerminal,
+            103,
+            json!({ "provider_turns_executed": 4 }),
+        ),
+    ];
+
+    assert_eq!(
+        task_provider_requests_since_latest_compaction_event(&events),
+        7
+    );
+}
+
+/// Verifies provider-request compaction requires automatic compaction and a positive threshold.
+/// 验证 Provider 请求数压缩必须同时启用自动压缩并配置正数阈值。
+#[test]
+fn task_provider_request_limit_requires_auto_compaction_and_positive_limit() {
+    let mut policy = ContextCompactionPolicySnapshot {
+        auto_compaction_enabled: true,
+        max_provider_requests: Some(3),
+        ..Default::default()
+    };
+
+    assert!(task_provider_request_limit_is_enabled(&policy));
+    assert!(!task_provider_request_limit_reached(&policy, 2));
+    assert!(task_provider_request_limit_reached(&policy, 3));
+
+    policy.auto_compaction_enabled = false;
+    assert!(!task_provider_request_limit_is_enabled(&policy));
+    assert!(!task_provider_request_limit_reached(&policy, 4));
+
+    policy.auto_compaction_enabled = true;
+    policy.max_provider_requests = Some(0);
+    assert!(!task_provider_request_limit_is_enabled(&policy));
+    assert!(!task_provider_request_limit_reached(&policy, 4));
+}
+
+/// Verifies shared-runtime task report conversion preserves the final assistant message id and cumulative usage.
+/// 验证共享运行时任务报告转换会保留最终助手消息标识与累计用量。
 #[test]
 fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
     let root_session_id = Uuid::new_v4();
@@ -988,6 +1188,7 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         current_session_id: root_session_id,
         root_session_id,
         task_id,
+        execution_id: String::from("test-execution"),
         public_task_id: String::from("agent-review"),
         prompt: String::from("review this change"),
         description: Some(String::from("Review code")),
@@ -1002,27 +1203,42 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
     };
     let controller_config = build_test_controller_config("Base prompt");
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
+    let last_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(120),
+        output_tokens: Some(30),
+        reasoning_tokens: Some(10),
+        total_tokens: Some(160),
+        cached_input_tokens: Some(40),
+        cache_creation_input_tokens: None,
+    };
+    let cumulative_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(220),
+        output_tokens: Some(55),
+        reasoning_tokens: Some(25),
+        total_tokens: Some(300),
+        cached_input_tokens: Some(80),
+        cache_creation_input_tokens: None,
+    };
     let report = ExecutionRunReport {
         session_id: task_id,
         preparation: None,
         assistant_output: Some(String::from("done")),
         thinking_output: None,
         conversation_state: Some(core_snapshot_to_session_conversation_state(&snapshot)),
-        provider_request_count: 1,
-        last_successful_provider_usage: Some(vulcan_core::types::ProviderUsageSnapshot {
-            input_tokens: Some(120),
-            output_tokens: Some(30),
-            reasoning_tokens: Some(10),
-            total_tokens: Some(160),
-            cached_input_tokens: Some(40),
-            cache_creation_input_tokens: None,
-        }),
+        provider_request_count: 2,
+        last_successful_provider_usage: Some(last_provider_usage),
+        cumulative_successful_provider_usage: Some(cumulative_provider_usage),
         embedded_turn_usage_segments: Vec::new(),
         mcp_discovery_rows: Vec::new(),
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
-        controller_events: Vec::new(),
+        controller_events: vec![vulcan_core::types::CoreEvent {
+            kind: vulcan_core::types::CoreEventKind::ToolFinished,
+            title: String::from("工具调用完成"),
+            body: String::from("done"),
+            metadata: None,
+        }],
     };
 
     let outcome =
@@ -1034,14 +1250,16 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         Some("assistant-final")
     );
     assert_eq!(outcome.final_output_text, "done");
+    assert_eq!(outcome.tool_calls_processed, 1);
     assert_eq!(outcome.usage_segments.len(), 1);
     let segment = &outcome.usage_segments[0];
     assert_eq!(segment.kind, SessionTurnUsageSegmentKind::SubagentTask);
     assert_eq!(segment.trigger.as_deref(), Some("agent-review"));
-    assert_eq!(segment.provider_call_count, 1);
-    assert_eq!(segment.input_tokens, 120);
-    assert_eq!(segment.output_tokens, 30);
-    assert_eq!(segment.reasoning_tokens, 10);
-    assert_eq!(segment.total_tokens, 160);
-    assert_eq!(segment.cached_input_tokens, Some(40));
+    assert_eq!(segment.provider_call_count, 2);
+    assert_eq!(segment.tool_call_count, 1);
+    assert_eq!(segment.input_tokens, 220);
+    assert_eq!(segment.output_tokens, 55);
+    assert_eq!(segment.reasoning_tokens, 25);
+    assert_eq!(segment.total_tokens, 300);
+    assert_eq!(segment.cached_input_tokens, Some(80));
 }

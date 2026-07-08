@@ -170,7 +170,7 @@ export function ConversationWorkspace(props: {
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
-  onForkConversation?: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean> | boolean;
+  onForkConversation?: (conversationId: string) => Promise<boolean> | boolean;
   // Selects the original source conversation for a fork marker.
   // 选择分叉标记对应的原始来源会话。
   onSelectForkSourceConversation?: (conversationId: string) => void;
@@ -233,8 +233,8 @@ export function ConversationWorkspace(props: {
   const surfaceRestoreId = props.conversation?.id ?? props.parentConversationId ?? null;
   const expandedStateSurfaceRestoreIdRef = React.useRef(surfaceRestoreId);
   const timelineItems = React.useMemo(
-    () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning),
-    [props.renderItems, props.conversation, nowMs, props.sessionRunning],
+    () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning, t),
+    [props.renderItems, props.conversation, nowMs, props.sessionRunning, t],
   );
   const visibleTimelineItems = React.useMemo(
     () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockIds)),
@@ -249,32 +249,16 @@ export function ConversationWorkspace(props: {
     }
     return visibleTimelineItems.some((item) => timelineItemContainsPlanArtifact(item, artifact));
   }, [props.pendingPlanArtifact, visibleTimelineItems]);
-  // forkTargetByFinalAssistantMetaKey maps final-answer action rows to their fork rollback boundary.
-  // forkTargetByFinalAssistantMetaKey 将最终回答操作行映射到对应的分叉回滚边界。
-  const forkTargetByFinalAssistantMetaKey = React.useMemo(() => {
-    const targets = new Map<string, string | null>();
-    let latestMetaKey: string | null = null;
-    for (let index = 0; index < visibleTimelineItems.length; index += 1) {
+  // latestFinalAssistantMetaKey keeps fork as a full-current-session action instead of a message-bound rollback.
+  // latestFinalAssistantMetaKey 将 fork 保持为完整当前会话动作，而不是绑定消息的回滚动作。
+  const latestFinalAssistantMetaKey = React.useMemo(() => {
+    for (let index = visibleTimelineItems.length - 1; index >= 0; index -= 1) {
       const item = visibleTimelineItems[index];
       if (item.kind === "final-assistant-meta") {
-        const metaKey = conversationTimelineItemKey(item);
-        latestMetaKey = metaKey;
-        for (let nextIndex = index + 1; nextIndex < visibleTimelineItems.length; nextIndex += 1) {
-          const nextItem = visibleTimelineItems[nextIndex];
-          if (nextItem.kind !== "item" || !nextItem.item.userMessage) {
-            continue;
-          }
-          if (nextItem.item.userMessage.editableUserPrompt) {
-            targets.set(metaKey, nextItem.item.userMessage.id);
-          }
-          break;
-        }
+        return conversationTimelineItemKey(item);
       }
     }
-    if (latestMetaKey && !targets.has(latestMetaKey)) {
-      targets.set(latestMetaKey, null);
-    }
-    return targets;
+    return null;
   }, [visibleTimelineItems]);
   const timelineCacheScopeKey = props.conversation?.id ?? props.parentConversationId ?? "conversation";
   const turnGroups = React.useMemo(
@@ -497,13 +481,11 @@ export function ConversationWorkspace(props: {
     }
     if (timelineItem.kind === "final-assistant-meta") {
       const metaKey = conversationTimelineItemKey(timelineItem);
-      const forkBeforeMessageId = forkTargetByFinalAssistantMetaKey.get(metaKey);
       return (
         <ConversationFinalAssistantMeta
           item={timelineItem.item}
           onCopyText={props.onCopyText}
-          onForkConversation={forkTargetByFinalAssistantMetaKey.has(metaKey) ? props.onForkConversation : undefined}
-          forkBeforeMessageId={forkBeforeMessageId ?? null}
+          onForkConversation={metaKey === latestFinalAssistantMetaKey ? props.onForkConversation : undefined}
         />
       );
     }

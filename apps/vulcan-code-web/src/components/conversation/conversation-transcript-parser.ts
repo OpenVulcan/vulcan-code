@@ -99,6 +99,10 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
     if (hostKind === "change_set") return "diff";
     return "tool-result";
   }
+  if (message.recordKind === "display-note") {
+    const hostKind = metadataString(message.metadata, ["host_result.kind", "hostResult.kind", "kind"]);
+    if (hostKind === "subagent_feedback") return "tool-result";
+  }
   if (message.recordKind === "thinking-output") return "thinking";
   if (message.recordKind === "turn-stats") return "turn-stats";
   if (message.recordKind === "compaction-status") return "notice";

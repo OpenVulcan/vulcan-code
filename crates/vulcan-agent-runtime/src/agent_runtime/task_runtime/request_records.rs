@@ -18,11 +18,6 @@ pub(super) fn prepare_task_execution_request(
     let normalized_subagent = normalize_optional_task_label(args.subagent.as_deref())
         .or_else(|| normalize_optional_task_label(args.subagent_profile_id.as_deref()));
     let mut invocation_config = task_invocation_config_from_args(&args);
-    let fork_turns = effective_spawn_agent_fork_turns(
-        invocation_config.subagent_mode.as_deref(),
-        invocation_config.subagent_profile_id.as_deref(),
-        args.fork_turns.as_deref(),
-    )?;
     let prompt = args.prompt;
     let (
         parent_task_id,
@@ -172,16 +167,14 @@ pub(super) fn prepare_task_execution_request(
                 task_id,
             );
             let timestamp = current_unix_millis_text();
-            let mut initial_snapshot = initial_spawn_snapshot_for_fork_turns(
+            let initial_context_source = task_initial_context_source(&invocation_config);
+            let initial_snapshot = initial_spawn_snapshot_for_context_source(
                 task_runtime,
                 current_session_id,
-                Some(fork_turns.as_str()),
+                initial_context_source,
             )?;
-            append_mirror_subagent_status_prompt_if_needed(
-                &mut initial_snapshot,
-                task_id,
-                &invocation_config,
-            );
+            let agent_prompt_snapshot =
+                parent_agent_prompt_snapshot_for_spawn(task_runtime, current_session_id);
             attach_subagent_runtime_debug_extra(&mut invocation_config);
             sessions.insert(
                 task_id,
@@ -196,6 +189,7 @@ pub(super) fn prepare_task_execution_request(
                     invocation_config: invocation_config.clone(),
                     display_title: display_title.clone(),
                     controller_config: None,
+                    agent_prompt_snapshot: agent_prompt_snapshot.clone(),
                     snapshot: initial_snapshot.clone(),
                     last_prompt: prompt.clone(),
                     last_result_text: String::new(),
@@ -218,10 +212,13 @@ pub(super) fn prepare_task_execution_request(
         }
     };
 
+    task_runtime.upsert_prepared_task_registry_entry(task_id)?;
+
     Ok(TaskExecutionRequest {
         current_session_id,
         root_session_id,
         task_id,
+        execution_id: Uuid::new_v4().to_string(),
         public_task_id,
         prompt,
         description,
@@ -319,44 +316,29 @@ fn debug_has_custom_system_prompt(invocation_config: &TaskInvocationConfig) -> b
         .is_some_and(|system_prompt| !system_prompt.trim().is_empty())
 }
 
-/// Appends the hidden mirror-mode user prompt to a newly forked child snapshot.
-/// 向新 fork 的子快照追加镜像模式隐藏用户提示词。
+/// Resolves the initial runtime context source from one invocation configuration.
+/// 从单次调用配置解析初始运行时上下文来源。
 ///
 /// # Parameters
 /// 参数
-/// `snapshot` is the child snapshot being prepared.
-/// `snapshot` 是正在准备的子快照。
-/// `task_id` is the child task session identifier.
-/// `task_id` 是子任务会话标识。
-/// `invocation_config` carries the resolved invocation mode.
-/// `invocation_config` 携带已解析的调用模式。
-fn append_mirror_subagent_status_prompt_if_needed(
-    snapshot: &mut CoreConversationSnapshot,
-    task_id: SessionId,
+/// `invocation_config` carries the child-agent creation mode.
+/// `invocation_config` 携带子智能体创建模式。
+///
+/// # Returns
+/// 返回值
+/// The explicit context source used by the new child runtime.
+/// 新子智能体运行时使用的显式上下文来源。
+fn task_initial_context_source(
     invocation_config: &TaskInvocationConfig,
-) {
-    if invocation_config.subagent_mode.as_deref() != Some(SUBAGENT_MODE_MIRROR) {
-        return;
+) -> TaskInitialContextSource {
+    if invocation_config.subagent_mode.as_deref() == Some(SUBAGENT_MODE_MIRROR) {
+        return TaskInitialContextSource::CloneLatestRuntime;
     }
-    snapshot.messages.push(CoreConversationMessage {
-        id: format!("mirror-subagent-status-{task_id}"),
-        payload: CoreConversationPayload::UserText {
-            text: mirror_subagent_status_prompt(),
-            attachments: Vec::new(),
-        },
-    });
+    TaskInitialContextSource::Fresh
 }
 
-/// Returns the hidden user prompt appended to mirror subagents.
-/// 返回追加给镜像子代理的隐藏用户提示词。
-fn mirror_subagent_status_prompt() -> String {
-    String::from(
-        "You are now running as a mirror subagent, not the root agent. You inherited the parent conversation context and may see the same tool schemas for cache stability and situational awareness. You may use ordinary available tools when they help complete the delegated task, but you must not use subagent orchestration tools such as spawning, listing, waiting for, interrupting, or messaging agents. If a subagent orchestration tool call is attempted, the host will reject it because the current execution is a mirror subagent. Complete the requested analysis from the inherited context and return your result to the parent agent.",
-    )
-}
-
-/// Builds the initial child snapshot for one Vulcan spawn fork selector.
-/// 根据 Vulcan 的 spawn 派生选择器构建子代理初始快照。
+/// Builds the initial child snapshot for one explicit context source.
+/// 根据显式上下文来源构建子智能体初始快照。
 ///
 /// # Parameters
 /// 参数
@@ -364,36 +346,24 @@ fn mirror_subagent_status_prompt() -> String {
 /// `task_runtime` 提供对已注册父级运行时上下文的访问。
 /// `current_session_id` is the parent session that invoked spawn_agent.
 /// `current_session_id` 是调用 spawn_agent 的父会话。
-/// `fork_turns` is the normalized optional fork selector.
-/// `fork_turns` 是已规范化的可选派生选择器。
+/// `context_source` selects whether the child starts fresh or clones the latest runtime state.
+/// `context_source` 选择子智能体是全新启动还是克隆最新运行时状态。
 ///
 /// # Returns
 /// 返回值
 /// A snapshot suitable for the child controller launch.
 /// 适合子控制器启动的快照。
-pub(super) fn initial_spawn_snapshot_for_fork_turns(
+pub(super) fn initial_spawn_snapshot_for_context_source(
     task_runtime: &TaskRuntime,
     current_session_id: SessionId,
-    fork_turns: Option<&str>,
+    context_source: TaskInitialContextSource,
 ) -> Result<CoreConversationSnapshot, String> {
-    let fork_turns = normalize_spawn_agent_fork_turns(fork_turns)?;
-    let Some(fork_turns) = fork_turns.as_deref() else {
-        return Ok(CoreConversationSnapshot::default());
-    };
-    if fork_turns == "none" {
-        return Ok(CoreConversationSnapshot::default());
+    match context_source {
+        TaskInitialContextSource::Fresh => Ok(CoreConversationSnapshot::default()),
+        TaskInitialContextSource::CloneLatestRuntime => {
+            parent_snapshot_for_spawn(task_runtime, current_session_id)
+        }
     }
-    let parent_snapshot = parent_snapshot_for_spawn(task_runtime, current_session_id)?;
-    if fork_turns == "all" {
-        return Ok(snapshot_for_child_agent_fork(parent_snapshot));
-    }
-    let turn_count = fork_turns.parse::<usize>().map_err(|_| {
-        String::from("fork_turns must be `none`, `all`, or a positive integer string")
-    })?;
-    Ok(truncate_snapshot_to_last_user_turns(
-        parent_snapshot,
-        turn_count,
-    ))
 }
 
 /// Reads the parent snapshot registered for the active runtime context.
@@ -424,68 +394,27 @@ fn parent_snapshot_for_spawn(
         })
 }
 
-/// Builds a child-agent fork snapshot without provider continuation state.
-/// 构建不携带 Provider continuation 状态的子代理 fork 快照。
+/// Reads the fixed parent agent prompt snapshot captured for the active runtime context.
+/// 读取当前运行时上下文捕获的固定父级代理提示词快照。
 ///
 /// # Parameters
 /// 参数
-/// `snapshot` is the parent snapshot selected for the fork.
-/// `snapshot` 是为 fork 选择的父级快照。
+/// `task_runtime` owns execution contexts keyed by session id.
+/// `task_runtime` 持有按会话标识索引的执行上下文。
+/// `current_session_id` is the parent session whose fixed prompt should be reused.
+/// `current_session_id` 是需要复用固定提示词的父级会话。
 ///
 /// # Returns
 /// 返回值
-/// A snapshot containing only conversation messages.
-/// 仅包含会话消息的快照。
-fn snapshot_for_child_agent_fork(snapshot: CoreConversationSnapshot) -> CoreConversationSnapshot {
-    CoreConversationSnapshot {
-        messages: snapshot.messages,
-        records: Vec::new(),
-        continuation: Default::default(),
-    }
-}
-
-/// Truncates a snapshot to the suffix beginning at the last N user-authored turns.
-/// 将快照裁剪为从最后 N 个用户回合开始的后缀。
-///
-/// # Parameters
-/// 参数
-/// `snapshot` is the parent snapshot to truncate.
-/// `snapshot` 是需要裁剪的父级快照。
-/// `turn_count` is the positive count of user turns to preserve.
-/// `turn_count` 是需要保留的正数用户回合数量。
-///
-/// # Returns
-/// 返回值
-/// A truncated snapshot with provider continuation cleared.
-/// 清空 Provider continuation 后的裁剪快照。
-pub(super) fn truncate_snapshot_to_last_user_turns(
-    snapshot: CoreConversationSnapshot,
-    turn_count: usize,
-) -> CoreConversationSnapshot {
-    if turn_count == 0 || snapshot.messages.is_empty() {
-        return CoreConversationSnapshot::default();
-    }
-    let mut user_turns_seen = 0usize;
-    let mut start_index = 0usize;
-    for (index, message) in snapshot.messages.iter().enumerate().rev() {
-        if matches!(message.payload, CoreConversationPayload::UserText { .. }) {
-            user_turns_seen += 1;
-            if user_turns_seen == turn_count {
-                start_index = index;
-                break;
-            }
-        }
-    }
-    let messages = if user_turns_seen < turn_count {
-        snapshot.messages
-    } else {
-        snapshot.messages[start_index..].to_vec()
-    };
-    CoreConversationSnapshot {
-        messages,
-        records: Vec::new(),
-        continuation: Default::default(),
-    }
+/// The fixed agent prompt snapshot when the parent runtime context has registered one.
+/// 父级运行时上下文已注册时返回固定代理提示词快照。
+fn parent_agent_prompt_snapshot_for_spawn(
+    task_runtime: &TaskRuntime,
+    current_session_id: SessionId,
+) -> Option<ExecutionAgentPromptSnapshot> {
+    task_runtime
+        .execution_context_for_session(current_session_id)
+        .and_then(|context| context.agent_prompt_snapshot)
 }
 
 /// Initialization fields for creating one fresh task-session record.
@@ -572,6 +501,7 @@ pub(super) fn build_task_session_record(init: TaskSessionRecordInit) -> TaskSess
         invocation_config,
         display_title,
         controller_config,
+        agent_prompt_snapshot: None,
         snapshot,
         last_prompt,
         last_result_text: String::new(),
@@ -622,6 +552,10 @@ pub(super) fn task_session_record_from_persisted_metadata(
         invocation_config,
         display_title: metadata.display_title.clone(),
         controller_config,
+        agent_prompt_snapshot: metadata
+            .agent_prompt_snapshot
+            .as_ref()
+            .and_then(|text| ExecutionAgentPromptSnapshot::fixed_parent_runtime(text.as_str())),
         snapshot,
         last_prompt: prompt,
         last_result_text: metadata.last_result_summary.clone().unwrap_or_default(),
@@ -698,12 +632,6 @@ pub(super) fn task_controller_config_from_context(
         .model_id
         .clone()
         .or_else(|| effective_config.provider_model.model_id.clone())?;
-    let system_prompt_layers = if context.system_prompt_layers.is_empty() {
-        effective_config.system_prompt_layers.clone()
-    } else {
-        context.system_prompt_layers.clone()
-    };
-    let system_prompt = system_prompt_layers.join("\n\n");
     let temperature = effective_config
         .extra
         .get("temperature")
@@ -719,8 +647,8 @@ pub(super) fn task_controller_config_from_context(
     Some(CoreControllerConfig {
         provider_id,
         model_id,
-        prompt_layers: CoreProviderPromptLayers::from_system_prompt(system_prompt.clone()),
-        system_prompt,
+        prompt_layers: CoreProviderPromptLayers::default(),
+        system_prompt: String::new(),
         temperature,
         max_turns,
         additional_params: None,

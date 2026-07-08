@@ -1,5 +1,14 @@
 import React from "react";
 import { AskQuestionDialog } from "@/components/ask/AskQuestionDialog";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ProjectFolderPickerDialog,
   type ProjectFolderPickerDialogProps,
@@ -24,6 +33,11 @@ import type {
   ProjectSummary,
   WorkbenchSnapshot,
 } from "@/types";
+import { useI18n } from "@/i18n";
+import type {
+  StopConversationRunAgentPromptItem,
+  StopConversationRunChoice,
+} from "@/components/workspace/workbench-layout/types";
 
 // WorkbenchDialogsProps groups globally mounted workbench dialogs and their callbacks.
 // WorkbenchDialogsProps 汇总工作台全局挂载的对话框及其回调。
@@ -115,6 +129,15 @@ export interface WorkbenchDialogsProps {
   // Current pending ask-tool request.
   // 当前待处理的 ask 工具请求。
   pendingQuestion: PendingQuestionSnapshot | null;
+  // Running agents that require a main-stop decision.
+  // 需要主会话停止决策的运行中智能体。
+  stopConversationAgents: StopConversationRunAgentPromptItem[] | null;
+  // Cancels the main conversation stop flow.
+  // 取消主会话停止流程。
+  onCancelStopConversationRun: () => void;
+  // Confirms how the main stop flow should handle running agents.
+  // 确认主会话停止流程应如何处理运行中智能体。
+  onConfirmStopConversationRun: (choice: StopConversationRunChoice) => void;
   // Rejects the pending ask-tool request.
   // 拒绝当前待处理的 ask 工具请求。
   onRejectPendingQuestion: React.ComponentProps<typeof AskQuestionDialog>["onReject"];
@@ -177,6 +200,64 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
         onReject={props.onRejectPendingQuestion}
         onSubmit={props.onSubmitPendingQuestion}
       />
+      <StopConversationRunDialog
+        agents={props.stopConversationAgents}
+        onCancel={props.onCancelStopConversationRun}
+        onConfirm={props.onConfirmStopConversationRun}
+      />
     </>
+  );
+}
+
+// StopConversationRunDialog asks how to handle running agents while stopping the main conversation.
+// StopConversationRunDialog 询问停止主会话时如何处理运行中的智能体。
+function StopConversationRunDialog(props: {
+  // Running agents reported by the backend preflight.
+  // 后端预检报告的运行中智能体。
+  agents: StopConversationRunAgentPromptItem[] | null;
+  // Cancels the stop flow without touching runtime state.
+  // 取消停止流程且不修改运行态。
+  onCancel: () => void;
+  // Confirms the chosen stop behavior.
+  // 确认选中的停止行为。
+  onConfirm: (choice: StopConversationRunChoice) => void;
+}) {
+  const { t } = useI18n();
+  const agents = props.agents ?? [];
+  const open = Boolean(props.agents);
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (!nextOpen) {
+        props.onCancel();
+      }
+    }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("conversation.stopWithAgents.title")}</DialogTitle>
+          <DialogDescription>
+            {t("conversation.stopWithAgents.description").replace("{count}", String(agents.length))}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
+          {agents.map((agent) => (
+            <div key={agent.taskId} className="flex min-w-0 items-center justify-between gap-3">
+              <span className="min-w-0 truncate font-medium">{agent.label}</span>
+              <code className="shrink-0 rounded bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground">{agent.taskId.slice(0, 8)}</code>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={props.onCancel}>
+            {t("conversation.action.cancel")}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => props.onConfirm("main_only")}>
+            {t("conversation.stopWithAgents.mainOnly")}
+          </Button>
+          <Button type="button" variant="destructive" onClick={() => props.onConfirm("main_and_subagents")}>
+            {t("conversation.stopWithAgents.all")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

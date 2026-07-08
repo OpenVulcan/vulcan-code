@@ -189,6 +189,7 @@ fn segmented_store_round_trips_task_session_artifacts() {
         .join(SEGMENTED_TASK_DIR)
         .join(task_session_id.to_string());
     assert!(task_dir.join(SEGMENTED_METADATA_FILE).exists());
+    assert!(task_dir.join(SEGMENTED_TASK_METADATA_FILE).exists());
     assert!(task_dir.join(SEGMENTED_STATE_FILE).exists());
     assert!(task_dir.join("s001.jsonl").exists());
     assert!(!root.join("tasks").exists());
@@ -203,6 +204,17 @@ fn segmented_store_round_trips_task_session_artifacts() {
             .expect("load context")
             .and_then(|context| context.provider_id),
         Some("provider".to_string())
+    );
+    let state_document = read_required_json::<Value>(&task_dir.join(SEGMENTED_STATE_FILE))
+        .expect("read task state document");
+    assert_eq!(
+        state_document["runtime_state"]["active_provider_id"],
+        "provider"
+    );
+    assert_eq!(state_document["runtime_state"]["active_model_id"], "model");
+    assert_eq!(
+        state_document["current_context"]["conversation_state"],
+        json!({ "messages": [] })
     );
     assert_eq!(
         store
@@ -226,7 +238,18 @@ fn segmented_store_round_trips_task_session_artifacts() {
     let root_metadata =
         read_required_json::<Value>(&root.join(SEGMENTED_METADATA_FILE)).expect("root metadata");
     assert_eq!(root_metadata["next_global_seq"], 2);
-    let task_metadata = read_required_json::<Value>(&task_dir.join(SEGMENTED_METADATA_FILE))
+    let task_main_metadata = read_required_json::<Value>(&task_dir.join(SEGMENTED_METADATA_FILE))
+        .expect("task main metadata");
+    assert_eq!(
+        task_main_metadata["session_id"],
+        task_session_id.to_string()
+    );
+    assert_eq!(
+        task_main_metadata["canonical_source"],
+        "segmented_task_session"
+    );
+    assert_eq!(task_main_metadata["next_global_seq"], 2);
+    let task_metadata = read_required_json::<Value>(&task_dir.join(SEGMENTED_TASK_METADATA_FILE))
         .expect("task metadata");
     assert_eq!(task_metadata["agent_kind"], "agent_md");
     assert_eq!(task_metadata["agent_profile"]["prompt_source"], "agent_md");
@@ -242,7 +265,7 @@ fn segmented_store_round_trips_task_session_artifacts() {
     assert_eq!(task_mirror["dir"], format!("task/{}", task_session_id));
     assert_eq!(
         task_mirror["metadata_file"],
-        format!("task/{}/metadata.json", task_session_id)
+        format!("task/{}/task_metadata.json", task_session_id)
     );
     assert_eq!(task_mirror["display_title"], "Review task");
     assert_eq!(task_mirror["public_task_id"], "review-task");
@@ -287,7 +310,7 @@ fn segmented_store_round_trips_task_session_artifacts() {
     );
     assert_eq!(
         root_lines[1].payload["task_metadata_file"],
-        format!("task/{}/metadata.json", task_session_id)
+        format!("task/{}/task_metadata.json", task_session_id)
     );
     assert_eq!(root_lines[1].payload["agent_kind"], "agent_md");
     assert_eq!(
@@ -375,7 +398,7 @@ fn root_task_mirror_summaries_do_not_require_child_metadata_files() {
     let task_metadata_path = root
         .join(SEGMENTED_TASK_DIR)
         .join(task_session_id.to_string())
-        .join(SEGMENTED_METADATA_FILE);
+        .join(SEGMENTED_TASK_METADATA_FILE);
     std::fs::remove_file(task_metadata_path).expect("remove child metadata");
 
     let mirrors = store
@@ -517,7 +540,7 @@ fn legacy_root_task_mirror_backfills_parent_from_root_invocation_events() {
     let task_metadata_path = root
         .join(SEGMENTED_TASK_DIR)
         .join(task_session_id.to_string())
-        .join(SEGMENTED_METADATA_FILE);
+        .join(SEGMENTED_TASK_METADATA_FILE);
     std::fs::remove_file(task_metadata_path).expect("remove child metadata");
 
     let mirrors = store
@@ -561,7 +584,7 @@ fn task_metadata_write_includes_required_agent_fields() {
     let task_dir = root
         .join(SEGMENTED_TASK_DIR)
         .join(task_session_id.to_string());
-    let task_metadata_path = task_dir.join(SEGMENTED_METADATA_FILE);
+    let task_metadata_path = task_dir.join(SEGMENTED_TASK_METADATA_FILE);
     let written_metadata =
         read_required_json::<Value>(&task_metadata_path).expect("read written metadata");
     assert_eq!(written_metadata["agent_kind"], "agent_md");
@@ -572,6 +595,10 @@ fn task_metadata_write_includes_required_agent_fields() {
     assert!(written_metadata.get("task_session").is_some());
     assert!(written_metadata.get("segments").is_some());
     assert!(written_metadata.get("segment_policy").is_some());
+    let main_metadata = read_required_json::<Value>(&task_dir.join(SEGMENTED_METADATA_FILE))
+        .expect("read main-compatible metadata");
+    assert_eq!(main_metadata["session_id"], task_session_id.to_string());
+    assert_eq!(main_metadata["canonical_source"], "segmented_task_session");
 }
 
 /// Verifies nested task sessions stay under the root task directory while parent metadata preserves hierarchy.
@@ -815,15 +842,16 @@ fn parent_task_link_uses_current_child_active_segment_after_rollover() {
     let task_dir = root
         .join(SEGMENTED_TASK_DIR)
         .join(task_session_id.to_string());
-    let task_metadata_path = task_dir.join(SEGMENTED_METADATA_FILE);
-    let mut task_metadata =
-        read_required_json::<SegmentedTaskMetadataDocument>(&task_metadata_path)
-            .expect("task metadata");
-    task_metadata.segment_policy = SegmentPolicy {
+    let task_metadata_path = task_dir.join(SEGMENTED_TASK_METADATA_FILE);
+    let task_main_metadata_path = task_dir.join(SEGMENTED_METADATA_FILE);
+    let mut task_main_metadata =
+        read_required_json::<SegmentedTaskSessionMainMetadataDocument>(&task_main_metadata_path)
+            .expect("task main metadata");
+    task_main_metadata.segment_policy = SegmentPolicy {
         max_lines: 2,
         max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
     };
-    write_json_file(&task_metadata_path, &task_metadata).expect("write task policy");
+    write_json_file(&task_main_metadata_path, &task_main_metadata).expect("write task policy");
 
     store
         .append_event(SessionEventRecord::new(
@@ -845,6 +873,10 @@ fn parent_task_link_uses_current_child_active_segment_after_rollover() {
             json!({ "body": "second" }),
         ))
         .expect("append second task event");
+    let task_main_metadata =
+        read_required_json::<SegmentedTaskSessionMainMetadataDocument>(&task_main_metadata_path)
+            .expect("task main metadata after rollover");
+    assert_eq!(task_main_metadata.active_segment, "s002.jsonl");
     let task_metadata = read_required_json::<SegmentedTaskMetadataDocument>(&task_metadata_path)
         .expect("task metadata after rollover");
     assert_eq!(task_metadata.active_segment, "s002.jsonl");
@@ -975,4 +1007,229 @@ fn root_task_link_uses_highest_existing_sequence_when_metadata_is_stale() {
     let updated_metadata =
         read_required_json::<Value>(&metadata_path).expect("read updated root metadata");
     assert_eq!(updated_metadata["next_global_seq"], json!(7));
+}
+
+/// Verifies task-local event appends follow the highest persisted sequence and backfill nested event sequence.
+/// 验证子任务本地事件追加会跟随已持久化最大序号并回填嵌套事件序号。
+#[test]
+fn task_segment_append_uses_highest_existing_sequence_and_backfills_event() {
+    let root = test_root("task_segment_append_uses_highest_existing_sequence_and_backfills_event");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    store
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent: ParentSessionRef::MainSession { root_session_id },
+            public_task_id: "stale-task-seq-child".to_string(),
+            display_title: "stale-task-seq-child".to_string(),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 1,
+            timestamp_ms: 200,
+        }))
+        .expect("create task session");
+    let task_dir = root
+        .join(SEGMENTED_TASK_DIR)
+        .join(task_session_id.to_string());
+    append_json_line(
+        &task_dir.join("s001.jsonl"),
+        &SegmentedEventLine {
+            seq: 5,
+            timestamp: "250".to_string(),
+            kind: "display_event".to_string(),
+            payload: json!({ "retained": true }),
+            turn_index: None,
+        },
+    )
+    .expect("append retained high-sequence task row");
+    let metadata_path = task_dir.join(SEGMENTED_METADATA_FILE);
+    let mut metadata =
+        read_required_json::<Value>(&metadata_path).expect("read stale task metadata");
+    metadata["next_global_seq"] = json!(1);
+    metadata["segments"][0]["line_count"] = json!(2);
+    write_json_file(&metadata_path, &metadata).expect("write stale task metadata");
+
+    store
+        .append_event(SessionEventRecord::new(
+            "task-local-event",
+            task_session_id,
+            0,
+            SessionEventKind::AssistantOutput,
+            300,
+            json!({ "body": "done" }),
+        ))
+        .expect("append task-local event");
+
+    let task_lines =
+        read_json_lines::<SegmentedEventLine>(&task_dir.join("s001.jsonl")).expect("read task");
+    let appended = task_lines.last().expect("appended task row");
+    assert_eq!(appended.seq, 6);
+    assert_eq!(appended.payload["session_event"]["sequence"], json!(6));
+    let loaded_events = store
+        .load_events(task_session_id)
+        .expect("load task events");
+    assert_eq!(
+        loaded_events
+            .last()
+            .expect("loaded appended event")
+            .sequence,
+        6
+    );
+    let updated_metadata =
+        read_required_json::<Value>(&metadata_path).expect("read updated task metadata");
+    assert_eq!(updated_metadata["next_global_seq"], json!(7));
+}
+
+/// Verifies task-local appends repair a truncated JSONL tail before writing the next event.
+/// 验证子任务本地追加会在写入下一条事件前修复截断的 JSONL 尾行。
+#[test]
+fn task_segment_append_repairs_truncated_jsonl_tail_line() {
+    let root = test_root("task_segment_append_repairs_truncated_jsonl_tail_line");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    store
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent: ParentSessionRef::MainSession { root_session_id },
+            public_task_id: "repair-task-tail-child".to_string(),
+            display_title: "repair-task-tail-child".to_string(),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 1,
+            timestamp_ms: 200,
+        }))
+        .expect("create task session");
+    store
+        .append_event(SessionEventRecord::new(
+            "before-broken-tail",
+            task_session_id,
+            0,
+            SessionEventKind::AssistantOutput,
+            250,
+            json!({ "body": "before" }),
+        ))
+        .expect("append first task-local event");
+    let task_dir = root
+        .join(SEGMENTED_TASK_DIR)
+        .join(task_session_id.to_string());
+    let segment_path = task_dir.join("s001.jsonl");
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&segment_path)
+            .expect("open task segment for broken tail");
+        use std::io::Write as _;
+        write!(file, "{{\"seq\":999,\"timestamp\":\"broken\"")
+            .expect("append truncated task segment tail");
+    }
+
+    store
+        .append_event(SessionEventRecord::new(
+            "after-broken-tail",
+            task_session_id,
+            0,
+            SessionEventKind::AssistantOutput,
+            300,
+            json!({ "body": "after" }),
+        ))
+        .expect("append after repairing broken tail");
+
+    let text = fs::read_to_string(&segment_path).expect("read repaired task segment");
+    assert!(
+        text.lines()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    );
+    let task_lines =
+        read_json_lines::<SegmentedEventLine>(&segment_path).expect("read repaired task lines");
+    assert_eq!(task_lines.last().expect("last repaired line").seq, 2);
+    let updated_metadata = read_required_json::<Value>(&task_dir.join(SEGMENTED_METADATA_FILE))
+        .expect("read updated task metadata");
+    assert_eq!(updated_metadata["next_global_seq"], json!(3));
+    assert_eq!(updated_metadata["segments"][0]["line_count"], json!(3));
+}
+
+/// Verifies latest-payload reads repair truncated task JSONL and refresh segment metadata.
+/// 验证最新载荷读取会修复截断的子任务 JSONL，并刷新分段元数据。
+#[test]
+fn load_latest_event_payload_repairs_truncated_task_jsonl_tail() {
+    let root = test_root("load_latest_event_payload_repairs_truncated_task_jsonl_tail");
+    let store = SegmentedTaskSessionStore::new(&root);
+    let root_session_id = SessionNodeId::new_v4();
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    store
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent: ParentSessionRef::MainSession { root_session_id },
+            public_task_id: "repair-latest-payload-child".to_string(),
+            display_title: "repair-latest-payload-child".to_string(),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 1,
+            timestamp_ms: 200,
+        }))
+        .expect("create task session");
+    store
+        .append_event(SessionEventRecord::new(
+            "latest-before-broken-tail",
+            task_session_id,
+            0,
+            SessionEventKind::AssistantOutput,
+            250,
+            json!({ "body": "latest-valid" }),
+        ))
+        .expect("append latest valid task event");
+
+    let task_dir = root
+        .join(SEGMENTED_TASK_DIR)
+        .join(task_session_id.to_string());
+    let segment_path = task_dir.join("s001.jsonl");
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&segment_path)
+            .expect("open task segment for broken tail");
+        use std::io::Write as _;
+        write!(file, "{{\"seq\":999,\"timestamp\":\"broken\"")
+            .expect("append truncated task segment tail");
+    }
+    let main_metadata_path = task_dir.join(SEGMENTED_METADATA_FILE);
+    let mut stale_metadata =
+        read_required_json::<Value>(&main_metadata_path).expect("read stale task main metadata");
+    stale_metadata["segments"][0]["line_count"] = json!(99);
+    write_json_file(&main_metadata_path, &stale_metadata).expect("write stale task metadata");
+
+    let payload = store
+        .load_latest_event_payload(task_session_id)
+        .expect("load latest payload after repair")
+        .expect("latest payload");
+
+    assert_eq!(payload["body"], json!("latest-valid"));
+    let text = fs::read_to_string(&segment_path).expect("read repaired task segment");
+    assert!(
+        text.lines()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+    );
+    let refreshed_main_metadata =
+        read_required_json::<Value>(&main_metadata_path).expect("read refreshed main metadata");
+    assert_eq!(
+        refreshed_main_metadata["segments"][0]["line_count"],
+        json!(2)
+    );
+    assert_eq!(refreshed_main_metadata["next_global_seq"], json!(2));
+    let refreshed_task_metadata =
+        read_required_json::<Value>(&task_dir.join(SEGMENTED_TASK_METADATA_FILE))
+            .expect("read refreshed task metadata");
+    assert_eq!(
+        refreshed_task_metadata["segments"][0]["line_count"],
+        json!(2)
+    );
+    assert_eq!(refreshed_task_metadata["next_seq"], json!(2));
 }

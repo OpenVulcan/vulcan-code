@@ -20,12 +20,14 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
         node_id: SessionNodeId,
     ) -> Result<Vec<SessionEventRecord>, SessionStoreError> {
         let task_dir = self.indexed_task_dir(node_id)?;
-        let metadata =
-            read_required_task_metadata_document(&task_dir.join(SEGMENTED_METADATA_FILE))?;
+        let (_, lines) = read_repaired_task_segment_lines(&task_dir)?;
         let mut records = Vec::new();
-        for line in read_segment_lines(&task_dir, &metadata.segments)? {
+        for line in lines {
             if let Some(value) = line.payload.get("session_event").cloned() {
-                records.push(serde_json::from_value(value).map_err(to_store_error)?);
+                let mut record: SessionEventRecord =
+                    serde_json::from_value(value).map_err(to_store_error)?;
+                record.sequence = line.seq;
+                records.push(record);
             }
         }
         records.sort_by_key(|record: &SessionEventRecord| record.sequence);
@@ -39,8 +41,10 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
         let mut state = read_task_state(&task_dir)?.unwrap_or_else(|| {
             SegmentedTaskStateDocument::new(context.node_id, current_unix_millis_u64())
         });
-        state.updated_at = current_unix_millis_u64();
-        state.context = Some(context);
+        state.updated_at = current_unix_millis_u64().to_string();
+        state.runtime_state = task_main_runtime_state_from_context(&context, &state.updated_at);
+        state.current_context = task_main_current_context_from_context(&context, &state.updated_at);
+        state.task_context = Some(context);
         write_json_file(&task_dir.join(SEGMENTED_STATE_FILE), &state)
     }
 
@@ -51,7 +55,7 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
         node_id: SessionNodeId,
     ) -> Result<Option<SessionContextDocument>, SessionStoreError> {
         let task_dir = self.indexed_task_dir(node_id)?;
-        Ok(read_task_state(&task_dir)?.and_then(|state| state.context))
+        Ok(read_task_state(&task_dir)?.and_then(|state| state.task_context))
     }
 
     /// Saves a lightweight runtime checkpoint into state.json.
@@ -64,7 +68,7 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
         let mut state = read_task_state(&task_dir)?.unwrap_or_else(|| {
             SegmentedTaskStateDocument::new(checkpoint.node_id, current_unix_millis_u64())
         });
-        state.updated_at = current_unix_millis_u64();
+        state.updated_at = current_unix_millis_u64().to_string();
         state.runtime_checkpoint = Some(checkpoint);
         write_json_file(&task_dir.join(SEGMENTED_STATE_FILE), &state)
     }
@@ -93,6 +97,9 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         }
         let task_dir = self.new_task_dir(&metadata)?;
         Self::create_task_layout(&task_dir)?;
+        let root_metadata = read_root_metadata_value(&self.root_session_dir)?;
+        let mut main_metadata =
+            SegmentedTaskSessionMainMetadataDocument::new(&metadata, root_metadata.as_ref());
         let mut document = SegmentedTaskMetadataDocument::new(metadata.clone());
         let meta_line = SegmentedEventLine {
             seq: 0,
@@ -112,16 +119,18 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
             }),
             turn_index: None,
         };
-        let bytes = append_json_line(&task_dir.join("s001.jsonl"), &meta_line)?;
-        if let Some(segment) = document.segments.first_mut() {
+        let bytes = append_json_line(&task_dir.join(&main_metadata.active_segment), &meta_line)?;
+        if let Some(segment) = main_metadata.segments.first_mut() {
             segment.line_count = 1;
             segment.byte_len = bytes;
             segment.start_seq = 0;
             segment.first_timestamp = Some(meta_line.timestamp.clone());
             segment.last_timestamp = Some(meta_line.timestamp.clone());
         }
-        document.next_seq = 1;
-        write_json_file(&task_dir.join(SEGMENTED_METADATA_FILE), &document)?;
+        main_metadata.next_global_seq = 1;
+        sync_task_metadata_segments_from_main(&mut document, &main_metadata);
+        write_json_file(&task_main_metadata_path(&task_dir), &main_metadata)?;
+        write_json_file(&task_metadata_path(&task_dir), &document)?;
         write_json_file(
             &task_dir.join(SEGMENTED_STATE_FILE),
             &SegmentedTaskStateDocument::new(metadata.task_session_id, metadata.created_at),
@@ -152,17 +161,23 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         self.append_task_invocation_event(metadata.parent, created_event)
     }
 
-    /// Saves task-session metadata into metadata.json.
-    /// 将子任务会话元数据保存到 metadata.json。
+    /// Saves task-session metadata into task_metadata.json.
+    /// 将子任务会话元数据保存到 task_metadata.json。
     fn save_task_session(&self, metadata: TaskSessionMetadata) -> Result<(), SessionStoreError> {
         let task_dir = self.indexed_task_dir(metadata.task_session_id)?;
-        let metadata_path = task_dir.join(SEGMENTED_METADATA_FILE);
+        let metadata_path = task_metadata_path(&task_dir);
         let mut document = read_required_task_metadata_document(&metadata_path)?;
         document.task_session = metadata;
         document.status = document.task_session.status;
         document.updated_at = document.task_session.updated_at;
         document.agent_kind = segmented_agent_kind(&document.task_session);
         document.agent_profile = segmented_agent_profile(&document.task_session);
+        let main_metadata_path = task_main_metadata_path(&task_dir);
+        let mut main_metadata = read_required_task_main_metadata_document(&main_metadata_path)?;
+        main_metadata.title = Some(document.task_session.display_title.clone());
+        main_metadata.updated_at = document.task_session.updated_at.to_string();
+        sync_task_metadata_segments_from_main(&mut document, &main_metadata);
+        write_json_file(&main_metadata_path, &main_metadata)?;
         write_json_file(&metadata_path, &document)?;
         refresh_main_session_task_mirror_from_metadata(&self.root_session_dir, &document)?;
         Ok(())
@@ -177,10 +192,8 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         let Some(task_dir) = self.find_task_dir(task_session_id)? else {
             return Ok(None);
         };
-        Ok(
-            read_task_metadata_document(&task_dir.join(SEGMENTED_METADATA_FILE))?
-                .map(|document| document.task_session),
-        )
+        Ok(read_task_metadata_document(&task_metadata_path(&task_dir))?
+            .map(|document| document.task_session))
     }
 
     /// Finds one task session by direct parent and public task id.
@@ -240,7 +253,7 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
     ) -> Result<(), SessionStoreError> {
         self.append_task_segment_event(
             checkpoint.node_id,
-            "compaction_marker",
+            "display_event",
             checkpoint.timestamp_ms,
             json!({ "compaction_checkpoint": checkpoint }),
         )?;
@@ -254,10 +267,9 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         task_session_id: TaskSessionId,
     ) -> Result<Vec<SessionCompactionCheckpoint>, SessionStoreError> {
         let task_dir = self.indexed_task_dir(task_session_id)?;
-        let metadata =
-            read_required_task_metadata_document(&task_dir.join(SEGMENTED_METADATA_FILE))?;
+        let (_, lines) = read_repaired_task_segment_lines(&task_dir)?;
         let mut checkpoints = Vec::new();
-        for line in read_segment_lines(&task_dir, &metadata.segments)? {
+        for line in lines {
             if let Some(value) = line.payload.get("compaction_checkpoint").cloned() {
                 checkpoints.push(serde_json::from_value(value).map_err(to_store_error)?);
             }

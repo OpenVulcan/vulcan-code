@@ -553,12 +553,14 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         let live_context_budgets = guard.live_context_budgets.clone();
         let (surface_messages, subagent_navigation) = match subagent_navigation_mode {
             SubagentNavigationRefreshMode::Rebuild => (
-                active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
-                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
+                active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot)?,
+                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot)?,
             ),
             SubagentNavigationRefreshMode::Preserve => {
-                let subagent_navigation =
-                    subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+                let subagent_navigation = subagent_navigation_snapshot_from_cached_state(
+                    &mut guard,
+                    &workspace_snapshot,
+                )?;
                 let active_session_id = preserved_active_surface_session_id(
                     &workspace_snapshot,
                     subagent_navigation.as_ref(),

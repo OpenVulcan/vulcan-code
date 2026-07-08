@@ -14,6 +14,7 @@ use crate::tooling::native::SUBMIT_PLAN_TOOL_ID;
 use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
 use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
+use vulcan_core::types::ConversationPayload as CoreConversationPayload;
 use vulcan_luaskills_prompt::{LuaSkillPromptEntry, render_luaskills_prompt_segment};
 use vulcan_prompt_skills::{
     PromptSkillsProjectConfig, PromptSkillsSessionConfig, render_prompt_skills_instructions,
@@ -150,6 +151,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         remove_resolved_tool(&mut resolved_tools, SUBMIT_PLAN_TOOL_ID);
     }
     filter_resolved_tool_set_by_tool_exposure(&mut resolved_tools, &tool_exposure);
+    remove_request_hidden_tools(&mut resolved_tools, &request.tool_request_hidden_tool_ids);
     let prompt_skill_tool_available = request.prompt_purpose.supports_user_turn_tooling()
         && render_prompt_skills_instructions(&prompt_skills).is_some();
     if !prompt_skill_tool_available {
@@ -173,7 +175,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         ));
     }
 
-    if request.prompt.trim().is_empty() {
+    if request.prompt.trim().is_empty() && request.provider_visible_agent_messages.is_empty() {
         warnings.push(String::from(
             "当前提示词为空，本次准备计划仅验证运行时链路。",
         ));
@@ -221,9 +223,10 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         agent_id: active_agent.id.clone(),
         agent_name: active_agent.name.clone(),
         agent_kind: active_agent.kind.label().to_string(),
-        agent_system_prompt_override: request.agent_system_prompt_override.clone(),
+        agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
+        subagent_prompt_context: request.subagent_prompt_context.clone(),
         model_blueprint,
-        prompt_preview: truncate_preview(request.prompt.trim(), 180),
+        prompt_preview: execution_prompt_preview(request),
         workspace_path,
         task_session_store_root: request.task_session_store_root.clone(),
         conversation_attachments,
@@ -256,6 +259,8 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         provider_request_snapshot_json: None,
         provider_wire_request_json: None,
         context_budget: None,
+        context_compaction_policy: request.context_compaction_policy,
+        context_budget_override: request.context_budget_override,
         context_assembly: None,
         context_baseline: None,
         context_request_mode: None,
@@ -351,6 +356,17 @@ fn remove_resolved_tool(resolved_tools: &mut vulcan_tools_manager::ResolvedToolS
         .retain(|definition| definition.descriptor.id != tool_id);
 }
 
+/// Removes request-hidden tools after normal exposure resolution has completed.
+/// 在常规可见性解析完成后移除请求级强制隐藏工具。
+fn remove_request_hidden_tools(
+    resolved_tools: &mut vulcan_tools_manager::ResolvedToolSet,
+    hidden_tool_ids: &[String],
+) {
+    for tool_id in hidden_tool_ids {
+        remove_resolved_tool(resolved_tools, tool_id);
+    }
+}
+
 /// Adds non-fatal diagnostics when a configured semantic AI fallback could not be exposed.
 /// 当配置的语义 AI 回退工具无法暴露时追加非致命诊断。
 fn push_missing_ai_tool_fallback_warnings(
@@ -372,6 +388,38 @@ fn push_missing_ai_tool_fallback_warnings(
             ));
         }
     }
+}
+
+/// Builds the human-readable prompt preview for user and seeded-agent turns.
+/// 为用户回合与已播种智能体回合构建人类可读提示预览。
+///
+/// # Parameters
+/// 参数
+/// `request` is the execution request being prepared.
+/// `request` 是正在准备的执行请求。
+///
+/// # Returns
+/// 返回值
+/// A truncated preview of the user prompt or the first provider-visible agent message.
+/// 返回用户提示词或第一条 Provider 可见智能体消息的截断预览。
+fn execution_prompt_preview(request: &ExecutionPreparationRequest) -> String {
+    let trimmed_prompt = request.prompt.trim();
+    if !trimmed_prompt.is_empty() {
+        return truncate_preview(trimmed_prompt, 180);
+    }
+    request
+        .provider_visible_agent_messages
+        .first()
+        .map(|message| {
+            CoreConversationPayload::render_agent_message_text(
+                &message.message_type,
+                &message.task_name,
+                &message.sender,
+                &message.payload,
+            )
+        })
+        .map(|preview| truncate_preview(&preview, 180))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

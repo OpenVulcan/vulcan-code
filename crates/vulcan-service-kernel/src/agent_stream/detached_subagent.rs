@@ -209,25 +209,11 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     }
                 }
                 refresh_webui_subagent_navigation_round_visibility(state, parent_session_id)?;
-                emit_webui_subagent_navigation_changed_delta(app, state)?;
-                if parent_is_regular_session
-                    && !parent_is_stopped
-                    && mailbox_delivery_error.is_none()
-                    && let Some(completion_request) =
-                        maybe_prepare_webui_parent_completion_after_subagent_finished(
-                            state,
-                            agent_runtime,
-                            parent_session_id,
-                        )?
-                {
-                    spawn_conversation_completion_hook_task(
-                        app.clone(),
-                        state.clone(),
-                        controller_runtime.clone(),
-                        agent_runtime.clone(),
-                        completion_request,
-                    );
-                }
+                emit_webui_subagent_navigation_changed_delta_for_parent(
+                    app,
+                    state,
+                    parent_session_id,
+                )?;
             }
             if webui_detached_parent_event_should_continue_pending_prompt(
                 parent_is_regular_session,
@@ -314,98 +300,6 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
     }
 }
 
-/// Prepares parent logical turn completion once its final child subagent reaches a terminal state.
-/// 当最后一个子代理进入终态后准备父级逻辑回合闭合请求。
-pub(crate) fn maybe_prepare_webui_parent_completion_after_subagent_finished(
-    state: &SharedServiceBridgeState,
-    agent_runtime: &AgentRuntimeBridge,
-    parent_session_id: SessionId,
-) -> Result<
-    Option<vulcan_agent_runtime::agent_runtime::conversation_hooks::ConversationCompletionRequest>,
-    String,
-> {
-    let gate = webui_turn_completion_gate_from_state(state, agent_runtime, parent_session_id)?;
-    webui_trace(
-        "subagent_parent_completion_gate",
-        format!(
-            "parent={parent_session_id} pending_subagents={} has_active_hook_turn={}",
-            gate.pending_subagent_count, gate.has_active_hook_turn
-        ),
-    );
-    if gate.has_pending_work() || !gate.has_active_hook_turn {
-        return Ok(None);
-    }
-
-    let completion_request = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        let now = current_unix_millis_text();
-        let project_id = owning_project_id_for_session(workspace, parent_session_id);
-        let runtime_state = workspace
-            .session_runtime_state
-            .entry(parent_session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: now.clone(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        let assistant_content =
-            latest_assistant_content_for_parent_completion(&runtime_state.conversation_state);
-        let provider_request_count = runtime_state
-            .last_safe_provider_request_count
-            .unwrap_or_default();
-        let conversation_state = runtime_state.conversation_state.clone();
-        let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
-            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
-        let (hook_turn_id, request) = hook_runtime.prepare_turn_completion_dispatch_with_status(
-            parent_session_id,
-            project_id,
-            assistant_content.as_str(),
-            provider_request_count,
-            &conversation_state,
-            ConversationTurnCompletionStatus::Completed,
-            0,
-        );
-        runtime_state
-            .context_injection_state
-            .consume_turn(&hook_turn_id, &now);
-        runtime_state.vmm_profile_sync.record_completed_turn();
-        agent_runtime
-            .vmm_hook_runtime
-            .store_profile_sync_state(parent_session_id, runtime_state.vmm_profile_sync.clone());
-        runtime_state.updated_at = now;
-        request
-    };
-    Ok(Some(completion_request))
-}
-
-/// Returns the latest assistant text to close a parent completion hook payload.
-/// 返回用于闭合父级完成 hook 载荷的最近助手文本。
-fn latest_assistant_content_for_parent_completion(
-    conversation_state: &vulcan_agent_runtime::conversation_protocol::SessionConversationState,
-) -> String {
-    for message in conversation_state.messages.iter().rev() {
-        if let vulcan_agent_runtime::conversation_protocol::SessionConversationPayload::Assistant {
-            text,
-            ..
-        } = &message.payload
-        {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-    }
-
-    String::from("The model completed the run but did not return visible text output.")
-}
-
 /// Enqueues one completed subagent result into the parent kernel mailbox for provider delivery.
 /// 将单个已完成子代理结果加入父级内核 mailbox，供后续 Provider 输入投递。
 pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
@@ -469,8 +363,52 @@ pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
     Ok(true)
 }
 
-/// Builds Codex-compatible provider input from the parent session kernel mailbox.
-/// 从父会话内核 mailbox 构建 Codex 兼容的 provider 输入。
+/// Collects typed provider-visible agent messages from the parent session kernel mailbox.
+/// 从父会话内核 mailbox 收集 Provider 可见类型化智能体消息。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state that owns runtime kernels.
+/// `state` 是持有运行时内核的共享服务状态。
+/// `parent_session_id` identifies the parent WebUI session.
+/// `parent_session_id` 标识父级 WebUI 会话。
+/// `task_id` optionally selects one child task session.
+/// `task_id` 可选指定一个子任务会话。
+///
+/// # Returns
+/// 返回值
+/// Typed inter-agent messages matching the requested mailbox scope.
+/// 返回匹配指定 mailbox 范围的类型化代理间消息。
+pub(crate) fn webui_session_mailbox_agent_messages_from_kernel(
+    state: &SharedServiceBridgeState,
+    parent_session_id: SessionId,
+    task_id: Option<&str>,
+) -> Result<Vec<ExecutionProviderVisibleAgentMessage>, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(kernel) = guard.session_runtime_kernels.get(&parent_session_id) else {
+        return Ok(Vec::new());
+    };
+    let mut messages = Vec::new();
+    for input in kernel.input_queue().get_unconsumed_mailbox_input() {
+        if input.kind != TurnInputKind::SubagentMessage
+            || task_id.is_some_and(|task_id| {
+                input.payload.get("task_id").and_then(Value::as_str) != Some(task_id)
+            })
+        {
+            continue;
+        }
+        messages.push(webui_provider_visible_agent_message_from_turn_input(
+            parent_session_id,
+            &input,
+        )?);
+    }
+    Ok(messages)
+}
+
+/// Builds Codex-compatible provider input text from the parent session kernel mailbox.
+/// 从父会话内核 mailbox 构建 Codex 兼容的 provider 输入文本。
 ///
 /// # Parameters
 /// 参数
@@ -485,38 +423,31 @@ pub(crate) fn enqueue_webui_session_mailbox_input_if_needed(
 /// 返回值
 /// Inter-agent message text when matching mailbox input exists.
 /// 当存在匹配 mailbox 输入时返回代理间消息文本。
+#[cfg(test)]
 pub(crate) fn webui_session_mailbox_input_from_kernel(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
     task_id: Option<&str>,
 ) -> Result<Option<String>, String> {
-    let guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let Some(kernel) = guard.session_runtime_kernels.get(&parent_session_id) else {
-        return Ok(None);
-    };
-    let mut mailbox_prompt = String::new();
-    for input in kernel.input_queue().get_unconsumed_mailbox_input() {
-        if input.kind != TurnInputKind::SubagentMessage
-            || task_id.is_some_and(|task_id| {
-                input.payload.get("task_id").and_then(Value::as_str) != Some(task_id)
-            })
-        {
-            continue;
-        }
-        if !mailbox_prompt.is_empty() {
-            mailbox_prompt.push_str("\n\n");
-        }
-        mailbox_prompt.push_str(&webui_agent_message_text_from_turn_input(
-            parent_session_id,
-            &input,
-        ));
-    }
-    if mailbox_prompt.is_empty() {
+    let messages =
+        webui_session_mailbox_agent_messages_from_kernel(state, parent_session_id, task_id)?;
+    if messages.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(mailbox_prompt))
+        Ok(Some(
+            messages
+                .iter()
+                .map(|message| {
+                    vulcan_core::types::ConversationPayload::render_agent_message_text(
+                        &message.message_type,
+                        &message.task_name,
+                        &message.sender,
+                        &message.payload,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ))
     }
 }
 
@@ -615,7 +546,259 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         ),
         ExecutionStreamEvent::Finished(report) => {
             let _ = (app, agent_runtime);
-            apply_task_session_execution_report_to_memory_in_place(state, &report).map(|_| ())
+            let session_id = report.session_id;
+            let before_visible_messages =
+                visible_workbench_messages_for_conversation(state, session_id)?;
+            apply_task_session_execution_report_to_memory_in_place(state, &report)?;
+            emit_detached_child_terminal_messages_patch(
+                app,
+                state,
+                session_id,
+                before_visible_messages.as_slice(),
+            )
         }
+    }
+}
+
+/// Returns the currently retained WebUI messages for one conversation surface.
+/// 返回当前保留的单个会话界面消息集合。
+fn visible_workbench_messages_for_conversation(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Vec<ConversationMessage>, String> {
+    let conversation_id = session_id.to_string();
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    Ok(guard
+        .workbench
+        .messages
+        .iter()
+        .filter(|message| message.conversation_id == conversation_id)
+        .cloned()
+        .collect())
+}
+
+/// Emits the refreshed child transcript after a detached child reaches a terminal state.
+/// 在分离子任务进入终态后发送刷新的子转录补丁。
+fn emit_detached_child_terminal_messages_patch(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    before_visible_messages: &[ConversationMessage],
+) -> Result<(), String> {
+    let conversation_id = session_id.to_string();
+    let message_window_event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if !workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
+            return Ok(());
+        }
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+        let messages = surface_messages_for_session_without_subagent_navigation_refresh(
+            &guard, workspace, session_id,
+        );
+        let projected_messages =
+            conversation_messages_from_session(&conversation_id, messages.as_slice(), false);
+        let Some(message_patch) = build_conversation_messages_patched_delta(
+            &conversation_id,
+            before_visible_messages,
+            projected_messages.as_slice(),
+        ) else {
+            return Ok(());
+        };
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        replace_conversation_messages_in_workbench_window(
+            &mut guard.workbench.messages,
+            &conversation_id,
+            projected_messages,
+        );
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "detached_child_terminal_messages_patch_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(message_window_event)),
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Minimal shell host used only by detached-subagent projection tests.
+    /// 仅供分离智能体投影测试使用的最小宿主壳。
+    struct DetachedSubagentProjectionTestShellHost;
+
+    impl ServiceShellHost for DetachedSubagentProjectionTestShellHost {
+        /// Accepts path-open requests without side effects.
+        /// 接受路径打开请求但不产生副作用。
+        fn open_path(&self, _path: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        /// Accepts URL-open requests without side effects.
+        /// 接受 URL 打开请求但不产生副作用。
+        fn open_url(&self, _url: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// Captures service events emitted during one projection test.
+    /// 捕获单个投影测试期间发出的服务事件。
+    struct DetachedSubagentProjectionEventSink {
+        /// Shared buffer containing emitted events in order.
+        /// 按顺序保存已发事件的共享缓冲区。
+        events: Arc<Mutex<Vec<ServiceEvent>>>,
+    }
+
+    impl vulcan_service_api::ServiceEventSink for DetachedSubagentProjectionEventSink {
+        /// Pushes one event into the shared capture buffer.
+        /// 将单个事件写入共享捕获缓冲区。
+        fn emit_service_event(&self, event: ServiceEvent) {
+            self.events.lock().expect("event sink lock").push(event);
+        }
+    }
+
+    /// Verifies terminal patches reuse cached child detail when workspace display rows are absent.
+    /// 验证终态补丁在工作区显示行缺失时复用缓存的子会话详情。
+    #[test]
+    fn detached_terminal_patch_uses_cached_surface_detail_when_workspace_rows_are_empty() {
+        let parent_session_id = SessionId::new_v4();
+        let task_session_id = SessionId::new_v4();
+        let conversation_id = task_session_id.to_string();
+        let cached_body = "cached child transcript";
+        let mut conversation_state = SessionConversationState::default();
+        conversation_state.records.push(SessionConversationRecord {
+            id: String::from("cached-record"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("智能体回复"),
+            body: String::from(cached_body),
+            metadata: None,
+            created_at: String::from("100"),
+        });
+        let cached_messages = conversation_state_to_session_messages(&conversation_state);
+        let mut workbench = fallback_workbench_snapshot(&[]);
+        workbench.selected_conversation_id = Some(parent_session_id.to_string());
+        workbench.subagent_navigation = Some(SubagentNavigationSnapshot {
+            parent_conversation_id: parent_session_id.to_string(),
+            active_conversation_id: conversation_id.clone(),
+            active_task_id: Some(conversation_id.clone()),
+            tasks: Vec::new(),
+        });
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                parent_session_id,
+                Some(String::from("project-a")),
+                "父会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: parent_session_id,
+            hydrated_session_ids: BTreeSet::from([parent_session_id]),
+        };
+        let mut service_state = ServiceBridgeState {
+            shell_host: Arc::new(DetachedSubagentProjectionTestShellHost),
+            startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
+            workbench,
+            workbench_generation: 0,
+            workspace_snapshot: Some(workspace_snapshot),
+            hydrated_conversation_windows: BTreeMap::new(),
+            agent_runtime: None,
+            service_runtime: None,
+            webui_service_discovery: None,
+            controller_runtime: None,
+            luaskills_runtime: None,
+            cached_luaskills_catalog: None,
+            token_budget_runtime: None,
+            mcp_runtime: None,
+            cached_mcp_catalog: None,
+            live_context_budgets: BTreeMap::new(),
+            session_goal_summaries: BTreeMap::new(),
+            budget_limit_reported_goal_ids: BTreeSet::new(),
+            webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
+            subagent_surface_detail_cache: BTreeMap::new(),
+            session_subagent_navigation_rounds: BTreeSet::new(),
+            active_subagent_panel: Some(SelectedSubagentTaskPanel {
+                parent_session_id,
+                task_id: task_session_id,
+            }),
+            detached_subagent_task_listeners: BTreeSet::new(),
+            subagent_parent_turn_bindings: BTreeMap::new(),
+            subagent_completion_gate_ignored_tasks: BTreeSet::new(),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            active_stream_tasks: BTreeMap::new(),
+            session_runtime_kernels: BTreeMap::new(),
+            session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
+        };
+        service_state.subagent_surface_detail_cache.insert(
+            task_session_id,
+            WebuiSubagentSurfaceDetailCacheEntry {
+                task_state: SubagentTaskPanelState {
+                    task_id: task_session_id,
+                    public_task_id: String::from("cached-task"),
+                    parent_session_id,
+                    subagent_label: String::from("cached-agent"),
+                    description: None,
+                    run_state: SubagentTaskRunState::Completed,
+                    result_text: String::new(),
+                    conversation_state: Some(conversation_state),
+                },
+                messages: cached_messages,
+                last_access_ms: 0,
+            },
+        );
+        let state = Arc::new(Mutex::new(service_state));
+        let captured_events = Arc::new(Mutex::new(Vec::new()));
+        let app = ServiceEventEmitter::new(vec![Arc::new(DetachedSubagentProjectionEventSink {
+            events: captured_events.clone(),
+        })]);
+
+        emit_detached_child_terminal_messages_patch(&app, &state, task_session_id, &[])
+            .expect("terminal patch should emit from cached detail");
+
+        let events = captured_events.lock().expect("captured events lock");
+        let patched_messages = events
+            .iter()
+            .find_map(|event| {
+                if let ServiceEvent::WorkbenchDelta(envelope) = event
+                    && let WorkbenchDelta::ConversationMessagesPatched(delta) = &envelope.delta
+                {
+                    return Some(delta.upsert_messages.clone());
+                }
+                None
+            })
+            .expect("cached child transcript should produce a message patch");
+        assert_eq!(patched_messages.len(), 1);
+        assert_eq!(patched_messages[0].body, cached_body);
     }
 }

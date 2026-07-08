@@ -8,9 +8,9 @@ use super::*;
 pub(crate) fn build_subagent_panel_route_response_locked(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
-) -> SubagentPanelRouteResponse {
+) -> Result<SubagentPanelRouteResponse, String> {
     let subagent_navigation =
-        subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot);
+        subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot)?;
     let active_session_id =
         preserved_active_surface_session_id(workspace_snapshot, subagent_navigation.as_ref());
     let mut surface_messages = surface_messages_for_session_without_subagent_navigation_refresh(
@@ -45,13 +45,13 @@ pub(crate) fn build_subagent_panel_route_response_locked(
     guard.workbench.revision = revision;
     guard.workbench.messages = messages.clone();
     guard.workbench.subagent_navigation = subagent_navigation.clone();
-    SubagentPanelRouteResponse {
+    Ok(SubagentPanelRouteResponse {
         parent_conversation_id,
         active_conversation_id,
         subagent_navigation,
         messages,
         revision,
-    }
+    })
 }
 
 /// Applies execution preparation identity fields to the target session runtime state.
@@ -257,18 +257,7 @@ pub(crate) fn finish_session_external_turn_lifecycle(
     let Some(turn_id) = terminal_event.turn_id.clone() else {
         return Ok(());
     };
-    let terminal_status = terminal_event
-        .payload
-        .get("status")
-        .and_then(Value::as_str)
-        .map(|status| {
-            if status == "completed" {
-                SessionTurnTerminalStatus::Completed
-            } else {
-                SessionTurnTerminalStatus::Failed
-            }
-        })
-        .unwrap_or(SessionTurnTerminalStatus::Completed);
+    let terminal_status = session_lifecycle_terminal_status_from_event(&terminal_event)?;
     let store = WorkspaceSegmentedSessionBoundaryStore::new(
         &controller_runtime.data_root,
         project_id,
@@ -283,6 +272,37 @@ pub(crate) fn finish_session_external_turn_lifecycle(
         final_events,
         terminal_event: Some(terminal_event),
     })
+}
+
+/// Parses the explicit terminal status carried by a session-boundary terminal event.
+/// 解析会话边界终态事件携带的显式终态状态。
+///
+/// # Parameters
+/// 参数
+/// `terminal_event` is the hidden turn-completed boundary event emitted for one provider turn.
+/// `terminal_event` 是单个 Provider 回合发出的隐藏回合完成边界事件。
+///
+/// # Returns
+/// 返回值
+/// A lifecycle terminal status when the event carries a known status string.
+/// 当事件携带已知状态字符串时返回生命周期终态状态。
+pub(crate) fn session_lifecycle_terminal_status_from_event(
+    terminal_event: &SessionBoundaryEvent,
+) -> Result<SessionTurnTerminalStatus, String> {
+    let Some(status) = terminal_event.payload.get("status").and_then(Value::as_str) else {
+        return Err(format!(
+            "terminal boundary event `{}` is missing payload.status",
+            terminal_event.event_id
+        ));
+    };
+    match status {
+        "completed" => Ok(SessionTurnTerminalStatus::Completed),
+        "failed" => Ok(SessionTurnTerminalStatus::Failed),
+        other => Err(format!(
+            "terminal boundary event `{}` has unknown payload.status `{other}`",
+            terminal_event.event_id
+        )),
+    }
 }
 
 /// Updates one session phase in the retained workspace snapshot.

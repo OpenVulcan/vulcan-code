@@ -627,6 +627,41 @@ impl ProviderUsageSnapshot {
             || self.cached_input_tokens.is_some()
             || self.cache_creation_input_tokens.is_some()
     }
+
+    /// Adds another provider usage snapshot into this snapshot field by field.
+    /// 将另一份 Provider 用量快照按字段累加到当前快照中。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `other` is the successful provider call usage to add.
+    /// `other` 是需要累加的成功 Provider 调用用量。
+    pub fn accumulate_from(&mut self, other: &Self) {
+        accumulate_optional_token_count(&mut self.input_tokens, other.input_tokens);
+        accumulate_optional_token_count(&mut self.output_tokens, other.output_tokens);
+        accumulate_optional_token_count(&mut self.reasoning_tokens, other.reasoning_tokens);
+        accumulate_optional_token_count(&mut self.total_tokens, other.total_tokens);
+        accumulate_optional_token_count(&mut self.cached_input_tokens, other.cached_input_tokens);
+        accumulate_optional_token_count(
+            &mut self.cache_creation_input_tokens,
+            other.cache_creation_input_tokens,
+        );
+    }
+}
+
+/// Adds one optional token count into an optional accumulated token count.
+/// 将一个可选 Token 数累加到可选累计 Token 数中。
+///
+/// # Parameters
+/// 参数
+/// `target` receives the accumulated token count when `value` exists.
+/// `target` 在 `value` 存在时接收累计后的 Token 数。
+/// `value` is the token count reported by one provider call.
+/// `value` 是单次 Provider 调用报告的 Token 数。
+fn accumulate_optional_token_count(target: &mut Option<usize>, value: Option<usize>) {
+    let Some(value) = value else {
+        return;
+    };
+    *target = Some(target.unwrap_or(0).saturating_add(value));
 }
 
 /// Represents one normalized provider turn response consumed by the host-owned controller loop.

@@ -20,8 +20,9 @@ use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_prompt_composer::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, ProjectPromptFileCache,
     ProjectPromptSnapshot, ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput,
-    PromptAssemblyMode, PromptAssemblyOutput, ProviderPromptSnapshot, TaskGoalSnapshot,
-    ToolCatalogSnapshot, ToolDescriptor, build_context_compaction_developer_segment,
+    PromptAssemblyMode, PromptAssemblyOutput, ProviderPromptSnapshot, SubagentSnapshot,
+    TaskGoalSnapshot, ToolCatalogSnapshot, ToolDescriptor,
+    build_context_compaction_developer_segment,
 };
 
 /// Process-wide project-rules source cache shared by provider runtime requests.
@@ -122,7 +123,7 @@ fn build_runtime_prompt_assembly_input(
     let provider_prompt =
         load_provider_base_system_prompt_with_source(&preparation.model_blueprint)
             .unwrap_or_else(default_provider_base_system_prompt);
-    let agent_prompt = build_request_agent_prompt_override_snapshot(preparation)
+    let agent_prompt = build_request_agent_prompt_snapshot(preparation)
         .or_else(|| active_agent.and_then(build_agent_prompt_snapshot));
     let environment_context = EnvironmentContextSnapshot::new(format!(
         "Current workspace: {}\nCurrent execution mode: {}",
@@ -137,19 +138,9 @@ fn build_runtime_prompt_assembly_input(
         custom_developer_segments.push(segment);
     }
 
+    let subagent_prompt_context = preparation.subagent_prompt_context.as_ref();
     PromptAssemblyInput {
-        mode: match preparation.prompt_purpose {
-            ExecutionPromptPurpose::UserTurn
-            | ExecutionPromptPurpose::ContextCompactionCachePreserving => {
-                PromptAssemblyMode::Primary
-            }
-            ExecutionPromptPurpose::ContextCompaction => {
-                PromptAssemblyMode::ContextCompactionMinimal
-            }
-            ExecutionPromptPurpose::GitCommitSummary => {
-                PromptAssemblyMode::ContextCompactionMinimal
-            }
-        },
+        mode: prompt_assembly_mode_for_preparation(preparation),
         model: ModelDescriptor {
             family: preparation.model_blueprint.api_family_key().to_string(),
             model_id: preparation.model_blueprint.model_id.clone(),
@@ -179,11 +170,33 @@ fn build_runtime_prompt_assembly_input(
                 })
                 .collect(),
         ),
-        subagent: None,
+        subagent: subagent_prompt_context.map(|context| SubagentSnapshot {
+            identity: context.identity.clone(),
+            task: context.delegated_task.clone(),
+            delegation: context.delegation.clone(),
+            functional_system_prompt: context.functional_system_prompt.clone(),
+        }),
         custom_developer_segments,
         custom_user_segments: load_workspace_project_user_prompt(preparation)
             .into_iter()
             .collect(),
+    }
+}
+
+/// Selects the prompt-composer mode for one prepared execution.
+/// 为一次已准备执行选择提示词组合模式。
+fn prompt_assembly_mode_for_preparation(preparation: &ExecutionPreparation) -> PromptAssemblyMode {
+    if let Some(context) = preparation.subagent_prompt_context.as_ref() {
+        if context.uses_functional_prompt() {
+            return PromptAssemblyMode::SubagentFunctional;
+        }
+        return PromptAssemblyMode::SubagentClone;
+    }
+    match preparation.prompt_purpose {
+        ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::ContextCompactionCachePreserving => PromptAssemblyMode::Primary,
+        ExecutionPromptPurpose::ContextCompaction => PromptAssemblyMode::ContextCompactionMinimal,
+        ExecutionPromptPurpose::GitCommitSummary => PromptAssemblyMode::ContextCompactionMinimal,
     }
 }
 
@@ -244,19 +257,17 @@ fn build_agent_prompt_snapshot(agent: &RuntimeAgentDefinition) -> Option<AgentPr
     )
 }
 
-/// Builds a request-scoped agent prompt override snapshot when one is present.
-/// 当请求携带代理提示词覆盖时构建请求级代理提示词快照。
-fn build_request_agent_prompt_override_snapshot(
+/// Builds a request-scoped fixed agent prompt snapshot when one is present.
+/// 当请求携带固定代理提示词快照时构建请求级代理提示词快照。
+fn build_request_agent_prompt_snapshot(
     preparation: &ExecutionPreparation,
 ) -> Option<AgentPromptSnapshot> {
-    let text = preparation.agent_system_prompt_override.as_deref()?.trim();
+    let snapshot = preparation.agent_prompt_snapshot.as_ref()?;
+    let text = snapshot.text.trim();
     if text.is_empty() {
         return None;
     }
-    Some(
-        AgentPromptSnapshot::new(text.to_string())
-            .with_source_label("Request-scoped agent system prompt override"),
-    )
+    Some(AgentPromptSnapshot::new(text.to_string()).with_source_label(snapshot.source_label()))
 }
 
 /// Renders one prompt-composer output into structured provider prompt layers.
@@ -517,6 +528,9 @@ mod tests {
     //! Provider 运行时上下文测试。
 
     use super::*;
+    use crate::agent_runtime::execution_models::{
+        ExecutionAgentPromptSnapshot, ExecutionSubagentPromptContext,
+    };
     use crate::context_budget::ContextBudgetSnapshot;
     use crate::model::SessionId;
     use crate::provider_config::{
@@ -723,16 +737,17 @@ mod tests {
         );
     }
 
-    /// Verifies request-scoped agent prompt overrides enter the shared runtime prompt composer.
-    /// 验证请求级代理提示词覆盖会进入共享运行时提示词组合器。
+    /// Verifies request-scoped agent prompt snapshots enter the shared runtime prompt composer.
+    /// 验证请求级代理提示词快照会进入共享运行时提示词组合器。
     #[test]
-    fn runtime_prompt_layers_use_request_scoped_agent_prompt_override() {
+    fn runtime_prompt_layers_use_request_scoped_agent_prompt_snapshot() {
         let mut preparation = build_test_preparation(
             String::from("D:/missing"),
             PersistedPromptConfiguration::default(),
         );
-        preparation.agent_system_prompt_override =
-            Some(String::from("Task-specific reviewer instructions."));
+        preparation.agent_prompt_snapshot = ExecutionAgentPromptSnapshot::fixed_parent_runtime(
+            "Task-specific reviewer instructions.",
+        );
 
         let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
 
@@ -740,6 +755,69 @@ mod tests {
             layers
                 .fallback_text
                 .contains("Task-specific reviewer instructions.")
+        );
+    }
+
+    /// Verifies child-agent prompt context enters the shared prompt composer directly.
+    /// 验证子智能体提示词上下文会直接进入共享提示词组合器。
+    #[test]
+    fn runtime_prompt_layers_use_subagent_prompt_context() {
+        let mut preparation = build_test_preparation(
+            String::from("D:/missing"),
+            PersistedPromptConfiguration::default(),
+        );
+        preparation.subagent_prompt_context = Some(ExecutionSubagentPromptContext {
+            identity: String::from("reviewer"),
+            delegated_task: String::from("Review code"),
+            delegation: Some(String::from("Return findings to the parent.")),
+            functional_system_prompt: None,
+        });
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .provider_layers
+                .developer
+                .contains("Subagent identity: reviewer")
+        );
+        assert!(
+            layers
+                .provider_layers
+                .developer
+                .contains("Delegated task: Review code")
+        );
+        assert!(!layers.provider_layers.system.contains("Subagent identity"));
+    }
+
+    /// Verifies functional child-agent prompts use the functional subagent strategy.
+    /// 验证功能型子智能体提示词会使用功能型子智能体策略。
+    #[test]
+    fn runtime_prompt_layers_use_functional_subagent_prompt() {
+        let mut preparation = build_test_preparation(
+            String::from("D:/missing"),
+            PersistedPromptConfiguration::default(),
+        );
+        preparation.subagent_prompt_context = Some(ExecutionSubagentPromptContext {
+            identity: String::from("custom-reviewer"),
+            delegated_task: String::from("Review code"),
+            delegation: Some(String::from("Return findings to the parent.")),
+            functional_system_prompt: Some(String::from("You are a strict reviewer.")),
+        });
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .provider_layers
+                .system
+                .contains("You are a strict reviewer.")
+        );
+        assert!(
+            layers
+                .provider_layers
+                .developer
+                .contains("Subagent identity: custom-reviewer")
         );
     }
 
@@ -849,7 +927,8 @@ mod tests {
             agent_id: String::from("default"),
             agent_name: String::from("Default"),
             agent_kind: String::from("Primary"),
-            agent_system_prompt_override: None,
+            agent_prompt_snapshot: None,
+            subagent_prompt_context: None,
             model_blueprint: sample_model_blueprint(),
             prompt_preview: String::new(),
             workspace_path,
@@ -876,6 +955,8 @@ mod tests {
             provider_request_snapshot_json: None,
             provider_wire_request_json: None,
             context_budget: Option::<ContextBudgetSnapshot>::None,
+            context_compaction_policy: None,
+            context_budget_override: None,
             context_assembly: Option::<ContextAssembly>::None,
             context_baseline: Option::<ContextBaseline>::None,
             context_request_mode: None,
