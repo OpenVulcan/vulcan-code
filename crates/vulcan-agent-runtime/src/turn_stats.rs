@@ -200,6 +200,7 @@ pub fn build_session_turn_stats_from_state_with_segments(
         stats.merge_usage_segment_group(&assistant_segment);
         stats.usage_segments.push(assistant_segment);
     }
+    append_wait_agent_host_usage_segments(turn_records, &mut explicit_usage_segments);
     for segment in explicit_usage_segments.drain(..) {
         merge_explicit_usage_segment_into_turn_stats(&mut stats, &segment);
         stats.usage_segments.push(segment);
@@ -256,6 +257,75 @@ pub fn merge_usage_segment_into_turn_stats(
     segment: &SessionTurnUsageSegment,
 ) {
     stats.merge_usage_segment(segment);
+}
+
+/// Appends child-agent usage segments carried by completed wait_agent host results.
+/// 追加已完成 wait_agent 宿主结果携带的智能体用量分段。
+///
+/// # Parameters
+/// 参数
+/// `turn_records` are the display records that belong to the current parent turn.
+/// `turn_records` 是属于当前父级回合的显示记录。
+/// `target_segments` receives unique child-agent usage segments for parent-turn grouping.
+/// `target_segments` 接收用于父级回合分组的唯一智能体用量分段。
+fn append_wait_agent_host_usage_segments(
+    turn_records: &[SessionConversationRecord],
+    target_segments: &mut Vec<SessionTurnUsageSegment>,
+) {
+    for record in turn_records {
+        let Some(payload) = record
+            .metadata
+            .as_ref()
+            .and_then(wait_agent_host_payload_from_metadata)
+        else {
+            continue;
+        };
+        let Some(agents) = payload.get("agents").and_then(Value::as_array) else {
+            continue;
+        };
+        for agent in agents {
+            let Some(usage_segments) = agent.get("usage_segments") else {
+                continue;
+            };
+            let Ok(parsed_segments) =
+                serde_json::from_value::<Vec<SessionTurnUsageSegment>>(usage_segments.clone())
+            else {
+                continue;
+            };
+            for segment in parsed_segments {
+                if segment.kind == SessionTurnUsageSegmentKind::SubagentTask
+                    && !target_segments.iter().any(|existing| existing == &segment)
+                {
+                    target_segments.push(segment);
+                }
+            }
+        }
+    }
+}
+
+/// Returns the structured wait_agent host payload from one record metadata object.
+/// 从单条记录元数据对象中返回结构化 wait_agent 宿主载荷。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is one conversation record metadata object.
+/// `metadata` 是单条会话记录的元数据对象。
+///
+/// # Returns
+/// 返回值
+/// The wait_agent host payload when the record is a completed subagent_wait result.
+/// 当记录是已完成 subagent_wait 结果时返回 wait_agent 宿主载荷。
+fn wait_agent_host_payload_from_metadata(metadata: &Value) -> Option<&Value> {
+    let host_result = metadata.get("host_result")?.as_object()?;
+    if host_result.get("kind").and_then(Value::as_str) != Some("subagent_wait") {
+        return None;
+    }
+    let payload = host_result.get("payload")?;
+    let payload_object = payload.as_object()?;
+    if payload_object.get("tool").and_then(Value::as_str) != Some("wait_agent") {
+        return None;
+    }
+    Some(payload)
 }
 
 /// Merges one explicit usage segment while preserving parent-turn ownership boundaries.

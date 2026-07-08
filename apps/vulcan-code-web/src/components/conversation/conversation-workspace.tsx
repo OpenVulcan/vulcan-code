@@ -233,8 +233,8 @@ export function ConversationWorkspace(props: {
   const surfaceRestoreId = props.conversation?.id ?? props.parentConversationId ?? null;
   const expandedStateSurfaceRestoreIdRef = React.useRef(surfaceRestoreId);
   const timelineItems = React.useMemo(
-    () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning, t),
-    [props.renderItems, props.conversation, nowMs, props.sessionRunning, t],
+    () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning),
+    [props.renderItems, props.conversation, nowMs, props.sessionRunning],
   );
   const visibleTimelineItems = React.useMemo(
     () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockIds)),

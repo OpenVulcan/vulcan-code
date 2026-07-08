@@ -20,22 +20,16 @@ pub(super) fn load_segmented_runtime_state(
     };
     let runtime_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)?;
     let Some(state_document) = read_state(&session_dir)? else {
-        let mut runtime_state = runtime_state_from_runtime_or_segmented_replay(
-            session_id,
-            runtime_conversation_state,
-            &session_dir,
-        )?;
+        let mut runtime_state =
+            runtime_state_from_runtime_log(session_id, runtime_conversation_state);
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
         return Ok(runtime_state);
     };
     let has_runtime_state = !state_document.runtime_state.is_null();
     if !has_runtime_state && state_document.current_context.is_null() {
-        let mut runtime_state = runtime_state_from_runtime_or_segmented_replay(
-            session_id,
-            runtime_conversation_state,
-            &session_dir,
-        )?;
+        let mut runtime_state =
+            runtime_state_from_runtime_log(session_id, runtime_conversation_state);
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
         return Ok(runtime_state);
@@ -101,13 +95,12 @@ fn apply_session_addon_state_to_loaded_runtime_state(
     Ok(true)
 }
 
-/// Rebuilds runtime state from runtime JSONL when available, otherwise falls back to segmented replay.
-/// 优先从 runtime JSONL 重建运行态，不可用时回退到分段展示重放。
-fn runtime_state_from_runtime_or_segmented_replay(
+/// Rebuilds runtime state only from provider-facing runtime JSONL when available.
+/// 仅在 Provider 可见 runtime JSONL 可用时重建运行态。
+fn runtime_state_from_runtime_log(
     session_id: SessionId,
     runtime_conversation_state: Option<SessionConversationState>,
-    session_dir: &std::path::Path,
-) -> Result<Option<SessionRuntimeStateEntry>, String> {
+) -> Option<SessionRuntimeStateEntry> {
     if let Some(conversation_state) = runtime_conversation_state {
         let mut runtime_state = SessionRuntimeStateEntry {
             conversation_state,
@@ -118,42 +111,9 @@ fn runtime_state_from_runtime_or_segmented_replay(
             session_id,
             &mut runtime_state.conversation_state,
         );
-        return Ok(Some(runtime_state));
+        return Some(runtime_state);
     }
-    runtime_state_from_segmented_replay(session_id, session_dir)
-}
-
-/// Rebuilds runtime state from segmented JSONL replay when state.json has no usable context.
-/// 当 state.json 没有可用上下文时，通过分段 JSONL 重放重建运行态。
-fn runtime_state_from_segmented_replay(
-    session_id: SessionId,
-    session_dir: &std::path::Path,
-) -> Result<Option<SessionRuntimeStateEntry>, String> {
-    let _ = repair_segmented_session_display_if_needed(session_dir)?;
-    let Some(replay) = replay_segmented_session_context(session_dir)? else {
-        return Ok(None);
-    };
-    let mut runtime_state = runtime_state_entry_from_segmented_replay(replay);
-    let _ =
-        repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
-    Ok(Some(runtime_state))
-}
-
-/// Converts a segmented replay result into the existing runtime-state model.
-/// 将分段重放结果转换为现有运行态模型。
-pub(super) fn runtime_state_entry_from_segmented_replay(
-    replay: SegmentedSessionReplayResult,
-) -> SessionRuntimeStateEntry {
-    let mut runtime_state = SessionRuntimeStateEntry {
-        conversation_state: replay.conversation_state,
-        last_compaction_id: replay.last_compaction_id,
-        context_start_message_id: replay.context_start_message_id,
-        ..Default::default()
-    };
-    if let Some(updated_at) = replay.updated_at {
-        runtime_state.updated_at = updated_at;
-    }
-    runtime_state
+    None
 }
 
 /// Applies a segmented current-context document onto one runtime-state entry.
@@ -261,24 +221,13 @@ fn segmented_json_string(value: &serde_json::Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Rebuilds hydration runtime state from the segmented window when no state file exists.
-/// 当分段状态文件不存在时，根据分段窗口重建水合运行态。
+/// Leaves runtime state absent when no provider-facing runtime source exists.
+/// 当不存在 Provider 可见运行时来源时，保持运行态为空。
 pub(super) async fn hydrate_session_runtime_state(
-    session_id: SessionId,
-    full_messages: &[SessionMessageEntry],
+    _session_id: SessionId,
+    _full_messages: &[SessionMessageEntry],
 ) -> Result<Option<SessionRuntimeStateEntry>, String> {
-    if full_messages.is_empty() {
-        return Ok(None);
-    }
-
-    let mut runtime_state = SessionRuntimeStateEntry {
-        conversation_state: conversation_state_from_session_messages(full_messages),
-        updated_at: current_unix_millis_text(),
-        ..Default::default()
-    };
-    let _ =
-        repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
-    Ok(Some(runtime_state))
+    Ok(None)
 }
 
 /// Rebuilds the visible hydration transcript from runtime state when the persisted turn window is unexpectedly empty.

@@ -263,6 +263,82 @@ fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
     assert_eq!(metadata.message_count, 3);
 }
 
+/// Verifies message update repairs duplicate persisted message indexes before checkpoint validation.
+/// 验证消息更新会在检查点校验前修复重复的持久化消息索引。
+#[test]
+fn append_message_update_repairs_duplicate_persisted_message_index() {
+    let root = test_root("append_message_update_repairs_duplicate_persisted_message_index");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let original_user = test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "original prompt",
+    );
+    let assistant = test_message(
+        "m-assistant-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "answer",
+    );
+    append_segmented_session_message_tail(
+        &session_dir,
+        &[original_user.clone(), assistant.clone()],
+    )
+    .expect("append original messages");
+
+    let replacement_user = test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "replacement prompt",
+    );
+    let duplicate_event =
+        segmented_event_input_from_message(0, &replacement_user, 0).expect("duplicate event");
+    let duplicate_line = SegmentedSessionEventLine {
+        seq: 99,
+        timestamp: duplicate_event.timestamp,
+        kind: duplicate_event.kind,
+        payload: duplicate_event.payload,
+    };
+    let segment_path = session_dir.join("s001.jsonl");
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&segment_path)
+        .expect("open segment");
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&duplicate_line).expect("serialize duplicate line")
+    )
+    .expect("append duplicate message index");
+
+    append_segmented_session_message_update(
+        &session_dir,
+        &[replacement_user.clone(), assistant.clone()],
+    )
+    .expect("repair duplicate message index during update");
+
+    let lines = read_segment_event_lines(&segment_path).expect("read repaired lines");
+    let messages = segmented_lines_to_session_messages(&lines).expect("project messages");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].body, "replacement prompt");
+    assert_eq!(messages[1].body, "answer");
+    let message_indexes = lines
+        .iter()
+        .filter_map(|line| line.payload.get("message_index").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    assert_eq!(message_indexes, vec![0, 1]);
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+    assert_eq!(metadata.message_count, 2);
+}
+
 /// Verifies tool-call detail references are backfilled with assigned JSONL sequence numbers.
 /// 验证工具调用详情引用会回填已分配的 JSONL 序号。
 #[test]

@@ -66,6 +66,21 @@ fn turn_stats_record(id: &str, created_at: &str) -> SessionConversationRecord {
     }
 }
 
+/// Builds one visible tool-result record with structured host metadata.
+/// 构建一条带结构化宿主元数据的可见工具结果记录。
+fn tool_result_record(id: &str, created_at: &str, metadata: Value) -> SessionConversationRecord {
+    SessionConversationRecord {
+        id: id.to_string(),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::ToolResultOutput,
+        visible: true,
+        title: String::from("工具返回"),
+        body: String::from("tool result"),
+        metadata: Some(metadata),
+        created_at: created_at.to_string(),
+    }
+}
+
 /// Builds one child-agent feedback statistics record embedded in a parent turn.
 /// 构建一条嵌入父回合中的智能体反馈统计记录。
 fn subagent_turn_stats_record(id: &str, created_at: &str) -> SessionConversationRecord {
@@ -220,6 +235,87 @@ fn explicit_subagent_segments_group_without_polluting_parent_turn_totals() {
     assert_eq!(stats.usage_groups[0].provider_call_count, 1);
     assert_eq!(stats.usage_groups[0].input_tokens, 100);
     assert_eq!(stats.usage_groups[0].total_tokens, 130);
+}
+
+/// Verifies wait_agent host-result usage is grouped into the parent turn without changing regular totals.
+/// 验证 wait_agent 宿主结果用量会分组进父级回合，且不会改变常规顶层统计。
+#[test]
+fn wait_agent_host_usage_segments_group_without_polluting_parent_turn_totals() {
+    let closing_record_id = "summary-current";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "等待智能体"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(10),
+                    output_tokens: Some(3),
+                    total_tokens: Some(13),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("user-current", "1000", "等待智能体"),
+            tool_result_record(
+                "tool-wait-result",
+                "1001",
+                json!({
+                    "tool_name": "wait_agent",
+                    "host_result": {
+                        "kind": "subagent_wait",
+                        "payload": {
+                            "tool": "wait_agent",
+                            "agents": [{
+                                "agent_id": "worker-a",
+                                "subagent_task_id": "00000000-0000-0000-0000-000000000001",
+                                "execution_id": "worker-a-run-1",
+                                "usage_segments": [{
+                                    "kind": "subagent_task",
+                                    "trigger": "worker-a",
+                                    "provider_call_count": 1,
+                                    "tool_call_count": 0,
+                                    "input_tokens": 100,
+                                    "output_tokens": 25,
+                                    "reasoning_tokens": 5,
+                                    "total_tokens": 130,
+                                    "cached_input_tokens": 40
+                                }]
+                            }]
+                        }
+                    }
+                }),
+            ),
+            summary_record(closing_record_id, "1002"),
+        ],
+        continuation: Default::default(),
+    };
+
+    let stats = build_session_turn_stats_from_state(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+    )
+    .expect("turn stats should be built");
+
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.input_tokens, 10);
+    assert_eq!(stats.output_tokens, 3);
+    assert_eq!(stats.reasoning_tokens, 0);
+    assert_eq!(stats.total_tokens, 13);
+    assert_eq!(stats.usage_groups.len(), 2);
+    assert_eq!(
+        stats.usage_groups[0].kind,
+        SessionTurnUsageGroupKind::Regular
+    );
+    assert_eq!(
+        stats.usage_groups[1].kind,
+        SessionTurnUsageGroupKind::Subagent
+    );
+    assert_eq!(stats.usage_groups[1].input_tokens, 100);
+    assert_eq!(stats.usage_groups[1].total_tokens, 130);
 }
 
 /// Verifies an unaligned current turn never inherits historical canonical usage or tool calls.

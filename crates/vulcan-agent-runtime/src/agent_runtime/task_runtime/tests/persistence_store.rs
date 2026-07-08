@@ -1197,6 +1197,14 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
         cached_input_tokens: None,
         cache_creation_input_tokens: None,
     };
+    let parent_provider_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(9_000),
+        output_tokens: Some(900),
+        reasoning_tokens: Some(90),
+        total_tokens: Some(9_990),
+        cached_input_tokens: None,
+        cache_creation_input_tokens: None,
+    };
     let snapshot = CoreConversationSnapshot {
         messages: vec![
             vulcan_core::types::ConversationMessage {
@@ -1213,7 +1221,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
                     reasoning: String::new(),
                     provider_message_id: None,
                     provider_message_state: None,
-                    usage: None,
+                    usage: Some(parent_provider_usage.clone()),
                     tool_calls: Vec::new(),
                 },
             },
@@ -1254,7 +1262,7 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
                 visible: true,
                 title: String::from("Assistant"),
                 body: String::from("parent answer"),
-                metadata: None,
+                metadata: Some(json!({ "provider_usage": parent_provider_usage })),
                 created_at: String::from("101"),
             },
             vulcan_core::types::ConversationRecord {
@@ -1331,6 +1339,266 @@ fn store_task_outcome_scopes_cloned_display_records_to_task_prompt() {
             .first()
             .map(|record| record.body.as_str()),
         Some("child prompt")
+    );
+    let stats_record = conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("task context should include turn stats");
+    let turn_stats: SessionTurnStats = serde_json::from_value(
+        stats_record
+            .metadata
+            .as_ref()
+            .expect("turn stats metadata should exist")["turn_stats"]
+            .clone(),
+    )
+    .expect("turn stats should deserialize");
+    let finished_at = stats_record
+        .created_at
+        .parse::<u64>()
+        .expect("stats record timestamp should parse");
+    let task_created_at = task_runtime
+        .sessions
+        .read()
+        .expect("task session registry should be readable")
+        .get(&task_id)
+        .expect("task record should persist in memory")
+        .created_at
+        .parse::<u64>()
+        .expect("task creation timestamp should parse");
+    assert_eq!(
+        turn_stats.duration_ms,
+        Some(finished_at.saturating_sub(task_created_at))
+    );
+    assert!(
+        turn_stats.duration_ms.unwrap_or_default() < finished_at.saturating_sub(200),
+        "cloned child duration must not start at inherited display records"
+    );
+    assert_eq!(
+        turn_stats.input_tokens, 20,
+        "cloned child turn stats must not include inherited parent runtime usage"
+    );
+    assert_eq!(
+        turn_stats.total_tokens, 26,
+        "cloned child turn totals must stay scoped to the child task turn"
+    );
+}
+
+/// Verifies resumed child-agent stats start at the parent-to-child delivery record.
+/// 验证续跑子智能体统计会从父到子投递记录开始计算。
+#[test]
+fn store_task_outcome_scopes_resumed_stats_to_inter_agent_delivery() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        execution_id: String::from("resume-execution"),
+        public_task_id: String::from("worker-a"),
+        prompt: String::from("<agent_message>continue now</agent_message>"),
+        description: Some(String::from("Worker A")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main(
+            "<agent_message>continue now</agent_message>",
+        ),
+        display_title: String::from("worker-a"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: true,
+    };
+    let controller_config = build_test_controller_config("Base prompt");
+    let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
+    let provider_usage = vulcan_core::types::ProviderUsageSnapshot {
+        input_tokens: Some(30),
+        output_tokens: Some(6),
+        reasoning_tokens: Some(0),
+        total_tokens: Some(36),
+        cached_input_tokens: None,
+        cache_creation_input_tokens: None,
+    };
+    let delivery_metadata = json!({
+        "display_note": true,
+        "kind": "subagent_message",
+        "tool": SEND_MESSAGE_TOOL,
+        "delivery_id": "delivery-5000",
+        "parent_session_id": root_session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
+        "created_at_ms": 5000_u64,
+    });
+    let agent_message_metadata = json!({
+        "kind": "subagent_message",
+        "tool": SEND_MESSAGE_TOOL,
+        "delivery_id": "delivery-5000",
+        "parent_session_id": root_session_id.to_string(),
+        (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
+        "target": "worker-a",
+        "created_at_ms": 5000_u64,
+    });
+    let snapshot = CoreConversationSnapshot {
+        messages: vec![
+            vulcan_core::types::ConversationMessage {
+                id: String::from("child-user-200"),
+                payload: vulcan_core::types::ConversationPayload::UserText {
+                    text: String::from("initial child prompt"),
+                    attachments: Vec::new(),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("child-assistant-201"),
+                payload: vulcan_core::types::ConversationPayload::Assistant {
+                    text: String::from("initial child answer"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-initial")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("agent-message-delivery-5000"),
+                payload: vulcan_core::types::ConversationPayload::AgentMessage {
+                    message_type: String::from("MESSAGE"),
+                    task_name: String::from("worker-a"),
+                    sender: format!("parent:{root_session_id}"),
+                    recipient: String::from("worker-a"),
+                    payload: String::from("continue now"),
+                    trigger_turn: true,
+                    metadata: Some(agent_message_metadata),
+                },
+            },
+            vulcan_core::types::ConversationMessage {
+                id: String::from("assistant-followup-5005"),
+                payload: vulcan_core::types::ConversationPayload::Assistant {
+                    text: String::from("followup answer"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("provider-followup")),
+                    provider_message_state: None,
+                    usage: Some(provider_usage.clone()),
+                    tool_calls: Vec::new(),
+                },
+            },
+        ],
+        records: vec![
+            vulcan_core::types::ConversationRecord {
+                id: String::from("child-user-record"),
+                role: vulcan_core::types::TranscriptRole::User,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("User"),
+                body: String::from("initial child prompt"),
+                metadata: Some(json!({ "canonical_user_text": "initial child prompt" })),
+                created_at: String::from("200"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("child-assistant-record"),
+                role: vulcan_core::types::TranscriptRole::Assistant,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("Assistant"),
+                body: String::from("initial child answer"),
+                metadata: None,
+                created_at: String::from("201"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("delivery-5000"),
+                role: vulcan_core::types::TranscriptRole::User,
+                record_kind: vulcan_core::types::TranscriptRecordKind::ProjectionOnly,
+                visible: true,
+                title: String::from("智能体消息"),
+                body: String::from("continue now"),
+                metadata: Some(delivery_metadata),
+                created_at: String::from("5000"),
+            },
+            vulcan_core::types::ConversationRecord {
+                id: String::from("assistant-followup-record"),
+                role: vulcan_core::types::TranscriptRole::Assistant,
+                record_kind: vulcan_core::types::TranscriptRecordKind::Visible,
+                visible: true,
+                title: String::from("Assistant"),
+                body: String::from("followup answer"),
+                metadata: Some(json!({ "provider_usage": provider_usage.clone() })),
+                created_at: String::from("5005"),
+            },
+        ],
+        continuation: Default::default(),
+    };
+    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&provider_usage),
+    );
+    let outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config,
+        snapshot,
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: Some(String::from("assistant-followup-5005")),
+        final_output_text: String::from("followup answer"),
+        execution_status: TaskExecutionStatus::Completed,
+        usage_segments: vec![usage_segment],
+    };
+
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &outcome)
+        .expect("resumed task outcome should store");
+
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let context = store
+        .load_context(SessionNodeId::from(task_id))
+        .expect("context should load")
+        .expect("context should exist");
+    let conversation_state: SessionConversationState =
+        serde_json::from_value(context.conversation_state.clone())
+            .expect("task context conversation state should deserialize");
+    assert_eq!(
+        conversation_state
+            .records
+            .first()
+            .map(|record| record.body.as_str()),
+        Some("initial child prompt")
+    );
+    assert!(
+        conversation_state
+            .records
+            .iter()
+            .any(
+                |record| record.record_kind == SessionMessageRecordKind::DisplayNote
+                    && record.body == "continue now"
+            ),
+        "task display should retain the parent-to-child delivery note"
+    );
+    let stats_record = conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+        .expect("task context should include turn stats");
+    let turn_stats: SessionTurnStats = serde_json::from_value(
+        stats_record
+            .metadata
+            .as_ref()
+            .expect("turn stats metadata should exist")["turn_stats"]
+            .clone(),
+    )
+    .expect("turn stats should deserialize");
+    let finished_at = stats_record
+        .created_at
+        .parse::<u64>()
+        .expect("stats record timestamp should parse");
+    assert_eq!(
+        turn_stats.duration_ms,
+        Some(finished_at.saturating_sub(5000))
     );
 }
 

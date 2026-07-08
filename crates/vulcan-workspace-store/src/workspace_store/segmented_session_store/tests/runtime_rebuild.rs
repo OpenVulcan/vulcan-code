@@ -44,11 +44,11 @@ fn runtime_log_rebuilds_and_restores_conversation_state() {
     assert_eq!(restored.messages.len(), conversation_state.messages.len());
 }
 
-/// Verifies missing runtime logs are rebuilt from metadata-indexed display segments.
-/// 验证缺失的 runtime 日志会从 metadata 索引的展示分段重建。
+/// Verifies missing runtime logs are not rebuilt from display-only segments.
+/// 验证缺失的 runtime 日志不会从纯展示分段重建。
 #[test]
-fn runtime_log_missing_rebuilds_from_segmented_display_segments() {
-    let root = test_root("runtime_log_missing_rebuilds_from_segmented_display_segments");
+fn runtime_log_missing_does_not_rebuild_from_segmented_display_segments() {
+    let root = test_root("runtime_log_missing_does_not_rebuild_from_segmented_display_segments");
     let session_dir = create_segmented_session_in_location(
         &root,
         false,
@@ -71,20 +71,18 @@ fn runtime_log_missing_rebuilds_from_segmented_display_segments() {
     ];
     append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
 
-    let restored = ensure_runtime_log_from_segmented_context(&session_dir)
-        .expect("ensure runtime log")
-        .expect("restored conversation");
+    let restored =
+        ensure_runtime_log_from_segmented_context(&session_dir).expect("ensure runtime log");
 
-    assert!(session_dir.join(SEGMENTED_RUNTIME_METADATA_FILE).exists());
-    assert_eq!(restored.messages.len(), 2);
-    assert_eq!(restored.messages[0].id, "m-user-1");
+    assert!(restored.is_none());
+    assert!(!session_dir.join(SEGMENTED_RUNTIME_METADATA_FILE).exists());
 }
 
-/// Verifies runtime rebuild follows metadata-indexed display segments after rollover.
-/// 验证 runtime 重建会在展示分段滚动后继续按 metadata 索引读取。
+/// Verifies missing runtime logs are not synthesized from rolled display segments.
+/// 验证缺失的 runtime 日志不会从滚动后的展示分段合成。
 #[test]
-fn runtime_log_missing_rebuilds_from_non_initial_display_segments() {
-    let root = test_root("runtime_log_missing_rebuilds_from_non_initial_display_segments");
+fn runtime_log_missing_ignores_non_initial_display_segments() {
+    let root = test_root("runtime_log_missing_ignores_non_initial_display_segments");
     let policy = SegmentPolicy {
         max_lines: 2,
         ..SegmentPolicy::default()
@@ -130,16 +128,11 @@ fn runtime_log_missing_rebuilds_from_non_initial_display_segments() {
     assert_eq!(metadata.active_segment, "s003.jsonl");
     assert_eq!(metadata.segments.len(), 3);
 
-    let restored = ensure_runtime_log_from_segmented_context(&session_dir)
-        .expect("ensure runtime log")
-        .expect("restored conversation");
+    let restored =
+        ensure_runtime_log_from_segmented_context(&session_dir).expect("ensure runtime log");
 
-    assert_eq!(restored.messages.len(), messages.len());
-    assert_eq!(
-        restored.messages.last().map(|message| message.id.as_str()),
-        Some("m-user-3")
-    );
-    assert!(session_dir.join("runtime").join("r001.jsonl").exists());
+    assert!(restored.is_none());
+    assert!(!session_dir.join("runtime").join("r001.jsonl").exists());
 }
 
 /// Verifies a corrupt runtime JSONL row is backed up and removed without losing valid rows.
@@ -205,11 +198,11 @@ fn runtime_log_tolerates_and_repairs_corrupt_jsonl_tail() {
     assert!(session_dir.join(SEGMENTED_RUNTIME_INDEX_FILE).exists());
 }
 
-/// Verifies fully damaged runtime logs are regenerated from display transcript segments.
-/// 验证完全损坏的 runtime 日志会从展示转录分段重新生成。
+/// Verifies fully damaged runtime logs are not regenerated from display transcript segments.
+/// 验证完全损坏的 runtime 日志不会从展示转录分段重新生成。
 #[test]
-fn runtime_log_full_corruption_falls_back_to_segmented_replay() {
-    let root = test_root("runtime_log_full_corruption_falls_back_to_segmented_replay");
+fn runtime_log_full_corruption_does_not_fall_back_to_segmented_replay() {
+    let root = test_root("runtime_log_full_corruption_does_not_fall_back_to_segmented_replay");
     let session_dir = create_segmented_session_in_location(
         &root,
         false,
@@ -241,14 +234,12 @@ fn runtime_log_full_corruption_falls_back_to_segmented_replay() {
     fs::write(session_dir.join("runtime").join("r001.jsonl"), "{ broken\n")
         .expect("damage runtime segment");
 
-    let restored = ensure_runtime_log_from_segmented_context(&session_dir)
-        .expect("ensure runtime log")
-        .expect("restored conversation");
+    let restored =
+        ensure_runtime_log_from_segmented_context(&session_dir).expect("ensure runtime log");
     let lines = read_runtime_log_lines(&session_dir)
         .expect("read rebuilt runtime lines")
         .expect("runtime lines exist");
 
-    assert_eq!(restored.messages.len(), 2);
-    assert_eq!(restored.messages[0].id, "m-user-1");
-    assert_eq!(lines.len(), 2);
+    assert!(restored.is_none());
+    assert!(lines.is_empty());
 }

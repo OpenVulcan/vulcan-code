@@ -170,13 +170,20 @@ function SubagentOrchestrationPresentationCard(props: {
     };
   }, [detailCacheKey, expanded, onLoadToolDetail, presentation]);
   const handleToggle = React.useCallback(() => {
+    if (!subagentPresentationHasExpandableDetail(hydratedPresentation)) {
+      return;
+    }
     dispatchConversationManualViewportInteraction();
     onExpandedChange(presentation.id, !expanded);
-  }, [expanded, onExpandedChange, presentation.id]);
+  }, [expanded, hydratedPresentation, onExpandedChange, presentation.id]);
+  // canExpand prevents empty status rows from opening an empty detail area.
+  // canExpand 避免空状态列表行展开出空详情区域。
+  const canExpand = subagentPresentationHasExpandableDetail(hydratedPresentation);
   return (
-    <div className={cn("tool-presentation-card subagent-orchestration", expanded && "expanded")}>
+    <div className={cn("tool-presentation-card subagent-orchestration", canExpand && expanded && "expanded")}>
       <button
-        aria-expanded={expanded}
+        aria-disabled={!canExpand}
+        aria-expanded={canExpand && expanded}
         className="tool-presentation-summary subagent-orchestration-summary"
         onClick={handleToggle}
         title={hydratedPresentation.title}
@@ -185,17 +192,39 @@ function SubagentOrchestrationPresentationCard(props: {
         <Bot className="subagent-orchestration-icon" size={15} />
         <span className="tool-presentation-state">{subagentOperationLabel(hydratedPresentation, t)}</span>
         <span className="tool-presentation-command">{subagentSummaryText(hydratedPresentation, t)}</span>
-        {expanded ? (
-          <ChevronDown className="tool-presentation-toggle" size={15} />
-        ) : (
-          <ChevronRight className="tool-presentation-toggle" size={15} />
-        )}
+        {canExpand ? (
+          expanded ? (
+            <ChevronDown className="tool-presentation-toggle" size={15} />
+          ) : (
+            <ChevronRight className="tool-presentation-toggle" size={15} />
+          )
+        ) : null}
       </button>
-      <ConversationMeasuredCollapse collapseId={`subagent:${presentation.id}`} expanded={expanded}>
+      <ConversationMeasuredCollapse collapseId={`subagent:${presentation.id}`} expanded={canExpand && expanded}>
         <SubagentOrchestrationDetail presentation={hydratedPresentation} t={t} />
       </ConversationMeasuredCollapse>
     </div>
   );
+}
+
+// subagentPresentationHasExpandableDetail returns whether a subagent row has useful expanded content.
+// subagentPresentationHasExpandableDetail 返回智能体行是否存在有价值的展开内容。
+function subagentPresentationHasExpandableDetail(
+  // Presentation model.
+  // 展示模型。
+  presentation: SubagentOrchestrationPresentation,
+): boolean {
+  if (
+    presentation.operation === "collect"
+    && presentation.collectKind === "status"
+    && presentation.agentsKnown
+    && presentation.agents.length === 0
+    && !presentation.result
+    && !presentation.note
+  ) {
+    return false;
+  }
+  return true;
 }
 
 // subagentOrchestrationPresentationDetailCacheKey returns a stable cache key for hidden subagent details.

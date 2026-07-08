@@ -112,12 +112,47 @@ mod tests {
     };
     use crate::{CapabilityPolicyMode, CapabilityPolicySnapshot, ToolExposureSnapshot};
 
-    /// Verifies the session progress todolist is treated as a parent-owned tool.
-    /// 验证会话进度 todolist 被视为父会话拥有工具。
+    /// Verifies every parent-owned interactive tool is forbidden for child agents.
+    /// 验证所有父会话拥有的交互工具都禁止智能体调用。
     #[test]
-    fn child_agent_forbidden_tools_include_todolist() {
-        assert!(child_agent_forbidden_tool_ids().contains(&"todolist"));
-        assert!(child_agent_tool_is_forbidden("TODOLIST"));
+    fn child_agent_forbidden_tools_include_parent_interactive_tools() {
+        let forbidden_tools = child_agent_forbidden_tool_ids();
+        for tool_id in [
+            "spawn_agent",
+            "agent_orchestration_info",
+            "send_message",
+            "wait_agent",
+            "interrupt_agent",
+            "close_agent",
+            "list_agents",
+            "ask",
+            "submit_plan",
+            "todolist",
+        ] {
+            assert!(
+                forbidden_tools.contains(&tool_id),
+                "child-agent hard-disabled tools must include {tool_id}"
+            );
+            assert!(child_agent_tool_is_forbidden(&tool_id.to_ascii_uppercase()));
+        }
+    }
+
+    /// Verifies memory tools stay owned by the parent runtime.
+    /// 验证记忆工具始终归父级运行时所有。
+    #[test]
+    fn child_agent_forbidden_tools_include_memory_tools() {
+        let forbidden_tools = child_agent_forbidden_tool_ids();
+        for tool_id in [
+            "vmm_memory_search",
+            "vmm_turn_details",
+            "vmm_memory_write",
+            "vmm_memory_delete",
+        ] {
+            assert!(
+                forbidden_tools.contains(&tool_id),
+                "child-agent hard-disabled tools must include {tool_id}"
+            );
+        }
     }
 
     /// Verifies explicit allow policies cannot persist parent-owned tools for child agents.

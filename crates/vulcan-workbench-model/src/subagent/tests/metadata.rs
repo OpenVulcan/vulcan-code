@@ -770,6 +770,50 @@ fn session_message_is_subagent_send_message_display_note_rejects_other_tools() {
     ));
 }
 
+/// Verifies canonical conversation records reuse the same subagent send_message identity.
+/// 验证规范会话记录复用同一套智能体 send_message 身份判定。
+#[test]
+fn session_conversation_record_is_subagent_send_message_display_note_accepts_canonical_note() {
+    let record = SessionConversationRecord {
+        id: String::from("delivery-record"),
+        kind: SessionMessageKind::User,
+        record_kind: SessionMessageRecordKind::DisplayNote,
+        visible: true,
+        title: String::from("智能体消息"),
+        body: String::from("继续。"),
+        metadata: Some(json!({
+            "display_note": true,
+            "kind": "subagent_message",
+            "tool": "send_message"
+        })),
+        created_at: String::from("100"),
+    };
+
+    assert!(session_conversation_record_is_subagent_send_message_display_note(&record));
+}
+
+/// Verifies hidden canonical rows cannot become child-agent delivery anchors.
+/// 验证隐藏规范记录不会成为子智能体投递锚点。
+#[test]
+fn session_conversation_record_is_subagent_send_message_display_note_rejects_hidden_note() {
+    let record = SessionConversationRecord {
+        id: String::from("hidden-delivery-record"),
+        kind: SessionMessageKind::User,
+        record_kind: SessionMessageRecordKind::DisplayNote,
+        visible: false,
+        title: String::from("智能体消息"),
+        body: String::from("继续。"),
+        metadata: Some(json!({
+            "display_note": true,
+            "kind": "subagent_message",
+            "tool": "send_message"
+        })),
+        created_at: String::from("100"),
+    };
+
+    assert!(!session_conversation_record_is_subagent_send_message_display_note(&record));
+}
+
 /// Verifies child-agent feedback display records preserve result text in metadata and usage statistics.
 /// 验证智能体反馈显示记录会在元数据中保留结果文本与用量统计。
 #[test]

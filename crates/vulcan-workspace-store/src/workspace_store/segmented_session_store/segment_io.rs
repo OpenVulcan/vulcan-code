@@ -101,6 +101,20 @@ pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed
         retained_segment_lines.push((segment.file.clone(), repair_read.lines));
     }
 
+    if repair_duplicate_segmented_message_indexes(&mut retained_segment_lines) {
+        for (file, lines) in &retained_segment_lines {
+            let segment_path = session_dir.join(file);
+            if lines.is_empty() {
+                if segment_path.exists() {
+                    fs::remove_file(&segment_path).map_err(to_store_error)?;
+                }
+            } else {
+                write_json_lines_file_atomic(&segment_path, lines)?;
+            }
+        }
+        changed = true;
+    }
+
     let retained_segments = retained_segment_lines
         .iter()
         .map(|(file, lines)| rebuild_segment_metadata(file, lines))
@@ -168,6 +182,82 @@ pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed
     update_segmented_message_checkpoint(&mut metadata, &messages)?;
     write_metadata(session_dir, &metadata)?;
     Ok(true)
+}
+
+/// Removes older duplicate persisted transcript rows before metadata is rebuilt.
+/// 在重建元数据之前移除较旧的重复持久化转录行。
+///
+/// # Parameters
+/// 参数
+/// `retained_segment_lines` contains repaired segment lines in persisted segment order.
+/// `retained_segment_lines` 包含按持久化分段顺序排列的已修复分段行。
+///
+/// # Returns
+/// 返回值
+/// `true` when at least one duplicate message row was removed.
+/// 当至少移除一条重复消息行时返回 `true`。
+fn repair_duplicate_segmented_message_indexes(
+    retained_segment_lines: &mut Vec<(String, Vec<SegmentedSessionEventLine>)>,
+) -> bool {
+    let mut latest_line_by_message_index = BTreeMap::new();
+    for (_, lines) in retained_segment_lines.iter() {
+        for line in lines {
+            if let Some(message_index) = repair_message_index_from_segment_line(line) {
+                latest_line_by_message_index.insert(message_index, line.clone());
+            }
+        }
+    }
+
+    let mut changed = false;
+    let mut emitted_message_indexes = BTreeSet::new();
+    for (_, lines) in retained_segment_lines.iter_mut() {
+        let previous_lines = std::mem::take(lines);
+        let mut repaired_lines = Vec::with_capacity(previous_lines.len());
+        for line in previous_lines {
+            let Some(message_index) = repair_message_index_from_segment_line(&line) else {
+                repaired_lines.push(line);
+                continue;
+            };
+            if !emitted_message_indexes.insert(message_index) {
+                changed = true;
+                continue;
+            }
+            let replacement = latest_line_by_message_index
+                .get(&message_index)
+                .map(|latest_line| {
+                    repair_message_line_with_latest_payload(line.clone(), latest_line)
+                })
+                .unwrap_or_else(|| line.clone());
+            if replacement != line {
+                changed = true;
+            }
+            repaired_lines.push(replacement);
+        }
+        *lines = repaired_lines;
+    }
+    changed
+}
+
+/// Keeps one message row position while applying the newest duplicate payload.
+/// 保留消息行位置，同时套用最新重复行的载荷内容。
+fn repair_message_line_with_latest_payload(
+    mut original: SegmentedSessionEventLine,
+    latest: &SegmentedSessionEventLine,
+) -> SegmentedSessionEventLine {
+    original.timestamp = latest.timestamp.clone();
+    original.kind = latest.kind;
+    original.payload = latest.payload.clone();
+    original
+}
+
+/// Reads the transcript message index from one repair candidate line.
+/// 从单条修复候选行中读取转录消息索引。
+fn repair_message_index_from_segment_line(line: &SegmentedSessionEventLine) -> Option<usize> {
+    line.payload.get("message")?;
+    line.payload
+        .get("message_index")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
 }
 
 /// Parsed JSONL content and repair status for one segment file.

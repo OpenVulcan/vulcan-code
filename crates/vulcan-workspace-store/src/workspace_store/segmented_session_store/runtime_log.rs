@@ -202,56 +202,19 @@ pub(in crate::workspace_store) fn sync_runtime_log_from_compacted_conversation_s
     append_runtime_log_tail(session_dir, tail)
 }
 
-/// Ensures a provider-facing runtime log exists, rebuilding it from display segments when needed.
-/// 确保存在 Provider 可见运行时日志，缺失时从展示分段重建。
+/// Reads an existing provider-facing runtime log while repairing corrupt JSONL tails.
+/// 读取既有 Provider 可见运行时日志，并修复损坏的 JSONL 尾行。
 pub(in crate::workspace_store) fn ensure_runtime_log_from_segmented_context(
     session_dir: &Path,
 ) -> Result<Option<SessionConversationState>, String> {
-    if runtime_metadata_path(session_dir).exists() {
-        match read_runtime_conversation_state(session_dir) {
-            Ok(Some(conversation_state)) if !conversation_state.messages.is_empty() => {
-                return Ok(Some(conversation_state));
-            }
-            Ok(Some(conversation_state)) => {
-                if replay_segmented_session_context(session_dir)?
-                    .as_ref()
-                    .map(|replay| replay.conversation_state.messages.is_empty())
-                    .unwrap_or(true)
-                {
-                    return Ok(Some(conversation_state));
-                }
-            }
-            Ok(None) => return Ok(None),
-            Err(error) => {
-                let Some(replay) = replay_segmented_session_context(session_dir)? else {
-                    return Err(error);
-                };
-                let updated_at = replay
-                    .updated_at
-                    .clone()
-                    .unwrap_or_else(current_unix_millis_text);
-                rebuild_runtime_log_from_conversation_state(
-                    session_dir,
-                    &replay.conversation_state,
-                    &updated_at,
-                )?;
-                return Ok(Some(replay.conversation_state));
-            }
-        }
-    }
-    let Some(replay) = replay_segmented_session_context(session_dir)? else {
+    if !runtime_metadata_path(session_dir).exists() {
         return Ok(None);
-    };
-    let updated_at = replay
-        .updated_at
-        .clone()
-        .unwrap_or_else(current_unix_millis_text);
-    rebuild_runtime_log_from_conversation_state(
-        session_dir,
-        &replay.conversation_state,
-        &updated_at,
-    )?;
-    Ok(Some(replay.conversation_state))
+    }
+    match read_runtime_conversation_state(session_dir) {
+        Ok(Some(conversation_state)) if conversation_state.messages.is_empty() => Ok(None),
+        Ok(conversation_state) => Ok(conversation_state),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Reads provider-facing runtime log lines in metadata segment order.
@@ -361,12 +324,19 @@ pub(in crate::workspace_store) fn append_runtime_log_event_if_present(
     event: RuntimeLogEvent,
 ) -> Result<bool, String> {
     if !runtime_metadata_path(session_dir).exists() {
-        let _ = ensure_runtime_log_from_segmented_context(session_dir)?;
+        return Ok(false);
     }
-    if !runtime_metadata_path(session_dir).exists() {
+    let lines = match read_runtime_log_lines(session_dir) {
+        Ok(Some(lines)) => lines,
+        Ok(None) | Err(_) => return Ok(false),
+    };
+    if lines.is_empty() {
         return Ok(false);
     }
     let metadata = read_runtime_metadata(session_dir)?;
+    if !session_dir.join(&metadata.active_segment).exists() {
+        return Ok(false);
+    }
     let line = RuntimeLogEventLine::new(metadata.next_seq, timestamp.to_string(), event);
     append_runtime_log_tail(session_dir, &[line])?;
     Ok(true)

@@ -2,6 +2,7 @@
 //! subagent event ingest 辅助逻辑。
 
 use super::*;
+use vulcan_workbench_model::SubagentFeedbackDisplayRecords;
 
 /// Consumes one delegate runtime event into the WebUI subagent cache and child transcript state.
 /// 将一条委派运行时事件吸收到 WebUI 子代理缓存与子会话转录状态中。
@@ -84,14 +85,20 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
             .filter(|message| message.conversation_id == conversation_id)
             .cloned()
             .collect::<Vec<_>>();
-        let suppress_feedback_entry = is_finished
-            && (parent_active_turn_will_consume_subagent_feedback(&guard, parent_session_id)
-                || parent_wait_agent_will_display_subagent_feedback(
-                    &guard,
-                    parent_session_id,
-                    &normalized_state,
-                    metadata,
-                ));
+        let feedback_projection_policy = if is_finished {
+            parent_subagent_feedback_projection_policy(
+                &guard,
+                parent_session_id,
+                &normalized_state,
+                metadata,
+            )
+        } else {
+            SubagentFeedbackParentProjectionPolicy::SkipAll
+        };
+        let parent_turn_binding = guard
+            .subagent_parent_turn_bindings
+            .get(&normalized_state.task_id)
+            .cloned();
         let (projected_messages, cached_messages, parent_projected_messages, parent_changed) = {
             let workspace = guard
                 .workspace_snapshot
@@ -126,7 +133,8 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
                     parent_session_id,
                     metadata,
                     &normalized_state,
-                    suppress_feedback_entry,
+                    feedback_projection_policy,
+                    parent_turn_binding.as_ref(),
                 )?
             } else {
                 false
@@ -237,6 +245,18 @@ fn terminal_webui_subagent_task_state(mut state: SubagentTaskPanelState) -> Suba
     state
 }
 
+/// Parent transcript projection policy for one completed child-agent execution.
+/// 单次智能体执行完成后写入父会话转录的投影策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubagentFeedbackParentProjectionPolicy {
+    /// Append both the display feedback card and the child-agent statistics row.
+    /// 同时追加反馈展示卡与智能体统计行。
+    AppendFeedbackAndStats,
+    /// Skip every display row because wait_agent owns feedback and usage display.
+    /// 完全跳过显示记录，因为 wait_agent 已经接管反馈与用量展示。
+    SkipAll,
+}
+
 /// Appends parent-visible child-agent feedback rows without adding anything to provider context.
 /// 追加父会话可见的智能体反馈记录，同时不向 Provider 上下文添加任何内容。
 ///
@@ -250,8 +270,10 @@ fn terminal_webui_subagent_task_state(mut state: SubagentTaskPanelState) -> Suba
 /// `metadata` 是携带用量和 mailbox 载荷的委派完成元数据。
 /// `state` is the normalized child panel state used for labels and result text.
 /// `state` 是用于标签与结果文本的规范化子面板状态。
-/// `suppress_feedback_entry` skips the feedback card when wait_agent already displays the result.
-/// `suppress_feedback_entry` 在 wait_agent 已展示结果时跳过反馈卡片。
+/// `projection_policy` decides whether feedback and statistics should be projected to the parent transcript.
+/// `projection_policy` 决定反馈与统计是否投影到父会话转录。
+/// `parent_turn_binding` is the captured spawn-time parent turn used for durable UI grouping.
+/// `parent_turn_binding` 是创建智能体时捕获的父回合绑定，用于持久稳定的 UI 分组。
 ///
 /// # Returns
 /// 返回值
@@ -262,8 +284,12 @@ fn append_webui_subagent_feedback_records_if_missing(
     parent_session_id: SessionId,
     metadata: &Value,
     state: &SubagentTaskPanelState,
-    suppress_feedback_entry: bool,
+    projection_policy: SubagentFeedbackParentProjectionPolicy,
+    parent_turn_binding: Option<&WebuiSubagentParentTurnBinding>,
 ) -> Result<bool, String> {
+    if projection_policy == SubagentFeedbackParentProjectionPolicy::SkipAll {
+        return Ok(false);
+    }
     let now = current_unix_millis_text();
     let task_id_text = state.task_id.to_string();
     let runtime_state = workspace_snapshot
@@ -289,9 +315,14 @@ fn append_webui_subagent_feedback_records_if_missing(
         return Ok(false);
     }
 
-    let display_records =
+    let mut display_records =
         subagent_feedback_display_records_from_tool_metadata(parent_session_id, metadata, state)?;
-    if !suppress_feedback_entry {
+    if let Some(binding) = parent_turn_binding
+        && binding.parent_session_id == parent_session_id
+    {
+        attach_parent_turn_binding_to_subagent_feedback_records(&mut display_records, binding);
+    }
+    if projection_policy == SubagentFeedbackParentProjectionPolicy::AppendFeedbackAndStats {
         append_webui_session_message_entry_to_state(
             runtime_state,
             parent_session_id,
@@ -313,26 +344,74 @@ fn append_webui_subagent_feedback_records_if_missing(
     Ok(true)
 }
 
-/// Returns whether an active parent turn should keep child feedback out of display-only rows.
-/// 返回活动父级回合是否应阻止智能体反馈生成独立显示行。
-///
-/// # Parameters
-/// 参数
-/// `state` is the locked service state that owns runtime kernels.
-/// `state` 是持有运行时内核的已加锁服务状态。
-/// `parent_session_id` identifies the parent conversation.
-/// `parent_session_id` 标识父级会话。
-///
-/// # Returns
-/// 返回值
-/// `true` while the parent turn can still receive the feedback through wait_agent or runtime mailbox flow.
-/// 当父级回合仍可通过 wait_agent 或运行时 mailbox 流程接收该反馈时返回 `true`。
-fn parent_active_turn_will_consume_subagent_feedback(
+/// Attaches the captured parent-turn binding to feedback rows for durable UI grouping.
+/// 将捕获的父回合绑定写入反馈记录，供 UI 持久稳定分组。
+fn attach_parent_turn_binding_to_subagent_feedback_records(
+    records: &mut SubagentFeedbackDisplayRecords,
+    binding: &WebuiSubagentParentTurnBinding,
+) {
+    attach_parent_turn_binding_to_metadata(&mut records.feedback_entry.metadata, binding);
+    attach_parent_turn_binding_to_metadata(&mut records.stats_entry.metadata, binding);
+}
+
+/// Writes parent-turn binding fields into one display metadata object.
+/// 将父回合绑定字段写入单条显示元数据对象。
+fn attach_parent_turn_binding_to_metadata(
+    metadata: &mut Option<Value>,
+    binding: &WebuiSubagentParentTurnBinding,
+) {
+    let Some(Value::Object(metadata)) = metadata.as_mut() else {
+        return;
+    };
+    metadata.insert(
+        String::from("source_generation"),
+        Value::from(binding.source_generation),
+    );
+    metadata.insert(String::from("parent_turn_binding"), Value::Bool(true));
+    if let Some(parent_turn_id) = binding.parent_turn_id.as_ref() {
+        metadata.insert(
+            String::from("parent_turn_id"),
+            Value::String(parent_turn_id.clone()),
+        );
+    }
+    let mut payload = metadata
+        .get_mut("host_result")
+        .and_then(Value::as_object_mut)
+        .and_then(|host_result| host_result.get_mut("payload"))
+        .and_then(Value::as_object_mut);
+    if let Some(payload) = payload.as_mut() {
+        payload.insert(
+            String::from("source_generation"),
+            Value::from(binding.source_generation),
+        );
+    }
+    if let Some(parent_turn_id) = binding.parent_turn_id.as_ref() {
+        if let Some(payload) = payload.as_mut() {
+            payload.insert(
+                String::from("parent_turn_id"),
+                Value::String(parent_turn_id.clone()),
+            );
+        }
+    }
+}
+
+/// Selects the parent transcript projection policy for one completed child-agent execution.
+/// 为一次完成的智能体执行选择父会话转录投影策略。
+fn parent_subagent_feedback_projection_policy(
     state: &ServiceBridgeState,
     parent_session_id: SessionId,
-) -> bool {
-    webui_session_kernel_has_active_turn(state, parent_session_id)
-        || webui_session_has_active_run(state, parent_session_id)
+    subagent_state: &SubagentTaskPanelState,
+    metadata: &Value,
+) -> SubagentFeedbackParentProjectionPolicy {
+    if parent_wait_agent_will_display_subagent_feedback(
+        state,
+        parent_session_id,
+        subagent_state,
+        metadata,
+    ) {
+        return SubagentFeedbackParentProjectionPolicy::SkipAll;
+    }
+    SubagentFeedbackParentProjectionPolicy::AppendFeedbackAndStats
 }
 
 /// Returns whether wait_agent will display the child feedback inside its own tool result.

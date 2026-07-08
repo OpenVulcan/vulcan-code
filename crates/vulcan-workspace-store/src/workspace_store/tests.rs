@@ -141,10 +141,10 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
     );
 }
 
-/// Verifies session hydration restores transcript context from segmented JSONL.
-/// 验证会话水合会从分段 JSONL 恢复转录上下文。
+/// Verifies runtime recovery does not synthesize provider context from segmented display JSONL.
+/// 验证运行时恢复不会从分段展示 JSONL 合成 Provider 上下文。
 #[test]
-fn session_hydration_rebuilds_runtime_log_from_segmented_jsonl() {
+fn session_hydration_does_not_rebuild_runtime_log_from_segmented_jsonl() {
     let root = std::env::temp_dir().join(format!(
         "vulcan-workspace-session-store-test-{}",
         uuid::Uuid::new_v4()
@@ -190,27 +190,18 @@ fn session_hydration_rebuilds_runtime_log_from_segmented_jsonl() {
         &[user_message.clone(), assistant_message.clone()],
     )
     .expect("append transcript");
-    let restored_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)
-        .expect("rehydrate runtime log")
-        .expect("conversation state");
+    let restored_conversation_state =
+        ensure_runtime_log_from_segmented_context(&session_dir).expect("rehydrate runtime log");
 
-    assert_eq!(restored_conversation_state.records.len(), 2);
-    assert_eq!(
-        restored_conversation_state.records[0].body,
-        user_message.body
-    );
-    assert_eq!(
-        restored_conversation_state.records[1].body,
-        assistant_message.body
-    );
+    assert!(restored_conversation_state.is_none());
 
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies records-only runtime state can receive provider-visible messages from session hydration.
-/// 验证仅有 records 的运行态可以从会话水合获得 Provider 可见消息。
+/// Verifies records-only runtime state is not upgraded from display rows into provider-visible messages.
+/// 验证仅有 records 的运行态不会从展示行升级为 Provider 可见消息。
 #[test]
-fn records_only_state_session_hydration_rebuilds_provider_messages_from_segmented_jsonl() {
+fn records_only_state_session_hydration_does_not_rebuild_provider_messages_from_segmented_jsonl() {
     let root = std::env::temp_dir().join(format!(
         "vulcan-workspace-record-only-replay-test-{}",
         uuid::Uuid::new_v4()
@@ -256,7 +247,7 @@ fn records_only_state_session_hydration_rebuilds_provider_messages_from_segmente
         &[user_message.clone(), assistant_message.clone()],
     )
     .expect("append transcript");
-    let mut records_only_runtime_state = SessionRuntimeStateEntry {
+    let records_only_runtime_state = SessionRuntimeStateEntry {
         active_model_id: Some(String::from("model-alpha")),
         conversation_state: SessionConversationState {
             messages: Vec::new(),
@@ -276,30 +267,25 @@ fn records_only_state_session_hydration_rebuilds_provider_messages_from_segmente
         ..SessionRuntimeStateEntry::default()
     };
 
-    let restored_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)
-        .expect("rehydrate runtime log")
-        .expect("conversation state");
-    records_only_runtime_state.conversation_state = restored_conversation_state;
+    let restored_conversation_state =
+        ensure_runtime_log_from_segmented_context(&session_dir).expect("rehydrate runtime log");
 
     assert_eq!(
         records_only_runtime_state.active_model_id.as_deref(),
         Some("model-alpha")
     );
+    assert!(restored_conversation_state.is_none());
     assert_eq!(
         records_only_runtime_state.conversation_state.messages.len(),
-        2
+        0
     );
     assert_eq!(
         records_only_runtime_state.conversation_state.records.len(),
-        2
+        1
     );
     assert_eq!(
         records_only_runtime_state.conversation_state.records[0].body,
-        user_message.body
-    );
-    assert_eq!(
-        records_only_runtime_state.conversation_state.records[1].body,
-        assistant_message.body
+        "仅显示记录"
     );
 
     let _ = std::fs::remove_dir_all(root);

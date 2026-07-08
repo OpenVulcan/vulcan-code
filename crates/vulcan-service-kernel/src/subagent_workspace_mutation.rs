@@ -617,6 +617,9 @@ pub(crate) fn cache_webui_subagent_surface_detail_for_task(
         );
     }
     let messages = display_session_messages_from_workspace(workspace_snapshot, task_state.task_id)
+        .map(|messages| {
+            task_scoped_display_session_messages(messages, task_state.description.as_deref())
+        })
         .unwrap_or_else(|| {
             task_state
                 .conversation_state

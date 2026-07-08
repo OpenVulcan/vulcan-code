@@ -693,12 +693,12 @@ pub struct TaskRuntime {
     /// Monotonic activity counter used to wake wait_agent on parent mailbox changes.
     /// 用于在父级 mailbox 变化时唤醒 wait_agent 的单调递增活动计数器。
     subagent_mailbox_activity_tx: watch::Sender<u64>,
-    /// Monotonic activity counter used to wake wait_agent on parent user steering.
-    /// 用于在父级用户插话时唤醒 wait_agent 的单调递增活动计数器。
-    parent_input_activity_tx: watch::Sender<u64>,
-    /// Parent sessions that have pending user steering activity for wait_agent.
-    /// 对 wait_agent 存在待处理用户插话活动的父会话集合。
-    parent_input_activity_sessions: RwLock<BTreeSet<SessionThreadId>>,
+    /// Monotonic activity counter used to wake wait_agent on explicit parent interruptions.
+    /// 用于在显式父级打断时唤醒 wait_agent 的单调递增活动计数器。
+    wait_agent_parent_interruption_tx: watch::Sender<u64>,
+    /// Parent sessions that have pending explicit interruptions for wait_agent.
+    /// 对 wait_agent 存在待处理显式打断的父会话集合。
+    wait_agent_parent_interruption_sessions: RwLock<BTreeSet<SessionThreadId>>,
     /// Per-child-agent inbox used by send_message.
     /// `send_message` 使用的按子代理划分 inbox。
     agent_inboxes: RwLock<HashMap<SessionId, VecDeque<QueuedInterAgentMessage>>>,

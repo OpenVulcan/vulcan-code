@@ -797,10 +797,10 @@ fn webui_subagent_mailbox_accepts_sibling_during_mailbox_turn() {
     ));
 }
 
-/// Verifies active parent turns consume child-agent feedback before it becomes an extra mailbox turn.
-/// 验证活动父回合会优先消费智能体反馈，避免额外生成一轮 mailbox 回合。
+/// Verifies active user-prompt turns defer child-agent feedback to the mailbox boundary.
+/// 验证活动用户提示词回合会将智能体反馈推迟到 mailbox 边界。
 #[test]
-fn active_parent_turn_accepts_subagent_feedback_for_current_turn() {
+fn active_user_prompt_turn_defers_subagent_feedback_to_mailbox() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -823,39 +823,32 @@ fn active_parent_turn_accepts_subagent_feedback_for_current_turn() {
         .is_queued()
     );
 
+    {
+        let kernel = service_state
+            .session_runtime_kernels
+            .get(&parent_session_id)
+            .expect("kernel should exist");
+        assert_eq!(kernel.input_queue().current_turn_len(), 0);
+        assert_eq!(kernel.input_queue().mailbox_len(), 1);
+        assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    }
+
     let state = Arc::new(Mutex::new(service_state));
     let mut controller = test_mailbox_controller();
     let appended =
         append_webui_mailbox_intervention_messages(&state, parent_session_id, &mut controller)
-            .expect("mailbox intervention should append current-turn feedback");
+            .expect("mailbox intervention should inspect current-turn feedback");
 
-    assert!(appended);
+    assert!(!appended);
     let guard = state.lock().expect("state lock");
     let kernel = guard
         .session_runtime_kernels
         .get(&parent_session_id)
         .expect("kernel should exist");
     assert_eq!(kernel.input_queue().current_turn_len(), 0);
-    assert_eq!(kernel.input_queue().mailbox_len(), 0);
-    assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
-    assert_eq!(controller.snapshot().messages.len(), 1);
-    match &controller.snapshot().messages[0].payload {
-        vulcan_core::types::ConversationPayload::AgentMessage {
-            message_type,
-            task_name,
-            sender,
-            payload,
-            trigger_turn,
-            ..
-        } => {
-            assert_eq!(message_type, "FINAL_ANSWER");
-            assert_eq!(task_name, "repeat-agent");
-            assert_eq!(sender, "repeat-agent");
-            assert_eq!(payload, "ABCD");
-            assert!(*trigger_turn);
-        }
-        other => panic!("expected agent message payload, got {other:?}"),
-    }
+    assert_eq!(kernel.input_queue().mailbox_len(), 1);
+    assert!(kernel.input_queue().has_trigger_turn_mailbox_items());
+    assert!(controller.snapshot().messages.is_empty());
 }
 
 /// Verifies a send_message terminal tool result consumes the matching mailbox input before enqueue.
@@ -1126,6 +1119,67 @@ fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
     assert!(!kernel.input_queue().has_trigger_turn_mailbox_items());
     assert_eq!(kernel.input_queue().consumed_input_count(), 0);
     assert_eq!(kernel.wait_scope_count(), 0);
+}
+
+/// Verifies a fresh wait_agent invocation replaces stale wait scopes before finishing.
+/// 验证新的 wait_agent 调用会先替换旧等待范围，再在结束时清干净。
+#[test]
+fn wait_agent_start_replaces_stale_wait_scope() {
+    let parent_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    session_runtime_kernel_mut(&mut service_state, parent_session_id)
+        .register_wait_scope("stale-wait-scope", Vec::<String>::new(), 10)
+        .expect("stale wait scope should register");
+    let state = Arc::new(Mutex::new(service_state));
+    let started_event = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "wait_agent started",
+        "waiting",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "tool_name": "wait_agent",
+        "tool_call_id": "fresh-wait-call"
+    })));
+
+    update_webui_wait_agent_runtime_state(&state, parent_session_id, &started_event);
+
+    {
+        let guard = state.lock().expect("state lock");
+        let kernel = guard
+            .session_runtime_kernels
+            .get(&parent_session_id)
+            .expect("kernel should exist");
+        assert_eq!(kernel.wait_scope_count(), 1);
+        assert!(
+            guard
+                .parent_sessions_waiting_for_subagents
+                .contains(&parent_session_id)
+        );
+    }
+
+    let finished_event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "wait_agent finished",
+        "finished",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "tool_name": "wait_agent",
+        "tool_call_id": "fresh-wait-call"
+    })));
+
+    update_webui_wait_agent_runtime_state(&state, parent_session_id, &finished_event);
+
+    let guard = state.lock().expect("state lock");
+    let kernel = guard
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("kernel should exist");
+    assert_eq!(kernel.wait_scope_count(), 0);
+    assert!(
+        !guard
+            .parent_sessions_waiting_for_subagents
+            .contains(&parent_session_id)
+    );
 }
 
 /// Verifies a late delegate-finished mailbox input is queued after wait_agent already completed.

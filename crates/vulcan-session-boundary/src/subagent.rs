@@ -53,6 +53,9 @@ pub enum SubagentMailboxEventKind {
     /// Child agent was spawned.
     /// 子代理已创建。
     Started,
+    /// Child agent status changed without producing parent-visible feedback.
+    /// 子代理状态发生变化，但没有产生父运行时可见反馈。
+    StatusUpdate,
     /// Child agent produced a parent-visible lifecycle message.
     /// 子代理产生了父运行时可见的生命周期消息。
     Message,

@@ -42,6 +42,17 @@ export function isSubagentHostKind(hostKind?: string | null): boolean {
   return Boolean(normalized && SUBAGENT_HOST_KINDS.has(normalized));
 }
 
+// isSubagentFeedbackMetadata returns whether metadata belongs to a child-agent feedback projection.
+// isSubagentFeedbackMetadata 判断元数据是否属于智能体反馈投影。
+export function isSubagentFeedbackMetadata(metadata: unknown): boolean {
+  const normalized = metadataString(metadata, [
+    "host_result.kind",
+    "hostResult.kind",
+    "kind",
+  ])?.trim().toLowerCase();
+  return normalized === "subagent_feedback";
+}
+
 // subagentTaskIdFromToolMetadata extracts the stable child subagent task id from host task metadata.
 // subagentTaskIdFromToolMetadata 从宿主任务元数据中提取稳定的子代理任务标识。
 export function subagentTaskIdFromToolMetadata(metadata: unknown): string | null {

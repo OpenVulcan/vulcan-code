@@ -122,7 +122,7 @@ impl TaskRuntime {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
         let parent_thread_id = SessionNodeId::from(current_session_id);
         let mut mailbox_activity_rx = self.subscribe_subagent_mailbox_activity();
-        let mut parent_input_activity_rx = self.subscribe_parent_input_activity();
+        let mut parent_interruption_rx = self.subscribe_wait_agent_parent_interruption();
         let mut waiting_logged = false;
         let mut collected_events = Vec::new();
         let mut satisfied_target_session_ids = BTreeSet::new();
@@ -134,12 +134,12 @@ impl TaskRuntime {
             ),
         );
         loop {
-            if self.take_parent_input_activity_for_parent(parent_thread_id)? {
+            if self.take_wait_agent_parent_interruption_for_parent(parent_thread_id)? {
                 let result = build_wait_agent_steered_tool_result(current_session_id, timeout_ms);
                 task_runtime_trace(
                     "subagent_wait_agent_steered",
                     format!(
-                        "parent={current_session_id} source=queued_parent_input elapsed_ms={}",
+                        "parent={current_session_id} source=parent_interruption elapsed_ms={}",
                         current_unix_millis_u64().saturating_sub(trace_started_at)
                     ),
                 );
@@ -217,13 +217,13 @@ impl TaskRuntime {
                         return Ok(result);
                     }
                 }
-                changed = parent_input_activity_rx.changed() => {
-                    if changed.is_ok() && self.take_parent_input_activity_for_parent(parent_thread_id)? {
+                changed = parent_interruption_rx.changed() => {
+                    if changed.is_ok() && self.take_wait_agent_parent_interruption_for_parent(parent_thread_id)? {
                         let result = build_wait_agent_steered_tool_result(current_session_id, timeout_ms);
                         task_runtime_trace(
                             "subagent_wait_agent_steered",
                             format!(
-                                "parent={current_session_id} elapsed_ms={}",
+                                "parent={current_session_id} source=parent_interruption elapsed_ms={}",
                                 current_unix_millis_u64().saturating_sub(trace_started_at)
                             ),
                         );
@@ -234,7 +234,7 @@ impl TaskRuntime {
                         task_runtime_trace(
                             "subagent_wait_agent_timeout",
                             format!(
-                                "parent={current_session_id} source=parent_input_closed elapsed_ms={}",
+                                "parent={current_session_id} source=parent_interruption_closed elapsed_ms={}",
                                 current_unix_millis_u64().saturating_sub(trace_started_at)
                             ),
                         );

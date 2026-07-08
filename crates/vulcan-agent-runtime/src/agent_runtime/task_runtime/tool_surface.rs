@@ -1112,7 +1112,8 @@ pub(super) fn build_wait_agent_activity_tool_result(
     } else {
         wait_agent_activity_message(events)
     };
-    let event_summaries = wait_agent_event_summaries(events);
+    let event_summaries = wait_agent_event_summaries(events, false);
+    let host_event_summaries = wait_agent_event_summaries(events, true);
     let terminal_event_count = events
         .iter()
         .filter(|event| wait_agent_mailbox_event_is_terminal(event.kind))
@@ -1123,10 +1124,15 @@ pub(super) fn build_wait_agent_activity_tool_result(
         .count();
     let status_event_count = events
         .iter()
-        .filter(|event| event.kind == SubagentMailboxEventKind::Started)
+        .filter(|event| {
+            matches!(
+                event.kind,
+                SubagentMailboxEventKind::Started | SubagentMailboxEventKind::StatusUpdate
+            )
+        })
         .count();
     let feedback_text = wait_agent_feedback_text(events);
-    let payload = json!({
+    let model_payload = json!({
         "tool": WAIT_AGENT_TOOL,
         "parent_session_id": current_session_id.to_string(),
         "message": message,
@@ -1140,10 +1146,24 @@ pub(super) fn build_wait_agent_activity_tool_result(
         "status_event_count": status_event_count,
         "agents": event_summaries,
     });
-    VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+    let host_payload = json!({
+        "tool": WAIT_AGENT_TOOL,
+        "parent_session_id": current_session_id.to_string(),
+        "message": message,
+        "activity_status": activity_status,
+        "result": feedback_text,
+        "timed_out": timed_out,
+        "timeout_ms": timeout_ms,
+        "pending_event_count": events.len(),
+        "terminal_event_count": terminal_event_count,
+        "message_event_count": message_event_count,
+        "status_event_count": status_event_count,
+        "agents": host_event_summaries,
+    });
+    VulcanToolInvocationResult::from_model_output(model_payload).with_host_result(
         VulcanToolHostResult {
             kind: String::from("subagent_wait"),
-            payload,
+            payload: host_payload,
         },
     )
 }
@@ -1179,10 +1199,12 @@ fn wait_agent_activity_message(events: &[SubagentMailboxEvent]) -> (String, Stri
             String::from("message_update"),
         );
     }
-    if events
-        .iter()
-        .any(|event| event.kind == SubagentMailboxEventKind::Started)
-    {
+    if events.iter().any(|event| {
+        matches!(
+            event.kind,
+            SubagentMailboxEventKind::Started | SubagentMailboxEventKind::StatusUpdate
+        )
+    }) {
         return (
             String::from("Subagent status changed."),
             String::from("status_update"),
@@ -1201,12 +1223,17 @@ fn wait_agent_activity_message(events: &[SubagentMailboxEvent]) -> (String, Stri
 /// 参数
 /// `events` are the mailbox events claimed by wait_agent.
 /// `events` 是被 `wait_agent` 认领的 mailbox 事件。
+/// `include_usage_segments` controls whether host-only child usage metadata is retained.
+/// `include_usage_segments` 控制是否保留仅供宿主使用的智能体用量元数据。
 ///
 /// # Returns
 /// 返回值
 /// JSON summaries that include exact child execution ids and feedback text when present.
 /// 返回包含精确子执行标识及可用反馈文本的 JSON 摘要。
-fn wait_agent_event_summaries(events: &[SubagentMailboxEvent]) -> Vec<Value> {
+fn wait_agent_event_summaries(
+    events: &[SubagentMailboxEvent],
+    include_usage_segments: bool,
+) -> Vec<Value> {
     events
         .iter()
         .map(|event| {
@@ -1228,7 +1255,7 @@ fn wait_agent_event_summaries(events: &[SubagentMailboxEvent]) -> Vec<Value> {
             let result =
                 wait_agent_payload_text(&event.payload, &["result_text", "result", "message"]);
             let error = wait_agent_payload_text(&event.payload, &["error_text", "error"]);
-            json!({
+            let mut summary = json!({
                 "agent_id": public_id.clone().unwrap_or_else(|| event.child_thread_id.to_string()),
                 "subagent_task_id": event.child_thread_id.to_string(),
                 "execution_id": execution_id,
@@ -1239,7 +1266,15 @@ fn wait_agent_event_summaries(events: &[SubagentMailboxEvent]) -> Vec<Value> {
                 "error": error,
                 "terminal": wait_agent_mailbox_event_is_terminal(event.kind),
                 "result_available": wait_agent_event_has_result_payload(&event.payload),
-            })
+            });
+            if include_usage_segments
+                && let Some(usage_segments) = event.payload.get("usage_segments")
+                && usage_segments.is_array()
+                && let Some(summary_object) = summary.as_object_mut()
+            {
+                summary_object.insert(String::from("usage_segments"), usage_segments.clone());
+            }
+            summary
         })
         .collect()
 }
@@ -1355,10 +1390,34 @@ pub(super) fn wait_agent_mailbox_event_is_actionable(kind: SubagentMailboxEventK
 fn wait_agent_mailbox_event_kind_label(kind: SubagentMailboxEventKind) -> &'static str {
     match kind {
         SubagentMailboxEventKind::Started => "started",
+        SubagentMailboxEventKind::StatusUpdate => "status_update",
         SubagentMailboxEventKind::Message => "message",
         SubagentMailboxEventKind::Completed => "completed",
         SubagentMailboxEventKind::Failed => "failed",
         SubagentMailboxEventKind::Stopped => "stopped",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies progress-only status updates do not satisfy wait_agent.
+    /// 验证仅表示进度的状态更新不会满足 wait_agent 等待。
+    #[test]
+    fn status_update_mailbox_events_do_not_satisfy_wait_agent() {
+        assert!(!wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::Started
+        ));
+        assert!(!wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::StatusUpdate
+        ));
+        assert!(wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::Message
+        ));
+        assert!(wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::Completed
+        ));
     }
 }
 

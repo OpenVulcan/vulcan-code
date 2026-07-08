@@ -401,6 +401,82 @@ fn active_subagent_surface_scopes_workspace_runtime_state_without_display_rows()
     }));
 }
 
+/// Verifies active child surfaces scope already persisted display rows before rendering.
+/// 验证活动子界面在渲染前会裁剪已经持久化的显示行。
+#[test]
+fn active_subagent_surface_scopes_persisted_child_display_rows() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let child_prompt = "Run the displayed child task.";
+    let mut guard = test_service_state_with_parent_session(parent_session_id);
+    guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
+        parent_session_id,
+        task_id: task_session_id,
+    });
+    let task_state = SubagentTaskPanelState {
+        task_id: task_session_id,
+        public_task_id: String::from("persisted-display-scope"),
+        parent_session_id,
+        subagent_label: String::from("persisted-display-scope"),
+        description: Some(child_prompt.to_string()),
+        run_state: SubagentTaskRunState::Completed,
+        result_text: String::new(),
+        conversation_state: None,
+    };
+    cache_test_subagent_surface_detail_states(&mut guard, std::slice::from_ref(&task_state));
+    seed_test_live_subagent_registry_from_panel_states(
+        &mut guard,
+        parent_session_id,
+        &[task_state],
+    );
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot");
+    let mut parent_prompt = SessionMessageEntry::new(
+        SessionMessageKind::User,
+        "用户指令",
+        "Parent prompt must stay out of child display.",
+    );
+    parent_prompt.id = String::from("persisted-parent-prompt");
+    let mut parent_output = SessionMessageEntry::new(
+        SessionMessageKind::Assistant,
+        "输出",
+        "Parent output must stay out of child display.",
+    );
+    parent_output.id = String::from("persisted-parent-output");
+    let mut child_prompt_message =
+        SessionMessageEntry::new(SessionMessageKind::User, "用户指令", child_prompt);
+    child_prompt_message.id = String::from("persisted-child-prompt");
+    let mut child_output =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "输出", "Child output only.");
+    child_output.id = String::from("persisted-child-output");
+    workspace_snapshot.session_messages.insert(
+        task_session_id,
+        vec![
+            parent_prompt,
+            parent_output,
+            child_prompt_message,
+            child_output,
+        ],
+    );
+    let workspace_snapshot = workspace_snapshot.clone();
+
+    let active_surface_messages =
+        active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot);
+
+    assert_eq!(
+        active_surface_messages
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect::<Vec<_>>(),
+        vec![child_prompt, "Child output only."]
+    );
+    assert!(active_surface_messages.iter().all(|message| {
+        !message.body.contains("Parent prompt") && !message.body.contains("Parent output")
+    }));
+}
+
 /// Verifies unclosed cached subagents remain listed without hijacking the parent-session surface.
 /// 楠岃瘉鏈叧闂紦瀛樺瓙浠ｇ悊鍦ㄤ笉鍔寔鐖朵細璇濈晫闈㈢殑鎯呭喌涓嬩粛浼氫繚鐣欏湪鍒楄〃涓€?
 #[test]

@@ -3,6 +3,7 @@ import type { ConversationDetailRef } from "@/components/conversation/conversati
 import type { TranslationKey } from "@/i18n-messages";
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
 import {
+  isSubagentFeedbackMetadata,
   isSubagentHostKind,
   isSubagentToolName,
   subagentToolDisplayName,
@@ -81,7 +82,7 @@ function buildSubagentToolExecutionDetailBody(blocks: ToolExecutionConversationB
   if (toolName === "wait_agent" || hostKind === "subagent_wait") {
     return buildSubagentWaitDetailBody(blocks, t);
   }
-  if (toolName === "subagent_feedback" || hostKind === "subagent_feedback") {
+  if (toolName === "subagent_feedback" || blocks.some((block) => isSubagentFeedbackMetadata(block.rawMetadata))) {
     return buildSubagentFeedbackDetailBody(blocks, t);
   }
   if (toolName === "list_agents" || toolName === "agent_orchestration_info" || hostKind === "subagent_status") {
@@ -288,14 +289,25 @@ function buildSubagentCollectionDetailBody(blocks: ToolExecutionConversationBloc
 // subagentCollectionDetailTitle 为模板列表与实时状态列表工具选择正确标题。
 function subagentCollectionDetailTitle(blocks: ToolExecutionConversationBlock[], t?: (key: TranslationKey) => string): string {
   const toolName = toolExecutionName(blocks);
+  const normalizedToolName = toolName ? normalizeToolExecutionName(toolName) : null;
   const hostKind = firstMetadataString(blocks, ["host_result.kind", "hostResult.kind", "kind"]);
-  if (toolName === "agent_orchestration_info") {
+  if (normalizedToolName === "agent_orchestration_info") {
     return text(t, "conversation.subagent.detail.templateCollection", "Agent template list");
   }
-  if (toolName === "list_agents" || hostKind === "subagent_status") {
+  if (normalizedToolName === "list_agents" || hostKind === "subagent_status") {
     return text(t, "conversation.subagent.detail.statusCollection", "Agent status list");
   }
   return text(t, "conversation.subagent.detail.collection", "Agent status list");
+}
+
+// normalizeToolExecutionName converts tool names into a stable comparison identity.
+// normalizeToolExecutionName 将工具名转换为稳定比较标识。
+function normalizeToolExecutionName(
+  // Raw tool name.
+  // 原始工具名。
+  value: string,
+): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_");
 }
 
 // subagentAgentStatusText formats Codex-style agent_status values for detail panels.

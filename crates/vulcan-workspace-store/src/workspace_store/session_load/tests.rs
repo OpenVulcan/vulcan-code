@@ -401,44 +401,10 @@ fn session_boundary_archive_restore_keeps_display_projection() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies session boundary projection overwrites transcript records while preserving runtime metadata.
-/// 验证 会话边界投影会覆盖转录正文，同时保留运行时元数据。
+/// Verifies hydration leaves runtime state absent when only display transcript rows exist.
+/// 验证只有展示转录行时，水合会保持运行态为空。
 #[test]
-fn boundary_projection_replaces_runtime_transcript_only() {
-    let mut runtime_state = SessionRuntimeStateEntry {
-        active_provider_id: Some(String::from("provider-a")),
-        ..SessionRuntimeStateEntry::default()
-    };
-    runtime_state.conversation_state = conversation_state_from_session_messages(&[test_message(
-        "old-user",
-        SessionMessageKind::User,
-        SessionMessageRecordKind::Transcript,
-        "旧正文",
-    )]);
-    let boundary_state = conversation_state_from_session_messages(&[test_message(
-        "session-assistant",
-        SessionMessageKind::Assistant,
-        SessionMessageRecordKind::AssistantOutput,
-        "会话边界正文",
-    )]);
-
-    apply_boundary_conversation_projection_to_runtime_state(&mut runtime_state, boundary_state);
-
-    assert_eq!(
-        runtime_state.active_provider_id.as_deref(),
-        Some("provider-a")
-    );
-    assert_eq!(runtime_state.conversation_state.records.len(), 1);
-    assert_eq!(
-        runtime_state.conversation_state.records[0].body,
-        "会话边界正文"
-    );
-}
-
-/// Verifies hydration can rebuild runtime state from the segmented transcript window when no overwrite state exists.
-/// 验证没有覆盖式状态时，水合能从分段转录窗口重建运行态。
-#[test]
-fn hydrate_session_runtime_state_rebuilds_from_segmented_window() {
+fn hydrate_session_runtime_state_does_not_rebuild_from_segmented_window() {
     let session_id = SessionId::from_u128(99);
     let transcript_messages = vec![test_message(
         "user-1",
@@ -456,11 +422,9 @@ fn hydrate_session_runtime_state_rebuilds_from_segmented_window() {
             session_id,
             &transcript_messages,
         ))
-        .expect("hydrate runtime state")
-        .expect("expected hydrated runtime state");
+        .expect("hydrate runtime state");
 
-    assert_eq!(hydrated.conversation_state.messages.len(), 1);
-    assert_eq!(hydrated.conversation_state.records.len(), 1);
+    assert!(hydrated.is_none());
 }
 
 /// Verifies hydration no longer falls back to legacy context snapshots when segmented state is absent.
@@ -564,35 +528,6 @@ fn segmented_current_context_restores_runtime_state_without_full_blob() {
         Some("# Segmented Preview")
     );
     assert_eq!(runtime_state.updated_at, "9001");
-}
-
-/// Verifies segmented replay results can hydrate the existing runtime-state structure.
-/// 验证分段重放结果可以水合到现有运行态结构中。
-#[test]
-fn segmented_replay_result_maps_to_runtime_state() {
-    let conversation_state = conversation_state_from_session_messages(&[test_message(
-        "assistant-replay",
-        SessionMessageKind::Assistant,
-        SessionMessageRecordKind::AssistantOutput,
-        "重放正文",
-    )]);
-    let runtime_state = runtime_state_entry_from_segmented_replay(SegmentedSessionReplayResult {
-        conversation_state,
-        last_compaction_id: Some("segmented-compaction-9".to_string()),
-        context_start_message_id: Some("assistant-replay".to_string()),
-        updated_at: Some("9900".to_string()),
-    });
-
-    assert_eq!(runtime_state.conversation_state.messages.len(), 1);
-    assert_eq!(
-        runtime_state.last_compaction_id.as_deref(),
-        Some("segmented-compaction-9")
-    );
-    assert_eq!(
-        runtime_state.context_start_message_id.as_deref(),
-        Some("assistant-replay")
-    );
-    assert_eq!(runtime_state.updated_at, "9900");
 }
 
 /// Verifies hydration repairs duplicate canonical record ids that were previously persisted by the broken runtime id generator.

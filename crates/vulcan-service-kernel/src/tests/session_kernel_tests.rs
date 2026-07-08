@@ -83,6 +83,59 @@ async fn webui_session_kernel_user_turn_does_not_preinterrupt_wait_agent() {
     assert!(wait_result.is_err());
 }
 
+/// Verifies a normally queued prompt does not interrupt an active wait_agent call.
+/// 验证普通排队提示词不会打断正在活动的 wait_agent 调用。
+#[tokio::test]
+async fn webui_pending_prompt_enqueue_does_not_interrupt_active_wait_agent() {
+    let session_id = SessionId::new_v4();
+    let mut state = test_service_state_with_parent_session(session_id);
+    state.agent_runtime = Some(test_agent_runtime_bridge());
+    let agent_runtime = state
+        .agent_runtime
+        .as_ref()
+        .expect("agent runtime should be installed")
+        .clone();
+    let task_runtime = agent_runtime.task_runtime.clone();
+    start_webui_session_kernel_user_turn(&mut state, session_id, "turn-a")
+        .expect("kernel turn should start");
+    state
+        .parent_sessions_waiting_for_subagents
+        .insert(session_id);
+    session_runtime_kernel_mut(&mut state, session_id)
+        .register_wait_scope("wait-a", Vec::<String>::new(), 10)
+        .expect("wait scope should register");
+
+    let mut wait_task = tokio::spawn(async move {
+        task_runtime
+            .invoke_wait_agent(session_id, serde_json::json!({ "timeout_ms": 10000 }))
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+    let workspace_snapshot = state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot should exist");
+    let workspace_path = workspace_path_for_session(workspace_snapshot, session_id);
+    enqueue_webui_pending_prompt_from_submission(
+        workspace_snapshot,
+        &agent_runtime,
+        session_id,
+        &workspace_path,
+        String::from("queued follow-up"),
+        None,
+        Vec::new(),
+        None,
+        None,
+    )
+    .expect("queued prompt should be stored");
+
+    let wait_result =
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut wait_task).await;
+    assert!(wait_result.is_err());
+    wait_task.abort();
+}
+
 /// Verifies stopping an active waiting turn interrupts the active wait_agent call.
 /// 验证停止活跃等待回合会打断正在等待的 wait_agent 调用。
 #[tokio::test]

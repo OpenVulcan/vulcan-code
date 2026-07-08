@@ -521,18 +521,36 @@ pub fn session_message_is_subagent_send_message_display_note(
     message: &SessionMessageEntry,
 ) -> bool {
     message.record_kind == SessionMessageRecordKind::DisplayNote
-        && message
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("kind"))
-            .and_then(Value::as_str)
-            == Some("subagent_message")
-        && message
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("tool"))
-            .and_then(Value::as_str)
-            == Some(SEND_MESSAGE_TOOL)
+        && subagent_send_message_display_note_metadata(message.metadata.as_ref())
+}
+
+/// Returns whether one canonical conversation record is a UI-only parent-to-child send_message note.
+/// 返回单条规范会话记录是否为仅 UI 使用的父级到子智能体 send_message 记录。
+///
+/// # Parameters
+/// 参数
+/// `record` is the canonical conversation record to classify.
+/// `record` 是需要分类的规范会话记录。
+///
+/// # Returns
+/// 返回值
+/// `true` when the record matches the canonical subagent send_message display-note metadata.
+/// 当该记录符合规范智能体 send_message display note 元数据时返回 `true`。
+pub fn session_conversation_record_is_subagent_send_message_display_note(
+    record: &SessionConversationRecord,
+) -> bool {
+    record.visible
+        && record.record_kind == SessionMessageRecordKind::DisplayNote
+        && subagent_send_message_display_note_metadata(record.metadata.as_ref())
+}
+
+/// Returns whether one metadata payload carries the canonical parent-to-child send_message identity.
+/// 返回单个元数据载荷是否携带规范父级到子智能体 send_message 身份。
+fn subagent_send_message_display_note_metadata(metadata: Option<&Value>) -> bool {
+    metadata.is_some_and(|metadata| {
+        metadata.get("kind").and_then(Value::as_str) == Some("subagent_message")
+            && metadata.get("tool").and_then(Value::as_str) == Some(SEND_MESSAGE_TOOL)
+    })
 }
 
 /// Resolves the stable display record id used to de-duplicate a projected `send_message` prompt.

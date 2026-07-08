@@ -46,7 +46,7 @@ export function resolveSubagentOrchestrationPresentation(
   return {
     agents: operationHasAgents ? subagentAgents(payload, blocks) : [],
     agentsKnown: operationHasAgents ? subagentAgentsKnown(payload) : true,
-    collectKind: operation === "collect" ? subagentCollectKind(toolName, hostKind) : null,
+    collectKind: operation === "collect" ? subagentCollectKind(toolName, hostKind, payload) : null,
     debugSummary: subagentDebugSummary(payload?.debug),
     detailRef,
     effectivePrompt: stringValue(payload?.prompt),
@@ -356,11 +356,25 @@ function subagentCollectKind(
   // Host result kind from metadata.
   // 元数据中的宿主结果类型。
   hostKind: string | null,
+  // Host or body payload.
+  // 宿主或正文载荷。
+  payload: Record<string, unknown> | null,
 ): "templates" | "status" | null {
-  const normalized = toolName ? normalizeToolName(toolName) : null;
+  const normalized = normalizeSubagentToolIdentity(toolName)
+    ?? normalizeSubagentToolIdentity(stringValue(payload?.tool));
   if (normalized === "agent_orchestration_info") return "templates";
   if (normalized === "list_agents" || hostKind === "subagent_status") return "status";
   return null;
+}
+
+// normalizeSubagentToolIdentity converts optional tool identifiers into canonical comparison form.
+// normalizeSubagentToolIdentity 将可选工具标识转换为规范比较形式。
+function normalizeSubagentToolIdentity(
+  // Raw tool identifier.
+  // 原始工具标识。
+  value: string | null,
+): string | null {
+  return value ? normalizeToolName(value) : null;
 }
 
 // subagentResult resolves visible result text for operations that expose child output.

@@ -257,13 +257,18 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
                 .insert(session_id);
             let scope_id = wait_agent_scope_id(event);
             let kernel = session_runtime_kernel_mut(&mut guard, session_id);
-            if !kernel.has_wait_scopes()
-                && let Err(error) = kernel.register_wait_scope(
-                    scope_id,
-                    Vec::<String>::new(),
-                    current_unix_millis_u64(),
-                )
-            {
+            let removed_stale_wait_scopes = kernel.clear_wait_scopes();
+            if removed_stale_wait_scopes > 0 {
+                webui_trace(
+                    "wait_agent_stale_scopes_cleared",
+                    format!("session={session_id} removed_wait_scopes={removed_stale_wait_scopes}"),
+                );
+            }
+            if let Err(error) = kernel.register_wait_scope(
+                scope_id,
+                Vec::<String>::new(),
+                current_unix_millis_u64(),
+            ) {
                 webui_trace(
                     "wait_agent_scope_register_failed",
                     format!("session={session_id} error={}", error.message),

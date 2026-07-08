@@ -128,7 +128,7 @@ async fn load_session_hydration_snapshot_from_locator(
         mut tool_detail_messages,
         earliest_ordinal,
         full_messages,
-        boundary_conversation_state,
+        _boundary_conversation_state,
     ) = segmented_window
         .map(|window| {
             (
@@ -146,18 +146,12 @@ async fn load_session_hydration_snapshot_from_locator(
             Some(runtime_state) => Some(runtime_state),
             None => hydrate_session_runtime_state(session_id, &full_messages).await?,
         }
-        .map(|mut runtime_state| {
+        .map(|runtime_state| {
             let provider_conversation_state = runtime_state.conversation_state.clone();
             repair_hydration_turn_stats_from_runtime_usage(
                 &mut messages,
                 &provider_conversation_state,
             );
-            if let Some(boundary_conversation_state) = boundary_conversation_state {
-                apply_boundary_conversation_projection_to_runtime_state(
-                    &mut runtime_state,
-                    boundary_conversation_state,
-                );
-            }
             runtime_state
         });
     restore_hydration_window_from_runtime_state_if_empty(

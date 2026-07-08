@@ -68,14 +68,32 @@ fn expected_child_forbidden_tool_ids() -> Vec<String> {
         .collect()
 }
 
-/// Verifies child agents cannot use the session todolist progress tool.
-/// 验证智能体不能使用会话 todolist 进度工具。
+/// Verifies child agents cannot use parent-owned interaction or memory tools.
+/// 验证智能体不能使用父级拥有的交互或记忆工具。
 #[test]
-fn child_forbidden_tool_ids_include_todolist() {
-    assert!(
-        expected_child_forbidden_tool_ids().contains(&"todolist".to_string()),
-        "child-agent hard-disabled tools must include todolist"
-    );
+fn child_forbidden_tool_ids_include_parent_owned_tools() {
+    let forbidden_tools = expected_child_forbidden_tool_ids();
+    for tool_id in [
+        "spawn_agent",
+        "agent_orchestration_info",
+        "send_message",
+        "wait_agent",
+        "interrupt_agent",
+        "close_agent",
+        "list_agents",
+        "ask",
+        "submit_plan",
+        "todolist",
+        "vmm_memory_search",
+        "vmm_turn_details",
+        "vmm_memory_write",
+        "vmm_memory_delete",
+    ] {
+        assert!(
+            forbidden_tools.contains(&tool_id.to_string()),
+            "child-agent hard-disabled tools must include {tool_id}"
+        );
+    }
 }
 
 /// Verifies execution-context registration returns a diagnostic instead of panicking on lock poisoning.

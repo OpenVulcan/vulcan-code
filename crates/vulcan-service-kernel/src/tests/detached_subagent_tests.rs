@@ -714,10 +714,10 @@ fn subagent_surface_conversation_state_uses_canonical_display_only_agent_message
     );
 }
 
-/// Verifies runtime refresh preserves existing parent-to-child visible message notes.
-/// 验证运行态刷新会保留已有的父到子可见消息记录。
+/// Verifies runtime refresh drops stale parent-to-child visible message notes.
+/// 验证运行态刷新会丢弃陈旧的父到子可见消息记录。
 #[test]
-fn subagent_surface_conversation_state_preserves_existing_send_message_notes() {
+fn subagent_surface_conversation_state_drops_stale_send_message_notes() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -776,12 +776,80 @@ fn subagent_surface_conversation_state_preserves_existing_send_message_notes() {
             .iter()
             .map(|message| message.body.as_str())
             .collect::<Vec<_>>(),
-        vec!["你之前做了什么？请回忆并列出。", "我只输出过 abcd。"]
+        vec!["我只输出过 abcd。"]
     );
     assert!(
         !messages
             .iter()
             .any(|message| message.body == "stale output")
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.body == "你之前做了什么？请回忆并列出。")
+    );
+}
+
+/// Verifies pending parent-to-child notes stay visible until runtime owns them.
+/// 验证待处理的父到子消息在运行时接管前保持可见。
+#[test]
+fn subagent_surface_conversation_state_preserves_pending_send_message_notes() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    let workspace_snapshot = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("test workspace snapshot should exist");
+    let mut send_note =
+        SessionMessageEntry::new(SessionMessageKind::User, "智能体消息", "请继续输出 1234。")
+            .with_runtime_metadata("delivery-followup-2", "1780000000005");
+    send_note.record_kind = SessionMessageRecordKind::DisplayNote;
+    send_note.metadata = Some(json!({
+        "display_note": true,
+        "kind": "subagent_message",
+        "tool": "send_message",
+        (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+        "delivery_id": "delivery-followup-2",
+    }));
+    let previous_output =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "输出", "previous output")
+            .with_runtime_metadata("previous-output", "1780000000001");
+    workspace_snapshot
+        .session_messages
+        .insert(task_session_id, vec![previous_output, send_note]);
+    let canonical_state = SessionConversationState {
+        messages: Vec::new(),
+        records: vec![SessionConversationRecord {
+            id: String::from("canonical-previous-output"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("输出"),
+            body: String::from("previous output"),
+            metadata: None,
+            created_at: String::from("1780000000001"),
+        }],
+        continuation: Default::default(),
+    };
+
+    replace_webui_subagent_task_conversation_state(
+        workspace_snapshot,
+        task_session_id,
+        canonical_state,
+        None,
+    );
+
+    let messages = workspace_snapshot
+        .session_messages
+        .get(&task_session_id)
+        .expect("hydrated child messages should exist");
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["previous output", "请继续输出 1234。"]
     );
 }
 
@@ -1918,15 +1986,16 @@ fn subagent_completion_appends_independent_parent_feedback_rows() {
     assert_eq!(stats.usage_groups[0].cached_input_tokens, Some(40));
 }
 
-/// Verifies active parent turns suppress child feedback display cards while preserving stats.
-/// 验证活动父回合会抑制智能体反馈显示卡片，同时保留统计。
+/// Verifies active parent user turns still receive independent child feedback display rows.
+/// 验证活动父级用户回合仍会接收独立智能体反馈显示行。
 #[test]
-fn active_parent_turn_suppresses_subagent_feedback_display_card_and_preserves_stats() {
+fn active_parent_turn_appends_independent_subagent_feedback_display_rows() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
     start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
         .expect("parent user turn should start");
+    bind_webui_subagent_parent_turn(&mut service_state, parent_session_id, task_session_id);
     let state = Arc::new(Mutex::new(service_state));
     let runtime = test_agent_runtime_bridge();
     let app = ServiceEventEmitter::new(Vec::new());
@@ -1965,42 +2034,108 @@ fn active_parent_turn_suppresses_subagent_feedback_display_card_and_preserves_st
     );
 
     let guard = state.lock().expect("service state lock");
-    let messages = guard
+    let feedback_rows = guard
         .workspace_snapshot
         .as_ref()
         .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
-        .expect("parent should contain feedback stats row");
-    let feedback_entry = messages
-        .iter()
-        .find(|message| message.record_kind == SessionMessageRecordKind::DisplayNote);
-    assert!(
-        feedback_entry.is_none(),
-        "active parent turns should consume feedback through wait/mailbox flow instead of inserting a display card"
+        .map(|messages| {
+            messages
+                .iter()
+                .filter(|message| {
+                    message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata
+                            .get("subagent_feedback_record")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        feedback_rows.len(),
+        2,
+        "active parent user turns without wait_agent ownership should append independent feedback and stats rows"
     );
-    let stats_row = messages
-        .iter()
-        .find(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
-        .expect("one feedback row should carry child-agent stats");
-    let stats: SessionTurnStats = serde_json::from_value(
-        stats_row
+    for row in feedback_rows {
+        let metadata = row
             .metadata
             .as_ref()
-            .and_then(|metadata| metadata.get("turn_stats"))
-            .expect("stats metadata should exist")
-            .clone(),
-    )
-    .expect("stats metadata should parse");
-
-    assert_eq!(stats.turn_kind, SessionTurnStatsKind::SubagentFeedback);
-    assert_eq!(stats.provider_call_count, 1);
-    assert_eq!(stats.total_tokens, 130);
-    assert_eq!(stats.cached_input_tokens, Some(40));
+            .expect("feedback metadata should exist");
+        assert_eq!(
+            metadata
+                .get("parent_turn_id")
+                .and_then(serde_json::Value::as_str),
+            Some("turn-a")
+        );
+        assert_eq!(
+            metadata
+                .get("parent_turn_binding")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            metadata
+                .get("source_generation")
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+        );
+    }
 }
 
-/// Verifies wait_agent-owned feedback suppresses the parent feedback card while preserving child stats.
-/// 验证 wait_agent 接管的反馈会抑制父级反馈卡片，同时保留智能体统计。
+/// Verifies active workspace run phases still receive independent child feedback display rows.
+/// 验证活跃工作区运行阶段仍会接收独立智能体反馈显示行。
 #[test]
-fn wait_agent_feedback_suppresses_parent_feedback_card_and_preserves_stats() {
+fn active_parent_workspace_phase_appends_independent_subagent_feedback_display_rows() {
+    let parent_session_id = SessionId::new_v4();
+    let task_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot should exist")
+        .session_run_phases
+        .insert(parent_session_id, SessionRunPhase::Requesting);
+    let state = Arc::new(Mutex::new(service_state));
+    let runtime = test_agent_runtime_bridge();
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = test_delegate_finished_event(task_session_id, "phase-worker", "阶段中完成");
+
+    assert!(
+        ingest_webui_subagent_runtime_event(&app, &state, &runtime, parent_session_id, &event)
+            .expect("delegate finished should ingest")
+    );
+
+    let guard = state.lock().expect("service state lock");
+    let feedback_rows = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
+        .map(|messages| {
+            messages
+                .iter()
+                .filter(|message| {
+                    message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata
+                            .get("subagent_feedback_record")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        feedback_rows.len(),
+        2,
+        "active parent phases without wait_agent ownership should append independent feedback and stats rows"
+    );
+}
+
+/// Verifies wait_agent-owned feedback suppresses independent parent feedback rows.
+/// 验证 wait_agent 接管的反馈会抑制独立父级反馈记录。
+#[test]
+fn wait_agent_feedback_suppresses_independent_parent_feedback_rows() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let second_task_session_id = SessionId::new_v4();
@@ -2094,70 +2229,34 @@ fn wait_agent_feedback_suppresses_parent_feedback_card_and_preserves_stats() {
     );
 
     let guard = state.lock().expect("service state lock");
-    let messages = guard
+    let feedback_rows = guard
         .workspace_snapshot
         .as_ref()
         .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
-        .expect("parent should contain display feedback stats");
-    let feedback_rows = messages
-        .iter()
-        .filter(|message| {
-            message.metadata.as_ref().is_some_and(|metadata| {
-                metadata
-                    .get("subagent_feedback_record")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-            })
+        .map(|messages| {
+            messages
+                .iter()
+                .filter(|message| {
+                    message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata
+                            .get("subagent_feedback_record")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                })
+                .collect::<Vec<_>>()
         })
-        .collect::<Vec<_>>();
-    assert_eq!(feedback_rows.len(), 2);
+        .unwrap_or_default();
     assert!(
-        !feedback_rows
-            .iter()
-            .any(|message| message.record_kind == SessionMessageRecordKind::DisplayNote)
-    );
-    let parsed_stats = feedback_rows
-        .iter()
-        .filter(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
-        .map(|message| {
-            serde_json::from_value::<SessionTurnStats>(
-                message
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.get("turn_stats"))
-                    .expect("stats metadata should exist")
-                    .clone(),
-            )
-            .expect("stats metadata should parse")
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(parsed_stats.len(), 2);
-    assert!(
-        parsed_stats
-            .iter()
-            .all(|stats| stats.turn_kind == SessionTurnStatsKind::SubagentFeedback)
-    );
-    assert!(
-        parsed_stats
-            .iter()
-            .any(|stats| stats.provider_call_count == 2
-                && stats.total_tokens == 260
-                && stats.cached_input_tokens == Some(80))
-    );
-    assert!(
-        parsed_stats
-            .iter()
-            .any(|stats| stats.provider_call_count == 3
-                && stats.total_tokens == 390
-                && stats.cached_input_tokens == Some(120))
+        feedback_rows.is_empty(),
+        "wait_agent-owned feedback must stay inside the wait_agent tool result instead of creating separate parent rows"
     );
 }
 
-/// Verifies feedback consumed by a completed wait_agent still suppresses delayed parent feedback cards.
-/// 验证已完成 wait_agent 消费过的反馈仍会抑制迟到的父级反馈卡片。
+/// Verifies feedback consumed by a completed wait_agent suppresses delayed parent feedback rows.
+/// 验证已完成 wait_agent 消费过的反馈会抑制迟到的父级反馈记录。
 #[test]
-fn consumed_wait_agent_feedback_suppresses_delayed_parent_feedback_card() {
+fn consumed_wait_agent_feedback_suppresses_delayed_parent_feedback_rows() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -2205,30 +2304,28 @@ fn consumed_wait_agent_feedback_suppresses_delayed_parent_feedback_card() {
     );
 
     let guard = state.lock().expect("service state lock");
-    let messages = guard
+    let feedback_rows = guard
         .workspace_snapshot
         .as_ref()
         .and_then(|workspace| workspace.session_messages.get(&parent_session_id))
-        .expect("parent should contain delayed feedback stats");
+        .map(|messages| {
+            messages
+                .iter()
+                .filter(|message| {
+                    message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata
+                            .get("subagent_feedback_record")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     assert!(
-        !messages
-            .iter()
-            .any(|message| message.record_kind == SessionMessageRecordKind::DisplayNote)
+        feedback_rows.is_empty(),
+        "delayed wait-owned feedback must not create separate parent rows"
     );
-    let stats_row = messages
-        .iter()
-        .find(|message| message.record_kind == SessionMessageRecordKind::TurnStats)
-        .expect("delayed wait-owned feedback should still preserve stats");
-    let stats: SessionTurnStats = serde_json::from_value(
-        stats_row
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("turn_stats"))
-            .expect("stats metadata should exist")
-            .clone(),
-    )
-    .expect("stats metadata should parse");
-    assert_eq!(stats.total_tokens, 13);
 }
 
 /// Verifies feedback deduplication is scoped to one concrete child-agent execution.

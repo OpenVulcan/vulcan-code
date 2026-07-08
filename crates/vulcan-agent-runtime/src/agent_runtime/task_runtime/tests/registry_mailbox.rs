@@ -1112,6 +1112,18 @@ async fn wait_agent_returns_consumed_child_feedback() {
         is_resumed: false,
     };
     let controller_config = build_test_controller_config("Base prompt");
+    let usage_segment = vulcan_workbench_model::SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::SubagentTask,
+        1,
+        Some(&vulcan_core::types::ProviderUsageSnapshot {
+            input_tokens: Some(120),
+            output_tokens: Some(30),
+            reasoning_tokens: Some(10),
+            total_tokens: Some(160),
+            cached_input_tokens: Some(40),
+            cache_creation_input_tokens: None,
+        }),
+    );
     let outcome = TaskExecutionOutcome {
         task_id,
         controller_config: controller_config.clone(),
@@ -1122,7 +1134,7 @@ async fn wait_agent_returns_consumed_child_feedback() {
         final_assistant_message_id: Some(String::from("assistant-1")),
         final_output_text: String::from("review complete"),
         execution_status: TaskExecutionStatus::Completed,
-        usage_segments: Vec::new(),
+        usage_segments: vec![usage_segment],
     };
     task_runtime
         .store_task_outcome(root_session_id, &invocation, &outcome)
@@ -1148,6 +1160,16 @@ async fn wait_agent_returns_consumed_child_feedback() {
     assert_eq!(
         result.model_output["agents"][0]["result"],
         "review complete"
+    );
+    assert!(
+        result.model_output["agents"][0]
+            .get("usage_segments")
+            .is_none()
+    );
+    let host_result = result.host_result.as_ref().expect("host result");
+    assert_eq!(
+        host_result.payload["agents"][0]["usage_segments"][0]["input_tokens"],
+        120
     );
     assert!(result.model_output.to_string().contains("review complete"));
 }
@@ -1372,23 +1394,24 @@ async fn targeted_wait_agent_retains_unrelated_stale_feedback() {
     assert_eq!(remaining_events[0].payload["result_text"], "STALE_DONE");
 }
 
-/// Verifies wait_agent wakes when the parent receives steered user input.
-/// 验证父会话收到用户插话时 wait_agent 会被唤醒。
+/// Verifies wait_agent wakes when the parent emits an explicit interruption.
+/// 验证父会话发出显式打断时 wait_agent 会被唤醒。
 #[tokio::test]
-async fn wait_agent_wakes_when_parent_input_arrives() {
+async fn wait_agent_wakes_when_parent_interruption_arrives() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let root_session_id = Uuid::new_v4();
     let notifier_runtime = Arc::clone(&task_runtime);
 
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(25)).await;
-        notifier_runtime.notify_parent_input_activity(SessionNodeId::from(root_session_id));
+        notifier_runtime
+            .notify_wait_agent_parent_interruption(SessionNodeId::from(root_session_id));
     });
 
     let result = task_runtime
         .invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 }))
         .await
-        .expect("wait_agent should wake on parent input");
+        .expect("wait_agent should wake on parent interruption");
 
     assert_eq!(
         result.model_output["message"],

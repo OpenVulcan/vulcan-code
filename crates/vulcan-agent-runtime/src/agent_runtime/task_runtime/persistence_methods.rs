@@ -1,4 +1,5 @@
 use super::*;
+use vulcan_workbench_model::session_conversation_record_is_subagent_send_message_display_note;
 
 impl TaskRuntime {
     /// Restores persisted child-agent registry entries for one parent tree without restarting work.
@@ -841,12 +842,16 @@ impl TaskRuntime {
                     invocation.prompt.as_str(),
                 );
                 if let Some(outcome) = outcome {
+                    let initial_execution_started_at_ms = (!invocation.is_resumed)
+                        .then(|| record.created_at.parse::<u64>().ok())
+                        .flatten();
                     append_task_context_turn_stats_record(
                         &mut conversation_state,
                         record.task_id,
                         now_ms,
                         status,
                         outcome,
+                        initial_execution_started_at_ms,
                     );
                 }
                 let conversation_state_value =
@@ -1311,6 +1316,7 @@ fn append_task_context_turn_stats_record(
     now_ms: u64,
     status: TaskSessionStatus,
     outcome: &TaskExecutionOutcome,
+    initial_execution_started_at_ms: Option<u64>,
 ) {
     if outcome
         .final_assistant_message_id
@@ -1347,8 +1353,12 @@ fn append_task_context_turn_stats_record(
         TaskSessionStatus::Stopped => SessionTurnStatsStatus::Stopped,
         _ => SessionTurnStatsStatus::Completed,
     };
-    let record_turn_stats = build_session_turn_stats_from_state_with_segments(
+    let stats_conversation_state = task_context_conversation_state_for_turn_stats(
         conversation_state,
+        summary_record_id.as_str(),
+    );
+    let record_turn_stats = build_session_turn_stats_from_state_with_segments(
+        &stats_conversation_state,
         summary_record_id.as_str(),
         status,
         Some(outcome.provider_turns_executed),
@@ -1369,7 +1379,7 @@ fn append_task_context_turn_stats_record(
         ))
     } else {
         build_session_turn_stats_from_state_with_segments(
-            conversation_state,
+            &stats_conversation_state,
             summary_record_id.as_str(),
             status,
             None,
@@ -1377,9 +1387,14 @@ fn append_task_context_turn_stats_record(
             task_context_usage_segments,
         )
     };
-    let Some(turn_stats) = turn_stats else {
+    let Some(mut turn_stats) = turn_stats else {
         return;
     };
+    clamp_task_turn_stats_duration_to_initial_execution_start(
+        &mut turn_stats,
+        now_ms,
+        initial_execution_started_at_ms,
+    );
     let stats_record_id =
         build_session_record_message_id(task_id, now.as_str(), conversation_state.records.len());
     conversation_state.records.push(SessionConversationRecord {
@@ -1396,6 +1411,143 @@ fn append_task_context_turn_stats_record(
         })),
         created_at: now,
     });
+}
+
+/// Clamps first-run child-agent duration so inherited display timestamps cannot extend it before task creation.
+/// 钳制首次运行子智能体耗时，避免继承显示时间戳把耗时扩展到任务创建之前。
+///
+/// # Parameters
+/// 参数
+/// `stats` is the child-agent turn-statistics snapshot being finalized.
+/// `stats` 是正在收尾的子智能体轮次统计快照。
+/// `finished_at_ms` is the timestamp of the terminal statistics record.
+/// `finished_at_ms` 是终态统计记录的时间戳。
+/// `initial_execution_started_at_ms` is the task creation timestamp for non-resumed executions.
+/// `initial_execution_started_at_ms` 是非续跑执行的任务创建时间戳。
+fn clamp_task_turn_stats_duration_to_initial_execution_start(
+    stats: &mut SessionTurnStats,
+    finished_at_ms: u64,
+    initial_execution_started_at_ms: Option<u64>,
+) {
+    let Some(initial_execution_started_at_ms) = initial_execution_started_at_ms else {
+        refresh_task_turn_stats_output_speed(stats);
+        return;
+    };
+    let Some(duration_ms) = stats.duration_ms else {
+        refresh_task_turn_stats_output_speed(stats);
+        return;
+    };
+    if finished_at_ms < initial_execution_started_at_ms {
+        refresh_task_turn_stats_output_speed(stats);
+        return;
+    }
+    let max_duration_ms = finished_at_ms.saturating_sub(initial_execution_started_at_ms);
+    if duration_ms > max_duration_ms {
+        stats.duration_ms = Some(max_duration_ms);
+    }
+    refresh_task_turn_stats_output_speed(stats);
+}
+
+/// Refreshes output speed after task-local duration or explicit usage changes.
+/// 在任务本地耗时或显式用量变更后刷新输出速度。
+///
+/// # Parameters
+/// 参数
+/// `stats` is the turn-statistics snapshot whose derived speed is refreshed.
+/// `stats` 是需要刷新派生速度的轮次统计快照。
+fn refresh_task_turn_stats_output_speed(stats: &mut SessionTurnStats) {
+    stats.output_tokens_per_second = match (stats.duration_ms, stats.output_tokens) {
+        (Some(duration_ms), output_tokens) if duration_ms > 0 && output_tokens > 0 => {
+            Some(output_tokens as f64 / (duration_ms as f64 / 1000.0))
+        }
+        _ => None,
+    };
+}
+
+/// Builds a statistics-only view scoped to the current child-agent execution.
+/// 构建仅用于统计的当前子智能体执行窗口视图。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` is the persisted child-agent conversation state.
+/// `conversation_state` 是持久化的子智能体会话状态。
+/// `closing_record_id` is the summary record that closes the current execution.
+/// `closing_record_id` 是闭合当前执行的摘要记录。
+///
+/// # Returns
+/// 返回值
+/// A cloned state whose records start at the current execution trigger when one is identifiable.
+/// 返回记录从可识别当前执行触发点开始的克隆状态。
+fn task_context_conversation_state_for_turn_stats(
+    conversation_state: &SessionConversationState,
+    closing_record_id: &str,
+) -> SessionConversationState {
+    let Some(start_index) =
+        task_context_current_execution_record_start_index(conversation_state, closing_record_id)
+    else {
+        return conversation_state.clone();
+    };
+    if start_index == 0 {
+        return conversation_state.clone();
+    }
+    let mut scoped_state = conversation_state.clone();
+    scoped_state.records = scoped_state.records.split_off(start_index);
+    scoped_state
+}
+
+/// Resolves the display record that starts the current child-agent execution for statistics.
+/// 解析用于统计的当前子智能体执行起始显示记录。
+///
+/// # Parameters
+/// 参数
+/// `conversation_state` contains task-owned display records plus the newly appended closing record.
+/// `conversation_state` 包含任务自有显示记录以及刚追加的闭合记录。
+/// `closing_record_id` identifies the current summary record.
+/// `closing_record_id` 标识当前摘要记录。
+///
+/// # Returns
+/// 返回值
+/// The index of the first parent-to-child delivery note in the current execution batch.
+/// 返回当前执行批次中第一条父到子投递记录的索引。
+fn task_context_current_execution_record_start_index(
+    conversation_state: &SessionConversationState,
+    closing_record_id: &str,
+) -> Option<usize> {
+    let closing_index = conversation_state
+        .records
+        .iter()
+        .position(|record| record.id == closing_record_id)?;
+    let latest_delivery_index = conversation_state.records[..closing_index]
+        .iter()
+        .rposition(task_context_record_is_inter_agent_delivery_note)?;
+    let search_start = conversation_state.records[..latest_delivery_index]
+        .iter()
+        .rposition(task_context_record_closes_delivery_stats_window)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    conversation_state.records[search_start..=latest_delivery_index]
+        .iter()
+        .position(task_context_record_is_inter_agent_delivery_note)
+        .map(|offset| search_start + offset)
+}
+
+/// Returns whether one record is a parent-to-child message delivery note.
+/// 判断单条记录是否为父会话投递给子智能体的消息记录。
+fn task_context_record_is_inter_agent_delivery_note(record: &SessionConversationRecord) -> bool {
+    record.kind == SessionMessageKind::User
+        && session_conversation_record_is_subagent_send_message_display_note(record)
+}
+
+/// Returns whether one record closes the previous child execution before a delivery note.
+/// 判断单条记录是否在投递记录之前闭合上一段子智能体执行。
+fn task_context_record_closes_delivery_stats_window(record: &SessionConversationRecord) -> bool {
+    matches!(
+        record.record_kind,
+        SessionMessageRecordKind::AssistantOutput
+            | SessionMessageRecordKind::SummaryOutput
+            | SessionMessageRecordKind::TurnStats
+            | SessionMessageRecordKind::TurnTerminated
+    )
 }
 
 /// Returns whether one turn-statistics snapshot contains concrete token usage.

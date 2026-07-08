@@ -231,13 +231,3 @@ pub(super) fn session_boundary_lines_to_window_messages(
         boundary_conversation_state: Some(projection.conversation_state),
     }))
 }
-
-/// Applies session-boundary transcript records while preserving non-transcript runtime continuation state.
-/// 应用 会话边界投影出的转录记录，同时保留非转录运行时 continuation 状态。
-pub(super) fn apply_boundary_conversation_projection_to_runtime_state(
-    runtime_state: &mut SessionRuntimeStateEntry,
-    boundary_conversation_state: SessionConversationState,
-) {
-    runtime_state.conversation_state.messages = boundary_conversation_state.messages;
-    runtime_state.conversation_state.records = boundary_conversation_state.records;
-}

@@ -6,6 +6,7 @@ use super::{
     display_session_messages_from_workspace, stable_display_session_messages_from_workspace,
     subagent_navigation_surface_is_visible, subagent_navigation_task_label,
     subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
+    task_scoped_display_session_messages,
 };
 use vulcan_service_api::{SubagentNavigationSnapshot, SubagentTaskSummary};
 use vulcan_session_core::{SubagentRegistryEntry, SubagentStatus};
@@ -122,14 +123,16 @@ fn surface_messages_for_resolved_session(
     active_session_id: SessionId,
 ) -> Vec<SessionMessageEntry> {
     if active_session_id != workspace_snapshot.selected_session {
-        if let Some(messages) =
-            stable_display_session_messages_from_workspace(workspace_snapshot, active_session_id)
-            && !messages.is_empty()
-        {
-            return messages;
-        }
         let task_prompt_anchor = webui_subagent_detail_state_by_task_id(guard, active_session_id)
             .and_then(|state| state.description.as_deref());
+        if let Some(messages) =
+            stable_display_session_messages_from_workspace(workspace_snapshot, active_session_id)
+        {
+            let messages = task_scoped_display_session_messages(messages, task_prompt_anchor);
+            if !messages.is_empty() {
+                return messages;
+            }
+        }
         if let Some(runtime_state) = workspace_snapshot
             .session_runtime_state
             .get(&active_session_id)

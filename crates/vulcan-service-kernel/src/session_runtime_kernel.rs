@@ -329,7 +329,7 @@ pub(crate) fn notify_webui_wait_agent_parent_interruption_if_waiting(
     if let Some(agent_runtime) = state.agent_runtime.as_ref() {
         agent_runtime
             .task_runtime
-            .notify_parent_input_activity(SessionNodeId::from(session_id));
+            .notify_wait_agent_parent_interruption(SessionNodeId::from(session_id));
         webui_trace(
             "wait_agent_parent_interruption_notified",
             format!("session={session_id} reason={reason}"),
@@ -976,7 +976,9 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
         .parent_sessions_waiting_for_subagents
         .contains(&parent_session_id);
     let kernel = session_runtime_kernel_mut(state, parent_session_id);
-    let deliver_to_active_parent_turn = kernel.active_turn().is_some()
+    let deliver_to_active_parent_turn = kernel
+        .active_turn()
+        .is_some_and(|turn| turn.kind == ActiveTurnKind::MailboxTriggered)
         && !kernel.has_wait_scopes()
         && kernel.input_queue().delivery_phase() != MailboxDeliveryPhase::Closed;
     if deliver_to_active_parent_turn {

@@ -13,6 +13,7 @@ import {
   conversationBlockHasToolEvidence,
   extractToolResultIdFromText,
   metadataToolFailureStatus,
+  isSubagentFeedbackMetadata,
   normalizeToolDisplayState,
   structuredKindLooksLikeToolBlock,
   structuredMessageHasToolEvidence,
@@ -100,8 +101,7 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
     return "tool-result";
   }
   if (message.recordKind === "display-note") {
-    const hostKind = metadataString(message.metadata, ["host_result.kind", "hostResult.kind", "kind"]);
-    if (hostKind === "subagent_feedback") return "tool-result";
+    if (isSubagentFeedbackMetadata(message.metadata)) return "tool-result";
   }
   if (message.recordKind === "thinking-output") return "thinking";
   if (message.recordKind === "turn-stats") return "turn-stats";

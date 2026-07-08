@@ -1,9 +1,9 @@
 //! Controller-backed persistence helpers for projects, sessions, transcript history, and hidden context nodes.
 //! 项目、会话、转录历史与隐藏上下文节点的控制器持久化辅助模块。
 
-use crate::conversation_protocol::{
-    SessionConversationState, conversation_state_from_session_messages,
-};
+use crate::conversation_protocol::SessionConversationState;
+#[cfg(test)]
+use crate::conversation_protocol::conversation_state_from_session_messages;
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::model::{
     SessionAddonState, SessionCompactionEntry, SessionId, SessionMessageEntry,

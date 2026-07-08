@@ -5,7 +5,7 @@ impl TaskRuntime {
     /// 构建一份带默认递归防护的空任务运行时。
     pub fn new() -> Self {
         let (subagent_mailbox_activity_tx, _) = watch::channel(0_u64);
-        let (parent_input_activity_tx, _) = watch::channel(0_u64);
+        let (wait_agent_parent_interruption_tx, _) = watch::channel(0_u64);
         Self {
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
@@ -14,8 +14,8 @@ impl TaskRuntime {
             detached_task_event_streams: RwLock::new(HashMap::new()),
             subagent_mailbox: InMemorySubagentMailbox::default(),
             subagent_mailbox_activity_tx,
-            parent_input_activity_tx,
-            parent_input_activity_sessions: RwLock::new(BTreeSet::new()),
+            wait_agent_parent_interruption_tx,
+            wait_agent_parent_interruption_sessions: RwLock::new(BTreeSet::new()),
             agent_inboxes: RwLock::new(HashMap::new()),
             subagent_registry: RwLock::new(SubagentRegistry::new()),
             subagent_catalog: RwLock::new(SubagentCatalog::default()),
@@ -78,32 +78,35 @@ impl TaskRuntime {
         let _ = self.subagent_mailbox_activity_tx.send(next_version);
     }
 
-    /// Subscribes to parent input activity notifications.
-    /// 订阅父级输入活动通知。
-    pub(super) fn subscribe_parent_input_activity(&self) -> watch::Receiver<u64> {
-        self.parent_input_activity_tx.subscribe()
+    /// Subscribes to explicit parent interruptions that should release wait_agent.
+    /// 订阅应释放 wait_agent 的显式父级打断通知。
+    pub(super) fn subscribe_wait_agent_parent_interruption(&self) -> watch::Receiver<u64> {
+        self.wait_agent_parent_interruption_tx.subscribe()
     }
 
-    /// Takes pending parent input activity for one parent thread.
-    /// 取出指定父线程下待处理的父级输入活动。
-    pub(super) fn take_parent_input_activity_for_parent(
+    /// Takes one pending explicit parent interruption for a parent thread.
+    /// 取出指定父线程下一次待处理的显式父级打断。
+    pub(super) fn take_wait_agent_parent_interruption_for_parent(
         &self,
         parent_thread_id: SessionThreadId,
     ) -> Result<bool, String> {
-        self.parent_input_activity_sessions
+        self.wait_agent_parent_interruption_sessions
             .write()
-            .map_err(|_| String::from("The parent-input activity registry is locked."))
+            .map_err(|_| String::from("The wait-agent interruption registry is locked."))
             .map(|mut sessions| sessions.remove(&parent_thread_id))
     }
 
-    /// Notifies waiters that new parent-side input or steering arrived.
-    /// 通知等待方父级已有新的输入或插话到达。
-    pub fn notify_parent_input_activity(&self, parent_thread_id: SessionThreadId) {
-        if let Ok(mut sessions) = self.parent_input_activity_sessions.write() {
+    /// Notifies wait_agent that a real parent-side interruption arrived.
+    /// 通知 wait_agent 真实父级插队或停止事件已到达。
+    pub fn notify_wait_agent_parent_interruption(&self, parent_thread_id: SessionThreadId) {
+        if let Ok(mut sessions) = self.wait_agent_parent_interruption_sessions.write() {
             sessions.insert(parent_thread_id);
         }
-        let next_version = self.parent_input_activity_tx.borrow().saturating_add(1);
-        let _ = self.parent_input_activity_tx.send(next_version);
+        let next_version = self
+            .wait_agent_parent_interruption_tx
+            .borrow()
+            .saturating_add(1);
+        let _ = self.wait_agent_parent_interruption_tx.send(next_version);
     }
 
     /// Returns a clone of the Vulcan-native subagent registry.

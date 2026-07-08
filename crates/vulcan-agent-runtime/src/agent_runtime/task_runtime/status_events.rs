@@ -403,7 +403,29 @@ pub(super) fn subagent_mailbox_kind_from_task_status(
         TaskSessionStatus::WaitingChildren
         | TaskSessionStatus::WaitingFollowup
         | TaskSessionStatus::Compacting
-        | TaskSessionStatus::Archived => SubagentMailboxEventKind::Message,
+        | TaskSessionStatus::Archived => SubagentMailboxEventKind::StatusUpdate,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies progress-only task states do not masquerade as child-agent messages.
+    /// 验证仅表示进度的任务状态不会伪装成子代理消息。
+    #[test]
+    fn progress_statuses_use_status_update_mailbox_kind() {
+        for status in [
+            TaskSessionStatus::WaitingChildren,
+            TaskSessionStatus::WaitingFollowup,
+            TaskSessionStatus::Compacting,
+            TaskSessionStatus::Archived,
+        ] {
+            assert_eq!(
+                subagent_mailbox_kind_from_task_status(status),
+                SubagentMailboxEventKind::StatusUpdate
+            );
+        }
     }
 }
 

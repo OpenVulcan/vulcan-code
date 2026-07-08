@@ -5,8 +5,8 @@ import type {
 } from "@/components/conversation/conversation-model";
 import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
 import { metadataValue } from "@/components/conversation/conversation-metadata";
-import { turnStatsSummary } from "@/components/conversation/conversation-tool-metadata";
-import type { LocaleCode, TranslationKey } from "@/i18n";
+import { isSubagentFeedbackMetadata } from "@/components/conversation/conversation-tool-metadata";
+import type { LocaleCode } from "@/i18n";
 
 // ProjectedTurnState stores transient grouping data while projecting transcript rows.
 // ProjectedTurnState 存储投影转录行时使用的临时分组数据。
@@ -26,9 +26,6 @@ interface ProjectedTurnState {
   // Optional terminal turn statistics row.
   // 可选的终态轮次统计行。
   statsItem: ConversationRenderItem | null;
-  // Child-agent statistics that belong to this parent turn.
-  // 属于当前父级回合的智能体统计。
-  subagentStatsItems: ConversationRenderItem[];
 }
 
 // projectConversationTimelineItems groups each user turn into a visible processing shell.
@@ -38,7 +35,6 @@ export function projectConversationTimelineItems(
   conversation: ConversationSummary | undefined,
   nowMs: number,
   conversationRunning: boolean,
-  t?: (key: TranslationKey) => string,
 ): ConversationTimelineItem[] {
   const timeline: ConversationTimelineItem[] = [];
   const turnStartUserIds = conversationTurnStartUserIds(renderItems);
@@ -52,10 +48,7 @@ export function projectConversationTimelineItems(
     if (currentTurn.userItem) {
       timeline.push({ kind: "item", item: currentTurn.userItem });
     }
-    const mergedStatsItem = currentTurn.statsItem
-      ? mergeSubagentStatsIntoTurnStatsItem(currentTurn.statsItem, currentTurn.subagentStatsItems, t)
-      : null;
-    const stats = mergedStatsItem?.blocks[0]?.rawMetadata;
+    const stats = currentTurn.statsItem?.blocks[0]?.rawMetadata;
     const statsStatus = turnStatsStatus(stats);
     const stopped = statsStatus === "stopped";
     const terminal = Boolean(currentTurn.statsItem);
@@ -63,12 +56,12 @@ export function projectConversationTimelineItems(
     const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems);
     const bodyItems = currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item));
     const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
-    const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item));
+    const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item) || isSubagentTurnStatsRenderItem(item));
     const turnUserItem = currentTurn.userItem;
     const shouldDefaultCollapse = Boolean(turnUserItem) && Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(turnUserItem?.id ?? "");
     const startedAtMs = conversationMessageUnixMillis(currentTurn.anchorItem.sourceMessage ?? currentTurn.anchorItem.userMessage);
     const statsDurationMs = turnStatsDurationMs(stats);
-    const terminalMessageMs = conversationMessageUnixMillis(finalItem?.sourceMessage ?? mergedStatsItem?.sourceMessage);
+    const terminalMessageMs = conversationMessageUnixMillis(finalItem?.sourceMessage ?? currentTurn.statsItem?.sourceMessage);
     const projectedDurationMs = startedAtMs && terminalMessageMs
       ? Math.max(0, terminalMessageMs - startedAtMs)
       : null;
@@ -95,12 +88,8 @@ export function projectConversationTimelineItems(
     if (finalItem) {
       timeline.push({ kind: "item", item: finalItem, finalAssistantOutput: true });
     }
-    if (mergedStatsItem) {
-      timeline.push({ kind: "item", item: mergedStatsItem });
-    } else {
-      for (const item of currentTurn.subagentStatsItems) {
-        timeline.push({ kind: "item", item });
-      }
+    if (currentTurn.statsItem) {
+      timeline.push({ kind: "item", item: currentTurn.statsItem });
     }
     if (finalItem) {
       timeline.push({ kind: "final-assistant-meta", item: finalItem });
@@ -141,7 +130,7 @@ export function projectConversationTimelineItems(
       continue;
     }
     if (isSubagentTurnStatsRenderItem(item)) {
-      currentTurn.subagentStatsItems.push(item);
+      currentTurn.bodyItems.push(item);
       continue;
     }
     if (isTurnStatsRenderItem(item)) {
@@ -175,7 +164,6 @@ function newProjectedTurn(
     bodyItems,
     guidanceItems: [],
     statsItem: null,
-    subagentStatsItems: [],
   };
 }
 
@@ -443,165 +431,8 @@ function isSubagentTurnStatsRenderItem(item: ConversationRenderItem): boolean {
 // isSubagentFeedbackDisplayRenderItem 返回条目是否为仅显示的智能体反馈卡。
 function isSubagentFeedbackDisplayRenderItem(item: ConversationRenderItem): boolean {
   return item.blocks.some((block) => {
-    const metadata = block.rawMetadata;
-    if (!metadata || typeof metadata !== "object") {
-      return false;
-    }
-    const record = metadata as Record<string, unknown>;
-    const hostResult = record.host_result ?? record.hostResult;
-    const hostKind = hostResult && typeof hostResult === "object"
-      ? (hostResult as Record<string, unknown>).kind
-      : null;
-    return record.kind === "subagent_feedback" || hostKind === "subagent_feedback";
+    return isSubagentFeedbackMetadata(block.rawMetadata);
   });
-}
-
-// mergeSubagentStatsIntoTurnStatsItem folds child-agent usage into the parent turn stats row.
-// mergeSubagentStatsIntoTurnStatsItem 将智能体用量合并到父级回合统计行。
-function mergeSubagentStatsIntoTurnStatsItem(
-  // Regular parent turn stats item.
-  // 常规父级回合统计条目。
-  statsItem: ConversationRenderItem,
-  // Child-agent stats rows captured during the same parent turn.
-  // 同一父级回合中捕获的智能体统计行。
-  subagentStatsItems: ConversationRenderItem[],
-  // Optional translator for rebuilt compact summary text.
-  // 重建紧凑摘要文本时使用的可选翻译器。
-  t?: (key: TranslationKey) => string,
-): ConversationRenderItem {
-  if (subagentStatsItems.length === 0) {
-    return statsItem;
-  }
-  const statsBlockIndex = statsItem.blocks.findIndex((block) => block.kind === "turn-stats");
-  if (statsBlockIndex < 0) {
-    return statsItem;
-  }
-  const statsBlock = statsItem.blocks[statsBlockIndex];
-  const mergedMetadata = mergeSubagentStatsMetadata(
-    statsBlock.rawMetadata,
-    subagentStatsItems.flatMap((item) => item.blocks.filter((block) => block.kind === "turn-stats").map((block) => block.rawMetadata)),
-  );
-  const mergedSummary = turnStatsSummary(mergedMetadata, t) ?? statsBlock.summary;
-  const mergedBody = mergeTurnStatsBodies(statsBlock.body, subagentStatsItems);
-  const blocks = statsItem.blocks.map((block, index) => index === statsBlockIndex
-    ? { ...block, rawMetadata: mergedMetadata, summary: mergedSummary, body: mergedBody }
-    : block);
-  return { ...statsItem, blocks };
-}
-
-// mergeSubagentStatsMetadata adds child-agent usage groups to one regular turn-stats metadata object.
-// mergeSubagentStatsMetadata 将智能体用量分组加入常规回合统计元数据。
-function mergeSubagentStatsMetadata(
-  // Regular turn-stats metadata.
-  // 常规回合统计元数据。
-  regularMetadata: unknown,
-  // Child-agent stats metadata entries.
-  // 智能体统计元数据条目。
-  subagentMetadataEntries: unknown[],
-): unknown {
-  const regularStats = turnStatsObject(regularMetadata);
-  if (!regularStats) {
-    return regularMetadata;
-  }
-  const subagentStats = subagentMetadataEntries
-    .map(turnStatsObject)
-    .filter((stats): stats is Record<string, unknown> => Boolean(stats));
-  if (subagentStats.length === 0) {
-    return regularMetadata;
-  }
-  const aggregate = aggregateSubagentStats(subagentStats);
-  const nextStats: Record<string, unknown> = { ...regularStats };
-  for (const field of TURN_STATS_ADDITIVE_FIELDS) {
-    nextStats[field] = numericMetadata(regularStats[field]) ?? 0;
-    nextStats[field] = Number(nextStats[field]) + (numericMetadata(aggregate[field]) ?? 0);
-  }
-  nextStats.usage_groups = mergedUsageGroups(regularStats, aggregate);
-  if (regularMetadata && typeof regularMetadata === "object") {
-    const metadataRecord = regularMetadata as Record<string, unknown>;
-    return "turnStats" in metadataRecord && !("turn_stats" in metadataRecord)
-      ? { ...metadataRecord, turnStats: nextStats }
-      : { ...metadataRecord, turn_stats: nextStats };
-  }
-  return regularMetadata;
-}
-
-// TURN_STATS_ADDITIVE_FIELDS are token and call fields that can be summed across parent and child work.
-// TURN_STATS_ADDITIVE_FIELDS 是可在父级与智能体工作之间累加的调用与 token 字段。
-const TURN_STATS_ADDITIVE_FIELDS = [
-  "provider_call_count",
-  "tool_call_count",
-  "input_tokens",
-  "output_tokens",
-  "reasoning_tokens",
-  "total_tokens",
-  "cached_input_tokens",
-] as const;
-
-// aggregateSubagentStats totals child-agent turn stats for display in the parent row.
-// aggregateSubagentStats 汇总智能体回合统计，用于父级统计行展示。
-function aggregateSubagentStats(statsList: Record<string, unknown>[]): Record<string, unknown> {
-  const aggregate: Record<string, unknown> = {};
-  for (const field of TURN_STATS_ADDITIVE_FIELDS) {
-    aggregate[field] = statsList.reduce((sum, stats) => sum + (numericMetadata(stats[field]) ?? 0), 0);
-  }
-  return aggregate;
-}
-
-// mergedUsageGroups returns regular usage plus one aggregated child-agent usage group.
-// mergedUsageGroups 返回常规用量加一条聚合后的智能体用量分组。
-function mergedUsageGroups(
-  // Regular turn-stats object.
-  // 常规回合统计对象。
-  regularStats: Record<string, unknown>,
-  // Aggregated child-agent stats object.
-  // 聚合后的智能体统计对象。
-  subagentAggregate: Record<string, unknown>,
-): Record<string, unknown>[] {
-  const existingGroups = Array.isArray(regularStats.usage_groups)
-    ? regularStats.usage_groups
-    : [];
-  const regularGroup = existingGroups.find((group) => usageGroupKind(group) === "regular");
-  const otherGroups = existingGroups
-    .filter((group) => usageGroupKind(group) !== "regular" && usageGroupKind(group) !== "subagent")
-    .filter((group): group is Record<string, unknown> => Boolean(group && typeof group === "object"));
-  return [
-    regularGroup && typeof regularGroup === "object"
-      ? { ...(regularGroup as Record<string, unknown>) }
-      : {
-          kind: "regular",
-          provider_call_count: numericMetadata(regularStats.provider_call_count) ?? 0,
-          tool_call_count: numericMetadata(regularStats.tool_call_count) ?? 0,
-          input_tokens: numericMetadata(regularStats.input_tokens) ?? 0,
-          output_tokens: numericMetadata(regularStats.output_tokens) ?? 0,
-          reasoning_tokens: numericMetadata(regularStats.reasoning_tokens) ?? 0,
-          total_tokens: numericMetadata(regularStats.total_tokens) ?? 0,
-          cached_input_tokens: numericMetadata(regularStats.cached_input_tokens) ?? 0,
-        },
-    ...otherGroups,
-    { kind: "subagent", ...subagentAggregate },
-  ];
-}
-
-// usageGroupKind reads the serialized usage-group kind.
-// usageGroupKind 读取序列化的用量分组类型。
-function usageGroupKind(group: unknown): string | null {
-  if (!group || typeof group !== "object") {
-    return null;
-  }
-  const value = (group as Record<string, unknown>).kind;
-  return typeof value === "string" ? value.trim().toLowerCase() : null;
-}
-
-// mergeTurnStatsBodies appends child-agent usage details to the parent stats tooltip text.
-// mergeTurnStatsBodies 将智能体用量详情追加到父级统计提示文本。
-function mergeTurnStatsBodies(parentBody: string, subagentStatsItems: ConversationRenderItem[]): string {
-  const childBodies = subagentStatsItems
-    .flatMap((item) => item.blocks.filter((block) => block.kind === "turn-stats").map((block) => block.body.trim()))
-    .filter(Boolean);
-  if (childBodies.length === 0) {
-    return parentBody;
-  }
-  return [parentBody.trim(), "Agent usage:", ...childBodies].filter(Boolean).join("\n\n");
 }
 
 // turnStatsKind returns the serialized turn-stats kind when present.

@@ -181,6 +181,94 @@ fn runtime_log_sync_rebuilds_when_prefix_mismatches() {
     assert_eq!(text, "rewritten prompt");
 }
 
+/// Verifies runtime audit append skips cleanly when metadata points at a missing active segment.
+/// 验证运行时审计追加在元数据指向缺失活动分段时会干净跳过。
+#[test]
+fn runtime_audit_append_skips_missing_active_segment() {
+    let root = test_root("runtime_audit_append_skips_missing_active_segment");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let messages = vec![test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "first prompt",
+    )];
+    append_segmented_session_message_tail(&session_dir, &messages).expect("append display row");
+    let state = conversation_state_from_session_messages(&messages);
+    sync_runtime_log_from_conversation_state(&session_dir, &state, "t1").expect("sync runtime log");
+    let metadata = read_runtime_metadata(&session_dir).expect("read runtime metadata");
+    fs::remove_file(session_dir.join(&metadata.active_segment)).expect("remove active segment");
+
+    let appended = record_runtime_audit_event(
+        &session_dir,
+        "t2",
+        RuntimeLogEvent::SystemUpdate(RuntimeSystemUpdateEvent {
+            turn_id: Some(String::from("turn-a")),
+            update_id: String::from("system-update-after-repair"),
+            effective_after_event_id: None,
+            text: String::from("repair test"),
+            trust: RuntimeSystemUpdateTrust::TrustedHost,
+            lowering_hint: RuntimeSystemUpdateLoweringHint::Auto,
+            fingerprint: Some(String::from("system-update-after-repair-fp")),
+            source: Some(String::from("test")),
+        }),
+    )
+    .expect("append audit after active segment loss");
+
+    assert!(!appended);
+    assert!(!session_dir.join(&metadata.active_segment).exists());
+}
+
+/// Verifies runtime audit append skips fully damaged runtime logs without display fallback.
+/// 验证运行时审计追加在 runtime 全损坏时会跳过且不回退到展示记录。
+#[test]
+fn runtime_audit_append_skips_fully_damaged_runtime_log() {
+    let root = test_root("runtime_audit_append_skips_fully_damaged_runtime_log");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let messages = vec![test_message(
+        "m-user-1",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "first prompt",
+    )];
+    let state = conversation_state_from_session_messages(&messages);
+    sync_runtime_log_from_conversation_state(&session_dir, &state, "t1").expect("sync runtime log");
+    fs::write(session_dir.join("runtime").join("r001.jsonl"), "{ broken\n")
+        .expect("damage runtime segment");
+
+    let appended = record_runtime_audit_event(
+        &session_dir,
+        "t2",
+        RuntimeLogEvent::SystemUpdate(RuntimeSystemUpdateEvent {
+            turn_id: Some(String::from("turn-a")),
+            update_id: String::from("system-update-after-damage"),
+            effective_after_event_id: None,
+            text: String::from("repair test"),
+            trust: RuntimeSystemUpdateTrust::TrustedHost,
+            lowering_hint: RuntimeSystemUpdateLoweringHint::Auto,
+            fingerprint: Some(String::from("system-update-after-damage-fp")),
+            source: Some(String::from("test")),
+        }),
+    )
+    .expect("append audit after full damage");
+    let lines = read_runtime_log_lines(&session_dir)
+        .expect("read runtime lines")
+        .expect("runtime lines exist");
+
+    assert!(!appended);
+    assert!(lines.is_empty());
+}
+
 /// Verifies runtime-only audit events survive a later canonical conversation rebuild.
 /// 验证仅审计 runtime 事件会在后续规范会话重建后继续保留。
 #[test]
