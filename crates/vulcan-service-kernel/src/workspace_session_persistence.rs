@@ -333,8 +333,8 @@ pub(crate) fn spawn_workspace_session_runtime_state_persist_task(
     );
 }
 
-/// Spawns a background write for the current visible transcript without touching runtime state.
-/// 为当前可见转录启动后台写入，且不触碰运行态。
+/// Spawns a background write for the current loaded transcript without touching runtime state.
+/// 为当前已载入转录启动后台写入，且不触碰运行态。
 ///
 /// # Parameters
 /// # 参数
@@ -342,8 +342,8 @@ pub(crate) fn spawn_workspace_session_runtime_state_persist_task(
 /// `state` 持有运行中转录持久化版本表。
 /// `controller_runtime` provides workspace persistence.
 /// `controller_runtime` 提供工作区持久化能力。
-/// `workspace_snapshot` is the current workspace snapshot containing display rows.
-/// `workspace_snapshot` 是包含显示行的当前工作区快照。
+/// `workspace_snapshot` is the current workspace snapshot containing loaded transcript rows.
+/// `workspace_snapshot` 是包含已载入转录行的当前工作区快照。
 /// `session_id` selects the session transcript to persist.
 /// `session_id` 选择要持久化的会话转录。
 /// `reason` is an optional diagnostic label for logs.
@@ -358,10 +358,9 @@ pub(crate) fn spawn_workspace_session_transcript_persist_task(
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
         return;
     }
-    let display_messages =
-        stable_display_session_messages_from_workspace(&workspace_snapshot, session_id)
-            .unwrap_or_default();
-    if display_messages.is_empty() {
+    let loaded_messages =
+        loaded_session_messages_from_workspace(&workspace_snapshot, session_id).unwrap_or_default();
+    if loaded_messages.is_empty() {
         return;
     }
     let persist_version = match next_webui_session_transcript_persist_version(&state, session_id) {
@@ -382,7 +381,7 @@ pub(crate) fn spawn_workspace_session_transcript_persist_task(
             vulcan_workspace_store::workspace_store::persist_single_session_transcript_messages(
                 controller_runtime,
                 session_id,
-                &display_messages,
+                &loaded_messages,
             )
             .await
         {

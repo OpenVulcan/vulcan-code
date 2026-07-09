@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use vulcan_context::{SessionConversationMessage, SessionConversationPayload};
-use vulcan_workbench_model::{SessionMessageEntry, SessionMessageKind};
+use vulcan_workbench_model::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 
 use super::*;
 
@@ -25,6 +25,13 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
     let hydrated_display_entry =
         SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "水合显示正文")
             .with_runtime_metadata("hydrated-display-entry", "1001");
+    // hidden_tool_detail_entry is loaded with the same visible window but must not be displayed directly.
+    // hidden_tool_detail_entry 随同一可见窗口加载，但不能直接显示。
+    let mut hidden_tool_detail_entry =
+        SessionMessageEntry::new(SessionMessageKind::Assistant, "工具详情", "隐藏详情正文")
+            .with_runtime_metadata("tool-detail-entry", "1002");
+    hidden_tool_detail_entry.record_kind = SessionMessageRecordKind::ToolDetailOutput;
+    hidden_tool_detail_entry.visible = false;
     // runtime_state represents the runtime/r001 JSONL conversation state.
     // runtime_state 表示 runtime/r001 JSONL 对应的会话运行态。
     let mut runtime_state = SessionRuntimeStateEntry::default();
@@ -38,7 +45,7 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
     let hydration = SessionHydrationSnapshot {
         session_id,
         messages: vec![hydrated_display_entry],
-        tool_detail_messages: Vec::new(),
+        tool_detail_messages: vec![hidden_tool_detail_entry.clone()],
         compactions: Vec::new(),
         runtime_state: Some(runtime_state),
         earliest_ordinal: None,
@@ -73,6 +80,15 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
             .map(|message| message.body.as_str()),
         Some("已有显示层正文")
     );
+    let retained_messages = workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .expect("retained messages should exist");
+    assert!(retained_messages.iter().any(|message| {
+        message.id == hidden_tool_detail_entry.id
+            && message.record_kind == SessionMessageRecordKind::ToolDetailOutput
+            && !message.visible
+    }));
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .get(&session_id)

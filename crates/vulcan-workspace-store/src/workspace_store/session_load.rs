@@ -5,6 +5,7 @@ mod hydration;
 mod locator;
 mod pages;
 mod runtime_state;
+mod tool_detail_hydration;
 mod types;
 mod windows;
 

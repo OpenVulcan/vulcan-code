@@ -728,14 +728,18 @@ fn default_transcript_window_filters_tool_detail_kinds() {
     assert!(!persisted_kind_in_default_transcript_window(
         "tool-result-output"
     ));
+    assert!(!persisted_kind_in_default_transcript_window(
+        "tool-detail-output"
+    ));
 }
 
-/// Verifies that the on-demand tool-detail stream accepts only tool call and result rows.
-/// 验证按需工具明细流只接收工具调用与工具结果行。
+/// Verifies that the on-demand tool-detail stream accepts tool rows and hidden detail rows.
+/// 验证按需工具明细流接收工具行与隐藏详情行。
 #[test]
 fn tool_detail_stream_filters_only_tool_detail_kinds() {
     assert!(persisted_kind_in_tool_detail_stream("tool-call-output"));
     assert!(persisted_kind_in_tool_detail_stream("tool-result-output"));
+    assert!(persisted_kind_in_tool_detail_stream("tool-detail-output"));
     assert!(!persisted_kind_in_tool_detail_stream("assistant-output"));
     assert!(!persisted_kind_in_tool_detail_stream("summary-output"));
 }

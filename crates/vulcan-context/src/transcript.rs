@@ -118,6 +118,15 @@ impl SessionMessageRecordKind {
         )
     }
 
+    /// Returns whether this record can resolve visible tool expansion or hidden tool detail.
+    /// 返回该记录是否可解析可见工具展开或隐藏工具详情。
+    pub const fn supports_tool_detail_lookup(self) -> bool {
+        matches!(
+            self,
+            Self::ToolCallOutput | Self::ToolResultOutput | Self::ToolDetailOutput
+        )
+    }
+
     /// Parses one persisted text key back into the durable record kind enum.
     /// 将一条持久化文本键解析回持久化记录类型枚举。
     pub fn from_persisted_key(value: &str) -> Self {
@@ -142,13 +151,44 @@ impl SessionMessageRecordKind {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionMessageRecordKind;
+    use super::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 
     /// Verifies hidden explore records remain audit-only and do not re-enter model context reconstruction.
     /// 验证隐藏探索记录仅作为审计信息保留，不会重新进入模型上下文重建。
     #[test]
     fn explore_output_does_not_contribute_to_context() {
         assert!(!SessionMessageRecordKind::ExploreOutput.contributes_to_context());
+    }
+
+    /// Verifies only tool rows and hidden tool-detail rows participate in detail lookup retention.
+    /// 验证只有工具行与隐藏工具详情行参与详情查找保留。
+    #[test]
+    fn tool_detail_lookup_carrier_kinds_are_explicit() {
+        assert!(SessionMessageRecordKind::ToolCallOutput.supports_tool_detail_lookup());
+        assert!(SessionMessageRecordKind::ToolResultOutput.supports_tool_detail_lookup());
+        assert!(SessionMessageRecordKind::ToolDetailOutput.supports_tool_detail_lookup());
+        assert!(!SessionMessageRecordKind::AssistantOutput.supports_tool_detail_lookup());
+        assert!(!SessionMessageRecordKind::SummaryOutput.supports_tool_detail_lookup());
+    }
+
+    /// Verifies loaded transcript merge keys prefer ids and remain deterministic without ids.
+    /// 验证已加载转录合并键优先使用 id，并在没有 id 时保持确定性。
+    #[test]
+    fn stable_merge_key_prefers_id_and_falls_back_to_content_identity() {
+        let mut message = SessionMessageEntry {
+            id: String::from("message-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolDetailOutput,
+            visible: false,
+            title: String::new(),
+            body: String::from("detail"),
+            metadata: None,
+            created_at: String::from("1000"),
+        };
+        assert_eq!(message.stable_merge_key(), "message-1");
+
+        message.id.clear();
+        assert_eq!(message.stable_merge_key(), "1000:tool-detail-output:detail");
     }
 }
 
@@ -244,6 +284,26 @@ impl SessionMessageEntry {
     /// 返回该消息项是否应参与未来的模型上下文重建。
     pub const fn contributes_to_context(&self) -> bool {
         self.record_kind.contributes_to_context()
+    }
+
+    /// Returns whether this loaded entry can resolve tool expansion or hidden tool detail.
+    /// 返回该已加载消息项是否可解析工具展开或隐藏工具详情。
+    pub const fn supports_tool_detail_lookup(&self) -> bool {
+        self.record_kind.supports_tool_detail_lookup()
+    }
+
+    /// Builds the stable identity key used when merging loaded transcript windows.
+    /// 构建合并已加载转录窗口时使用的稳定身份键。
+    pub fn stable_merge_key(&self) -> String {
+        if !self.id.is_empty() {
+            return self.id.clone();
+        }
+        format!(
+            "{}:{}:{}",
+            self.created_at,
+            self.record_kind.as_persisted_key(),
+            self.body
+        )
     }
 }
 

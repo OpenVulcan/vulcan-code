@@ -466,30 +466,17 @@ fn prepend_unique_older_session_history_page(
 ) {
     let mut seen_keys = retained_messages
         .iter()
-        .map(session_message_entry_stable_merge_key)
+        .map(SessionMessageEntry::stable_merge_key)
         .collect::<BTreeSet<_>>();
     let mut merged = page
         .messages
         .iter()
-        .filter(|message| seen_keys.insert(session_message_entry_stable_merge_key(message)))
+        .chain(page.tool_detail_messages.iter())
+        .filter(|message| seen_keys.insert(message.stable_merge_key()))
         .cloned()
         .collect::<Vec<_>>();
     merged.append(retained_messages);
     *retained_messages = merged;
-}
-
-/// Returns the stable merge key used by transcript history pagination.
-/// 返回转录历史分页使用的稳定合并键。
-fn session_message_entry_stable_merge_key(message: &SessionMessageEntry) -> String {
-    if !message.id.is_empty() {
-        return message.id.clone();
-    }
-    format!(
-        "{}:{}:{}",
-        message.created_at,
-        message.record_kind.as_persisted_key(),
-        message.body
-    )
 }
 
 /// Captures storage inputs needed before reading one selected-session transcript window.
@@ -1119,10 +1106,13 @@ mod tests {
         let retained_newer = history_test_message("m3", "newer", "30");
         let older_unique = history_test_message("m1", "older", "10");
         let older_duplicate = history_test_message("m2", "older duplicate", "20");
+        let mut older_tool_detail = history_test_message("detail-m1", "hidden detail", "11");
+        older_tool_detail.record_kind = SessionMessageRecordKind::ToolDetailOutput;
+        older_tool_detail.visible = false;
         let page = SessionHistoryPage {
             session_id,
             messages: vec![older_unique.clone(), older_duplicate],
-            tool_detail_messages: Vec::new(),
+            tool_detail_messages: vec![older_tool_detail.clone()],
             earliest_ordinal: Some(1),
             has_more_history: false,
         };
@@ -1132,7 +1122,12 @@ mod tests {
 
         assert_eq!(
             retained_messages,
-            vec![older_unique, retained_duplicate, retained_newer]
+            vec![
+                older_unique,
+                older_tool_detail,
+                retained_duplicate,
+                retained_newer
+            ]
         );
     }
 }

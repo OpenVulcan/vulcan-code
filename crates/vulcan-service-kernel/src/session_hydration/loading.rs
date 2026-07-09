@@ -152,13 +152,21 @@ pub(crate) fn apply_hydration_to_selected_workspace_snapshot(
     task_runtime: Option<&Arc<TaskRuntime>>,
     live_listener_task_ids: &BTreeSet<SessionId>,
 ) -> Result<(), String> {
+    let SessionHydrationSnapshot {
+        messages,
+        tool_detail_messages,
+        compactions,
+        runtime_state,
+        ..
+    } = hydration;
+    let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
     workspace_snapshot
         .session_messages
-        .insert(session_id, hydration.messages);
+        .insert(session_id, messages);
     workspace_snapshot
         .session_compactions
-        .insert(session_id, hydration.compactions);
-    if let Some(runtime_state) = hydration.runtime_state {
+        .insert(session_id, compactions);
+    if let Some(runtime_state) = runtime_state {
         workspace_snapshot
             .session_runtime_state
             .insert(session_id, runtime_state);
@@ -326,13 +334,22 @@ pub(crate) fn apply_selected_session_runtime_hydration(
     session_id: SessionId,
     hydration: SessionHydrationSnapshot,
 ) {
-    if let std::collections::btree_map::Entry::Vacant(e) =
-        workspace_snapshot.session_messages.entry(session_id)
-    {
-        let messages = filter_legacy_goal_internal_user_messages(hydration.messages);
-        e.insert(messages);
+    let SessionHydrationSnapshot {
+        messages,
+        tool_detail_messages,
+        runtime_state,
+        ..
+    } = hydration;
+    match workspace_snapshot.session_messages.entry(session_id) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
+            entry.insert(filter_legacy_goal_internal_user_messages(messages));
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            append_unique_session_messages(entry.get_mut(), tool_detail_messages);
+        }
     }
-    if let Some(mut runtime_state) = hydration.runtime_state {
+    if let Some(mut runtime_state) = runtime_state {
         sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state);
         workspace_snapshot
             .session_runtime_state
@@ -365,11 +382,18 @@ pub(crate) fn apply_submission_session_hydration(
     session_id: SessionId,
     hydration: SessionHydrationSnapshot,
 ) -> Result<(), String> {
-    let messages = filter_legacy_goal_internal_user_messages(hydration.messages);
+    let SessionHydrationSnapshot {
+        messages,
+        tool_detail_messages,
+        runtime_state,
+        ..
+    } = hydration;
+    let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
+    let messages = filter_legacy_goal_internal_user_messages(messages);
     workspace_snapshot
         .session_messages
         .insert(session_id, messages);
-    if let Some(mut runtime_state) = hydration.runtime_state {
+    if let Some(mut runtime_state) = runtime_state {
         sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state);
         workspace_snapshot
             .session_runtime_state
@@ -383,4 +407,50 @@ pub(crate) fn apply_submission_session_hydration(
         session_id,
         |_| false,
     )
+}
+
+/// Combines a loaded display window with hidden tool-detail rows from the same load.
+/// 将已加载显示窗口与同次加载得到的隐藏工具详情行合并。
+///
+/// # Parameters
+/// 参数
+/// `messages` are the primary loaded transcript rows for the visible window.
+/// `messages` 是可见窗口对应的主要已加载转录行。
+/// `tool_detail_messages` are rows required for expanding visible tool nodes.
+/// `tool_detail_messages` 是展开可见工具节点所需的行。
+///
+/// # Returns
+/// 返回值
+/// A retained in-memory window containing both display rows and their hidden details.
+/// 返回同时包含显示行及其隐藏详情的内存保留窗口。
+fn hydration_messages_with_tool_details(
+    mut messages: Vec<SessionMessageEntry>,
+    tool_detail_messages: Vec<SessionMessageEntry>,
+) -> Vec<SessionMessageEntry> {
+    append_unique_session_messages(&mut messages, tool_detail_messages);
+    messages
+}
+
+/// Appends session messages by stable identity without duplicating already retained rows.
+/// 按稳定身份追加会话消息，避免重复已保留行。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the retained in-memory message window to extend.
+/// `messages` 是需要扩展的内存保留消息窗口。
+/// `additional_messages` are candidate rows loaded for the same visible window.
+/// `additional_messages` 是为同一可见窗口加载的候选行。
+fn append_unique_session_messages(
+    messages: &mut Vec<SessionMessageEntry>,
+    additional_messages: Vec<SessionMessageEntry>,
+) {
+    let mut seen_keys = messages
+        .iter()
+        .map(SessionMessageEntry::stable_merge_key)
+        .collect::<BTreeSet<_>>();
+    for message in additional_messages {
+        if seen_keys.insert(message.stable_merge_key()) {
+            messages.push(message);
+        }
+    }
 }

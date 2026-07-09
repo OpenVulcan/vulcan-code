@@ -1,6 +1,7 @@
 //! Segmented transcript window loading and boundary projection.
 //! 分段转录窗口加载与会话边界投影逻辑。
 
+use super::tool_detail_hydration::augment_window_tool_details_from_runtime_logs;
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
 use vulcan_session_boundary::boundary_events_to_vulcan_conversation_state;
@@ -32,9 +33,14 @@ pub(super) fn load_segmented_window_messages(
         {
             merge_raw_timeline_window_into_boundary_window(&mut window, raw_window);
         }
+        augment_window_tool_details_from_runtime_logs(&session_dir, &mut window)?;
         return Ok(Some(window));
     }
-    load_segmented_raw_window_messages(&session_dir, before_seq, requested_limit)
+    let mut window = load_segmented_raw_window_messages(&session_dir, before_seq, requested_limit)?;
+    if let Some(window) = window.as_mut() {
+        augment_window_tool_details_from_runtime_logs(&session_dir, window)?;
+    }
+    Ok(window)
 }
 
 /// Merges a raw segmented window into a boundary-projected window for visible timeline hydration.
@@ -101,13 +107,7 @@ fn load_segmented_raw_window_messages(
     }
     let tool_detail_messages = messages
         .iter()
-        .filter(|message| {
-            matches!(
-                message.record_kind,
-                SessionMessageRecordKind::ToolCallOutput
-                    | SessionMessageRecordKind::ToolResultOutput
-            )
-        })
+        .filter(|message| message.supports_tool_detail_lookup())
         .cloned()
         .collect::<Vec<_>>();
     Ok(Some(SegmentedWindowMessages {
@@ -213,13 +213,7 @@ pub(super) fn session_boundary_lines_to_window_messages(
     }
     let tool_detail_messages = messages
         .iter()
-        .filter(|message| {
-            matches!(
-                message.record_kind,
-                SessionMessageRecordKind::ToolCallOutput
-                    | SessionMessageRecordKind::ToolResultOutput
-            )
-        })
+        .filter(|message| message.supports_tool_detail_lookup())
         .cloned()
         .collect::<Vec<_>>();
     Ok(Some(SegmentedWindowMessages {

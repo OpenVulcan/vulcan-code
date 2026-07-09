@@ -118,14 +118,20 @@ pub(super) async fn query_active_project_ids(
 /// 返回某个持久化记录类型是否应进入默认转录窗口。
 #[cfg(test)]
 pub(super) fn persisted_kind_in_default_transcript_window(kind: &str) -> bool {
-    !matches!(kind, "tool-call-output" | "tool-result-output")
+    !matches!(
+        kind,
+        "tool-call-output" | "tool-result-output" | "tool-detail-output"
+    )
 }
 
 /// Returns whether one persisted record kind belongs to the on-demand tool-detail stream.
 /// 返回某个持久化记录类型是否属于按需工具明细流。
 #[cfg(test)]
 pub(super) fn persisted_kind_in_tool_detail_stream(kind: &str) -> bool {
-    matches!(kind, "tool-call-output" | "tool-result-output")
+    matches!(
+        kind,
+        "tool-call-output" | "tool-result-output" | "tool-detail-output"
+    )
 }
 
 /// Decodes one controller JSON row-set payload into typed Rust rows.

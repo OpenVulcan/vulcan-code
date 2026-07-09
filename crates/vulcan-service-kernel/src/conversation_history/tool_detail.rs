@@ -36,6 +36,24 @@ pub(crate) async fn service_session_tool_detail(
         {
             return Ok(payload);
         }
+        if let Some(payload) = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_messages.get(&parsed_session_id))
+            .and_then(|messages| {
+                find_tool_detail_message(
+                    messages.iter(),
+                    record_id.as_deref(),
+                    tool_call_id.as_deref(),
+                    message_index,
+                )
+                .map(|message| {
+                    tool_detail_payload_from_session_message(message, seq, message_index)
+                })
+            })
+        {
+            return Ok(payload);
+        }
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
@@ -63,7 +81,7 @@ pub(crate) async fn service_session_tool_detail(
     } else {
         None
     };
-    transcript_page
+    let payload = transcript_page
         .as_ref()
         .and_then(|transcript_page| {
             find_tool_detail_message(
@@ -76,17 +94,18 @@ pub(crate) async fn service_session_tool_detail(
                 message_index,
             )
         })
-        .map(|message| tool_detail_payload_from_session_message(message, seq, message_index))
-        .ok_or_else(|| {
-            record_id
-                .map(|record_id| format!("tool detail record not found: {record_id}"))
-                .unwrap_or_else(|| {
-                    format!(
-                        "tool detail record not found for tool call: {}",
-                        tool_call_id.unwrap_or_else(|| String::from("<missing>"))
-                    )
-                })
-        })
+        .map(|message| tool_detail_payload_from_session_message(message, seq, message_index));
+    if let Some(payload) = payload {
+        return Ok(payload);
+    }
+    Err(record_id
+        .map(|record_id| format!("tool detail record not found: {record_id}"))
+        .unwrap_or_else(|| {
+            format!(
+                "tool detail record not found for tool call: {}",
+                tool_call_id.unwrap_or_else(|| String::from("<missing>"))
+            )
+        }))
 }
 
 /// Finds a hidden tool-detail message by precise record id first, then by tool-call id.

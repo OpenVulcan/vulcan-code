@@ -479,6 +479,45 @@ fn restore_hydration_window_from_runtime_state_if_empty_rebuilds_visible_message
     assert!(tool_detail_messages.is_empty());
 }
 
+/// Verifies runtime-state hydration appends hidden tool details even when visible rows already loaded.
+/// 验证运行态水合在可见行已加载时仍会追加隐藏工具详情。
+#[test]
+fn restore_hydration_window_from_runtime_state_if_empty_appends_tool_details_when_messages_exist() {
+    let mut hidden_tool_detail = test_message(
+        "tool-detail-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::ToolDetailOutput,
+        "完整工具输出",
+    );
+    hidden_tool_detail.visible = false;
+    let runtime_state = SessionRuntimeStateEntry {
+        conversation_state: conversation_state_from_session_messages(&[hidden_tool_detail]),
+        ..Default::default()
+    };
+    let mut messages = vec![test_message(
+        "visible-1",
+        SessionMessageKind::Assistant,
+        SessionMessageRecordKind::AssistantOutput,
+        "已经从 turn 窗口加载的正文",
+    )];
+    let mut tool_detail_messages = Vec::new();
+
+    restore_hydration_window_from_runtime_state_if_empty(
+        &mut messages,
+        &mut tool_detail_messages,
+        Some(&runtime_state),
+    );
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, "visible-1");
+    assert_eq!(tool_detail_messages.len(), 1);
+    assert_eq!(tool_detail_messages[0].id, "tool-detail-1");
+    assert_eq!(
+        tool_detail_messages[0].record_kind,
+        SessionMessageRecordKind::ToolDetailOutput
+    );
+}
+
 /// Verifies segmented current-context fallback can restore runtime conversation state without a full runtime-state blob.
 /// 验证分段当前上下文兜底能在缺少完整运行态 blob 时恢复运行时会话状态。
 #[test]

@@ -30,6 +30,18 @@ pub(crate) fn stable_display_session_messages_from_workspace(
         .map(|messages| filter_display_session_messages(messages.clone()))
 }
 
+/// Returns the retained loaded transcript rows that must survive refresh and persistence.
+/// 返回必须在刷新与持久化后继续存在的已载入转录行。
+pub(crate) fn loaded_session_messages_from_workspace(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<Vec<SessionMessageEntry>> {
+    workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .map(|messages| retain_loaded_session_messages(messages.clone()))
+}
+
 /// Returns display-record messages for fallback rendering without deriving from runtime-only messages.
 /// 返回用于显示回退的记录流消息，不从仅运行态消息派生。
 pub(crate) fn display_record_messages_from_workspace(
@@ -87,8 +99,8 @@ pub(crate) fn merge_runtime_state_records_into_display_messages(
             .unwrap_or(&[]),
         &runtime_state.conversation_state,
     );
-    let merged_messages = filter_display_session_messages(merged_messages);
-    set_display_session_messages(workspace_snapshot, session_id, merged_messages);
+    let retained_messages = retain_loaded_session_messages(merged_messages);
+    set_display_session_messages(workspace_snapshot, session_id, retained_messages);
 }
 
 /// Replaces a TaskSession display transcript with records owned by the delegated child task.
@@ -448,6 +460,42 @@ pub(crate) fn filter_display_session_messages(
     display_messages
 }
 
+/// Keeps rows that belong in the loaded transcript window even when they are not rendered directly.
+/// 保留属于已载入转录窗口的行，即使它们不会被直接渲染。
+fn retain_loaded_session_messages(messages: Vec<SessionMessageEntry>) -> Vec<SessionMessageEntry> {
+    let mut retained_messages = Vec::new();
+    for message in messages {
+        if session_message_should_remain_loaded(&message) {
+            push_loaded_session_message_once(&mut retained_messages, message);
+        }
+    }
+    retained_messages
+}
+
+/// Returns whether one message must stay loaded for display or tool-detail expansion.
+/// 判断单条消息是否必须为显示或工具详情展开保留在已载入窗口中。
+fn session_message_should_remain_loaded(message: &SessionMessageEntry) -> bool {
+    session_message_is_display_visible(message) || message.supports_tool_detail_lookup()
+}
+
+/// Appends one loaded row while preserving the same duplicate suppression used by display rows.
+/// 追加一条已载入行，同时保留显示行使用的相同重复抑制语义。
+fn push_loaded_session_message_once(
+    loaded_messages: &mut Vec<SessionMessageEntry>,
+    message: SessionMessageEntry,
+) {
+    let message_key = message.stable_merge_key();
+    if loaded_messages.iter().any(|existing| {
+        existing.stable_merge_key() == message_key
+            || (session_message_is_subagent_send_message_display_note(existing)
+                && session_message_is_subagent_send_message_display_note(&message)
+                && existing.body.trim() == message.body.trim())
+    }) {
+        return;
+    }
+    loaded_messages.push(message);
+}
+
 /// Returns whether one session transcript entry belongs in user-facing display projections.
 /// 返回单条会话转录项是否应进入面向用户的显示投影。
 pub(crate) fn session_message_is_display_visible(message: &SessionMessageEntry) -> bool {
@@ -537,17 +585,15 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    /// Verifies empty display transcript updates remove retained session entries.
-    /// 验证空显示层转录更新会移除保留会话条目。
-    #[test]
-    fn set_display_session_messages_removes_empty_entries() {
-        let session_id = SessionId::new_v4();
-        let mut workspace_snapshot = WorkspaceSnapshot {
+    /// Builds an empty workspace snapshot for display-retention unit tests.
+    /// 为显示保留单元测试构建一个空工作区快照。
+    fn test_workspace_snapshot(session_id: SessionId) -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
             task_projects: Vec::new(),
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
-            session_messages: BTreeMap::from([(session_id, Vec::new())]),
+            session_messages: BTreeMap::new(),
             archived_session_messages: BTreeMap::new(),
             session_compactions: BTreeMap::new(),
             archived_session_compactions: BTreeMap::new(),
@@ -557,7 +603,38 @@ mod tests {
             expanded_task_projects: BTreeSet::new(),
             selected_session: session_id,
             hydrated_session_ids: BTreeSet::new(),
-        };
+        }
+    }
+
+    /// Builds one test transcript entry with explicit visibility.
+    /// 使用显式可见性构建一条测试转录项。
+    fn test_message(
+        id: &str,
+        record_kind: SessionMessageRecordKind,
+        visible: bool,
+        body: &str,
+    ) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.to_string(),
+            kind: SessionMessageKind::Assistant,
+            record_kind,
+            visible,
+            title: id.to_string(),
+            body: body.to_string(),
+            metadata: None,
+            created_at: String::from("1"),
+        }
+    }
+
+    /// Verifies empty display transcript updates remove retained session entries.
+    /// 验证空显示层转录更新会移除保留会话条目。
+    #[test]
+    fn set_display_session_messages_removes_empty_entries() {
+        let session_id = SessionId::new_v4();
+        let mut workspace_snapshot = test_workspace_snapshot(session_id);
+        workspace_snapshot
+            .session_messages
+            .insert(session_id, Vec::new());
 
         set_display_session_messages(&mut workspace_snapshot, session_id, Vec::new());
 
@@ -566,5 +643,63 @@ mod tests {
                 .session_messages
                 .contains_key(&session_id)
         );
+    }
+
+    /// Verifies runtime refresh keeps hidden tool-detail rows while dropping unrelated hidden records.
+    /// 验证运行时刷新会保留隐藏工具详情行，并丢弃无关隐藏记录。
+    #[test]
+    fn merge_runtime_state_records_retains_loaded_tool_detail_rows() {
+        let session_id = SessionId::new_v4();
+        let mut workspace_snapshot = test_workspace_snapshot(session_id);
+        let visible_tool = test_message(
+            "tool-visible",
+            SessionMessageRecordKind::ToolCallOutput,
+            true,
+            "RG enhanced search",
+        );
+        let hidden_detail = test_message(
+            "tool-detail",
+            SessionMessageRecordKind::ToolDetailOutput,
+            false,
+            "complete stdout",
+        );
+        let hidden_summary = test_message(
+            "summary-hidden",
+            SessionMessageRecordKind::SummaryOutput,
+            false,
+            "internal summary",
+        );
+        let runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&[
+                visible_tool,
+                hidden_detail,
+                hidden_summary,
+            ]),
+            ..Default::default()
+        };
+
+        merge_runtime_state_records_into_display_messages(
+            &mut workspace_snapshot,
+            session_id,
+            &runtime_state,
+        );
+
+        let retained_messages = workspace_snapshot
+            .session_messages
+            .get(&session_id)
+            .expect("retained loaded messages");
+        assert!(retained_messages.iter().any(|message| {
+            message.id == "tool-detail"
+                && message.record_kind == SessionMessageRecordKind::ToolDetailOutput
+        }));
+        assert!(!retained_messages.iter().any(|message| {
+            message.id == "summary-hidden"
+                && message.record_kind == SessionMessageRecordKind::SummaryOutput
+        }));
+        let display_messages =
+            stable_display_session_messages_from_workspace(&workspace_snapshot, session_id)
+                .expect("stable display messages");
+        assert_eq!(display_messages.len(), 1);
+        assert_eq!(display_messages[0].id, "tool-visible");
     }
 }

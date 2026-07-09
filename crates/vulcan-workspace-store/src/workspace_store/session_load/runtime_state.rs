@@ -230,16 +230,13 @@ pub(super) async fn hydrate_session_runtime_state(
     Ok(None)
 }
 
-/// Rebuilds the visible hydration transcript from runtime state when the persisted turn window is unexpectedly empty.
-/// 当持久化 turn 窗口意外为空时，根据运行时状态回建可见的水合转录窗口。
+/// Restores missing hydration rows from runtime state while keeping loaded tool details available.
+/// 从运行时状态恢复缺失的水合行，并保持已载入工具详情可用。
 pub(super) fn restore_hydration_window_from_runtime_state_if_empty(
     messages: &mut Vec<SessionMessageEntry>,
     tool_detail_messages: &mut Vec<SessionMessageEntry>,
     runtime_state: Option<&SessionRuntimeStateEntry>,
 ) {
-    if !messages.is_empty() {
-        return;
-    }
     let Some(runtime_state) = runtime_state else {
         return;
     };
@@ -248,18 +245,40 @@ pub(super) fn restore_hydration_window_from_runtime_state_if_empty(
     if rebuilt_messages.is_empty() {
         return;
     }
-    *tool_detail_messages = rebuilt_messages
+    append_loaded_tool_detail_messages(tool_detail_messages, rebuilt_messages.as_slice());
+    if messages.is_empty() {
+        *messages = rebuilt_messages;
+    }
+}
+
+/// Appends runtime-projected tool rows that are required for tool-detail expansion.
+/// 追加工具详情展开所需的运行态投影工具行。
+fn append_loaded_tool_detail_messages(
+    tool_detail_messages: &mut Vec<SessionMessageEntry>,
+    rebuilt_messages: &[SessionMessageEntry],
+) {
+    for message in rebuilt_messages
         .iter()
-        .filter(|message| {
-            matches!(
-                message.record_kind,
-                SessionMessageRecordKind::ToolCallOutput
-                    | SessionMessageRecordKind::ToolResultOutput
-            )
-        })
-        .cloned()
-        .collect();
-    *messages = rebuilt_messages;
+        .filter(|message| message.supports_tool_detail_lookup())
+    {
+        push_loaded_tool_detail_message_once(tool_detail_messages, message.clone());
+    }
+}
+
+/// Appends one tool-detail lookup row while preserving stable identity de-duplication.
+/// 追加一条工具详情查找行，同时保持稳定身份去重。
+fn push_loaded_tool_detail_message_once(
+    tool_detail_messages: &mut Vec<SessionMessageEntry>,
+    message: SessionMessageEntry,
+) {
+    let message_key = message.stable_merge_key();
+    if tool_detail_messages
+        .iter()
+        .any(|existing| existing.stable_merge_key() == message_key)
+    {
+        return;
+    }
+    tool_detail_messages.push(message);
 }
 
 /// Resolves the startup hydration turn target by taking the larger value between the configured page size and the overlap required to expose five turns before the active compaction boundary.
