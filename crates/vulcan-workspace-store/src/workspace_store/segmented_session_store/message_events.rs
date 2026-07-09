@@ -409,6 +409,7 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
 
 /// Physically truncates a segmented session after one persisted message without adding display events.
 /// 在不追加展示事件的情况下，将分段会话物理截断到某条已持久化消息之后。
+#[cfg(test)]
 pub(in crate::workspace_store) fn truncate_segmented_session_after_message(
     session_dir: &Path,
     message_id: &str,

@@ -251,8 +251,9 @@ use conversation_actions::*;
 use conversation_display::*;
 use conversation_history::{
     HydratedConversationWindowState, hydrated_conversation_window_summaries,
-    load_hydrated_session_workbench, retain_hydrated_conversation_windows_for_workspace,
-    service_session_history_page, service_session_messages, service_session_tool_detail,
+    load_hydrated_session_workbench_for_fork_trace,
+    retain_hydrated_conversation_windows_for_workspace, service_session_history_page,
+    service_session_messages, service_session_tool_detail,
 };
 #[cfg(test)]
 use conversation_history::{

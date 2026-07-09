@@ -185,6 +185,19 @@ pub enum WorkbenchDelta {
     /// Session addon-state replacement for goal, todolist, and Plan mode surfaces.
     /// 面向目标、待办与计划模式界面的会话附属状态替换增量。
     SessionAddonsChanged(SessionAddonsChangedDelta),
+    /// Conversation hydration progress replacement for one lazy-loaded transcript.
+    /// 单个懒加载转录的会话水合进度替换增量。
+    ConversationHydrationChanged(ConversationHydrationChangedDelta),
+}
+
+/// Replaces the current conversation hydration progress without resending a full workbench.
+/// 在不重发完整工作台的情况下替换当前会话水合进度。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationHydrationChangedDelta {
+    /// Latest hydration progress payload for the target conversation.
+    /// 目标会话的最新水合进度载荷。
+    pub progress: ConversationHydrationProgress,
 }
 
 /// Appends streamed text to one visible conversation message.

@@ -23,12 +23,14 @@ use super::segmented_session_store::{
     find_segmented_session_directory_by_id,
     find_segmented_session_directory_for_task_store_created_at,
     fork_segmented_session_directory_from_source, patch_segmented_session_metadata,
-    rebuild_runtime_log_from_conversation_state, repair_segmented_session_display_if_needed,
-    replay_segmented_session_context, restore_segmented_session_by_created_date,
+    read_session_metadata, rebuild_runtime_log_from_conversation_state,
+    repair_segmented_session_display_if_needed, replay_segmented_session_context,
+    replay_segmented_session_context_without_repair, restore_segmented_session_by_created_date,
+    rewrite_json_value_identity_tokens, rewrite_string_identity_tokens,
     segmented_session_directory, state_document_from_runtime_state,
     sync_runtime_log_from_compacted_conversation_state, sync_runtime_log_from_conversation_state,
-    truncate_segmented_session_after_message, truncate_segmented_session_before_message,
-    write_segmented_session_fork_source, write_state,
+    to_store_error, truncate_segmented_session_before_message, update_segmented_message_checkpoint,
+    write_metadata, write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;

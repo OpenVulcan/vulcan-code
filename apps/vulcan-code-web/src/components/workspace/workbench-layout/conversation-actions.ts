@@ -521,17 +521,30 @@ const handleForkConversation = React.useCallback(async (conversationId: string, 
   if (conversationForkInFlightRef.current) {
     return false;
   }
+  const forkActionStartedAt = performance.now();
+  console.info("[fork-trace] frontend.action.start", {
+    conversationId,
+    anchorMessageId: anchorMessageId ?? null,
+  });
   conversationForkInFlightRef.current = true;
   setConversationForkInProgress(true);
   const sourceConversation = workbenchStateRef.current.conversations.find((conversation) => conversation.id === conversationId);
   const sourceTitle = sourceConversation?.title.trim() || translate("console.newConversation");
   try {
+    const rpcStartedAt = performance.now();
     const snapshot = await forkConversation({
       conversationId,
       title: `${sourceTitle}${translate("conversation.action.forkTitleSuffix")}`,
       anchorMessageId,
     });
+    console.info("[fork-trace] frontend.action.rpc_complete", {
+      conversationId,
+      elapsedMs: Math.round(performance.now() - rpcStartedAt),
+      totalMs: Math.round(performance.now() - forkActionStartedAt),
+      hasSnapshot: Boolean(snapshot),
+    });
     if (snapshot) {
+      const mergeStartedAt = performance.now();
       // Validate the service-selected fork before mirroring it into local sidebar state.
       // 写入本地侧栏状态前校验服务端选中的分叉会话仍在会话列表中。
       const forkedConversationId = snapshot.conversations.some((conversation) => (
@@ -547,10 +560,27 @@ const handleForkConversation = React.useCallback(async (conversationId: string, 
         snapshot,
         { selectedConversationSource: "incoming" },
       ));
+      console.info("[fork-trace] frontend.action.apply_snapshot", {
+        conversationId,
+        forkedConversationId,
+        elapsedMs: Math.round(performance.now() - mergeStartedAt),
+        totalMs: Math.round(performance.now() - forkActionStartedAt),
+        conversations: snapshot.conversations.length,
+        messages: snapshot.messages.length,
+      });
       toast.success(translate("conversation.action.forkSucceeded"));
     }
+    console.info("[fork-trace] frontend.action.success", {
+      conversationId,
+      totalMs: Math.round(performance.now() - forkActionStartedAt),
+    });
     return true;
   } catch (nextError) {
+    console.info("[fork-trace] frontend.action.error", {
+      conversationId,
+      totalMs: Math.round(performance.now() - forkActionStartedAt),
+      error: nextError instanceof Error ? nextError.message : String(nextError),
+    });
     const errorMessage = nextError instanceof Error ? nextError.message.trim() : "";
     toast.error(
       errorMessage
@@ -561,6 +591,10 @@ const handleForkConversation = React.useCallback(async (conversationId: string, 
   } finally {
     conversationForkInFlightRef.current = false;
     setConversationForkInProgress(false);
+    console.info("[fork-trace] frontend.action.finally", {
+      conversationId,
+      totalMs: Math.round(performance.now() - forkActionStartedAt),
+    });
   }
 }, [mergeWorkbenchWithLocalCaches, setSelectedConversationId, setWorkbenchState, translate, workbenchStateRef]);
 

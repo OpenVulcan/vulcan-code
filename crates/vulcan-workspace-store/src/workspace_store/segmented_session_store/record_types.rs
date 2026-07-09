@@ -133,6 +133,9 @@ pub(in crate::workspace_store) struct SegmentedSessionForkRequest {
     /// Target title-source key.
     /// 目标标题来源键。
     pub target_title_source: String,
+    /// Source-side display message id where the forked transcript should stop.
+    /// 分叉后转录应停止的源侧展示消息标识。
+    pub source_anchor_message_id: Option<String>,
 }
 
 /// Main session metadata patch with explicit optional updates.

@@ -10,6 +10,7 @@ import type {
   SubagentNavigationSnapshot,
 } from "./planning-questions";
 import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
+import type { ConversationHydrationProgress } from "./workbench";
 
 export interface ConversationSummary {
   // Stable conversation identifier.
@@ -377,7 +378,16 @@ export type WorkbenchDelta =
   | { kind: "contextInjectionChanged"; payload: ContextInjectionChangedDelta }
   | { kind: "conversationMessagesChanged"; payload: ConversationMessagesChangedDelta }
   | { kind: "conversationMessagesPatched"; payload: ConversationMessagesPatchedDelta }
-  | { kind: "sessionAddonsChanged"; payload: SessionAddonsChangedDelta };
+  | { kind: "sessionAddonsChanged"; payload: SessionAddonsChangedDelta }
+  | { kind: "conversationHydrationChanged"; payload: ConversationHydrationChangedDelta };
+
+// ConversationHydrationChangedDelta replaces conversation hydration progress without a full snapshot.
+// ConversationHydrationChangedDelta 在不发送完整快照的情况下替换会话水合进度。
+export interface ConversationHydrationChangedDelta {
+  // Latest hydration progress payload.
+  // 最新水合进度载荷。
+  progress: ConversationHydrationProgress;
+}
 
 // WorkbenchDeltaEnvelope carries one ordered partial workbench update.
 // WorkbenchDeltaEnvelope 携带一条有序的局部工作台更新。

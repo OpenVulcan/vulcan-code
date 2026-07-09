@@ -581,6 +581,42 @@ pub(in crate::workspace_store) fn rebuild_segment_metadata(
     Ok(segment)
 }
 
+/// Writes display event lines once and returns metadata collected during the same serialization pass.
+/// 单次写入展示事件行，并返回同一轮序列化过程中收集的元数据。
+pub(in crate::workspace_store) fn write_segment_event_lines_atomic_with_metadata(
+    path: &Path,
+    file: &str,
+    lines: &[SegmentedSessionEventLine],
+) -> Result<SegmentMetadata, String> {
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent)?;
+    }
+    let start_seq = lines.first().map(|line| line.seq).unwrap_or(1);
+    let mut segment = SegmentMetadata::empty(file.to_string(), start_seq);
+    let mut encoded_lines = Vec::new();
+    for line in lines {
+        let line_text = serde_json::to_string(line).map_err(to_store_error)?;
+        let line_byte_len = line_text.len() as u64 + 1;
+        encoded_lines.extend_from_slice(line_text.as_bytes());
+        encoded_lines.push(b'\n');
+        update_segment_metadata(
+            &mut segment,
+            line,
+            line_byte_len,
+            segmented_line_turn_index(line),
+        );
+    }
+    let temp_path = unique_json_temp_path(path);
+    let mut output = File::create(&temp_path).map_err(to_store_error)?;
+    output.write_all(&encoded_lines).map_err(to_store_error)?;
+    output.flush().map_err(to_store_error)?;
+    fs::rename(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        to_store_error(error)
+    })?;
+    Ok(segment)
+}
+
 /// Reads the canonical message identifier carried by one segmented event line.
 /// 读取单条分段事件行携带的规范消息标识。
 pub(in crate::workspace_store) fn segmented_line_message_id(

@@ -750,6 +750,11 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
           envelope.delta.payload,
         ),
       });
+    case "conversationHydrationChanged":
+      return {
+        ...workbench,
+        conversationHydration: envelope.delta.payload.progress,
+      };
   }
 }
 

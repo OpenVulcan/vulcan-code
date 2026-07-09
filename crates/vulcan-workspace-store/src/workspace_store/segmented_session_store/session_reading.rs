@@ -122,7 +122,7 @@ pub(in crate::workspace_store) fn replay_segmented_session_context(
 
 /// Rebuilds conversation state after the caller has already repaired segmented JSONL files.
 /// 在调用方已经修复分段 JSONL 文件后重建会话状态。
-fn replay_segmented_session_context_without_repair(
+pub(in crate::workspace_store) fn replay_segmented_session_context_without_repair(
     session_dir: &Path,
 ) -> Result<Option<SegmentedSessionReplayResult>, String> {
     let metadata = read_session_metadata(session_dir)?;

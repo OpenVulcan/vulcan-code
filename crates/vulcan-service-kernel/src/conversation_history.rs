@@ -12,9 +12,10 @@ use super::session_hydration::{
 use serde_json::{Value, json};
 use vulcan_context::SessionConversationRecord;
 use vulcan_service_api::{
-    ConversationHistoryPageResponse, ConversationHydrationProgress, ConversationHydrationStatus,
-    ConversationMessage, ConversationMessagesLoadResponse, HydratedConversationWindowSummary,
-    ServiceEventEmitter, WorkbenchSnapshot,
+    ConversationHistoryPageResponse, ConversationHydrationChangedDelta,
+    ConversationHydrationProgress, ConversationHydrationStatus, ConversationMessage,
+    ConversationMessagesLoadResponse, HydratedConversationWindowSummary, ServiceEvent,
+    ServiceEventEmitter, WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{SessionId, SessionMessageEntry, SessionMessageRecordKind};
 use vulcan_workspace_store::workspace_store::{SessionHistoryPage, WorkspaceSnapshot};
@@ -28,14 +29,15 @@ use super::{
     apply_hydration_to_selected_workspace_snapshot,
     apply_webui_unclosed_subagent_surface_preload_once, cached_luaskills_catalog_from_state,
     cached_mcp_catalog_from_state, conversation_messages_from_session, current_unix_millis_value,
-    emit_workbench_event, load_selected_session_display_hydration,
+    emit_service_event_with_trace, emit_workbench_event, load_selected_session_display_hydration,
     load_webui_unclosed_subagent_surface_preload_once, native_tool_summaries_from_agent_runtime,
     pending_question_snapshots_from_agent_runtime, preserve_active_session_run_state,
     restore_webui_subagent_registry_for_session_hydration, selected_session_id_after_refresh,
     session_summary_project_and_created_at, subagent_navigation_snapshot_from_cached_state,
-    sync_selected_session_goal_summary_from_store, webui_trace_if_slow, workbench_from_runtime,
-    workbench_surface_matches_conversation, workspace_session_summary_for_session,
-    workspace_snapshot_contains_regular_session, workspace_surface_allows_user_prompt_editing,
+    sync_selected_session_goal_summary_from_store, webui_fork_trace, webui_trace_if_slow,
+    workbench_from_runtime, workbench_surface_matches_conversation,
+    workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
+    workspace_surface_allows_user_prompt_editing,
 };
 
 mod tool_detail;
@@ -83,6 +85,50 @@ struct HydratedSessionProjectionContext {
     /// Detached subagent task ids that still have live listeners.
     /// 仍然存在实时监听器的分离子代理任务标识集合。
     live_listener_task_ids: BTreeSet<SessionId>,
+}
+
+/// Optional diagnostics scope for the shared hydrated-session loader.
+/// 共享会话水合加载器的可选诊断作用域。
+#[derive(Clone, Copy)]
+struct HydratedSessionTraceContext {
+    /// Whether fork-specific trace output should be emitted for this load.
+    /// 本次加载是否应输出分叉专用追踪日志。
+    enabled: bool,
+    /// Human-readable reason attached to each trace line.
+    /// 附加到每条追踪日志的人类可读原因。
+    reason: &'static str,
+}
+
+impl HydratedSessionTraceContext {
+    /// Creates a disabled trace context for normal session hydration.
+    /// 为普通会话水合创建禁用的追踪上下文。
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            reason: "normal_hydration",
+        }
+    }
+
+    /// Creates an enabled trace context for fork-triggered hydration.
+    /// 为分叉触发的会话水合创建启用的追踪上下文。
+    fn fork() -> Self {
+        Self {
+            enabled: true,
+            reason: "fork_hydration",
+        }
+    }
+
+    /// Emits a fork trace line only when this context explicitly enables it.
+    /// 仅在当前上下文显式启用时输出分叉追踪日志。
+    fn log(&self, stage: &str, started_at_millis: i128, detail: impl AsRef<str>) {
+        if self.enabled {
+            webui_fork_trace(
+                stage,
+                started_at_millis,
+                format!("reason={} {}", self.reason, detail.as_ref()),
+            );
+        }
+    }
 }
 
 /// Hydrated workbench plus transcript pagination cursors for one selected session.
@@ -726,7 +772,51 @@ pub(super) async fn load_hydrated_session_workbench(
     parsed_session_id: SessionId,
     session_id: &str,
 ) -> Result<HydratedSessionWorkbench, String> {
+    load_hydrated_session_workbench_with_trace(
+        app,
+        state,
+        parsed_session_id,
+        session_id,
+        HydratedSessionTraceContext::disabled(),
+    )
+    .await
+}
+
+/// Loads one conversation while emitting fork-only hydration diagnostics.
+/// 加载单个会话并输出仅限分叉场景的水合诊断。
+pub(super) async fn load_hydrated_session_workbench_for_fork_trace(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    parsed_session_id: SessionId,
+    session_id: &str,
+) -> Result<HydratedSessionWorkbench, String> {
+    load_hydrated_session_workbench_with_trace(
+        app,
+        state,
+        parsed_session_id,
+        session_id,
+        HydratedSessionTraceContext::fork(),
+    )
+    .await
+}
+
+/// Loads one conversation with an explicit diagnostics scope.
+/// 使用显式诊断作用域加载单个会话。
+async fn load_hydrated_session_workbench_with_trace(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    parsed_session_id: SessionId,
+    session_id: &str,
+    trace: HydratedSessionTraceContext,
+) -> Result<HydratedSessionWorkbench, String> {
+    let hydration_total_started_at = current_unix_millis_value();
+    let read_context_started_at = current_unix_millis_value();
     let read_context = capture_hydrated_session_read_context(state, parsed_session_id)?;
+    trace.log(
+        "hydration.capture_read_context",
+        read_context_started_at,
+        format!("session={parsed_session_id}"),
+    );
     emit_conversation_hydration_progress(
         app,
         state,
@@ -738,13 +828,23 @@ pub(super) async fn load_hydrated_session_workbench(
             "正在读取消息索引。",
         ),
     )?;
-    let mut refreshed_snapshot = if let Some(snapshot) =
-        retained_workspace_snapshot_for_session_hydration_from_state(state, parsed_session_id)?
-    {
+    let retained_snapshot_started_at = current_unix_millis_value();
+    let retained_snapshot =
+        retained_workspace_snapshot_for_session_hydration_from_state(state, parsed_session_id)?;
+    trace.log(
+        "hydration.retained_snapshot_lookup",
+        retained_snapshot_started_at,
+        format!(
+            "session={} hit={}",
+            parsed_session_id,
+            retained_snapshot.is_some()
+        ),
+    );
+    let mut refreshed_snapshot = if let Some(snapshot) = retained_snapshot {
         snapshot
     } else {
         let index_load_started_at = current_unix_millis_value();
-        vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+        let snapshot = vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
             read_context.controller_runtime.clone(),
         )
         .await
@@ -754,13 +854,25 @@ pub(super) async fn load_hydrated_session_workbench(
                 index_load_started_at,
                 format!("session={parsed_session_id}"),
             );
-        })?
+        })?;
+        trace.log(
+            "hydration.load_workspace_index",
+            index_load_started_at,
+            format!("session={parsed_session_id}"),
+        );
+        snapshot
     };
+    let preserve_started_at = current_unix_millis_value();
     preserve_active_session_run_state(
         read_context.preserved_workspace_run_state.as_ref(),
         &mut refreshed_snapshot,
     );
     refreshed_snapshot.selected_session = parsed_session_id;
+    trace.log(
+        "hydration.preserve_run_state",
+        preserve_started_at,
+        format!("session={parsed_session_id}"),
+    );
     emit_conversation_hydration_progress(
         app,
         state,
@@ -788,6 +900,14 @@ pub(super) async fn load_hydrated_session_workbench(
     })?;
     let earliest_ordinal = hydration.earliest_ordinal;
     let has_more_history = hydration.has_more_history;
+    trace.log(
+        "hydration.display_window",
+        display_hydration_started_at,
+        format!(
+            "session={} earliest_ordinal={:?} has_more_history={}",
+            parsed_session_id, earliest_ordinal, has_more_history
+        ),
+    );
     emit_conversation_hydration_progress(
         app,
         state,
@@ -799,7 +919,14 @@ pub(super) async fn load_hydrated_session_workbench(
             "正在整理显示数据。",
         ),
     )?;
+    let projection_context_started_at = current_unix_millis_value();
     let projection_context = capture_hydrated_session_projection_context(state, parsed_session_id)?;
+    trace.log(
+        "hydration.capture_projection_context",
+        projection_context_started_at,
+        format!("session={parsed_session_id}"),
+    );
+    let apply_hydration_started_at = current_unix_millis_value();
     apply_hydration_to_selected_workspace_snapshot(
         &read_context.controller_runtime,
         &mut refreshed_snapshot,
@@ -811,12 +938,23 @@ pub(super) async fn load_hydrated_session_workbench(
             .map(|runtime| &runtime.task_runtime),
         &projection_context.live_listener_task_ids,
     )?;
+    trace.log(
+        "hydration.apply_selected_snapshot",
+        apply_hydration_started_at,
+        format!("session={parsed_session_id}"),
+    );
+    let goal_sync_started_at = current_unix_millis_value();
     sync_selected_session_goal_summary_from_store(
         state,
         read_context.controller_runtime.clone(),
         parsed_session_id,
     )
     .await?;
+    trace.log(
+        "hydration.sync_goal_summary",
+        goal_sync_started_at,
+        format!("session={parsed_session_id}"),
+    );
     emit_conversation_hydration_progress(
         app,
         state,
@@ -844,6 +982,11 @@ pub(super) async fn load_hydrated_session_workbench(
         subagent_preload_started_at,
         format!("session={parsed_session_id}"),
     );
+    trace.log(
+        "hydration.subagent_preload",
+        subagent_preload_started_at,
+        format!("session={parsed_session_id}"),
+    );
     emit_conversation_hydration_progress(
         app,
         state,
@@ -862,6 +1005,7 @@ pub(super) async fn load_hydrated_session_workbench(
         hydrated_windows,
         preloaded_subagent_roots,
     ) = {
+        let state_projection_started_at = current_unix_millis_value();
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -902,16 +1046,28 @@ pub(super) async fn load_hydrated_session_workbench(
             &mut hydrated_windows,
             &refreshed_snapshot,
         );
+        let surface_messages =
+            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot)?;
+        let subagent_navigation =
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot)?;
+        let session_goal_summaries = guard.session_goal_summaries.clone();
+        let preloaded_subagent_roots = guard.webui_preloaded_unclosed_subagent_roots.clone();
+        trace.log(
+            "hydration.state_projection_data",
+            state_projection_started_at,
+            format!("session={parsed_session_id}"),
+        );
         (
-            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot)?,
-            subagent_navigation_snapshot_from_cached_state(&mut guard, &refreshed_snapshot)?,
-            guard.session_goal_summaries.clone(),
+            surface_messages,
+            subagent_navigation,
+            session_goal_summaries,
             hydrated_windows,
-            guard.webui_preloaded_unclosed_subagent_roots.clone(),
+            preloaded_subagent_roots,
         )
     };
     let hydrated_window_summaries =
         hydrated_conversation_window_summaries(&hydrated_windows, &preloaded_subagent_roots);
+    let workbench_projection_started_at = current_unix_millis_value();
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &read_context.controller_runtime,
         command_session_runtime: projection_context
@@ -937,7 +1093,13 @@ pub(super) async fn load_hydrated_session_workbench(
             projection_context.agent_runtime_for_status.as_ref(),
         ),
     });
+    trace.log(
+        "hydration.workbench_projection",
+        workbench_projection_started_at,
+        format!("session={parsed_session_id}"),
+    );
     {
+        let state_commit_started_at = current_unix_millis_value();
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -946,7 +1108,17 @@ pub(super) async fn load_hydrated_session_workbench(
         guard.hydrated_conversation_windows = hydrated_windows;
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(refreshed_snapshot);
+        trace.log(
+            "hydration.state_commit",
+            state_commit_started_at,
+            format!("session={parsed_session_id}"),
+        );
     }
+    trace.log(
+        "hydration.total",
+        hydration_total_started_at,
+        format!("session={parsed_session_id}"),
+    );
     Ok(HydratedSessionWorkbench {
         workbench,
         earliest_ordinal,
@@ -1065,16 +1237,25 @@ fn emit_conversation_hydration_progress(
     state: &SharedServiceBridgeState,
     progress: ConversationHydrationProgress,
 ) -> Result<(), String> {
-    let workbench = {
+    let event = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.workbench.conversation_hydration = Some(progress);
+        guard.workbench.conversation_hydration = Some(progress.clone());
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench.revision = guard.workbench_generation;
-        guard.workbench.clone()
+        WorkbenchDeltaEnvelope {
+            generation: guard.workbench_generation,
+            delta: WorkbenchDelta::ConversationHydrationChanged(
+                ConversationHydrationChangedDelta { progress },
+            ),
+        }
     };
-    emit_workbench_event(app, &workbench);
+    emit_service_event_with_trace(
+        app,
+        "conversation_hydration_progress_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
     Ok(())
 }
 

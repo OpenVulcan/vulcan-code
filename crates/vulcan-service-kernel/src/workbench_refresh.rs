@@ -413,6 +413,20 @@ pub(crate) fn webui_trace_if_slow(stage: &str, started_at_ms: i128, detail: impl
     }
 }
 
+/// Emits one temporary conversation-fork timing trace line unconditionally.
+/// 无条件输出一条临时会话分叉耗时诊断日志。
+pub(crate) fn webui_fork_trace(stage: &str, started_at_ms: i128, detail: impl AsRef<str>) {
+    let elapsed_ms = current_unix_millis_value().saturating_sub(started_at_ms);
+    eprintln!(
+        "[webui-service][fork-trace] timestamp={} unix_ms={} stage={} elapsed_ms={} {}",
+        current_webui_trace_timestamp(),
+        current_unix_millis_text(),
+        stage,
+        elapsed_ms,
+        detail.as_ref()
+    );
+}
+
 /// Builds WebUI native-tool policy rows from the current agent runtime bridge.
 /// 从当前 Agent 运行时桥接构建 WebUI 原生工具策略行。
 pub(crate) fn native_tool_summaries_from_agent_runtime(

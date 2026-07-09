@@ -2,6 +2,19 @@
 //! 分段会话分叉支持。
 
 use super::*;
+use crate::workspace_store::current_unix_millis;
+
+/// Emits one temporary segmented-session fork timing trace line unconditionally.
+/// 无条件输出一条临时分段会话分叉耗时诊断日志。
+fn segmented_fork_trace(stage: &str, started_at_ms: i64, detail: impl AsRef<str>) {
+    let elapsed_ms = current_unix_millis().saturating_sub(started_at_ms);
+    eprintln!(
+        "[webui-service][fork-trace] source=segmented-store stage={} elapsed_ms={} {}",
+        stage,
+        elapsed_ms,
+        detail.as_ref()
+    );
+}
 
 /// Forks one already resolved segmented session directory without searching for the source again.
 /// 分叉一个已经解析出的分段会话目录，不再重新搜索源目录。
@@ -10,6 +23,7 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
     data_root: &Path,
     request: &SegmentedSessionForkRequest,
 ) -> Result<PathBuf, String> {
+    let total_started_at = current_unix_millis();
     if !source_dir.is_dir() {
         return Err(String::from("ERR_SESSION_FORK_SOURCE_NOT_FOUND"));
     }
@@ -24,26 +38,67 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
         return Err(String::from("ERR_SESSION_FORK_TARGET_EXISTS"));
     }
     let fork_result = (|| {
-        copy_segmented_session_tree_without_tasks(&source_dir, &target_dir)?;
-        rewrite_forked_session_metadata(&target_dir, request)?;
+        let copy_started_at = current_unix_millis();
+        let source_metadata = copy_segmented_session_tree_without_tasks(&source_dir, &target_dir)?;
+        segmented_fork_trace(
+            "directory.copy_without_tasks",
+            copy_started_at,
+            format!(
+                "source_session={} target_session={}",
+                request.source_session_id, request.target_session_id
+            ),
+        );
         let identity_replacements = forked_identity_replacements(request);
-        rewrite_json_file_identity_tokens(
-            &target_dir.join(SEGMENTED_METADATA_FILE),
-            &identity_replacements,
-        )?;
-        rewrite_forked_session_identity_events(&target_dir, request, &identity_replacements)?;
-        rewrite_forked_persisted_identity_artifacts(
+        let display_events_started_at = current_unix_millis();
+        write_forked_session_identity_events_from_source(
+            &source_dir,
             &target_dir,
-            &request.target_session_id,
-            &request.target_created_at,
+            request,
+            &source_metadata,
             &identity_replacements,
         )?;
+        segmented_fork_trace(
+            "directory.rewrite_display_events",
+            display_events_started_at,
+            format!("target_session={}", request.target_session_id),
+        );
+        let artifacts_started_at = current_unix_millis();
+        if request.source_anchor_message_id.is_some() {
+            segmented_fork_trace(
+                "directory.skip_rewrite_persisted_artifacts",
+                artifacts_started_at,
+                format!(
+                    "target_session={} reason=truncated_runtime_rebuild",
+                    request.target_session_id
+                ),
+            );
+        } else {
+            rewrite_forked_persisted_identity_artifacts(
+                &target_dir,
+                &request.target_session_id,
+                &request.target_created_at,
+                &identity_replacements,
+            )?;
+            segmented_fork_trace(
+                "directory.rewrite_persisted_artifacts",
+                artifacts_started_at,
+                format!("target_session={}", request.target_session_id),
+            );
+        }
         Ok::<(), String>(())
     })();
     if let Err(error) = fork_result {
         let _ = fs::remove_dir_all(&target_dir);
         return Err(error);
     }
+    segmented_fork_trace(
+        "directory.total",
+        total_started_at,
+        format!(
+            "source_session={} target_session={}",
+            request.source_session_id, request.target_session_id
+        ),
+    );
     Ok(target_dir)
 }
 
@@ -52,27 +107,68 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
 fn copy_segmented_session_tree_without_tasks(
     source_dir: &Path,
     target_dir: &Path,
-) -> Result<(), String> {
+) -> Result<SegmentedSessionMetadata, String> {
+    let total_started_at = current_unix_millis();
+    let metadata_started_at = current_unix_millis();
     let metadata = read_session_metadata(source_dir)?;
+    segmented_fork_trace(
+        "copy.read_metadata",
+        metadata_started_at,
+        format!("source_dir={}", source_dir.display()),
+    );
     create_dir_all(target_dir)?;
+    let display_segment_files: BTreeSet<&str> = metadata
+        .segments
+        .iter()
+        .map(|segment| segment.file.as_str())
+        .collect();
+    let mut copied_top_level_dirs = 0usize;
+    let mut copied_top_level_files = 0usize;
+    let mut skipped_top_level_dirs = Vec::new();
+    let mut skipped_top_level_files = Vec::new();
     for entry in fs::read_dir(source_dir).map_err(to_store_error)? {
         let entry = entry.map_err(to_store_error)?;
         let source_path = entry.path();
         let target_path = target_dir.join(entry.file_name());
         let file_type = entry.file_type().map_err(to_store_error)?;
+        let file_name = entry.file_name();
+        let file_name_text = file_name.to_string_lossy();
         if file_type.is_dir() {
             let directory_name = source_path.file_name().and_then(|name| name.to_str());
             if forked_session_should_skip_top_level_directory(directory_name, &metadata.task_dir) {
+                if let Some(directory_name) = directory_name {
+                    skipped_top_level_dirs.push(directory_name.to_string());
+                }
                 continue;
             }
         }
         if file_type.is_dir() {
             copy_segmented_directory_tree(&source_path, &target_path)?;
+            copied_top_level_dirs = copied_top_level_dirs.saturating_add(1);
         } else if file_type.is_file() {
+            if file_name_text == SEGMENTED_METADATA_FILE
+                || display_segment_files.contains(file_name_text.as_ref())
+            {
+                skipped_top_level_files.push(file_name_text.to_string());
+                continue;
+            }
             fs::copy(&source_path, &target_path).map_err(to_store_error)?;
+            copied_top_level_files = copied_top_level_files.saturating_add(1);
         }
     }
-    create_dir_all(&target_dir.join(&metadata.task_dir))
+    create_dir_all(&target_dir.join(&metadata.task_dir))?;
+    segmented_fork_trace(
+        "copy.total_without_tasks",
+        total_started_at,
+        format!(
+            "top_level_dirs={} top_level_files={} skipped_dirs={:?} skipped_files={:?}",
+            copied_top_level_dirs,
+            copied_top_level_files,
+            skipped_top_level_dirs,
+            skipped_top_level_files
+        ),
+    );
+    Ok(metadata)
 }
 
 /// Returns whether a top-level source directory should be omitted from a forked session copy.
@@ -111,13 +207,14 @@ pub(in crate::workspace_store) fn copy_segmented_directory_tree(
     Ok(())
 }
 
-/// Rewrites the forked metadata document after the directory has been copied.
-/// 在目录复制完成后改写分叉会话的元数据文档。
-fn rewrite_forked_session_metadata(
-    target_dir: &Path,
+/// Builds target metadata from source metadata before the transformed display segments are attached.
+/// 在挂接转换后的展示分段前，根据源元数据构建目标元数据。
+fn forked_session_metadata_from_source(
+    source_metadata: &SegmentedSessionMetadata,
     request: &SegmentedSessionForkRequest,
-) -> Result<(), String> {
-    let mut metadata = read_session_metadata(target_dir)?;
+    replacements: &BTreeMap<String, String>,
+) -> SegmentedSessionMetadata {
+    let mut metadata = source_metadata.clone();
     metadata.session_id = request.target_session_id.clone();
     metadata.project_tag = request.target_project_tag.clone();
     metadata.project_id = Some(request.target_project_tag.clone());
@@ -127,7 +224,14 @@ fn rewrite_forked_session_metadata(
     metadata.title = Some(request.target_title.clone());
     metadata.title_source = Some(request.target_title_source.clone());
     metadata.tasks.clear();
-    write_metadata(target_dir, &metadata)
+    metadata.fork_source = None;
+    if let Some(message_id) = metadata.last_message_id.as_mut() {
+        rewrite_string_identity_tokens(message_id, replacements);
+    }
+    if let Some(fingerprint) = metadata.last_message_fingerprint.as_mut() {
+        rewrite_string_identity_tokens(fingerprint, replacements);
+    }
+    metadata
 }
 
 /// Builds exact identity-token replacements for a forked parent session.
@@ -188,11 +292,20 @@ fn rewrite_forked_runtime_identity_artifacts(
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     if !runtime_metadata_path(session_dir).exists() {
+        segmented_fork_trace(
+            "runtime_artifacts.skip_missing_metadata",
+            current_unix_millis(),
+            format!("session_dir={}", session_dir.display()),
+        );
         return Ok(());
     }
+    let total_started_at = current_unix_millis();
     let mut metadata = read_runtime_metadata(session_dir)?;
     let mut all_lines = Vec::new();
+    let mut rewritten_segments = 0usize;
+    let mut total_lines = 0usize;
     for segment in &mut metadata.segments {
+        let segment_started_at = current_unix_millis();
         let segment_path = session_dir.join(&segment.file);
         let mut line_values = read_json_lines::<Value>(&segment_path)?;
         let mut changed = false;
@@ -203,7 +316,9 @@ fn rewrite_forked_runtime_identity_artifacts(
         }
         if changed {
             write_json_lines_file_atomic(&segment_path, &line_values)?;
+            rewritten_segments = rewritten_segments.saturating_add(1);
         }
+        total_lines = total_lines.saturating_add(line_values.len());
         let mut typed_segment_lines = Vec::with_capacity(line_values.len());
         for line_value in line_values {
             typed_segment_lines.push(
@@ -220,6 +335,11 @@ fn rewrite_forked_runtime_identity_artifacts(
             .last()
             .map(|line| line.created_at.clone());
         all_lines.extend(typed_segment_lines);
+        segmented_fork_trace(
+            "runtime_artifacts.segment",
+            segment_started_at,
+            format!("file={} changed={changed}", segment.file),
+        );
     }
     all_lines.sort_by_key(|line| line.seq);
     metadata.next_seq = next_runtime_line_seq(&all_lines);
@@ -228,29 +348,29 @@ fn rewrite_forked_runtime_identity_artifacts(
         .map(|line| line.created_at.clone())
         .unwrap_or_else(current_unix_millis_text);
     write_runtime_metadata(session_dir, &metadata)?;
-    write_runtime_index(session_dir, &rebuild_runtime_log_index(&all_lines))
-}
-
-/// Rewrites one JSON file using exact known identity-token replacements.
-/// 使用已知精确身份 token 替换表改写单个 JSON 文件。
-fn rewrite_json_file_identity_tokens(
-    path: &Path,
-    replacements: &BTreeMap<String, String>,
-) -> Result<bool, String> {
-    if !path.exists() {
-        return Ok(false);
-    }
-    let mut value = read_required_json::<Value>(path)?;
-    if !rewrite_json_value_identity_tokens(&mut value, replacements) {
-        return Ok(false);
-    }
-    write_json_file_atomic(path, &value)?;
-    Ok(true)
+    let index_started_at = current_unix_millis();
+    write_runtime_index(session_dir, &rebuild_runtime_log_index(&all_lines))?;
+    segmented_fork_trace(
+        "runtime_artifacts.rebuild_index",
+        index_started_at,
+        format!("segments={} lines={}", metadata.segments.len(), total_lines),
+    );
+    segmented_fork_trace(
+        "runtime_artifacts.total",
+        total_started_at,
+        format!(
+            "segments={} rewritten_segments={} lines={}",
+            metadata.segments.len(),
+            rewritten_segments,
+            total_lines
+        ),
+    );
+    Ok(())
 }
 
 /// Rewrites exact known identity tokens anywhere inside a JSON value.
 /// 在 JSON 值内部任意位置改写已知精确身份 token。
-fn rewrite_json_value_identity_tokens(
+pub(in crate::workspace_store) fn rewrite_json_value_identity_tokens(
     value: &mut Value,
     replacements: &BTreeMap<String, String>,
 ) -> bool {
@@ -287,7 +407,7 @@ fn rewrite_json_value_identity_tokens(
 
 /// Rewrites exact known identity tokens inside one string.
 /// 改写单个字符串中的已知精确身份 token。
-fn rewrite_string_identity_tokens(
+pub(in crate::workspace_store) fn rewrite_string_identity_tokens(
     text: &mut String,
     replacements: &BTreeMap<String, String>,
 ) -> bool {
@@ -301,29 +421,43 @@ fn rewrite_string_identity_tokens(
     changed
 }
 
-/// Rewrites explicit session-identity JSONL payloads in a copied session directory.
-/// 改写已复制会话目录中明确的会话身份 JSONL 载荷。
-fn rewrite_forked_session_identity_events(
+/// Writes transformed display JSONL segments from the source session into the target directory.
+/// 将源会话转换后的展示 JSONL 分段写入目标目录。
+fn write_forked_session_identity_events_from_source(
+    source_dir: &Path,
     target_dir: &Path,
     request: &SegmentedSessionForkRequest,
+    source_metadata: &SegmentedSessionMetadata,
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let mut metadata = read_session_metadata(target_dir)?;
-    let original_segments = metadata.segments.clone();
+    let total_started_at = current_unix_millis();
+    let mut metadata = forked_session_metadata_from_source(source_metadata, request, replacements);
+    let original_segments = source_metadata.segments.clone();
     let mut retained_segments = Vec::new();
-    let mut metadata_changed = false;
     let mut max_retained_seq = None::<u64>;
+    let mut total_lines = 0usize;
+    let mut retained_line_count = 0usize;
+    let mut dropped_line_count = 0usize;
+    let mut changed_segment_count = 0usize;
+    let mut latest_rollback_seq = None;
+    let mut found_anchor = request.source_anchor_message_id.is_none();
     for segment in original_segments {
-        let segment_path = target_dir.join(&segment.file);
-        let lines = read_segment_event_lines(&segment_path)?;
+        let segment_started_at = current_unix_millis();
+        let source_segment_path = source_dir.join(&segment.file);
+        let target_segment_path = target_dir.join(&segment.file);
+        let lines = read_segment_event_lines(&source_segment_path)?;
+        total_lines = total_lines.saturating_add(lines.len());
         let mut retained_lines = Vec::with_capacity(lines.len());
-        let mut changed = false;
+        let mut changed = true;
         for mut line in lines {
             if forked_session_should_drop_subagent_state_event(line.kind) {
-                changed = true;
-                metadata_changed = true;
+                dropped_line_count = dropped_line_count.saturating_add(1);
                 continue;
             }
+            let is_anchor = request
+                .source_anchor_message_id
+                .as_deref()
+                .is_some_and(|message_id| segmented_line_message_id(&line) == Some(message_id));
             if rewrite_forked_parent_message_task_metadata(&mut line.payload, request) {
                 changed = true;
             }
@@ -355,16 +489,17 @@ fn rewrite_forked_session_identity_events(
                 }
                 _ => {}
             }
+            if line.kind == SegmentedSessionEventKind::ThreadRolledBack {
+                latest_rollback_seq = Some(line.seq);
+            }
             retained_lines.push(line);
-        }
-        if changed {
-            if retained_lines.is_empty() {
-                let _ = fs::remove_file(&segment_path);
-            } else {
-                write_json_lines_file_atomic(&segment_path, &retained_lines)?;
+            if is_anchor {
+                found_anchor = true;
+                break;
             }
         }
         if !retained_lines.is_empty() {
+            changed_segment_count = changed_segment_count.saturating_add(1);
             if let Some(segment_max_seq) = retained_lines.iter().map(|line| line.seq).max() {
                 max_retained_seq = Some(
                     max_retained_seq
@@ -372,23 +507,66 @@ fn rewrite_forked_session_identity_events(
                         .unwrap_or(segment_max_seq),
                 );
             }
-            retained_segments.push(rebuild_segment_metadata(&segment.file, &retained_lines)?);
+            retained_segments.push(write_segment_event_lines_atomic_with_metadata(
+                &target_segment_path,
+                &segment.file,
+                &retained_lines,
+            )?);
+        }
+        retained_line_count = retained_line_count.saturating_add(retained_lines.len());
+        segmented_fork_trace(
+            "display_events.segment",
+            segment_started_at,
+            format!(
+                "file={} changed={} retained_lines={}",
+                segment.file,
+                changed,
+                retained_lines.len()
+            ),
+        );
+        if found_anchor {
+            break;
         }
     }
-    if metadata_changed {
-        metadata.segments = retained_segments;
-        metadata.active_segment = metadata
-            .segments
-            .last()
-            .map(|segment| segment.file.clone())
-            .unwrap_or_else(|| segment_file_name(1));
-        metadata.next_global_seq = max_retained_seq
-            .map(|seq| seq.saturating_add(1))
-            .unwrap_or(1);
-        metadata.updated_at = request.target_created_at.clone();
-        metadata.tasks.clear();
-        write_metadata(target_dir, &metadata)?;
+    if !found_anchor {
+        return Err(String::from(
+            "ERR_SEGMENTED_SESSION_TRUNCATE_ANCHOR_NOT_FOUND",
+        ));
     }
+    if retained_segments.is_empty() {
+        let empty_file = segment_file_name(1);
+        retained_segments.push(write_segment_event_lines_atomic_with_metadata(
+            &target_dir.join(&empty_file),
+            &empty_file,
+            &[],
+        )?);
+    }
+    metadata.segments = retained_segments;
+    metadata.active_segment = metadata
+        .segments
+        .last()
+        .map(|segment| segment.file.clone())
+        .unwrap_or_else(|| segment_file_name(1));
+    metadata.next_global_seq = max_retained_seq
+        .map(|seq| seq.saturating_add(1))
+        .unwrap_or(1);
+    metadata.latest_rollback_seq = latest_rollback_seq;
+    metadata.updated_at = request.target_created_at.clone();
+    write_metadata(target_dir, &metadata)?;
+    segmented_fork_trace(
+        "display_events.total",
+        total_started_at,
+        format!(
+            "target_session={} segments={} changed_segments={} lines={} retained_lines={} dropped_lines={} metadata_changed={}",
+            request.target_session_id,
+            metadata.segments.len(),
+            changed_segment_count,
+            total_lines,
+            retained_line_count,
+            dropped_line_count,
+            true
+        ),
+    );
     Ok(())
 }
 

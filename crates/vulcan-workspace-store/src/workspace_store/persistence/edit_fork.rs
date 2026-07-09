@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// 从分段会话事实源加载出的持久化编辑草稿。
@@ -31,6 +32,18 @@ pub struct PersistedSessionForkResult {
     /// Newly created session summary.
     /// 新创建的会话摘要。
     pub session: SessionSummary,
+}
+
+/// Emits one temporary persisted-fork timing trace line unconditionally.
+/// 无条件输出一条临时持久化分叉耗时诊断日志。
+fn persisted_fork_trace(stage: &str, started_at_ms: i64, detail: impl AsRef<str>) {
+    let elapsed_ms = current_unix_millis().saturating_sub(started_at_ms);
+    eprintln!(
+        "[webui-service][fork-trace] source=workspace-store stage={} elapsed_ms={} {}",
+        stage,
+        elapsed_ms,
+        detail.as_ref()
+    );
 }
 
 /// Loads one user-prompt edit draft from persisted segmented session state.
@@ -94,19 +107,51 @@ pub async fn fork_persisted_session(
     target_title: String,
     anchor_message_id: Option<&str>,
 ) -> Result<PersistedSessionForkResult, String> {
+    let persisted_total_started_at = current_unix_millis();
     let now = current_unix_millis_text();
     let target_session_id_text = target_session_id.to_string();
     let anchor_message_id = anchor_message_id
         .map(str::trim)
         .filter(|message_id| !message_id.is_empty());
+    let source_locate_started_at = current_unix_millis();
     let source_dir = locate_segmented_session_dir_for_summary(
         controller,
         source_session,
         project_id,
         "ERR_SESSION_FORK_SOURCE_NOT_FOUND",
     )?;
+    persisted_fork_trace(
+        "persist.locate_source_dir",
+        source_locate_started_at,
+        format!(
+            "source_session={} project={} source_dir={}",
+            source_session.id,
+            project_id,
+            source_dir.display()
+        ),
+    );
+    let repair_started_at = current_unix_millis();
     let _ = repair_segmented_session_display_if_needed(&source_dir)?;
-    let source_replay = replay_segmented_session_context(&source_dir)?;
+    persisted_fork_trace(
+        "persist.repair_source_display_if_needed",
+        repair_started_at,
+        format!("source_session={}", source_session.id),
+    );
+    let replay_started_at = current_unix_millis();
+    let source_replay = replay_segmented_session_context_without_repair(&source_dir)?;
+    let source_record_count = source_replay
+        .as_ref()
+        .map(|replay| replay.conversation_state.records.len())
+        .unwrap_or_default();
+    persisted_fork_trace(
+        "persist.replay_source",
+        replay_started_at,
+        format!(
+            "source_session={} records={}",
+            source_session.id, source_record_count
+        ),
+    );
+    let anchor_started_at = current_unix_millis();
     let source_anchor_index = anchor_message_id
         .map(|message_id| {
             let replay = source_replay
@@ -118,6 +163,24 @@ pub async fn fork_persisted_session(
     let source_last_visible_index = source_replay
         .as_ref()
         .and_then(last_visible_record_index_in_replay);
+    persisted_fork_trace(
+        "persist.resolve_anchor",
+        anchor_started_at,
+        format!(
+            "source_session={} anchor={:?} anchor_index={:?} last_visible_index={:?}",
+            source_session.id, anchor_message_id, source_anchor_index, source_last_visible_index
+        ),
+    );
+    let truncate_after_anchor = match (source_anchor_index, source_last_visible_index) {
+        (Some(anchor_index), Some(last_index)) => anchor_index < last_index,
+        _ => false,
+    };
+    let identity_replacements =
+        forked_identity_replacements_for_persisted_session(source_session.id, target_session_id);
+    let source_anchor_message_id_for_display = anchor_message_id
+        .filter(|_| truncate_after_anchor)
+        .map(ToOwned::to_owned);
+    let directory_fork_started_at = current_unix_millis();
     let target_dir = fork_segmented_session_directory_from_source(
         &source_dir,
         &controller.data_root,
@@ -131,8 +194,19 @@ pub async fn fork_persisted_session(
             target_created_at: now.clone(),
             target_title: target_title.clone(),
             target_title_source: source_session.title_source.as_persisted_key().to_string(),
+            source_anchor_message_id: source_anchor_message_id_for_display,
         },
     )?;
+    persisted_fork_trace(
+        "persist.copy_and_rewrite_directory",
+        directory_fork_started_at,
+        format!(
+            "source_session={} target_session={} target_dir={}",
+            source_session.id,
+            target_session_id_text,
+            target_dir.display()
+        ),
+    );
     let target_anchor_message_id = anchor_message_id.map(|message_id| {
         forked_anchor_message_id(message_id, source_session.id, target_session_id)
     });
@@ -147,26 +221,52 @@ pub async fn fork_persisted_session(
                 forked_anchor_message_id(&record.id, source_session.id, target_session_id)
             })
     });
-    let truncate_after_anchor = match (source_anchor_index, source_last_visible_index) {
-        (Some(anchor_index), Some(last_index)) => anchor_index < last_index,
-        _ => false,
-    };
     let fork_result = async {
         if truncate_after_anchor
             && let Some(anchor_message_id) = target_anchor_message_id.as_deref()
+            && let Some(anchor_index) = source_anchor_index
         {
-            truncate_forked_persisted_session_after_message(
+            let truncate_started_at = current_unix_millis();
+            let replay = source_replay
+                .as_ref()
+                .ok_or_else(|| String::from("ERR_SESSION_FORK_EMPTY_SESSION"))?;
+            rebuild_forked_persisted_session_runtime_from_source_replay(
                 &target_dir,
                 &target_session_id_text,
-                anchor_message_id,
+                replay,
+                anchor_index,
+                &identity_replacements,
             )?;
+            persisted_fork_trace(
+                "persist.rebuild_target_runtime_after_anchor",
+                truncate_started_at,
+                format!(
+                    "target_session={} anchor={anchor_message_id}",
+                    target_session_id_text
+                ),
+            );
+        } else {
+            persisted_fork_trace(
+                "persist.skip_truncate_target",
+                current_unix_millis(),
+                format!(
+                    "target_session={} anchor={:?} truncate_after_anchor={}",
+                    target_session_id_text, target_anchor_message_id, truncate_after_anchor
+                ),
+            );
         }
+        let marker_started_at = current_unix_millis();
         record_persisted_session_fork_source_marker(
             &target_dir,
             source_session,
             project_id,
             fork_source_anchor_message_id,
         )?;
+        persisted_fork_trace(
+            "persist.record_source_marker",
+            marker_started_at,
+            format!("target_session={target_session_id_text}"),
+        );
         let forked_session = SessionSummary::new(
             target_session_id,
             Some(project_id.to_string()),
@@ -180,6 +280,7 @@ pub async fn fork_persisted_session(
         .with_title_source(source_session.title_source)
         .with_created_at(now.clone())
         .with_updated_at(now.clone());
+        let index_started_at = current_unix_millis();
         upsert_session_index_row(
             controller,
             &forked_session,
@@ -189,58 +290,156 @@ pub async fn fork_persisted_session(
             Some(&now),
         )
         .await?;
+        persisted_fork_trace(
+            "persist.upsert_session_index",
+            index_started_at,
+            format!("target_session={target_session_id_text}"),
+        );
         Ok(PersistedSessionForkResult {
             session: forked_session,
         })
     }
     .await;
     if fork_result.is_err() {
+        let cleanup_started_at = current_unix_millis();
         let _ = std::fs::remove_dir_all(&target_dir);
+        persisted_fork_trace(
+            "persist.cleanup_failed_target",
+            cleanup_started_at,
+            format!("target_session={target_session_id_text}"),
+        );
+    } else {
+        persisted_fork_trace(
+            "persist.total",
+            persisted_total_started_at,
+            format!(
+                "source_session={} target_session={}",
+                source_session.id, target_session_id_text
+            ),
+        );
     }
     fork_result
 }
 
-/// Truncates a newly copied fork to the selected persisted message anchor.
-/// 将刚复制出的分叉会话截断到选中的持久化消息锚点。
-fn truncate_forked_persisted_session_after_message(
+/// Rebuilds forked runtime artifacts from the already replayed source state.
+/// 从已重放的源会话状态重建分叉运行态产物。
+fn rebuild_forked_persisted_session_runtime_from_source_replay(
     session_dir: &Path,
     target_session_id_text: &str,
-    anchor_message_id: &str,
+    source_replay: &SegmentedSessionReplayResult,
+    source_anchor_record_index: usize,
+    replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let replay = replay_segmented_session_context(&session_dir)?
-        .ok_or_else(|| String::from("ERR_SESSION_FORK_EMPTY_SESSION"))?;
-    let record_index = fork_anchor_record_index_in_replay(&replay, anchor_message_id)?;
-    let mut retained_conversation_state = replay.conversation_state;
+    let truncate_total_started_at = current_unix_millis();
+    let mut retained_conversation_state = source_replay.conversation_state.clone();
     retained_conversation_state
         .records
-        .truncate(record_index.saturating_add(1));
+        .truncate(source_anchor_record_index.saturating_add(1));
     retained_conversation_state.continuation = Default::default();
+    let identity_rewrite_started_at = current_unix_millis();
+    rewrite_forked_conversation_state_identity(&mut retained_conversation_state, replacements)?;
+    persisted_fork_trace(
+        "truncate.rewrite_source_replay_identity",
+        identity_rewrite_started_at,
+        format!(
+            "target_session={} records={}",
+            target_session_id_text,
+            retained_conversation_state.records.len()
+        ),
+    );
     let original_runtime_messages = retained_conversation_state.messages.clone();
     let retained_messages = conversation_state_to_session_messages(&retained_conversation_state);
-    let retained_context_start_message_id =
-        retained_context_anchor(replay.context_start_message_id, &retained_messages);
+    let retained_context_start_message_id = retained_context_anchor(
+        source_replay
+            .context_start_message_id
+            .clone()
+            .map(|message_id| rewrite_forked_identity_text(message_id, replacements)),
+        &retained_messages,
+    );
     retained_conversation_state = fork_conversation_state_from_retained_messages(
         &retained_messages,
         &original_runtime_messages,
     );
-    truncate_segmented_session_after_message(&session_dir, anchor_message_id, &retained_messages)?;
+    let checkpoint_started_at = current_unix_millis();
+    let mut metadata = read_session_metadata(session_dir)?;
+    update_segmented_message_checkpoint(&mut metadata, &retained_messages)?;
+    write_metadata(session_dir, &metadata)?;
+    persisted_fork_trace(
+        "truncate.update_message_checkpoint",
+        checkpoint_started_at,
+        format!(
+            "target_session={} retained_messages={}",
+            target_session_id_text,
+            retained_messages.len()
+        ),
+    );
     let updated_at = current_unix_millis_text();
     let mut runtime_state = SessionRuntimeStateEntry {
         conversation_state: retained_conversation_state,
         updated_at,
         ..SessionRuntimeStateEntry::default()
     };
-    runtime_state.last_compaction_id = replay.last_compaction_id;
+    runtime_state.last_compaction_id = source_replay.last_compaction_id.clone();
     runtime_state.context_start_message_id = retained_context_start_message_id;
     runtime_state.conversation_state.continuation = Default::default();
+    let state_write_started_at = current_unix_millis();
     let state_document = state_document_from_runtime_state(target_session_id_text, &runtime_state)?;
     write_state(&session_dir, &state_document)?;
+    persisted_fork_trace(
+        "truncate.write_state",
+        state_write_started_at,
+        format!("target_session={target_session_id_text}"),
+    );
+    let runtime_rebuild_started_at = current_unix_millis();
     rebuild_runtime_log_from_conversation_state(
         &session_dir,
         &runtime_state.conversation_state,
         &runtime_state.updated_at,
     )?;
+    persisted_fork_trace(
+        "truncate.rebuild_runtime_log",
+        runtime_rebuild_started_at,
+        format!("target_session={target_session_id_text}"),
+    );
+    persisted_fork_trace(
+        "truncate.total",
+        truncate_total_started_at,
+        format!("target_session={target_session_id_text}"),
+    );
     Ok(())
+}
+
+/// Builds the exact session-id replacement table used by persisted fork reconstruction.
+/// 构建持久化分叉重建使用的精确会话标识替换表。
+fn forked_identity_replacements_for_persisted_session(
+    source_session_id: SessionId,
+    target_session_id: SessionId,
+) -> BTreeMap<String, String> {
+    let mut replacements = BTreeMap::new();
+    replacements.insert(source_session_id.to_string(), target_session_id.to_string());
+    replacements
+}
+
+/// Rewrites session identity tokens inside an already replayed conversation state.
+/// 改写已重放会话状态内部的会话身份 token。
+fn rewrite_forked_conversation_state_identity(
+    conversation_state: &mut SessionConversationState,
+    replacements: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut state_value = serde_json::to_value(&conversation_state).map_err(to_store_error)?;
+    rewrite_json_value_identity_tokens(&mut state_value, replacements);
+    *conversation_state = serde_json::from_value(state_value).map_err(to_store_error)?;
+    Ok(())
+}
+
+/// Rewrites one text value with the fork identity replacement table.
+/// 使用分叉身份替换表改写单个文本值。
+fn rewrite_forked_identity_text(
+    mut text: String,
+    replacements: &BTreeMap<String, String>,
+) -> String {
+    rewrite_string_identity_tokens(&mut text, replacements);
+    text
 }
 
 /// Returns the retained display-record index for one message-scoped fork anchor.
@@ -628,5 +827,44 @@ mod tests {
             target_anchor_message_id,
             format!("{target_session_id}-1783590054811-255")
         );
+    }
+
+    /// Verifies source replay reconstruction rewrites both visible and runtime message identities.
+    /// 验证源重放重建会同时改写展示消息与运行时消息身份。
+    #[test]
+    fn forked_source_replay_identity_rewrite_updates_retained_state_ids() {
+        let source_session_id = SessionId::from_u128(710);
+        let target_session_id = SessionId::from_u128(711);
+        let source_message_id = format!("{source_session_id}-source-message");
+        let target_message_id = format!("{target_session_id}-source-message");
+        let mut replay = replay_from_messages(vec![test_message(
+            &source_message_id,
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "source prompt",
+        )]);
+        replay.context_start_message_id = Some(source_message_id.clone());
+        let replacements = forked_identity_replacements_for_persisted_session(
+            source_session_id,
+            target_session_id,
+        );
+        let mut retained_conversation_state = replay.conversation_state.clone();
+
+        rewrite_forked_conversation_state_identity(&mut retained_conversation_state, &replacements)
+            .expect("rewrite source replay identity");
+
+        let retained_messages =
+            conversation_state_to_session_messages(&retained_conversation_state);
+        let retained_context_start_message_id = retained_context_anchor(
+            replay
+                .context_start_message_id
+                .map(|message_id| rewrite_forked_identity_text(message_id, &replacements)),
+            &retained_messages,
+        );
+        let rewritten_state =
+            serde_json::to_string(&retained_conversation_state).expect("serialize state");
+        assert!(rewritten_state.contains(&target_message_id));
+        assert!(!rewritten_state.contains(&source_message_id));
+        assert_eq!(retained_context_start_message_id, Some(target_message_id));
     }
 }

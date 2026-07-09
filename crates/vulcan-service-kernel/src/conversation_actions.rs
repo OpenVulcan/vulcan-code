@@ -130,8 +130,20 @@ pub(crate) async fn service_fork_conversation(
     state: SharedServiceBridgeState,
     request: ConversationForkRequest,
 ) -> Result<WorkbenchSnapshot, String> {
+    let fork_total_started_at = current_unix_millis_value();
+    let parse_started_at = current_unix_millis_value();
     let source_session_id = parse_session_id(&request.conversation_id)
         .ok_or_else(|| String::from("ERR_SESSION_FORK_INVALID_CONVERSATION"))?;
+    webui_fork_trace(
+        "service.parse_request",
+        parse_started_at,
+        format!(
+            "source_session={} anchor={}",
+            source_session_id,
+            request.anchor_message_id.as_deref().unwrap_or("<latest>")
+        ),
+    );
+    let state_lookup_started_at = current_unix_millis_value();
     let (controller_runtime, source_session, project_id) = {
         let mut guard = state
             .lock()
@@ -157,12 +169,18 @@ pub(crate) async fn service_fork_conversation(
             .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
         (controller_runtime, source_session, project_id)
     };
+    webui_fork_trace(
+        "service.resolve_source",
+        state_lookup_started_at,
+        format!("source_session={} project={project_id}", source_session.id),
+    );
     let target_session_id = SessionId::new_v4();
     let fork_title = if request.title.trim().is_empty() {
         source_session.title.clone()
     } else {
         request.title.trim().to_string()
     };
+    let persist_started_at = current_unix_millis_value();
     let fork_result = fork_persisted_session(
         &controller_runtime,
         &source_session,
@@ -172,15 +190,40 @@ pub(crate) async fn service_fork_conversation(
         request.anchor_message_id.as_deref(),
     )
     .await?;
+    webui_fork_trace(
+        "service.persist_fork",
+        persist_started_at,
+        format!(
+            "source_session={} target_session={} total_ms={}",
+            source_session.id,
+            fork_result.session.id,
+            current_unix_millis_value().saturating_sub(fork_total_started_at)
+        ),
+    );
     let target_session_id_text = fork_result.session.id.to_string();
-    load_hydrated_session_workbench(
+    let hydration_started_at = current_unix_millis_value();
+    let hydrated = load_hydrated_session_workbench_for_fork_trace(
         &app,
         &state,
         fork_result.session.id,
         &target_session_id_text,
     )
-    .await
-    .map(|hydrated| hydrated.workbench)
+    .await?;
+    webui_fork_trace(
+        "service.hydrate_fork",
+        hydration_started_at,
+        format!(
+            "target_session={} total_ms={}",
+            target_session_id_text,
+            current_unix_millis_value().saturating_sub(fork_total_started_at)
+        ),
+    );
+    webui_fork_trace(
+        "service.total",
+        fork_total_started_at,
+        format!("target_session={target_session_id_text}"),
+    );
+    Ok(hydrated.workbench)
 }
 
 /// Emits only the ask-modal pending question projection as a workbench delta.

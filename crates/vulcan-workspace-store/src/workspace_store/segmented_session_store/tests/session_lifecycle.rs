@@ -225,6 +225,7 @@ fn fork_session_directory_rewrites_structural_identity() {
             target_created_at: "2026-06-07T10:00:00Z".to_string(),
             target_title: "Alpha Fork".to_string(),
             target_title_source: "user".to_string(),
+            source_anchor_message_id: None,
         },
     )
     .expect("fork segmented session");
@@ -328,4 +329,72 @@ fn fork_session_directory_rewrites_structural_identity() {
         task_card_metadata["subagent_mailbox_event"]["payload"]["task_id"],
         "task-alpha"
     );
+}
+
+/// Verifies fork display conversion stops while streaming the source segment containing the anchor.
+/// 验证分叉展示转换会在流式处理源分段时停在锚点所在位置。
+#[test]
+fn fork_session_directory_stops_display_at_source_anchor() {
+    let root = test_root("fork_session_directory_stops_display_at_source_anchor");
+    let source_session_id = Uuid::new_v4().to_string();
+    let target_session_id = Uuid::new_v4().to_string();
+    let mut request = test_session_request(SegmentPolicy::default());
+    request.session_id = source_session_id.clone();
+    let source_dir = create_segmented_session_in_location(&root, false, request)
+        .expect("create segmented session");
+    let anchor_message_id = format!("{source_session_id}-keep-anchor");
+    let dropped_message_id = format!("{source_session_id}-drop-after-anchor");
+    append_segmented_session_message_tail(
+        &source_dir,
+        &[
+            test_message(
+                &anchor_message_id,
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "keep this answer",
+            ),
+            test_message(
+                &dropped_message_id,
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "drop this answer",
+            ),
+        ],
+    )
+    .expect("append source transcript");
+
+    let target_dir = fork_segmented_session_directory_from_source(
+        &source_dir,
+        &root,
+        &SegmentedSessionForkRequest {
+            source_archived: false,
+            source_project_tag: "Project Alpha".to_string(),
+            source_session_id: source_session_id.clone(),
+            target_project_tag: "Project Alpha".to_string(),
+            target_session_id: target_session_id.clone(),
+            target_created_date: "2026-06-07".to_string(),
+            target_created_at: "2026-06-07T10:00:00Z".to_string(),
+            target_title: "Alpha Fork".to_string(),
+            target_title_source: "user".to_string(),
+            source_anchor_message_id: Some(anchor_message_id.clone()),
+        },
+    )
+    .expect("fork segmented session");
+
+    let target_metadata = read_session_metadata(&target_dir).expect("read target metadata");
+    let target_text = target_metadata
+        .segments
+        .iter()
+        .map(|segment| {
+            fs::read_to_string(target_dir.join(&segment.file)).expect("read target segment")
+        })
+        .collect::<String>();
+    assert!(
+        target_text.contains(&anchor_message_id.replace(&source_session_id, &target_session_id))
+    );
+    assert!(!target_text.contains(&source_session_id));
+    assert!(
+        !target_text.contains(&dropped_message_id.replace(&source_session_id, &target_session_id))
+    );
+    assert_eq!(target_metadata.session_id, target_session_id);
 }
