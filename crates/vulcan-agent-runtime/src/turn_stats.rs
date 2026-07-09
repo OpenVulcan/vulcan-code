@@ -49,30 +49,40 @@ pub fn build_session_turn_stats_from_state_with_segments(
         .rposition(record_closes_parent_turn_boundary)
         .map(|index| index + 1)
         .unwrap_or(0);
-    let start_index = records[boundary_index..=closing_index]
+    let default_start_index = records[boundary_index..=closing_index]
         .iter()
         .position(record_starts_user_turn)
         .map(|offset| boundary_index + offset)
         .unwrap_or(boundary_index);
+    let start_index = if turn_kind == SessionTurnStatsKind::ContextCompaction {
+        context_compaction_turn_start_index(records, closing_index).unwrap_or(default_start_index)
+    } else {
+        default_start_index
+    };
     let turn_records = &records[start_index..=closing_index];
     if turn_records.is_empty() {
         return None;
     }
-    let turn_start_user_record = turn_records
-        .iter()
-        .find(|record| record_starts_user_turn(record));
-    let visible_user_record_count_before_turn = records[..start_index]
-        .iter()
-        .filter(|record| record_starts_user_turn(record))
-        .count();
-    let turn_start_message_index = match turn_start_user_record {
-        Some(user_record) => canonical_turn_start_message_index(
-            conversation_state,
-            visible_user_record_count_before_turn,
-            user_record,
-        )
-        .unwrap_or(conversation_state.messages.len()),
-        None => fallback_turn_start_message_index_without_user_record(conversation_state),
+    let include_assistant_response_usage = turn_kind == SessionTurnStatsKind::UserTurn;
+    let turn_start_message_index = if include_assistant_response_usage {
+        let turn_start_user_record = turn_records
+            .iter()
+            .find(|record| record_starts_user_turn(record));
+        let visible_user_record_count_before_turn = records[..start_index]
+            .iter()
+            .filter(|record| record_starts_user_turn(record))
+            .count();
+        match turn_start_user_record {
+            Some(user_record) => canonical_turn_start_message_index(
+                conversation_state,
+                visible_user_record_count_before_turn,
+                user_record,
+            )
+            .unwrap_or(conversation_state.messages.len()),
+            None => fallback_turn_start_message_index_without_user_record(conversation_state),
+        }
+    } else {
+        conversation_state.messages.len()
     };
     let turn_messages = &conversation_state.messages[turn_start_message_index..];
 
@@ -93,7 +103,9 @@ pub fn build_session_turn_stats_from_state_with_segments(
         output_tokens_per_second: None,
     };
 
-    stats.tool_call_count = count_turn_tool_calls_from_records(turn_records);
+    if turn_kind == SessionTurnStatsKind::UserTurn {
+        stats.tool_call_count = count_turn_tool_calls_from_records(turn_records);
+    }
 
     let mut assistant_segment = SessionTurnUsageSegment {
         kind: SessionTurnUsageSegmentKind::AssistantResponse,
@@ -200,7 +212,9 @@ pub fn build_session_turn_stats_from_state_with_segments(
         stats.merge_usage_segment_group(&assistant_segment);
         stats.usage_segments.push(assistant_segment);
     }
-    append_wait_agent_host_usage_segments(turn_records, &mut explicit_usage_segments);
+    if turn_kind == SessionTurnStatsKind::UserTurn {
+        append_wait_agent_host_usage_segments(turn_records, &mut explicit_usage_segments);
+    }
     for segment in explicit_usage_segments.drain(..) {
         merge_explicit_usage_segment_into_turn_stats(&mut stats, &segment);
         stats.usage_segments.push(segment);
@@ -358,6 +372,31 @@ fn record_closes_parent_turn_boundary(record: &SessionConversationRecord) -> boo
         SessionMessageRecordKind::TurnStats => !record_is_subagent_feedback_turn_stats(record),
         _ => false,
     }
+}
+
+/// Returns the first record that belongs to the same context-compaction display section as the closing record.
+/// 返回与闭合记录属于同一上下文压缩显示分段的第一条记录。
+fn context_compaction_turn_start_index(
+    records: &[SessionConversationRecord],
+    closing_index: usize,
+) -> Option<usize> {
+    let closing_section_id = context_compaction_section_id(records.get(closing_index)?)?;
+    records[..=closing_index]
+        .iter()
+        .position(|record| context_compaction_section_id(record) == Some(closing_section_id))
+        .or(Some(closing_index))
+}
+
+/// Reads the stable context-compaction section id from one transcript record.
+/// 从单条转录记录读取稳定的上下文压缩分段标识。
+fn context_compaction_section_id(record: &SessionConversationRecord) -> Option<&str> {
+    record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("context_compaction_section_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 /// Returns whether one turn-statistics record is only child-agent feedback accounting.

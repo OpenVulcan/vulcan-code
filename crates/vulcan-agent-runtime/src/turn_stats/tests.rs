@@ -66,6 +66,31 @@ fn turn_stats_record(id: &str, created_at: &str) -> SessionConversationRecord {
     }
 }
 
+/// Builds one visible context-compaction status record with stable section metadata.
+/// 构建一条带稳定分段元数据的可见上下文压缩状态记录。
+fn context_compaction_record(
+    id: &str,
+    section_id: &str,
+    role: &str,
+    created_at: &str,
+) -> SessionConversationRecord {
+    SessionConversationRecord {
+        id: id.to_string(),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::CompactionStatus,
+        visible: true,
+        title: format!("context_compaction.{role}"),
+        body: String::new(),
+        metadata: Some(json!({
+            "context_compaction_status": true,
+            "context_compaction_section_id": section_id,
+            "context_compaction_role": role,
+            "context_compaction_state": "completed",
+        })),
+        created_at: created_at.to_string(),
+    }
+}
+
 /// Builds one visible tool-result record with structured host metadata.
 /// 构建一条带结构化宿主元数据的可见工具结果记录。
 fn tool_result_record(id: &str, created_at: &str, metadata: Value) -> SessionConversationRecord {
@@ -1060,4 +1085,77 @@ fn context_compaction_turn_stats_can_be_built_from_explicit_segment_only() {
         SessionTurnUsageGroupKind::ContextCompaction
     );
     assert_eq!(stats.usage_groups[0].cache_creation_input_tokens, Some(10));
+}
+
+/// Verifies standalone manual compaction stats do not inherit the previous assistant response.
+/// 验证独立手动压缩统计不会继承上一轮助手响应消耗。
+#[test]
+fn context_compaction_turn_stats_ignore_previous_assistant_usage() {
+    let closing_record_id = "compaction-end";
+    let conversation_state = SessionConversationState {
+        messages: vec![
+            user_message("session-1-protocol-user-1000", "上一轮任务"),
+            assistant_message(
+                "session-1-protocol-assistant-1001",
+                ProviderUsageSnapshot {
+                    input_tokens: Some(40),
+                    output_tokens: Some(12),
+                    reasoning_tokens: Some(3),
+                    total_tokens: Some(55),
+                    cached_input_tokens: Some(16),
+                    ..ProviderUsageSnapshot::default()
+                },
+                false,
+            ),
+        ],
+        records: vec![
+            user_record("previous-user", "1000", "上一轮任务"),
+            turn_stats_record("previous-stats", "2000"),
+            context_compaction_record("compaction-start", "section-1", "start", "3000"),
+            context_compaction_record(closing_record_id, "section-1", "end", "3040"),
+        ],
+        continuation: Default::default(),
+    };
+    let compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::ContextCompaction,
+        1,
+        Some(&ProviderUsageSnapshot {
+            input_tokens: Some(20),
+            output_tokens: Some(4),
+            reasoning_tokens: Some(2),
+            total_tokens: Some(26),
+            cached_input_tokens: Some(5),
+            ..ProviderUsageSnapshot::default()
+        }),
+    );
+
+    let stats = build_session_turn_stats_from_state_with_segments(
+        &conversation_state,
+        closing_record_id,
+        SessionTurnStatsStatus::Completed,
+        None,
+        SessionTurnStatsKind::ContextCompaction,
+        vec![compaction_segment],
+    )
+    .expect("context-compaction stats should be built");
+
+    assert_eq!(stats.turn_kind, SessionTurnStatsKind::ContextCompaction);
+    assert_eq!(stats.provider_call_count, 1);
+    assert_eq!(stats.tool_call_count, 0);
+    assert_eq!(stats.input_tokens, 20);
+    assert_eq!(stats.output_tokens, 4);
+    assert_eq!(stats.reasoning_tokens, 2);
+    assert_eq!(stats.total_tokens, 26);
+    assert_eq!(stats.cached_input_tokens, Some(5));
+    assert_eq!(stats.duration_ms, Some(40));
+    assert_eq!(stats.usage_segments.len(), 1);
+    assert_eq!(
+        stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::ContextCompaction
+    );
+    assert_eq!(stats.usage_groups.len(), 1);
+    assert_eq!(
+        stats.usage_groups[0].kind,
+        SessionTurnUsageGroupKind::ContextCompaction
+    );
 }
