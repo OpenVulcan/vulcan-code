@@ -133,6 +133,37 @@
   color: var(--muted-foreground);
 }
 
+.tool-presentation-card.markdown-tool {
+  width: min(100%, 860px);
+}
+
+.markdown-tool-icon {
+  color: color-mix(in oklch, var(--primary) 78%, var(--foreground));
+}
+
+.markdown-tool-block {
+  max-width: 100%;
+}
+
+.markdown-tool-block .markdown-message .markdown-code-block {
+  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.markdown-tool-block .markdown-code-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.markdown-tool-empty {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .terminal-output-view {
   color: var(--muted-foreground);
 }

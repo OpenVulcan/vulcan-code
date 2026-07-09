@@ -10,6 +10,10 @@ import {
   resolveFileChangePresentation,
 } from "./tool-presentations/file-change-presentation";
 import {
+  hydrateMarkdownToolPresentation,
+  resolveMarkdownToolPresentation,
+} from "./tool-presentations/markdown-output-presentation";
+import {
   commandPresentationStatusLabel,
   hydrateCommandExecutionPresentation,
   resolveCommandExecutionPresentation,
@@ -32,6 +36,8 @@ export type {
   FileChangeFilePresentation,
   FileChangeOperation,
   FileChangePresentation,
+  MarkdownToolPresentation,
+  MarkdownToolPresentationIcon,
   SubagentOrchestrationAgent,
   SubagentOrchestrationPresentation,
   SubagentUsageSummary,
@@ -43,6 +49,7 @@ export {
   askQuestionStatusLabel,
   commandPresentationStatusLabel,
   fileChangeStatusLabel,
+  hydrateMarkdownToolPresentation,
   hydrateSubagentOrchestrationPresentation,
   hydrateAskQuestionPresentation,
   hydrateCommandExecutionPresentation,
@@ -59,5 +66,6 @@ export function resolveToolPresentation(
   return resolveSubagentOrchestrationPresentation(blocks, displayState, detailRef)
     ?? resolveAskQuestionPresentation(blocks, displayState, detailRef)
     ?? resolveFileChangePresentation(blocks, displayState, options)
+    ?? resolveMarkdownToolPresentation(blocks, displayState, detailRef)
     ?? resolveCommandExecutionPresentation(blocks, displayState, detailRef, options);
 }

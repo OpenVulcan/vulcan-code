@@ -827,6 +827,14 @@ export type TranslationKey =
   | "toolPresentation.file.modify.completed"
   | "toolPresentation.file.delete.completed"
   | "toolPresentation.file.mixed.completed"
+  | "toolPresentation.markdownOutput.running"
+  | "toolPresentation.markdownOutput.failed"
+  | "toolPresentation.markdownOutput.stopped"
+  | "toolPresentation.markdownOutput.completed"
+  | "toolPresentation.fileList.title"
+  | "toolPresentation.codekit.astTree.title"
+  | "toolPresentation.codekit.astDetail.title"
+  | "toolPresentation.codekit.rg.title"
   | "markdown.wrap.enable"
   | "markdown.wrap.disable"
   | "markdown.copyCode"
@@ -1969,14 +1977,22 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.modify.failed": "编辑失败",
     "toolPresentation.file.delete.failed": "删除失败",
     "toolPresentation.file.mixed.failed": "变更失败",
-    "toolPresentation.file.create.preview": "将写入",
-    "toolPresentation.file.modify.preview": "将编辑",
-    "toolPresentation.file.delete.preview": "将删除",
-    "toolPresentation.file.mixed.preview": "将变更",
+    "toolPresentation.file.create.preview": "预览写入",
+    "toolPresentation.file.modify.preview": "预览编辑",
+    "toolPresentation.file.delete.preview": "预览删除",
+    "toolPresentation.file.mixed.preview": "预览变更",
     "toolPresentation.file.create.completed": "已写入",
     "toolPresentation.file.modify.completed": "已编辑",
     "toolPresentation.file.delete.completed": "已删除",
     "toolPresentation.file.mixed.completed": "已变更",
+    "toolPresentation.markdownOutput.running": "查询中",
+    "toolPresentation.markdownOutput.failed": "查询失败",
+    "toolPresentation.markdownOutput.stopped": "已停止",
+    "toolPresentation.markdownOutput.completed": "已查询",
+    "toolPresentation.fileList.title": "查询文件列表",
+    "toolPresentation.codekit.astTree.title": "列出 AST 树",
+    "toolPresentation.codekit.astDetail.title": "查看 AST 详情",
+    "toolPresentation.codekit.rg.title": "RG增强探索",
     "markdown.wrap.enable": "开启自动换行",
     "markdown.wrap.disable": "关闭自动换行",
     "markdown.copyCode": "复制代码",
@@ -3116,14 +3132,22 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.file.modify.failed": "Edit failed",
     "toolPresentation.file.delete.failed": "Delete failed",
     "toolPresentation.file.mixed.failed": "Change failed",
-    "toolPresentation.file.create.preview": "Will write",
-    "toolPresentation.file.modify.preview": "Will edit",
-    "toolPresentation.file.delete.preview": "Will delete",
-    "toolPresentation.file.mixed.preview": "Will change",
+    "toolPresentation.file.create.preview": "Preview write",
+    "toolPresentation.file.modify.preview": "Preview edit",
+    "toolPresentation.file.delete.preview": "Preview delete",
+    "toolPresentation.file.mixed.preview": "Preview change",
     "toolPresentation.file.create.completed": "Written",
     "toolPresentation.file.modify.completed": "Edited",
     "toolPresentation.file.delete.completed": "Deleted",
     "toolPresentation.file.mixed.completed": "Changed",
+    "toolPresentation.markdownOutput.running": "Querying",
+    "toolPresentation.markdownOutput.failed": "Query failed",
+    "toolPresentation.markdownOutput.stopped": "Stopped",
+    "toolPresentation.markdownOutput.completed": "Queried",
+    "toolPresentation.fileList.title": "List files",
+    "toolPresentation.codekit.astTree.title": "List AST Tree",
+    "toolPresentation.codekit.astDetail.title": "View AST Details",
+    "toolPresentation.codekit.rg.title": "RG Enhanced Search",
     "markdown.wrap.enable": "Enable line wrap",
     "markdown.wrap.disable": "Disable line wrap",
     "markdown.copyCode": "Copy code",

@@ -1,6 +1,7 @@
 import type { ConversationDetailRef } from "@/components/conversation/conversation-detail";
 import type { TerminalVisualState } from "@/components/conversation/conversation-terminal-model";
 import type { FileTypeIconModel } from "@/components/conversation/conversation-file-type-icon";
+import type { TranslationKey } from "@/i18n";
 import type { DiffFile } from "@/diff/types";
 import type { CommandSessionSummary } from "@/types";
 
@@ -165,6 +166,39 @@ export interface FileChangeFilePresentation {
   // Whether this file has meaningful expandable rows.
   // 当前文件是否有有意义的可展开行。
   expandable: boolean;
+}
+
+// MarkdownToolPresentationIcon names the visual icon slot for Markdown-output tools.
+// MarkdownToolPresentationIcon 命名 Markdown 输出工具使用的视觉图标槽位。
+export type MarkdownToolPresentationIcon = "folder_tree" | "ast_tree" | "ast_detail" | "search";
+
+// MarkdownToolPresentation describes raw Markdown/text output produced by exact tool ids.
+// MarkdownToolPresentation 描述由明确工具标识产生的原始 Markdown/文本输出。
+export interface MarkdownToolPresentation {
+  // Discriminator for Markdown-output presentation cards.
+  // Markdown 输出展示卡片的判别字段。
+  kind: "markdown_tool_output";
+  // Stable id used for expansion state across virtualized remounts.
+  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  id: string;
+  // Exact tool id that selected this presentation adapter.
+  // 选择该展示适配器的精确工具标识。
+  toolId: string;
+  // Current compact display state.
+  // 当前紧凑展示状态。
+  state: ToolPresentationDisplayState;
+  // Hidden detail reference used to hydrate the full Markdown output.
+  // 用于补全完整 Markdown 输出的隐藏详情引用。
+  detailRef?: ConversationDetailRef;
+  // User-visible card title translation key.
+  // 用户可见卡片标题的翻译键。
+  titleKey: TranslationKey;
+  // Icon slot used by the shared card renderer.
+  // 共享卡片渲染器使用的图标槽位。
+  icon: MarkdownToolPresentationIcon;
+  // Markdown output shown in the expanded card.
+  // 展开卡片中展示的 Markdown 输出。
+  markdown: string;
 }
 
 // FileChangeDiffRow describes one rendered line inside a file change panel.
@@ -346,4 +380,4 @@ export interface SubagentUsageSummary {
 
 // ToolPresentation is the union of all recognized custom tool displays.
 // ToolPresentation 是所有已识别自定义工具展示的联合类型。
-export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | AskQuestionPresentation | SubagentOrchestrationPresentation;
+export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | MarkdownToolPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation;

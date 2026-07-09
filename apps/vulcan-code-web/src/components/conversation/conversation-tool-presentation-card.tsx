@@ -3,8 +3,12 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  Code2,
+  FolderTree,
+  GitBranch,
   MessageCircleQuestionMark,
   Pencil,
+  Search,
   TerminalSquare,
   Trash2,
 } from "lucide-react";
@@ -14,6 +18,7 @@ import type {
 } from "@/components/conversation/conversation-detail";
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
+import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
@@ -24,6 +29,7 @@ import {
 import {
   hydrateAskQuestionPresentation,
   hydrateCommandExecutionPresentation,
+  hydrateMarkdownToolPresentation,
   hydrateSubagentOrchestrationPresentation,
   type AskQuestionPresentation,
   type AskQuestionPresentationItem,
@@ -31,6 +37,8 @@ import {
   type FileChangeFilePresentation,
   type FileChangeOperation,
   type FileChangePresentation,
+  type MarkdownToolPresentation,
+  type MarkdownToolPresentationIcon,
   type SubagentOrchestrationAgent,
   type SubagentOrchestrationPresentation,
   type SubagentUsageSummary,
@@ -79,6 +87,16 @@ export function ToolPresentationCard(props: {
       />
     );
   }
+  if (props.presentation.kind === "markdown_tool_output") {
+    return (
+      <MarkdownToolPresentationCard
+        expanded={props.expanded}
+        presentation={props.presentation}
+        onExpandedChange={props.onExpandedChange}
+        onLoadToolDetail={props.onLoadToolDetail}
+      />
+    );
+  }
   if (props.presentation.kind === "ask_question") {
     return (
       <AskQuestionPresentationCard
@@ -110,9 +128,172 @@ const commandPresentationDetailCache = new Map<string, CommandExecutionPresentat
 // askQuestionPresentationDetailCache 避免虚拟滚动重挂后重复请求已完成 ask 答案。
 const askQuestionPresentationDetailCache = new Map<string, AskQuestionPresentation>();
 
+// markdownToolPresentationDetailCache avoids refetching full Markdown-output detail after remounts.
+// markdownToolPresentationDetailCache 避免重挂后重复请求完整 Markdown 输出详情。
+const markdownToolPresentationDetailCache = new Map<string, MarkdownToolPresentation>();
+
 // subagentOrchestrationPresentationDetailCache avoids refetching hidden subagent status details.
 // subagentOrchestrationPresentationDetailCache 避免重复请求隐藏子代理状态详情。
 const subagentOrchestrationPresentationDetailCache = new Map<string, SubagentOrchestrationPresentation>();
+
+// MarkdownToolPresentationCard renders exact-tool Markdown output.
+// MarkdownToolPresentationCard 渲染精确工具标识对应的 Markdown 输出。
+function MarkdownToolPresentationCard(props: {
+  // Markdown-output presentation model.
+  // Markdown 输出展示模型。
+  presentation: MarkdownToolPresentation;
+  // Whether this Markdown-output card is expanded.
+  // 当前 Markdown 输出卡片是否展开。
+  expanded: boolean;
+  // Updates the surface-level expansion state.
+  // 更新界面级展开状态。
+  onExpandedChange: (presentationId: string, expanded: boolean) => void;
+  // Loads one hidden tool-detail record for full Markdown output.
+  // 加载单条隐藏工具详情记录用于完整 Markdown 输出。
+  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+}) {
+  // t resolves stable WebUI copy keys for the active language.
+  // t 根据当前语言解析稳定的 WebUI 文案键。
+  const { t } = useI18n();
+  const {
+    expanded,
+    onExpandedChange,
+    onLoadToolDetail,
+    presentation,
+  } = props;
+  const detailCacheKey = markdownToolPresentationDetailCacheKey(presentation);
+  const [hydratedPresentation, setHydratedPresentation] = React.useState<MarkdownToolPresentation>(
+    () => detailCacheKey ? markdownToolPresentationDetailCache.get(detailCacheKey) ?? presentation : presentation,
+  );
+  const [loadingDetail, setLoadingDetail] = React.useState(false);
+  React.useEffect(() => {
+    const cached = detailCacheKey ? markdownToolPresentationDetailCache.get(detailCacheKey) : undefined;
+    setHydratedPresentation(cached ?? presentation);
+  }, [detailCacheKey, presentation]);
+  React.useEffect(() => {
+    if (!expanded || !presentation.detailRef || !detailCacheKey || markdownToolPresentationDetailCache.has(detailCacheKey)) {
+      return;
+    }
+    let cancelled = false;
+    setLoadingDetail(true);
+    void onLoadToolDetail(presentation.detailRef)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const nextPresentation = hydrateMarkdownToolPresentation(presentation, payload);
+        markdownToolPresentationDetailCache.set(detailCacheKey, nextPresentation);
+        setHydratedPresentation(nextPresentation);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHydratedPresentation(presentation);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingDetail(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailCacheKey, expanded, onLoadToolDetail, presentation]);
+  const markdown = hydratedPresentation.markdown.trim();
+  const markdownBlock = markdown ? markdownToolCodeBlock(markdown) : "";
+  const title = t(hydratedPresentation.titleKey);
+  const handleToggle = React.useCallback(() => {
+    dispatchConversationManualViewportInteraction();
+    onExpandedChange(presentation.id, !expanded);
+  }, [expanded, onExpandedChange, presentation.id]);
+  return (
+    <div className={cn("tool-presentation-card markdown-tool", expanded && "expanded")}>
+      <button
+        aria-expanded={expanded}
+        className="tool-presentation-summary markdown-tool-summary"
+        onClick={handleToggle}
+        title={title}
+        type="button"
+      >
+        <MarkdownToolIcon className="markdown-tool-icon" icon={hydratedPresentation.icon} size={15} />
+        <span className="tool-presentation-state">{markdownToolStatusLabel(hydratedPresentation.state, t)}</span>
+        <span className="tool-presentation-command">{title}</span>
+        {expanded ? (
+          <ChevronDown className="tool-presentation-toggle" size={15} />
+        ) : (
+          <ChevronRight className="tool-presentation-toggle" size={15} />
+        )}
+      </button>
+      <ConversationMeasuredCollapse collapseId={`markdown-tool:${presentation.id}`} expanded={expanded}>
+        <div className="markdown-tool-block">
+          {markdownBlock ? (
+            <MarkdownMessage content={markdownBlock} eager />
+          ) : (
+            <div className="markdown-tool-empty">{loadingDetail ? t("toolPresentation.output.loading") : t("toolPresentation.output.empty")}</div>
+          )}
+        </div>
+      </ConversationMeasuredCollapse>
+    </div>
+  );
+}
+
+// markdownToolCodeBlock wraps raw tool output in a Markdown code fence.
+// markdownToolCodeBlock 将原始工具输出包裹为 Markdown 代码块。
+function markdownToolCodeBlock(markdown: string): string {
+  return `\`\`\`markdown\n${markdown}\n\`\`\``;
+}
+
+// MarkdownToolIcon renders the icon selected by the exact tool-id adapter.
+// MarkdownToolIcon 渲染精确工具标识适配器选择的图标。
+function MarkdownToolIcon(props: {
+  // Icon slot selected by the presentation adapter.
+  // 展示适配器选择的图标槽位。
+  icon: MarkdownToolPresentationIcon;
+  // CSS class attached to the icon.
+  // 附加到图标上的 CSS 类名。
+  className?: string;
+  // Icon size in pixels.
+  // 图标像素尺寸。
+  size: number;
+}) {
+  if (props.icon === "ast_tree") {
+    return <GitBranch className={props.className} size={props.size} />;
+  }
+  if (props.icon === "ast_detail") {
+    return <Code2 className={props.className} size={props.size} />;
+  }
+  if (props.icon === "search") {
+    return <Search className={props.className} size={props.size} />;
+  }
+  return <FolderTree className={props.className} size={props.size} />;
+}
+
+// markdownToolStatusLabel returns the localized lifecycle label for Markdown-output cards.
+// markdownToolStatusLabel 返回 Markdown 输出卡片的本地化生命周期文案。
+function markdownToolStatusLabel(
+  state: ToolPresentationDisplayState,
+  t: (key: TranslationKey) => string,
+): string {
+  if (state === "running") return t("toolPresentation.markdownOutput.running");
+  if (state === "failed") return t("toolPresentation.markdownOutput.failed");
+  if (state === "stopped") return t("toolPresentation.markdownOutput.stopped");
+  return t("toolPresentation.markdownOutput.completed");
+}
+
+// markdownToolPresentationDetailCacheKey returns a cache key for one Markdown-output detail reference.
+// markdownToolPresentationDetailCacheKey 返回单条 Markdown 输出详情引用的缓存键。
+function markdownToolPresentationDetailCacheKey(presentation: MarkdownToolPresentation): string | null {
+  if (!presentation.detailRef) {
+    return null;
+  }
+  return [
+    presentation.detailRef.sessionId,
+    presentation.detailRef.recordId ?? "",
+    presentation.detailRef.toolCallId ?? "",
+    presentation.detailRef.seq ?? "",
+    presentation.detailRef.messageIndex ?? "",
+  ].join(":");
+}
 
 // SubagentOrchestrationPresentationCard renders a compact inline subagent dispatch record.
 // SubagentOrchestrationPresentationCard 渲染紧凑的内联子代理调度记录。
