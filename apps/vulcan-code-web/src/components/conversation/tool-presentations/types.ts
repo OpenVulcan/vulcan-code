@@ -170,7 +170,7 @@ export interface FileChangeFilePresentation {
 
 // MarkdownToolPresentationIcon names the visual icon slot for Markdown-output tools.
 // MarkdownToolPresentationIcon 命名 Markdown 输出工具使用的视觉图标槽位。
-export type MarkdownToolPresentationIcon = "folder_tree" | "ast_tree" | "ast_detail" | "search";
+export type MarkdownToolPresentationIcon = "folder_tree" | "file_text" | "ast_tree" | "ast_detail" | "search";
 
 // MarkdownToolPresentation describes raw Markdown/text output produced by exact tool ids.
 // MarkdownToolPresentation 描述由明确工具标识产生的原始 Markdown/文本输出。

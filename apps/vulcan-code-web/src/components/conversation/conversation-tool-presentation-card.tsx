@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Code2,
+  FileText,
   FolderTree,
   GitBranch,
   MessageCircleQuestionMark,
@@ -258,6 +259,9 @@ function MarkdownToolIcon(props: {
 }) {
   if (props.icon === "ast_tree") {
     return <GitBranch className={props.className} size={props.size} />;
+  }
+  if (props.icon === "file_text") {
+    return <FileText className={props.className} size={props.size} />;
   }
   if (props.icon === "ast_detail") {
     return <Code2 className={props.className} size={props.size} />;

@@ -26,6 +26,11 @@ const MARKDOWN_OUTPUT_TOOL_CONFIGS = new Map<string, MarkdownOutputToolConfig>([
     idPrefix: "file-list",
     titleKey: "toolPresentation.fileList.title",
   }],
+  ["vulcan_file_read", {
+    icon: "file_text",
+    idPrefix: "file-read",
+    titleKey: "toolPresentation.fileRead.title",
+  }],
   ["vulcan_codekit_ast_tree", {
     icon: "ast_tree",
     idPrefix: "codekit-ast-tree",
@@ -40,6 +45,11 @@ const MARKDOWN_OUTPUT_TOOL_CONFIGS = new Map<string, MarkdownOutputToolConfig>([
     icon: "search",
     idPrefix: "codekit-rg",
     titleKey: "toolPresentation.codekit.rg.title",
+  }],
+  ["vulcan_codekit_node_source", {
+    icon: "ast_detail",
+    idPrefix: "codekit-node-source",
+    titleKey: "toolPresentation.codekit.nodeSource.title",
   }],
 ]);
 

@@ -832,9 +832,11 @@ export type TranslationKey =
   | "toolPresentation.markdownOutput.stopped"
   | "toolPresentation.markdownOutput.completed"
   | "toolPresentation.fileList.title"
+  | "toolPresentation.fileRead.title"
   | "toolPresentation.codekit.astTree.title"
   | "toolPresentation.codekit.astDetail.title"
   | "toolPresentation.codekit.rg.title"
+  | "toolPresentation.codekit.nodeSource.title"
   | "markdown.wrap.enable"
   | "markdown.wrap.disable"
   | "markdown.copyCode"
@@ -1990,9 +1992,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.markdownOutput.stopped": "已停止",
     "toolPresentation.markdownOutput.completed": "已查询",
     "toolPresentation.fileList.title": "查询文件列表",
+    "toolPresentation.fileRead.title": "读取文件",
     "toolPresentation.codekit.astTree.title": "列出 AST 树",
     "toolPresentation.codekit.astDetail.title": "查看 AST 详情",
     "toolPresentation.codekit.rg.title": "RG增强探索",
+    "toolPresentation.codekit.nodeSource.title": "获取节点源码",
     "markdown.wrap.enable": "开启自动换行",
     "markdown.wrap.disable": "关闭自动换行",
     "markdown.copyCode": "复制代码",
@@ -3145,9 +3149,11 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.markdownOutput.stopped": "Stopped",
     "toolPresentation.markdownOutput.completed": "Queried",
     "toolPresentation.fileList.title": "List files",
+    "toolPresentation.fileRead.title": "Read file",
     "toolPresentation.codekit.astTree.title": "List AST Tree",
     "toolPresentation.codekit.astDetail.title": "View AST Details",
     "toolPresentation.codekit.rg.title": "RG Enhanced Search",
+    "toolPresentation.codekit.nodeSource.title": "Get node source",
     "markdown.wrap.enable": "Enable line wrap",
     "markdown.wrap.disable": "Disable line wrap",
     "markdown.copyCode": "Copy code",
