@@ -105,9 +105,10 @@ pub(crate) fn retained_submission_snapshot_is_usable(
         Some(session_id) => {
             workspace_snapshot_contains_regular_session(workspace_snapshot, session_id)
         }
-        None => project_id.is_some_and(|project_id| {
-            workspace_snapshot_contains_active_project(workspace_snapshot, project_id)
-        }),
+        None => project_id.map_or_else(
+            || !workspace_snapshot.task_projects.is_empty(),
+            |project_id| workspace_snapshot_contains_active_project(workspace_snapshot, project_id),
+        ),
     }
 }
 

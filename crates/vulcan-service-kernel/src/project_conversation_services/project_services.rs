@@ -276,10 +276,10 @@ pub(crate) async fn service_archive_project_conversations(
     state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let (controller_runtime, project, project_sessions) =
+    let (controller_runtime, _project, project_sessions) =
         controller_runtime_and_active_project_from_state(&state, &project_id, "归档")?;
 
-    if project.session_ids.is_empty() {
+    if project_sessions.is_empty() {
         return retained_workbench_snapshot_from_state(&state);
     }
 
@@ -289,7 +289,7 @@ pub(crate) async fn service_archive_project_conversations(
         &project_sessions,
     )
     .await?;
-    archive_project_sessions_in_retained_state(&state, &project_id, &project_sessions, false)
+    archive_project_sessions_in_retained_state(&state, &project_id, &project_sessions)
 }
 
 /// Archives all project conversations, removes the active project row, and refreshes the snapshot.
@@ -300,17 +300,99 @@ pub(crate) async fn service_remove_project(
 ) -> Result<WorkbenchSnapshot, String> {
     let (controller_runtime, project, project_sessions) =
         controller_runtime_and_active_project_from_state(&state, &project_id, "移除")?;
+    let removal_effect = project_removal_default_project_effect(&state, &project_id, &project)?;
 
     vulcan_workspace_store::workspace_store::remove_project_after_archiving_sessions(
-        controller_runtime,
+        controller_runtime.clone(),
         &project_id,
         &project_sessions,
     )
     .await?;
-    if project.session_ids.is_empty() {
-        return remove_empty_project_from_retained_state(&state, &project_id);
+    if removal_effect == ProjectRemovalDefaultProjectEffect::RestoreDefault {
+        vulcan_workspace_store::workspace_store::ensure_default_workspace_project(
+            controller_runtime,
+        )
+        .await?;
     }
-    archive_project_sessions_in_retained_state(&state, &project_id, &project_sessions, true)
+    refresh_workbench_snapshot(state).await
+}
+
+/// Describes whether project removal must restore the default project afterward.
+/// 描述项目移除后是否必须恢复默认项目。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectRemovalDefaultProjectEffect {
+    /// No default-project repair is needed after removal.
+    /// 移除后不需要修复默认项目。
+    None,
+    /// Removing this project leaves no active projects, so the default project must be restored.
+    /// 移除此项目会导致没有活动项目，因此必须恢复默认项目。
+    RestoreDefault,
+}
+
+/// Validates default-project removal policy and returns the needed post-removal repair effect.
+/// 校验默认项目移除策略，并返回移除后需要执行的修复效果。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current retained workspace snapshot.
+/// `state` 持有当前保留的工作区快照。
+/// `project_id` is the active project being removed.
+/// `project_id` 是正在被移除的活动项目。
+/// `project` is the resolved active project summary.
+/// `project` 是已解析的活动项目摘要。
+///
+/// # Returns
+/// 返回值
+/// Returns the default-project repair effect or a user-facing rejection message.
+/// 返回默认项目修复效果，或面向用户的拒绝信息。
+fn project_removal_default_project_effect(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+    project: &TaskProjectSummary,
+) -> Result<ProjectRemovalDefaultProjectEffect, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("工作区快照尚未加载，无法处理项目。"))?;
+    project_removal_default_project_effect_from_snapshot(workspace_snapshot, project_id, project)
+}
+
+/// Computes the default-project repair effect from a concrete workspace snapshot.
+/// 根据具体工作区快照计算默认项目修复效果。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the retained snapshot containing active projects.
+/// `workspace_snapshot` 是包含活动项目的保留快照。
+/// `project_id` is the active project being removed.
+/// `project_id` 是正在被移除的活动项目。
+/// `project` is the resolved active project summary.
+/// `project` 是已解析的活动项目摘要。
+///
+/// # Returns
+/// 返回值
+/// Returns the repair effect or rejects removing the only default project.
+/// 返回修复效果，或拒绝移除唯一默认项目。
+fn project_removal_default_project_effect_from_snapshot(
+    workspace_snapshot: &WorkspaceSnapshot,
+    project_id: &str,
+    project: &TaskProjectSummary,
+) -> Result<ProjectRemovalDefaultProjectEffect, String> {
+    let remaining_active_project_count = workspace_snapshot
+        .task_projects
+        .iter()
+        .filter(|candidate| candidate.id != project_id)
+        .count();
+    if remaining_active_project_count > 0 {
+        return Ok(ProjectRemovalDefaultProjectEffect::None);
+    }
+    if vulcan_workspace_store::workspace_store::is_default_workspace_project(project)? {
+        return Err(String::from("默认项目是当前唯一项目，不能移除。"));
+    }
+    Ok(ProjectRemovalDefaultProjectEffect::RestoreDefault)
 }
 
 /// Returns the controller runtime and one retained active project without reloading the workspace.
@@ -338,18 +420,54 @@ pub(super) fn controller_runtime_and_active_project_from_state(
         .as_ref()
         .ok_or_else(|| String::from("工作区快照尚未加载，无法处理项目。"))?;
     let project = active_project_from_workspace(workspace_snapshot, project_id, action_label)?;
-    let project_sessions = project
-        .session_ids
-        .iter()
-        .filter_map(|session_id| {
-            workspace_snapshot
-                .sessions
-                .iter()
-                .find(|session| session.id == *session_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
+    let project_sessions = active_sessions_for_project_action(workspace_snapshot, &project);
     Ok((controller_runtime, project, project_sessions))
+}
+
+/// Collects active sessions that belong to one project action target.
+/// 收集属于单个项目操作目标的活动会话。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains active session summaries and project membership.
+/// `workspace_snapshot` 包含活动会话摘要与项目成员关系。
+/// `project` is the active project selected by the user action.
+/// `project` 是用户操作选中的活动项目。
+///
+/// # Returns
+/// 返回值
+/// Sessions listed by project membership plus sessions whose own project id points to this project.
+/// 返回项目成员列出的会话，以及自身项目标识指向该项目的会话。
+fn active_sessions_for_project_action(
+    workspace_snapshot: &WorkspaceSnapshot,
+    project: &TaskProjectSummary,
+) -> Vec<SessionSummary> {
+    let mut seen_session_ids = BTreeSet::new();
+    let mut project_sessions = Vec::new();
+
+    for session_id in &project.session_ids {
+        let Some(session) = workspace_snapshot
+            .sessions
+            .iter()
+            .find(|candidate| candidate.id == *session_id)
+        else {
+            continue;
+        };
+        if seen_session_ids.insert(session.id) {
+            project_sessions.push(session.clone());
+        }
+    }
+
+    for session in &workspace_snapshot.sessions {
+        if session_summary_project_id(session) != Some(project.id.as_str()) {
+            continue;
+        }
+        if seen_session_ids.insert(session.id) {
+            project_sessions.push(session.clone());
+        }
+    }
+
+    project_sessions
 }
 
 /// Resolves one active workspace project for a project-level action.
@@ -389,41 +507,12 @@ pub(super) fn retained_workbench_snapshot_from_state(
     Ok(guard.workbench.clone())
 }
 
-/// Removes an empty active project from retained workspace and workbench state.
-/// 从保留的工作区与工作台状态中移除一个空活动项目。
-pub(super) fn remove_empty_project_from_retained_state(
-    state: &SharedServiceBridgeState,
-    project_id: &str,
-) -> Result<WorkbenchSnapshot, String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
-        workspace_snapshot
-            .task_projects
-            .retain(|project| project.id != project_id);
-        workspace_snapshot.expanded_task_projects.remove(project_id);
-    }
-    guard
-        .workbench
-        .projects
-        .retain(|project| project.id != project_id);
-    guard
-        .workbench
-        .expanded_project_ids
-        .retain(|candidate| candidate != project_id);
-    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-    guard.workbench.revision = guard.workbench_generation;
-    Ok(guard.workbench.clone())
-}
-
 /// Moves project sessions between retained active and archived metadata without reloading catalogs.
 /// 在保留内存状态中迁移项目会话到归档元数据，不重新加载目录目录表。
 pub(super) fn archive_project_sessions_in_retained_state(
     state: &SharedServiceBridgeState,
     project_id: &str,
     sessions: &[SessionSummary],
-    remove_project: bool,
 ) -> Result<WorkbenchSnapshot, String> {
     let session_ids = sessions
         .iter()
@@ -473,12 +562,6 @@ pub(super) fn archive_project_sessions_in_retained_state(
             workspace_snapshot.session_run_phases.remove(session_id);
             workspace_snapshot.hydrated_session_ids.remove(session_id);
         }
-        if remove_project {
-            workspace_snapshot
-                .task_projects
-                .retain(|project| project.id != project_id);
-            workspace_snapshot.expanded_task_projects.remove(project_id);
-        }
         if session_ids.contains(&workspace_snapshot.selected_session) {
             workspace_snapshot.selected_session = workspace_snapshot
                 .sessions
@@ -500,31 +583,20 @@ pub(super) fn archive_project_sessions_in_retained_state(
         .workbench
         .archived_conversations
         .retain(|conversation| !conversation_ids.contains(&conversation.id));
-    if remove_project {
-        guard
-            .workbench
-            .projects
-            .retain(|project| project.id != project_id);
-        guard
-            .workbench
-            .expanded_project_ids
-            .retain(|candidate| candidate != project_id);
-    } else {
-        guard.workbench.archived_conversations.extend(
-            archived_sessions
-                .iter()
-                .map(archived_conversation_summary_from_session),
-        );
-        guard
-            .workbench
-            .archived_conversations
-            .sort_by_key(|conversation| {
-                -conversation
-                    .last_updated_at
-                    .parse::<i64>()
-                    .unwrap_or_default()
-            });
-    }
+    guard.workbench.archived_conversations.extend(
+        archived_sessions
+            .iter()
+            .map(archived_conversation_summary_from_session),
+    );
+    guard
+        .workbench
+        .archived_conversations
+        .sort_by_key(|conversation| {
+            -conversation
+                .last_updated_at
+                .parse::<i64>()
+                .unwrap_or_default()
+        });
     if guard
         .workbench
         .selected_conversation_id
@@ -608,6 +680,54 @@ mod tests {
         )
     }
 
+    /// Builds one active session summary for project action tests.
+    /// 为项目操作测试构建单个活动会话摘要。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the stable session identifier.
+    /// `session_id` 是稳定会话标识。
+    /// `project_id` is the optional project id stored on the session.
+    /// `project_id` 是写入会话的可选项目标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A visible idle session with the requested project id.
+    /// 返回带指定项目标识的可见空闲会话。
+    fn session_summary(session_id: SessionId, project_id: Option<String>) -> SessionSummary {
+        SessionSummary::new(
+            session_id,
+            project_id,
+            format!("Session {session_id}"),
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )
+    }
+
+    /// Builds the default workspace project summary used by removal policy tests.
+    /// 构建移除策略测试使用的默认工作区项目摘要。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A project summary whose path matches the canonical default workspace path.
+    /// 返回路径匹配标准默认工作区路径的项目摘要。
+    fn default_project_summary() -> TaskProjectSummary {
+        TaskProjectSummary::new(
+            "default-project",
+            "VulcanProject",
+            vulcan_workspace_store::workspace_store::default_workspace_project_path_text()
+                .expect("test host should expose a home directory"),
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        )
+    }
+
     /// Resolves active projects through the shared workspace project lookup.
     /// 通过共享工作区项目查找解析活动项目。
     #[test]
@@ -641,5 +761,102 @@ mod tests {
             .expect_err("blank project id should be rejected by shared lookup");
 
         assert!(error.contains("未找到要移除的项目"));
+    }
+
+    /// Includes sessions that point to the project even when project membership is stale.
+    /// 即使项目成员表过期，也包含自身指向该项目的会话。
+    #[test]
+    fn active_sessions_for_project_action_includes_session_project_id_matches() {
+        // Project membership contains only one session while another session still stores the same project id.
+        // 项目成员表只包含一个会话，而另一个会话自身仍写着相同项目标识。
+        let listed_session_id = SessionId::new_v4();
+        let inferred_session_id = SessionId::new_v4();
+        let unrelated_session_id = SessionId::new_v4();
+        let mut project = project_summary("project-a", "Project A");
+        project.session_ids.push(listed_session_id);
+        let mut workspace_snapshot = workspace_snapshot_with_projects(vec![project.clone()]);
+        workspace_snapshot.sessions = vec![
+            session_summary(listed_session_id, Some(String::from("project-a"))),
+            session_summary(inferred_session_id, Some(String::from("project-a"))),
+            session_summary(unrelated_session_id, Some(String::from("project-b"))),
+        ];
+
+        // Project actions must archive both owned sessions so deleting the project cannot leave an unlinked active conversation.
+        // 项目操作必须归档两个归属会话，避免删除项目后留下未关联的活动会话。
+        let project_sessions = active_sessions_for_project_action(&workspace_snapshot, &project);
+
+        assert_eq!(
+            project_sessions
+                .iter()
+                .map(|session| session.id)
+                .collect::<Vec<_>>(),
+            vec![listed_session_id, inferred_session_id]
+        );
+    }
+
+    /// Rejects removing the default project when it is the only active project.
+    /// 当默认项目是唯一活动项目时拒绝移除。
+    #[test]
+    fn project_removal_rejects_only_default_project() {
+        // Workspace snapshot containing only the built-in default project.
+        // 仅包含内置默认项目的工作区快照。
+        let default_project = default_project_summary();
+        let workspace_snapshot = workspace_snapshot_with_projects(vec![default_project.clone()]);
+
+        // Removal policy refuses to leave the workspace without any active project.
+        // 移除策略拒绝让工作区进入没有活动项目的状态。
+        let error = project_removal_default_project_effect_from_snapshot(
+            &workspace_snapshot,
+            &default_project.id,
+            &default_project,
+        )
+        .expect_err("the only default project should not be removable");
+
+        assert!(error.contains("默认项目是当前唯一项目"));
+    }
+
+    /// Requests default-project restoration after removing the only non-default project.
+    /// 移除唯一非默认项目后要求恢复默认项目。
+    #[test]
+    fn project_removal_restores_default_after_last_non_default_project() {
+        // Workspace snapshot containing one ordinary active project.
+        // 包含一个普通活动项目的工作区快照。
+        let project = project_summary("project-a", "Project A");
+        let workspace_snapshot = workspace_snapshot_with_projects(vec![project.clone()]);
+
+        // Removal is allowed, but the default project must be restored afterward.
+        // 允许移除，但之后必须恢复默认项目。
+        let effect = project_removal_default_project_effect_from_snapshot(
+            &workspace_snapshot,
+            &project.id,
+            &project,
+        )
+        .expect("ordinary last project removal should be repairable");
+
+        assert_eq!(effect, ProjectRemovalDefaultProjectEffect::RestoreDefault);
+    }
+
+    /// Allows removing the default project when another active project remains.
+    /// 当仍有其他活动项目时允许移除默认项目。
+    #[test]
+    fn project_removal_allows_default_project_when_another_project_remains() {
+        // Workspace snapshot containing the default project and one ordinary project.
+        // 包含默认项目和一个普通项目的工作区快照。
+        let default_project = default_project_summary();
+        let workspace_snapshot = workspace_snapshot_with_projects(vec![
+            default_project.clone(),
+            project_summary("project-a", "Project A"),
+        ]);
+
+        // Another project remains visible, so no default restoration is required.
+        // 仍有另一个项目可见，因此无需恢复默认项目。
+        let effect = project_removal_default_project_effect_from_snapshot(
+            &workspace_snapshot,
+            &default_project.id,
+            &default_project,
+        )
+        .expect("default project removal should be allowed when another project remains");
+
+        assert_eq!(effect, ProjectRemovalDefaultProjectEffect::None);
     }
 }

@@ -698,6 +698,11 @@ fn retained_submission_snapshot_accepts_draft_submission() {
         Some("missing-project"),
         None
     ));
+    assert!(retained_submission_snapshot_is_usable(
+        &workspace_snapshot,
+        None,
+        None
+    ));
 }
 
 /// Verifies retained old-session submissions require only the target session to exist in memory.
@@ -1181,4 +1186,65 @@ fn materialize_prompt_session_ignores_blank_existing_session_project_id() {
     assert_eq!(workspace_path, "");
     assert_eq!(workspace_snapshot.selected_session, session_id);
     assert_eq!(workspace_snapshot.sessions[0].status, SessionState::Running);
+}
+
+/// Verifies new prompt sessions fall back to the first active project when no project id is provided.
+/// 验证新提示词会话在没有传入项目标识时会回退到第一个活动项目。
+#[test]
+fn materialize_prompt_session_uses_first_project_when_project_id_is_missing() {
+    let first_project_id = String::from("project-a");
+    let second_project_id = String::from("project-b");
+    let mut workspace_snapshot = WorkspaceSnapshot {
+        task_projects: vec![
+            TaskProjectSummary::new(
+                first_project_id.clone(),
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            ),
+            TaskProjectSummary::new(
+                second_project_id,
+                "Project B",
+                "D:/project-b",
+                false,
+                1,
+                None,
+                None,
+                Vec::new(),
+            ),
+        ],
+        archived_task_projects: Vec::new(),
+        sessions: Vec::new(),
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: SessionId::nil(),
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    let (session_id, session_title, workspace_path) =
+        materialize_prompt_session(&mut workspace_snapshot, None, None, "首次启动后创建会话")
+            .expect("missing project id should use first active project");
+
+    assert_eq!(session_title, "首次启动后创建会话");
+    assert_eq!(workspace_path, "D:/project-a");
+    assert_eq!(workspace_snapshot.selected_session, session_id);
+    assert_eq!(
+        workspace_snapshot.task_projects[0].session_ids,
+        vec![session_id]
+    );
+    assert_eq!(
+        session_summary_project_id(&workspace_snapshot.sessions[0]),
+        Some(first_project_id.as_str())
+    );
 }

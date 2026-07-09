@@ -130,9 +130,11 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
   // submittedSelectionId captures the sidebar choice that owned this submission.
   // submittedSelectionId 捕获发起本次提交时所属的侧栏选择。
   const submittedSelectionId = selectedConversationId;
+  const fallbackProject = workbenchStateRef.current.projects[0] ?? null;
   const activeProjectId =
     selectedDraftConversation?.projectId
     ?? selectedConversation?.projectId
+    ?? fallbackProject?.id
     ?? null;
   if (!activeProjectId) {
     toast.error(translate("conversationActions.noProjectForSend"));

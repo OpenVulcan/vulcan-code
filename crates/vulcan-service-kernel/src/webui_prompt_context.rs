@@ -229,11 +229,21 @@ pub(crate) fn materialize_prompt_session(
         return Ok((session_id, session_title, workspace_path));
     }
 
-    let project_id = project_id.ok_or_else(|| String::from("新建会话需要提供项目标识。"))?;
+    let project_id = project_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            workspace_snapshot
+                .task_projects
+                .first()
+                .map(|project| project.id.clone())
+        })
+        .ok_or_else(|| String::from("新建会话需要提供项目标识。"))?;
     let project = workspace_snapshot
         .task_projects
         .iter_mut()
-        .find(|candidate| candidate.id == project_id)
+        .find(|candidate| candidate.id == project_id.as_str())
         .ok_or_else(|| format!("未找到项目：{project_id}"))?;
     let session_id = SessionId::new_v4();
     let now = current_unix_millis_text();

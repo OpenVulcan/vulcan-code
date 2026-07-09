@@ -267,10 +267,20 @@ export function WorkbenchLayout(props: {
   // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
   // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
   const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("status");
+  // initialDraftConversationRef computes the first-run draft once for local selection state.
+  // initialDraftConversationRef 为本地选择状态只计算一次首次启动草稿。
+  const initialDraftConversationRef = React.useRef<DraftConversationSelection | null | undefined>(undefined);
+  if (initialDraftConversationRef.current === undefined) {
+    initialDraftConversationRef.current = defaultDraftConversationForEmptyWorkbench(props.workbench);
+  }
+  const initialDraftConversation = initialDraftConversationRef.current;
   // selectedConversationId stores the conversation selected in the sidebar.
   // selectedConversationId 保存侧栏当前选中的会话。
   const [selectedConversationId, setSelectedConversationId] = React.useState<string | null>(
-    props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null,
+    props.workbench.selectedConversationId
+      ?? props.workbench.conversations[0]?.id
+      ?? initialDraftConversation?.id
+      ?? null,
   );
   // selectedConversationIdRef lets async submit completions avoid stealing focus after the user switches sessions.
   // selectedConversationIdRef 让异步提交完成时避免在用户已切换会话后抢回焦点。
@@ -289,7 +299,9 @@ export function WorkbenchLayout(props: {
   const [stopConversationAgents, setStopConversationAgents] = React.useState<StopConversationRunAgentPromptItem[] | null>(null);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
-  const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(null);
+  const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(
+    initialDraftConversation,
+  );
   // draftConversationIdRef keeps the latest draft id without retriggering workbench snapshot hydration.
   // draftConversationIdRef 保存最新草稿标识，避免重新触发工作台快照水合。
   const draftConversationIdRef = React.useRef<string | null>(null);
@@ -887,6 +899,20 @@ export function WorkbenchLayout(props: {
     draftConversationIdRef.current = draftConversation?.id ?? null;
   }, [draftConversation?.id]);
 
+  // Ensure service snapshots with projects but no sessions still have a draft send target.
+  // 确保服务快照存在项目但没有会话时仍有草稿发送目标。
+  React.useEffect(() => {
+    if (draftConversation || selectedConversationId || workbenchState.conversations.length > 0) {
+      return;
+    }
+    const nextDraftConversation = defaultDraftConversationForEmptyWorkbench(workbenchState);
+    if (!nextDraftConversation) {
+      return;
+    }
+    setDraftConversation(nextDraftConversation);
+    setSelectedConversationId(nextDraftConversation.id);
+  }, [draftConversation, selectedConversationId, workbenchState.conversations.length, workbenchState.projects]);
+
   React.useEffect(() => {
     if (!acceptServiceWorkbenchSnapshot(props.workbench)) {
       return;
@@ -1135,6 +1161,37 @@ export function WorkbenchLayout(props: {
       />
     </div>
   );
+}
+
+// defaultDraftConversationForEmptyWorkbench creates a local draft when projects exist but sessions do not.
+// defaultDraftConversationForEmptyWorkbench 在存在项目但没有会话时创建本地草稿。
+function defaultDraftConversationForEmptyWorkbench(
+  // Workbench snapshot used to choose the draft owner project.
+  // 用于选择草稿归属项目的工作台快照。
+  workbench: WorkbenchSnapshot,
+): DraftConversationSelection | null {
+  if (workbench.conversations.length > 0) {
+    return null;
+  }
+  const project = workbench.projects[0] ?? null;
+  if (!project) {
+    return null;
+  }
+  return draftConversationForProject(project);
+}
+
+// draftConversationForProject creates the local route used before the first persisted send.
+// draftConversationForProject 创建首次持久化发送前使用的本地路由。
+function draftConversationForProject(
+  // Project that owns the future persisted conversation.
+  // 拥有未来持久化会话的项目。
+  project: ProjectSummary,
+): DraftConversationSelection {
+  return {
+    id: `draft-${project.id}-${Date.now()}`,
+    projectId: project.id,
+    projectName: project.name,
+  };
 }
 
 // formatWorkbenchTranslation replaces named placeholders in localized workbench messages.
