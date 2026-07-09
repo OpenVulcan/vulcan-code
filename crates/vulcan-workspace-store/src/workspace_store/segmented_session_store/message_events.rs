@@ -407,6 +407,96 @@ pub(in crate::workspace_store) fn truncate_segmented_session_before_message(
     write_metadata(session_dir, &metadata)
 }
 
+/// Physically truncates a segmented session after one persisted message without adding display events.
+/// 在不追加展示事件的情况下，将分段会话物理截断到某条已持久化消息之后。
+pub(in crate::workspace_store) fn truncate_segmented_session_after_message(
+    session_dir: &Path,
+    message_id: &str,
+    retained_messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    // Forking to a visible anchor should preserve that anchor and drop only the future tail.
+    // 分叉到可见锚点时应保留该锚点，只丢弃其后的未来尾部。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
+    let mut metadata = read_session_metadata(session_dir)?;
+    let mut retained_segment_lines: Vec<(String, Vec<SegmentedSessionEventLine>)> = Vec::new();
+    let mut found_cutoff = false;
+    let mut latest_rollback_seq = None;
+    let original_segments = metadata.segments.clone();
+    for segment in &original_segments {
+        let segment_path = session_dir.join(&segment.file);
+        let lines = read_segment_event_lines(&segment_path)?;
+        let mut retained_lines = Vec::new();
+        if !found_cutoff {
+            for line in lines {
+                let is_cutoff = segmented_line_message_id(&line) == Some(message_id);
+                if line.kind == SegmentedSessionEventKind::ThreadRolledBack {
+                    latest_rollback_seq = Some(line.seq);
+                }
+                retained_lines.push(line);
+                if is_cutoff {
+                    found_cutoff = true;
+                    break;
+                }
+            }
+        }
+        if !retained_lines.is_empty() {
+            retained_segment_lines.push((segment.file.clone(), retained_lines));
+        }
+        if found_cutoff {
+            break;
+        }
+    }
+    if !found_cutoff {
+        return Err(String::from(
+            "ERR_SEGMENTED_SESSION_TRUNCATE_ANCHOR_NOT_FOUND",
+        ));
+    }
+    let mut retained_segments = Vec::new();
+    for (file, retained_lines) in &retained_segment_lines {
+        let segment_path = session_dir.join(file);
+        write_json_lines_file_atomic(&segment_path, retained_lines)?;
+        retained_segments.push(rebuild_segment_metadata(file, retained_lines)?);
+    }
+    for segment in original_segments.iter().filter(|segment| {
+        !retained_segment_lines
+            .iter()
+            .any(|(file, _)| file == &segment.file)
+    }) {
+        let segment_path = session_dir.join(&segment.file);
+        if segment_path.exists() {
+            let _ = fs::remove_file(segment_path);
+        }
+    }
+    metadata.active_segment = retained_segments
+        .last()
+        .map(|segment| segment.file.clone())
+        .unwrap_or_else(|| segment_file_name(1));
+    metadata.next_global_seq = retained_segment_lines
+        .iter()
+        .flat_map(|(_, lines)| lines.iter().map(|line| line.seq))
+        .max()
+        .map(|seq| seq.saturating_add(1))
+        .unwrap_or(1);
+    metadata.segments = retained_segments;
+    metadata.latest_rollback_seq = latest_rollback_seq;
+    metadata.updated_at = current_unix_millis_text();
+    if let Some(anchor_message_id) = metadata
+        .fork_source
+        .as_ref()
+        .and_then(|source| source.anchor_message_id.as_deref())
+        && !retained_messages
+            .iter()
+            .any(|message| message.id == anchor_message_id)
+    {
+        metadata.fork_source = None;
+    }
+    update_segmented_message_checkpoint(&mut metadata, retained_messages)?;
+    write_metadata(session_dir, &metadata)
+}
+
 /// Validates the persisted transcript tail boundary without scanning historical segment files.
 /// 不扫描历史分段文件，仅校验已持久化转录尾部边界。
 pub(in crate::workspace_store) fn validate_segmented_message_tail_boundary(

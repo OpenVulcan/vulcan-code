@@ -677,6 +677,7 @@ export function WorkbenchLayout(props: {
     handleGetUserPromptEditDraft,
     handleSubmitUserPromptEdit,
     handleForkConversation,
+    conversationForkInProgress,
     handleSelectWorkbenchReasoningEffort,
     handleSelectWorkbenchThinkingDisplayMode,
   } = useWorkbenchConversationActions({
@@ -1010,6 +1011,7 @@ export function WorkbenchLayout(props: {
             conversationHydration={workbenchState.conversationHydration ?? null}
             conversationHasMoreHistory={Boolean(selectedConversationHistoryCursor?.hasMoreHistory)}
             conversationHistoryLoading={selectedConversationId ? conversationHistoryLoadingIds.has(selectedConversationId) : false}
+            conversationForkInProgress={conversationForkInProgress}
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversation}

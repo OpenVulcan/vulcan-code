@@ -351,6 +351,92 @@ fn truncate_before_message_removes_tail_without_rollback_marker() {
     );
 }
 
+/// Verifies anchor truncation keeps the selected message and drops only later rows.
+/// 验证锚点截断会保留所选消息且只丢弃后续行。
+#[test]
+fn truncate_after_message_keeps_anchor_and_rewrites_segments() {
+    let root = test_root("truncate_after_message_keeps_anchor_and_rewrites_segments");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy {
+            max_lines: 2,
+            max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
+        }),
+    )
+    .expect("create session");
+    let messages = vec![
+        test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        ),
+        test_message(
+            "m-assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first answer",
+        ),
+        test_message(
+            "m-user-2",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "second prompt",
+        ),
+        test_message(
+            "m-assistant-2",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "second answer",
+        ),
+    ];
+    append_segmented_session_message_tail(&session_dir, &messages)
+        .expect("append original messages");
+
+    truncate_segmented_session_after_message(&session_dir, "m-assistant-1", &messages[..2])
+        .expect("truncate after first answer");
+
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+            .expect("read truncated metadata");
+    assert_eq!(metadata.message_count, 2);
+    assert_eq!(metadata.latest_rollback_seq, None);
+    let retained_lines = metadata
+        .segments
+        .iter()
+        .flat_map(|segment| {
+            read_segment_event_lines(&session_dir.join(&segment.file))
+                .expect("read retained segment")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        retained_lines
+            .iter()
+            .all(|line| line.kind != SegmentedSessionEventKind::ThreadRolledBack)
+    );
+    assert!(
+        retained_lines
+            .iter()
+            .any(|line| segmented_line_message_id(line) == Some("m-assistant-1"))
+    );
+    assert!(
+        retained_lines
+            .iter()
+            .all(|line| segmented_line_message_id(line) != Some("m-user-2"))
+    );
+    let replay = replay_segmented_session_context(&session_dir).expect("replay truncated context");
+    let replay_messages =
+        conversation_state_to_session_messages(&replay.expect("replay result").conversation_state);
+    assert_eq!(
+        replay_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["m-user-1", "m-assistant-1"]
+    );
+}
+
 /// Verifies a missing prompt id cannot partially mutate segment files.
 /// 验证缺失的提示词标识不会导致分段文件发生局部改写。
 #[test]

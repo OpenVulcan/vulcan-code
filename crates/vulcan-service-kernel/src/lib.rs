@@ -164,8 +164,7 @@ use vulcan_workspace_store::{
     workspace_store::{
         GoalUpdate, SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
         WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot, fork_persisted_session,
-        load_persisted_user_prompt_edit_draft, record_persisted_session_fork_source_marker,
-        rollback_persisted_session_before_user_prompt,
+        load_persisted_user_prompt_edit_draft, rollback_persisted_session_before_user_prompt,
     },
 };
 

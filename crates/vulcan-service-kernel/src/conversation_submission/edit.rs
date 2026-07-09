@@ -2,6 +2,7 @@
 //! 用户提示词编辑提交辅助逻辑。
 
 use super::*;
+use crate::owning_project_id_for_session;
 
 /// Applies a user prompt edit and resubmits the edited prompt into the conversation.
 /// 应用用户提示词编辑，并将编辑后的提示词重新提交到会话。
@@ -33,7 +34,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
         .attachments
         .iter()
         .try_for_each(validate_composer_attachment_summary)?;
-    let controller_runtime = {
+    let (controller_runtime, source_session, project_id) = {
         let mut guard = state
             .lock()
             .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
@@ -55,11 +56,20 @@ pub(crate) async fn service_submit_user_prompt_edit(
         ) {
             return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_EDITABLE"));
         }
-        controller_runtime
+        let source_session = workspace
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .cloned()
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND"))?;
+        let project_id = owning_project_id_for_session(workspace, session_id)
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROJECT_NOT_FOUND"))?;
+        (controller_runtime, source_session, project_id)
     };
     let rollback = rollback_persisted_session_before_user_prompt(
         &controller_runtime,
-        session_id,
+        &source_session,
+        &project_id,
         &request.message_id,
     )
     .await?;

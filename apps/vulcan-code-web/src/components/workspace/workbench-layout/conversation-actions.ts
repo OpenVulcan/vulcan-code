@@ -124,6 +124,12 @@ export function useWorkbenchConversationActions(options: WorkbenchConversationAc
     inflightSubagentOpenRequestRef,
     subagentSurfaceMessageCacheRef,
   } = options;
+  // conversationForkInFlightRef synchronously gates duplicate fork submissions before React state commits.
+  // conversationForkInFlightRef 在 React 状态提交前同步拦截重复分叉提交。
+  const conversationForkInFlightRef = React.useRef(false);
+  // conversationForkInProgress drives the workspace-level blocking progress overlay.
+  // conversationForkInProgress 驱动工作台级阻塞进度遮罩。
+  const [conversationForkInProgress, setConversationForkInProgress] = React.useState(false);
 // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
 // handleSubmitConversationPrompt 通过共享后端运行时发送输入区文本。
 const handleSubmitConversationPrompt = React.useCallback(async (submission: ComposerSubmission): Promise<boolean> => {
@@ -511,13 +517,19 @@ const handleSubmitUserPromptEdit = React.useCallback(async (request: {
 
 // handleForkConversation creates a persisted copy of the current conversation and opens it.
 // handleForkConversation 创建当前会话的持久化副本并打开。
-const handleForkConversation = React.useCallback(async (conversationId: string): Promise<boolean> => {
+const handleForkConversation = React.useCallback(async (conversationId: string, anchorMessageId?: string): Promise<boolean> => {
+  if (conversationForkInFlightRef.current) {
+    return false;
+  }
+  conversationForkInFlightRef.current = true;
+  setConversationForkInProgress(true);
   const sourceConversation = workbenchStateRef.current.conversations.find((conversation) => conversation.id === conversationId);
   const sourceTitle = sourceConversation?.title.trim() || translate("console.newConversation");
   try {
     const snapshot = await forkConversation({
       conversationId,
       title: `${sourceTitle}${translate("conversation.action.forkTitleSuffix")}`,
+      anchorMessageId,
     });
     if (snapshot) {
       // Validate the service-selected fork before mirroring it into local sidebar state.
@@ -539,8 +551,16 @@ const handleForkConversation = React.useCallback(async (conversationId: string):
     }
     return true;
   } catch (nextError) {
-    toast.error(translate("conversation.action.forkFailed"));
+    const errorMessage = nextError instanceof Error ? nextError.message.trim() : "";
+    toast.error(
+      errorMessage
+        ? `${translate("conversation.action.forkFailed")}：${errorMessage}`
+        : translate("conversation.action.forkFailed"),
+    );
     return false;
+  } finally {
+    conversationForkInFlightRef.current = false;
+    setConversationForkInProgress(false);
   }
 }, [mergeWorkbenchWithLocalCaches, setSelectedConversationId, setWorkbenchState, translate, workbenchStateRef]);
 
@@ -592,6 +612,7 @@ const handleSelectWorkbenchThinkingDisplayMode = React.useCallback(async (mode: 
     handleGetUserPromptEditDraft,
     handleSubmitUserPromptEdit,
     handleForkConversation,
+    conversationForkInProgress,
     handleSelectWorkbenchReasoningEffort,
     handleSelectWorkbenchThinkingDisplayMode,
   };

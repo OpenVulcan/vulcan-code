@@ -160,6 +160,8 @@ export type TranslationKey =
   | "conversation.action.forkTitleSuffix"
   | "conversation.action.forkFailed"
   | "conversation.action.forkSucceeded"
+  | "conversation.action.forkInProgressTitle"
+  | "conversation.action.forkInProgressMessage"
   | "conversation.forkSource.label"
   | "conversation.forkSource.missing"
   | "conversation.block.toolCall"
@@ -1320,6 +1322,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkTitleSuffix": "（分叉）",
     "conversation.action.forkFailed": "分叉失败",
     "conversation.action.forkSucceeded": "已创建分叉会话",
+    "conversation.action.forkInProgressTitle": "正在分叉会话",
+    "conversation.action.forkInProgressMessage": "正在复制会话并打开新分叉，请稍候。",
     "conversation.forkSource.label": "从对话中派生",
     "conversation.forkSource.missing": "原会话已经不存在",
     "conversation.block.toolCall": "工具调用",
@@ -2477,6 +2481,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkTitleSuffix": " (fork)",
     "conversation.action.forkFailed": "Fork failed",
     "conversation.action.forkSucceeded": "Forked conversation created",
+    "conversation.action.forkInProgressTitle": "Forking conversation",
+    "conversation.action.forkInProgressMessage": "Copying the conversation and opening the new fork. Please wait.",
     "conversation.forkSource.label": "Derived from conversation",
     "conversation.forkSource.missing": "The original conversation no longer exists",
     "conversation.block.toolCall": "Tool call",

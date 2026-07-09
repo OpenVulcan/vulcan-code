@@ -69,7 +69,7 @@ pub(crate) async fn service_get_user_prompt_edit_draft(
 ) -> Result<UserPromptEditDraftSummary, String> {
     let session_id = parse_session_id(&conversation_id)
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_INVALID_CONVERSATION"))?;
-    let controller_runtime = {
+    let (controller_runtime, source_session, project_id) = {
         let mut guard = state
             .lock()
             .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
@@ -87,13 +87,27 @@ pub(crate) async fn service_get_user_prompt_edit_draft(
         ) {
             return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_EDITABLE"));
         }
-        guard
+        let source_session = workspace
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .cloned()
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND"))?;
+        let project_id = owning_project_id_for_session(workspace, session_id)
+            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_PROJECT_NOT_FOUND"))?;
+        let controller_runtime = guard
             .controller_runtime
             .clone()
-            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?
+            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
+        (controller_runtime, source_session, project_id)
     };
-    let target =
-        load_persisted_user_prompt_edit_draft(&controller_runtime, session_id, &message_id).await?;
+    let target = load_persisted_user_prompt_edit_draft(
+        &controller_runtime,
+        &source_session,
+        &project_id,
+        &message_id,
+    )
+    .await?;
     Ok(UserPromptEditDraftSummary {
         conversation_id,
         message_id,
@@ -155,14 +169,9 @@ pub(crate) async fn service_fork_conversation(
         &project_id,
         target_session_id,
         fork_title,
+        request.anchor_message_id.as_deref(),
     )
     .await?;
-    record_persisted_session_fork_source_marker(
-        &controller_runtime,
-        fork_result.session.id,
-        &source_session,
-        &project_id,
-    )?;
     let target_session_id_text = fork_result.session.id.to_string();
     load_hydrated_session_workbench(
         &app,

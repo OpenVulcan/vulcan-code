@@ -77,6 +77,10 @@ pub(crate) struct ConversationForkRequest {
     /// Localized title assigned to the forked session.
     /// 分配给分叉会话的本地化标题。
     pub(crate) title: String,
+    /// Optional retained message anchor for a message-scoped fork.
+    /// 消息级分叉时可选保留的消息锚点。
+    #[serde(default)]
+    pub(crate) anchor_message_id: Option<String>,
 }
 
 /// Session-scoped AI capability configuration save request sent by the WebUI composer dialog.
@@ -343,18 +347,17 @@ pub(crate) fn webui_workspace_persist_lock() -> Arc<tokio::sync::Mutex<()>> {
 mod tests {
     use super::*;
 
-    /// Verifies fork requests reject historical message-bound rollback fields.
-    /// 验证 fork 请求会拒绝历史消息绑定回滚字段。
+    /// Verifies fork requests accept the explicit retained message anchor.
+    /// 验证 fork 请求接受显式保留消息锚点。
     #[test]
-    fn conversation_fork_request_rejects_before_message_id() {
-        let error = serde_json::from_value::<ConversationForkRequest>(serde_json::json!({
+    fn conversation_fork_request_accepts_anchor_message_id() {
+        let request = serde_json::from_value::<ConversationForkRequest>(serde_json::json!({
             "conversationId": "conversation-a",
             "title": "Conversation A fork",
-            "beforeMessageId": "message-a"
+            "anchorMessageId": "message-a"
         }))
-        .expect_err("fork request should reject message-bound fork fields");
+        .expect("fork request should accept explicit anchor");
 
-        assert!(error.to_string().contains("unknown field"));
-        assert!(error.to_string().contains("beforeMessageId"));
+        assert_eq!(request.anchor_message_id.as_deref(), Some("message-a"));
     }
 }

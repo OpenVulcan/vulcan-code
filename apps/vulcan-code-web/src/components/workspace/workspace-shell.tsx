@@ -1038,6 +1038,42 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onRefreshReviewSummary={refreshSessionReviewSummary}
         />
       ) : null}
+      {props.conversationForkInProgress ? (
+        <WorkspaceBlockingProgressOverlay
+          message={t("conversation.action.forkInProgressMessage")}
+          title={t("conversation.action.forkInProgressTitle")}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// WorkspaceBlockingProgressOverlay blocks all workspace interaction while one modal backend action is pending.
+// WorkspaceBlockingProgressOverlay 在单个模态后端动作等待期间阻塞所有工作台交互。
+function WorkspaceBlockingProgressOverlay(props: {
+  // Primary progress title shown in the shared loading card.
+  // 共享加载卡片中展示的主标题。
+  title: string;
+  // Secondary progress message shown below the indeterminate bar.
+  // 不确定进度条下方展示的辅助说明。
+  message: string;
+}) {
+  return (
+    <div className="workspace-blocking-progress-overlay" role="status" aria-live="polite" aria-busy="true">
+      <section className="conversation-loading-card workspace-blocking-progress-card">
+        <div className="conversation-loading-heading">
+          <strong>{props.title}</strong>
+        </div>
+        <div
+          aria-label={props.title}
+          aria-valuetext={props.message}
+          className="conversation-loading-bar workspace-blocking-progress-bar"
+          role="progressbar"
+        >
+          <div className="conversation-loading-bar-value workspace-blocking-progress-bar-value" />
+        </div>
+        <p className="workspace-blocking-progress-message">{props.message}</p>
+      </section>
     </div>
   );
 }

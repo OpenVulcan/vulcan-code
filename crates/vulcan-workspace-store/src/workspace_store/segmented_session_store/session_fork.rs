@@ -3,37 +3,16 @@
 
 use super::*;
 
-/// Rewritten child task identity used while forking one segmented session.
-/// 分叉单个分段会话时使用的已改写子任务身份。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ForkedTaskIdentity {
-    /// New child task session identifier.
-    /// 新的子任务会话标识。
-    task_session_id: String,
-    /// New child task directory relative to the parent session directory.
-    /// 相对父会话目录的新子任务目录。
-    task_dir: String,
-    /// New child task active segment path relative to the parent session directory.
-    /// 相对父会话目录的新子任务活动分段路径。
-    task_active_segment: String,
-    /// New child task metadata file path relative to the parent session directory.
-    /// 相对父会话目录的新子任务元数据文件路径。
-    task_metadata_file: String,
-}
-
-/// Forks one persisted segmented session directory by copying files and rewriting structural ownership fields.
-/// 通过复制文件并改写结构化归属字段来分叉一个持久化分段会话目录。
-pub(in crate::workspace_store) fn fork_segmented_session_directory(
+/// Forks one already resolved segmented session directory without searching for the source again.
+/// 分叉一个已经解析出的分段会话目录，不再重新搜索源目录。
+pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
+    source_dir: &Path,
     data_root: &Path,
     request: &SegmentedSessionForkRequest,
 ) -> Result<PathBuf, String> {
-    let source_dir = find_segmented_session_directory(
-        data_root,
-        request.source_archived,
-        &request.source_project_tag,
-        &request.source_session_id,
-    )?
-    .ok_or_else(|| String::from("ERR_SESSION_FORK_SOURCE_NOT_FOUND"))?;
+    if !source_dir.is_dir() {
+        return Err(String::from("ERR_SESSION_FORK_SOURCE_NOT_FOUND"));
+    }
     let target_dir = segmented_session_directory(
         data_root,
         false,
@@ -45,20 +24,14 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory(
         return Err(String::from("ERR_SESSION_FORK_TARGET_EXISTS"));
     }
     let fork_result = (|| {
-        copy_segmented_directory_tree(&source_dir, &target_dir)?;
+        copy_segmented_session_tree_without_tasks(&source_dir, &target_dir)?;
         rewrite_forked_session_metadata(&target_dir, request)?;
-        let forked_task_identities = rewrite_forked_session_task_identities(&target_dir, request)?;
-        let identity_replacements = forked_identity_replacements(request, &forked_task_identities);
+        let identity_replacements = forked_identity_replacements(request);
         rewrite_json_file_identity_tokens(
             &target_dir.join(SEGMENTED_METADATA_FILE),
             &identity_replacements,
         )?;
-        rewrite_forked_session_identity_events(
-            &target_dir,
-            request,
-            &forked_task_identities,
-            &identity_replacements,
-        )?;
+        rewrite_forked_session_identity_events(&target_dir, request, &identity_replacements)?;
         rewrite_forked_persisted_identity_artifacts(
             &target_dir,
             &request.target_session_id,
@@ -72,6 +45,49 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory(
         return Err(error);
     }
     Ok(target_dir)
+}
+
+/// Copies only the parent segmented session tree and creates an empty task root for the fork.
+/// 只复制父级分段会话树，并为分叉会话创建空的子任务根目录。
+fn copy_segmented_session_tree_without_tasks(
+    source_dir: &Path,
+    target_dir: &Path,
+) -> Result<(), String> {
+    let metadata = read_session_metadata(source_dir)?;
+    create_dir_all(target_dir)?;
+    for entry in fs::read_dir(source_dir).map_err(to_store_error)? {
+        let entry = entry.map_err(to_store_error)?;
+        let source_path = entry.path();
+        let target_path = target_dir.join(entry.file_name());
+        let file_type = entry.file_type().map_err(to_store_error)?;
+        if file_type.is_dir() {
+            let directory_name = source_path.file_name().and_then(|name| name.to_str());
+            if forked_session_should_skip_top_level_directory(directory_name, &metadata.task_dir) {
+                continue;
+            }
+        }
+        if file_type.is_dir() {
+            copy_segmented_directory_tree(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &target_path).map_err(to_store_error)?;
+        }
+    }
+    create_dir_all(&target_dir.join(&metadata.task_dir))
+}
+
+/// Returns whether a top-level source directory should be omitted from a forked session copy.
+/// 返回源会话顶层目录是否应从分叉复制中排除。
+fn forked_session_should_skip_top_level_directory(
+    directory_name: Option<&str>,
+    task_dir_name: &str,
+) -> bool {
+    matches!(
+        directory_name,
+        Some(name)
+            if name == task_dir_name
+                || name == SEGMENTED_RUNTIME_BACKUP_DIR
+                || name == SEGMENTED_DISPLAY_MAINTENANCE_BACKUP_DIR
+    )
 }
 
 /// Copies a segmented session directory recursively without changing file contents.
@@ -110,104 +126,17 @@ fn rewrite_forked_session_metadata(
     metadata.archived_at = None;
     metadata.title = Some(request.target_title.clone());
     metadata.title_source = Some(request.target_title_source.clone());
+    metadata.tasks.clear();
     write_metadata(target_dir, &metadata)
-}
-
-/// Rewrites copied child task identities so parent and forked sessions never share child task ids.
-/// 改写已复制子任务身份，确保父会话与分叉会话不会共享子任务标识。
-fn rewrite_forked_session_task_identities(
-    target_dir: &Path,
-    request: &SegmentedSessionForkRequest,
-) -> Result<BTreeMap<String, ForkedTaskIdentity>, String> {
-    let mut metadata = read_session_metadata(target_dir)?;
-    let mut task_identities = BTreeMap::new();
-    for task in &mut metadata.tasks {
-        let old_task_session_id = task.session_id.clone();
-        let new_task_session_id = Uuid::new_v4().to_string();
-        let old_task_dir = target_dir.join(&task.dir);
-        let new_task_dir_relative = format!(
-            "{SEGMENTED_TASK_DIR}/{}",
-            sanitize_file_component(&new_task_session_id)
-        );
-        let new_task_dir = target_dir.join(&new_task_dir_relative);
-        fs::rename(&old_task_dir, &new_task_dir).map_err(to_store_error)?;
-
-        let mut task_metadata = read_task_session_metadata(&new_task_dir)?;
-        task_metadata.task_session_id = new_task_session_id.clone();
-        task_metadata.parent_session_id = request.target_session_id.clone();
-        task_metadata.parent_project_tag = request.target_project_tag.clone();
-        write_task_metadata(&new_task_dir, &task_metadata)?;
-
-        let task_identity_replacements =
-            forked_task_identity_replacements(request, &old_task_session_id, &new_task_session_id);
-        rewrite_json_file_identity_tokens(
-            &new_task_dir.join(SEGMENTED_METADATA_FILE),
-            &task_identity_replacements,
-        )?;
-        rewrite_forked_task_identity_events(
-            &new_task_dir,
-            request,
-            &old_task_session_id,
-            &new_task_session_id,
-            &task_identity_replacements,
-        )?;
-        rewrite_forked_persisted_identity_artifacts(
-            &new_task_dir,
-            &new_task_session_id,
-            &request.target_created_at,
-            &task_identity_replacements,
-        )?;
-
-        task.session_id = new_task_session_id.clone();
-        task.dir = new_task_dir_relative.clone();
-        task.active_segment = format!("{}/{}", new_task_dir_relative, task_metadata.active_segment);
-        task.metadata_file = format!("{}/{}", new_task_dir_relative, SEGMENTED_METADATA_FILE);
-        let identity = ForkedTaskIdentity {
-            task_session_id: task.session_id.clone(),
-            task_dir: task.dir.clone(),
-            task_active_segment: task.active_segment.clone(),
-            task_metadata_file: task.metadata_file.clone(),
-        };
-        task_identities.insert(old_task_session_id, identity);
-    }
-    if !task_identities.is_empty() {
-        write_metadata(target_dir, &metadata)?;
-    }
-    Ok(task_identities)
 }
 
 /// Builds exact identity-token replacements for a forked parent session.
 /// 为分叉后的父会话构建精确身份 token 替换表。
-fn forked_identity_replacements(
-    request: &SegmentedSessionForkRequest,
-    task_identities: &BTreeMap<String, ForkedTaskIdentity>,
-) -> BTreeMap<String, String> {
+fn forked_identity_replacements(request: &SegmentedSessionForkRequest) -> BTreeMap<String, String> {
     let mut replacements = BTreeMap::new();
     replacements.insert(
         request.source_session_id.clone(),
         request.target_session_id.clone(),
-    );
-    for (source_task_id, identity) in task_identities {
-        replacements.insert(source_task_id.clone(), identity.task_session_id.clone());
-    }
-    replacements
-}
-
-/// Builds exact identity-token replacements for one copied child task.
-/// 为单个已复制子任务构建精确身份 token 替换表。
-fn forked_task_identity_replacements(
-    request: &SegmentedSessionForkRequest,
-    old_task_session_id: &str,
-    new_task_session_id: &str,
-) -> BTreeMap<String, String> {
-    let mut replacements = BTreeMap::new();
-    replacements.insert(
-        request.source_session_id.clone(),
-        request.target_session_id.clone(),
-    );
-    replacements.insert(
-        old_task_session_id.to_string(),
-        new_task_session_id.to_string(),
     );
     replacements
 }
@@ -377,20 +306,25 @@ fn rewrite_string_identity_tokens(
 fn rewrite_forked_session_identity_events(
     target_dir: &Path,
     request: &SegmentedSessionForkRequest,
-    task_identities: &BTreeMap<String, ForkedTaskIdentity>,
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let metadata = read_session_metadata(target_dir)?;
-    for segment in metadata.segments {
+    let mut metadata = read_session_metadata(target_dir)?;
+    let original_segments = metadata.segments.clone();
+    let mut retained_segments = Vec::new();
+    let mut metadata_changed = false;
+    let mut max_retained_seq = None::<u64>;
+    for segment in original_segments {
         let segment_path = target_dir.join(&segment.file);
-        let mut lines = read_segment_event_lines(&segment_path)?;
+        let lines = read_segment_event_lines(&segment_path)?;
+        let mut retained_lines = Vec::with_capacity(lines.len());
         let mut changed = false;
-        for line in &mut lines {
-            if rewrite_forked_parent_message_task_metadata(
-                &mut line.payload,
-                request,
-                task_identities,
-            ) {
+        for mut line in lines {
+            if forked_session_should_drop_subagent_state_event(line.kind) {
+                changed = true;
+                metadata_changed = true;
+                continue;
+            }
+            if rewrite_forked_parent_message_task_metadata(&mut line.payload, request) {
                 changed = true;
             }
             if rewrite_json_value_identity_tokens(&mut line.payload, replacements) {
@@ -419,41 +353,54 @@ fn rewrite_forked_session_identity_events(
                         changed = true;
                     }
                 }
-                SegmentedSessionEventKind::SubagentTaskStarted
-                | SegmentedSessionEventKind::SubagentTaskEventLinked
-                | SegmentedSessionEventKind::SubagentTaskCompleted => {
-                    if let Some(payload) = line.payload.as_object_mut()
-                        && let Some(old_task_session_id) =
-                            payload.get("task_session_id").and_then(Value::as_str)
-                        && let Some(identity) = task_identities.get(old_task_session_id)
-                    {
-                        payload.insert(
-                            String::from("task_session_id"),
-                            Value::String(identity.task_session_id.clone()),
-                        );
-                        payload.insert(
-                            String::from("task_dir"),
-                            Value::String(identity.task_dir.clone()),
-                        );
-                        payload.insert(
-                            String::from("task_active_segment"),
-                            Value::String(identity.task_active_segment.clone()),
-                        );
-                        payload.insert(
-                            String::from("task_metadata_file"),
-                            Value::String(identity.task_metadata_file.clone()),
-                        );
-                        changed = true;
-                    }
-                }
                 _ => {}
             }
+            retained_lines.push(line);
         }
         if changed {
-            write_json_lines_file_atomic(&segment_path, &lines)?;
+            if retained_lines.is_empty() {
+                let _ = fs::remove_file(&segment_path);
+            } else {
+                write_json_lines_file_atomic(&segment_path, &retained_lines)?;
+            }
+        }
+        if !retained_lines.is_empty() {
+            if let Some(segment_max_seq) = retained_lines.iter().map(|line| line.seq).max() {
+                max_retained_seq = Some(
+                    max_retained_seq
+                        .map(|current_max_seq| current_max_seq.max(segment_max_seq))
+                        .unwrap_or(segment_max_seq),
+                );
+            }
+            retained_segments.push(rebuild_segment_metadata(&segment.file, &retained_lines)?);
         }
     }
+    if metadata_changed {
+        metadata.segments = retained_segments;
+        metadata.active_segment = metadata
+            .segments
+            .last()
+            .map(|segment| segment.file.clone())
+            .unwrap_or_else(|| segment_file_name(1));
+        metadata.next_global_seq = max_retained_seq
+            .map(|seq| seq.saturating_add(1))
+            .unwrap_or(1);
+        metadata.updated_at = request.target_created_at.clone();
+        metadata.tasks.clear();
+        write_metadata(target_dir, &metadata)?;
+    }
     Ok(())
+}
+
+/// Returns whether a copied parent event is child-agent runtime state instead of durable parent transcript.
+/// 返回复制出的父级事件是否属于子代理运行状态，而不是持久父会话正文。
+fn forked_session_should_drop_subagent_state_event(kind: SegmentedSessionEventKind) -> bool {
+    matches!(
+        kind,
+        SegmentedSessionEventKind::SubagentTaskStarted
+            | SegmentedSessionEventKind::SubagentTaskEventLinked
+            | SegmentedSessionEventKind::SubagentTaskCompleted
+    )
 }
 
 /// Rewrites structured task references carried by one parent transcript message payload.
@@ -461,7 +408,6 @@ fn rewrite_forked_session_identity_events(
 fn rewrite_forked_parent_message_task_metadata(
     payload: &mut Value,
     request: &SegmentedSessionForkRequest,
-    task_identities: &BTreeMap<String, ForkedTaskIdentity>,
 ) -> bool {
     let Some(metadata) = payload
         .get_mut("message")
@@ -480,11 +426,6 @@ fn rewrite_forked_parent_message_task_metadata(
     ) {
         changed = true;
     }
-    for key in ["task_session_id", "task_id", "child_thread_id"] {
-        if rewrite_task_identity_field(metadata, key, task_identities) {
-            changed = true;
-        }
-    }
     if let Some(mailbox_event) = metadata
         .get_mut("subagent_mailbox_event")
         .and_then(Value::as_object_mut)
@@ -497,18 +438,16 @@ fn rewrite_forked_parent_message_task_metadata(
         ) {
             changed = true;
         }
-        if rewrite_task_identity_field(mailbox_event, "child_thread_id", task_identities) {
-            changed = true;
-        }
         if let Some(mailbox_payload) = mailbox_event
             .get_mut("payload")
             .and_then(Value::as_object_mut)
         {
-            for key in ["task_session_id", "task_id", "child_thread_id"] {
-                if rewrite_task_identity_field(mailbox_payload, key, task_identities) {
-                    changed = true;
-                }
-            }
+            changed |= rewrite_string_field_if_equal(
+                mailbox_payload,
+                "parent_thread_id",
+                &request.source_session_id,
+                &request.target_session_id,
+            );
         }
     }
     changed
@@ -527,82 +466,4 @@ fn rewrite_string_field_if_equal(
     }
     object.insert(key.to_string(), Value::String(target_value.to_string()));
     true
-}
-
-/// Rewrites one task identity field when it points at a copied child task session.
-/// 当字段指向已复制的子任务会话时改写该子任务身份字段。
-fn rewrite_task_identity_field(
-    object: &mut serde_json::Map<String, Value>,
-    key: &str,
-    task_identities: &BTreeMap<String, ForkedTaskIdentity>,
-) -> bool {
-    let Some(source_task_id) = object.get(key).and_then(Value::as_str) else {
-        return false;
-    };
-    let Some(identity) = task_identities.get(source_task_id) else {
-        return false;
-    };
-    object.insert(
-        key.to_string(),
-        Value::String(identity.task_session_id.clone()),
-    );
-    true
-}
-
-/// Rewrites explicit child task identity JSONL payloads in a copied task directory.
-/// 改写已复制子任务目录中明确的子任务身份 JSONL 载荷。
-fn rewrite_forked_task_identity_events(
-    task_dir: &Path,
-    request: &SegmentedSessionForkRequest,
-    old_task_session_id: &str,
-    new_task_session_id: &str,
-    replacements: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    let metadata = read_task_session_metadata(task_dir)?;
-    for segment in metadata.segments {
-        let segment_path = task_dir.join(&segment.file);
-        let mut lines = read_segment_event_lines(&segment_path)?;
-        let mut changed = false;
-        for line in &mut lines {
-            if rewrite_json_value_identity_tokens(&mut line.payload, replacements) {
-                changed = true;
-            }
-            match line.kind {
-                SegmentedSessionEventKind::SubagentTaskMeta => {
-                    if let Some(payload) = line.payload.as_object_mut() {
-                        payload.insert(
-                            String::from("task_session_id"),
-                            Value::String(new_task_session_id.to_string()),
-                        );
-                        payload.insert(
-                            String::from("parent_session_id"),
-                            Value::String(request.target_session_id.clone()),
-                        );
-                        payload.insert(
-                            String::from("parent_project_tag"),
-                            Value::String(request.target_project_tag.clone()),
-                        );
-                        changed = true;
-                    }
-                }
-                SegmentedSessionEventKind::SessionBoundary => {
-                    if let Some(payload) = line.payload.as_object_mut()
-                        && payload.get("thread_id").and_then(Value::as_str)
-                            == Some(old_task_session_id)
-                    {
-                        payload.insert(
-                            String::from("thread_id"),
-                            Value::String(new_task_session_id.to_string()),
-                        );
-                        changed = true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if changed {
-            write_json_lines_file_atomic(&segment_path, &lines)?;
-        }
-    }
-    Ok(())
 }

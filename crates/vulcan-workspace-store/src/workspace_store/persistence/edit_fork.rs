@@ -1,4 +1,5 @@
 use super::*;
+use std::path::{Path, PathBuf};
 
 /// 从分段会话事实源加载出的持久化编辑草稿。
 #[derive(Debug, Clone, PartialEq)]
@@ -36,10 +37,11 @@ pub struct PersistedSessionForkResult {
 /// 从持久化分段会话状态加载一份用户提示词编辑草稿。
 pub async fn load_persisted_user_prompt_edit_draft(
     controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
+    session: &SessionSummary,
+    project_id: &str,
     message_id: &str,
 ) -> Result<PersistedUserPromptEditDraft, String> {
-    let target = locate_persisted_user_prompt_target(controller, session_id, message_id)?;
+    let target = locate_persisted_user_prompt_target(controller, session, project_id, message_id)?;
     Ok(PersistedUserPromptEditDraft {
         prompt: target.prompt,
         attachments: target.attachments,
@@ -50,10 +52,11 @@ pub async fn load_persisted_user_prompt_edit_draft(
 /// 将一个持久化会话回滚到所选用户提示词之前。
 pub async fn rollback_persisted_session_before_user_prompt(
     controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
+    session: &SessionSummary,
+    project_id: &str,
     message_id: &str,
 ) -> Result<PersistedUserPromptRollbackResult, String> {
-    let target = locate_persisted_user_prompt_target(controller, session_id, message_id)?;
+    let target = locate_persisted_user_prompt_target(controller, session, project_id, message_id)?;
     truncate_segmented_session_before_message(
         &target.session_dir,
         message_id,
@@ -68,7 +71,7 @@ pub async fn rollback_persisted_session_before_user_prompt(
     runtime_state.context_start_message_id = target.context_start_message_id;
     runtime_state.conversation_state.continuation = Default::default();
     let state_document =
-        state_document_from_runtime_state(&session_id.to_string(), &runtime_state)?;
+        state_document_from_runtime_state(&session.id.to_string(), &runtime_state)?;
     write_state(&target.session_dir, &state_document)?;
     rebuild_runtime_log_from_conversation_state(
         &target.session_dir,
@@ -89,16 +92,34 @@ pub async fn fork_persisted_session(
     project_id: &str,
     target_session_id: SessionId,
     target_title: String,
+    anchor_message_id: Option<&str>,
 ) -> Result<PersistedSessionForkResult, String> {
     let now = current_unix_millis_text();
     let target_session_id_text = target_session_id.to_string();
-    if let Some(source_dir) = find_segmented_session_directory_by_id(
-        &controller.data_root,
-        &source_session.id.to_string(),
-    )? {
-        let _ = repair_segmented_session_display_if_needed(&source_dir)?;
-    }
-    fork_segmented_session_directory(
+    let anchor_message_id = anchor_message_id
+        .map(str::trim)
+        .filter(|message_id| !message_id.is_empty());
+    let source_dir = locate_segmented_session_dir_for_summary(
+        controller,
+        source_session,
+        project_id,
+        "ERR_SESSION_FORK_SOURCE_NOT_FOUND",
+    )?;
+    let _ = repair_segmented_session_display_if_needed(&source_dir)?;
+    let source_replay = replay_segmented_session_context(&source_dir)?;
+    let source_anchor_index = anchor_message_id
+        .map(|message_id| {
+            let replay = source_replay
+                .as_ref()
+                .ok_or_else(|| String::from("ERR_SESSION_FORK_EMPTY_SESSION"))?;
+            fork_anchor_record_index_in_replay(replay, message_id)
+        })
+        .transpose()?;
+    let source_last_visible_index = source_replay
+        .as_ref()
+        .and_then(last_visible_record_index_in_replay);
+    let target_dir = fork_segmented_session_directory_from_source(
+        &source_dir,
         &controller.data_root,
         &SegmentedSessionForkRequest {
             source_archived: false,
@@ -112,52 +133,209 @@ pub async fn fork_persisted_session(
             target_title_source: source_session.title_source.as_persisted_key().to_string(),
         },
     )?;
-    let forked_session = SessionSummary::new(
-        target_session_id,
-        Some(project_id.to_string()),
-        target_title,
-        source_session.focus.clone(),
-        SessionState::Completed,
-        source_session.changed_files,
-        source_session.queued_steps,
-        "",
-    )
-    .with_title_source(source_session.title_source)
-    .with_created_at(now.clone())
-    .with_updated_at(now.clone());
-    upsert_session_index_row(
-        controller,
-        &forked_session,
-        project_id,
-        false,
-        0,
-        Some(&now),
-    )
-    .await?;
-    Ok(PersistedSessionForkResult {
-        session: forked_session,
+    let target_anchor_message_id = anchor_message_id.map(|message_id| {
+        forked_anchor_message_id(message_id, source_session.id, target_session_id)
+    });
+    let fork_source_anchor_message_id = target_anchor_message_id.clone().or_else(|| {
+        source_last_visible_index
+            .and_then(|record_index| {
+                source_replay
+                    .as_ref()
+                    .and_then(|replay| replay.conversation_state.records.get(record_index))
+            })
+            .map(|record| {
+                forked_anchor_message_id(&record.id, source_session.id, target_session_id)
+            })
+    });
+    let truncate_after_anchor = match (source_anchor_index, source_last_visible_index) {
+        (Some(anchor_index), Some(last_index)) => anchor_index < last_index,
+        _ => false,
+    };
+    let fork_result = async {
+        if truncate_after_anchor
+            && let Some(anchor_message_id) = target_anchor_message_id.as_deref()
+        {
+            truncate_forked_persisted_session_after_message(
+                &target_dir,
+                &target_session_id_text,
+                anchor_message_id,
+            )?;
+        }
+        record_persisted_session_fork_source_marker(
+            &target_dir,
+            source_session,
+            project_id,
+            fork_source_anchor_message_id,
+        )?;
+        let forked_session = SessionSummary::new(
+            target_session_id,
+            Some(project_id.to_string()),
+            target_title,
+            source_session.focus.clone(),
+            SessionState::Completed,
+            source_session.changed_files,
+            source_session.queued_steps,
+            "",
+        )
+        .with_title_source(source_session.title_source)
+        .with_created_at(now.clone())
+        .with_updated_at(now.clone());
+        upsert_session_index_row(
+            controller,
+            &forked_session,
+            project_id,
+            false,
+            0,
+            Some(&now),
+        )
+        .await?;
+        Ok(PersistedSessionForkResult {
+            session: forked_session,
+        })
+    }
+    .await;
+    if fork_result.is_err() {
+        let _ = std::fs::remove_dir_all(&target_dir);
+    }
+    fork_result
+}
+
+/// Truncates a newly copied fork to the selected persisted message anchor.
+/// 将刚复制出的分叉会话截断到选中的持久化消息锚点。
+fn truncate_forked_persisted_session_after_message(
+    session_dir: &Path,
+    target_session_id_text: &str,
+    anchor_message_id: &str,
+) -> Result<(), String> {
+    let replay = replay_segmented_session_context(&session_dir)?
+        .ok_or_else(|| String::from("ERR_SESSION_FORK_EMPTY_SESSION"))?;
+    let record_index = fork_anchor_record_index_in_replay(&replay, anchor_message_id)?;
+    let mut retained_conversation_state = replay.conversation_state;
+    retained_conversation_state
+        .records
+        .truncate(record_index.saturating_add(1));
+    retained_conversation_state.continuation = Default::default();
+    let original_runtime_messages = retained_conversation_state.messages.clone();
+    let retained_messages = conversation_state_to_session_messages(&retained_conversation_state);
+    let retained_context_start_message_id =
+        retained_context_anchor(replay.context_start_message_id, &retained_messages);
+    retained_conversation_state = fork_conversation_state_from_retained_messages(
+        &retained_messages,
+        &original_runtime_messages,
+    );
+    truncate_segmented_session_after_message(&session_dir, anchor_message_id, &retained_messages)?;
+    let updated_at = current_unix_millis_text();
+    let mut runtime_state = SessionRuntimeStateEntry {
+        conversation_state: retained_conversation_state,
+        updated_at,
+        ..SessionRuntimeStateEntry::default()
+    };
+    runtime_state.last_compaction_id = replay.last_compaction_id;
+    runtime_state.context_start_message_id = retained_context_start_message_id;
+    runtime_state.conversation_state.continuation = Default::default();
+    let state_document = state_document_from_runtime_state(target_session_id_text, &runtime_state)?;
+    write_state(&session_dir, &state_document)?;
+    rebuild_runtime_log_from_conversation_state(
+        &session_dir,
+        &runtime_state.conversation_state,
+        &runtime_state.updated_at,
+    )?;
+    Ok(())
+}
+
+/// Returns the retained display-record index for one message-scoped fork anchor.
+/// 返回消息级分叉锚点对应的保留展示记录下标。
+fn fork_anchor_record_index_in_replay(
+    replay: &SegmentedSessionReplayResult,
+    anchor_message_id: &str,
+) -> Result<usize, String> {
+    replay
+        .conversation_state
+        .records
+        .iter()
+        .position(|record| record.id == anchor_message_id && record.visible)
+        .ok_or_else(|| String::from("ERR_SESSION_FORK_ANCHOR_NOT_FOUND"))
+        .and_then(|record_index| {
+            ensure_fork_anchor_after_context_start(replay, record_index)?;
+            Ok(record_index)
+        })
+}
+
+/// Returns the last visible display-record index in one replayed segmented session.
+/// 返回一份分段会话重放结果中的最后一条可见展示记录下标。
+fn last_visible_record_index_in_replay(replay: &SegmentedSessionReplayResult) -> Option<usize> {
+    replay
+        .conversation_state
+        .records
+        .iter()
+        .rposition(|record| record.visible)
+}
+
+/// Rejects anchors that belong to display history before the active runtime context boundary.
+/// 拒绝位于活动运行时上下文边界之前的展示历史锚点。
+fn ensure_fork_anchor_after_context_start(
+    replay: &SegmentedSessionReplayResult,
+    record_index: usize,
+) -> Result<(), String> {
+    let Some(context_start_message_id) = replay
+        .context_start_message_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|message_id| !message_id.is_empty())
+    else {
+        return Ok(());
+    };
+    let context_start_index = replay
+        .conversation_state
+        .records
+        .iter()
+        .position(|record| record.id == context_start_message_id)
+        .ok_or_else(|| String::from("ERR_SESSION_FORK_CONTEXT_START_NOT_FOUND"))?;
+    if record_index < context_start_index {
+        return Err(String::from("ERR_SESSION_FORK_ANCHOR_NOT_FOUND"));
+    }
+    Ok(())
+}
+
+/// Rebuilds fork runtime state from retained display records while preserving exact original runtime payloads when ids still match.
+/// 从保留展示记录重建分叉运行态，并在标识仍匹配时保留原始运行时载荷。
+fn fork_conversation_state_from_retained_messages(
+    retained_messages: &[SessionMessageEntry],
+    original_runtime_messages: &[SessionConversationMessage],
+) -> SessionConversationState {
+    let mut conversation_state = conversation_state_from_session_messages(retained_messages);
+    for message in &mut conversation_state.messages {
+        if let Some(original_message) = original_runtime_messages
+            .iter()
+            .find(|original_message| original_message.id == message.id)
+        {
+            *message = original_message.clone();
+        }
+    }
+    conversation_state
+}
+
+/// Preserves the context-start anchor only when it is still present after fork truncation.
+/// 仅当上下文起点锚点在分叉截断后仍然存在时保留它。
+fn retained_context_anchor(
+    context_start_message_id: Option<String>,
+    retained_messages: &[SessionMessageEntry],
+) -> Option<String> {
+    context_start_message_id.filter(|message_id| {
+        retained_messages
+            .iter()
+            .any(|message| message.id == message_id.as_str() && message.visible)
     })
 }
 
 /// Records a display-only source marker for a forked persisted session.
 /// 为已分叉的持久化会话记录纯展示用来源标记。
-pub fn record_persisted_session_fork_source_marker(
-    controller: &ControllerRuntimeHandle,
-    target_session_id: SessionId,
+fn record_persisted_session_fork_source_marker(
+    session_dir: &Path,
     source_session: &SessionSummary,
     source_project_id: &str,
+    anchor_message_id: Option<String>,
 ) -> Result<(), String> {
-    let session_dir = find_segmented_session_directory_by_id(
-        &controller.data_root,
-        &target_session_id.to_string(),
-    )?
-    .ok_or_else(|| String::from("ERR_SESSION_FORK_TARGET_NOT_FOUND"))?;
-    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
-    let replay = replay_segmented_session_context(&session_dir)?;
-    let anchor_message_id = replay
-        .as_ref()
-        .and_then(|replay| replay.conversation_state.messages.last())
-        .map(|message| message.id.clone());
     write_segmented_session_fork_source(
         &session_dir,
         SegmentedSessionForkSource {
@@ -167,6 +345,37 @@ pub fn record_persisted_session_fork_source_marker(
             anchor_message_id,
             created_at: current_unix_millis_text(),
         },
+    )
+}
+
+/// Locates one known session directory by its project and creation timestamp instead of scanning all sessions.
+/// 通过项目与创建时间定位一条已知会话目录，而不是扫描全部会话。
+fn locate_segmented_session_dir_for_summary(
+    controller: &ControllerRuntimeHandle,
+    session: &SessionSummary,
+    project_id: &str,
+    missing_error: &str,
+) -> Result<PathBuf, String> {
+    let created_at = normalized_session_created_at(session);
+    find_segmented_session_directory_for_task_store_created_at(
+        &controller.data_root,
+        project_id,
+        &created_at,
+        &session.id.to_string(),
+    )
+    .ok_or_else(|| missing_error.to_string())
+}
+
+/// Rewrites a source message anchor the same way the forked directory identity rewrite does.
+/// 按分叉目录身份改写的同一规则改写源消息锚点。
+fn forked_anchor_message_id(
+    anchor_message_id: &str,
+    source_session_id: SessionId,
+    target_session_id: SessionId,
+) -> String {
+    anchor_message_id.replace(
+        &source_session_id.to_string(),
+        &target_session_id.to_string(),
     )
 }
 
@@ -200,12 +409,16 @@ struct PersistedUserPromptTarget {
 /// 从持久化分段重放结果中定位一个可编辑用户提示词。
 fn locate_persisted_user_prompt_target(
     controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
+    session: &SessionSummary,
+    project_id: &str,
     message_id: &str,
 ) -> Result<PersistedUserPromptTarget, String> {
-    let session_dir =
-        find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
-            .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND"))?;
+    let session_dir = locate_segmented_session_dir_for_summary(
+        controller,
+        session,
+        project_id,
+        "ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND",
+    )?;
     let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     let replay = replay_segmented_session_context(&session_dir)?
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_EMPTY_SESSION"))?;
@@ -249,4 +462,171 @@ fn locate_persisted_user_prompt_target(
         last_compaction_id,
         context_start_message_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one persisted transcript message for fork-anchor lookup tests.
+    /// 为分叉锚点查找测试构建一条持久化转录消息。
+    fn test_message(
+        id: &str,
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        body: &str,
+    ) -> SessionMessageEntry {
+        let mut message = SessionMessageEntry::new(kind, "Title", body)
+            .with_runtime_metadata(id, format!("2026-07-09T10:00:0{}Z", id.len()));
+        message.record_kind = record_kind;
+        message
+    }
+
+    /// Builds one replay result from the current runtime-context messages.
+    /// 根据当前运行时上下文消息构建一份重放结果。
+    fn replay_from_messages(messages: Vec<SessionMessageEntry>) -> SegmentedSessionReplayResult {
+        SegmentedSessionReplayResult {
+            conversation_state: conversation_state_from_session_messages(&messages),
+            last_compaction_id: Some(String::from("segmented-compaction-test")),
+            context_start_message_id: messages.first().map(|message| message.id.clone()),
+            updated_at: Some(String::from("2026-07-09T10:00:00Z")),
+        }
+    }
+
+    /// Verifies a fork anchor is accepted when it belongs to the visible transcript records.
+    /// 验证分叉锚点属于可见转录记录时会被接受。
+    #[test]
+    fn fork_anchor_record_index_accepts_current_display_anchor() {
+        let replay = replay_from_messages(vec![
+            test_message(
+                "summary-user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "compressed prompt",
+            ),
+            test_message(
+                "summary-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "compressed answer",
+            ),
+            test_message(
+                "live-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "new answer",
+            ),
+        ]);
+
+        let record_index = fork_anchor_record_index_in_replay(&replay, "live-assistant")
+            .expect("current display anchor should be accepted");
+
+        assert_eq!(record_index, 2);
+    }
+
+    /// Verifies fork validation does not require a matching provider-runtime message id.
+    /// 验证分叉校验不要求存在同名 Provider 运行时消息标识。
+    #[test]
+    fn fork_anchor_record_index_accepts_display_anchor_without_runtime_message() {
+        let mut replay = replay_from_messages(vec![
+            test_message(
+                "summary-user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "compressed prompt",
+            ),
+            test_message(
+                "display-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "visible answer",
+            ),
+        ]);
+        replay.conversation_state.messages.clear();
+
+        let record_index = fork_anchor_record_index_in_replay(&replay, "display-assistant")
+            .expect("display anchor should not depend on provider messages");
+
+        assert_eq!(record_index, 1);
+    }
+
+    /// Verifies visible records before the active context-start anchor cannot be forked.
+    /// 验证活动上下文起点之前的可见记录不能作为分叉锚点。
+    #[test]
+    fn fork_anchor_record_index_rejects_anchor_before_context_start() {
+        let mut replay = replay_from_messages(vec![
+            test_message(
+                "old-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "old answer",
+            ),
+            test_message(
+                "compaction-summary",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::CompactionSummary,
+                "compressed context",
+            ),
+            test_message(
+                "live-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "new answer",
+            ),
+        ]);
+        replay.context_start_message_id = Some(String::from("compaction-summary"));
+
+        let error = fork_anchor_record_index_in_replay(&replay, "old-assistant")
+            .expect_err("pre-context display anchor should be rejected");
+
+        assert_eq!(error, "ERR_SESSION_FORK_ANCHOR_NOT_FOUND");
+        let record_index = fork_anchor_record_index_in_replay(&replay, "live-assistant")
+            .expect("post-context display anchor should be accepted");
+        assert_eq!(record_index, 2);
+    }
+
+    /// Verifies a fork anchor from pruned display history is rejected by runtime replay validation.
+    /// 验证来自已裁剪展示历史的分叉锚点会被运行时重放校验拒绝。
+    #[test]
+    fn fork_anchor_record_index_rejects_pruned_display_anchor() {
+        let replay = replay_from_messages(vec![
+            test_message(
+                "summary-user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "compressed prompt",
+            ),
+            test_message(
+                "summary-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "compressed answer",
+            ),
+        ]);
+
+        let error = fork_anchor_record_index_in_replay(&replay, "old-assistant")
+            .expect_err("pruned display anchor should be rejected");
+
+        assert_eq!(error, "ERR_SESSION_FORK_ANCHOR_NOT_FOUND");
+    }
+
+    /// Verifies fork truncation uses the target-side message id after session identity rewriting.
+    /// 验证分叉截断在会话身份改写后使用目标侧消息标识。
+    #[test]
+    fn forked_anchor_message_id_matches_session_identity_rewrite() {
+        let source_session_id = SessionId::from_u128(610);
+        let target_session_id = SessionId::from_u128(611);
+        let source_anchor_message_id = format!("{source_session_id}-1783590054811-255");
+
+        let target_anchor_message_id = forked_anchor_message_id(
+            &source_anchor_message_id,
+            source_session_id,
+            target_session_id,
+        );
+
+        assert_eq!(
+            target_anchor_message_id,
+            format!("{target_session_id}-1783590054811-255")
+        );
+    }
 }

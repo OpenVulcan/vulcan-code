@@ -41,6 +41,7 @@ pub(in crate::workspace_store) struct SubagentAgentProfile {
 
 /// Spawn origin recorded in a child task metadata event.
 /// 子任务元数据事件中记录的派生来源。
+#[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::workspace_store) struct SubagentSpawnedBy {
     /// Parent turn identifier when known.
@@ -192,6 +193,7 @@ pub(in crate::workspace_store) struct SegmentedSessionMetadata {
 
 /// Metadata document stored in each child task session directory.
 /// 存储在每个子任务会话目录中的元数据文档。
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::workspace_store) struct SegmentedTaskSessionMetadata {
     /// Metadata schema version.

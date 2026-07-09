@@ -7,7 +7,7 @@ import {
   type ConversationTimelineUserScrollDirection,
   type ConversationTimelineVirtualRestoreState,
 } from "@/components/conversation/conversation-virtualization";
-import { GitFork } from "lucide-react";
+import { Split } from "lucide-react";
 import {
   createEmptyConversationSurfaceExpandedState,
   type ConversationSurfaceExpandedState,
@@ -31,6 +31,7 @@ import {
   ConversationRenderItemView,
   renderItemHiddenByThinkingDisplay,
 } from "@/components/conversation/conversation-render-items";
+import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
 import {
   PlanArtifactBlock,
   type PlanArtifactActionPayload,
@@ -170,7 +171,7 @@ export function ConversationWorkspace(props: {
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
-  onForkConversation?: (conversationId: string) => Promise<boolean> | boolean;
+  onForkConversation?: (conversationId: string, anchorMessageId?: string) => Promise<boolean> | boolean;
   // Selects the original source conversation for a fork marker.
   // 选择分叉标记对应的原始来源会话。
   onSelectForkSourceConversation?: (conversationId: string) => void;
@@ -249,16 +250,23 @@ export function ConversationWorkspace(props: {
     }
     return visibleTimelineItems.some((item) => timelineItemContainsPlanArtifact(item, artifact));
   }, [props.pendingPlanArtifact, visibleTimelineItems]);
-  // latestFinalAssistantMetaKey keeps fork as a full-current-session action instead of a message-bound rollback.
-  // latestFinalAssistantMetaKey 将 fork 保持为完整当前会话动作，而不是绑定消息的回滚动作。
-  const latestFinalAssistantMetaKey = React.useMemo(() => {
-    for (let index = visibleTimelineItems.length - 1; index >= 0; index -= 1) {
-      const item = visibleTimelineItems[index];
-      if (item.kind === "final-assistant-meta") {
-        return conversationTimelineItemKey(item);
+  // lockedTimelineActionKeys identifies rows before the latest completed compaction runtime boundary.
+  // lockedTimelineActionKeys 标识最后一次成功压缩运行时边界之前的只读行。
+  const lockedTimelineActionKeys = React.useMemo(() => {
+    let latestCompletedCompactionIndex = -1;
+    visibleTimelineItems.forEach((item, index) => {
+      if (timelineItemHasCompletedContextCompaction(item)) {
+        latestCompletedCompactionIndex = index;
       }
+    });
+    if (latestCompletedCompactionIndex < 0) {
+      return new Set<string>();
     }
-    return null;
+    return new Set(
+      visibleTimelineItems
+        .slice(0, latestCompletedCompactionIndex + 1)
+        .map(conversationTimelineItemKey),
+    );
   }, [visibleTimelineItems]);
   const timelineCacheScopeKey = props.conversation?.id ?? props.parentConversationId ?? "conversation";
   const turnGroups = React.useMemo(
@@ -481,15 +489,17 @@ export function ConversationWorkspace(props: {
     }
     if (timelineItem.kind === "final-assistant-meta") {
       const metaKey = conversationTimelineItemKey(timelineItem);
+      const lockedByCompaction = lockedTimelineActionKeys.has(metaKey);
       return (
         <ConversationFinalAssistantMeta
           item={timelineItem.item}
           onCopyText={props.onCopyText}
-          onForkConversation={metaKey === latestFinalAssistantMetaKey ? props.onForkConversation : undefined}
+          onForkConversation={!lockedByCompaction && timelineItem.item.sourceMessage ? props.onForkConversation : undefined}
         />
       );
     }
     if (timelineItem.kind === "item") {
+      const lockedByCompaction = lockedTimelineActionKeys.has(conversationTimelineItemKey(timelineItem));
       return (
         <ConversationRenderItemView
           item={timelineItem.item}
@@ -504,6 +514,7 @@ export function ConversationWorkspace(props: {
           commandSessions={props.commandSessions}
           onCopyText={props.onCopyText}
           onEditUserPrompt={props.onEditUserPrompt}
+          userPromptEditDisabled={lockedByCompaction}
           onOpenDetail={setDetail}
           onOpenMedia={setMediaPlayer}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -537,6 +548,7 @@ export function ConversationWorkspace(props: {
         onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
         onCopyText={props.onCopyText}
         onEditUserPrompt={props.onEditUserPrompt}
+        userPromptEditDisabled={lockedTimelineActionKeys.has(conversationTimelineItemKey(timelineItem))}
         onOpenDetail={setDetail}
         onOpenMedia={setMediaPlayer}
         onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -676,6 +688,28 @@ function renderItemContainsPlanArtifact(
   ));
 }
 
+// timelineItemHasCompletedContextCompaction detects the durable runtime compaction boundary.
+// timelineItemHasCompletedContextCompaction 检测持久运行时压缩边界。
+function timelineItemHasCompletedContextCompaction(item: ConversationTimelineItem): boolean {
+  if (item.kind === "item" || item.kind === "final-assistant-meta") {
+    return renderItemHasCompletedContextCompaction(item.item);
+  }
+  if (item.kind === "process") {
+    return item.process.items.some(renderItemHasCompletedContextCompaction)
+      || item.process.guidanceItems.some(renderItemHasCompletedContextCompaction);
+  }
+  return false;
+}
+
+// renderItemHasCompletedContextCompaction checks one projected row for a completed compaction marker.
+// renderItemHasCompletedContextCompaction 检查单条投影行是否包含已完成压缩标记。
+function renderItemHasCompletedContextCompaction(item: ConversationRenderItem): boolean {
+  return item.blocks.some((block) => (
+    isContextCompactionBlock(block)
+      && block.compactionState?.trim().toLowerCase() === "completed"
+  ));
+}
+
 // conversationPlanArtifactsMatch compares stable file identity first and content identity second.
 // conversationPlanArtifactsMatch 优先比较稳定文件身份，其次比较内容身份。
 function conversationPlanArtifactsMatch(
@@ -760,7 +794,7 @@ function ConversationForkSourceSeparator(props: {
     <button className="conversation-fork-source" onClick={props.onSelect} type="button">
       <span className="conversation-fork-source__line" />
       <span className="conversation-fork-source__label">
-        <GitFork size={14} />
+        <Split size={14} />
         <span>{props.label}</span>
       </span>
       <span className="conversation-fork-source__line" />

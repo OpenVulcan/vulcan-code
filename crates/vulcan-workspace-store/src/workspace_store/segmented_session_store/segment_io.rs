@@ -597,14 +597,6 @@ pub(in crate::workspace_store) fn read_session_metadata(
     read_required_json::<SegmentedSessionMetadata>(&metadata_path(session_dir))
 }
 
-/// Reads one child task metadata document.
-/// 读取一份子任务元数据文档。
-pub(in crate::workspace_store) fn read_task_session_metadata(
-    task_dir: &Path,
-) -> Result<SegmentedTaskSessionMetadata, String> {
-    read_required_json::<SegmentedTaskSessionMetadata>(&metadata_path(task_dir))
-}
-
 /// Lists one active or archived segmented-session root from text metadata.
 /// 从文本元数据列出一个活动或归档分段会话根。
 pub(in crate::workspace_store) fn list_segmented_session_catalog_for_root(
@@ -658,6 +650,7 @@ pub(in crate::workspace_store) fn write_metadata(
 
 /// Writes a task session metadata document atomically.
 /// 原子写入子任务会话元数据文档。
+#[cfg(test)]
 pub(in crate::workspace_store) fn write_task_metadata(
     task_dir: &Path,
     metadata: &SegmentedTaskSessionMetadata,

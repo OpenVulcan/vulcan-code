@@ -93,6 +93,9 @@ export interface WorkspaceShellProps {
   // Whether an older history page is currently being loaded.
   // 当前是否正在加载更早历史页。
   conversationHistoryLoading: boolean;
+  // Whether a conversation fork request is currently blocking workspace interaction.
+  // 当前是否有会话分叉请求正在阻塞工作台交互。
+  conversationForkInProgress: boolean;
   // Pinned conversation ids used by the project tree.
   // 项目树使用的置顶会话标识集合。
   pinnedConversationIds: Set<string>;
@@ -314,7 +317,7 @@ export interface WorkspaceShellProps {
   }) => Promise<boolean>;
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
-  onForkConversation: (conversationId: string) => Promise<boolean>;
+  onForkConversation: (conversationId: string, anchorMessageId?: string) => Promise<boolean>;
   // Loads hidden tool details for transcript rows.
   // 为转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;

@@ -6,8 +6,8 @@ import {
   ChevronUp,
   Clock3,
   Copy,
-  GitFork,
   Pencil,
+  Split,
 } from "lucide-react";
 
 import {
@@ -91,6 +91,9 @@ export function ConversationProcessGroup(props: {
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
+  // Whether user prompt editing is locked by the current runtime boundary.
+  // 用户提示词编辑是否被当前运行时边界锁定。
+  userPromptEditDisabled?: boolean;
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -194,6 +197,7 @@ export function ConversationProcessGroup(props: {
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
             onEditUserPrompt={props.onEditUserPrompt}
+            userPromptEditDisabled={props.userPromptEditDisabled}
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -226,6 +230,7 @@ export function ConversationProcessGroup(props: {
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
             onEditUserPrompt={props.onEditUserPrompt}
+            userPromptEditDisabled={props.userPromptEditDisabled}
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -261,6 +266,7 @@ export function ConversationProcessGroup(props: {
               expandedUserPromptIds={props.expandedUserPromptIds}
               onCopyText={props.onCopyText}
               onEditUserPrompt={props.onEditUserPrompt}
+              userPromptEditDisabled={props.userPromptEditDisabled}
               onOpenDetail={props.onOpenDetail}
               onOpenMedia={props.onOpenMedia}
               onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -343,6 +349,9 @@ export function ConversationRenderItemView(props: {
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
+  // Whether user prompt editing is locked by the current runtime boundary.
+  // 用户提示词编辑是否被当前运行时边界锁定。
+  userPromptEditDisabled?: boolean;
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -523,7 +532,7 @@ export function ConversationRenderItemView(props: {
               {userPromptCopied ? <Check size={14} /> : <Copy size={14} />}
             </button>
           ) : null}
-          {props.item.userMessage?.editableUserPrompt ? (
+          {props.item.userMessage?.editableUserPrompt && props.onEditUserPrompt && !props.userPromptEditDisabled ? (
             <button
               aria-label={t("conversation.userPrompt.edit")}
               className="user-message-copy"
@@ -590,13 +599,14 @@ export function ConversationFinalAssistantMeta(props: {
   onCopyText: (text: string) => Promise<void> | void;
   // Creates a forked copy of the owning conversation.
   // 创建所属会话的分叉副本。
-  onForkConversation?: (conversationId: string) => Promise<boolean> | boolean;
+  onForkConversation?: (conversationId: string, anchorMessageId?: string) => Promise<boolean> | boolean;
 }) {
   const { t } = useI18n();
   const finalAssistantRawText = finalAssistantOutputText(props.item);
   const finalAssistantTimestampMs = conversationMessageUnixMillis(props.item.sourceMessage);
   const finalAssistantTimestamp = formatShortConversationTimestamp(props.item.sourceMessage);
   const conversationId = props.item.sourceMessage?.conversationId ?? null;
+  const forkAnchorMessageId = props.item.sourceMessage?.id ?? undefined;
   const [finalAssistantCopied, setFinalAssistantCopied] = React.useState(false);
   const handleCopyFinalAssistantOutput = React.useCallback(async () => {
     if (!finalAssistantRawText) {
@@ -609,8 +619,8 @@ export function ConversationFinalAssistantMeta(props: {
     if (!conversationId) {
       return;
     }
-    await props.onForkConversation?.(conversationId);
-  }, [conversationId, props]);
+    await props.onForkConversation?.(conversationId, forkAnchorMessageId);
+  }, [conversationId, forkAnchorMessageId, props]);
   return (
     <div className="assistant-final-meta">
       {finalAssistantRawText ? (
@@ -633,7 +643,7 @@ export function ConversationFinalAssistantMeta(props: {
           title={t("conversation.action.fork")}
           type="button"
         >
-          <GitFork size={13} />
+          <Split size={13} />
         </button>
       ) : null}
       {finalAssistantTimestamp && finalAssistantTimestampMs ? (

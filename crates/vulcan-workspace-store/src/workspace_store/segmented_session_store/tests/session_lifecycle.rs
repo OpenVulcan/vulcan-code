@@ -212,7 +212,8 @@ fn fork_session_directory_rewrites_structural_identity() {
     append_segmented_session_message_tail(&source_dir, &[task_card_message])
         .expect("append source task transcript card");
 
-    let target_dir = fork_segmented_session_directory(
+    let target_dir = fork_segmented_session_directory_from_source(
+        &source_dir,
         &root,
         &SegmentedSessionForkRequest {
             source_archived: false,
@@ -235,12 +236,15 @@ fn fork_session_directory_rewrites_structural_identity() {
     assert_eq!(target_metadata.session_id, target_session_id);
     assert_eq!(target_metadata.title.as_deref(), Some("Alpha Fork"));
     assert_eq!(target_metadata.created_at, "2026-06-07T10:00:00Z");
-    assert_eq!(target_metadata.tasks.len(), 1);
-    let target_task = &target_metadata.tasks[0];
-    assert_ne!(target_task.session_id, "task-alpha");
-    assert!(target_task.dir.starts_with("task/"));
-    assert!(target_task.active_segment.starts_with(&target_task.dir));
-    assert!(target_task.metadata_file.starts_with(&target_task.dir));
+    assert!(target_metadata.tasks.is_empty());
+    let target_task_root = target_dir.join(&target_metadata.task_dir);
+    assert!(target_task_root.is_dir());
+    assert!(
+        fs::read_dir(&target_task_root)
+            .expect("read target task root")
+            .next()
+            .is_none()
+    );
 
     let target_state = read_state(&target_dir)
         .expect("read target state")
@@ -288,38 +292,29 @@ fn fork_session_directory_rewrites_structural_identity() {
     assert_eq!(target_lines[0].kind, SegmentedSessionEventKind::SessionMeta);
     assert_eq!(target_lines[0].payload["session_id"], target_session_id);
     assert_eq!(target_lines[0].payload["project_tag"], "Project Alpha");
-    assert_eq!(
-        target_lines[1].kind,
+    assert!(!target_lines.iter().any(|line| matches!(
+        line.kind,
         SegmentedSessionEventKind::SubagentTaskStarted
-    );
-    assert_eq!(
-        target_lines[1].payload["task_session_id"],
-        target_task.session_id
-    );
-    assert_eq!(target_lines[1].payload["task_dir"], target_task.dir);
-    assert_eq!(
-        target_lines[2].kind,
-        SegmentedSessionEventKind::SessionBoundary
-    );
-    assert_eq!(target_lines[2].payload["thread_id"], target_session_id);
+            | SegmentedSessionEventKind::SubagentTaskEventLinked
+            | SegmentedSessionEventKind::SubagentTaskCompleted
+    )));
+    let boundary_line = target_lines
+        .iter()
+        .find(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
+        .expect("target boundary line exists");
+    assert_eq!(boundary_line.payload["thread_id"], target_session_id);
     let task_card_line = target_lines
         .iter()
         .find(|line| line.payload["message_id"] == "task-card")
         .expect("target task card line exists");
     let task_card_metadata = &task_card_line.payload["message"]["metadata"];
-    assert_eq!(
-        task_card_metadata["task_session_id"],
-        target_task.session_id
-    );
-    assert_eq!(task_card_metadata["task_id"], target_task.session_id);
-    assert_eq!(
-        task_card_metadata["child_thread_id"],
-        target_task.session_id
-    );
+    assert_eq!(task_card_metadata["task_session_id"], "task-alpha");
+    assert_eq!(task_card_metadata["task_id"], "task-alpha");
+    assert_eq!(task_card_metadata["child_thread_id"], "task-alpha");
     assert_eq!(task_card_metadata["parent_thread_id"], target_session_id);
     assert_eq!(
         task_card_metadata["subagent_mailbox_event"]["child_thread_id"],
-        target_task.session_id
+        "task-alpha"
     );
     assert_eq!(
         task_card_metadata["subagent_mailbox_event"]["parent_thread_id"],
@@ -327,56 +322,10 @@ fn fork_session_directory_rewrites_structural_identity() {
     );
     assert_eq!(
         task_card_metadata["subagent_mailbox_event"]["payload"]["task_session_id"],
-        target_task.session_id
+        "task-alpha"
     );
     assert_eq!(
         task_card_metadata["subagent_mailbox_event"]["payload"]["task_id"],
-        target_task.session_id
-    );
-
-    let target_task_dir = target_dir.join(&target_task.dir);
-    let target_task_metadata =
-        read_task_session_metadata(&target_task_dir).expect("read target task metadata");
-    assert_eq!(target_task_metadata.task_session_id, target_task.session_id);
-    assert_eq!(target_task_metadata.parent_session_id, target_session_id);
-    let target_task_state = read_state(&target_task_dir)
-        .expect("read target task state")
-        .expect("target task state exists");
-    assert_eq!(target_task_state.session_id, target_task.session_id);
-    assert_eq!(
-        target_task_state.runtime_state["active_provider_id"],
-        "task-provider"
-    );
-    assert_eq!(
-        target_task_state.session_boundary_state["thread_id"],
-        target_task.session_id
-    );
-    assert_eq!(
-        target_task_state.session_boundary_state["parent_thread_id"],
-        target_session_id
-    );
-    assert!(runtime_metadata_path(&target_task_dir).exists());
-    assert!(runtime_index_path(&target_task_dir).exists());
-    assert!(runtime_dir_path(&target_task_dir).exists());
-    let target_task_runtime_lines = read_runtime_log_lines(&target_task_dir)
-        .expect("read target task runtime lines")
-        .expect("target task runtime exists");
-    let target_task_runtime_text = serde_json::to_string(&target_task_runtime_lines)
-        .expect("serialize target task runtime lines");
-    assert!(!target_task_runtime_text.contains("task-alpha"));
-    assert!(target_task_runtime_text.contains(&target_task.session_id));
-    let target_task_lines = read_segment_event_lines(&target_task_dir.join("s001.jsonl"))
-        .expect("read target task lines");
-    assert_eq!(
-        target_task_lines[0].kind,
-        SegmentedSessionEventKind::SubagentTaskMeta
-    );
-    assert_eq!(
-        target_task_lines[0].payload["task_session_id"],
-        target_task.session_id
-    );
-    assert_eq!(
-        target_task_lines[0].payload["parent_session_id"],
-        target_session_id
+        "task-alpha"
     );
 }

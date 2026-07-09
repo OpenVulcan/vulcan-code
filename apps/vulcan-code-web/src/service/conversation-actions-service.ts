@@ -321,6 +321,7 @@ export async function submitUserPromptEdit(request: {
 export async function forkConversation(request: {
   conversationId: string;
   title: string;
+  anchorMessageId?: string;
 }): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;

@@ -153,7 +153,7 @@ export interface ChatAreaProps {
   }) => Promise<boolean>;
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
-  onForkConversation: (conversationId: string) => Promise<boolean>;
+  onForkConversation: (conversationId: string, anchorMessageId?: string) => Promise<boolean>;
   // Selects one persisted conversation from a transcript navigation affordance.
   // 从转录导航入口选择一个持久化会话。
   onSelectConversation: (conversationId: string) => void;
