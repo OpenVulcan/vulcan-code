@@ -34,18 +34,6 @@ pub struct PersistedSessionForkResult {
     pub session: SessionSummary,
 }
 
-/// Emits one temporary persisted-fork timing trace line unconditionally.
-/// 无条件输出一条临时持久化分叉耗时诊断日志。
-fn persisted_fork_trace(stage: &str, started_at_ms: i64, detail: impl AsRef<str>) {
-    let elapsed_ms = current_unix_millis().saturating_sub(started_at_ms);
-    eprintln!(
-        "[webui-service][fork-trace] source=workspace-store stage={} elapsed_ms={} {}",
-        stage,
-        elapsed_ms,
-        detail.as_ref()
-    );
-}
-
 /// Loads one user-prompt edit draft from persisted segmented session state.
 /// 从持久化分段会话状态加载一份用户提示词编辑草稿。
 pub async fn load_persisted_user_prompt_edit_draft(
@@ -107,51 +95,19 @@ pub async fn fork_persisted_session(
     target_title: String,
     anchor_message_id: Option<&str>,
 ) -> Result<PersistedSessionForkResult, String> {
-    let persisted_total_started_at = current_unix_millis();
     let now = current_unix_millis_text();
     let target_session_id_text = target_session_id.to_string();
     let anchor_message_id = anchor_message_id
         .map(str::trim)
         .filter(|message_id| !message_id.is_empty());
-    let source_locate_started_at = current_unix_millis();
     let source_dir = locate_segmented_session_dir_for_summary(
         controller,
         source_session,
         project_id,
         "ERR_SESSION_FORK_SOURCE_NOT_FOUND",
     )?;
-    persisted_fork_trace(
-        "persist.locate_source_dir",
-        source_locate_started_at,
-        format!(
-            "source_session={} project={} source_dir={}",
-            source_session.id,
-            project_id,
-            source_dir.display()
-        ),
-    );
-    let repair_started_at = current_unix_millis();
     let _ = repair_segmented_session_display_if_needed(&source_dir)?;
-    persisted_fork_trace(
-        "persist.repair_source_display_if_needed",
-        repair_started_at,
-        format!("source_session={}", source_session.id),
-    );
-    let replay_started_at = current_unix_millis();
     let source_replay = replay_segmented_session_context_without_repair(&source_dir)?;
-    let source_record_count = source_replay
-        .as_ref()
-        .map(|replay| replay.conversation_state.records.len())
-        .unwrap_or_default();
-    persisted_fork_trace(
-        "persist.replay_source",
-        replay_started_at,
-        format!(
-            "source_session={} records={}",
-            source_session.id, source_record_count
-        ),
-    );
-    let anchor_started_at = current_unix_millis();
     let source_anchor_index = anchor_message_id
         .map(|message_id| {
             let replay = source_replay
@@ -163,14 +119,6 @@ pub async fn fork_persisted_session(
     let source_last_visible_index = source_replay
         .as_ref()
         .and_then(last_visible_record_index_in_replay);
-    persisted_fork_trace(
-        "persist.resolve_anchor",
-        anchor_started_at,
-        format!(
-            "source_session={} anchor={:?} anchor_index={:?} last_visible_index={:?}",
-            source_session.id, anchor_message_id, source_anchor_index, source_last_visible_index
-        ),
-    );
     let truncate_after_anchor = match (source_anchor_index, source_last_visible_index) {
         (Some(anchor_index), Some(last_index)) => anchor_index < last_index,
         _ => false,
@@ -180,7 +128,6 @@ pub async fn fork_persisted_session(
     let source_anchor_message_id_for_display = anchor_message_id
         .filter(|_| truncate_after_anchor)
         .map(ToOwned::to_owned);
-    let directory_fork_started_at = current_unix_millis();
     let target_dir = fork_segmented_session_directory_from_source(
         &source_dir,
         &controller.data_root,
@@ -197,16 +144,6 @@ pub async fn fork_persisted_session(
             source_anchor_message_id: source_anchor_message_id_for_display,
         },
     )?;
-    persisted_fork_trace(
-        "persist.copy_and_rewrite_directory",
-        directory_fork_started_at,
-        format!(
-            "source_session={} target_session={} target_dir={}",
-            source_session.id,
-            target_session_id_text,
-            target_dir.display()
-        ),
-    );
     let target_anchor_message_id = anchor_message_id.map(|message_id| {
         forked_anchor_message_id(message_id, source_session.id, target_session_id)
     });
@@ -223,10 +160,9 @@ pub async fn fork_persisted_session(
     });
     let fork_result = async {
         if truncate_after_anchor
-            && let Some(anchor_message_id) = target_anchor_message_id.as_deref()
+            && target_anchor_message_id.is_some()
             && let Some(anchor_index) = source_anchor_index
         {
-            let truncate_started_at = current_unix_millis();
             let replay = source_replay
                 .as_ref()
                 .ok_or_else(|| String::from("ERR_SESSION_FORK_EMPTY_SESSION"))?;
@@ -237,36 +173,13 @@ pub async fn fork_persisted_session(
                 anchor_index,
                 &identity_replacements,
             )?;
-            persisted_fork_trace(
-                "persist.rebuild_target_runtime_after_anchor",
-                truncate_started_at,
-                format!(
-                    "target_session={} anchor={anchor_message_id}",
-                    target_session_id_text
-                ),
-            );
-        } else {
-            persisted_fork_trace(
-                "persist.skip_truncate_target",
-                current_unix_millis(),
-                format!(
-                    "target_session={} anchor={:?} truncate_after_anchor={}",
-                    target_session_id_text, target_anchor_message_id, truncate_after_anchor
-                ),
-            );
         }
-        let marker_started_at = current_unix_millis();
         record_persisted_session_fork_source_marker(
             &target_dir,
             source_session,
             project_id,
             fork_source_anchor_message_id,
         )?;
-        persisted_fork_trace(
-            "persist.record_source_marker",
-            marker_started_at,
-            format!("target_session={target_session_id_text}"),
-        );
         let forked_session = SessionSummary::new(
             target_session_id,
             Some(project_id.to_string()),
@@ -280,7 +193,6 @@ pub async fn fork_persisted_session(
         .with_title_source(source_session.title_source)
         .with_created_at(now.clone())
         .with_updated_at(now.clone());
-        let index_started_at = current_unix_millis();
         upsert_session_index_row(
             controller,
             &forked_session,
@@ -290,33 +202,13 @@ pub async fn fork_persisted_session(
             Some(&now),
         )
         .await?;
-        persisted_fork_trace(
-            "persist.upsert_session_index",
-            index_started_at,
-            format!("target_session={target_session_id_text}"),
-        );
         Ok(PersistedSessionForkResult {
             session: forked_session,
         })
     }
     .await;
     if fork_result.is_err() {
-        let cleanup_started_at = current_unix_millis();
         let _ = std::fs::remove_dir_all(&target_dir);
-        persisted_fork_trace(
-            "persist.cleanup_failed_target",
-            cleanup_started_at,
-            format!("target_session={target_session_id_text}"),
-        );
-    } else {
-        persisted_fork_trace(
-            "persist.total",
-            persisted_total_started_at,
-            format!(
-                "source_session={} target_session={}",
-                source_session.id, target_session_id_text
-            ),
-        );
     }
     fork_result
 }
@@ -330,23 +222,12 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
     source_anchor_record_index: usize,
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let truncate_total_started_at = current_unix_millis();
     let mut retained_conversation_state = source_replay.conversation_state.clone();
     retained_conversation_state
         .records
         .truncate(source_anchor_record_index.saturating_add(1));
     retained_conversation_state.continuation = Default::default();
-    let identity_rewrite_started_at = current_unix_millis();
     rewrite_forked_conversation_state_identity(&mut retained_conversation_state, replacements)?;
-    persisted_fork_trace(
-        "truncate.rewrite_source_replay_identity",
-        identity_rewrite_started_at,
-        format!(
-            "target_session={} records={}",
-            target_session_id_text,
-            retained_conversation_state.records.len()
-        ),
-    );
     let original_runtime_messages = retained_conversation_state.messages.clone();
     let retained_messages = conversation_state_to_session_messages(&retained_conversation_state);
     let retained_context_start_message_id = retained_context_anchor(
@@ -360,19 +241,9 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
         &retained_messages,
         &original_runtime_messages,
     );
-    let checkpoint_started_at = current_unix_millis();
     let mut metadata = read_session_metadata(session_dir)?;
     update_segmented_message_checkpoint(&mut metadata, &retained_messages)?;
     write_metadata(session_dir, &metadata)?;
-    persisted_fork_trace(
-        "truncate.update_message_checkpoint",
-        checkpoint_started_at,
-        format!(
-            "target_session={} retained_messages={}",
-            target_session_id_text,
-            retained_messages.len()
-        ),
-    );
     let updated_at = current_unix_millis_text();
     let mut runtime_state = SessionRuntimeStateEntry {
         conversation_state: retained_conversation_state,
@@ -382,30 +253,13 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
     runtime_state.last_compaction_id = source_replay.last_compaction_id.clone();
     runtime_state.context_start_message_id = retained_context_start_message_id;
     runtime_state.conversation_state.continuation = Default::default();
-    let state_write_started_at = current_unix_millis();
     let state_document = state_document_from_runtime_state(target_session_id_text, &runtime_state)?;
     write_state(&session_dir, &state_document)?;
-    persisted_fork_trace(
-        "truncate.write_state",
-        state_write_started_at,
-        format!("target_session={target_session_id_text}"),
-    );
-    let runtime_rebuild_started_at = current_unix_millis();
     rebuild_runtime_log_from_conversation_state(
         &session_dir,
         &runtime_state.conversation_state,
         &runtime_state.updated_at,
     )?;
-    persisted_fork_trace(
-        "truncate.rebuild_runtime_log",
-        runtime_rebuild_started_at,
-        format!("target_session={target_session_id_text}"),
-    );
-    persisted_fork_trace(
-        "truncate.total",
-        truncate_total_started_at,
-        format!("target_session={target_session_id_text}"),
-    );
     Ok(())
 }
 

@@ -326,29 +326,7 @@ export async function forkConversation(request: {
   if (!hasServiceRuntime()) {
     return null;
   }
-  const forkRequestStartedAt = performance.now();
-  console.info("[fork-trace] frontend.service.request.start", {
-    conversationId: request.conversationId,
-    anchorMessageId: request.anchorMessageId ?? null,
-  });
-  try {
-    const snapshot = await serviceClient.request<WorkbenchSnapshot>("service_fork_conversation", { request });
-    console.info("[fork-trace] frontend.service.request.success", {
-      conversationId: request.conversationId,
-      selectedConversationId: snapshot.selectedConversationId,
-      elapsedMs: Math.round(performance.now() - forkRequestStartedAt),
-      conversations: snapshot.conversations.length,
-      messages: snapshot.messages.length,
-    });
-    return snapshot;
-  } catch (error) {
-    console.info("[fork-trace] frontend.service.request.error", {
-      conversationId: request.conversationId,
-      elapsedMs: Math.round(performance.now() - forkRequestStartedAt),
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
-  }
+  return serviceClient.request<WorkbenchSnapshot>("service_fork_conversation", { request });
 }
 
 // saveSessionGoal persists a user-authored goal for the current conversation.
