@@ -1,10 +1,10 @@
 use super::*;
 
-/// Verifies non-tail transcript changes are rejected instead of being silently appended out of order.
-/// 验证非尾部转录变更会被拒绝，而不是被静默乱序追加。
+/// Verifies an inserted transcript row triggers a physical rewrite instead of an unchecked suffix append.
+/// 验证插入转录行会触发物理重写，而不是未经校验的尾部追加。
 #[test]
-fn append_message_tail_rejects_non_tail_change() {
-    let root = test_root("append_message_tail_rejects_non_tail_change");
+fn append_message_update_physically_rewrites_inserted_history() {
+    let root = test_root("append_message_update_physically_rewrites_inserted_history");
     let session_dir = create_segmented_session_in_location(
         &root,
         false,
@@ -25,7 +25,7 @@ fn append_message_tail_rejects_non_tail_change() {
             "first answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &first_messages)
+    append_segmented_session_message_update(&session_dir, &first_messages)
         .expect("append first messages");
 
     let changed_messages = vec![
@@ -38,10 +38,81 @@ fn append_message_tail_rejects_non_tail_change() {
         ),
         first_messages[1].clone(),
     ];
-    let error = append_segmented_session_message_tail(&session_dir, &changed_messages)
-        .expect_err("reject non-tail change");
+    let changed_lines = append_segmented_session_message_update(&session_dir, &changed_messages)
+        .expect("rewrite inserted transcript row");
 
-    assert!(error.contains("non-tail transcript change"));
+    let metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+            .expect("read rewritten metadata");
+    let replay = replay_segmented_session_context(&session_dir)
+        .expect("replay rewritten transcript")
+        .expect("rewritten transcript replay result");
+    let replay_messages = conversation_state_to_session_messages(&replay.conversation_state);
+    assert_eq!(changed_lines.len(), 2);
+    assert_eq!(metadata.message_count, 3);
+    assert_eq!(metadata.latest_rollback_seq, None);
+    assert_eq!(replay_messages, changed_messages);
+}
+
+/// Verifies an incomplete persisted tail checkpoint forces a physical rewrite and checkpoint repair.
+/// 验证不完整的持久化尾部检查点会强制执行物理重写并修复检查点。
+#[test]
+fn append_message_update_rewrites_incomplete_tail_checkpoint() {
+    let root = test_root("append_message_update_rewrites_incomplete_tail_checkpoint");
+    let session_dir = create_segmented_session_in_location(
+        &root,
+        false,
+        test_session_request(SegmentPolicy::default()),
+    )
+    .expect("create session");
+    let original_messages = vec![
+        test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        ),
+        test_message(
+            "m-assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first answer",
+        ),
+    ];
+    append_segmented_session_message_update(&session_dir, &original_messages)
+        .expect("append original messages");
+
+    let mut incomplete_metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+            .expect("read original metadata");
+    incomplete_metadata.last_message_id = None;
+    incomplete_metadata.last_message_fingerprint = None;
+    write_metadata(&session_dir, &incomplete_metadata).expect("write incomplete checkpoint");
+
+    let changed_messages = vec![
+        original_messages[0].clone(),
+        test_message(
+            "m-assistant-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "corrected answer",
+        ),
+    ];
+    let changed_lines = append_segmented_session_message_update(&session_dir, &changed_messages)
+        .expect("rewrite incomplete checkpoint transcript");
+
+    let repaired_metadata: SegmentedSessionMetadata =
+        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+            .expect("read repaired metadata");
+    let replay = replay_segmented_session_context(&session_dir)
+        .expect("replay repaired transcript")
+        .expect("repaired transcript replay result");
+    let replay_messages = conversation_state_to_session_messages(&replay.conversation_state);
+    assert_eq!(changed_lines.len(), 1);
+    assert_eq!(repaired_metadata.message_count, 2);
+    assert!(repaired_metadata.last_message_id.is_some());
+    assert!(repaired_metadata.last_message_fingerprint.is_some());
+    assert_eq!(replay_messages, changed_messages);
 }
 
 /// Verifies shortened transcript updates physically rewrite message rows without rollback bloat.
@@ -69,7 +140,7 @@ fn append_message_update_physically_rewrites_shortened_history() {
             "first answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &original_messages)
+    append_segmented_session_message_update(&session_dir, &original_messages)
         .expect("append original messages");
     let replacement_messages = vec![test_message(
         "m-user-1",
@@ -161,7 +232,7 @@ fn replay_uses_physically_rewritten_events_as_baseline() {
             "stream prefix",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &original_messages)
+    append_segmented_session_message_update(&session_dir, &original_messages)
         .expect("append original messages");
     let replacement_messages = vec![
         test_message(
@@ -191,71 +262,6 @@ fn replay_uses_physically_rewritten_events_as_baseline() {
         conversation_state_to_session_messages(&replay.expect("replay result").conversation_state);
     assert_eq!(replay_messages.len(), 2);
     assert_eq!(replay_messages[1].body, "stream prefix and completed body");
-}
-
-/// Verifies caller-confirmed suffix append never creates a rollback replacement.
-/// 验证调用方确认的尾部追加不会创建回滚替换。
-#[test]
-fn append_message_suffix_extends_tail_without_rollback_replacement() {
-    let root = test_root("append_message_suffix_extends_tail_without_rollback_replacement");
-    let session_dir = create_segmented_session_in_location(
-        &root,
-        false,
-        test_session_request(SegmentPolicy::default()),
-    )
-    .expect("create session");
-    let original_messages = vec![
-        test_message(
-            "m-user-1",
-            SessionMessageKind::User,
-            SessionMessageRecordKind::Transcript,
-            "first prompt",
-        ),
-        test_message(
-            "m-assistant-1",
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::AssistantOutput,
-            "first answer",
-        ),
-    ];
-    append_segmented_session_message_tail(&session_dir, &original_messages)
-        .expect("append original messages");
-    let suffix_messages = vec![
-        test_message(
-            "m-compaction-start",
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::CompactionStatus,
-            "",
-        ),
-        test_message(
-            "m-compaction-end",
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::CompactionStatus,
-            "",
-        ),
-    ];
-
-    let suffix_lines = append_segmented_session_message_suffix(&session_dir, &suffix_messages)
-        .expect("append suffix messages");
-
-    assert_eq!(suffix_lines.len(), suffix_messages.len());
-    assert!(
-        suffix_lines
-            .iter()
-            .all(|line| line.kind != SegmentedSessionEventKind::ThreadRolledBack)
-    );
-    assert_eq!(
-        suffix_lines[0]
-            .payload
-            .get("message_index")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    let metadata: SegmentedSessionMetadata =
-        read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
-            .expect("read suffix metadata");
-    assert_eq!(metadata.message_count, 4);
-    assert_eq!(metadata.latest_rollback_seq, None);
 }
 
 /// Verifies prompt-edit rewinds physically truncate later events without a rollback marker.
@@ -298,7 +304,7 @@ fn truncate_before_message_removes_tail_without_rollback_marker() {
             "second answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages)
+    append_segmented_session_message_update(&session_dir, &messages)
         .expect("append original messages");
     write_segmented_session_fork_source(
         &session_dir,
@@ -391,7 +397,7 @@ fn truncate_after_message_keeps_anchor_and_rewrites_segments() {
             "second answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages)
+    append_segmented_session_message_update(&session_dir, &messages)
         .expect("append original messages");
 
     truncate_segmented_session_after_message(&session_dir, "m-assistant-1", &messages[..2])
@@ -471,7 +477,7 @@ fn truncate_before_missing_message_leaves_segments_unchanged() {
             "second prompt",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages)
+    append_segmented_session_message_update(&session_dir, &messages)
         .expect("append original messages");
     let before_metadata =
         fs::read_to_string(session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
@@ -519,7 +525,7 @@ fn append_after_physical_rewrite_reintroduces_removed_message_id() {
             "removed answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &original_messages)
+    append_segmented_session_message_update(&session_dir, &original_messages)
         .expect("append original messages");
     let replacement_messages = vec![original_messages[0].clone(), original_messages[1].clone()];
     let replacement_lines =
@@ -583,7 +589,7 @@ fn repeated_message_updates_do_not_create_rollback_maintenance_work() {
             "stream prefix",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages)
+    append_segmented_session_message_update(&session_dir, &messages)
         .expect("append initial messages");
     for index in 0..4 {
         messages[1].body.push_str(&format!(
@@ -643,7 +649,7 @@ fn append_message_update_keeps_next_sequence_after_retained_event_gap() {
             "first answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &original_messages)
+    append_segmented_session_message_update(&session_dir, &original_messages)
         .expect("append original messages");
     append_segmented_session_events(
         &session_dir,

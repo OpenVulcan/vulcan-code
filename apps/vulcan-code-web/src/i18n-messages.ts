@@ -860,6 +860,8 @@ export type TranslationKey =
   | "memory.action.refreshUsersProjects"
   | "memory.vmm.action.running"
   | "memory.vmm.action.failed"
+  | "memory.vmm.project.loading"
+  | "memory.vmm.project.selected"
   | "memory.vmm.save.global.running"
   | "memory.vmm.save.project.running"
   | "memory.vmm.save.global.completed"
@@ -2022,6 +2024,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.action.refreshUsersProjects": "刷新用户/项目",
     "memory.vmm.action.running": "正在执行 VMM 动作：{action}",
     "memory.vmm.action.failed": "VMM 动作失败：{message}",
+    "memory.vmm.project.loading": "正在加载项目 VMM 配置：{project}。",
+    "memory.vmm.project.selected": "当前编辑项目：{project}。",
     "memory.vmm.save.global.running": "正在保存全局 VMM 配置。",
     "memory.vmm.save.project.running": "正在保存项目 VMM 配置。",
     "memory.vmm.save.global.completed": "已保存全局 VMM 配置。",
@@ -3181,6 +3185,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "memory.action.refreshUsersProjects": "Refresh users/projects",
     "memory.vmm.action.running": "Running VMM action: {action}",
     "memory.vmm.action.failed": "VMM action failed: {message}",
+    "memory.vmm.project.loading": "Loading project VMM config: {project}.",
+    "memory.vmm.project.selected": "Editing project: {project}.",
     "memory.vmm.save.global.running": "Saving global VMM config.",
     "memory.vmm.save.project.running": "Saving project VMM config.",
     "memory.vmm.save.global.completed": "Global VMM config saved.",

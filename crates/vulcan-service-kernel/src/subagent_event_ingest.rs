@@ -385,13 +385,13 @@ fn attach_parent_turn_binding_to_metadata(
             Value::from(binding.source_generation),
         );
     }
-    if let Some(parent_turn_id) = binding.parent_turn_id.as_ref() {
-        if let Some(payload) = payload.as_mut() {
-            payload.insert(
-                String::from("parent_turn_id"),
-                Value::String(parent_turn_id.clone()),
-            );
-        }
+    if let Some(parent_turn_id) = binding.parent_turn_id.as_ref()
+        && let Some(payload) = payload.as_mut()
+    {
+        payload.insert(
+            String::from("parent_turn_id"),
+            Value::String(parent_turn_id.clone()),
+        );
     }
 }
 

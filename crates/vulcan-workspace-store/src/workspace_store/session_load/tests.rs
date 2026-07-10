@@ -299,6 +299,8 @@ fn session_boundary_turn_window_skips_non_boundary_tail_noise() {
 
 /// Verifies archived and restored session directories still hydrate display text from session boundary events.
 /// 验证归档与恢复后的会话目录仍然从 会话边界事件水合显示正文。
+/// Verifies deterministic archive and restore preserve the session-boundary display projection.
+/// 验证确定性归档与恢复会保留会话边界展示投影。
 #[test]
 fn session_boundary_archive_restore_keeps_display_projection() {
     let root = std::env::temp_dir().join(format!(
@@ -354,14 +356,15 @@ fn session_boundary_archive_restore_keeps_display_projection() {
     )
     .expect("append session boundary events");
 
-    let archived_dir = super::super::segmented_session_store::archive_segmented_session_by_id(
-        &root,
-        project_tag,
-        &request.session_id,
-        "200",
-    )
-    .expect("archive session")
-    .expect("archived directory");
+    let archived_dir =
+        super::super::segmented_session_store::archive_segmented_session_by_created_date(
+            &root,
+            project_tag,
+            &request.created_date,
+            &request.session_id,
+            "200",
+        )
+        .expect("archive session");
     let archived_lines =
         read_segmented_session_event_window(&archived_dir, None, 8).expect("read archived");
     let archived_boundary_lines = archived_lines
@@ -383,8 +386,7 @@ fn session_boundary_archive_restore_keeps_display_projection() {
             &request.session_id,
             "300",
         )
-        .expect("restore session")
-        .expect("restored directory");
+        .expect("restore session");
     let restored_lines =
         read_segmented_session_event_window(&restored_dir, None, 8).expect("read restored");
     let restored_boundary_lines = restored_lines

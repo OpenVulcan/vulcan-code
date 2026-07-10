@@ -146,13 +146,12 @@ async fn load_session_hydration_snapshot_from_locator(
             Some(runtime_state) => Some(runtime_state),
             None => hydrate_session_runtime_state(session_id, &full_messages).await?,
         }
-        .map(|runtime_state| {
+        .inspect(|runtime_state| {
             let provider_conversation_state = runtime_state.conversation_state.clone();
             repair_hydration_turn_stats_from_runtime_usage(
                 &mut messages,
                 &provider_conversation_state,
             );
-            runtime_state
         });
     restore_hydration_window_from_runtime_state_if_empty(
         &mut messages,
@@ -354,7 +353,7 @@ fn repaired_turn_stats_from_runtime_messages(
         }
         tool_call_count = tool_call_count.saturating_add(tool_calls.len());
         if let Some(usage) = usage {
-            cumulative_usage.accumulate_from(&usage);
+            cumulative_usage.accumulate_from(usage);
             has_usage = true;
         }
     }
@@ -535,6 +534,36 @@ fn apply_turn_stats_to_message(message: &mut SessionMessageEntry, turn_stats: Se
     }
 }
 
+/// Repairs duplicate canonical record ids inside one loaded conversation state so older broken sessions can recover during hydration.
+/// 修复单份已加载会话状态中的重复规范记录标识，确保旧的损坏会话能在水合阶段自动恢复。
+pub(super) fn repair_duplicate_conversation_record_ids(
+    session_id: SessionId,
+    conversation_state: &mut SessionConversationState,
+) -> bool {
+    let mut seen_ids = BTreeSet::new();
+    let mut repaired = false;
+
+    for (record_index, record) in conversation_state.records.iter_mut().enumerate() {
+        if seen_ids.insert(record.id.clone()) {
+            continue;
+        }
+
+        let created_at = non_empty_timestamp_text(&record.created_at);
+        let mut candidate_id = format!("session-{session_id}-message-{created_at}-{record_index}");
+        let mut collision_suffix = 1usize;
+        while !seen_ids.insert(candidate_id.clone()) {
+            candidate_id = format!(
+                "session-{session_id}-message-{created_at}-{record_index}-{collision_suffix}"
+            );
+            collision_suffix = collision_suffix.saturating_add(1);
+        }
+        record.id = candidate_id;
+        repaired = true;
+    }
+
+    repaired
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,34 +740,4 @@ mod tests {
             },
         }
     }
-}
-
-/// Repairs duplicate canonical record ids inside one loaded conversation state so older broken sessions can recover during hydration.
-/// 修复单份已加载会话状态中的重复规范记录标识，确保旧的损坏会话能在水合阶段自动恢复。
-pub(super) fn repair_duplicate_conversation_record_ids(
-    session_id: SessionId,
-    conversation_state: &mut SessionConversationState,
-) -> bool {
-    let mut seen_ids = BTreeSet::new();
-    let mut repaired = false;
-
-    for (record_index, record) in conversation_state.records.iter_mut().enumerate() {
-        if seen_ids.insert(record.id.clone()) {
-            continue;
-        }
-
-        let created_at = non_empty_timestamp_text(&record.created_at);
-        let mut candidate_id = format!("session-{session_id}-message-{created_at}-{record_index}");
-        let mut collision_suffix = 1usize;
-        while !seen_ids.insert(candidate_id.clone()) {
-            candidate_id = format!(
-                "session-{session_id}-message-{created_at}-{record_index}-{collision_suffix}"
-            );
-            collision_suffix = collision_suffix.saturating_add(1);
-        }
-        record.id = candidate_id;
-        repaired = true;
-    }
-
-    repaired
 }

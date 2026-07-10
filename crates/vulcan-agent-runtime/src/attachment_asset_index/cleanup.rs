@@ -63,7 +63,19 @@ pub fn execute_attachment_cleanup(
         .format(ATTACHMENT_DATE_FORMAT)
         .map_err(|error| format!("格式化清理截止日期失败：{error}。"))?;
     let asset_root = resolve_managed_attachment_root(workspace_path);
-    let mut document = load_attachment_asset_index_document(&asset_root)?;
+    // transaction_lock excludes staging and reference updates during the destructive cleanup transaction.
+    // transaction_lock 在破坏性清理事务期间排除暂存与引用更新。
+    let transaction_lock = attachment_index_transaction_lock(&asset_root)?;
+    // transaction_guard covers selection, purge marking, file deletion, and final diagnostic persistence.
+    // transaction_guard 覆盖选择、清理标记、文件删除与最终诊断持久化。
+    let _transaction_guard = transaction_lock.lock().map_err(|error| {
+        format!(
+            "failed to lock attachment index transaction `{}`: {error}",
+            asset_root.display()
+        )
+    })?;
+    let mut document =
+        super::lifecycle::load_attachment_asset_index_document_for_mutation(&asset_root)?;
     let purge_timestamp = current_attachment_timestamp_parts();
     let matched_indices = document
         .assets
@@ -95,6 +107,7 @@ pub fn execute_attachment_cleanup(
             record.purged_at_local_text = Some(purge_timestamp.local_timestamp_text.clone());
             record.purged_at_unix_millis = Some(purge_timestamp.unix_millis);
             record.purge_reason = Some(format!("purged-before-{}", cutoff_text));
+            record.deletion_pending = false;
         }
     }
     if !matched_indices.is_empty() {

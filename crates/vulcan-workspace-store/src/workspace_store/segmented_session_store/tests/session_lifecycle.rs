@@ -51,8 +51,17 @@ fn task_store_locator_finds_session_directory_by_created_at() {
         &session_id,
     )
     .expect("deterministic locator should find session");
+    // invalid_created_at proves the optional locator no longer maps malformed input onto 1970-01-01.
+    // invalid_created_at 证明可选定位器不再把格式错误输入映射到 1970-01-01。
+    let invalid_created_at = find_segmented_session_directory_for_task_store_created_at(
+        &root,
+        &project_tag,
+        "not-a-timestamp",
+        &session_id,
+    );
 
     assert_eq!(located, session_dir);
+    assert_eq!(invalid_created_at, None);
 }
 
 /// Verifies task mirror rows load from an already resolved segmented session directory.
@@ -209,7 +218,7 @@ fn fork_session_directory_rewrites_structural_identity() {
             }
         }
     }));
-    append_segmented_session_message_tail(&source_dir, &[task_card_message])
+    append_segmented_session_message_update(&source_dir, &[task_card_message])
         .expect("append source task transcript card");
 
     let target_dir = fork_segmented_session_directory_from_source(
@@ -344,7 +353,7 @@ fn fork_session_directory_stops_display_at_source_anchor() {
         .expect("create segmented session");
     let anchor_message_id = format!("{source_session_id}-keep-anchor");
     let dropped_message_id = format!("{source_session_id}-drop-after-anchor");
-    append_segmented_session_message_tail(
+    append_segmented_session_message_update(
         &source_dir,
         &[
             test_message(

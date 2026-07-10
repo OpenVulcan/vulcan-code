@@ -111,16 +111,16 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
     );
 }
 
-/// Verifies hydrated sessions require concrete runtime dialogue context before being marked ready.
-/// 验证已水合会话必须具备具体运行态对话层上下文后才能被视为就绪。
+/// Verifies display hydration readiness remains distinct from strict submission context readiness.
+/// 验证显示层水合就绪状态与严格的提交上下文就绪状态保持分离。
 #[test]
-fn hydrated_session_dialogue_context_requires_runtime_context() {
+fn display_hydration_readiness_remains_distinct_from_submission_context() {
     // session_id identifies the hydrated conversation under validation.
     // session_id 标识正在校验的已水合会话。
     let session_id = SessionId::new_v4();
     // display_only_snapshot simulates a loaded UI window without runtime dialogue context.
     // display_only_snapshot 模拟只有 UI 窗口而缺少运行态对话层上下文的状态。
-    let display_only_snapshot = WorkspaceSnapshot {
+    let mut display_only_snapshot = WorkspaceSnapshot {
         task_projects: Vec::new(),
         archived_task_projects: Vec::new(),
         sessions: Vec::new(),
@@ -155,11 +155,25 @@ fn hydrated_session_dialogue_context_requires_runtime_context() {
     }];
     // ready_snapshot simulates a fully hydrated session with dialogue context.
     // ready_snapshot 模拟带有对话层上下文的完整水合会话。
-    let ready_snapshot = WorkspaceSnapshot {
+    let mut ready_snapshot = WorkspaceSnapshot {
         session_runtime_state: BTreeMap::from([(session_id, ready_runtime_state)]),
         ..display_only_snapshot.clone()
     };
 
     assert!(ensure_hydrated_session_dialogue_context(&display_only_snapshot, session_id).is_err());
+    assert!(!sync_hydrated_session_dialogue_ready_marker(
+        &mut display_only_snapshot,
+        session_id
+    ));
+    assert!(
+        !display_only_snapshot
+            .hydrated_session_ids
+            .contains(&session_id)
+    );
     assert!(ensure_hydrated_session_dialogue_context(&ready_snapshot, session_id).is_ok());
+    assert!(sync_hydrated_session_dialogue_ready_marker(
+        &mut ready_snapshot,
+        session_id
+    ));
+    assert!(ready_snapshot.hydrated_session_ids.contains(&session_id));
 }

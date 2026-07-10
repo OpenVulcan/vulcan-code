@@ -66,6 +66,10 @@ pub struct AttachmentAssetRecord {
     /// 在该托管资产成为消息历史前，当前保留它的瞬时暂存作用域集合。
     #[serde(default)]
     pub staging_refs: Vec<String>,
+    /// Whether an unreferenced managed file deletion was durably planned but not fully committed.
+    /// 是否已经持久规划但尚未完整提交未引用托管文件删除。
+    #[serde(default, skip_serializing_if = "boolean_is_false")]
+    pub deletion_pending: bool,
     /// Optional local timestamp text recorded when the managed copy was purged.
     /// 托管副本被清理时记录的可选本地时间戳文本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,6 +82,22 @@ pub struct AttachmentAssetRecord {
     /// 为诊断保留的可选清理原因。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purge_reason: Option<String>,
+}
+
+/// Returns whether one persisted boolean is false for compact serde output.
+/// 返回一个持久化布尔值是否为 false，以生成紧凑 serde 输出。
+///
+/// # Parameters
+/// 参数
+/// `value` is the boolean field inspected by serde.
+/// `value` 是由 serde 检查的布尔字段。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the field contains `false` and may be omitted.
+/// 仅当字段为 `false` 且可以省略时返回 `true`。
+fn boolean_is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Persistent asset-index document stored inside the managed attachment index directory.

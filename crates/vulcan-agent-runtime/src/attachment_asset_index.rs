@@ -55,7 +55,7 @@ pub use types::{
 use cleanup::{CleanupManagedPath, validate_cleanup_managed_path};
 use lifecycle::attachment_record_has_transient_refs;
 use storage::{
-    load_attachment_asset_index_document, resolve_asset_root_from_attachment,
-    save_attachment_asset_index_document,
+    attachment_index_transaction_lock, load_attachment_asset_index_document,
+    resolve_asset_root_from_attachment, save_attachment_asset_index_document,
 };
 use types::AttachmentAssetIndexDocument;

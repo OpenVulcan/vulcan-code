@@ -1,269 +1,37 @@
 use super::*;
 
-/// Persists the current visible workspace snapshot back into the controller-backed SQLite database.
-/// 将当前可见工作台快照回写到控制器承载的 SQLite 数据库。
-pub async fn persist_workspace_snapshot(
-    controller: ControllerRuntimeHandle,
-    snapshot: &WorkspaceSnapshot,
-) -> Result<WorkspaceSnapshotPersistOutcome, String> {
-    let mut warnings = Vec::new();
-    let existing_active_project_ids = query_active_project_ids(&controller).await?;
-    let visible_project_ids = snapshot
-        .task_projects
-        .iter()
-        .map(|project| project.id.clone())
-        .collect::<BTreeSet<_>>();
-    let active_owner_map = session_owner_map_from_projects(&snapshot.task_projects);
-    let archived_owner_map = session_owner_map_from_projects(&snapshot.archived_task_projects);
-    let all_projects = snapshot
-        .task_projects
-        .iter()
-        .cloned()
-        .map(|project| (project, false))
-        .chain(
-            snapshot
-                .archived_task_projects
-                .iter()
-                .cloned()
-                .map(|project| (project, true)),
-        )
-        .collect::<Vec<_>>();
-    upsert_projects(&controller, &all_projects).await?;
-    persist_session_index_snapshot(&controller, snapshot).await?;
-    persist_segmented_snapshot_session_stores(PersistSegmentedSnapshotSessionStoresRequest {
-        controller: &controller,
-        sessions: &snapshot.sessions,
-        active_owner_map: &active_owner_map,
-        session_messages: &snapshot.session_messages,
-        session_runtime_state: &snapshot.session_runtime_state,
-        archived_sessions: &snapshot.archived_sessions,
-        archived_owner_map: &archived_owner_map,
-        archived_session_messages: &snapshot.archived_session_messages,
-        archived_session_runtime_state: &snapshot.archived_session_runtime_state,
-        hydrated_session_ids: &snapshot.hydrated_session_ids,
-        warnings: &mut warnings,
-    })
-    .await;
-    archive_missing_projects(
-        &controller,
-        &existing_active_project_ids,
-        &visible_project_ids,
-    )
-    .await?;
-
-    Ok(WorkspaceSnapshotPersistOutcome { warnings })
-}
-
-/// Persists the lightweight deterministic session locator index for one workspace snapshot.
-/// 为一个工作台快照持久化轻量确定性会话定位索引。
-pub(super) async fn persist_session_index_snapshot(
-    controller: &ControllerRuntimeHandle,
-    snapshot: &WorkspaceSnapshot,
-) -> Result<(), String> {
-    let active_owner_map = session_owner_map_from_projects(&snapshot.task_projects);
-    let archived_owner_map = session_owner_map_from_projects(&snapshot.archived_task_projects);
-    for session in &snapshot.sessions {
-        let (project_id, sort_order) =
-            required_session_project_owner(&active_owner_map, session, "活动会话索引持久化")?;
-        upsert_session_index_row(controller, session, &project_id, false, sort_order, None).await?;
-    }
-    for session in &snapshot.archived_sessions {
-        let (project_id, sort_order) =
-            required_session_project_owner(&archived_owner_map, session, "归档会话索引持久化")?;
-        upsert_session_index_row(controller, session, &project_id, true, sort_order, None).await?;
-    }
-    Ok(())
-}
-
-/// Mirrors all loaded snapshot sessions into segmented append-only directories.
-/// 将所有已加载的快照会话镜像到分段追加式目录。
-pub(super) struct PersistSegmentedSnapshotSessionStoresRequest<'a> {
-    /// Controller runtime used to locate the workspace data root.
-    /// 用于定位工作区数据根目录的控制器运行时。
-    pub controller: &'a ControllerRuntimeHandle,
-    /// Active sessions in the visible workspace snapshot.
-    /// 可见工作台快照中的活动会话。
-    pub sessions: &'a [SessionSummary],
-    /// Active session owner lookup by session id.
-    /// 按会话标识索引的活动会话归属表。
-    pub active_owner_map: &'a BTreeMap<SessionId, (String, usize)>,
-    /// Active session transcript windows.
-    /// 活动会话的转录窗口。
-    pub session_messages: &'a BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    /// Active session runtime state entries.
-    /// 活动会话的运行态条目。
-    pub session_runtime_state: &'a BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    /// Archived sessions in the visible workspace snapshot.
-    /// 可见工作台快照中的归档会话。
-    pub archived_sessions: &'a [SessionSummary],
-    /// Archived session owner lookup by session id.
-    /// 按会话标识索引的归档会话归属表。
-    pub archived_owner_map: &'a BTreeMap<SessionId, (String, usize)>,
-    /// Archived session transcript windows.
-    /// 归档会话的转录窗口。
-    pub archived_session_messages: &'a BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    /// Archived session runtime state entries.
-    /// 归档会话的运行态条目。
-    pub archived_session_runtime_state: &'a BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    /// Sessions whose transcript was explicitly hydrated during load.
-    /// 加载期间已显式水合转录的会话集合。
-    pub hydrated_session_ids: &'a BTreeSet<SessionId>,
-    /// Warning sink populated with non-fatal segmented persistence failures.
-    /// 用于收集非致命分段持久化失败的警告容器。
-    pub warnings: &'a mut Vec<String>,
-}
-
-/// Mirrors one active or archived snapshot session group into segmented storage.
-/// 将一组活动或归档快照会话镜像到分段存储。
-pub(super) struct PersistSegmentedSnapshotSessionGroupRequest<'a> {
-    /// Controller runtime used to locate the workspace data root.
-    /// 用于定位工作区数据根目录的控制器运行时。
-    pub controller: &'a ControllerRuntimeHandle,
-    /// Sessions in the current group.
-    /// 当前分组中的会话。
-    pub sessions: &'a [SessionSummary],
-    /// Whether the current group represents archived sessions.
-    /// 当前分组是否表示归档会话。
-    pub archived: bool,
-    /// Session owner lookup by session id.
-    /// 按会话标识索引的会话归属表。
-    pub session_owner_map: &'a BTreeMap<SessionId, (String, usize)>,
-    /// Transcript windows for the current group.
-    /// 当前分组的转录窗口。
-    pub session_messages: &'a BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    /// Runtime state entries for the current group.
-    /// 当前分组的运行态条目。
-    pub session_runtime_state: &'a BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    /// Sessions whose transcript was explicitly hydrated during load.
-    /// 加载期间已显式水合转录的会话集合。
-    pub hydrated_session_ids: &'a BTreeSet<SessionId>,
-    /// Warning sink populated with non-fatal segmented persistence failures.
-    /// 用于收集非致命分段持久化失败的警告容器。
-    pub warnings: &'a mut Vec<String>,
-}
-
-/// Mirrors all loaded snapshot sessions into segmented append-only directories.
-/// 将所有已加载的快照会话镜像到分段追加式目录。
-pub(super) async fn persist_segmented_snapshot_session_stores(
-    request: PersistSegmentedSnapshotSessionStoresRequest<'_>,
-) {
-    let PersistSegmentedSnapshotSessionStoresRequest {
-        controller,
-        sessions,
-        active_owner_map,
-        session_messages,
-        session_runtime_state,
-        archived_sessions,
-        archived_owner_map,
-        archived_session_messages,
-        archived_session_runtime_state,
-        hydrated_session_ids,
-        warnings,
-    } = request;
-    persist_segmented_snapshot_session_group(PersistSegmentedSnapshotSessionGroupRequest {
-        controller,
-        sessions,
-        archived: false,
-        session_owner_map: active_owner_map,
-        session_messages,
-        session_runtime_state,
-        hydrated_session_ids,
-        warnings,
-    })
-    .await;
-    persist_segmented_snapshot_session_group(PersistSegmentedSnapshotSessionGroupRequest {
-        controller,
-        sessions: archived_sessions,
-        archived: true,
-        session_owner_map: archived_owner_map,
-        session_messages: archived_session_messages,
-        session_runtime_state: archived_session_runtime_state,
-        hydrated_session_ids,
-        warnings,
-    })
-    .await;
-}
-
-/// Mirrors one active or archived snapshot session group into segmented storage.
-/// 将一组活动或归档快照会话镜像到分段存储。
-pub(super) async fn persist_segmented_snapshot_session_group(
-    request: PersistSegmentedSnapshotSessionGroupRequest<'_>,
-) {
-    let PersistSegmentedSnapshotSessionGroupRequest {
-        controller,
-        sessions,
-        archived,
-        session_owner_map,
-        session_messages,
-        session_runtime_state,
-        hydrated_session_ids,
-        warnings,
-    } = request;
-    let empty_messages = Vec::<SessionMessageEntry>::new();
-    for session in sessions {
-        let runtime_state = session_runtime_state.get(&session.id);
-        if !snapshot_session_transcript_is_loaded(
-            session.id,
-            session_messages,
-            hydrated_session_ids,
-        ) {
-            continue;
-        }
-        let stored_messages = session_messages.get(&session.id).unwrap_or(&empty_messages);
-        let rebuilt_messages = runtime_state.map(|runtime_state| {
-            effective_session_messages_for_persistence(stored_messages, runtime_state)
-        });
-        let effective_messages = rebuilt_messages
-            .as_deref()
-            .unwrap_or(stored_messages.as_slice());
-        let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
-            warnings.push(format!(
-                "跳过缺少明确项目归属的分段会话同步：session={}",
-                session.id
-            ));
-            continue;
-        };
-        if let Err(error) = persist_segmented_session_tail_update(
-            controller,
-            session,
-            project_id,
-            archived,
-            effective_messages,
-            runtime_state,
-        )
-        .await
-        {
-            warnings.push(segmented_session_persist_warning(
-                "同步快照分段会话失败",
-                1,
-                &error,
-            ));
-        }
-    }
-}
-
-/// Returns whether a snapshot session has a loaded transcript window that is safe to mirror into JSONL.
-/// 返回快照会话是否已有可安全镜像到 JSONL 的已加载转录窗口。
-pub(super) fn snapshot_session_transcript_is_loaded(
-    session_id: SessionId,
-    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    hydrated_session_ids: &BTreeSet<SessionId>,
-) -> bool {
-    session_messages.contains_key(&session_id) || hydrated_session_ids.contains(&session_id)
-}
-
 /// Persists one session and its runtime artifacts without rewriting unrelated workspace sessions.
 /// 仅持久化单个会话及其运行时工件，不重写无关工作区会话。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite binding and segmented data root.
+/// `controller` 持有权威 SQLite 绑定与分段数据根。
+/// `task_projects` defines the only accepted project membership for the session.
+/// `task_projects` 定义该会话唯一可接受的项目成员关系。
+/// `session` is the exact session summary being persisted.
+/// `session` 是正在持久化的精确会话摘要。
+/// `archived` selects the active or archived filesystem and locator state.
+/// `archived` 选择活动或归档文件系统与定位行状态。
+/// `messages` contains the caller-retained visible transcript rows.
+/// `messages` 包含调用方保留的可见转录行。
+/// `runtime_state` optionally provides the authoritative runtime checkpoint and records.
+/// `runtime_state` 可选提供权威运行时检查点与记录。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after segmented artifacts and the SQLite locator are both persisted.
+/// 仅在分段工件与 SQLite 定位行都持久化后成功。
 pub async fn persist_single_session_update(
     controller: ControllerRuntimeHandle,
     task_projects: &[TaskProjectSummary],
     session: &SessionSummary,
     archived: bool,
     messages: &[SessionMessageEntry],
-    compactions: Option<&[SessionCompactionEntry]>,
     runtime_state: Option<&SessionRuntimeStateEntry>,
-) -> Result<WorkspaceSnapshotPersistOutcome, String> {
-    let mut warnings = Vec::new();
+) -> Result<(), String> {
+    // session_owner_map is the authoritative project-membership projection supplied by the caller.
+    // session_owner_map 是调用方提供的权威项目成员关系投影。
     let session_owner_map = session_owner_map_from_projects(task_projects);
     let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
         return Err(format!(
@@ -271,13 +39,43 @@ pub async fn persist_single_session_update(
             session.id
         ));
     };
+    // active_locator_exists records whether the authoritative index currently owns the active lifecycle.
+    // active_locator_exists 记录权威索引当前是否拥有活动生命周期。
+    let active_locator_exists = query_session_index_locator(&controller, session.id, false)
+        .await?
+        .is_some();
+    // archived_locator_exists records whether the authoritative index currently owns the archived lifecycle.
+    // archived_locator_exists 记录权威索引当前是否拥有归档生命周期。
+    let archived_locator_exists = query_session_index_locator(&controller, session.id, true)
+        .await?
+        .is_some();
+    validate_single_session_update_lifecycle(
+        session.id,
+        archived,
+        active_locator_exists,
+        archived_locator_exists,
+    )?;
 
-    let sessions = std::slice::from_ref(session);
-    let archived_sessions = Vec::<SessionSummary>::new();
+    // rebuilt_messages preserves caller-visible rows while incorporating authoritative runtime records.
+    // rebuilt_messages 在纳入权威运行时记录的同时保留调用方可见行。
     let rebuilt_messages = runtime_state
         .map(|runtime_state| effective_session_messages_for_persistence(messages, runtime_state));
+    // effective_messages is the exact transcript written before the locator becomes discoverable.
+    // effective_messages 是定位行可发现前写入的精确转录。
     let effective_messages = rebuilt_messages.as_deref().unwrap_or(messages);
-    let _ = (sessions, archived_sessions, compactions);
+    // Persist filesystem artifacts first so SQLite never publishes a locator for a failed file write.
+    // 先持久化文件系统工件，避免 SQLite 为失败的文件写入发布定位行。
+    persist_segmented_session_update(
+        &controller,
+        session,
+        project_id,
+        archived,
+        effective_messages,
+        runtime_state,
+    )
+    .await?;
+    // Publish or update the locator only after its backing segmented state is durable.
+    // 仅在底层分段状态耐久化后发布或更新定位行。
     upsert_session_index_row(
         &controller,
         session,
@@ -286,26 +84,52 @@ pub async fn persist_single_session_update(
         0,
         runtime_state.map(|state| state.updated_at.as_str()),
     )
-    .await?;
-
-    if let Err(error) = persist_segmented_session_tail_update(
-        &controller,
-        session,
-        project_id,
-        archived,
-        effective_messages,
-        runtime_state,
-    )
     .await
-    {
-        warnings.push(segmented_session_persist_warning(
-            "同步分段会话追加流失败",
-            1,
-            &error,
+}
+
+/// Validates that an ordinary session snapshot write cannot change authoritative archive state.
+/// 校验普通会话快照写入不能改变权威归档状态。
+///
+/// # Parameters
+/// 参数
+/// `session_id` identifies the exact session being persisted.
+/// `session_id` 标识正在持久化的精确会话。
+/// `requested_archived` is the lifecycle state carried by the caller snapshot.
+/// `requested_archived` 是调用方快照携带的生命周期状态。
+/// `active_locator_exists` reports whether SQLite currently owns an active locator.
+/// `active_locator_exists` 表示 SQLite 当前是否拥有活动定位行。
+/// `archived_locator_exists` reports whether SQLite currently owns an archived locator.
+/// `archived_locator_exists` 表示 SQLite 当前是否拥有归档定位行。
+///
+/// # Returns
+/// 返回值
+/// Returns success only for a new active session or an update that preserves the existing lifecycle.
+/// 仅对新活动会话或保持现有生命周期的更新返回成功。
+fn validate_single_session_update_lifecycle(
+    session_id: SessionId,
+    requested_archived: bool,
+    active_locator_exists: bool,
+    archived_locator_exists: bool,
+) -> Result<(), String> {
+    if active_locator_exists && archived_locator_exists {
+        return Err(format!(
+            "单会话保存失败：会话 `{session_id}` 同时存在活动与归档定位行。"
         ));
     }
-
-    Ok(WorkspaceSnapshotPersistOutcome { warnings })
+    if requested_archived {
+        if archived_locator_exists && !active_locator_exists {
+            return Ok(());
+        }
+        return Err(format!(
+            "单会话保存失败：会话 `{session_id}` 的归档状态只能通过生命周期接口变更。"
+        ));
+    }
+    if archived_locator_exists {
+        return Err(format!(
+            "单会话保存失败：会话 `{session_id}` 已归档，普通快照写入不能将其恢复为活动状态。"
+        ));
+    }
+    Ok(())
 }
 
 /// Persists only one session runtime-state document without rewriting transcript or project rows.
@@ -318,26 +142,6 @@ pub async fn persist_single_session_runtime_state_update(
     persist_segmented_session_runtime_state_checkpoint(&controller, session_id, runtime_state)
         .await?;
 
-    Ok(())
-}
-
-/// Appends new visible transcript suffix rows for one existing segmented session.
-/// 为一个既有分段会话追加新的可见转录尾部行。
-pub async fn append_single_session_transcript_suffix(
-    controller: ControllerRuntimeHandle,
-    session_id: SessionId,
-    messages: &[SessionMessageEntry],
-) -> Result<(), String> {
-    if messages.is_empty() {
-        return Ok(());
-    }
-    let Some(session_dir) =
-        find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
-    else {
-        return Ok(());
-    };
-    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
-    append_segmented_session_message_suffix(&session_dir, messages)?;
     Ok(())
 }
 
@@ -397,4 +201,26 @@ pub(super) fn effective_session_messages_for_persistence(
         stored_messages,
         &runtime_state.conversation_state,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies ordinary snapshot writes preserve the authoritative session lifecycle boundary.
+    /// 验证普通快照写入保持权威会话生命周期边界。
+    #[test]
+    fn single_session_update_lifecycle_rejects_archive_state_transitions() {
+        // session_id identifies every lifecycle validation case in this test.
+        // session_id 标识本测试中的每个生命周期校验场景。
+        let session_id = SessionId::from_u128(0x91);
+
+        assert!(validate_single_session_update_lifecycle(session_id, false, false, false).is_ok());
+        assert!(validate_single_session_update_lifecycle(session_id, false, true, false).is_ok());
+        assert!(validate_single_session_update_lifecycle(session_id, true, false, true).is_ok());
+        assert!(validate_single_session_update_lifecycle(session_id, false, false, true).is_err());
+        assert!(validate_single_session_update_lifecycle(session_id, true, true, false).is_err());
+        assert!(validate_single_session_update_lifecycle(session_id, true, false, false).is_err());
+        assert!(validate_single_session_update_lifecycle(session_id, false, true, true).is_err());
+    }
 }

@@ -407,6 +407,23 @@ pub(super) fn subagent_mailbox_kind_from_task_status(
     }
 }
 
+/// Builds a compact result summary suitable for task-session metadata.
+/// 构建适合 TaskSession 元数据使用的紧凑结果摘要。
+pub(super) fn task_result_summary(result_text: &str) -> Option<String> {
+    let summary = result_text.trim();
+    if summary.is_empty() {
+        return None;
+    }
+    const MAX_SUMMARY_CHARS: usize = 240;
+    let mut chars = summary.chars();
+    let clipped: String = chars.by_ref().take(MAX_SUMMARY_CHARS).collect();
+    if chars.next().is_some() {
+        Some(format!("{clipped}..."))
+    } else {
+        Some(clipped)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,22 +443,5 @@ mod tests {
                 SubagentMailboxEventKind::StatusUpdate
             );
         }
-    }
-}
-
-/// Builds a compact result summary suitable for task-session metadata.
-/// 构建适合 TaskSession 元数据使用的紧凑结果摘要。
-pub(super) fn task_result_summary(result_text: &str) -> Option<String> {
-    let summary = result_text.trim();
-    if summary.is_empty() {
-        return None;
-    }
-    const MAX_SUMMARY_CHARS: usize = 240;
-    let mut chars = summary.chars();
-    let clipped: String = chars.by_ref().take(MAX_SUMMARY_CHARS).collect();
-    if chars.next().is_some() {
-        Some(format!("{clipped}..."))
-    } else {
-        Some(clipped)
     }
 }

@@ -107,13 +107,23 @@ export type StopConversationRunResponse =
     running_subagents: StopConversationRunAgentSummary[];
   };
 
-// stopConversationRun stops the selected backend conversation run.
-// stopConversationRun 停止当前选中的后端会话运行。
-export async function stopConversationRun(mode: StopConversationRunMode): Promise<StopConversationRunResponse | null> {
+// stopConversationRun stops one exact backend conversation run.
+// stopConversationRun 停止一个精确后端会话运行。
+// Parameters: conversationId is the immutable stop target; mode selects child-agent handling.
+// 参数：conversationId 是不可变停止目标；mode 选择子代理处理方式。
+// Returns: the tagged stop response, or null when no service runtime is available.
+// 返回值：带标记的停止响应；无服务运行时时返回 null。
+export async function stopConversationRun(
+  conversationId: string,
+  mode: StopConversationRunMode,
+): Promise<StopConversationRunResponse | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
-  return serviceClient.request<StopConversationRunResponse>("service_stop_conversation_run", { mode });
+  return serviceClient.request<StopConversationRunResponse>("service_stop_conversation_run", {
+    conversationId,
+    mode,
+  });
 }
 
 // stopCommandSession force-stops one live backend command session.

@@ -12,10 +12,10 @@ use vulcan_workbench_model::SessionAddonNamespace;
 
 use super::{
     SharedServiceBridgeState, active_reasoning_selection_effort, current_unix_millis_text,
-    emit_workbench_event, parse_reasoning_effort, parse_thinking_display_mode,
-    refresh_settings_projection_locked, refresh_workbench_runtime_controls_locked,
-    selected_session_runtime_state_mut, session_addon_state_from_workspace_snapshot,
-    spawn_workspace_session_addon_state_persist_task,
+    emit_workbench_event, mutate_provider_configuration, parse_reasoning_effort,
+    parse_thinking_display_mode, refresh_settings_projection_locked,
+    refresh_workbench_runtime_controls_locked, selected_session_runtime_state_mut,
+    session_addon_state_from_workspace_snapshot, spawn_workspace_session_addon_state_persist_task,
 };
 
 mod openrouter_routes;
@@ -74,68 +74,57 @@ pub(super) async fn service_select_workbench_model(
         persist_workspace_snapshot,
         workbench,
         default_ai_tool_configuration,
-    ) = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let has_model = provider_config::effective_model_choices(
-            &provider_id,
-            &agent_runtime.provider_configuration,
-        )
-        .into_iter()
-        .any(|choice| choice.id == model_id);
-        if !has_model {
-            return Err(format!(
-                "模型 `{model_id}` 不在 `{provider_id}` 的已启用模型列表中。"
-            ));
-        }
-
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        next_configuration.model = Some(format!("{provider_id}/{model_id}"));
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存模型选择失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        let selected_effort = active_reasoning_selection_effort(&next_configuration);
-        let openrouter_endpoint_route = (provider_id == "openrouter")
-            .then(|| {
-                provider_config::openrouter_endpoint_route_for_model(&next_configuration, &model_id)
-            })
-            .flatten();
-        let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
-            selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
-                runtime_state.active_provider_id = Some(provider_id.clone());
-                runtime_state.active_model_id = Some(model_id.clone());
-                runtime_state.active_openrouter_endpoint_route = openrouter_endpoint_route;
-                if let Some(selected_effort) = selected_effort {
-                    runtime_state.active_reasoning_effort = Some(selected_effort);
-                }
-                runtime_state.updated_at = current_unix_millis_text();
-                session_id
-            })
-        });
-        refresh_workbench_runtime_controls_locked(
-            &mut guard,
-            &next_configuration,
-            &ai_tool_configuration,
-        );
-        (
-            controller_runtime,
-            persist_session_id,
-            guard.workspace_snapshot.clone(),
-            guard.workbench.clone(),
-            ai_tool_configuration,
-        )
-    };
+    ) = mutate_provider_configuration(
+        &state,
+        "保存模型选择失败",
+        |configuration| {
+            let has_model = provider_config::effective_model_choices(&provider_id, configuration)
+                .into_iter()
+                .any(|choice| choice.id == model_id);
+            if !has_model {
+                return Err(format!(
+                    "模型 `{model_id}` 不在 `{provider_id}` 的已启用模型列表中。"
+                ));
+            }
+            configuration.model = Some(format!("{provider_id}/{model_id}"));
+            Ok(())
+        },
+        |guard, configuration| {
+            let controller_runtime = guard.controller_runtime.clone();
+            let ai_tool_configuration = guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| runtime.ai_tool_configuration.clone())
+                .unwrap_or_default();
+            let selected_effort = active_reasoning_selection_effort(configuration);
+            let openrouter_endpoint_route = (provider_id == "openrouter")
+                .then(|| {
+                    provider_config::openrouter_endpoint_route_for_model(configuration, &model_id)
+                })
+                .flatten();
+            let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
+                selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
+                    runtime_state.active_provider_id = Some(provider_id.clone());
+                    runtime_state.active_model_id = Some(model_id.clone());
+                    runtime_state.active_openrouter_endpoint_route = openrouter_endpoint_route;
+                    if let Some(selected_effort) = selected_effort {
+                        runtime_state.active_reasoning_effort = Some(selected_effort);
+                    }
+                    runtime_state.updated_at = current_unix_millis_text();
+                    session_id
+                })
+            });
+            refresh_workbench_runtime_controls_locked(guard, configuration, &ai_tool_configuration);
+            (
+                controller_runtime,
+                persist_session_id,
+                guard.workspace_snapshot.clone(),
+                guard.workbench.clone(),
+                ai_tool_configuration,
+            )
+        },
+    )
+    .await?;
 
     if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
         controller_runtime,
@@ -229,58 +218,47 @@ pub(super) async fn service_select_workbench_model_secondary_route(
         persist_workspace_snapshot,
         workbench,
         default_ai_tool_configuration,
-    ) = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        ensure_provider_model_enabled(
-            &agent_runtime.provider_configuration,
-            &provider_id,
-            &model_id,
-        )?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        provider_config::set_openrouter_endpoint_route_for_model(
-            &mut next_configuration,
-            &model_id,
-            selection.clone(),
-        );
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存 OpenRouter 二级供应商失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
-            selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
-                if runtime_state.active_provider_id.as_deref() == Some("openrouter")
-                    && runtime_state.active_model_id.as_deref() == Some(model_id.as_str())
-                {
-                    runtime_state.active_openrouter_endpoint_route = selection.clone();
-                    runtime_state.updated_at = current_unix_millis_text();
-                }
-                session_id
-            })
-        });
-        refresh_workbench_runtime_controls_locked(
-            &mut guard,
-            &next_configuration,
-            &ai_tool_configuration,
-        );
-        (
-            controller_runtime,
-            persist_session_id,
-            guard.workspace_snapshot.clone(),
-            guard.workbench.clone(),
-            ai_tool_configuration,
-        )
-    };
+    ) = mutate_provider_configuration(
+        &state,
+        "保存 OpenRouter 二级供应商失败",
+        |configuration| {
+            ensure_provider_model_enabled(configuration, &provider_id, &model_id)?;
+            provider_config::set_openrouter_endpoint_route_for_model(
+                configuration,
+                &model_id,
+                selection.clone(),
+            );
+            Ok(())
+        },
+        |guard, configuration| {
+            let controller_runtime = guard.controller_runtime.clone();
+            let ai_tool_configuration = guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| runtime.ai_tool_configuration.clone())
+                .unwrap_or_default();
+            let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
+                selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
+                    if runtime_state.active_provider_id.as_deref() == Some("openrouter")
+                        && runtime_state.active_model_id.as_deref() == Some(model_id.as_str())
+                    {
+                        runtime_state.active_openrouter_endpoint_route = selection.clone();
+                        runtime_state.updated_at = current_unix_millis_text();
+                    }
+                    session_id
+                })
+            });
+            refresh_workbench_runtime_controls_locked(guard, configuration, &ai_tool_configuration);
+            (
+                controller_runtime,
+                persist_session_id,
+                guard.workspace_snapshot.clone(),
+                guard.workbench.clone(),
+                ai_tool_configuration,
+            )
+        },
+    )
+    .await?;
     if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
         controller_runtime,
         persist_session_id,
@@ -340,45 +318,38 @@ pub(super) async fn service_select_workbench_reasoning_effort(
         persist_workspace_snapshot,
         workbench,
         default_ai_tool_configuration,
-    ) = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone();
-        let ai_tool_configuration = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| runtime.ai_tool_configuration.clone())
-            .unwrap_or_default();
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        next_configuration.workbench_reasoning_effort = Some(selected_effort);
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存思考档位失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
-            selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
-                runtime_state.active_reasoning_effort = Some(selected_effort);
-                runtime_state.updated_at = current_unix_millis_text();
-                session_id
-            })
-        });
-        refresh_workbench_runtime_controls_locked(
-            &mut guard,
-            &next_configuration,
-            &ai_tool_configuration,
-        );
-        (
-            controller_runtime,
-            persist_session_id,
-            guard.workspace_snapshot.clone(),
-            guard.workbench.clone(),
-            ai_tool_configuration,
-        )
-    };
+    ) = mutate_provider_configuration(
+        &state,
+        "保存思考档位失败",
+        |configuration| {
+            configuration.workbench_reasoning_effort = Some(selected_effort);
+            Ok(())
+        },
+        |guard, configuration| {
+            let controller_runtime = guard.controller_runtime.clone();
+            let ai_tool_configuration = guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| runtime.ai_tool_configuration.clone())
+                .unwrap_or_default();
+            let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
+                selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
+                    runtime_state.active_reasoning_effort = Some(selected_effort);
+                    runtime_state.updated_at = current_unix_millis_text();
+                    session_id
+                })
+            });
+            refresh_workbench_runtime_controls_locked(guard, configuration, &ai_tool_configuration);
+            (
+                controller_runtime,
+                persist_session_id,
+                guard.workspace_snapshot.clone(),
+                guard.workbench.clone(),
+                ai_tool_configuration,
+            )
+        },
+    )
+    .await?;
 
     if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
         controller_runtime,
@@ -429,22 +400,19 @@ pub(super) async fn service_select_workbench_thinking_display_mode(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_mode = parse_thinking_display_mode(mode.trim())
         .ok_or_else(|| format!("未知思考展示模式：{mode}"))?;
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        next_configuration.workbench_thinking_display_mode = Some(selected_mode);
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存思考展示模式失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存思考展示模式失败",
+        |configuration| {
+            configuration.workbench_thinking_display_mode = Some(selected_mode);
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
@@ -473,23 +441,20 @@ pub(super) async fn service_select_webui_locale(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_locale = parse_webui_locale(locale.trim())
         .ok_or_else(|| format!("unsupported WebUI locale: {locale}"))?;
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        next_configuration.ui_locale = Some(selected_locale.clone());
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("failed to save WebUI locale: {error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        guard.startup.ui_locale = Some(selected_locale);
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "failed to save WebUI locale",
+        |configuration| {
+            configuration.ui_locale = Some(selected_locale.clone());
+            Ok(())
+        },
+        |guard, configuration| {
+            guard.startup.ui_locale = Some(selected_locale.clone());
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)

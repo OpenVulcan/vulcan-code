@@ -80,6 +80,9 @@ pub(super) async fn service_save_mcp_server_configuration(
     state: SharedServiceBridgeState,
     request: McpServerSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
+    // configuration_transaction serializes clone, asynchronous runtime preparation, persistence, and runtime replacement.
+    // configuration_transaction 串行化克隆、异步运行时准备、持久化与运行时替换。
+    let configuration_transaction = begin_provider_configuration_transaction().await;
     let create_new_server = request
         .server_id
         .as_deref()
@@ -100,15 +103,20 @@ pub(super) async fn service_save_mcp_server_configuration(
     let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
         .await
         .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
-    if let Err(error) = provider_config::save_configuration_file(&next_configuration) {
+    if let Err(error) =
+        configuration_transaction.persist(&next_configuration, "保存 MCP 服务器失败")
+    {
         next_mcp_runtime.shutdown();
-        return Err(format!("保存 MCP 服务器失败：{error}"));
+        return Err(error);
     }
     let workbench = store_provider_and_mcp_configuration_after_change(
         &state,
         next_configuration,
         next_mcp_runtime,
     )?;
+    // Release the global configuration transaction only after the rebuilt runtime is stored.
+    // 仅在重建运行时完成回存后释放全局配置事务。
+    drop(configuration_transaction);
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
@@ -120,6 +128,9 @@ pub(super) async fn service_remove_mcp_server_configuration(
     state: SharedServiceBridgeState,
     server_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
+    // configuration_transaction serializes clone, asynchronous runtime preparation, persistence, and runtime replacement.
+    // configuration_transaction 串行化克隆、异步运行时准备、持久化与运行时替换。
+    let configuration_transaction = begin_provider_configuration_transaction().await;
     let mut next_configuration = provider_configuration_from_state(&state)?;
     next_configuration
         .mcp
@@ -129,15 +140,20 @@ pub(super) async fn service_remove_mcp_server_configuration(
     let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
         .await
         .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
-    if let Err(error) = provider_config::save_configuration_file(&next_configuration) {
+    if let Err(error) =
+        configuration_transaction.persist(&next_configuration, "移除 MCP 服务器失败")
+    {
         next_mcp_runtime.shutdown();
-        return Err(format!("移除 MCP 服务器失败：{error}"));
+        return Err(error);
     }
     let workbench = store_provider_and_mcp_configuration_after_change(
         &state,
         next_configuration,
         next_mcp_runtime,
     )?;
+    // Release the global configuration transaction only after the rebuilt runtime is stored.
+    // 仅在重建运行时完成回存后释放全局配置事务。
+    drop(configuration_transaction);
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }

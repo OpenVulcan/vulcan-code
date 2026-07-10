@@ -3,96 +3,230 @@
 
 use super::*;
 
-/// Applies a conversation display name and returns the refreshed workbench snapshot.
-/// 应用会话显示名称并返回刷新后的工作台快照。
+/// Renames one authoritative active conversation and reloads the workbench from persistence.
+/// 重命名一个权威活动会话，并从持久化层重新加载工作台。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the committed lifecycle delta through the ordered workbench event stream.
+/// `app` 通过有序工作台事件流发送已提交生命周期增量。
+/// `state` owns the controller runtime and retained WebUI projection.
+/// `state` 持有控制器运行时与保留的 WebUI 投影。
+/// `conversation_id` is the exact visible session UUID selected by the user.
+/// `conversation_id` 是用户选择的精确可见会话 UUID。
+/// `name` is the requested manual display title.
+/// `name` 是请求设置的手动展示标题。
+///
+/// # Returns
+/// 返回值
+/// Returns the workbench snapshot reloaded after locator-driven rename succeeds.
+/// 返回 locator 驱动重命名成功后重新加载的工作台快照。
 pub(crate) async fn service_rename_conversation(
     state: SharedServiceBridgeState,
     conversation_id: String,
     name: String,
 ) -> Result<WorkbenchSnapshot, String> {
+    // normalized_name is the validated manual title shared by both persistence documents.
+    // normalized_name 是两个持久化文档共享的已验证手动标题。
     let normalized_name = normalize_non_empty_name(&name)?;
-    let parsed_session_id = conversation_id
+    // session_id is the stable identity used for retained visibility validation and locator lookup.
+    // session_id 是用于保留可见性验证与定位查询的稳定身份。
+    let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    // updated_at is the single commit timestamp written to metadata and SQLite.
+    // updated_at 是写入元数据与 SQLite 的单一提交时间戳。
     let updated_at = current_unix_millis_text();
-    let (controller_runtime, project_id, session) =
-        controller_runtime_and_visible_session_project_from_state(&state, parsed_session_id)?;
-    vulcan_workspace_store::workspace_store::rename_single_session_metadata(
+    // controller_runtime is returned only after the selected session is still proven visible.
+    // controller_runtime 仅在所选会话仍被证明可见后返回。
+    let controller_runtime = controller_runtime_for_visible_session_from_state(&state, session_id)?;
+    vulcan_workspace_store::workspace_store::rename_single_session(
         controller_runtime,
-        &project_id,
-        &session,
+        session_id,
         &normalized_name,
         &updated_at,
     )
     .await
     .map_err(|error| format!("重命名会话失败：{error}"))?;
-    rename_conversation_in_retained_state(&state, parsed_session_id, &normalized_name, &updated_at)
+    refresh_workbench_snapshot(state).await
 }
 
-/// Renames one retained visible conversation without reloading the workspace snapshot.
-/// 不重新加载工作区快照，重命名一个保留的可见会话。
-pub(super) fn rename_conversation_in_retained_state(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    title: &str,
-    updated_at: &str,
-) -> Result<WorkbenchSnapshot, String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut()
-        && let Some(session) = workspace_snapshot
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-    {
-        session.title = title.to_string();
-        session.title_source = SessionTitleSource::Manual;
-        session.updated_at = updated_at.to_string();
-        session.last_updated_label = String::from("刚刚");
-    }
-    let conversation_id = session_id.to_string();
-    if let Some(conversation) = guard
-        .workbench
-        .conversations
-        .iter_mut()
-        .find(|conversation| conversation.id == conversation_id)
-    {
-        conversation.title = title.to_string();
-        conversation.last_updated_at = updated_at.to_string();
-        conversation.last_updated_label = String::from("刚刚");
-    }
-    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-    guard.workbench.revision = guard.workbench_generation;
-    Ok(guard.workbench.clone())
-}
-
-/// Archives one visible conversation and returns the refreshed workbench snapshot.
-/// 归档单个可见会话并返回刷新后的工作台快照。
+/// Archives one authoritative active conversation and reloads the workbench from persistence.
+/// 归档一个权威活动会话，并从持久化层重新加载工作台。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the controller runtime and retained WebUI projection.
+/// `state` 持有控制器运行时与保留的 WebUI 投影。
+/// `conversation_id` is the exact visible session UUID selected by the user.
+/// `conversation_id` 是用户选择的精确可见会话 UUID。
+///
+/// # Returns
+/// 返回值
+/// Returns the workbench snapshot reloaded after locator-driven archival succeeds.
+/// 返回 locator 驱动归档成功后重新加载的工作台快照。
 pub(crate) async fn service_archive_conversation(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
+    // session_id is the stable identity validated by the authoritative SQLite lifecycle lookup.
+    // session_id 是由权威 SQLite 生命周期查询校验的稳定身份。
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let (controller_runtime, project_id, session) =
-        controller_runtime_and_visible_session_project_from_state(&state, session_id)?;
-    vulcan_workspace_store::workspace_store::archive_single_session_for_project(
+    // lifecycle_guard atomically blocks new turns and rejects archival while this session is active.
+    // lifecycle_guard 原子阻止新回合，并在此会话活动时拒绝归档。
+    let _lifecycle_guard = begin_session_lifecycle_transition(&state, [session_id], "归档")?;
+    // controller_runtime deliberately does not revalidate the mutable active snapshot before the authoritative lookup.
+    // controller_runtime 刻意不在权威查询前重复校验可变活动快照。
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
+    // persist_lock serializes the directory/index transition with every background session writer.
+    // persist_lock 将目录/索引转换与每个后台会话写入者串行化。
+    let persist_lock = webui_workspace_persist_lock();
+    // persist_guard remains held until the authoritative lifecycle mutation finishes.
+    // persist_guard 持有至权威生命周期变更完成。
+    let persist_guard = persist_lock.lock().await;
+    // archive_result is inspected only after writers queued during the storage attempt are invalidated.
+    // archive_result 仅在存储尝试期间排队的写入者失效后才进行检查。
+    let archive_result = vulcan_workspace_store::workspace_store::archive_single_session(
         controller_runtime,
-        &project_id,
-        &session,
+        session_id,
     )
-    .await?;
-    archive_conversation_in_retained_state(&state, session_id, &project_id)
+    .await;
+    invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
+    archive_result?;
+    // refresh_result updates retained lifecycle state while stale writers remain behind the gate.
+    // refresh_result 在过期写入者仍被闸门阻挡时更新保留生命周期状态。
+    let refresh_result = refresh_workbench_snapshot(state.clone()).await;
+    invalidate_webui_session_lifecycle_persist_versions(&state, session_id)?;
+    drop(persist_guard);
+    // workbench is the authoritative retained projection committed by the refresh inside the persistence gate.
+    // workbench 是持久化闸门内刷新所提交的权威保留投影。
+    let workbench = refresh_result?;
+    // lifecycle_event carries only the archive-owned sidebar transition at the same committed generation.
+    // lifecycle_event 仅携带同一已提交 generation 下归档领域拥有的侧栏转换。
+    let lifecycle_event = conversation_archived_delta_envelope(&workbench, session_id);
+    emit_service_event_with_trace(
+        &app,
+        "workbench_conversation_archived_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(lifecycle_event)),
+    );
+    Ok(workbench)
 }
 
-/// Returns the controller runtime and owning project id for one retained visible session.
-/// 返回单个保留可见会话的控制器运行时与所属项目标识。
-pub(super) fn controller_runtime_and_visible_session_project_from_state(
+/// Builds the ordered lifecycle delta that represents one committed archive refresh.
+/// 构建表示单次已提交归档刷新的有序生命周期增量。
+///
+/// # Parameters
+/// 参数
+/// `workbench` is the authoritative post-archive retained projection.
+/// `workbench` 是归档后的权威保留投影。
+/// `session_id` identifies the conversation removed from the active collection.
+/// `session_id` 标识从活动集合移除的会话。
+///
+/// # Returns
+/// 返回值
+/// Returns an envelope at the exact generation committed by the archive refresh.
+/// 返回使用归档刷新所提交精确 generation 的增量信封。
+fn conversation_archived_delta_envelope(
+    workbench: &WorkbenchSnapshot,
+    session_id: SessionId,
+) -> WorkbenchDeltaEnvelope {
+    WorkbenchDeltaEnvelope {
+        generation: workbench.revision,
+        delta: WorkbenchDelta::ConversationArchived(conversation_archived_delta(
+            workbench, session_id,
+        )),
+    }
+}
+
+/// Builds one exact conversation archive payload from the committed workbench projection.
+/// 从已提交工作台投影构建一条精确会话归档载荷。
+///
+/// # Parameters
+/// 参数
+/// `workbench` is the authoritative post-archive retained projection.
+/// `workbench` 是归档后的权威保留投影。
+/// `session_id` identifies the conversation removed from the active collection.
+/// `session_id` 标识从活动集合移除的会话。
+///
+/// # Returns
+/// 返回值
+/// Returns the target-owned lifecycle payload without unrelated workbench fields.
+/// 返回仅拥有目标生命周期字段且不含无关工作台字段的载荷。
+pub(super) fn conversation_archived_delta(
+    workbench: &WorkbenchSnapshot,
+    session_id: SessionId,
+) -> ConversationArchivedDelta {
+    // conversation_id is shared by active removal and archived-summary lookup.
+    // conversation_id 由活动移除与归档摘要查询共同使用。
+    let conversation_id = session_id.to_string();
+    // archived_conversation remains optional because the workbench intentionally hides non-restorable archived sessions.
+    // archived_conversation 保持可选，因为工作台会刻意隐藏不可恢复的归档会话。
+    let archived_conversation = workbench
+        .archived_conversations
+        .iter()
+        .find(|conversation| conversation.id == conversation_id)
+        .cloned();
+    ConversationArchivedDelta {
+        conversation_id,
+        archived_conversation,
+        selected_conversation_id: workbench.selected_conversation_id.clone(),
+    }
+}
+
+/// Builds one ordered batch archive envelope for a project-level lifecycle transaction.
+/// 为一次项目级生命周期事务构建一条有序批量归档信封。
+///
+/// # Parameters
+/// 参数
+/// `workbench` is the authoritative post-archive retained projection.
+/// `workbench` 是归档后的权威保留投影。
+/// `session_ids` are the exact child sessions archived by the transaction.
+/// `session_ids` 是事务归档的精确子会话集合。
+///
+/// # Returns
+/// 返回值
+/// Returns one envelope so the transport never drops same-generation sibling transitions.
+/// 返回单个信封，避免传输层丢弃同 generation 的同级转换。
+pub(super) fn conversations_archived_delta_envelope(
+    workbench: &WorkbenchSnapshot,
+    session_ids: &[SessionId],
+) -> WorkbenchDeltaEnvelope {
+    // archived_conversations retains one target-owned transition per archived child session.
+    // archived_conversations 为每个已归档子会话保留一条目标自有转换。
+    let archived_conversations = session_ids
+        .iter()
+        .map(|session_id| conversation_archived_delta(workbench, *session_id))
+        .collect();
+    WorkbenchDeltaEnvelope {
+        generation: workbench.revision,
+        delta: WorkbenchDelta::ConversationsArchived(ConversationsArchivedDelta {
+            archived_conversations,
+        }),
+    }
+}
+
+/// Returns the controller runtime after validating that one session remains visible in retained state.
+/// 在验证一个会话仍处于保留可见状态后返回控制器运行时。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the controller runtime and retained workspace snapshot.
+/// `state` 持有控制器运行时与保留的工作区快照。
+/// `session_id` is the exact visible session identity selected by the user.
+/// `session_id` 是用户选择的精确可见会话身份。
+///
+/// # Returns
+/// 返回值
+/// Returns the controller runtime without deriving project or directory identity from the snapshot.
+/// 返回控制器运行时，且不从快照推导项目或目录身份。
+fn controller_runtime_for_visible_session_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<(ControllerRuntimeHandle, String, SessionSummary), String> {
+) -> Result<ControllerRuntimeHandle, String> {
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -102,129 +236,10 @@ pub(super) fn controller_runtime_and_visible_session_project_from_state(
     let workspace_snapshot = guard
         .workspace_snapshot
         .as_ref()
-        .ok_or_else(|| String::from("工作区快照尚未加载，无法归档会话。"))?;
-    let session = workspace_session_summary_for_session(workspace_snapshot, session_id)
-        .cloned()
-        .ok_or_else(|| format!("未找到要归档的会话：{session_id}"))?;
-    let project_id = session
-        .project_id
-        .clone()
-        .or_else(|| owning_project_id_for_session(workspace_snapshot, session_id))
-        .ok_or_else(|| format!("会话缺少所属项目，无法归档：{session_id}"))?;
-    Ok((controller_runtime, project_id, session))
-}
-
-/// Moves one archived conversation from retained active state into archived metadata state.
-/// 将一个已归档会话从保留的活动状态移动到归档元数据状态。
-pub(super) fn archive_conversation_in_retained_state(
-    state: &SharedServiceBridgeState,
-    session_id: SessionId,
-    project_id: &str,
-) -> Result<WorkbenchSnapshot, String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let mut archived_session = {
-        let workspace_snapshot = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("工作区快照尚未加载，无法更新归档状态。"))?;
-        let session_index = workspace_snapshot
-            .sessions
-            .iter()
-            .position(|candidate| candidate.id == session_id)
-            .ok_or_else(|| format!("未找到要归档的会话：{session_id}"))?;
-        let mut archived_session = workspace_snapshot.sessions.remove(session_index);
-        if archived_session.project_id.is_none() {
-            archived_session.project_id = Some(project_id.to_string());
-        }
-        for project in &mut workspace_snapshot.task_projects {
-            project
-                .session_ids
-                .retain(|candidate| *candidate != session_id);
-        }
-        workspace_snapshot.session_messages.remove(&session_id);
-        workspace_snapshot.session_compactions.remove(&session_id);
-        workspace_snapshot.session_runtime_state.remove(&session_id);
-        workspace_snapshot.session_run_phases.remove(&session_id);
-        workspace_snapshot.hydrated_session_ids.remove(&session_id);
-        workspace_snapshot
-            .archived_sessions
-            .retain(|candidate| candidate.id != session_id);
-        workspace_snapshot
-            .archived_sessions
-            .push(archived_session.clone());
-        workspace_snapshot
-            .archived_sessions
-            .sort_by_key(|session| -session.updated_at.parse::<i64>().unwrap_or_default());
-        if workspace_snapshot.selected_session == session_id {
-            workspace_snapshot.selected_session = workspace_snapshot
-                .sessions
-                .first()
-                .map(|session| session.id)
-                .unwrap_or_else(SessionId::nil);
-        }
-        archived_session
-    };
-    if archived_session.project_id.is_none() {
-        archived_session.project_id = Some(project_id.to_string());
-    }
-    let archived_conversation = archived_conversation_summary_from_session(&archived_session);
-    let archived_conversation_id = session_id.to_string();
-    guard
-        .workbench
-        .conversations
-        .retain(|conversation| conversation.id != archived_conversation_id);
-    guard
-        .workbench
-        .messages
-        .retain(|message| message.conversation_id != archived_conversation_id);
-    guard
-        .workbench
-        .archived_conversations
-        .retain(|conversation| conversation.id != archived_conversation_id);
-    guard
-        .workbench
-        .archived_conversations
-        .push(archived_conversation);
-    guard
-        .workbench
-        .archived_conversations
-        .sort_by_key(|conversation| {
-            -conversation
-                .last_updated_at
-                .parse::<i64>()
-                .unwrap_or_default()
-        });
-    if guard.workbench.selected_conversation_id.as_deref() == Some(&archived_conversation_id) {
-        guard.workbench.selected_conversation_id = guard
-            .workbench
-            .conversations
-            .first()
-            .map(|conversation| conversation.id.clone());
-    }
-    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-    guard.workbench.revision = guard.workbench_generation;
-    Ok(guard.workbench.clone())
-}
-
-/// Builds a WebUI archived-conversation summary from persisted session metadata.
-/// 根据持久化会话元数据构建 WebUI 归档会话摘要。
-pub(super) fn archived_conversation_summary_from_session(
-    session: &SessionSummary,
-) -> ConversationSummary {
-    ConversationSummary {
-        id: session.id.to_string(),
-        title: session.title.clone(),
-        status: String::from("Archived"),
-        run_phase: SessionRunPhase::Idle.to_string(),
-        last_updated_label: session.last_updated_label.clone(),
-        last_updated_at: session.updated_at.clone(),
-        unread: false,
-        attention: None,
-        project_id: session_summary_project_id_owned(session),
-        fork_source: conversation_fork_source_summary_from_session(session),
-    }
+        .ok_or_else(|| String::from("工作区快照尚未加载，无法处理会话。"))?;
+    workspace_session_summary_for_session(workspace_snapshot, session_id)
+        .ok_or_else(|| format!("未找到活动会话：{session_id}"))?;
+    Ok(controller_runtime)
 }
 
 /// Marks one conversation as read and returns the retained workbench snapshot.
@@ -468,43 +483,82 @@ fn sync_selected_conversation_fields_for_retained_workbench(
 mod tests {
     use super::*;
 
-    /// Builds one session summary for archived conversation projection tests.
-    /// 为归档会话投影测试构建单个会话摘要。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `project_id` is the optional project id stored on the session.
-    /// `project_id` 是写入会话的可选项目标识。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A completed session summary with the supplied project id.
-    /// 返回携带给定项目标识的已完成会话摘要。
-    fn archived_projection_session(project_id: Option<String>) -> SessionSummary {
-        SessionSummary::new(
-            SessionId::new_v4(),
-            project_id,
-            "归档投影测试会话",
-            "",
-            SessionState::Completed,
-            0,
-            0,
-            "刚刚",
-        )
+    /// Verifies archive lifecycle deltas preserve the committed generation and authoritative projection.
+    /// 验证归档生命周期增量保留已提交 generation 与权威投影。
+    #[test]
+    fn conversation_archive_delta_uses_committed_workbench_projection() {
+        // session_id identifies the archived conversation under test.
+        // session_id 标识测试中的已归档会话。
+        let session_id = SessionId::from_u128(0x52);
+        // archived_conversation is the exact restorable row exposed by the post-archive workbench.
+        // archived_conversation 是归档后工作台暴露的精确可恢复行。
+        let archived_conversation = ConversationSummary {
+            id: session_id.to_string(),
+            title: String::from("归档事件测试"),
+            status: String::from("Archived"),
+            run_phase: String::from("idle"),
+            last_updated_label: String::from("刚刚"),
+            last_updated_at: String::from("1783671000000"),
+            unread: false,
+            attention: None,
+            project_id: Some(String::from("project-a")),
+            fork_source: None,
+        };
+        // workbench supplies the authoritative lifecycle domain after refresh commit.
+        // workbench 提供刷新提交后的权威生命周期领域。
+        let mut workbench = crate::fallback_workbench_projection::fallback_workbench_snapshot(&[]);
+        workbench.revision = 52;
+        workbench.archived_conversations = vec![archived_conversation.clone()];
+        workbench.selected_conversation_id = Some(String::from("next-session"));
+
+        // envelope is the transport projection emitted before the archive RPC returns.
+        // envelope 是归档 RPC 返回前发送的传输投影。
+        let envelope = conversation_archived_delta_envelope(&workbench, session_id);
+
+        assert_eq!(envelope.generation, 52);
+        assert_eq!(
+            envelope.delta,
+            WorkbenchDelta::ConversationArchived(ConversationArchivedDelta {
+                conversation_id: session_id.to_string(),
+                archived_conversation: Some(archived_conversation),
+                selected_conversation_id: Some(String::from("next-session")),
+            })
+        );
     }
 
-    /// Verifies archived conversation summaries do not expose blank project ids.
-    /// 验证归档会话摘要不会暴露空白项目标识。
+    /// Verifies project-level archive operations keep every child transition in one generation envelope.
+    /// 验证项目级归档操作会把全部子转换保留在单个 generation 信封中。
     #[test]
-    fn archived_conversation_summary_ignores_blank_project_id() {
-        // session stores a blank project id that should be filtered before UI projection.
-        // session 保存一个投影到 UI 前应被过滤的空白项目标识。
-        let session = archived_projection_session(Some(String::from("   ")));
+    fn conversation_archive_batch_uses_one_transport_envelope() {
+        // first_session_id identifies the first archived child transition.
+        // first_session_id 标识第一条已归档子转换。
+        let first_session_id = SessionId::from_u128(0x61);
+        // second_session_id identifies the second archived child transition.
+        // second_session_id 标识第二条已归档子转换。
+        let second_session_id = SessionId::from_u128(0x62);
+        // workbench supplies the shared committed generation and final selection.
+        // workbench 提供共享的已提交 generation 与最终选择。
+        let mut workbench = crate::fallback_workbench_projection::fallback_workbench_snapshot(&[]);
+        workbench.revision = 61;
+        workbench.selected_conversation_id = Some(String::from("remaining-session"));
 
-        // summary is the WebUI sidebar projection built from the archived session.
-        // summary 是从归档会话构建出的 WebUI 侧栏投影。
-        let summary = archived_conversation_summary_from_session(&session);
+        let envelope = conversations_archived_delta_envelope(
+            &workbench,
+            &[first_session_id, second_session_id],
+        );
 
-        assert_eq!(summary.project_id, None);
+        assert_eq!(envelope.generation, 61);
+        let WorkbenchDelta::ConversationsArchived(delta) = envelope.delta else {
+            panic!("expected conversations archived delta");
+        };
+        assert_eq!(delta.archived_conversations.len(), 2);
+        assert_eq!(
+            delta.archived_conversations[0].conversation_id,
+            first_session_id.to_string()
+        );
+        assert_eq!(
+            delta.archived_conversations[1].conversation_id,
+            second_session_id.to_string()
+        );
     }
 }

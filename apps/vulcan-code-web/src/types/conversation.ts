@@ -10,6 +10,7 @@ import type {
   SubagentNavigationSnapshot,
 } from "./planning-questions";
 import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
+import type { ProjectSummary } from "./projects-files";
 import type { ConversationHydrationProgress } from "./workbench";
 
 export interface ConversationSummary {
@@ -180,6 +181,45 @@ export interface ConversationSummaryChangedDelta {
   // Selected conversation id after applying this summary update.
   // 应用该摘要更新后的选中会话标识。
   selectedConversationId?: string | null;
+}
+
+// ConversationArchivedDelta applies one committed sidebar lifecycle transition.
+// ConversationArchivedDelta 应用单个已提交的侧栏生命周期转换。
+export interface ConversationArchivedDelta {
+  // Stable identifier removed from the active conversation collection.
+  // 从活动会话集合移除的稳定会话标识。
+  conversationId: string;
+  // Authoritative archived summary when the session remains restorable.
+  // 当会话仍可恢复时对应的权威归档摘要。
+  archivedConversation?: ConversationSummary | null;
+  // Selected active conversation identifier after the archive transition.
+  // 归档转换完成后的选中活动会话标识。
+  selectedConversationId?: string | null;
+}
+
+// ConversationsArchivedDelta carries every conversation archive committed by one project action.
+// ConversationsArchivedDelta 携带单次项目操作提交的全部会话归档结果。
+export interface ConversationsArchivedDelta {
+  // Exact conversation lifecycle transitions committed in the shared generation.
+  // 在同一 generation 中提交的精确会话生命周期转换。
+  archivedConversations: ConversationArchivedDelta[];
+}
+
+// ProjectRemovedDelta carries one committed project removal and its child archive transitions.
+// ProjectRemovedDelta 携带单次已提交项目移除及其子会话归档转换。
+export interface ProjectRemovedDelta {
+  // Exact active project identifier removed by the lifecycle transaction.
+  // 生命周期事务移除的精确活动项目标识。
+  projectId: string;
+  // Authoritative active projects after removal and default-project repair.
+  // 移除及默认项目修复后的权威活动项目集合。
+  projects: ProjectSummary[];
+  // Authoritative expanded project identifiers after removal.
+  // 移除后的权威展开项目标识集合。
+  expandedProjectIds: string[];
+  // Exact child conversation archive transitions committed with project removal.
+  // 与项目移除一同提交的精确子会话归档转换。
+  archivedConversations: ConversationArchivedDelta[];
 }
 
 // PendingQuestionChangedDelta replaces the active ask-tool pending question.
@@ -371,6 +411,9 @@ export type WorkbenchDelta =
   | { kind: "updateConversationRunPhase"; payload: UpdateConversationRunPhaseDelta }
   | { kind: "pendingPromptsChanged"; payload: PendingPromptsChangedDelta }
   | { kind: "conversationSummaryChanged"; payload: ConversationSummaryChangedDelta }
+| { kind: "conversationArchived"; payload: ConversationArchivedDelta }
+| { kind: "conversationsArchived"; payload: ConversationsArchivedDelta }
+| { kind: "projectRemoved"; payload: ProjectRemovedDelta }
   | { kind: "pendingQuestionChanged"; payload: PendingQuestionChangedDelta }
   | { kind: "commandSessionsChanged"; payload: CommandSessionsChangedDelta }
   | { kind: "subagentNavigationChanged"; payload: SubagentNavigationChangedDelta }

@@ -198,6 +198,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // skillHeaderBusyAction stores the registered skill header action currently running.
   // skillHeaderBusyAction 保存当前正在运行的已注册技能标题栏动作。
   const [skillHeaderBusyAction, setSkillHeaderBusyAction] = React.useState<SkillHeaderBusyActionId | null>(null);
+  // skillHeaderActionRunningRef closes the synchronous repeat-click window before React commits busy state.
+  // skillHeaderActionRunningRef 在 React 提交忙碌状态前关闭同步重复点击窗口。
+  const skillHeaderActionRunningRef = React.useRef(false);
   // hasSelectedChatConversation is true only for an existing persisted conversation surface.
   // hasSelectedChatConversation 仅在当前界面是已存在的持久化会话时为真。
   const hasSelectedChatConversation = props.mainView === "chat" && !props.selectedDraftConversation && Boolean(props.selectedConversationId);
@@ -415,7 +418,16 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
 
   // runSkillHeaderAction wraps registered skill header actions with busy feedback.
   // runSkillHeaderAction 为注册的技能标题栏动作包裹忙碌反馈。
+  //
+  // Parameters: actionId selects the busy indicator and action performs the registered service request.
+  // 参数：actionId 选择忙碌提示，action 执行已注册的服务请求。
+  // Returns: a promise that settles after feedback timing and the synchronous guard are released.
+  // 返回值：在反馈时长结束且同步守卫释放后结束的 Promise。
   const runSkillHeaderAction = React.useCallback(async (actionId: SkillHeaderBusyActionId, action: () => Promise<void>) => {
+    if (skillHeaderActionRunningRef.current) {
+      return;
+    }
+    skillHeaderActionRunningRef.current = true;
     setSkillHeaderBusyAction(actionId);
     const startedAt = window.performance.now();
     try {
@@ -427,6 +439,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           window.setTimeout(resolve, remainingMs);
         });
       }
+      skillHeaderActionRunningRef.current = false;
       setSkillHeaderBusyAction(null);
     }
   }, []);

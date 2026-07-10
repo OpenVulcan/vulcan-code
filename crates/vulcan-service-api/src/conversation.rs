@@ -161,6 +161,15 @@ pub enum WorkbenchDelta {
     /// Conversation summary upsert for sidebar and selection state.
     /// 用于侧栏与选择状态的会话摘要写入增量。
     ConversationSummaryChanged(ConversationSummaryChangedDelta),
+    /// Committed conversation archive transition for sidebar lifecycle state.
+    /// 用于侧栏生命周期状态的已提交会话归档转换增量。
+    ConversationArchived(ConversationArchivedDelta),
+    /// Committed multi-conversation archive transition for one project lifecycle action.
+    /// 单次项目生命周期操作提交的多会话归档转换增量。
+    ConversationsArchived(ConversationsArchivedDelta),
+    /// Committed project removal transition with every owned conversation archive.
+    /// 包含全部所属会话归档结果的已提交项目移除转换增量。
+    ProjectRemoved(ProjectRemovedDelta),
     /// Pending ask-question replacement for the global ask overlay.
     /// 全局 ask 浮层的待回答问题替换增量。
     PendingQuestionChanged(PendingQuestionChangedDelta),
@@ -275,6 +284,53 @@ pub struct ConversationSummaryChangedDelta {
     /// 应用该摘要更新后的选中会话标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_conversation_id: Option<String>,
+}
+
+/// Applies one committed conversation archive transition without replacing unrelated workbench domains.
+/// 应用单个已提交会话归档转换，且不替换无关工作台领域。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationArchivedDelta {
+    /// Stable identifier removed from the active conversation collection.
+    /// 从活动会话集合移除的稳定会话标识。
+    pub conversation_id: String,
+    /// Authoritative archived summary when the session remains restorable in the archived collection.
+    /// 当会话在归档集合中仍可恢复时对应的权威归档摘要。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_conversation: Option<ConversationSummary>,
+    /// Selected active conversation identifier after the archive transition.
+    /// 归档转换完成后的选中活动会话标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_conversation_id: Option<String>,
+}
+
+/// Carries every conversation archive committed by one project-level operation.
+/// 携带单次项目级操作提交的全部会话归档结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationsArchivedDelta {
+    /// Exact conversation lifecycle transitions committed in the shared generation.
+    /// 在同一 generation 中提交的精确会话生命周期转换。
+    pub archived_conversations: Vec<ConversationArchivedDelta>,
+}
+
+/// Carries one committed project removal and every child conversation archive.
+/// 携带单次已提交项目移除及其全部子会话归档结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRemovedDelta {
+    /// Exact active project identifier removed by the lifecycle transaction.
+    /// 生命周期事务移除的精确活动项目标识。
+    pub project_id: String,
+    /// Authoritative active projects after removal and default-project repair.
+    /// 移除及默认项目修复后的权威活动项目集合。
+    pub projects: Vec<ProjectSummary>,
+    /// Authoritative expanded project identifiers after removal.
+    /// 移除后的权威展开项目标识集合。
+    pub expanded_project_ids: Vec<String>,
+    /// Exact child conversation archive transitions committed with the project removal.
+    /// 与项目移除一同提交的精确子会话归档转换。
+    pub archived_conversations: Vec<ConversationArchivedDelta>,
 }
 
 /// Replaces the active pending ask-question projection.

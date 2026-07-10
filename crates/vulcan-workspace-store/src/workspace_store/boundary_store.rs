@@ -182,7 +182,7 @@ pub(super) fn ensure_session_boundary_dir(
             SegmentedSessionCreateRequest {
                 session_id: session_id_text,
                 project_tag: project_id.to_string(),
-                created_date: segmented_session_date_from_unix_millis_text(&now),
+                created_date: session_directory_date_from_unix_millis_text(&now)?,
                 created_at: now,
                 project_id: Some(project_id.to_string()),
                 title: Some(session_title.to_string()),
@@ -213,31 +213,6 @@ pub fn load_segmented_session_boundary_events(
         .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
         .map(session_boundary_event_from_segment_line)
         .collect()
-}
-
-/// Updates display metadata for one segmented session without rewriting transcript segments.
-/// 仅更新单个分段会话的展示元数据，不重写转录分段。
-pub fn rename_segmented_session_metadata(
-    data_root: &std::path::Path,
-    session_id: SessionId,
-    title: &str,
-    updated_at: &str,
-) -> Result<(), String> {
-    let session_id_text = session_id.to_string();
-    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
-    else {
-        return Err(format!("未找到分段会话目录：{session_id_text}"));
-    };
-    patch_segmented_session_metadata(
-        &session_dir,
-        SegmentedSessionMetadataPatch {
-            updated_at: Some(updated_at.to_string()),
-            title: Some(Some(title.to_string())),
-            title_source: Some(Some("manual".to_string())),
-            archived_at: None,
-        },
-    )?;
-    Ok(())
 }
 
 /// Rebuilds one session boundary event from a segmented JSONL line.
@@ -287,37 +262,4 @@ pub(super) fn find_existing_segmented_context_session_dir(
             find_segmented_session_directory(data_root, true, project_id, &session_id.to_string())
         }
     }
-}
-
-/// Converts Unix-milliseconds text into the UTC date segment used by segmented session directories.
-/// 将 Unix 毫秒文本转换为分段会话目录使用的 UTC 日期片段。
-pub(super) fn segmented_session_date_from_unix_millis_text(value: &str) -> String {
-    let millis = value.trim().parse::<i64>().unwrap_or_default();
-    let seconds = millis.div_euclid(1_000);
-    let days = seconds.div_euclid(86_400);
-    let (year, month, day) = civil_date_from_unix_days(days);
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-/// Converts days since the Unix epoch into one proleptic Gregorian UTC date.
-/// 将 Unix 纪元以来的天数转换为一个前推格里高利 UTC 日期。
-pub(super) fn civil_date_from_unix_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
-    let shifted_days = days_since_unix_epoch + 719_468;
-    let era = if shifted_days >= 0 {
-        shifted_days
-    } else {
-        shifted_days - 146_096
-    } / 146_097;
-    let day_of_era = shifted_days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    if month <= 2 {
-        year += 1;
-    }
-    (year, month, day)
 }

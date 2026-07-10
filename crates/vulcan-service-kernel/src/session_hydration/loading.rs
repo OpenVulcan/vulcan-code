@@ -171,7 +171,8 @@ pub(crate) fn apply_hydration_to_selected_workspace_snapshot(
             .session_runtime_state
             .insert(session_id, runtime_state);
     }
-    ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
+    // Display hydration may legally observe a newly created live session before provider dialogue context is persisted.
+    // 显示层水合可能合法地观察到尚未持久化 Provider 对话上下文的新建实时会话。
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     let hydrated_session_run_phases = workspace_snapshot.session_run_phases.clone();
     apply_persisted_task_mirror_statuses_to_workspace(

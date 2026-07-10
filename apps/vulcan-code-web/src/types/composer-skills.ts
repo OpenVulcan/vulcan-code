@@ -175,6 +175,40 @@ export interface LuaSkillsCatalogSummary {
   skills: LuaSkillSummary[];
 }
 
+// PluginSummary describes one plugin or LuaSkills package projected by the service.
+// PluginSummary 描述服务端投影的单个插件或 LuaSkills 包。
+export interface PluginSummary {
+  // Stable plugin identifier.
+  // 稳定插件标识。
+  id: string;
+  // Human-facing plugin name.
+  // 面向用户的插件名称。
+  name: string;
+  // Plugin kind such as LuaSkill or native Rust.
+  // 插件类型，例如 LuaSkill 或原生 Rust。
+  kind: string;
+  // Current plugin lifecycle status.
+  // 当前插件生命周期状态。
+  status: string;
+  // Human-readable plugin capability summary.
+  // 人类可读的插件能力摘要。
+  capability: string;
+}
+
+// LuaSkillsCatalogUpdate carries one revisioned full LuaSkills domain projection.
+// LuaSkillsCatalogUpdate 携带单次带版本的完整 LuaSkills 领域投影。
+export interface LuaSkillsCatalogUpdate {
+  // Workbench revision committed together with this domain projection.
+  // 与当前领域投影一并提交的工作台版本。
+  revision: number;
+  // Complete LuaSkills catalog after the committed mutation.
+  // 已提交变更后的完整 LuaSkills 目录。
+  luaSkills: LuaSkillsCatalogSummary;
+  // Plugin rows derived from the same committed LuaSkills catalog.
+  // 从同一份已提交 LuaSkills 目录派生的插件行。
+  plugins: PluginSummary[];
+}
+
 // AgentSkillSummary describes one prompt-based Agent Skill.
 // AgentSkillSummary 描述单个基于提示词的 Agent Skill。
 export interface AgentSkillSummary {
@@ -239,6 +273,17 @@ export interface AgentSkillsCatalogSummary {
   // Non-fatal loading issues.
   // 非致命加载问题。
   errors: AgentSkillLoadIssueSummary[];
+}
+
+// AgentSkillsCatalogUpdate carries one revisioned full Agent Skills domain projection.
+// AgentSkillsCatalogUpdate 携带单次带版本的完整 Agent Skills 领域投影。
+export interface AgentSkillsCatalogUpdate {
+  // Workbench revision committed together with this domain projection.
+  // 与当前领域投影一并提交的工作台版本。
+  revision: number;
+  // Complete Agent Skills catalog after the committed mutation.
+  // 已提交变更后的完整 Agent Skills 目录。
+  agentSkills: AgentSkillsCatalogSummary;
 }
 
 // SubagentDefinitionSummary describes one subagent or expert definition.
@@ -427,18 +472,15 @@ export interface SubagentProviderModelSummary {
   unavailableReason?: string | null;
 }
 
-// SubagentDefinitionEnabledUpdate describes one lightweight enabled-state update.
-// SubagentDefinitionEnabledUpdate 描述单个轻量启停状态更新。
-export interface SubagentDefinitionEnabledUpdate {
-  // Stable agent id that was updated.
-  // 已更新的稳定智能体标识。
-  agentId: string;
-  // Updated enabled state.
-  // 更新后的启停状态。
-  enabled: boolean;
-  // Updated catalog notice.
-  // 更新后的目录提示。
-  notice: string;
+// SubagentCatalogUpdate carries one revisioned full agent-catalog domain projection.
+// SubagentCatalogUpdate 携带单次带版本的完整智能体目录领域投影。
+export interface SubagentCatalogUpdate {
+  // Workbench revision committed together with this domain projection.
+  // 与当前领域投影一并提交的工作台版本。
+  revision: number;
+  // Complete agent catalog after the committed mutation.
+  // 已提交变更后的完整智能体目录。
+  subagentCatalog: SubagentCatalogSummary;
 }
 
 // SubagentDefinitionSaveRequest describes one editable agent definition form submission.

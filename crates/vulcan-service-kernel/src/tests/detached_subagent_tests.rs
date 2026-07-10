@@ -90,6 +90,8 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),

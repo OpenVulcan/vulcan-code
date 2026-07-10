@@ -243,6 +243,24 @@ pub(crate) fn preserve_active_session_run_state(
     }
     for preserved_session in &preserved_state.sessions {
         let previous_session = &preserved_session.session;
+        // is_authoritatively_archived prevents retained hydration or run state from reviving a committed archive tombstone.
+        // is_authoritatively_archived 防止保留的水合态或运行态复活已提交的归档墓碑。
+        let is_authoritatively_archived = refreshed_snapshot
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == previous_session.id);
+        if is_authoritatively_archived {
+            continue;
+        }
+        // has_authoritative_owner_project distinguishes a not-yet-persisted session from a removed-project tombstone.
+        // has_authoritative_owner_project 区分尚未持久化的会话与已删除项目墓碑。
+        let has_authoritative_owner_project = session_summary_project_id(previous_session)
+            .is_none_or(|project_id| {
+                workspace_task_project_for_project_id(refreshed_snapshot, project_id).is_some()
+            });
+        if !has_authoritative_owner_project {
+            continue;
+        }
         if !refreshed_snapshot
             .sessions
             .iter()

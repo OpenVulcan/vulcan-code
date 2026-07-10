@@ -31,6 +31,7 @@ import type {
 } from "@/diff/types";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
+import { useWorkspaceReviewRequestOwnership } from "@/components/workspace/workspace-review-panel-request-ownership";
 import type {
   ConversationMessage,
   WorkbenchSnapshot,
@@ -190,6 +191,9 @@ export function WorkspaceReviewPanelHost(props: {
     () => workspaceReviewPanelCacheKey(workspacePath),
     [workspacePath],
   );
+  // requestOwnership binds all review async writers to the committed project-level cache route.
+  // requestOwnership 将全部审核异步写入者绑定到已提交的项目级缓存路由。
+  const requestOwnership = useWorkspaceReviewRequestOwnership(reviewPanelCacheKey);
   // initialReviewPanelCache restores a prior collapsed-panel state for this surface.
   // initialReviewPanelCache 恢复该界面先前折叠面板时保留的状态。
   const initialReviewPanelCache = React.useMemo(
@@ -230,6 +234,9 @@ export function WorkspaceReviewPanelHost(props: {
   const [workspaceReviewError, setWorkspaceReviewError] = React.useState<string | null>(
     () => initialReviewPanelCache?.error ?? null,
   );
+  // hydratedReviewPanelCacheKey records which project cache route owns the current React review state.
+  // hydratedReviewPanelCacheKey 记录当前 React 审核状态所属的项目缓存路由。
+  const [hydratedReviewPanelCacheKey, setHydratedReviewPanelCacheKey] = React.useState(reviewPanelCacheKey);
   // workspaceGitActionPending tracks one in-flight Git mutation from the review panel.
   // workspaceGitActionPending 跟踪审核面板发起的一次进行中的 Git 变更操作。
   const [workspaceGitActionPending, setWorkspaceGitActionPending] = React.useState(false);
@@ -242,24 +249,21 @@ export function WorkspaceReviewPanelHost(props: {
   // conversationReviewError stores the latest conversation diff parse error.
   // conversationReviewError 保存最近一次会话 diff 解析错误。
   const [conversationReviewError, setConversationReviewError] = React.useState<string | null>(null);
-  // workspaceReviewRequestSeqRef prevents stale async refresh results from replacing the current project diff.
-  // workspaceReviewRequestSeqRef 防止过期异步刷新结果覆盖当前项目 diff。
-  const workspaceReviewRequestSeqRef = React.useRef(0);
   // conversationReviewParseSeqRef prevents stale async message diff parses from replacing current state.
   // conversationReviewParseSeqRef 防止过期会话 diff 异步解析结果覆盖当前状态。
   const conversationReviewParseSeqRef = React.useRef(0);
-  // hydratedReviewPanelCacheKeyRef prevents stale state from being saved under a newly selected surface.
-  // hydratedReviewPanelCacheKeyRef 防止旧状态被写入新选中界面的缓存桶。
-  const hydratedReviewPanelCacheKeyRef = React.useRef(reviewPanelCacheKey);
+  // lastHydratedReviewPanelCacheKeyRef limits route-cache hydration to actual project changes.
+  // lastHydratedReviewPanelCacheKeyRef 将路由缓存水合限制为真实项目变化。
+  const lastHydratedReviewPanelCacheKeyRef = React.useRef<string | null>(null);
   // forceWorkspaceReviewRefreshRef marks real project switches while ignoring simple collapse/reopen cycles.
   // forceWorkspaceReviewRefreshRef 标记真实项目切换，同时忽略单纯折叠再展开。
   const forceWorkspaceReviewRefreshRef = React.useRef(false);
-  // workspaceDetailPendingRef prevents duplicate lazy file-detail requests.
-  // workspaceDetailPendingRef 防止重复发起文件详情懒加载请求。
-  const workspaceDetailPendingRef = React.useRef(new Set<string>());
   // workspaceDetailAttemptedRef records file details already attempted for this snapshot.
   // workspaceDetailAttemptedRef 记录当前快照中已经尝试加载过详情的文件。
   const workspaceDetailAttemptedRef = React.useRef(new Set<string>());
+  // latestDiffReviewSelectionRef exposes the latest committed source to long-running Git mutation continuations.
+  // latestDiffReviewSelectionRef 向长生命周期 Git 变更延续逻辑暴露最近提交的审核来源。
+  const latestDiffReviewSelectionRef = React.useRef(diffReviewSelection);
   // handledReviewFocusRequestRef stores the latest external focus request already applied.
   // handledReviewFocusRequestRef 保存已经应用的最近一次外部聚焦请求。
   const handledReviewFocusRequestRef = React.useRef(0);
@@ -268,6 +272,17 @@ export function WorkspaceReviewPanelHost(props: {
       ? workspaceReviewSnapshot
       : null;
   const activeReviewSnapshot = activeWorkspaceReviewSnapshot ?? conversationReviewSnapshot;
+
+  React.useLayoutEffect(() => {
+    // Project route changes synchronously release loading flags owned by invalidated requests.
+    // 项目路由变化会同步释放由失效请求持有的加载标记。
+    setWorkspaceReviewLoading(false);
+    setWorkspaceGitActionPending(false);
+  }, [reviewPanelCacheKey]);
+
+  React.useLayoutEffect(() => {
+    latestDiffReviewSelectionRef.current = diffReviewSelection;
+  }, [diffReviewSelection]);
 
   React.useEffect(() => {
     const requestSeq = conversationReviewParseSeqRef.current + 1;
@@ -312,48 +327,68 @@ export function WorkspaceReviewPanelHost(props: {
   // handleRefreshWorkspaceDiff refreshes the current project Git diff through the local service.
   // handleRefreshWorkspaceDiff 通过本地服务刷新当前项目 Git diff。
   const handleRefreshWorkspaceDiff = React.useCallback(async (selectionOverride?: DiffReviewSelection) => {
+    if (hydratedReviewPanelCacheKey !== reviewPanelCacheKey) {
+      return;
+    }
     if (!workspacePath) {
       setWorkspaceReviewError(t("workspaceReview.noProjectPathForRefresh"));
       return;
     }
+    // ownedRequest makes only the latest refresh for the committed project route eligible to update state.
+    // ownedRequest 仅允许已提交项目路由的最新刷新更新状态。
+    const ownedRequest = requestOwnership.beginRefreshRequest();
+    if (!ownedRequest) {
+      return;
+    }
+    // requestSelection freezes the requested Git source across service load and asynchronous parsing.
+    // requestSelection 在服务加载与异步解析期间固定所请求的 Git 来源。
     const requestSelection = selectionOverride ?? diffReviewSelection;
+    // requestKey is the stable source identity attached to the resulting snapshot.
+    // requestKey 是附加到结果快照的稳定来源身份。
     const requestKey = diffReviewSelectionStableKey(requestSelection);
-    const requestSeq = workspaceReviewRequestSeqRef.current + 1;
-    workspaceReviewRequestSeqRef.current = requestSeq;
     setWorkspaceReviewLoading(true);
     setWorkspaceReviewError(null);
     try {
+      // response is the backend diff payload for the captured project route and source.
+      // response 是捕获项目路由与来源对应的后端 diff 载荷。
       const response = await props.loadWorkspaceDiffSnapshot(workspacePath, workspaceProjectId, activeSurfaceId, requestSelection);
-      if (workspaceReviewRequestSeqRef.current !== requestSeq) {
+      if (!requestOwnership.ownsRefreshRequest(ownedRequest)) {
         return;
       }
       props.onWorkspaceDiffSnapshotLoaded?.(workspacePath, workspaceProjectId, requestSelection, response);
+      // snapshot is the parsed render model produced by the worker pipeline.
+      // snapshot 是工作线程流水线产出的已解析渲染模型。
       const snapshot = await diffSnapshotFromWorkspaceResponseAsync(response);
-      if (workspaceReviewRequestSeqRef.current !== requestSeq) {
+      if (!requestOwnership.ownsRefreshRequest(ownedRequest)) {
         return;
       }
       setWorkspaceReviewSnapshot(snapshot);
       setWorkspaceReviewPath(workspacePath);
       setWorkspaceReviewKey(requestKey);
-      workspaceDetailPendingRef.current.clear();
+      requestOwnership.invalidateDetailRequests();
       workspaceDetailAttemptedRef.current.clear();
     } catch (error) {
-      if (workspaceReviewRequestSeqRef.current !== requestSeq) {
+      if (!requestOwnership.ownsRefreshRequest(ownedRequest)) {
         return;
       }
+      // message normalizes service and parser failures for panel state and user feedback.
+      // message 归一化服务与解析失败，供面板状态和用户反馈使用。
       const message = error instanceof Error ? error.message : String(error);
       setWorkspaceReviewError(message);
       toast.error(formatWorkspaceReviewTranslation(t, "workspaceReview.refreshGitDiffFailed", { error: message }));
     } finally {
-      if (workspaceReviewRequestSeqRef.current === requestSeq) {
+      if (requestOwnership.finishRefreshRequest(ownedRequest)) {
         setWorkspaceReviewLoading(false);
       }
     }
   }, [
     activeSurfaceId,
     diffReviewSelection,
+    hydratedReviewPanelCacheKey,
     props.loadWorkspaceDiffSnapshot,
     props.onWorkspaceDiffSnapshotLoaded,
+    requestOwnership,
+    reviewPanelCacheKey,
     t,
     workspacePath,
     workspaceProjectId,
@@ -381,19 +416,27 @@ export function WorkspaceReviewPanelHost(props: {
     const retryable = Boolean(contextLines)
       || file.fileDiffLoadState?.status === "failed"
       || file.fileDiffLoadState?.status === "timed-out";
-    if (workspaceDetailPendingRef.current.has(detailKey) || (workspaceDetailAttemptedRef.current.has(detailKey) && !retryable)) {
+    if (workspaceDetailAttemptedRef.current.has(detailKey) && !retryable) {
       return;
     }
-    workspaceDetailPendingRef.current.add(detailKey);
+    // ownedRequest coalesces this detail key and binds every continuation to the committed project route.
+    // ownedRequest 合并该详情键，并将全部延续逻辑绑定到已提交项目路由。
+    const ownedRequest = requestOwnership.beginDetailRequest(detailKey);
+    if (!ownedRequest) {
+      return;
+    }
     workspaceDetailAttemptedRef.current.add(detailKey);
-    setWorkspaceReviewSnapshot((previous) => previous
-      ? workspaceDiffSnapshotWithFileLoadState(previous, file.key, {
+    setWorkspaceReviewSnapshot((previous) => {
+      if (!requestOwnership.ownsDetailRequest(detailKey, ownedRequest) || !previous) {
+        return previous;
+      }
+      return workspaceDiffSnapshotWithFileLoadState(previous, file.key, {
         status: "loading",
         message: contextLines
           ? diffHunkExpansionLoadingMessage(expansion, t)
           : t("workspaceReview.fileDetailLoading"),
-      })
-      : previous);
+      });
+    });
     try {
       const response = await workspaceDiffFileDetailWithTimeout(
         (signal) => props.loadWorkspaceDiffFileDetail(
@@ -413,33 +456,51 @@ export function WorkspaceReviewPanelHost(props: {
         ),
         WORKSPACE_DIFF_FILE_DETAIL_TIMEOUT_MS,
       );
+      if (!requestOwnership.ownsDetailRequest(detailKey, ownedRequest)) {
+        return;
+      }
+      // detailFile is the parsed file projection for this exact base snapshot and expansion request.
+      // detailFile 是该准确基础快照与展开请求对应的已解析文件投影。
       const detailFile = await diffFileFromWorkspaceDetailAsync(response, file, expansion);
+      if (!requestOwnership.ownsDetailRequest(detailKey, ownedRequest)) {
+        return;
+      }
       setWorkspaceReviewSnapshot((previous) => {
-        if (!previous) {
+        if (!requestOwnership.ownsDetailRequest(detailKey, ownedRequest) || !previous) {
           return previous;
         }
         return diffSnapshotWithWorkspaceDetailFile(previous, detailFile, file) ?? previous;
       });
     } catch (error) {
+      if (!requestOwnership.ownsDetailRequest(detailKey, ownedRequest)) {
+        return;
+      }
+      // timedOut distinguishes the bounded lazy-load timeout from backend and parsing failures.
+      // timedOut 区分受限懒加载超时与后端、解析失败。
       const timedOut = isWorkspaceDiffFileDetailTimeout(error);
+      // message is the stable status text written into the matching file card.
+      // message 是写入匹配文件卡片的稳定状态文本。
       const message = timedOut
         ? formatWorkspaceReviewTranslation(t, "workspaceReview.fileDetailTimeoutError", {
           seconds: String(Math.round(WORKSPACE_DIFF_FILE_DETAIL_TIMEOUT_MS / 1000)),
         })
         : error instanceof Error ? error.message : String(error);
-      setWorkspaceReviewSnapshot((previous) => previous
-        ? workspaceDiffSnapshotWithFileLoadState(previous, file.key, {
+      setWorkspaceReviewSnapshot((previous) => {
+        if (!requestOwnership.ownsDetailRequest(detailKey, ownedRequest) || !previous) {
+          return previous;
+        }
+        return workspaceDiffSnapshotWithFileLoadState(previous, file.key, {
           status: timedOut ? "timed-out" : "failed",
           message,
-        })
-        : previous);
+        });
+      });
       toast.error(formatWorkspaceReviewTranslation(
         t,
         timedOut ? "workspaceReview.fileDetailTimeout" : "workspaceReview.fileDetailFailed",
         { error: message },
       ));
     } finally {
-      workspaceDetailPendingRef.current.delete(detailKey);
+      requestOwnership.finishDetailRequest(detailKey, ownedRequest);
     }
   }, [
     activeSurfaceId,
@@ -447,6 +508,7 @@ export function WorkspaceReviewPanelHost(props: {
     diffReviewSelection,
     diffReviewSelectionKey,
     props.loadWorkspaceDiffFileDetail,
+    requestOwnership,
     t,
     workspacePath,
     workspaceProjectId,
@@ -455,7 +517,7 @@ export function WorkspaceReviewPanelHost(props: {
   // handleSearchWorkspaceDiff loads backend file-level search hits for the active live diff.
   // handleSearchWorkspaceDiff 为当前实时 diff 加载后端文件级搜索命中。
   const handleSearchWorkspaceDiff = React.useCallback(async (query: string, limit?: number) => {
-    if (!workspacePath || !activeWorkspaceReviewSnapshot) {
+    if (hydratedReviewPanelCacheKey !== reviewPanelCacheKey || !workspacePath || !activeWorkspaceReviewSnapshot) {
       return null;
     }
     return props.loadWorkspaceDiffSearch(
@@ -469,7 +531,9 @@ export function WorkspaceReviewPanelHost(props: {
     activeSurfaceId,
     activeWorkspaceReviewSnapshot,
     diffReviewSelection,
+    hydratedReviewPanelCacheKey,
     props.loadWorkspaceDiffSearch,
+    reviewPanelCacheKey,
     workspacePath,
     workspaceProjectId,
   ]);
@@ -483,10 +547,21 @@ export function WorkspaceReviewPanelHost(props: {
     if (workspaceGitActionPending) {
       return;
     }
+    if (hydratedReviewPanelCacheKey !== reviewPanelCacheKey) {
+      return;
+    }
     if (!workspacePath) {
       toast.error(t("workspaceReview.noProjectPathForGit"));
       return;
     }
+    // ownedRequest synchronously gates duplicate mutations and binds UI effects to this project route.
+    // ownedRequest 同步拦截重复变更，并将界面副作用绑定到该项目路由。
+    const ownedRequest = requestOwnership.beginMutationRequest();
+    if (!ownedRequest) {
+      return;
+    }
+    // files freezes the optional file target before the asynchronous Git mutation starts.
+    // files 在异步 Git 变更开始前固定可选文件目标。
     const files = file ? [{
       oldPath: file.oldPath,
       newPath: file.newPath,
@@ -494,31 +569,51 @@ export function WorkspaceReviewPanelHost(props: {
     }] : [];
     setWorkspaceGitActionPending(true);
     try {
+      // result is the authoritative Git mutation outcome for the captured project route.
+      // result 是捕获项目路由对应的权威 Git 变更结果。
       const result = await props.runWorkspaceGitFileAction(
         workspacePath,
         workspaceProjectId,
         activeSurfaceId,
         { action, files },
       );
-      toast.success(result.summary);
-      setWorkspaceReviewSnapshot(null);
-      setWorkspaceReviewKey(null);
-      workspaceDetailPendingRef.current.clear();
-      workspaceDetailAttemptedRef.current.clear();
+      if (requestOwnership.ownsMutationRequest(ownedRequest)) {
+        toast.success(result.summary);
+        requestOwnership.invalidateRefreshRequest();
+        setWorkspaceReviewLoading(false);
+        setWorkspaceReviewSnapshot(null);
+        setWorkspaceReviewKey(null);
+        requestOwnership.invalidateDetailRequests();
+        workspaceDetailAttemptedRef.current.clear();
+      }
+      // Shared project Git state must refresh even when the user has already navigated away.
+      // 即使用户已经离开，也必须刷新共享项目 Git 状态。
       await props.onWorkspaceGitStateChanged?.(workspacePath, workspaceProjectId, activeSurfaceId);
-      await handleRefreshWorkspaceDiff(diffReviewSelection);
+      if (!requestOwnership.ownsMutationRequest(ownedRequest)) {
+        return;
+      }
+      await handleRefreshWorkspaceDiff(latestDiffReviewSelectionRef.current);
     } catch (error) {
+      if (!requestOwnership.ownsMutationRequest(ownedRequest)) {
+        return;
+      }
+      // message normalizes mutation and shared-refresh failures for the active route.
+      // message 归一化当前路由的变更与共享刷新失败。
       const message = error instanceof Error ? error.message : String(error);
       toast.error(formatWorkspaceReviewTranslation(t, "workspaceReview.gitOperationFailed", { error: message }));
     } finally {
-      setWorkspaceGitActionPending(false);
+      if (requestOwnership.finishMutationRequest(ownedRequest)) {
+        setWorkspaceGitActionPending(false);
+      }
     }
   }, [
     activeSurfaceId,
-    diffReviewSelection,
     handleRefreshWorkspaceDiff,
+    hydratedReviewPanelCacheKey,
     props.onWorkspaceGitStateChanged,
     props.runWorkspaceGitFileAction,
+    requestOwnership,
+    reviewPanelCacheKey,
     workspaceGitActionPending,
     workspacePath,
     workspaceProjectId,
@@ -527,14 +622,25 @@ export function WorkspaceReviewPanelHost(props: {
   // handleDiffReviewSelectionChange applies a new Git review source and refreshes it.
   // handleDiffReviewSelectionChange 应用新的 Git 审核来源并刷新。
   const handleDiffReviewSelectionChange = React.useCallback((selection: DiffReviewSelection) => {
+    if (hydratedReviewPanelCacheKey !== reviewPanelCacheKey) {
+      return;
+    }
+    // nextSelectionKey determines whether this action changes source or explicitly refreshes the current source.
+    // nextSelectionKey 判断该动作是切换来源，还是显式刷新当前来源。
+    const nextSelectionKey = diffReviewSelectionStableKey(selection);
+    requestOwnership.invalidateRefreshRequest();
+    setWorkspaceReviewLoading(false);
+    requestOwnership.invalidateDetailRequests();
+    workspaceDetailAttemptedRef.current.clear();
+    if (nextSelectionKey === diffReviewSelectionKey) {
+      void handleRefreshWorkspaceDiff(selection);
+      return;
+    }
     setDiffReviewSelection(selection);
     setWorkspaceReviewSnapshot(null);
     setWorkspaceReviewPath(workspacePath);
     setWorkspaceReviewKey(null);
-    workspaceDetailPendingRef.current.clear();
-    workspaceDetailAttemptedRef.current.clear();
-    void handleRefreshWorkspaceDiff(selection);
-  }, [handleRefreshWorkspaceDiff, workspacePath]);
+  }, [diffReviewSelectionKey, handleRefreshWorkspaceDiff, hydratedReviewPanelCacheKey, requestOwnership, reviewPanelCacheKey, workspacePath]);
 
   React.useEffect(() => {
     if (props.reviewFocusRequest <= 0 || handledReviewFocusRequestRef.current === props.reviewFocusRequest) {
@@ -552,11 +658,12 @@ export function WorkspaceReviewPanelHost(props: {
   }, [workspacePath]);
 
   React.useEffect(() => {
-    if (hydratedReviewPanelCacheKeyRef.current === reviewPanelCacheKey) {
+    if (lastHydratedReviewPanelCacheKeyRef.current === reviewPanelCacheKey) {
       return;
     }
-    hydratedReviewPanelCacheKeyRef.current = reviewPanelCacheKey;
-    workspaceReviewRequestSeqRef.current += 1;
+    lastHydratedReviewPanelCacheKeyRef.current = reviewPanelCacheKey;
+    // cachedEntry is the project-level review snapshot retained across panel unmounts.
+    // cachedEntry 是面板卸载期间保留的项目级审核快照。
     const cachedEntry = workspaceReviewPanelCache.get(reviewPanelCacheKey) ?? null;
     setDiffReviewSelection(cachedEntry?.selection ?? DEFAULT_WORKSPACE_REVIEW_SELECTION);
     setWorkspaceReviewSnapshot(cachedEntry?.snapshot ?? null);
@@ -564,12 +671,13 @@ export function WorkspaceReviewPanelHost(props: {
     setWorkspaceReviewKey(cachedEntry?.reviewKey ?? null);
     setWorkspaceReviewError(cachedEntry?.error ?? null);
     setWorkspaceReviewLoading(false);
-    workspaceDetailPendingRef.current.clear();
+    requestOwnership.invalidateDetailRequests();
     workspaceDetailAttemptedRef.current.clear();
-  }, [reviewPanelCacheKey, workspacePath]);
+    setHydratedReviewPanelCacheKey(reviewPanelCacheKey);
+  }, [requestOwnership, reviewPanelCacheKey, workspacePath]);
 
   React.useEffect(() => {
-    if (hydratedReviewPanelCacheKeyRef.current !== reviewPanelCacheKey) {
+    if (hydratedReviewPanelCacheKey !== reviewPanelCacheKey) {
       return;
     }
     rememberWorkspaceReviewPanelCache(reviewPanelCacheKey, {
@@ -581,6 +689,7 @@ export function WorkspaceReviewPanelHost(props: {
     });
   }, [
     diffReviewSelection,
+    hydratedReviewPanelCacheKey,
     reviewPanelCacheKey,
     workspaceReviewError,
     workspaceReviewKey,
@@ -589,7 +698,7 @@ export function WorkspaceReviewPanelHost(props: {
   ]);
 
   React.useEffect(() => {
-    if (hydratedReviewPanelCacheKeyRef.current !== reviewPanelCacheKey) {
+    if (hydratedReviewPanelCacheKey !== reviewPanelCacheKey) {
       return;
     }
     const forceRefreshForProject = forceWorkspaceReviewRefreshRef.current;
@@ -600,7 +709,7 @@ export function WorkspaceReviewPanelHost(props: {
       setWorkspaceReviewKey(null);
       setWorkspaceReviewError(null);
       setWorkspaceReviewLoading(false);
-      workspaceDetailPendingRef.current.clear();
+      requestOwnership.invalidateDetailRequests();
       workspaceDetailAttemptedRef.current.clear();
       return;
     }
@@ -617,12 +726,14 @@ export function WorkspaceReviewPanelHost(props: {
     setWorkspaceReviewSnapshot(null);
     setWorkspaceReviewPath(workspacePath);
     setWorkspaceReviewKey(diffReviewSelectionKey);
-    workspaceDetailPendingRef.current.clear();
+    requestOwnership.invalidateDetailRequests();
     workspaceDetailAttemptedRef.current.clear();
     void handleRefreshWorkspaceDiff();
   }, [
     diffReviewSelectionKey,
     handleRefreshWorkspaceDiff,
+    hydratedReviewPanelCacheKey,
+    requestOwnership,
     reviewPanelCacheKey,
     workspacePath,
     workspaceReviewKey,

@@ -364,18 +364,7 @@ impl AgentRuntimeConfig {
 
         Self {
             active_model: config.model.clone(),
-            active_agent_id: agent_profile_catalog
-                .state
-                .selected_agent_id
-                .clone()
-                .filter(|agent_id| {
-                    *agent_id == PLAN_AGENT_ID
-                        || *agent_id == EXPLORE_AGENT_ID
-                        || (!is_reserved_agent_identifier(agent_id)
-                            && agents.iter().any(|definition| definition.id == *agent_id))
-                })
-                .filter(|agent_id| agents.iter().any(|definition| definition.id == *agent_id))
-                .unwrap_or_else(|| DEFAULT_WORKER_AGENT_ID.to_string()),
+            active_agent_id: DEFAULT_WORKER_AGENT_ID.to_string(),
             agents,
             skills,
             tool_policies,
@@ -779,7 +768,8 @@ fn read_non_empty_prompt_file(path: &Path) -> Option<String> {
 mod tests {
     use super::{
         ANALYSIS_SAFE_TOOL_POLICY_ID, AgentRuntimeConfig, DEFAULT_SAFE_TOOL_POLICY_ID,
-        EXPLORE_AGENT_ID, LUA_SAFE_TOOL_POLICY_ID, PLAN_AGENT_ID, ensure_runtime_defaults,
+        DEFAULT_WORKER_AGENT_ID, EXPLORE_AGENT_ID, LUA_SAFE_TOOL_POLICY_ID, PLAN_AGENT_ID,
+        ensure_runtime_defaults,
     };
     use crate::agent_profile::{AgentProfileCatalog, UserAgentProfile};
     use crate::provider_config::{PersistedToolPolicyEntry, ProviderConfigurationFile};
@@ -808,17 +798,18 @@ mod tests {
         );
     }
 
-    /// Verifies that a persisted plan-agent selection survives runtime projection.
-    /// 验证持久化的规划代理选择会在运行时投影中保持生效。
+    /// Verifies requests without an explicit Agent use the stable built-in worker fallback.
+    /// 验证未显式指定 Agent 的请求会使用稳定的内建 worker 回退项。
     #[test]
-    fn runtime_config_preserves_selected_plan_agent() {
-        let mut catalog = AgentProfileCatalog::default();
-        catalog.state.selected_agent_id = Some(String::from(PLAN_AGENT_ID));
+    fn runtime_config_defaults_to_builtin_worker_agent() {
+        // runtime_config is built without any request-level Agent override.
+        // runtime_config 在没有任何请求级 Agent 覆盖的情况下构建。
+        let runtime_config = AgentRuntimeConfig::from_sources(
+            &ProviderConfigurationFile::default(),
+            &AgentProfileCatalog::default(),
+        );
 
-        let runtime_config =
-            AgentRuntimeConfig::from_sources(&ProviderConfigurationFile::default(), &catalog);
-
-        assert_eq!(runtime_config.active_agent_id, PLAN_AGENT_ID);
+        assert_eq!(runtime_config.active_agent_id, DEFAULT_WORKER_AGENT_ID);
     }
 
     /// Verifies user-authored profiles project advanced tool and runtime-policy fields into runtime agents.

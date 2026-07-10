@@ -363,6 +363,11 @@ pub(crate) fn start_webui_session_kernel_turn(
     turn_id: &str,
     kind: ActiveTurnKind,
 ) -> Result<(), String> {
+    if state.session_lifecycle_transition_ids.contains(&session_id) {
+        return Err(format!(
+            "会话 `{session_id}` 正在执行归档或移除转换，无法启动新的运行内核回合。"
+        ));
+    }
     if kind == ActiveTurnKind::UserPrompt {
         clear_webui_session_wait_agent_coordination(state, session_id, "new_user_turn");
     }

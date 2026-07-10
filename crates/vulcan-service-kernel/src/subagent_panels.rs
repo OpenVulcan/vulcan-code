@@ -37,8 +37,6 @@ type SubagentTaskStopMark = (SessionId, SessionId, Option<SubagentTaskPanelState
 ///
 /// # Parameters
 /// 参数
-/// `app` emits the navigation delta after the panel route is resolved.
-/// `app` 在面板路由解析完成后发出导航增量。
 /// `state` owns the shared service caches and selected workspace snapshot.
 /// `state` 持有共享服务缓存与当前选中的工作区快照。
 /// `parent_conversation_id` is the WebUI parent conversation identifier.
@@ -51,7 +49,6 @@ type SubagentTaskStopMark = (SessionId, SessionId, Option<SubagentTaskPanelState
 /// A route response built only from memory, or a friendly initialization/closed-state error.
 /// 返回仅由内存构建的路由响应，或友好的未初始化/已关闭状态错误。
 pub(super) async fn service_open_subagent_panel(
-    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     parent_conversation_id: String,
     task_id: String,
@@ -97,7 +94,7 @@ pub(super) async fn service_open_subagent_panel(
                 "智能体会话尚未完成初始化，或该智能体已经关闭。",
             ));
         };
-        build_subagent_panel_route_response_for_task_locked(
+        build_readonly_subagent_panel_route_response_for_task_locked(
             &mut guard,
             &workspace_snapshot,
             resolved_parent_session_id,
@@ -108,13 +105,6 @@ pub(super) async fn service_open_subagent_panel(
         "open_subagent_panel_cache_slow",
         cache_open_started_at,
         format!("parent={parent_session_id} task={task_session_id} opened_from_memory=true"),
-    );
-    let emit_started_at = current_unix_millis_value();
-    emit_subagent_navigation_delta_from_route_response(&app, &response);
-    webui_trace_if_slow(
-        "open_subagent_panel_emit_slow",
-        emit_started_at,
-        format!("parent={parent_session_id} task={task_session_id} source=memory"),
     );
     Ok(response)
 }
@@ -164,8 +154,8 @@ fn open_webui_subagent_panel_from_authoritative_state(
     Ok(Some(entry.parent_session_id.as_uuid()))
 }
 
-/// Builds a subagent route response with a temporary active task selection.
-/// 使用临时活动任务选择构建子代理路由响应。
+/// Builds a subagent response with a temporary active task selection.
+/// 使用临时活动任务选择构建子代理响应。
 ///
 /// # Parameters
 /// 参数
@@ -180,25 +170,81 @@ fn open_webui_subagent_panel_from_authoritative_state(
 ///
 /// # Returns
 /// 返回值
-/// A route response for the requested child task without persisting UI active state globally.
-/// 返回请求子任务的路由响应，且不会全局持久化 UI 活动状态。
+/// A route response for the requested child task without persisting the temporary active UI surface.
+/// 返回请求子任务的路由响应，且不会持久化临时活动界面。
 fn build_subagent_panel_route_response_for_task_locked(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
     parent_session_id: SessionId,
     task_session_id: SessionId,
 ) -> Result<SubagentPanelRouteResponse, String> {
+    // previous_active_panel preserves the route selection owned by the shared service state.
+    // previous_active_panel 保留共享服务状态持有的路由选择。
     let previous_active_panel = guard.active_subagent_panel;
+    // previous_subagent_navigation preserves the shared navigation projection across the temporary route build.
+    // previous_subagent_navigation 在临时路由构建期间保留共享导航投影。
     let previous_subagent_navigation = guard.workbench.subagent_navigation.clone();
+    // previous_messages preserves the shared message surface across the temporary route build.
+    // previous_messages 在临时路由构建期间保留共享消息界面。
     let previous_messages = guard.workbench.messages.clone();
     guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
         parent_session_id,
         task_id: task_session_id,
     });
+    // response captures the requested child projection before every temporary global field is restored.
+    // response 在恢复全部临时全局字段前捕获请求的子任务投影。
     let response = build_subagent_panel_route_response_locked(guard, workspace_snapshot);
     guard.active_subagent_panel = previous_active_panel;
     guard.workbench.subagent_navigation = previous_subagent_navigation;
     guard.workbench.messages = previous_messages;
+    response
+}
+
+/// Builds a read-only route-local subagent response without advancing global event ordering.
+/// 构建不推进全局事件顺序的只读路由局部子代理响应。
+///
+/// # Parameters
+/// 参数
+/// `guard` is the shared service state guard being projected.
+/// `guard` 是正在投影的共享服务状态锁。
+/// `workspace_snapshot` is the workspace snapshot used for transcript lookup.
+/// `workspace_snapshot` 是用于查找转录的工作区快照。
+/// `parent_session_id` is the parent conversation that owns the child task.
+/// `parent_session_id` 是拥有子任务的父会话。
+/// `task_session_id` is the child task conversation to render.
+/// `task_session_id` 是需要渲染的子任务会话。
+///
+/// # Returns
+/// 返回值
+/// A route-local response that inherits the unchanged global revision.
+/// 返回继承未变化全局版本的路由局部响应。
+pub(super) fn build_readonly_subagent_panel_route_response_for_task_locked(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+    parent_session_id: SessionId,
+    task_session_id: SessionId,
+) -> Result<SubagentPanelRouteResponse, String> {
+    // previous_workbench_generation prevents a read-only route response from advancing global event ordering.
+    // previous_workbench_generation 防止只读路由响应推进全局事件顺序。
+    let previous_workbench_generation = guard.workbench_generation;
+    // previous_workbench_revision preserves the revision visible before the temporary projection.
+    // previous_workbench_revision 保留临时投影前可见的版本号。
+    let previous_workbench_revision = guard.workbench.revision;
+    // response builds through the mutation-capable projector before its revision side effects are rolled back.
+    // response 通过支持变更的投影器构建，随后回滚其版本副作用。
+    let mut response = build_subagent_panel_route_response_for_task_locked(
+        guard,
+        workspace_snapshot,
+        parent_session_id,
+        task_session_id,
+    );
+    guard.workbench_generation = previous_workbench_generation;
+    guard.workbench.revision = previous_workbench_revision;
+    if let Ok(response) = response.as_mut() {
+        // The route-local result inherits the unchanged global revision so later real deltas remain strictly newer.
+        // 路由局部结果继承未变化的全局版本，使后续真实增量保持严格更新。
+        response.revision = previous_workbench_revision;
+    }
     response
 }
 

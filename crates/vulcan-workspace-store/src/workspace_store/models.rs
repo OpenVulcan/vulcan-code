@@ -1,22 +1,5 @@
 use super::*;
 
-/// Describes the completed workspace-snapshot persistence pass, including any non-fatal auxiliary warnings.
-/// 描述一次已完成的工作台快照持久化过程，并携带所有非致命的辅助告警。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct WorkspaceSnapshotPersistOutcome {
-    /// Non-fatal warnings collected while synchronizing auxiliary workspace projections.
-    /// 在同步工作台辅助投影期间收集到的非致命告警。
-    pub warnings: Vec<String>,
-}
-
-impl WorkspaceSnapshotPersistOutcome {
-    /// Returns whether the persistence pass completed without any auxiliary warnings.
-    /// 返回本次持久化是否在没有任何辅助告警的情况下完成。
-    pub fn is_clean(&self) -> bool {
-        self.warnings.is_empty()
-    }
-}
-
 /// Stable in-memory snapshot hydrated from the controller-backed workspace database.
 /// 从控制器承载的工作台数据库中还原出的稳定内存快照。
 #[derive(Debug, Clone)]

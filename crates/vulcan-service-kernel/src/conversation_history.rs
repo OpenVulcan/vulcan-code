@@ -732,7 +732,7 @@ pub(super) async fn load_hydrated_session_workbench(
         snapshot
     } else {
         let index_load_started_at = current_unix_millis_value();
-        let snapshot = vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+        vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
             read_context.controller_runtime.clone(),
         )
         .await
@@ -742,8 +742,7 @@ pub(super) async fn load_hydrated_session_workbench(
                 index_load_started_at,
                 format!("session={parsed_session_id}"),
             );
-        })?;
-        snapshot
+        })?
     };
     preserve_active_session_run_state(
         read_context.preserved_workspace_run_state.as_ref(),

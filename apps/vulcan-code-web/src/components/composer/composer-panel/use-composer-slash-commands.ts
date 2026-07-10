@@ -1,0 +1,224 @@
+import React from "react";
+import {
+  composerSlashCommandMatchesInput,
+  exactComposerSlashCommand,
+  normalizedComposerSlashCommandId,
+  type ComposerSlashCommandResult,
+} from "@/components/composer/composer-model";
+import type { ComposerSlashCommandSummary } from "@/types";
+
+// UseComposerSlashCommandsOptions defines the input state and routed actions owned outside slash selection.
+// UseComposerSlashCommandsOptions 定义 slash 选择之外持有的输入状态与路由动作。
+export interface UseComposerSlashCommandsOptions {
+  // Current composer input used to filter and activate commands.
+  // 用于筛选与激活指令的当前输入区文本。
+  input: string;
+  // Updates composer input after typing or command activation.
+  // 在输入或指令激活后更新输入区文本。
+  setInput: React.Dispatch<React.SetStateAction<string>>;
+  // Commands projected by the shared workbench service.
+  // 共享工作台服务投影出的指令。
+  commands: ComposerSlashCommandSummary[];
+  // Whether Plan mode is currently active.
+  // 当前是否启用计划模式。
+  planModeEnabled: boolean;
+  // Persists or previews one Plan mode transition.
+  // 持久化或预览一次计划模式转换。
+  onSetPlanMode: (enabled: boolean) => Promise<boolean>;
+  // Routes one non-Plan command through the owning workbench.
+  // 通过所属工作台路由一个非 Plan 指令。
+  onRouteCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
+  // Opens the existing model picker.
+  // 打开现有模型选择器。
+  onOpenModelPicker: () => void;
+  // Opens the existing reasoning picker.
+  // 打开现有推理选择器。
+  onOpenReasoningPicker: () => void;
+  // Sends the current composer draft when Enter is not consumed by the slash panel.
+  // 当 Enter 未被 slash 面板消费时发送当前输入区草稿。
+  onSend: () => Promise<void>;
+}
+
+// ComposerSlashCommandsController exposes slash panel state and keyboard actions to ComposerPanel.
+// ComposerSlashCommandsController 向 ComposerPanel 暴露 slash 面板状态与键盘操作。
+export interface ComposerSlashCommandsController {
+  // Commands matching the current non-dismissed slash input.
+  // 匹配当前未关闭 slash 输入的指令。
+  visibleCommands: ComposerSlashCommandSummary[];
+  // Whether at least one command is visible.
+  // 是否至少有一个可见指令。
+  panelVisible: boolean;
+  // Index highlighted by keyboard or pointer navigation.
+  // 由键盘或指针导航高亮的索引。
+  highlightedIndex: number;
+  // Updates the highlighted command index from pointer navigation.
+  // 通过指针导航更新高亮指令索引。
+  setHighlightedIndex: React.Dispatch<React.SetStateAction<number>>;
+  // Updates composer input and re-enables filtering after a dismissed value changes.
+  // 更新输入区文本，并在被关闭值变化后重新启用筛选。
+  handleInputChange: (value: string) => void;
+  // Appends one globally redirected printable key and re-enables filtering.
+  // 追加一个全局重定向的可打印按键并重新启用筛选。
+  appendGlobalInput: (value: string) => void;
+  // Activates one selected command and applies its routed result.
+  // 激活一个选中指令并应用其路由结果。
+  activateCommand: (command: ComposerSlashCommandSummary) => void;
+  // Handles slash navigation before applying ordinary composer Enter-to-send behavior.
+  // 在应用普通输入区 Enter 发送行为前处理 slash 导航。
+  handleKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  // Resets command dismissal and highlighting when the active draft slot changes.
+  // 当前草稿槽变化时重置指令关闭状态与高亮。
+  reset: () => void;
+}
+
+// useComposerSlashCommands owns slash filtering, navigation, activation, and keyboard priority.
+// useComposerSlashCommands 管理 slash 筛选、导航、激活与键盘优先级。
+// Parameters: options provides composer input, projected commands, and routed side effects.
+// 参数：options 提供输入区文本、投影指令与路由副作用。
+// Returns: slash panel state and stable input, activation, keyboard, and reset actions.
+// 返回值：slash 面板状态及稳定的输入、激活、键盘与重置操作。
+export function useComposerSlashCommands(options: UseComposerSlashCommandsOptions): ComposerSlashCommandsController {
+  // highlightedIndex stores the active command row while the panel is visible.
+  // highlightedIndex 保存面板可见时的活动指令行。
+  const [highlightedIndex, setHighlightedIndex] = React.useState(0);
+  // dismissedInput stores the exact slash input dismissed by Escape.
+  // dismissedInput 保存被 Escape 关闭的精确 slash 输入。
+  const [dismissedInput, setDismissedInput] = React.useState<string | null>(null);
+  // visibleCommands applies prefix filtering unless the exact current value was dismissed.
+  // visibleCommands 应用前缀筛选，但排除被关闭的精确当前值。
+  const visibleCommands = React.useMemo(() => {
+    if (!options.input.startsWith("/") || dismissedInput === options.input) {
+      return [];
+    }
+    return options.commands.filter((command) => composerSlashCommandMatchesInput(command, options.input));
+  }, [dismissedInput, options.commands, options.input]);
+  // panelVisible indicates whether keyboard navigation has at least one valid target.
+  // panelVisible 表示键盘导航是否至少存在一个有效目标。
+  const panelVisible = visibleCommands.length > 0;
+  // highlightedCommand resolves the clamped keyboard target.
+  // highlightedCommand 解析经过边界收敛的键盘目标。
+  const highlightedCommand = visibleCommands[
+    Math.min(highlightedIndex, Math.max(visibleCommands.length - 1, 0))
+  ] ?? null;
+  // exactCommand takes precedence over the highlighted row when Enter activates a full trigger.
+  // exactCommand 在 Enter 激活完整触发词时优先于高亮行。
+  const exactCommand = React.useMemo(
+    () => exactComposerSlashCommand(visibleCommands, options.input),
+    [options.input, visibleCommands],
+  );
+
+  React.useEffect(() => {
+    setHighlightedIndex((current) => {
+      if (!visibleCommands.length) {
+        return 0;
+      }
+      return Math.min(current, visibleCommands.length - 1);
+    });
+  }, [visibleCommands.length]);
+
+  // resetSelection clears slash navigation state and applies the requested next input.
+  // resetSelection 清理 slash 导航状态并应用请求的下一输入值。
+  const resetSelection = React.useCallback((nextInput: string) => {
+    options.setInput(nextInput);
+    setDismissedInput(null);
+    setHighlightedIndex(0);
+  }, [options.setInput]);
+  // handleInputChange tracks textarea edits and re-enables matching after the dismissed value changes.
+  // handleInputChange 跟踪文本框编辑，并在被关闭值变化后重新启用匹配。
+  const handleInputChange = React.useCallback((value: string) => {
+    options.setInput(value);
+    setDismissedInput((current) => current !== null && value !== current ? null : current);
+  }, [options.setInput]);
+  // appendGlobalInput appends one redirected key without capturing stale input.
+  // appendGlobalInput 追加一个重定向按键，同时避免捕获过期输入。
+  const appendGlobalInput = React.useCallback((value: string) => {
+    options.setInput((current) => `${current}${value}`);
+    setDismissedInput((current) => current === null ? current : null);
+  }, [options.setInput]);
+  // activateCommand handles the local Plan command before applying workbench-routed results.
+  // activateCommand 在应用工作台路由结果前处理本地 Plan 指令。
+  const activateCommand = React.useCallback((command: ComposerSlashCommandSummary) => {
+    if (normalizedComposerSlashCommandId(command) === "plan") {
+      void options.onSetPlanMode(!options.planModeEnabled).then((handled) => {
+        if (handled) {
+          resetSelection("");
+        }
+      });
+      return;
+    }
+    // result describes the synchronous UI effect routed by the owning workbench.
+    // result 描述所属工作台同步路由出的界面效果。
+    const result = options.onRouteCommand(command);
+    if (!result.handled) {
+      return;
+    }
+    resetSelection(result.replacementText ?? "");
+    if (result.openTarget === "model") {
+      options.onOpenModelPicker();
+    }
+    if (result.openTarget === "reasoning") {
+      options.onOpenReasoningPicker();
+    }
+  }, [
+    options.onOpenModelPicker,
+    options.onOpenReasoningPicker,
+    options.onRouteCommand,
+    options.onSetPlanMode,
+    options.planModeEnabled,
+    resetSelection,
+  ]);
+  // handleKeyDown gives visible slash navigation priority over ordinary Enter-to-send behavior.
+  // handleKeyDown 让可见 slash 导航优先于普通 Enter 发送行为。
+  const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (panelVisible) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setHighlightedIndex((current) => (current + 1) % visibleCommands.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setHighlightedIndex((current) => (current - 1 + visibleCommands.length) % visibleCommands.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDismissedInput(options.input);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+        // command prioritizes an exact trigger before the currently highlighted row.
+        // command 优先选择精确触发词，再选择当前高亮行。
+        const command = exactCommand ?? highlightedCommand;
+        if (command) {
+          event.preventDefault();
+          activateCommand(command);
+          return;
+        }
+      }
+    }
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    void options.onSend();
+  }, [activateCommand, exactCommand, highlightedCommand, options.input, options.onSend, panelVisible, visibleCommands.length]);
+  // reset clears transient slash state without mutating the newly restored draft input.
+  // reset 清理临时 slash 状态，但不修改刚恢复的草稿输入。
+  const reset = React.useCallback(() => {
+    setDismissedInput(null);
+    setHighlightedIndex(0);
+  }, []);
+
+  return {
+    visibleCommands,
+    panelVisible,
+    highlightedIndex,
+    setHighlightedIndex,
+    handleInputChange,
+    appendGlobalInput,
+    activateCommand,
+    handleKeyDown,
+    reset,
+  };
+}

@@ -179,6 +179,8 @@ fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_r
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -512,6 +514,8 @@ fn unclosed_subagent_cache_without_visible_round_builds_navigation() {
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -1743,13 +1747,37 @@ fn opening_one_subagent_detail_preserves_full_unclosed_navigation() {
             .expect("registry lookup should succeed")
             .is_some()
     );
-    guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
+    // previous_active_panel records the shared route selection before the route-local detail projection.
+    // previous_active_panel 记录路由局部详情投影前的共享路由选择。
+    let previous_active_panel = guard.active_subagent_panel;
+    // previous_workbench_generation records the global event sequence before the read-only route build.
+    // previous_workbench_generation 记录只读路由构建前的全局事件序号。
+    let previous_workbench_generation = guard.workbench_generation;
+    // previous_workbench_revision records the visible global revision before the read-only route build.
+    // previous_workbench_revision 记录只读路由构建前的可见全局版本。
+    let previous_workbench_revision = guard.workbench.revision;
+    // previous_navigation_json captures navigation content for side-effect verification without requiring structural equality derives.
+    // previous_navigation_json 捕获导航内容，用于在不依赖结构相等派生的情况下验证副作用。
+    let previous_navigation_json = serde_json::to_value(&guard.workbench.subagent_navigation)
+        .expect("serialize navigation before route-local detail build");
+    // previous_messages_json captures message content for side-effect verification.
+    // previous_messages_json 捕获消息内容用于副作用验证。
+    let previous_messages_json = serde_json::to_value(&guard.workbench.messages)
+        .expect("serialize messages before route-local detail build");
+    // detail_response is the independently requested child transcript projection.
+    // detail_response 是独立请求的子任务转录投影。
+    let detail_response = build_readonly_subagent_panel_route_response_for_task_locked(
+        &mut guard,
+        &workspace_snapshot,
         parent_session_id,
-        task_id: lifecycle_task_id,
-    });
-    let navigation_after_detail =
-        subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)
-            .expect("navigation should remain visible after detail open");
+        lifecycle_task_id,
+    )
+    .expect("route-local detail response should build");
+    // navigation_after_detail is the route-local navigation returned to the requesting tab.
+    // navigation_after_detail 是返回给请求页签的路由局部导航。
+    let navigation_after_detail = detail_response
+        .subagent_navigation
+        .expect("navigation should remain visible after detail open");
 
     assert_eq!(navigation_after_detail.tasks.len(), 3);
     assert_eq!(
@@ -1767,6 +1795,20 @@ fn opening_one_subagent_detail_preserves_full_unclosed_navigation() {
             .tasks
             .iter()
             .any(|task| task.task_id == mirror_task_id.to_string())
+    );
+    assert_eq!(detail_response.revision, previous_workbench_revision);
+    assert_eq!(guard.active_subagent_panel, previous_active_panel);
+    assert_eq!(guard.workbench_generation, previous_workbench_generation);
+    assert_eq!(guard.workbench.revision, previous_workbench_revision);
+    assert_eq!(
+        serde_json::to_value(&guard.workbench.subagent_navigation)
+            .expect("serialize navigation after route-local detail build"),
+        previous_navigation_json
+    );
+    assert_eq!(
+        serde_json::to_value(&guard.workbench.messages)
+            .expect("serialize messages after route-local detail build"),
+        previous_messages_json
     );
 }
 
@@ -1901,6 +1943,8 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -2028,6 +2072,8 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -2122,6 +2168,8 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),

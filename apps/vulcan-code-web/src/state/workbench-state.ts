@@ -7,12 +7,14 @@ import {
 } from "@/state/workbench-message-merge";
 import type {
   ConversationHydrationProgress,
+  ConversationArchivedDelta,
   ContextInjectionChangedDelta,
   ConversationMessage,
   ConversationSummary,
   PendingPromptsChangedDelta,
   PendingQuestionSnapshot,
   PendingPromptSummary,
+  ProjectRemovedDelta,
   SessionAddonsChangedResponse,
   SessionAddonsChangedDelta,
   SessionVmmPolicyByConversation,
@@ -27,20 +29,6 @@ export {
   coalesceWorkbenchDeltaEnvelopes,
   workbenchDeltaConversationId,
 } from "@/state/workbench-message-merge";
-
-// InflightSubagentOpenRequest tracks one backend transcript-load command that duplicate clicks can share.
-// InflightSubagentOpenRequest 跟踪一条可被重复点击复用的后端转录加载命令。
-export interface InflightSubagentOpenRequest {
-  // Stable parent/task route key for request coalescing.
-  // 用于请求合并的稳定父级/任务键。
-  key: string;
-  // Monotonic route request sequence owned by the original backend call.
-  // 原始后端调用持有的单调路由请求序号。
-  requestSeq: number;
-  // Backend command promise for the transcript load.
-  // 转录加载对应的后端命令 Promise。
-  promise: Promise<SubagentPanelRouteResponse | null>;
-}
 
 // SubagentSurfaceMessageCache stores loaded child transcript messages by child task conversation id.
 // SubagentSurfaceMessageCache 按子任务会话标识保存已载入的子代理转录消息。
@@ -369,6 +357,13 @@ function mergeHydratedConversationWindows(
 // deriveSelectedConversationFields 从按会话归一化缓存派生顶层当前会话字段。
 function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): WorkbenchSnapshot {
   const selectedConversationId = workbench.selectedConversationId ?? null;
+  // liveParentConversationIds contains every active regular conversation allowed to own a navigation tree.
+  // liveParentConversationIds 包含允许拥有导航树的全部活动常规会话。
+  const liveParentConversationIds = new Set(workbench.conversations.map((conversation) => conversation.id));
+  // subagentNavigationByConversation removes trees whose regular parent is no longer active.
+  // subagentNavigationByConversation 删除常规父会话已不活动的导航树。
+  const subagentNavigationByConversation = (workbench.subagentNavigationByConversation ?? [])
+    .filter((navigation) => liveParentConversationIds.has(navigation.parentConversationId));
   const pendingQuestion = selectedConversationId
     ? (workbench.pendingQuestions ?? []).find((question) => question.sessionId === selectedConversationId) ?? null
     : null;
@@ -382,7 +377,7 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
     ? workbench.sessionVmmPoliciesByConversation?.find((entry) => entry.conversationId === selectedConversationId) ?? null
     : null;
   const subagentNavigation = selectedConversationId
-    ? workbench.subagentNavigationByConversation?.find((navigation) => navigation.parentConversationId === selectedConversationId) ?? null
+    ? subagentNavigationByConversation.find((navigation) => navigation.parentConversationId === selectedConversationId) ?? null
     : null;
   const contextInjectionEntry = selectedConversationId
     ? workbench.contextInjectionByConversation?.find((entry) => entry.conversationId === selectedConversationId) ?? null
@@ -395,6 +390,7 @@ function deriveSelectedConversationFields(workbench: WorkbenchSnapshot): Workben
     sessionTodolist: sessionAddons?.sessionTodolist ?? null,
     sessionPlanMode: sessionAddons?.sessionPlanMode ?? null,
     sessionVmmPolicy: sessionVmmPolicyEntry?.sessionVmmPolicy ?? null,
+    subagentNavigationByConversation,
     subagentNavigation,
     contextInjection: contextInjectionEntry?.contextInjection ?? null,
   };
@@ -654,13 +650,20 @@ export function applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
   envelope: WorkbenchDeltaEnvelope,
   cache: SubagentSurfaceMessageCache,
 ): WorkbenchSnapshot {
-  if (envelope.generation <= (workbench.revision ?? 0)) {
+  // ownsIndependentLifecycleDomain identifies a delta whose domain revision is accepted separately from unrelated state.
+  // ownsIndependentLifecycleDomain 标识其领域版本独立于无关状态接收的增量。
+  const ownsIndependentLifecycleDomain = envelope.delta.kind === "conversationArchived"
+    || envelope.delta.kind === "conversationsArchived"
+    || envelope.delta.kind === "projectRemoved";
+  if (!ownsIndependentLifecycleDomain && envelope.generation <= (workbench.revision ?? 0)) {
     return workbench;
   }
+  // nextWorkbench applies only fields explicitly owned by this delta kind.
+  // nextWorkbench 仅应用该增量类型明确拥有的字段。
   const nextWorkbench = applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(workbench, envelope, cache);
   return {
     ...nextWorkbench,
-    revision: envelope.generation,
+    revision: Math.max(workbench.revision ?? 0, envelope.generation),
   };
 }
 
@@ -689,6 +692,16 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
       });
     case "conversationSummaryChanged":
       return applyConversationSummaryChangedDelta(workbench, envelope.delta.payload);
+    case "conversationArchived":
+      return applyConversationArchivedDelta(workbench, envelope.delta.payload, cache);
+    case "conversationsArchived":
+      return applyConversationsArchivedDelta(
+        workbench,
+        envelope.delta.payload.archivedConversations,
+        cache,
+      );
+    case "projectRemoved":
+      return applyProjectRemovedDelta(workbench, envelope.delta.payload, cache);
     case "pendingQuestionChanged": {
       const pendingQuestions = pendingQuestionsFromDelta(
         workbench.pendingQuestions ?? [],
@@ -758,8 +771,112 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
   }
 }
 
-// applyConversationSummaryChangedDelta upserts one sidebar summary without touching transcript rows.
-// applyConversationSummaryChangedDelta 写入单个侧栏摘要，不触碰转录消息行。
+// applyConversationArchivedDelta commits the archive-owned lifecycle domain without replacing unrelated newer state.
+// applyConversationArchivedDelta 提交归档拥有的生命周期领域，且不替换无关的较新状态。
+//
+// Parameters: workbench is the current mixed-domain state, delta is the authoritative archive transition, and cache owns loaded child surfaces.
+// 参数：workbench 是当前混合领域状态，delta 是权威归档转换，cache 持有已载入子界面。
+// Returns: the workbench with the archived parent and every parent-owned retained projection removed atomically.
+// 返回值：原子移除已归档父会话及其全部父级保留投影后的工作台。
+function applyConversationArchivedDelta(
+  workbench: WorkbenchSnapshot,
+  delta: ConversationArchivedDelta,
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  // conversationId is the exact lifecycle identity retired by the backend commit.
+  // conversationId 是后端提交所淘汰的精确生命周期身份。
+  const conversationId = delta.conversationId;
+  // conversations is the active collection after removing the committed archive target.
+  // conversations 是移除已提交归档目标后的活动集合。
+  const conversations = workbench.conversations.filter((conversation) => conversation.id !== conversationId);
+  // selectedConversationId accepts the backend choice only when it remains visible in the active collection.
+  // selectedConversationId 仅在后端选择仍存在于活动集合时接受该选择。
+  const selectedConversationId = visibleConversationId(conversations, delta.selectedConversationId)
+    ?? conversations[0]?.id
+    ?? null;
+  // retainedArchivedConversations removes any stale copy before applying the authoritative archived projection.
+  // retainedArchivedConversations 在应用权威归档投影前移除任何过期副本。
+  const retainedArchivedConversations = (workbench.archivedConversations ?? [])
+    .filter((conversation) => conversation.id !== conversationId);
+  // archivedConversations mirrors whether the post-archive workbench exposes this session as restorable.
+  // archivedConversations 镜像归档后工作台是否将该会话暴露为可恢复状态。
+  const archivedConversations = delta.archivedConversation
+    ? [delta.archivedConversation, ...retainedArchivedConversations]
+    : retainedArchivedConversations;
+  // nextWorkbench removes every retained projection whose owning parent lifecycle has ended.
+  // nextWorkbench 移除所属父会话生命周期已结束的每个保留投影。
+  const nextWorkbench = deriveSelectedConversationFields({
+    ...workbench,
+    conversations,
+    archivedConversations,
+    selectedConversationId,
+    messages: workbench.messages.filter((message) => message.conversationId !== conversationId),
+    hydratedConversationWindows: (workbench.hydratedConversationWindows ?? [])
+      .filter((window) => window.sessionId !== conversationId),
+    conversationHydration: workbench.conversationHydration?.sessionId === conversationId
+      ? null
+      : workbench.conversationHydration,
+    pendingPromptsByConversation: (workbench.pendingPromptsByConversation ?? [])
+      .filter((entry) => entry.conversationId !== conversationId),
+    pendingQuestions: (workbench.pendingQuestions ?? [])
+      .filter((question) => question.sessionId !== conversationId),
+    sessionAddonsByConversation: (workbench.sessionAddonsByConversation ?? [])
+      .filter((entry) => entry.conversationId !== conversationId),
+    sessionVmmPoliciesByConversation: (workbench.sessionVmmPoliciesByConversation ?? [])
+      .filter((entry) => entry.conversationId !== conversationId),
+    contextInjectionByConversation: (workbench.contextInjectionByConversation ?? [])
+      .filter((entry) => entry.conversationId !== conversationId),
+    contextUsage: workbench.selectedConversationId === conversationId ? null : workbench.contextUsage,
+  });
+  return injectCachedSubagentSurfaceMessages(nextWorkbench, cache);
+}
+
+// applyConversationsArchivedDelta commits a target-owned archive transition for every requested conversation.
+// applyConversationsArchivedDelta 为每个请求会话提交一条目标自有归档转换。
+//
+// Parameters: workbench is the current mixed-domain state, deltas are committed archive transitions, and cache owns loaded child surfaces.
+// 参数：workbench 是当前混合领域状态，deltas 是已提交归档转换，cache 持有已载入子界面。
+// Returns: the workbench after every archive transition has been applied idempotently.
+// 返回值：幂等应用全部归档转换后的工作台。
+function applyConversationsArchivedDelta(
+  workbench: WorkbenchSnapshot,
+  deltas: ConversationArchivedDelta[],
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  return deltas.reduce(
+    (nextWorkbench, delta) => applyConversationArchivedDelta(nextWorkbench, delta, cache),
+    workbench,
+  );
+}
+
+// applyProjectRemovedDelta commits project membership and all child archive transitions atomically.
+// applyProjectRemovedDelta 原子提交项目成员关系及全部子会话归档转换。
+//
+// Parameters: workbench is the current mixed-domain state, delta is the committed project removal, and cache owns loaded child surfaces.
+// 参数：workbench 是当前混合领域状态，delta 是已提交项目移除，cache 持有已载入子界面。
+// Returns: the workbench after project and child lifecycle state converge to the backend commit.
+// 返回值：项目与子生命周期状态收敛到后端提交后的工作台。
+function applyProjectRemovedDelta(
+  workbench: WorkbenchSnapshot,
+  delta: ProjectRemovedDelta,
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  // archivedWorkbench removes only the child-owned retained projections named by the lifecycle payload.
+  // archivedWorkbench 仅移除生命周期载荷点名的子会话自有保留投影。
+  const archivedWorkbench = applyConversationsArchivedDelta(
+    workbench,
+    delta.archivedConversations,
+    cache,
+  );
+  return {
+    ...archivedWorkbench,
+    projects: delta.projects,
+    expandedProjectIds: delta.expandedProjectIds,
+  };
+}
+
+// applyConversationSummaryChangedDelta upserts one sidebar summary and applies its owned selection without touching transcript rows.
+// applyConversationSummaryChangedDelta 写入单个侧栏摘要及其自有选择，不触碰转录消息行。
 function applyConversationSummaryChangedDelta(
   workbench: WorkbenchSnapshot,
   delta: { conversation: ConversationSummary; selectedConversationId?: string | null },
@@ -778,11 +895,14 @@ function applyConversationSummaryChangedDelta(
   const nextWorkbench = {
     ...workbench,
     conversations,
+    selectedConversationId: delta.selectedConversationId === undefined
+      ? workbench.selectedConversationId
+      : visibleConversationId(conversations, delta.selectedConversationId),
   };
-  return {
+  return deriveSelectedConversationFields({
     ...nextWorkbench,
     conversations: applyNormalizedConversationAttention(conversations, nextWorkbench),
-  };
+  });
 }
 
 // applyUpdateConversationRunPhaseDelta updates one conversation lifecycle row without touching transcript messages.
@@ -830,8 +950,10 @@ function syncSubagentSurfaceMessageCacheForDelta(
   workbench: WorkbenchSnapshot,
   conversationId: string,
 ): void {
-  const belongsToVisibleTask = workbench.subagentNavigation?.tasks?.some((task) => task.taskId === conversationId) ?? false;
-  if (!belongsToVisibleTask && !cache.has(conversationId)) {
+  // belongsToLiveTask prevents late deltas from reviving a closed or detached task cache.
+  // belongsToLiveTask 防止迟到增量重新激活已关闭或已脱离的任务缓存。
+  const belongsToLiveTask = liveSubagentTaskIds(workbench).has(conversationId);
+  if (!belongsToLiveTask) {
     return;
   }
   cache.set(
@@ -906,25 +1028,48 @@ export function mergeConversationMessagesWithSubagentSurfaceMessageCache(
   messages: ConversationMessage[],
   cache: SubagentSurfaceMessageCache,
 ): WorkbenchSnapshot {
-  if (workbench.subagentNavigation?.tasks?.some((task) => task.taskId === conversationId) || cache.has(conversationId)) {
+  if (liveSubagentTaskIds(workbench).has(conversationId)) {
     cache.set(conversationId, messages);
   }
   return injectCachedSubagentSurfaceMessages(mergeConversationMessages(workbench, conversationId, messages), cache);
 }
 
-// applySubagentPanelRouteResponse applies one focused subagent route response without merging a full snapshot.
-// applySubagentPanelRouteResponse 应用单个聚焦子代理路由响应，不合并完整快照。
+// applySubagentPanelRouteResponse applies one route response while preserving messages from successful concurrent tab loads.
+// applySubagentPanelRouteResponse 应用单个路由响应，同时保留并发页签成功加载的消息。
+// Parameters: workbench is the latest global snapshot; response is one route-local result; cache owns live child transcript windows.
+// 参数：workbench 是最新全局快照；response 是单条路由局部结果；cache 持有存活子转录窗口。
+// Returns: a full route projection for a current response, or a message-only merge when a newer global revision already won.
+// 返回值：当前响应返回完整路由投影；较新全局版本已生效时仅合并消息。
 export function applySubagentPanelRouteResponse(
   workbench: WorkbenchSnapshot,
   response: SubagentPanelRouteResponse,
   cache: SubagentSurfaceMessageCache,
 ): WorkbenchSnapshot {
+  // activeConversationId identifies the route-local transcript independently from global navigation revision order.
+  // activeConversationId 独立于全局导航版本顺序标识该路由的局部转录。
+  const activeConversationId = response.activeConversationId ?? response.subagentNavigation?.activeConversationId ?? null;
+  // currentRevision is the authoritative global projection revision already visible to the client.
+  // currentRevision 是客户端当前可见的权威全局投影版本。
   const currentRevision = workbench.revision ?? 0;
+  // responseRevision is the global projection revision captured while this route response was built.
+  // responseRevision 是构建该路由响应时捕获的全局投影版本。
   const responseRevision = response.revision ?? 0;
   if (currentRevision > 0 && responseRevision < currentRevision) {
-    return workbench;
+    // A stale global projection must never overwrite newer navigation, but its independently requested transcript remains valid
+    // only while the latest navigation still declares that task live.
+    // 过期全局投影绝不能覆盖较新导航；仅当最新导航仍声明该任务存活时，其独立请求的转录才仍然有效。
+    if (!activeConversationId || !liveSubagentTaskIds(workbench).has(activeConversationId)) {
+      return workbench;
+    }
+    return mergeConversationMessagesWithSubagentSurfaceMessageCache(
+      workbench,
+      activeConversationId,
+      response.messages,
+      cache,
+    );
   }
-  const activeConversationId = response.activeConversationId ?? response.subagentNavigation?.activeConversationId ?? null;
+  // shouldCacheAsSubagentSurface limits message retention to a child task declared by this accepted route projection.
+  // shouldCacheAsSubagentSurface 将消息保留限制为本次已接受路由投影声明的子任务。
   const shouldCacheAsSubagentSurface = activeConversationId
     ? (response.subagentNavigation?.tasks?.some((task) => task.taskId === activeConversationId) ?? false)
       || cache.has(activeConversationId)
@@ -970,13 +1115,47 @@ export function applySessionAddonsChangedResponse(
   });
 }
 
-// rememberSubagentSurfaceMessages records message windows for current tasks and already opened cached child tabs.
-// rememberSubagentSurfaceMessages 记录当前任务与已打开缓存子页签的消息窗口。
+// liveSubagentTaskIds returns every unclosed task in active regular-conversation navigation trees.
+// liveSubagentTaskIds 返回活动常规会话导航树中的全部未关闭任务。
+// Parameters: workbench supplies active regular conversations and normalized navigation trees.
+// 参数：workbench 提供活动常规会话与已归一化导航树。
+// Returns: the authoritative live child-task id set, including nested tasks projected under each root.
+// 返回值：权威存活子任务标识集合，包含每个根下投影的嵌套任务。
+function liveSubagentTaskIds(workbench: WorkbenchSnapshot): Set<string> {
+  // liveParentConversationIds limits navigation ownership to active regular conversations.
+  // liveParentConversationIds 将导航所有权限制为活动常规会话。
+  const liveParentConversationIds = new Set(workbench.conversations.map((conversation) => conversation.id));
+  // navigationByParent lets the focused projection override its cached entry for the same parent.
+  // navigationByParent 让聚焦投影覆盖同一父会话的缓存条目。
+  const navigationByParent = new Map(
+    (workbench.subagentNavigationByConversation ?? [])
+      .map((navigation) => [navigation.parentConversationId, navigation] as const),
+  );
+  if (workbench.subagentNavigation) {
+    navigationByParent.set(workbench.subagentNavigation.parentConversationId, workbench.subagentNavigation);
+  }
+  // taskIds accumulates the full projected tree for every live regular parent.
+  // taskIds 累积每个存活常规父会话的完整投影树。
+  const taskIds = new Set<string>();
+  for (const [parentConversationId, navigation] of navigationByParent) {
+    if (!liveParentConversationIds.has(parentConversationId)) {
+      continue;
+    }
+    for (const task of navigation.tasks ?? []) {
+      taskIds.add(task.taskId);
+    }
+  }
+  return taskIds;
+}
+
+// rememberSubagentSurfaceMessages records message windows only for authoritative live child tasks.
+// rememberSubagentSurfaceMessages 仅记录权威存活子任务的消息窗口。
+// Parameters: cache owns retained child windows; workbench supplies current navigation and messages.
+// 参数：cache 持有已保留子窗口；workbench 提供当前导航与消息。
+// Returns: nothing; only live tasks with messages in the snapshot update the cache.
+// 返回值：无；仅快照中带消息的存活任务更新缓存。
 function rememberSubagentSurfaceMessages(cache: SubagentSurfaceMessageCache, workbench: WorkbenchSnapshot): void {
-  const taskIds = new Set([
-    ...(workbench.subagentNavigation?.tasks?.map((task) => task.taskId) ?? []),
-    ...cache.keys(),
-  ]);
+  const taskIds = liveSubagentTaskIds(workbench);
   if (taskIds.size === 0) {
     return;
   }
@@ -994,17 +1173,41 @@ function rememberSubagentSurfaceMessages(cache: SubagentSurfaceMessageCache, wor
   }
 }
 
-// injectCachedSubagentSurfaceMessages reattaches every cached child message window independent of the active floating list.
-// injectCachedSubagentSurfaceMessages 重新挂回所有已缓存子代理消息窗口，不依赖当前浮动列表。
+// injectCachedSubagentSurfaceMessages prunes retired tasks and reattaches every live cached child window.
+// injectCachedSubagentSurfaceMessages 清理已退出任务，并重新挂回全部存活缓存子窗口。
+// Parameters: workbench supplies authoritative live navigation; cache is pruned in place before message injection.
+// 参数：workbench 提供权威存活导航；cache 在消息注入前就地清理。
+// Returns: the original snapshot when no cache key changed messages, otherwise a snapshot with stale child rows removed and live cached rows attached.
+// 返回值：无缓存键影响消息时返回原快照，否则返回已移除过期子行并挂载存活缓存行的快照。
 export function injectCachedSubagentSurfaceMessages(
   workbench: WorkbenchSnapshot,
   cache: SubagentSurfaceMessageCache,
 ): WorkbenchSnapshot {
+  // liveTaskIds is the authoritative retention boundary for cached child transcripts.
+  // liveTaskIds 是缓存子转录的权威保留边界。
+  const liveTaskIds = liveSubagentTaskIds(workbench);
+  // retiredTaskIds retains removed cache keys long enough to strip their stale messages from the snapshot.
+  // retiredTaskIds 临时保留已删除缓存键，以便从快照中移除其过期消息。
+  const retiredTaskIds = new Set<string>();
+  for (const taskId of cache.keys()) {
+    if (liveTaskIds.has(taskId)) {
+      continue;
+    }
+    retiredTaskIds.add(taskId);
+    cache.delete(taskId);
+  }
   const taskIdsWithCache = new Set(cache.keys());
-  if (taskIdsWithCache.size === 0) {
+  // taskIdsToReplace removes both live cached windows and just-retired stale windows from the base snapshot.
+  // taskIdsToReplace 从基础快照中同时移除存活缓存窗口与刚退出的过期窗口。
+  const taskIdsToReplace = new Set([...taskIdsWithCache, ...retiredTaskIds]);
+  if (taskIdsToReplace.size === 0) {
     return workbench;
   }
-  const retainedMessages = workbench.messages.filter((message) => !taskIdsWithCache.has(message.conversationId));
+  // retainedMessages contains every non-cached message from the authoritative snapshot.
+  // retainedMessages 包含权威快照中的全部非缓存消息。
+  const retainedMessages = workbench.messages.filter((message) => !taskIdsToReplace.has(message.conversationId));
+  // cachedMessages flattens only the still-live child transcript windows.
+  // cachedMessages 仅展平仍存活的子代理转录窗口。
   const cachedMessages = [...taskIdsWithCache].flatMap((taskId) => cache.get(taskId) ?? []);
   return {
     ...workbench,

@@ -1,12 +1,8 @@
 import type { ConversationScrollSnapshot } from "@/components/conversation/chat-area-scroll";
-import type { ConversationTimelineVirtualRestoreState } from "@/components/conversation/conversation-virtualization";
 
 // ConversationSurfaceExpandedState stores UI expansion choices for one transcript surface.
 // ConversationSurfaceExpandedState 保存单个转录界面的 UI 展开选择。
 export interface ConversationSurfaceExpandedState {
-  // Generic expansion states keyed by stable collapse ids.
-  // 按稳定折叠标识保存的通用展开状态。
-  expandedById: Record<string, boolean>;
   // Stable measured collapse metrics keyed by stable collapse ids.
   // 按稳定折叠标识保存的稳定折叠测量数据。
   measuredCollapseById: Record<string, ConversationMeasuredCollapseMemory>;
@@ -44,22 +40,18 @@ export interface ConversationSurfaceLayoutRestoreState {
   // Latest scroll restoration point for this surface.
   // 当前界面的最近滚动恢复点。
   scroll: ConversationScrollSnapshot;
-  // Latest virtual list restore state, when the transcript is long enough to virtualize.
-  // 转录足够长并启用虚拟列表时的最近虚拟列表恢复状态。
-  virtualizer: ConversationTimelineVirtualRestoreState | null;
+  // Measured turn-shell heights keyed by stable turn keys.
+  // 按稳定轮次键保存的轮次外壳实测高度。
+  turnHeightsByKey: Record<string, number>;
   // Runtime-only expansion choices restored before row height estimation.
   // 行高估算前恢复的运行期展开选择。
   expandedState: ConversationSurfaceExpandedState;
-  // Monotonic version for diagnostics and future persistence boundaries.
-  // 用于诊断和后续持久化边界的单调版本号。
-  layoutVersion: number;
 }
 
 // createEmptyConversationSurfaceExpandedState returns a neutral expansion state.
 // createEmptyConversationSurfaceExpandedState 返回一个空的展开状态。
 export function createEmptyConversationSurfaceExpandedState(): ConversationSurfaceExpandedState {
   return {
-    expandedById: {},
     expandedToolPresentationIds: [],
     expandedUserPromptIds: [],
     measuredCollapseById: {},
@@ -72,11 +64,10 @@ export function createEmptyConversationSurfaceExpandedState(): ConversationSurfa
 export function createConversationSurfaceLayoutRestoreState(): ConversationSurfaceLayoutRestoreState {
   return {
     expandedState: createEmptyConversationSurfaceExpandedState(),
-    layoutVersion: 0,
     scroll: {
       distanceFromBottom: 0,
       wasAtBottom: true,
     },
-    virtualizer: null,
+    turnHeightsByKey: {},
   };
 }

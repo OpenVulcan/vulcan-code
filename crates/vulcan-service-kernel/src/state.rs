@@ -255,6 +255,12 @@ pub struct ServiceBridgeState {
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     pub(crate) session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
+    /// Sessions currently crossing an authoritative archive or removal lifecycle boundary.
+    /// 当前正在跨越权威归档或移除生命周期边界的会话集合。
+    pub(crate) session_lifecycle_transition_ids: BTreeSet<SessionId>,
+    /// Projects currently crossing an authoritative batch archive or removal lifecycle boundary.
+    /// 当前正在跨越权威批量归档或移除生命周期边界的项目集合。
+    pub(crate) project_lifecycle_transition_ids: BTreeSet<String>,
     /// Latest background persistence version keyed by session id.
     /// 按会话标识索引的最新后台持久化版本。
     pub(crate) session_persist_versions: BTreeMap<SessionId, u64>,

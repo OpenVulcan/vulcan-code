@@ -178,9 +178,15 @@ export function AgentsArea(props: {
   // busyAction stores the catalog action currently in flight.
   // busyAction 保存当前正在执行的目录动作。
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
+  // busyActionRef closes the synchronous repeat-trigger window before React commits page busy state.
+  // busyActionRef 在 React 提交页面忙碌状态前关闭同步重复触发窗口。
+  const busyActionRef = React.useRef(false)
   // togglingAgentIds stores row-level enabled-state updates currently in flight.
   // togglingAgentIds 保存当前正在执行启停更新的行级智能体标识。
   const [togglingAgentIds, setTogglingAgentIds] = React.useState<ReadonlySet<string>>(() => new Set())
+  // togglingAgentIdsRef rejects duplicate same-row toggles while preserving concurrency across different rows.
+  // togglingAgentIdsRef 拒绝同一行的重复启停，同时保留不同行之间的并发能力。
+  const togglingAgentIdsRef = React.useRef<ReadonlySet<string>>(new Set())
   // editorDraft stores the currently edited or newly created definition.
   // editorDraft 保存当前正在编辑或新建的定义。
   const [editorDraft, setEditorDraft] = React.useState<AgentEditorDraft | null>(null)
@@ -196,6 +202,9 @@ export function AgentsArea(props: {
   // localCategoryId stores standalone category filtering outside the adaptive shell.
   // localCategoryId 保存自适应外壳之外的独立分类筛选。
   const [localCategoryId, setLocalCategoryId] = React.useState("")
+  // catalogActionDisabled blocks catalog-wide actions while any page action or row mutation is active.
+  // catalogActionDisabled 在任意页面动作或行级变更执行时禁用目录级动作。
+  const catalogActionDisabled = busyAction !== null || togglingAgentIds.size > 0
   // selectedCategoryId resolves controlled or standalone category filtering.
   // selectedCategoryId 解析受控或独立的分类筛选。
   const selectedCategoryId = props.selectedCategoryId ?? localCategoryId
@@ -230,18 +239,43 @@ export function AgentsArea(props: {
     }
   }, [onSelectCategory, props.workbench.subagentCatalog.categories, selectedCategoryId])
 
+  // runAction executes one page-exclusive catalog mutation.
+  // runAction 执行单个页面互斥的目录变更。
+  //
+  // Parameters: label identifies the busy indicator and action performs the service mutation.
+  // 参数：label 标识忙碌提示，action 执行服务变更。
+  // Returns: a promise that settles after the accepted action releases the synchronous guard.
+  // 返回值：在已接受动作释放同步守卫后结束的 Promise。
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
+    if (busyActionRef.current || togglingAgentIdsRef.current.size > 0) {
+      return
+    }
+    busyActionRef.current = true
     setBusyAction(label)
     try {
       await action()
     } finally {
+      busyActionRef.current = false
       setBusyAction(null)
     }
   }, [])
 
   // runToggleAction executes one enabled-state update without blocking the whole page.
   // runToggleAction 执行单个启停更新且不阻塞整个页面。
+  //
+  // Parameters: agentId identifies the row guard and action performs the service mutation.
+  // 参数：agentId 标识行级守卫，action 执行服务变更。
+  // Returns: a promise that settles after the accepted row action releases its guard.
+  // 返回值：在已接受行级动作释放守卫后结束的 Promise。
   const runToggleAction = React.useCallback(async (agentId: string, action: () => Promise<void>) => {
+    if (busyActionRef.current || togglingAgentIdsRef.current.has(agentId)) {
+      return
+    }
+    // activeAgentIds is the synchronous row-guard snapshot after accepting this toggle.
+    // activeAgentIds 是接受本次启停后的同步行级守卫快照。
+    const activeAgentIds = new Set(togglingAgentIdsRef.current)
+    activeAgentIds.add(agentId)
+    togglingAgentIdsRef.current = activeAgentIds
     setTogglingAgentIds((current) => {
       const next = new Set(current)
       next.add(agentId)
@@ -252,6 +286,11 @@ export function AgentsArea(props: {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
+      // activeAgentIds is the synchronous row-guard snapshot after releasing this toggle.
+      // activeAgentIds 是释放本次启停后的同步行级守卫快照。
+      const activeAgentIds = new Set(togglingAgentIdsRef.current)
+      activeAgentIds.delete(agentId)
+      togglingAgentIdsRef.current = activeAgentIds
       setTogglingAgentIds((current) => {
         const next = new Set(current)
         next.delete(agentId)
@@ -264,6 +303,9 @@ export function AgentsArea(props: {
   // submitEditorDraft 通过用户目录持久化当前草稿。
   const submitEditorDraft = React.useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (busyActionRef.current) {
+      return
+    }
     const normalizedDraft = editorDraft ? normalizedAgentEditorDraftFileIdentity(editorDraft) : null
     if (!normalizedDraft || normalizedDraft.agentId.trim().length === 0) {
       return
@@ -293,13 +335,13 @@ export function AgentsArea(props: {
           <div className="agent-catalog-toolbar-heading">
             <p>{text("管理 Vulcan Code Agent 运行时消费的用户级智能体 Markdown 文件。", "Manage user-level agent Markdown files consumed by the Vulcan Code Agent runtime.")}</p>
             <div className="agent-catalog-toolbar-actions">
-              <button aria-label={text("新增智能体", "New agent")} className="agent-catalog-icon-button" disabled={busyAction !== null} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} title={text("新增智能体", "New agent")} type="button">
+              <button aria-label={text("新增智能体", "New agent")} className="agent-catalog-icon-button" disabled={catalogActionDisabled} onClick={() => setEditorDraft(emptyAgentDraft(defaultAgentMetadataLocale(locale)))} title={text("新增智能体", "New agent")} type="button">
                 <Plus size={15} />
               </button>
-              <button aria-label={text("打开用户目录", "Open user directory")} className="agent-catalog-icon-button" disabled={busyAction !== null} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} title={text("打开用户目录", "Open user directory")} type="button">
+              <button aria-label={text("打开用户目录", "Open user directory")} className="agent-catalog-icon-button" disabled={catalogActionDisabled} onClick={() => runAction("open-user-dir", props.actions.onOpenAgentUserDirectory)} title={text("打开用户目录", "Open user directory")} type="button">
                 <FolderOpen size={15} />
               </button>
-              <button aria-label={t("skills.action.refresh")} className="agent-catalog-icon-button" disabled={busyAction !== null} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} title={t("skills.action.refresh")} type="button">
+              <button aria-label={t("skills.action.refresh")} className="agent-catalog-icon-button" disabled={catalogActionDisabled} onClick={() => runAction("refresh", props.actions.onRefreshAgentCatalog)} title={t("skills.action.refresh")} type="button">
                 <RefreshCw className={busyAction === "refresh" ? "spin" : undefined} size={15} />
               </button>
             </div>
@@ -355,7 +397,7 @@ export function AgentsArea(props: {
           ))}
         </div>
         <AgentEditorForm
-          busy={busyAction !== null}
+          busy={catalogActionDisabled}
           draft={editorDraft}
           onCancel={() => setEditorDraft(null)}
           onDraftChange={setEditorDraft}

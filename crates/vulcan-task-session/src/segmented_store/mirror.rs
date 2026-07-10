@@ -1,13 +1,24 @@
 use super::*;
 use std::collections::{BTreeSet, VecDeque};
 
-pub(super) fn append_main_session_task_link_event(
+/// Appends one task-link event while the caller owns the shared append transaction.
+/// 在调用方持有共享追加事务时追加一条子任务关联事件。
+///
+/// # Parameters
+/// 参数
+/// `root_session_dir` is the owning root main-session directory.
+/// `root_session_dir` 是所属根主会话目录。
+/// `event` is the task invocation event projected into the root stream and mirror.
+/// `event` 是要投影到根流与镜像中的子任务调用事件。
+///
+/// # Returns
+/// 返回值
+/// `true` when root metadata exists and receives the event, or `false` when it is absent.
+/// 根元数据存在并接收事件时返回 `true`，不存在时返回 `false`。
+pub(super) fn append_main_session_task_link_event_with_owned_append_lock(
     root_session_dir: &Path,
     event: &TaskInvocationEvent,
 ) -> Result<bool, SessionStoreError> {
-    let _guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
     if !metadata_path.exists() {
         return Ok(false);
@@ -137,15 +148,24 @@ fn next_main_session_sequence_after_existing_lines(
     )
 }
 
-/// Refreshes the root metadata task mirror from a saved child metadata document without appending a parent event.
-/// 从已保存的子任务元数据文档刷新根元数据任务镜像，且不追加父级事件。
-pub(super) fn refresh_main_session_task_mirror_from_metadata(
+/// Refreshes the root metadata task mirror while the caller owns the shared append lock.
+/// 在调用方持有共享追加锁时刷新根元数据任务镜像。
+///
+/// # Parameters
+/// 参数
+/// `root_session_dir` is the root main-session directory whose metadata mirror is updated.
+/// `root_session_dir` 是要更新元数据镜像的根主会话目录。
+/// `document` is the authoritative saved child metadata projection.
+/// `document` 是已保存的权威子任务元数据投影。
+///
+/// # Returns
+/// 返回值
+/// `true` when root metadata exists and is refreshed, or `false` when the root metadata file is absent.
+/// 根元数据存在并完成刷新时返回 `true`，根元数据文件不存在时返回 `false`。
+pub(super) fn refresh_main_session_task_mirror_from_metadata_with_owned_append_lock(
     root_session_dir: &Path,
     document: &SegmentedTaskMetadataDocument,
 ) -> Result<bool, SessionStoreError> {
-    let _guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
     if !metadata_path.exists() {
         return Ok(false);

@@ -16,6 +16,7 @@ fn test_vmm_action_request(action: &str, payload: Value) -> VmmMemoryActionReque
         action: action.to_string(),
         scope: String::from("global"),
         project_id: None,
+        conversation_id: None,
         payload,
     }
 }
@@ -88,6 +89,69 @@ fn parse_vmm_memory_action_covers_common_management_branches() {
     let error = parse_vmm_memory_action(&test_vmm_action_request("unknown", json!({})))
         .expect_err("unknown action should fail");
     assert!(error.contains("不支持的 VMM 记忆动作"));
+}
+
+/// Verifies session-scoped suppression resolves the explicit request route instead of current selection.
+/// 验证会话级抑制解析明确请求路由，而不是使用当前选中状态。
+#[test]
+fn vmm_suppression_session_id_uses_explicit_conversation() {
+    // selected_session_id represents mutable UI selection that must not own the request.
+    // selected_session_id 代表不得拥有该请求的可变 UI 选中状态。
+    let selected_session_id = SessionId::new_v4();
+    // requested_session_id represents the route that initiated suppression before selection changed.
+    // requested_session_id 代表选中状态变化前发起抑制动作的路由。
+    let requested_session_id = SessionId::new_v4();
+    // workspace retains both active sessions while the first one is currently selected.
+    // workspace 在第一个会话当前被选中时保留两个活动会话。
+    let workspace = WorkspaceSnapshot {
+        task_projects: Vec::new(),
+        archived_task_projects: Vec::new(),
+        sessions: vec![
+            SessionSummary::new(
+                selected_session_id,
+                None,
+                "当前选中会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+            SessionSummary::new(
+                requested_session_id,
+                None,
+                "请求发起会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            ),
+        ],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: selected_session_id,
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    // resolved_session_id proves the explicit request remains authoritative after route changes.
+    // resolved_session_id 证明路由变化后明确请求仍保持权威。
+    let resolved_session_id =
+        vmm_suppression_session_id(&workspace, Some(&requested_session_id.to_string()))
+            .expect("explicit active conversation should resolve");
+
+    assert_eq!(resolved_session_id, requested_session_id);
+    assert!(vmm_suppression_session_id(&workspace, None).is_err());
+    assert!(
+        vmm_suppression_session_id(&workspace, Some(&SessionId::new_v4().to_string())).is_err()
+    );
 }
 
 /// Verifies draft conversion parses transport and behavior fields without silent drift.

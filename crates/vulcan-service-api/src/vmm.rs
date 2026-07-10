@@ -261,6 +261,10 @@ pub struct VmmMemoryActionRequest {
     /// 项目作用域使用的可选任务项目标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// Exact persisted conversation id required by session-scoped actions.
+    /// 会话级动作必须提供的准确已持久化会话标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     /// Action-specific JSON payload.
     /// 动作专用 JSON 载荷。
     #[serde(default)]

@@ -4,6 +4,10 @@ import type { ConversationMessage } from "@/types";
 // STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT 将尾部追随签名限制在会影响视口尾部的消息范围。
 const STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT = 8;
 
+// ConversationTimelineUserScrollDirection describes the latest user-driven scroll direction.
+// ConversationTimelineUserScrollDirection 描述最近一次用户驱动滚动的方向。
+export type ConversationTimelineUserScrollDirection = "up" | "down" | "unknown";
+
 // ConversationScrollSnapshot stores one transcript surface scroll restoration point.
 // ConversationScrollSnapshot 保存单个转录界面的滚动恢复点。
 export interface ConversationScrollSnapshot {
@@ -81,6 +85,26 @@ export function restoreConversationViewportAnchor(
     return true;
   }
   return false;
+}
+
+// restoreConversationScrollSnapshot restores one complete viewport snapshot with deterministic fallback order.
+// restoreConversationScrollSnapshot 按确定回退顺序恢复一个完整视口快照。
+// Parameters: element is the owning scroll viewport; snapshot carries tail-follow, anchor, and bottom-distance state.
+// 参数：element 是所属滚动视口；snapshot 携带尾随、锚点与底部距离状态。
+// Returns: nothing; the function restores the tail, then the anchor, then the saved bottom distance as fallback.
+// 返回值：无；函数依次恢复尾部、锚点，最后以已保存底部距离回退。
+export function restoreConversationScrollSnapshot(
+  element: HTMLElement,
+  snapshot: ConversationScrollSnapshot,
+): void {
+  if (snapshot.wasAtBottom) {
+    element.scrollTop = element.scrollHeight;
+    return;
+  }
+  if (snapshot.anchor && restoreConversationViewportAnchor(element, snapshot.anchor)) {
+    return;
+  }
+  conversationScrollToDistanceFromBottom(element, snapshot.distanceFromBottom);
 }
 
 // buildConversationStreamSignature returns a compact content signature for tail-follow decisions.

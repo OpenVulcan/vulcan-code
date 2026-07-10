@@ -158,7 +158,7 @@ fn build_task_subagent_prompt_context(
     let identity = invocation
         .subagent
         .as_deref()
-        .or_else(|| invocation.description.as_deref())
+        .or(invocation.description.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("subagent")
@@ -233,11 +233,7 @@ fn child_agent_delegation_prompt(preserve_parent_tool_shape: bool) -> String {
 /// A comma-separated list of child-agent forbidden tool ids.
 /// 逗号分隔的智能体禁用工具标识列表。
 fn child_forbidden_tool_prompt_list() -> String {
-    vulcan_session_core::child_agent_forbidden_tool_ids()
-        .iter()
-        .copied()
-        .collect::<Vec<_>>()
-        .join(", ")
+    vulcan_session_core::child_agent_forbidden_tool_ids().join(", ")
 }
 
 /// Adds child-forbidden tool ids to the request hidden list without changing global policies.
@@ -374,17 +370,15 @@ pub(crate) async fn prepare_task_runtime_stream_launch_with_preflight_compaction
                 invocation.task_id,
             )?,
         )
-    {
-        if let Some(compacted_snapshot) = run_task_session_context_compaction(
+        && let Some(compacted_snapshot) = run_task_session_context_compaction(
             Arc::clone(&task_runtime),
             context.clone(),
             invocation.clone(),
             resolved_config.clone(),
         )
         .await?
-        {
-            invocation.snapshot = compacted_snapshot;
-        }
+    {
+        invocation.snapshot = compacted_snapshot;
     }
 
     let launch = prepare_task_runtime_stream_launch(context, invocation, resolved_config).await?;

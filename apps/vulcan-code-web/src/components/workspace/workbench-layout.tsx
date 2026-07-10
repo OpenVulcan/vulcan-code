@@ -44,15 +44,13 @@ import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout
 import {
   copyText,
   webuiClickTrace,
-  type RequestStopConversationRunChoice,
-  type StopConversationRunAgentPromptItem,
-  type StopConversationRunChoice,
   type WorkbenchDeltaSignal,
 } from "@/components/workspace/workbench-layout/types";
 import { useConversationHydration } from "@/components/workspace/workbench-layout/conversation-hydration";
 import { useWorkbenchConversationActions } from "@/components/workspace/workbench-layout/conversation-actions";
 import { useWorkbenchProjectActions } from "@/components/workspace/workbench-layout/project-actions";
 import { useWorkbenchSessionActions } from "@/components/workspace/workbench-layout/session-actions";
+import { useStopConversationRunDecision } from "@/components/workspace/workbench-layout/use-stop-conversation-run-decision";
 export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
@@ -68,17 +66,20 @@ import type {
 import { cn } from "@/lib/utils";
 import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
 import type {
-  AgentSkillsCatalogSummary,
+  AgentSkillsCatalogUpdate,
   ComposerSlashCommandSummary,
+  ConversationArchivedDelta,
   ConversationMessage,
   ConversationSummary,
   FeatureAreaSummary,
+  LuaSkillsCatalogUpdate,
   MainAreaId,
   PendingQuestionSnapshot,
   PendingPromptSummary,
   ProjectSummary,
   SettingsSubAreaId,
   StartupSnapshot,
+  SubagentCatalogUpdate,
   VmmConfigDraftSummary,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
@@ -162,7 +163,6 @@ import {
   shouldAcceptWorkbenchRevision,
   workbenchWithSelectedConversationProjection,
   workbenchWithSubagentSurfaceMessageCache,
-  type InflightSubagentOpenRequest,
   type SubagentSurfaceMessageCache,
   type WorkbenchMergeOptions,
 } from "@/state/workbench-state";
@@ -280,23 +280,18 @@ export function WorkbenchLayout(props: {
     props.workbench.selectedConversationId
       ?? props.workbench.conversations[0]?.id
       ?? initialDraftConversation?.id
-      ?? null,
+    ?? null,
   );
+  // Stop decision controller binds confirmation to the conversation selected when preflight started.
+  // 停止决策控制器将确认绑定到预检开始时选中的会话。
+  const {
+    agents: stopConversationAgents,
+    request: requestStopConversationRunChoice,
+    resolve: resolveStopConversationRunChoice,
+  } = useStopConversationRunDecision({ activeConversationId: selectedConversationId });
   // selectedConversationIdRef lets async submit completions avoid stealing focus after the user switches sessions.
   // selectedConversationIdRef 让异步提交完成时避免在用户已切换会话后抢回焦点。
   const selectedConversationIdRef = React.useRef<string | null>(selectedConversationId);
-  // subagentNavigationRequestSeqRef tracks stale async subagent loading responses after a newer click.
-  // subagentNavigationRequestSeqRef 跟踪发生更新点击后的过期异步子代理加载响应。
-  const subagentNavigationRequestSeqRef = React.useRef(0);
-  // inflightSubagentOpenRequestRef coalesces duplicate backend open commands for the same route.
-  // inflightSubagentOpenRequestRef 合并同一路由的重复后端打开命令。
-  const inflightSubagentOpenRequestRef = React.useRef<InflightSubagentOpenRequest | null>(null);
-  // stopConversationChoiceResolverRef resolves the pending main-run stop dialog decision.
-  // stopConversationChoiceResolverRef 解析待处理的主会话停止弹窗决策。
-  const stopConversationChoiceResolverRef = React.useRef<((choice: StopConversationRunChoice | null) => void) | null>(null);
-  // stopConversationAgents stores the running agents shown in the stop confirmation dialog.
-  // stopConversationAgents 保存停止确认弹窗展示的运行中智能体。
-  const [stopConversationAgents, setStopConversationAgents] = React.useState<StopConversationRunAgentPromptItem[] | null>(null);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(
@@ -305,6 +300,12 @@ export function WorkbenchLayout(props: {
   // draftConversationIdRef keeps the latest draft id without retriggering workbench snapshot hydration.
   // draftConversationIdRef 保存最新草稿标识，避免重新触发工作台快照水合。
   const draftConversationIdRef = React.useRef<string | null>(null);
+  // pendingMaterializedConversationIdRef protects a committed draft selection until its sidebar summary arrives.
+  // pendingMaterializedConversationIdRef 在侧栏摘要到达前保护已提交草稿对应的会话选择。
+  const pendingMaterializedConversationIdRef = React.useRef<string | null>(null);
+  // locallyCreatedConversationIdsRef distinguishes live-created transcripts from persisted conversations that require history hydration.
+  // locallyCreatedConversationIdsRef 区分实时创建的转录与需要历史水合的持久化会话。
+  const locallyCreatedConversationIdsRef = React.useRef<Set<string>>(new Set());
   // subagentSurfaceMessageCacheRef retains every loaded child transcript for instant side-panel reuse.
   // subagentSurfaceMessageCacheRef 保留每个已载入的子代理转录，用于侧栏即时复用。
   const subagentSurfaceMessageCacheRef = React.useRef<SubagentSurfaceMessageCache>(new Map());
@@ -316,10 +317,34 @@ export function WorkbenchLayout(props: {
   // acceptedWorkbenchRevisionRef tracks the highest service revision accepted by any state entrypoint.
   // acceptedWorkbenchRevisionRef 跟踪任意状态入口已接受的最高服务版本。
   const acceptedWorkbenchRevisionRef = React.useRef(workbenchState.revision ?? 0);
+  // acceptedLuaSkillsRevisionRef tracks the newest full LuaSkills domain projection applied locally.
+  // acceptedLuaSkillsRevisionRef 跟踪本地已应用的最新完整 LuaSkills 领域投影版本。
+  const acceptedLuaSkillsRevisionRef = React.useRef(workbenchState.revision ?? 0);
+  // acceptedAgentSkillsRevisionRef tracks the newest full Agent Skills domain projection applied locally.
+  // acceptedAgentSkillsRevisionRef 跟踪本地已应用的最新完整 Agent Skills 领域投影版本。
+  const acceptedAgentSkillsRevisionRef = React.useRef(workbenchState.revision ?? 0);
+  // acceptedSubagentCatalogRevisionRef tracks the newest full agent-catalog domain projection applied locally.
+  // acceptedSubagentCatalogRevisionRef 跟踪本地已应用的最新完整智能体目录领域投影版本。
+  const acceptedSubagentCatalogRevisionRef = React.useRef(workbenchState.revision ?? 0);
+  // acceptedConversationLifecycleRevisionRef tracks the newest complete conversation lifecycle transition independently.
+  // acceptedConversationLifecycleRevisionRef 独立跟踪最新的完整会话生命周期转换。
+  const acceptedConversationLifecycleRevisionRef = React.useRef(workbenchState.revision ?? 0);
+  // acceptedConversationLifecycleRevisionByIdRef orders target-owned archive responses independently.
+  // acceptedConversationLifecycleRevisionByIdRef 按目标独立排序归档响应。
+  const acceptedConversationLifecycleRevisionByIdRef = React.useRef<Map<string, number>>(new Map());
+  // acceptedProjectLifecycleRevisionRef tracks the newest authoritative full-project lifecycle snapshot.
+  // acceptedProjectLifecycleRevisionRef 跟踪最新权威完整项目生命周期快照。
+  const acceptedProjectLifecycleRevisionRef = React.useRef(workbenchState.revision ?? 0);
+  // acceptedProjectLifecycleRevisionByIdRef orders target-owned project removal responses independently.
+  // acceptedProjectLifecycleRevisionByIdRef 按目标独立排序项目移除响应。
+  const acceptedProjectLifecycleRevisionByIdRef = React.useRef<Map<string, number>>(new Map());
   // workbenchStateRef exposes the latest workbench state to route-click callbacks without stale closures.
   // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
   workbenchStateRef.current = workbenchState;
+  // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
+  // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
+  const conversationArchivePendingIdsRef = React.useRef<Set<string>>(new Set());
   acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, workbenchState.revision ?? 0);
   // expandedProjectIdsLocallyEditedRef records whether the user has touched project expansion in this session.
   // expandedProjectIdsLocallyEditedRef 记录本轮会话中用户是否已经手动修改过项目展开状态。
@@ -342,7 +367,21 @@ export function WorkbenchLayout(props: {
         options,
       );
       if (merged !== current) {
-        acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, merged.revision ?? 0);
+        // mergedRevision is the authoritative full-snapshot version accepted by this merge.
+        // mergedRevision 是本次合并接受的权威全量快照版本。
+        const mergedRevision = merged.revision ?? 0;
+        acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, mergedRevision);
+        acceptedLuaSkillsRevisionRef.current = Math.max(acceptedLuaSkillsRevisionRef.current, mergedRevision);
+        acceptedAgentSkillsRevisionRef.current = Math.max(acceptedAgentSkillsRevisionRef.current, mergedRevision);
+        acceptedSubagentCatalogRevisionRef.current = Math.max(acceptedSubagentCatalogRevisionRef.current, mergedRevision);
+        acceptedConversationLifecycleRevisionRef.current = Math.max(
+          acceptedConversationLifecycleRevisionRef.current,
+          mergedRevision,
+        );
+        acceptedProjectLifecycleRevisionRef.current = Math.max(
+          acceptedProjectLifecycleRevisionRef.current,
+          mergedRevision,
+        );
       }
       return merged;
     })()
@@ -375,8 +414,153 @@ export function WorkbenchLayout(props: {
       return false;
     }
     acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, incomingRevision);
+    acceptedLuaSkillsRevisionRef.current = Math.max(acceptedLuaSkillsRevisionRef.current, incomingRevision);
+    acceptedAgentSkillsRevisionRef.current = Math.max(acceptedAgentSkillsRevisionRef.current, incomingRevision);
+    acceptedSubagentCatalogRevisionRef.current = Math.max(acceptedSubagentCatalogRevisionRef.current, incomingRevision);
+    acceptedConversationLifecycleRevisionRef.current = Math.max(
+      acceptedConversationLifecycleRevisionRef.current,
+      incomingRevision,
+    );
+    acceptedProjectLifecycleRevisionRef.current = Math.max(
+      acceptedProjectLifecycleRevisionRef.current,
+      incomingRevision,
+    );
     return true;
   }, []);
+  // acceptConversationArchiveTransitions filters archive payloads through full-snapshot and per-target revisions.
+  // acceptConversationArchiveTransitions 通过完整快照与按目标版本过滤归档载荷。
+  //
+  // Parameters: transitions are exact archive payloads and generation is their committed backend revision.
+  // 参数：transitions 是精确归档载荷，generation 是其已提交后端版本。
+  // Returns: only transitions that are newer for their own conversation lifecycle target.
+  // 返回值：仅返回对各自会话生命周期目标而言较新的转换。
+  const acceptConversationArchiveTransitions = React.useCallback((
+    transitions: ConversationArchivedDelta[],
+    generation: number,
+  ): ConversationArchivedDelta[] => transitions.filter((transition) => {
+    // targetRevision combines the latest full snapshot and target-owned archive response.
+    // targetRevision 合并最新完整快照与目标自有归档响应。
+    const targetRevision = Math.max(
+      acceptedConversationLifecycleRevisionRef.current,
+      acceptedConversationLifecycleRevisionByIdRef.current.get(transition.conversationId) ?? 0,
+    );
+    if (!shouldAcceptWorkbenchRevision(targetRevision, generation)) {
+      return false;
+    }
+    acceptedConversationLifecycleRevisionByIdRef.current.set(transition.conversationId, generation);
+    return true;
+  }), []);
+  // acceptProjectRemovalTransition reserves one target-owned project removal revision.
+  // acceptProjectRemovalTransition 预占一条目标自有项目移除版本。
+  //
+  // Parameters: projectId is the removed project target and generation is the committed backend revision.
+  // 参数：projectId 是移除项目目标，generation 是已提交后端版本。
+  // Returns: true only when this removal is newer for the exact project target.
+  // 返回值：仅当此移除对精确项目目标而言较新时返回 true。
+  const acceptProjectRemovalTransition = React.useCallback((projectId: string, generation: number): boolean => {
+    // targetRevision combines the latest full snapshot and target-owned project removal response.
+    // targetRevision 合并最新完整快照与目标自有项目移除响应。
+    const targetRevision = Math.max(
+      acceptedProjectLifecycleRevisionRef.current,
+      acceptedProjectLifecycleRevisionByIdRef.current.get(projectId) ?? 0,
+    );
+    if (!shouldAcceptWorkbenchRevision(targetRevision, generation)) {
+      return false;
+    }
+    acceptedProjectLifecycleRevisionByIdRef.current.set(projectId, generation);
+    return true;
+  }, []);
+  // applyLifecycleResponseSnapshot applies only archive and project-removal fields from a rejected full RPC snapshot.
+  // applyLifecycleResponseSnapshot 仅从被拒绝的完整 RPC 快照应用归档与项目移除字段。
+  //
+  // Parameters: snapshot is the committed RPC result, conversationIds are archived targets, and removedProjectId is the optional removed project.
+  // 参数：snapshot 是已提交 RPC 结果，conversationIds 是归档目标，removedProjectId 是可选的已移除项目。
+  // Returns: true when at least one target transition was applied or the targets already converged.
+  // 返回值：至少应用一条目标转换或目标已经收敛时返回 true。
+  const applyLifecycleResponseSnapshot = React.useCallback((
+    snapshot: WorkbenchSnapshot,
+    conversationIds: string[],
+    removedProjectId?: string,
+  ): boolean => {
+    // generation is the exact backend revision committed by the lifecycle RPC.
+    // generation 是生命周期 RPC 提交的精确后端版本。
+    const generation = snapshot.revision ?? 0;
+    // archiveTransitions project only target-owned fields from the full RPC snapshot.
+    // archiveTransitions 仅从完整 RPC 快照投影目标自有字段。
+    const archiveTransitions = conversationIds.map((conversationId): ConversationArchivedDelta => ({
+      conversationId,
+      archivedConversation: (snapshot.archivedConversations ?? [])
+        .find((conversation) => conversation.id === conversationId) ?? null,
+      selectedConversationId: snapshot.selectedConversationId ?? null,
+    }));
+    // acceptedArchives contains only target transitions newer than their own lifecycle state.
+    // acceptedArchives 仅包含比各自生命周期状态更新的目标转换。
+    const acceptedArchives = acceptConversationArchiveTransitions(archiveTransitions, generation);
+    // projectAccepted records whether the optional project removal owns a newer target revision.
+    // projectAccepted 记录可选项目移除是否拥有较新的目标版本。
+    const projectAccepted = removedProjectId
+      ? acceptProjectRemovalTransition(removedProjectId, generation)
+      : false;
+    if (acceptedArchives.length === 0 && !projectAccepted) {
+      // currentWorkbench is used only to verify that a previously accepted transition already converged.
+      // currentWorkbench 仅用于验证此前接受的转换已经收敛。
+      const currentWorkbench = workbenchStateRef.current;
+      // conversationsScheduled recognizes target transitions already accepted but not yet committed by React rendering.
+      // conversationsScheduled 识别已经接受但尚未由 React 渲染提交的目标转换。
+      const conversationsScheduled = conversationIds.every((conversationId) => Math.max(
+        acceptedConversationLifecycleRevisionRef.current,
+        acceptedConversationLifecycleRevisionByIdRef.current.get(conversationId) ?? 0,
+      ) >= generation);
+      const conversationsConverged = conversationIds.every((conversationId) => (
+        !currentWorkbench.conversations.some((conversation) => conversation.id === conversationId)
+      ));
+      // projectScheduled recognizes a project removal already accepted but not yet rendered.
+      // projectScheduled 识别已经接受但尚未渲染的项目移除。
+      const projectScheduled = !removedProjectId || Math.max(
+        acceptedProjectLifecycleRevisionRef.current,
+        acceptedProjectLifecycleRevisionByIdRef.current.get(removedProjectId) ?? 0,
+      ) >= generation;
+      const projectConverged = !removedProjectId
+        || !currentWorkbench.projects.some((project) => project.id === removedProjectId);
+      return (conversationsScheduled || conversationsConverged)
+        && (projectScheduled || projectConverged);
+    }
+    // acceptedEnvelopes separates conversation and project domains when only one target class is newer.
+    // acceptedEnvelopes 在仅一类目标较新时拆分会话与项目领域。
+    const acceptedEnvelopes: WorkbenchDeltaEnvelope[] = [];
+    if (projectAccepted && removedProjectId) {
+      acceptedEnvelopes.push({
+        generation,
+        delta: {
+          kind: "projectRemoved",
+          payload: {
+            projectId: removedProjectId,
+            projects: snapshot.projects,
+            expandedProjectIds: snapshot.expandedProjectIds ?? [],
+            archivedConversations: acceptedArchives,
+          },
+        },
+      });
+    } else if (acceptedArchives.length > 0) {
+      acceptedEnvelopes.push({
+        generation,
+        delta: {
+          kind: "conversationsArchived",
+          payload: { archivedConversations: acceptedArchives },
+        },
+      });
+    }
+    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, generation);
+    setWorkbenchState((current) => acceptedEnvelopes.reduce(
+      (nextWorkbench, envelope) => applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
+        nextWorkbench,
+        envelope,
+        subagentSurfaceMessageCacheRef.current,
+      ),
+      current,
+    ));
+    return true;
+  }, [acceptConversationArchiveTransitions, acceptProjectRemovalTransition]);
   // applyLocalPreviewWithLocalCaches applies optimistic snapshots without service revision gating.
   // applyLocalPreviewWithLocalCaches 应用乐观快照，不经过服务版本门禁。
   const applyLocalPreviewWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => {
@@ -419,13 +603,78 @@ export function WorkbenchLayout(props: {
     const snapshot = await action();
     setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
   }, [mergeWorkbenchWithLocalCaches]);
-  // applyAgentSkillsCatalog merges one lightweight Agent Skills catalog update.
-  // applyAgentSkillsCatalog 合并单个轻量 Agent Skills 目录更新。
-  const applyAgentSkillsCatalog = React.useCallback((agentSkills: AgentSkillsCatalogSummary) => {
-    setWorkbenchState((current) => ({
-      ...current,
-      agentSkills,
-    }));
+  // applyLuaSkillsCatalogUpdate applies the newest complete LuaSkills domain response independently of unrelated deltas.
+  // applyLuaSkillsCatalogUpdate 独立于无关增量应用最新的完整 LuaSkills 领域响应。
+  //
+  // Parameters: update contains the committed revision, LuaSkills catalog, and derived plugin rows.
+  // 参数：update 包含已提交版本、LuaSkills 目录与派生插件行。
+  // Returns: nothing; accepted data is scheduled into workbench state without lowering its global revision.
+  // 返回值：无；已接受数据会安排到工作台状态且不会降低全局版本。
+  const applyLuaSkillsCatalogUpdate = React.useCallback((update: LuaSkillsCatalogUpdate) => {
+    if (!shouldAcceptWorkbenchRevision(acceptedLuaSkillsRevisionRef.current, update.revision)) {
+      return;
+    }
+    acceptedLuaSkillsRevisionRef.current = update.revision;
+    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, update.revision);
+    setWorkbenchState((current) => {
+      if (update.revision < acceptedLuaSkillsRevisionRef.current) {
+        return current;
+      }
+      return {
+        ...current,
+        revision: Math.max(current.revision ?? 0, update.revision),
+        luaSkills: update.luaSkills,
+        plugins: update.plugins,
+      };
+    });
+  }, []);
+  // applyAgentSkillsCatalogUpdate applies the newest complete Agent Skills domain response independently of unrelated deltas.
+  // applyAgentSkillsCatalogUpdate 独立于无关增量应用最新的完整 Agent Skills 领域响应。
+  //
+  // Parameters: update contains the committed revision and complete Agent Skills catalog.
+  // 参数：update 包含已提交版本与完整 Agent Skills 目录。
+  // Returns: nothing; accepted data is scheduled into workbench state without lowering its global revision.
+  // 返回值：无；已接受数据会安排到工作台状态且不会降低全局版本。
+  const applyAgentSkillsCatalogUpdate = React.useCallback((update: AgentSkillsCatalogUpdate) => {
+    if (!shouldAcceptWorkbenchRevision(acceptedAgentSkillsRevisionRef.current, update.revision)) {
+      return;
+    }
+    acceptedAgentSkillsRevisionRef.current = update.revision;
+    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, update.revision);
+    setWorkbenchState((current) => {
+      if (update.revision < acceptedAgentSkillsRevisionRef.current) {
+        return current;
+      }
+      return {
+        ...current,
+        revision: Math.max(current.revision ?? 0, update.revision),
+        agentSkills: update.agentSkills,
+      };
+    });
+  }, []);
+  // applySubagentCatalogUpdate applies the newest complete agent-catalog domain response independently of unrelated deltas.
+  // applySubagentCatalogUpdate 独立于无关增量应用最新的完整智能体目录领域响应。
+  //
+  // Parameters: update contains the committed revision and complete agent catalog.
+  // 参数：update 包含已提交版本与完整智能体目录。
+  // Returns: nothing; accepted data is scheduled into workbench state without lowering its global revision.
+  // 返回值：无；已接受数据会安排到工作台状态且不会降低全局版本。
+  const applySubagentCatalogUpdate = React.useCallback((update: SubagentCatalogUpdate) => {
+    if (!shouldAcceptWorkbenchRevision(acceptedSubagentCatalogRevisionRef.current, update.revision)) {
+      return;
+    }
+    acceptedSubagentCatalogRevisionRef.current = update.revision;
+    acceptedWorkbenchRevisionRef.current = Math.max(acceptedWorkbenchRevisionRef.current, update.revision);
+    setWorkbenchState((current) => {
+      if (update.revision < acceptedSubagentCatalogRevisionRef.current) {
+        return current;
+      }
+      return {
+        ...current,
+        revision: Math.max(current.revision ?? 0, update.revision),
+        subagentCatalog: update.subagentCatalog,
+      };
+    });
   }, []);
   // renameTarget stores the project or conversation currently being renamed.
   // renameTarget 保存当前正在重命名的项目或会话目标。
@@ -525,10 +774,15 @@ export function WorkbenchLayout(props: {
   const selectedConversationHistoryCursor = selectedConversationId
     ? hydratedConversationWindowById.get(selectedConversationId)
     : null;
-  // selectedConversationHydrated records whether Rust retained both the selected body and its subagent metadata.
-  // selectedConversationHydrated 记录 Rust 是否同时保留当前会话正文与子智能体元数据。
+  // selectedConversationCreatedLocally identifies a new live transcript that has no persisted history to hydrate.
+  // selectedConversationCreatedLocally 标识没有持久化历史需要水合的新建实时转录。
+  const selectedConversationCreatedLocally = selectedConversationId
+    ? locallyCreatedConversationIdsRef.current.has(selectedConversationId)
+    : false;
+  // selectedConversationHydrated records whether the selected body is already available locally or retained by Rust.
+  // selectedConversationHydrated 记录当前正文是否已由本地创建流程提供或由 Rust 保留。
   const selectedConversationHydrated = Boolean(
-    selectedConversationHistoryCursor?.subagentMetadataLoaded,
+    selectedConversationCreatedLocally || selectedConversationHistoryCursor?.subagentMetadataLoaded,
   );
   // conversationHydration owns backend hydration and older-history paging for the selected conversation.
   // conversationHydration 持有当前选中会话的后端水合与更早历史分页状态。
@@ -621,7 +875,9 @@ export function WorkbenchLayout(props: {
     setRemoveProjectTarget,
     expandedProjectIdsLocallyEditedRef,
     applySkillWorkbenchAction,
-    applyAgentSkillsCatalog,
+    applyLuaSkillsCatalogUpdate,
+    applyAgentSkillsCatalogUpdate,
+    applySubagentCatalogUpdate,
     handleOpenWorkspaceChat,
   });
 
@@ -640,25 +896,6 @@ export function WorkbenchLayout(props: {
     setWorkbenchState,
     mergeWorkbenchWithLocalCaches,
   });
-
-  // requestStopConversationRunChoice opens the stop decision dialog and resolves with the user's choice.
-  // requestStopConversationRunChoice 打开停止决策弹窗，并用用户选择完成 Promise。
-  const requestStopConversationRunChoice = React.useCallback<RequestStopConversationRunChoice>((agents) => new Promise((resolve) => {
-    if (stopConversationChoiceResolverRef.current) {
-      stopConversationChoiceResolverRef.current(null);
-    }
-    stopConversationChoiceResolverRef.current = resolve;
-    setStopConversationAgents(agents);
-  }), []);
-
-  // resolveStopConversationRunChoice closes the stop decision dialog with one explicit choice.
-  // resolveStopConversationRunChoice 使用一个明确选择关闭停止决策弹窗。
-  const resolveStopConversationRunChoice = React.useCallback((choice: StopConversationRunChoice | null) => {
-    const resolver = stopConversationChoiceResolverRef.current;
-    stopConversationChoiceResolverRef.current = null;
-    setStopConversationAgents(null);
-    resolver?.(choice);
-  }, []);
 
   const {
     handleSubmitConversationPrompt,
@@ -690,10 +927,10 @@ export function WorkbenchLayout(props: {
     setDraftConversation,
     setSelectedConversationId,
     selectedConversationIdRef,
+    pendingMaterializedConversationIdRef,
+    locallyCreatedConversationIdsRef,
     workbenchStateRef,
     requestStopConversationRunChoice,
-    subagentNavigationRequestSeqRef,
-    inflightSubagentOpenRequestRef,
     subagentSurfaceMessageCacheRef,
   });
 
@@ -720,13 +957,33 @@ export function WorkbenchLayout(props: {
         return;
       }
       if (action === "archive") {
-        const snapshot = await archiveConversation(conversation.id);
-        if (snapshot) {
-          applyProjectActionSnapshot(snapshot);
-        } else {
-          applyProjectActionSnapshot(applyPreviewConversationAction(workbenchState, conversation.id, action).snapshot, "local");
+        if (conversationArchivePendingIdsRef.current.has(conversation.id)) {
+          return;
         }
-        toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archived", { conversation: conversation.title }));
+        conversationArchivePendingIdsRef.current.add(conversation.id);
+        // archiveCommitted keeps the request locked after success until the active row actually disappears.
+        // archiveCommitted 在成功后继续保持请求锁，直到活动行真正消失。
+        let archiveCommitted = false;
+        try {
+          const snapshot = await archiveConversation(conversation.id);
+          if (snapshot) {
+            const snapshotApplied = applyProjectActionSnapshot(snapshot);
+            if (!snapshotApplied && !applyLifecycleResponseSnapshot(snapshot, [conversation.id])) {
+              throw new Error("归档已提交，但本地生命周期状态未能收敛，请重试刷新。");
+            }
+          } else {
+            applyProjectActionSnapshot(
+              applyPreviewConversationAction(workbenchState, conversation.id, action).snapshot,
+              "local",
+            );
+          }
+          archiveCommitted = true;
+          toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archived", { conversation: conversation.title }));
+        } finally {
+          if (!archiveCommitted) {
+            conversationArchivePendingIdsRef.current.delete(conversation.id);
+          }
+        }
         return;
       }
       if (action === "open-directory") {
@@ -762,13 +1019,12 @@ export function WorkbenchLayout(props: {
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [applyProjectActionSnapshot, i18n.t, workbenchState]);
+  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, i18n.t, workbenchState]);
 
   // handleSelectConversation selects a conversation and persists its read marker.
   // handleSelectConversation 选择会话并持久化它的已读标记。
   const handleSelectConversation = React.useCallback((conversationId: string) => {
     handleOpenWorkspaceChat();
-    subagentNavigationRequestSeqRef.current += 1;
     setSelectedConversationId(conversationId);
     setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
     void selectConversation(conversationId)
@@ -834,9 +1090,17 @@ export function WorkbenchLayout(props: {
     }
     setArchiveProjectSubmitting(true);
     try {
+      // archivedConversationIds captures the exact visible child lifecycle set before the RPC commits.
+      // archivedConversationIds 捕获 RPC 提交前的精确可见子生命周期集合。
+      const archivedConversationIds = workbenchState.conversations
+        .filter((conversation) => conversation.projectId === archiveProjectTarget.id)
+        .map((conversation) => conversation.id);
       const snapshot = await archiveProjectConversations(archiveProjectTarget.id);
       if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
+        const snapshotApplied = applyProjectActionSnapshot(snapshot);
+        if (!snapshotApplied && !applyLifecycleResponseSnapshot(snapshot, archivedConversationIds)) {
+          throw new Error("批量归档已提交，但本地生命周期状态未能收敛，请重试刷新。");
+        }
       } else {
         applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, archiveProjectTarget.id, "archive-conversations").snapshot, "local");
       }
@@ -849,7 +1113,7 @@ export function WorkbenchLayout(props: {
     } finally {
       setArchiveProjectSubmitting(false);
     }
-  }, [applyProjectActionSnapshot, archiveProjectSubmitting, archiveProjectTarget, i18n.t, workbenchState]);
+  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, archiveProjectSubmitting, archiveProjectTarget, i18n.t, workbenchState]);
 
   // handleRemoveProjectConfirm archives conversations and removes the selected project.
   // handleRemoveProjectConfirm 归档对话并移除选中的项目。
@@ -859,9 +1123,21 @@ export function WorkbenchLayout(props: {
     }
     setRemoveProjectSubmitting(true);
     try {
+      // archivedConversationIds captures the exact visible child lifecycle set before project removal commits.
+      // archivedConversationIds 捕获项目移除提交前的精确可见子生命周期集合。
+      const archivedConversationIds = workbenchState.conversations
+        .filter((conversation) => conversation.projectId === removeProjectTarget.id)
+        .map((conversation) => conversation.id);
       const snapshot = await removeProject(removeProjectTarget.id);
       if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
+        const snapshotApplied = applyProjectActionSnapshot(snapshot);
+        if (!snapshotApplied && !applyLifecycleResponseSnapshot(
+          snapshot,
+          archivedConversationIds,
+          removeProjectTarget.id,
+        )) {
+          throw new Error("项目移除已提交，但本地生命周期状态未能收敛，请重试刷新。");
+        }
       } else {
         applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, removeProjectTarget.id, "remove-project").snapshot, "local");
       }
@@ -872,7 +1148,7 @@ export function WorkbenchLayout(props: {
     } finally {
       setRemoveProjectSubmitting(false);
     }
-  }, [applyProjectActionSnapshot, i18n.t, removeProjectSubmitting, removeProjectTarget, workbenchState]);
+  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, i18n.t, removeProjectSubmitting, removeProjectTarget, workbenchState]);
 
   // handlePendingQuestionSubmit resumes a blocked ask tool call with validated modal answers.
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
@@ -899,6 +1175,19 @@ export function WorkbenchLayout(props: {
   React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
   }, [draftConversation?.id]);
+
+  // Release committed archive request locks only after the authoritative active row is no longer visible.
+  // 仅在权威活动行不再可见后释放已提交归档请求锁。
+  React.useEffect(() => {
+    // activeConversationIds is the current lifecycle boundary rendered by the sidebar.
+    // activeConversationIds 是侧栏当前渲染的生命周期边界。
+    const activeConversationIds = new Set(workbenchState.conversations.map((conversation) => conversation.id));
+    for (const conversationId of conversationArchivePendingIdsRef.current) {
+      if (!activeConversationIds.has(conversationId)) {
+        conversationArchivePendingIdsRef.current.delete(conversationId);
+      }
+    }
+  }, [workbenchState.conversations]);
 
   // Ensure service snapshots with projects but no sessions still have a draft send target.
   // 确保服务快照存在项目但没有会话时仍有草稿发送目标。
@@ -931,6 +1220,9 @@ export function WorkbenchLayout(props: {
       if (current && current === draftConversationIdRef.current) {
         return current;
       }
+      if (current && current === pendingMaterializedConversationIdRef.current) {
+        return current;
+      }
       if (current && props.workbench.conversations.some((conversation) => conversation.id === current)) {
         return current;
       }
@@ -945,6 +1237,76 @@ export function WorkbenchLayout(props: {
     const acceptedEnvelopes: WorkbenchDeltaEnvelope[] = [];
     let nextAcceptedRevision = acceptedWorkbenchRevisionRef.current;
     for (const envelope of props.workbenchDelta.envelopes) {
+      if (envelope.delta.kind === "conversationArchived") {
+        // acceptedArchives filters this single target through its own lifecycle revision.
+        // acceptedArchives 通过目标自身生命周期版本过滤此单个目标。
+        const acceptedArchives = acceptConversationArchiveTransitions(
+          [envelope.delta.payload],
+          envelope.generation,
+        );
+        if (acceptedArchives.length > 0) {
+          acceptedEnvelopes.push(envelope);
+          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        }
+        continue;
+      }
+      if (envelope.delta.kind === "conversationsArchived") {
+        // acceptedArchives independently filters every child target in the shared batch generation.
+        // acceptedArchives 在共享批次 generation 中独立过滤每个子目标。
+        const acceptedArchives = acceptConversationArchiveTransitions(
+          envelope.delta.payload.archivedConversations,
+          envelope.generation,
+        );
+        if (acceptedArchives.length > 0) {
+          acceptedEnvelopes.push({
+            ...envelope,
+            delta: {
+              kind: "conversationsArchived",
+              payload: { archivedConversations: acceptedArchives },
+            },
+          });
+          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        }
+        continue;
+      }
+      if (envelope.delta.kind === "projectRemoved") {
+        // acceptedArchives filters child lifecycle targets independently from the project target.
+        // acceptedArchives 独立于项目目标过滤子生命周期目标。
+        const acceptedArchives = acceptConversationArchiveTransitions(
+          envelope.delta.payload.archivedConversations,
+          envelope.generation,
+        );
+        // projectAccepted orders removal only against the exact project lifecycle target.
+        // projectAccepted 仅针对精确项目生命周期目标排序移除操作。
+        const projectAccepted = acceptProjectRemovalTransition(
+          envelope.delta.payload.projectId,
+          envelope.generation,
+        );
+        if (projectAccepted) {
+          acceptedEnvelopes.push({
+            ...envelope,
+            delta: {
+              kind: "projectRemoved",
+              payload: {
+                ...envelope.delta.payload,
+                archivedConversations: acceptedArchives,
+              },
+            },
+          });
+        } else if (acceptedArchives.length > 0) {
+          acceptedEnvelopes.push({
+            generation: envelope.generation,
+            delta: {
+              kind: "conversationsArchived",
+              payload: { archivedConversations: acceptedArchives },
+            },
+          });
+        }
+        if (projectAccepted || acceptedArchives.length > 0) {
+          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        }
+        continue;
+      }
       if (!shouldAcceptWorkbenchRevision(nextAcceptedRevision, envelope.generation)) {
         continue;
       }
@@ -965,7 +1327,59 @@ export function WorkbenchLayout(props: {
         current,
       )
     ));
-  }, [props.workbenchDelta]);
+  }, [acceptConversationArchiveTransitions, acceptProjectRemovalTransition, props.workbenchDelta]);
+
+  // Complete draft materialization only after the authoritative sidebar row becomes visible.
+  // 仅在权威侧栏行可见后完成草稿转正状态。
+  React.useEffect(() => {
+    const pendingConversationId = pendingMaterializedConversationIdRef.current;
+    if (!pendingConversationId) {
+      return;
+    }
+    if (workbenchState.conversations.some((conversation) => conversation.id === pendingConversationId)) {
+      pendingMaterializedConversationIdRef.current = null;
+    }
+  }, [workbenchState.conversations]);
+
+  // Retire local-creation markers after their active conversation lifecycle ends.
+  // 在对应活动会话生命周期结束后清理本地创建标记。
+  React.useEffect(() => {
+    // activeConversationIds is the authoritative active sidebar identity set for marker retention.
+    // activeConversationIds 是保留创建标记所依据的权威活动侧栏身份集合。
+    const activeConversationIds = new Set(workbenchState.conversations.map((conversation) => conversation.id));
+    for (const conversationId of locallyCreatedConversationIdsRef.current) {
+      if (conversationId === pendingMaterializedConversationIdRef.current) {
+        continue;
+      }
+      if (!activeConversationIds.has(conversationId)) {
+        locallyCreatedConversationIdsRef.current.delete(conversationId);
+      }
+    }
+  }, [workbenchState.conversations]);
+
+  // Keep local sidebar selection inside the active conversation lifecycle domain after deltas apply.
+  // 在增量应用后，保持本地侧栏选择位于活动会话生命周期领域内。
+  React.useEffect(() => {
+    setSelectedConversationId((current) => {
+      if (current && current === draftConversationIdRef.current) {
+        return current;
+      }
+      if (current && current === pendingMaterializedConversationIdRef.current) {
+        return current;
+      }
+      if (current && workbenchState.conversations.some((conversation) => conversation.id === current)) {
+        return current;
+      }
+      // nextSelectedConversationId uses the backend lifecycle choice only while it remains active.
+      // nextSelectedConversationId 仅在后端生命周期选择仍处于活动状态时使用它。
+      const nextSelectedConversationId = workbenchState.selectedConversationId;
+      if (nextSelectedConversationId
+        && workbenchState.conversations.some((conversation) => conversation.id === nextSelectedConversationId)) {
+        return nextSelectedConversationId;
+      }
+      return workbenchState.conversations[0]?.id ?? null;
+    });
+  }, [workbenchState.conversations, workbenchState.selectedConversationId]);
 
   // handleComposerSlashCommand routes slash commands into existing workbench actions.
   // handleComposerSlashCommand 将 slash 指令路由到现有工作台动作。
@@ -1035,6 +1449,7 @@ export function WorkbenchLayout(props: {
             skillActions={skillActions}
             agentActions={agentActions}
             memoryActions={{
+              onLoadProjectVmmConfig: loadProjectVmmConfig,
               onRunVmmAction: runVmmMemoryAction,
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
             }}
@@ -1090,6 +1505,7 @@ export function WorkbenchLayout(props: {
             skillActions={skillActions}
             agentActions={agentActions}
             memoryActions={{
+              onLoadProjectVmmConfig: loadProjectVmmConfig,
               onRunVmmAction: runVmmMemoryAction,
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
             }}

@@ -4,28 +4,18 @@ import { ListRestart, RefreshCw } from "lucide-react"
 import { useI18n } from "@/i18n"
 import type {
   MemorySummary,
-  VmmConfigDraftSummary,
-  VmmConfigSaveRequest,
-  VmmMemoryActionRequest,
-  VmmMemoryActionResult,
   VmmMemorySnapshot,
 } from "@/types"
 
 import { VmmEffectiveOverview, VmmResultPanel, VmmRuntimePanel } from "./vmm-memory-components"
 import { renderVmmSectionDetail, type VmmScope } from "./vmm-memory-sections"
+import {
+  useMemoryAreaController,
+  type MemoryActionProps,
+} from "./use-memory-area-controller"
 
 export { vmmSectionIcon } from "./vmm-memory-sections"
-
-// MemoryActionProps groups service-backed actions used by the VMM memory page.
-// MemoryActionProps 分组 VMM 记忆页面使用的服务端动作。
-export interface MemoryActionProps {
-  // Runs one VMM memory management action.
-  // 执行单个 VMM 记忆管理动作。
-  onRunVmmAction: (request: VmmMemoryActionRequest) => Promise<VmmMemoryActionResult>
-  // Saves one VMM memory configuration draft.
-  // 保存单个 VMM 记忆配置草稿。
-  onSaveVmmConfig: (request: VmmConfigSaveRequest) => Promise<void>
-}
+export type { MemoryActionProps } from "./use-memory-area-controller"
 
 // MemorySubAreaId identifies the selected VMM memory management page.
 // MemorySubAreaId 标识当前选中的 VMM 记忆管理页面。
@@ -48,13 +38,31 @@ export function MemoryArea(props: {
   snapshot: VmmMemorySnapshot
 }) {
   const { t } = useI18n();
-  const [scope, setScope] = React.useState<VmmScope>("global");
-  const [projectId, setProjectId] = React.useState(props.snapshot.selectedProjectId ?? props.snapshot.projectScopes[0]?.projectId ?? "");
-  const [globalDraft, setGlobalDraft] = React.useState(props.snapshot.globalDraft);
-  const [projectDraft, setProjectDraft] = React.useState(props.snapshot.projectDraft);
-  const [result, setResult] = React.useState<VmmMemoryActionResult | null>(null);
-  const [notice, setNotice] = React.useState(props.snapshot.notice);
-  const [busyAction, setBusyAction] = React.useState<string | null>(null);
+  // controller owns exact draft routes and the exclusive asynchronous operation channel.
+  // controller 持有准确草稿路由与独占异步操作通道。
+  const controller = useMemoryAreaController({
+    actions: props.actions,
+    snapshot: props.snapshot,
+  });
+  // Controller fields expose the rendered scope, exact drafts, and guarded action callbacks.
+  // 控制器字段暴露渲染作用域、准确草稿与受保护动作回调。
+  const {
+    busyAction,
+    globalDraft,
+    notice,
+    operationBusy,
+    projectDraft,
+    projectDraftReady,
+    projectId,
+    result,
+    runAction,
+    saveDraft,
+    scope,
+    selectProject,
+    selectScope,
+    setActiveDraft,
+    setGlobalDraft,
+  } = controller;
   const [userRef, setUserRef] = React.useState(props.snapshot.effective.userId?.toString() ?? "");
   const [userConfirmationCode, setUserConfirmationCode] = React.useState("");
   const [projectPath, setProjectPath] = React.useState("");
@@ -76,60 +84,14 @@ export function MemoryArea(props: {
   const [deleteMemoryIds, setDeleteMemoryIds] = React.useState("");
   const [deleteReason, setDeleteReason] = React.useState("");
 
-  React.useEffect(() => {
-    setGlobalDraft(props.snapshot.globalDraft);
-    setProjectDraft(props.snapshot.projectDraft);
-    setProjectId(props.snapshot.selectedProjectId ?? props.snapshot.projectScopes[0]?.projectId ?? "");
-    setNotice(props.snapshot.notice);
-  }, [props.snapshot]);
-
+  // activeDraft is the exact editable draft selected by the committed scope.
+  // activeDraft 是已提交作用域选择的准确可编辑草稿。
   const activeDraft = scope === "global" ? globalDraft : projectDraft;
-  const setActiveDraft = (patch: Partial<VmmConfigDraftSummary>) => {
-    if (scope === "global") {
-      setGlobalDraft((draft) => ({ ...draft, ...patch }));
-    } else {
-      setProjectDraft((draft) => ({ ...draft, ...patch }));
-    }
-  };
-
-  const runAction = async (action: string, payload: Record<string, unknown> = {}) => {
-    setBusyAction(action);
-    setNotice(t("memory.vmm.action.running").replace("{action}", action));
-    try {
-      const nextResult = await props.actions.onRunVmmAction({
-        action,
-        scope,
-        projectId: scope === "project" ? projectId : null,
-        payload,
-      });
-      setResult((currentResult) => vmmResultAfterAction(currentResult, nextResult, action));
-      setNotice(nextResult.summary);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotice(t("memory.vmm.action.failed").replace("{message}", message));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const saveDraft = async (targetScope: VmmScope = scope) => {
-    const draft = targetScope === "global" ? globalDraft : projectDraft;
-    setBusyAction(`save-${targetScope}`);
-    setNotice(targetScope === "global" ? t("memory.vmm.save.global.running") : t("memory.vmm.save.project.running"));
-    try {
-      await props.actions.onSaveVmmConfig({
-        scope: targetScope,
-        projectId: targetScope === "project" ? projectId : null,
-        draft,
-      });
-      setNotice(targetScope === "global" ? t("memory.vmm.save.global.completed") : t("memory.vmm.save.project.completed"));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotice(t("memory.vmm.save.failed").replace("{message}", message));
-    } finally {
-      setBusyAction(null);
-    }
-  };
+  // handleProjectIdChange starts an exact project draft load without leaking a floating promise to React.
+  // handleProjectIdChange 启动准确项目草稿加载，并避免向 React 泄漏悬空 Promise。
+  const handleProjectIdChange = React.useCallback((nextProjectId: string) => {
+    void selectProject(nextProjectId);
+  }, [selectProject]);
 
   const activeSectionDetail = renderVmmSectionDetail({
     activeDraft,
@@ -140,10 +102,12 @@ export function MemoryArea(props: {
     migrateSource,
     migrateTarget,
     notice,
+    operationBusy,
     profileInstruction,
     profileTarget,
     projectDeleteConfirmed,
     projectDraft,
+    projectDraftReady,
     projectId,
     projectPath,
     result,
@@ -158,9 +122,9 @@ export function MemoryArea(props: {
     setProfileInstruction,
     setProfileTarget,
     setProjectDeleteConfirmed,
-    setProjectId,
+    setProjectId: handleProjectIdChange,
     setProjectPath,
-    setScope,
+    setScope: selectScope,
     setSearchQueries,
     setSearchTopK,
     setTurnIds,
@@ -214,23 +178,23 @@ export function MemoryArea(props: {
           <div className="vmm-scope-bar">
             <label>
               <span>{t("memory.scope")}</span>
-              <select value={scope} onChange={(event) => setScope(event.target.value as VmmScope)}>
+              <select disabled={operationBusy} value={scope} onChange={(event) => selectScope(event.target.value as VmmScope)}>
                 <option value="global">{t("memory.scope.global")}</option>
                 <option value="project">{t("memory.scope.project")}</option>
               </select>
             </label>
             <label>
               <span>{t("memory.project")}</span>
-              <select disabled={scope !== "project"} value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+              <select disabled={scope !== "project" || operationBusy} value={projectId} onChange={(event) => handleProjectIdChange(event.target.value)}>
                 {props.snapshot.projectScopes.map((project) => (
                   <option key={project.projectId} value={project.projectId}>{project.name}</option>
                 ))}
               </select>
             </label>
-            <button className="vmm-icon-button" onClick={() => runAction("healthz")} type="button">
+            <button className="vmm-icon-button" disabled={operationBusy} onClick={() => runAction("healthz")} type="button">
               <RefreshCw size={15} />{t("memory.action.testConnection")}
             </button>
-            <button className="vmm-icon-button" onClick={() => runAction("load_users_projects")} type="button">
+            <button className="vmm-icon-button" disabled={operationBusy} onClick={() => runAction("load_users_projects")} type="button">
               <ListRestart size={15} />{t("memory.action.refreshUsersProjects")}
             </button>
           </div>
@@ -245,72 +209,4 @@ export function MemoryArea(props: {
   )
 }
 
-// vmmResultAfterAction preserves search results when deletion removes visible rows.
-// vmmResultAfterAction 在删除记忆移除可见行时保留当前搜索结果。
-function vmmResultAfterAction(
-  currentResult: VmmMemoryActionResult | null,
-  nextResult: VmmMemoryActionResult,
-  action: string,
-): VmmMemoryActionResult {
-  if (action !== "delete_memories" || currentResult?.kind !== "search_memory_events") {
-    return nextResult;
-  }
-  const deletedIds = vmmDeletedMemoryIdSet(nextResult.response);
-  if (deletedIds.size === 0) {
-    return currentResult;
-  }
-  return {
-    ...currentResult,
-    summary: nextResult.summary,
-    response: vmmSearchResultWithoutMemoryIds(currentResult.response, deletedIds),
-  };
-}
-
-// vmmDeletedMemoryIdSet extracts deleted ids from one delete response.
-// vmmDeletedMemoryIdSet 从删除响应中提取已删除标识集合。
-function vmmDeletedMemoryIdSet(response: unknown): Set<number> {
-  const object = vmmObject(response);
-  const values = object.deletedMemoryIds ?? object.deleted_memory_ids;
-  if (!Array.isArray(values)) {
-    return new Set();
-  }
-  return new Set(values.map(vmmNumber).filter((value) => value > 0));
-}
-
-// vmmSearchResultWithoutMemoryIds removes deleted hits from one search response.
-// vmmSearchResultWithoutMemoryIds 从搜索响应中移除已删除的命中项。
-function vmmSearchResultWithoutMemoryIds(response: unknown, deletedIds: Set<number>): unknown {
-  const object = vmmObject(response);
-  const groups = Array.isArray(object.results) ? object.results : [];
-  return {
-    ...object,
-    results: groups.map((group) => {
-      const groupObject = vmmObject(group);
-      const hits = Array.isArray(groupObject.hits) ? groupObject.hits : [];
-      return {
-        ...groupObject,
-        hits: hits.filter((hit) => !deletedIds.has(vmmNumber(vmmObject(hit).memoryId ?? vmmObject(hit).memory_id))),
-      };
-    }),
-  };
-}
-
-// vmmObject normalizes unknown values into an object.
-// vmmObject 将未知值规范化为对象。
-function vmmObject(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
-}
-
-// vmmNumber normalizes unknown values into a finite number.
-// vmmNumber 将未知值规范化为有限数字。
-function vmmNumber(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
 

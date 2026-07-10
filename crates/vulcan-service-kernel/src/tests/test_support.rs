@@ -341,6 +341,8 @@ pub(super) fn test_service_state_with_parent_session(
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),

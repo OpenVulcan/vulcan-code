@@ -29,9 +29,6 @@ import type {
   ConversationSurfaceExpandedState,
 } from "@/components/conversation/conversation-layout-restore";
 import type {
-  ConversationTimelineVirtualRestoreState,
-} from "@/components/conversation/conversation-virtualization";
-import type {
   ConversationDetailRef,
   ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
@@ -696,6 +693,7 @@ function WorkspaceContextTabContent(args: {
     return (
       <div className="context-tab-content memory-tab-content">
         <WorkspaceMemoryPanel
+          selectedConversationId={args.props.selectedConversationId}
           selectedProjectId={selectedContextProjectId(args.props)}
           snapshot={args.props.workbench.contextInjection ?? null}
           onRunVmmAction={args.props.onRunVmmAction}
@@ -851,9 +849,6 @@ function WorkspaceSubagentPanel(args: {
   // handleNoopUserScrollStart satisfies the read-only transcript contract without tail-follow side effects.
   // handleNoopUserScrollStart 满足只读转录契约，但不产生尾随副作用。
   const handleNoopUserScrollStart = React.useCallback(() => undefined, []);
-  // handleNoopVirtualizerStateChange avoids sharing main-chat virtualization memory with side tabs.
-  // handleNoopVirtualizerStateChange 避免侧栏页签共享主会话虚拟列表记忆。
-  const handleNoopVirtualizerStateChange = React.useCallback((_surfaceId: string, _state: ConversationTimelineVirtualRestoreState | null) => undefined, []);
   // handleNoopExpandedStateChange avoids sharing main-chat expansion memory with side tabs.
   // handleNoopExpandedStateChange 避免侧栏页签共享主会话展开记忆。
   const handleNoopExpandedStateChange = React.useCallback((_surfaceId: string, _state: ConversationSurfaceExpandedState) => undefined, []);
@@ -914,7 +909,6 @@ function WorkspaceSubagentPanel(args: {
         historyLoading={false}
         initialExpandedState={null}
         initialScrollDistanceFromBottom={0}
-        initialVirtualizerState={null}
         messages={messages}
         parentConversationId={taskId}
         renderItems={renderItems}
@@ -923,7 +917,7 @@ function WorkspaceSubagentPanel(args: {
         scrollRef={scrollRef}
         sessionRunning={Boolean(task?.isRunning)}
         suppressEmptyPlaceholder={transcriptLoading && messages.length === 0}
-        suppressInitialDistanceRestore={false}
+        restoreInitialScrollDistance
         workspacePath={workspacePath}
         onCopyText={args.props.onCopyText}
         onExpandedStateChange={handleNoopExpandedStateChange}
@@ -933,7 +927,6 @@ function WorkspaceSubagentPanel(args: {
         onOpenSubagentPanel={args.props.onOpenSubagentPanel}
         onScrollStateChange={handleNoopScrollStateChange}
         onUserScrollStart={handleNoopUserScrollStart}
-        onVirtualizerStateChange={handleNoopVirtualizerStateChange}
       />
       {transcriptLoading && messages.length === 0 ? (
         <div className="workspace-subagent-loading" role="status" aria-live="polite">

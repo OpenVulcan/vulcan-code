@@ -27,6 +27,24 @@ fn webui_session_kernel_rejects_second_active_turn() {
     );
 }
 
+/// Verifies an authoritative lifecycle transition blocks every new kernel turn for its session.
+/// 验证权威生命周期转换会阻止对应会话启动任何新内核回合。
+#[test]
+fn webui_session_kernel_rejects_turn_during_lifecycle_transition() {
+    // session_id identifies the session reserved by the lifecycle transition.
+    // session_id 标识被生命周期转换预留的会话。
+    let session_id = SessionId::from_u128(0x94);
+    // state owns both the lifecycle reservation and runtime kernel table under test.
+    // state 持有测试中的生命周期预留状态与运行内核表。
+    let mut state = test_service_state_with_parent_session(session_id);
+    state.session_lifecycle_transition_ids.insert(session_id);
+
+    let start_result = start_webui_session_kernel_user_turn(&mut state, session_id, "blocked-turn");
+
+    assert!(start_result.is_err());
+    assert!(!webui_session_kernel_has_active_turn(&state, session_id));
+}
+
 /// Verifies a new user turn clears stale wait-agent coordination from earlier turns.
 /// 验证新的用户回合会清理旧回合残留的 wait_agent 协调状态。
 #[test]

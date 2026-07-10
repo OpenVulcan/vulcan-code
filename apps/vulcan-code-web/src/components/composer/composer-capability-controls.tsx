@@ -49,11 +49,7 @@ import type {
 } from "@/types";
 import {
   COMPOSER_AI_CAPABILITY_OPTIONS,
-  defaultAiCapabilityTargetOrder,
-  defaultDisabledAiCapabilityKinds,
-  defaultDisabledAiCapabilityTargetSelectors,
   orderedAiCapabilityTargets,
-  serializeAiCapabilityTargetOrder,
   type AiCapabilityKind,
   type ComposerAiCapabilityConfigurationSave,
   type ComposerAiCapabilityOption,
@@ -61,6 +57,7 @@ import {
 } from "@/components/composer/composer-model";
 
 import { useVerticalSortableItem } from "./composer-sortable";
+import { useComposerCapabilityDraft } from "./use-composer-capability-draft";
 
 // ContextUsageOrb renders a compact context budget indicator beside the composer.
 // ContextUsageOrb 在输入区旁渲染紧凑的上下文预算指示器。
@@ -131,6 +128,9 @@ function ComposerCapabilityIcon(props: {
 // ComposerAiCapabilityControl renders the WebUI-aligned capability dialog.
 // ComposerAiCapabilityControl 渲染对齐 WebUI 的能力设置对话框。
 export function ComposerAiCapabilityControl(props: {
+  // Stable conversation or new-conversation draft slot that owns dialog state.
+  // 拥有弹窗状态的稳定会话或新建会话草稿槽。
+  scopeKey: string;
   // Accessible label for the dialog trigger.
   // 对话框触发器的无障碍标签。
   ariaLabel: string;
@@ -159,33 +159,39 @@ export function ComposerAiCapabilityControl(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
-  // open tracks whether the full capability dialog is visible.
-  // open 跟踪完整能力对话框是否可见。
-  const [open, setOpen] = React.useState(false);
-  // confirmCloseOpen tracks the dirty-close confirmation dialog.
-  // confirmCloseOpen 跟踪有未保存变更时的关闭确认弹窗。
-  const [confirmCloseOpen, setConfirmCloseOpen] = React.useState(false);
   // selectedKind stores the capability currently shown in the right pane.
   // selectedKind 保存右侧面板当前展示的能力。
   const [selectedKind, setSelectedKind] = React.useState<AiCapabilityKind>("web_search");
-  // draftDisabledKinds stores dialog-local capability disabled choices.
-  // draftDisabledKinds 保存弹窗本地的能力禁用选择。
-  const [draftDisabledKinds, setDraftDisabledKinds] = React.useState<Set<AiCapabilityKind>>(() => new Set());
-  // draftDisabledTargetSelectors stores dialog-local target disabled choices.
-  // draftDisabledTargetSelectors 保存弹窗本地的目标禁用选择。
-  const [draftDisabledTargetSelectors, setDraftDisabledTargetSelectors] = React.useState<Set<string>>(() => new Set());
-  // draftTargetOrder stores dialog-local route order choices.
-  // draftTargetOrder 保存弹窗本地的路由顺序选择。
-  const [draftTargetOrder, setDraftTargetOrder] = React.useState<Map<AiCapabilityKind, string[]>>(() => new Map());
-  // baselineSignature stores the persisted snapshot captured when the dialog opens.
-  // baselineSignature 保存弹窗打开时捕获的已持久化快照签名。
-  const [baselineSignature, setBaselineSignature] = React.useState("");
-  // saveState drives the visible save button state.
-  // saveState 驱动可见保存按钮状态。
-  const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved">("idle");
-  // externalUpdateNotice tracks whether another UI changed this session while the local draft is dirty.
-  // externalUpdateNotice 跟踪本地草稿脏时其他 UI 是否修改了当前会话。
-  const [externalUpdateNotice, setExternalUpdateNotice] = React.useState(false);
+  // Capability draft controller owns scoped dialog state, save concurrency, and external updates.
+  // 能力草稿控制器管理有作用域的弹窗状态、保存并发与外部更新。
+  const {
+    open,
+    confirmCloseOpen,
+    draftDisabledKinds,
+    draftDisabledTargetSelectors,
+    draftTargetOrder,
+    activeDisabledKinds,
+    hasUnsavedChanges,
+    isSaving,
+    saveState,
+    externalUpdateNotice,
+    requestOpenChange: requestDialogOpenChange,
+    keepEditing,
+    saveDraft,
+    resetSavedState: resetSavedButtonState,
+    discardDraft,
+    useDefaultConfiguration: handleUseDefaultConfiguration,
+    setCapabilityEnabled: handleCapabilityToggle,
+    setTargetEnabled: handleTargetToggle,
+    reorderTargets: handleTargetReorder,
+  } = useComposerCapabilityDraft({
+    scopeKey: props.scopeKey,
+    disabledKinds: props.disabledKinds,
+    disabledTargetSelectors: props.disabledTargetSelectors,
+    targetOrder: props.targetOrder,
+    defaultCapabilities: props.defaultCapabilities,
+    onSaveConfiguration: props.onSaveConfiguration,
+  });
   const capabilityByKind = React.useMemo(() => {
     return new Map(props.capabilities.map((capability) => [capability.kind, capability]));
   }, [props.capabilities]);
@@ -195,19 +201,6 @@ export function ComposerAiCapabilityControl(props: {
       capability: capabilityByKind.get(option.value),
     }));
   }, [capabilityByKind]);
-  const draftSignature = React.useMemo(
-    () => composerCapabilityDraftSignature(draftDisabledKinds, draftDisabledTargetSelectors, draftTargetOrder),
-    [draftDisabledKinds, draftDisabledTargetSelectors, draftTargetOrder],
-  );
-  const sessionSignature = React.useMemo(
-    () => composerCapabilityDraftSignature(props.disabledKinds, props.disabledTargetSelectors, props.targetOrder),
-    [props.disabledKinds, props.disabledTargetSelectors, props.targetOrder],
-  );
-  const hasUnsavedChanges = open && draftSignature !== baselineSignature;
-  const isSaving = saveState === "saving";
-  // activeDisabledKinds keeps the closed trigger bound to persisted session state instead of stale drafts.
-  // activeDisabledKinds 让关闭状态下的触发器绑定已持久化会话状态，而不是遗留草稿。
-  const activeDisabledKinds = open ? draftDisabledKinds : props.disabledKinds;
   const enabledCapabilityEntries = visibleCapabilities.filter(({ option, capability }) => {
     return Boolean(capability?.available) && !activeDisabledKinds.has(option.value);
   });
@@ -236,147 +229,6 @@ export function ComposerAiCapabilityControl(props: {
     ),
     [activeDisabledKinds, props.disabledTargetSelectors, props.locale, props.targetOrder, t, visibleCapabilities],
   );
-  // resetDraftFromProps refreshes the dialog draft from the latest session snapshot.
-  // resetDraftFromProps 根据最新会话快照刷新弹窗草稿。
-  const resetDraftFromProps = React.useCallback(() => {
-    const nextDisabledKinds = cloneAiCapabilityKindSet(props.disabledKinds);
-    const nextDisabledTargetSelectors = new Set(props.disabledTargetSelectors);
-    const nextTargetOrder = cloneAiCapabilityTargetOrder(props.targetOrder);
-    setDraftDisabledKinds(nextDisabledKinds);
-    setDraftDisabledTargetSelectors(nextDisabledTargetSelectors);
-    setDraftTargetOrder(nextTargetOrder);
-    setBaselineSignature(composerCapabilityDraftSignature(nextDisabledKinds, nextDisabledTargetSelectors, nextTargetOrder));
-    setSaveState("idle");
-    setExternalUpdateNotice(false);
-  }, [props.disabledKinds, props.disabledTargetSelectors, props.targetOrder]);
-  // requestDialogOpenChange keeps dirty close attempts inside an explicit confirmation flow.
-  // requestDialogOpenChange 将带未保存变更的关闭请求收束到显式确认流程。
-  const requestDialogOpenChange = React.useCallback((nextOpen: boolean) => {
-    if (nextOpen) {
-      resetDraftFromProps();
-      setConfirmCloseOpen(false);
-      setOpen(true);
-      return;
-    }
-    if (isSaving) {
-      return;
-    }
-    if (hasUnsavedChanges) {
-      setConfirmCloseOpen(true);
-      return;
-    }
-    setOpen(false);
-  }, [hasUnsavedChanges, isSaving, resetDraftFromProps]);
-  // saveDraft persists the dialog-local capability draft and optionally completes a pending close request.
-  // saveDraft 持久化弹窗本地能力草稿，并可选地完成一次待处理关闭请求。
-  const saveDraft = React.useCallback(async (options?: { closeAfterSave?: boolean }) => {
-    if (isSaving) {
-      return false;
-    }
-    setSaveState("saving");
-    const request: ComposerAiCapabilityConfigurationSave = {
-      disabledAiCapabilityKinds: Array.from(draftDisabledKinds),
-      disabledAiCapabilityTargetSelectors: Array.from(draftDisabledTargetSelectors),
-      aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(draftTargetOrder),
-    };
-    const saved = await props.onSaveConfiguration(request);
-    if (!saved) {
-      setSaveState("idle");
-      return false;
-    }
-    setBaselineSignature(draftSignature);
-    setSaveState("saved");
-    setExternalUpdateNotice(false);
-    if (options?.closeAfterSave) {
-      window.setTimeout(() => {
-        setOpen(false);
-        setConfirmCloseOpen(false);
-        setSaveState("idle");
-      }, 220);
-      return true;
-    }
-    setConfirmCloseOpen(false);
-    return true;
-  }, [draftDisabledKinds, draftDisabledTargetSelectors, draftSignature, draftTargetOrder, isSaving, props]);
-  // resetSavedButtonState returns the save button to its normal idle appearance after saved feedback.
-  // resetSavedButtonState 在已保存反馈后将保存按钮恢复为普通空闲外观。
-  const resetSavedButtonState = React.useCallback(() => {
-    if (saveState === "saved") {
-      setConfirmCloseOpen(false);
-      setSaveState("idle");
-    }
-  }, [saveState]);
-  // discardDraft closes the dialog without applying local draft changes.
-  // discardDraft 在不应用本地草稿的情况下关闭弹窗。
-  const discardDraft = React.useCallback(() => {
-    setConfirmCloseOpen(false);
-    setOpen(false);
-    setSaveState("idle");
-    setExternalUpdateNotice(false);
-  }, []);
-  // handleUseDefaultConfiguration stages the default capability configuration without persisting it.
-  // handleUseDefaultConfiguration 将默认能力配置暂存为草稿但不直接持久化。
-  const handleUseDefaultConfiguration = React.useCallback(() => {
-    if (isSaving) {
-      return;
-    }
-    setDraftDisabledKinds(defaultDisabledAiCapabilityKinds(props.defaultCapabilities));
-    setDraftDisabledTargetSelectors(defaultDisabledAiCapabilityTargetSelectors(props.defaultCapabilities));
-    setDraftTargetOrder(defaultAiCapabilityTargetOrder(props.defaultCapabilities));
-    setExternalUpdateNotice(false);
-    setSaveState("idle");
-  }, [isSaving, props.defaultCapabilities]);
-  // handleCapabilityToggle updates the dialog-local disabled capability set.
-  // handleCapabilityToggle 更新弹窗本地禁用能力集合。
-  const handleCapabilityToggle = React.useCallback((kind: AiCapabilityKind, enabled: boolean) => {
-    if (isSaving) {
-      return;
-    }
-    setDraftDisabledKinds((current) => {
-      const next = new Set(current);
-      if (enabled) {
-        next.delete(kind);
-      } else {
-        next.add(kind);
-      }
-      return next;
-    });
-    setSaveState("idle");
-  }, [isSaving]);
-  // handleTargetToggle updates the dialog-local disabled target selector set.
-  // handleTargetToggle 更新弹窗本地禁用目标选择器集合。
-  const handleTargetToggle = React.useCallback((targetSelector: string, enabled: boolean) => {
-    if (isSaving) {
-      return;
-    }
-    setDraftDisabledTargetSelectors((current) => {
-      const next = new Set(current);
-      if (enabled) {
-        next.delete(targetSelector);
-      } else {
-        next.add(targetSelector);
-      }
-      return next;
-    });
-    setSaveState("idle");
-  }, [isSaving]);
-  // handleTargetReorder replaces one dialog-local route order.
-  // handleTargetReorder 替换单个弹窗本地路由顺序。
-  const handleTargetReorder = React.useCallback((kind: AiCapabilityKind, targetSelectors: string[]) => {
-    if (isSaving) {
-      return;
-    }
-    setDraftTargetOrder((current) => {
-      const next = new Map(current);
-      const currentOrder = next.get(kind) ?? [];
-      if (currentOrder.length === targetSelectors.length && currentOrder.every((selector, index) => selector === targetSelectors[index])) {
-        return current;
-      }
-      next.set(kind, targetSelectors);
-      return next;
-    });
-    setSaveState("idle");
-  }, [isSaving]);
   // handleTargetDragEnd applies the dnd-kit order to the dialog-local route draft.
   // handleTargetDragEnd 将 dnd-kit 顺序应用到弹窗本地路由草稿。
   const handleTargetDragEnd = React.useCallback((event: DragEndEvent) => {
@@ -405,17 +257,6 @@ export function ComposerAiCapabilityControl(props: {
       setSelectedKind(firstCapability);
     }
   }, [selectedKind, visibleCapabilities]);
-
-  React.useEffect(() => {
-    if (!open || isSaving || sessionSignature === baselineSignature) {
-      return;
-    }
-    if (!hasUnsavedChanges) {
-      resetDraftFromProps();
-      return;
-    }
-    setExternalUpdateNotice(true);
-  }, [baselineSignature, hasUnsavedChanges, isSaving, open, resetDraftFromProps, sessionSignature]);
 
   return (
     <Dialog open={open} onOpenChange={requestDialogOpenChange}>
@@ -584,7 +425,11 @@ export function ComposerAiCapabilityControl(props: {
           </button>
         </DialogFooter>
       </DialogContent>
-      <Dialog open={confirmCloseOpen} onOpenChange={setConfirmCloseOpen}>
+      <Dialog open={confirmCloseOpen} onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          keepEditing();
+        }
+      }}>
         <DialogContent className="composer-capability-close-confirm-dialog">
           <DialogHeader>
             <DialogTitle>{t("composer.capability.close.title")}</DialogTitle>
@@ -596,7 +441,7 @@ export function ComposerAiCapabilityControl(props: {
             <button className="skill-action-button secondary" disabled={isSaving} onClick={discardDraft} type="button">
               {t("composer.capability.close.discard")}
             </button>
-            <button className="skill-action-button secondary" disabled={isSaving} onClick={() => setConfirmCloseOpen(false)} type="button">
+            <button className="skill-action-button secondary" disabled={isSaving} onClick={keepEditing} type="button">
               {t("composer.capability.close.keepEditing")}
             </button>
             <button className="skill-action-button" disabled={isSaving} onClick={() => void saveDraft({ closeAfterSave: true })} type="button">
@@ -703,35 +548,6 @@ function formatComposerTranslation(
 // composerCapabilityTargetTooltipLabel 返回单个能力目标最短可用展示标签。
 function composerCapabilityTargetTooltipLabel(target: AiCapabilityTargetSummary): string {
   return target.targetName || target.targetAlias || target.vendorName || target.vendorId;
-}
-
-// cloneAiCapabilityKindSet creates a mutable dialog-local copy of a capability set.
-// cloneAiCapabilityKindSet 创建一个可变的弹窗本地能力集合副本。
-function cloneAiCapabilityKindSet(value: Set<AiCapabilityKind>): Set<AiCapabilityKind> {
-  return new Set(value);
-}
-
-// cloneAiCapabilityTargetOrder creates a mutable dialog-local copy of target order maps.
-// cloneAiCapabilityTargetOrder 创建一个可变的弹窗本地目标顺序映射副本。
-function cloneAiCapabilityTargetOrder(value: Map<AiCapabilityKind, string[]>): Map<AiCapabilityKind, string[]> {
-  return new Map(Array.from(value.entries()).map(([kind, selectors]) => [kind, [...selectors]]));
-}
-
-// composerCapabilityDraftSignature builds a stable comparison key for one dialog draft.
-// composerCapabilityDraftSignature 为单个弹窗草稿构建稳定对比键。
-function composerCapabilityDraftSignature(
-  disabledKinds: Set<AiCapabilityKind>,
-  disabledTargetSelectors: Set<string>,
-  targetOrder: Map<AiCapabilityKind, string[]>,
-): string {
-  return JSON.stringify({
-    disabledKinds: Array.from(disabledKinds).sort(),
-    disabledTargetSelectors: Array.from(disabledTargetSelectors).sort(),
-    targetOrder: COMPOSER_AI_CAPABILITY_OPTIONS.map((option) => [
-      option.value,
-      targetOrder.get(option.value) ?? [],
-    ]),
-  });
 }
 
 // ComposerSelectControl renders one WebUI-aligned compact composer selector.

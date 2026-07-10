@@ -198,7 +198,7 @@ fn runtime_audit_append_skips_missing_active_segment() {
         SessionMessageRecordKind::Transcript,
         "first prompt",
     )];
-    append_segmented_session_message_tail(&session_dir, &messages).expect("append display row");
+    append_segmented_session_message_update(&session_dir, &messages).expect("append display row");
     let state = conversation_state_from_session_messages(&messages);
     sync_runtime_log_from_conversation_state(&session_dir, &state, "t1").expect("sync runtime log");
     let metadata = read_runtime_metadata(&session_dir).expect("read runtime metadata");

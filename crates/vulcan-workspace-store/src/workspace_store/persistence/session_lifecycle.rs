@@ -58,285 +58,433 @@ pub async fn persist_single_session_addon_state_update(
     Ok(merged_state)
 }
 
-/// Renames one visible session by exact locator metadata without scanning segmented directories.
-/// 通过精确定位元数据重命名一个可见会话，不扫描分段目录。
-pub async fn rename_single_session_metadata(
+/// Renames one authoritative active session without rebuilding or overwriting its locator identity.
+/// 重命名一个权威活动会话，且不重建或覆盖其定位身份。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite index and workspace data root.
+/// `controller` 持有权威 SQLite 索引与工作区数据根。
+/// `session_id` is the exact active session identity selected by the user.
+/// `session_id` 是用户选择的精确活动会话身份。
+/// `title` is the normalized non-empty manual display title.
+/// `title` 是规范化后的非空手动展示标题。
+/// `updated_at` is the timestamp committed to metadata and the index.
+/// `updated_at` 是提交到元数据与索引的时间戳。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after exact-directory metadata and field-scoped SQLite title updates both succeed.
+/// 仅在精确目录元数据与限定字段的 SQLite 标题更新均成功后返回成功。
+pub async fn rename_single_session(
     controller: ControllerRuntimeHandle,
-    project_id: &str,
-    session: &SessionSummary,
+    session_id: SessionId,
     title: &str,
     updated_at: &str,
 ) -> Result<(), String> {
-    let mut renamed_session = session.clone();
-    renamed_session.title = title.to_string();
-    renamed_session.title_source = SessionTitleSource::Manual;
-    renamed_session.updated_at = updated_at.to_string();
-    let created_at = normalized_session_created_at(&renamed_session);
-    let created_date = persistence_segmented_session_date_from_unix_millis_text(&created_at);
-    let session_dir = segmented_session_directory(
-        &controller.data_root,
-        false,
-        project_id,
-        &created_date,
-        &renamed_session.id.to_string(),
-    );
-    if session_dir.exists() {
-        patch_segmented_session_metadata(
-            &session_dir,
-            SegmentedSessionMetadataPatch {
-                updated_at: Some(updated_at.to_string()),
-                title: Some(Some(title.to_string())),
-                title_source: Some(Some(
-                    SessionTitleSource::Manual.as_persisted_key().to_string(),
-                )),
-                ..Default::default()
-            },
-        )?;
+    if title.trim().is_empty() {
+        return Err(String::from("会话标题不能为空。"));
     }
-    upsert_session_index_row(
-        &controller,
-        &renamed_session,
-        project_id,
-        false,
-        0,
-        Some(updated_at),
-    )
-    .await?;
-    Ok(())
+    // locator provides the only permitted project tag and creation timestamp for directory addressing.
+    // locator 提供目录寻址唯一允许使用的项目标签与创建时间戳。
+    let locator = query_session_index_locator(&controller, session_id, false)
+        .await?
+        .ok_or_else(|| format!("活动会话 `{session_id}` 不存在，拒绝重命名。"))?;
+    // created_date is strictly derived from the persisted locator and never from a retained summary.
+    // created_date 严格从持久化定位信息派生，绝不来自保留摘要。
+    let created_date = session_directory_date_from_unix_millis_text(&locator.created_at)?;
+    let _ = rename_segmented_session_by_created_date(
+        &controller.data_root,
+        &locator.project_tag,
+        &created_date,
+        &session_id.to_string(),
+        title,
+        updated_at,
+    )?;
+    update_active_session_index_title(&controller, session_id, title, updated_at).await
 }
 
-/// Marks one visible session as archived without rewriting transcript or runtime-state documents.
-/// 将单个可见会话标记为已归档，不重写转录或运行时状态文档。
+/// Resolved storage action for one idempotent session archive request.
+/// 单次幂等会话归档请求解析出的存储动作。
+enum SessionArchiveTransition {
+    /// Active locator that still requires a directory and index transition.
+    /// 仍需执行目录与索引转换的活动定位行。
+    Required(PersistedSessionIndexLocator),
+    /// Archived locator proving that an earlier request already committed the target state.
+    /// 证明更早请求已经提交目标状态的归档定位行。
+    AlreadyCommitted,
+}
+
+/// Resolves authoritative active and archived locator query results into one archive action.
+/// 将权威活动与归档定位查询结果解析为单个归档动作。
+///
+/// # Parameters
+/// 参数
+/// `session_id` is the exact session identity being archived.
+/// `session_id` 是正在归档的精确会话身份。
+/// `active_locator` is the matching active row when the transition is still required.
+/// `active_locator` 是仍需转换时匹配的活动行。
+/// `archived_locator` is the matching archived row when the target state is already committed.
+/// `archived_locator` 是目标状态已提交时匹配的归档行。
+///
+/// # Returns
+/// 返回值
+/// Returns the required transition, an idempotent committed result, or an explicit missing-session error.
+/// 返回必需转换、幂等已提交结果或显式会话缺失错误。
+fn resolve_session_archive_transition(
+    session_id: SessionId,
+    active_locator: Option<PersistedSessionIndexLocator>,
+    archived_locator: Option<PersistedSessionIndexLocator>,
+) -> Result<SessionArchiveTransition, String> {
+    if let Some(locator) = active_locator {
+        return Ok(SessionArchiveTransition::Required(locator));
+    }
+    if archived_locator.is_some() {
+        return Ok(SessionArchiveTransition::AlreadyCommitted);
+    }
+    Err(format!("会话 `{session_id}` 不存在，拒绝归档。"))
+}
+
+/// Idempotently marks one authoritative session locator as archived without rewriting transcript or runtime-state documents.
+/// 以幂等方式将一个权威会话定位行标记为已归档，而不重写转录或运行时状态文档。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite index and workspace data root.
+/// `controller` 持有权威 SQLite 索引与工作区数据根。
+/// `session_id` is the exact session identity to archive or verify as already archived.
+/// `session_id` 是需要归档或验证为已归档的精确会话身份。
+///
+/// # Returns
+/// 返回值
+/// Returns success after committing an active locator or verifying that a concurrent request already archived it.
+/// 活动定位行提交完成，或验证并发请求已将其归档后返回成功。
 pub async fn archive_single_session(
     controller: ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<(), String> {
-    archive_segmented_session_directory_if_present(&controller, session_id).await?;
-    Ok(())
+    // active_locator proves the session still needs its filesystem and index lifecycle transition.
+    // active_locator 证明该会话仍需执行文件系统与索引生命周期转换。
+    let active_locator = query_session_index_locator(&controller, session_id, false).await?;
+    // archived_locator is queried only when no active row exists, distinguishing idempotency from absence.
+    // archived_locator 仅在活动行缺失时查询，用于区分幂等完成与完全不存在。
+    let archived_locator = if active_locator.is_none() {
+        query_session_index_locator(&controller, session_id, true).await?
+    } else {
+        None
+    };
+    match resolve_session_archive_transition(session_id, active_locator, archived_locator)? {
+        SessionArchiveTransition::Required(locator) => {
+            archive_segmented_session_directory_for_locator(&controller, session_id, &locator).await
+        }
+        SessionArchiveTransition::AlreadyCommitted => Ok(()),
+    }
 }
 
-/// Archives one visible session when its owning project is already known.
-/// 在已知所属项目时归档单个可见会话。
-pub async fn archive_single_session_for_project(
-    controller: ControllerRuntimeHandle,
-    project_id: &str,
-    session: &SessionSummary,
-) -> Result<(), String> {
-    let archived_at = archive_segmented_session_directory_for_project_and_summary_if_present(
-        &controller,
-        project_id,
-        session,
-    )?;
-    upsert_session_index_row(
-        &controller,
-        session,
-        project_id,
-        true,
-        0,
-        Some(&archived_at),
-    )
-    .await?;
-    Ok(())
-}
-
-/// Archives all visible sessions under one project while keeping the project active.
-/// 归档单个项目下的全部可见会话，同时保留项目为活动状态。
+/// Archives every active session locator owned by one project while keeping the project active.
+/// 归档单个项目拥有的全部活动会话定位行，同时保持项目为活动状态。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite index and workspace data root.
+/// `controller` 持有权威 SQLite 索引与工作区数据根。
+/// `project_id` is the exact active project identity whose sessions must be archived.
+/// `project_id` 是必须归档其会话的精确活动项目身份。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after the project is verified active and no active child locator remains.
+/// 仅在项目验证为活动状态且不存在任何活动子定位行后返回成功。
 pub async fn archive_project_sessions(
     controller: ControllerRuntimeHandle,
     project_id: &str,
-    sessions: &[SessionSummary],
 ) -> Result<(), String> {
-    for (index, session) in sessions.iter().enumerate() {
-        let archived_at = archive_segmented_session_directory_for_project_and_summary_if_present(
+    if project_id.trim().is_empty() {
+        return Err(String::from("活动项目标识不能为空。"));
+    }
+    if !project_archive_state_exists(&controller, project_id, false).await? {
+        return Err(format!(
+            "活动项目 `{project_id}` 不存在，拒绝归档项目会话。"
+        ));
+    }
+
+    // session_entries are the complete authoritative active child set from SQLite.
+    // session_entries 是来自 SQLite 的完整权威活动子会话集合。
+    let session_entries =
+        query_session_index_locators_for_project(&controller, project_id, false).await?;
+    for entry in session_entries {
+        archive_segmented_session_directory_for_locator(
             &controller,
-            project_id,
-            session,
-        )?;
-        upsert_session_index_row(
-            &controller,
-            session,
-            project_id,
-            true,
-            index,
-            Some(&archived_at),
+            entry.session_id,
+            &entry.locator,
         )
         .await?;
     }
-    Ok(())
-}
 
-/// Marks one visible project and all of its child sessions as archived.
-/// 将单个可见项目及其全部子会话标记为已归档。
-pub async fn archive_project_with_sessions(
-    controller: ControllerRuntimeHandle,
-    project_id: &str,
-    session_ids: &[SessionId],
-) -> Result<(), String> {
-    archive_project_session_ids(controller.clone(), project_id, session_ids).await?;
-    update_project_archive_flag(&controller, project_id, true).await?;
-    Ok(())
-}
-
-/// Archives visible project sessions by id for legacy callers that do not retain creation timestamps.
-/// 为尚未保留创建时间的旧调用方按标识归档可见项目会话。
-pub(super) async fn archive_project_session_ids(
-    controller: ControllerRuntimeHandle,
-    project_id: &str,
-    session_ids: &[SessionId],
-) -> Result<(), String> {
-    for session_id in session_ids {
-        archive_segmented_session_directory_for_project_if_present(
-            &controller,
-            project_id,
-            *session_id,
-        )?;
+    // remaining_entries detect a concurrent or partial writer before the caller mutates the project row.
+    // remaining_entries 在调用方变更项目行前检测并发或局部写入者。
+    let remaining_entries =
+        query_session_index_locators_for_project(&controller, project_id, false).await?;
+    if !remaining_entries.is_empty() {
+        return Err(format!(
+            "项目 `{project_id}` 归档后仍包含 {} 个活动会话定位行。",
+            remaining_entries.len()
+        ));
     }
     Ok(())
 }
 
-/// Archives project sessions and removes the active project row without deleting archived data.
-/// 归档项目会话并移除活动项目记录，但不删除归档数据。
+/// Archives every authoritative project session and removes the active project row without deleting archived data.
+/// 归档项目的全部权威会话并移除活动项目行，但不删除归档数据。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite index and workspace data root.
+/// `controller` 持有权威 SQLite 索引与工作区数据根。
+/// `project_id` is the exact active project identity to remove from the visible tree.
+/// `project_id` 是需要从可见树移除的精确活动项目身份。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after all active child locators are archived and the active project row is deleted.
+/// 仅在全部活动子定位行归档且活动项目行删除完成后返回成功。
 pub async fn remove_project_after_archiving_sessions(
     controller: ControllerRuntimeHandle,
     project_id: &str,
-    sessions: &[SessionSummary],
 ) -> Result<(), String> {
-    if !sessions.is_empty() {
-        archive_project_sessions(controller.clone(), project_id, sessions).await?;
-    }
+    archive_project_sessions(controller.clone(), project_id).await?;
     delete_active_project_row(&controller, project_id).await?;
     Ok(())
 }
 
-/// Restores one archived project and its child session summaries into the visible tree.
-/// 将单个已归档项目及其子会话摘要恢复到可见树中。
-pub async fn restore_project_with_sessions(
+/// Restores one archived project and every authoritative archived child locator into the visible tree.
+/// 将单个归档项目及其全部权威归档子定位行恢复到可见树。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the authoritative SQLite index and workspace data root.
+/// `controller` 持有权威 SQLite 索引与工作区数据根。
+/// `project_id` is the exact archived project identity to restore.
+/// `project_id` 是需要恢复的精确归档项目身份。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after no archived child locator remains and the existing project row is reactivated.
+/// 仅在不存在任何归档子定位行且既有项目行重新激活后返回成功。
+pub async fn restore_project(
     controller: ControllerRuntimeHandle,
-    project: &TaskProjectSummary,
-    sessions: &[SessionSummary],
+    project_id: &str,
 ) -> Result<(), String> {
-    for (index, session) in sessions.iter().enumerate() {
-        restore_segmented_session_directory_for_project_if_present(
-            &controller,
-            &project.id,
-            session,
-        )?;
-        upsert_session_index_row(&controller, session, &project.id, false, index, None).await?;
+    if project_id.trim().is_empty() {
+        return Err(String::from("归档项目标识不能为空。"));
     }
-    upsert_projects(&controller, &[(project.clone(), false)]).await?;
-    Ok(())
-}
+    if !project_archive_state_exists(&controller, project_id, true).await? {
+        return Err(format!("归档项目 `{project_id}` 不存在，拒绝恢复。"));
+    }
 
-/// Archives a segmented session directory using the persisted session locator when present.
-/// 存在持久化会话定位信息时归档对应分段会话目录。
-pub(super) async fn archive_segmented_session_directory_if_present(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let Some(locator) = query_session_index_locator(controller, session_id, false).await? else {
-        return Ok(());
-    };
-    let archived_at = current_unix_millis_text();
-    let project_tag = if locator.project_tag.trim().is_empty() {
-        locator.project_id.as_str()
-    } else {
-        locator.project_tag.as_str()
-    };
-    let created_date =
-        persistence_segmented_session_date_from_unix_millis_text(&locator.created_at);
-    let _ = archive_segmented_session_by_created_date(
-        &controller.data_root,
-        project_tag,
-        &created_date,
-        &session_id.to_string(),
-        &archived_at,
-    )?;
-    update_session_index_archive_state(controller, session_id, true, &archived_at).await
-}
+    // session_entries are the complete authoritative archived child set from SQLite.
+    // session_entries 是来自 SQLite 的完整权威归档子会话集合。
+    let session_entries =
+        query_session_index_locators_for_project(&controller, project_id, true).await?;
+    for entry in session_entries {
+        restore_segmented_session_directory_for_locator(
+            &controller,
+            entry.session_id,
+            &entry.locator,
+        )
+        .await?;
+    }
 
-/// Archives a segmented session directory for a known project id when present.
-/// 在已知项目标识时归档对应分段会话目录。
-pub(super) fn archive_segmented_session_directory_for_project_if_present(
-    controller: &ControllerRuntimeHandle,
-    project_id: &str,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let archived_at = current_unix_millis_text();
-    let _ = archive_segmented_session_by_id(
-        &controller.data_root,
-        project_id,
-        &session_id.to_string(),
-        &archived_at,
-    )?;
-    Ok(())
-}
-
-/// Archives a known project session by deterministic metadata instead of scanning directories.
-/// 通过确定性元数据归档已知项目会话，而不是扫描目录。
-pub(super) fn archive_segmented_session_directory_for_project_and_summary_if_present(
-    controller: &ControllerRuntimeHandle,
-    project_id: &str,
-    session: &SessionSummary,
-) -> Result<String, String> {
-    let created_at = session.created_at.trim();
-    if created_at.is_empty() {
+    // remaining_entries stop project reactivation when a concurrent or partial writer leaves archived children.
+    // remaining_entries 在并发或局部写入者留下归档子会话时阻止项目重新激活。
+    let remaining_entries =
+        query_session_index_locators_for_project(&controller, project_id, true).await?;
+    if !remaining_entries.is_empty() {
         return Err(format!(
-            "会话缺少创建时间，无法无扫描定位目录：{}",
-            session.id
+            "项目 `{project_id}` 恢复后仍包含 {} 个归档会话定位行。",
+            remaining_entries.len()
         ));
     }
-    let archived_at = current_unix_millis_text();
-    let created_date = persistence_segmented_session_date_from_unix_millis_text(created_at);
-    let _ = archive_segmented_session_by_created_date(
-        &controller.data_root,
-        project_id,
-        &created_date,
-        &session.id.to_string(),
-        &archived_at,
-    )?;
-    Ok(archived_at)
-}
-
-/// Restores a segmented session directory for a known project id when present.
-/// 在已知项目标识时恢复对应分段会话目录。
-pub(super) fn restore_segmented_session_directory_for_project_if_present(
-    controller: &ControllerRuntimeHandle,
-    project_id: &str,
-    session: &SessionSummary,
-) -> Result<(), String> {
-    let restored_at = current_unix_millis_text();
-    let created_at = normalized_session_created_at(session);
-    let created_date = persistence_segmented_session_date_from_unix_millis_text(&created_at);
-    let _ = restore_segmented_session_by_created_date(
-        &controller.data_root,
-        project_id,
-        &created_date,
-        &session.id.to_string(),
-        &restored_at,
-    )?;
+    update_project_archive_flag(&controller, project_id, true, false).await?;
     Ok(())
 }
 
-/// Deletes one segmented session directory from a persisted locator.
-/// 按持久化定位信息删除一个分段会话目录。
-pub(super) fn delete_segmented_session_directory_for_locator_if_present(
+/// Archives one session directory and index row from an authoritative active locator.
+/// 根据权威活动定位行归档一个会话目录与索引行。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace data root and SQLite index.
+/// `controller` 持有工作区数据根与 SQLite 索引。
+/// `session_id` is the stable session identity parsed from SQLite.
+/// `session_id` 是从 SQLite 解析出的稳定会话身份。
+/// `locator` is the exact active filesystem locator returned by SQLite.
+/// `locator` 是 SQLite 返回的精确活动文件系统定位信息。
+///
+/// # Returns
+/// 返回值
+/// Returns success after directory publication and the archive-state index update both succeed.
+/// 在目录发布与索引归档状态更新均成功后返回成功。
+async fn archive_segmented_session_directory_for_locator(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
     locator: &PersistedSessionIndexLocator,
 ) -> Result<(), String> {
-    let project_tag = if locator.project_tag.trim().is_empty() {
-        locator.project_id.as_str()
-    } else {
-        locator.project_tag.as_str()
-    };
-    let created_date =
-        persistence_segmented_session_date_from_unix_millis_text(&locator.created_at);
-    let _ = delete_segmented_session_by_created_date(
+    if locator.archived {
+        return Err(format!(
+            "会话 `{session_id}` 的定位行已归档，拒绝重复执行活动目录归档。"
+        ));
+    }
+    let archived_at = current_unix_millis_text();
+    let created_date = session_directory_date_from_unix_millis_text(&locator.created_at)?;
+    let _ = archive_segmented_session_by_created_date(
         &controller.data_root,
-        locator.archived,
-        project_tag,
+        &locator.project_tag,
         &created_date,
         &session_id.to_string(),
+        &archived_at,
     )?;
+    if let Err(commit_error) =
+        update_session_index_archive_state(controller, session_id, locator, true, &archived_at)
+            .await
+    {
+        let rollback_result = restore_segmented_session_by_created_date(
+            &controller.data_root,
+            &locator.project_tag,
+            &created_date,
+            &session_id.to_string(),
+            &locator.updated_at,
+        );
+        return match rollback_result {
+            Ok(_) => Err(format!(
+                "会话 `{session_id}` 的归档索引提交失败，目录已回滚：{commit_error}"
+            )),
+            Err(rollback_error) => Err(format!(
+                "会话 `{session_id}` 的归档索引提交失败：{commit_error}；目录回滚也失败：{rollback_error}"
+            )),
+        };
+    }
     Ok(())
+}
+
+/// Restores one session directory and index row from an authoritative archived locator.
+/// 根据权威归档定位行恢复一个会话目录与索引行。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace data root and SQLite index.
+/// `controller` 持有工作区数据根与 SQLite 索引。
+/// `session_id` is the stable session identity parsed from SQLite.
+/// `session_id` 是从 SQLite 解析出的稳定会话身份。
+/// `locator` is the exact archived filesystem locator returned by SQLite.
+/// `locator` 是 SQLite 返回的精确归档文件系统定位信息。
+///
+/// # Returns
+/// 返回值
+/// Returns success after active-directory publication and the index-state update both succeed.
+/// 在活动目录发布与索引状态更新均成功后返回成功。
+async fn restore_segmented_session_directory_for_locator(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    locator: &PersistedSessionIndexLocator,
+) -> Result<(), String> {
+    if !locator.archived {
+        return Err(format!(
+            "会话 `{session_id}` 的定位行未归档，拒绝重复执行归档目录恢复。"
+        ));
+    }
+    let restored_at = current_unix_millis_text();
+    let created_date = session_directory_date_from_unix_millis_text(&locator.created_at)?;
+    let _ = restore_segmented_session_by_created_date(
+        &controller.data_root,
+        &locator.project_tag,
+        &created_date,
+        &session_id.to_string(),
+        &restored_at,
+    )?;
+    if let Err(commit_error) =
+        update_session_index_archive_state(controller, session_id, locator, false, &restored_at)
+            .await
+    {
+        let rollback_result = archive_segmented_session_by_created_date(
+            &controller.data_root,
+            &locator.project_tag,
+            &created_date,
+            &session_id.to_string(),
+            &locator.updated_at,
+        );
+        return match rollback_result {
+            Ok(_) => Err(format!(
+                "会话 `{session_id}` 的恢复索引提交失败，目录已回滚：{commit_error}"
+            )),
+            Err(rollback_error) => Err(format!(
+                "会话 `{session_id}` 的恢复索引提交失败：{commit_error}；目录回滚也失败：{rollback_error}"
+            )),
+        };
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one exact lifecycle locator for archive-transition resolution tests.
+    /// 为归档转换解析测试构建一个精确生命周期定位行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `archived` is the persisted lifecycle state represented by the locator.
+    /// `archived` 是定位行表示的持久化生命周期状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns a complete deterministic locator with the requested archive state.
+    /// 返回具有所需归档状态的完整确定性定位行。
+    fn archive_transition_test_locator(archived: bool) -> PersistedSessionIndexLocator {
+        PersistedSessionIndexLocator {
+            project_id: String::from("project-a"),
+            project_tag: String::from("project-a"),
+            created_at: String::from("1783669000000"),
+            updated_at: String::from("1783669001000"),
+            archived,
+        }
+    }
+
+    /// Verifies duplicate archive requests accept an already committed locator while missing sessions still fail.
+    /// 验证重复归档请求接受已提交定位行，而完全缺失的会话仍然失败。
+    #[test]
+    fn session_archive_transition_is_idempotent_after_commit() {
+        // session_id is shared by every lifecycle lookup outcome under test.
+        // session_id 由测试中的每种生命周期查询结果共享。
+        let session_id = SessionId::from_u128(0x51);
+        // required proves an active row still selects the physical transition path.
+        // required 证明活动行仍会选择物理转换路径。
+        let required = resolve_session_archive_transition(
+            session_id,
+            Some(archive_transition_test_locator(false)),
+            None,
+        )
+        .expect("active locator should require archive transition");
+        // committed proves a prior archive is accepted as the idempotent target state.
+        // committed 证明先前归档会被接受为幂等目标状态。
+        let committed = resolve_session_archive_transition(
+            session_id,
+            None,
+            Some(archive_transition_test_locator(true)),
+        )
+        .expect("archived locator should be idempotent success");
+        // missing_error proves idempotency does not hide an unknown session identity.
+        // missing_error 证明幂等语义不会掩盖未知会话身份。
+        let missing_error = resolve_session_archive_transition(session_id, None, None)
+            .err()
+            .expect("missing session should fail");
+
+        assert!(matches!(required, SessionArchiveTransition::Required(_)));
+        assert!(matches!(
+            committed,
+            SessionArchiveTransition::AlreadyCommitted
+        ));
+        assert!(missing_error.contains(&session_id.to_string()));
+    }
 }

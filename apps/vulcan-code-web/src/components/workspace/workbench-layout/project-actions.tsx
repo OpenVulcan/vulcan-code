@@ -6,7 +6,7 @@ import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type Proje
 import { type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
 import type { ProjectMenuAction } from "@/components/project/ProjectSidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
-import type { AgentSkillsCatalogSummary, ProjectSummary, SubagentCatalogSummary, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
+import type { AgentSkillsCatalogUpdate, LuaSkillsCatalogUpdate, ProjectSummary, SubagentCatalogUpdate, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
 import {
   addProjectFromPath,
   openProjectDirectory,
@@ -92,9 +92,15 @@ interface WorkbenchProjectActionsOptions {
   // Applies a service-backed skill action snapshot.
   // 应用服务驱动的技能动作快照。
   applySkillWorkbenchAction: (action: () => Promise<WorkbenchSnapshot>) => Promise<void>;
-  // Applies the latest agent skill catalog summary.
-  // 应用最新 Agent Skill 目录摘要。
-  applyAgentSkillsCatalog: (agentSkills: AgentSkillsCatalogSummary) => void;
+  // Applies one revisioned complete LuaSkills domain response.
+  // 应用单个带版本的完整 LuaSkills 领域响应。
+  applyLuaSkillsCatalogUpdate: (update: LuaSkillsCatalogUpdate) => void;
+  // Applies one revisioned complete Agent Skills domain response.
+  // 应用单个带版本的完整 Agent Skills 领域响应。
+  applyAgentSkillsCatalogUpdate: (update: AgentSkillsCatalogUpdate) => void;
+  // Applies one revisioned complete agent-catalog domain response.
+  // 应用单个带版本的完整智能体目录领域响应。
+  applySubagentCatalogUpdate: (update: SubagentCatalogUpdate) => void;
   // Switches the workbench back to chat.
   // 将工作台切回聊天区域。
   handleOpenWorkspaceChat: () => void;
@@ -122,7 +128,9 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     setRemoveProjectTarget,
     expandedProjectIdsLocallyEditedRef,
     applySkillWorkbenchAction,
-    applyAgentSkillsCatalog,
+    applyLuaSkillsCatalogUpdate,
+    applyAgentSkillsCatalogUpdate,
+    applySubagentCatalogUpdate,
     handleOpenWorkspaceChat,
   } = options;
   // applyProjectActionSnapshot merges a project-menu operation result into the local workbench.
@@ -130,12 +138,12 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   const applyProjectActionSnapshot = React.useCallback((
     snapshot: WorkbenchSnapshot | null,
     source: WorkbenchProjectActionSnapshotSource = "service",
-  ) => {
+  ): boolean => {
     if (!snapshot) {
-      return;
+      return false;
     }
     if (source === "service" && !acceptServiceWorkbenchSnapshot(snapshot)) {
-      return;
+      return false;
     }
     const applySnapshot = source === "local" ? applyLocalPreviewWithLocalCaches : mergeWorkbenchWithLocalCaches;
     setWorkbenchState((current) => applySnapshot(current, snapshot));
@@ -146,6 +154,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       }
       return snapshot.selectedConversationId ?? snapshot.conversations[0]?.id ?? null;
     });
+    return true;
   }, [
     acceptServiceWorkbenchSnapshot,
     applyLocalPreviewWithLocalCaches,
@@ -154,15 +163,6 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     setSelectedConversationId,
     setWorkbenchState,
   ]);
-
-  // applySubagentCatalogPatch merges a local agent catalog patch against the latest state.
-  // applySubagentCatalogPatch 基于最新状态合并本地智能体目录补丁。
-  const applySubagentCatalogPatch = React.useCallback((patch: (catalog: SubagentCatalogSummary) => SubagentCatalogSummary) => {
-    setWorkbenchState((current) => ({
-      ...current,
-      subagentCatalog: patch(current.subagentCatalog),
-    }));
-  }, [setWorkbenchState]);
 
   // handleProjectMenuAction executes immediate project-tree context menu commands.
   // handleProjectMenuAction 执行可立即处理的项目树右键菜单命令。
@@ -227,82 +227,83 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     toast.success(projectAgentSkillSaveMessage(name, stateKey, t));
   }, [t]);
 
+  // runLuaSkillsCatalogAction executes one service action and applies its revisioned complete LuaSkills domain.
+  // runLuaSkillsCatalogAction 执行单个服务动作并应用其带版本的完整 LuaSkills 领域。
+  //
+  // Parameters: action returns the committed LuaSkills domain response.
+  // 参数：action 返回已提交的 LuaSkills 领域响应。
+  // Returns: a promise that settles after the accepted domain response is scheduled locally.
+  // 返回值：在已接受领域响应安排到本地状态后结束的 Promise。
+  const runLuaSkillsCatalogAction = React.useCallback(async (action: () => Promise<LuaSkillsCatalogUpdate>) => {
+    applyLuaSkillsCatalogUpdate(await action());
+  }, [applyLuaSkillsCatalogUpdate]);
+
+  // runAgentSkillsCatalogAction executes one service action and applies its revisioned complete Agent Skills domain.
+  // runAgentSkillsCatalogAction 执行单个服务动作并应用其带版本的完整 Agent Skills 领域。
+  //
+  // Parameters: action returns the committed Agent Skills domain response.
+  // 参数：action 返回已提交的 Agent Skills 领域响应。
+  // Returns: a promise that settles after the accepted domain response is scheduled locally.
+  // 返回值：在已接受领域响应安排到本地状态后结束的 Promise。
+  const runAgentSkillsCatalogAction = React.useCallback(async (action: () => Promise<AgentSkillsCatalogUpdate>) => {
+    applyAgentSkillsCatalogUpdate(await action());
+  }, [applyAgentSkillsCatalogUpdate]);
+
+  // runSubagentCatalogAction executes one service action and applies its revisioned complete agent-catalog domain.
+  // runSubagentCatalogAction 执行单个服务动作并应用其带版本的完整智能体目录领域。
+  //
+  // Parameters: action returns the committed agent-catalog domain response.
+  // 参数：action 返回已提交的智能体目录领域响应。
+  // Returns: a promise that settles after the accepted domain response is scheduled locally.
+  // 返回值：在已接受领域响应安排到本地状态后结束的 Promise。
+  const runSubagentCatalogAction = React.useCallback(async (action: () => Promise<SubagentCatalogUpdate>) => {
+    applySubagentCatalogUpdate(await action());
+  }, [applySubagentCatalogUpdate]);
+
   // handleSetAgentSkillsEnabled persists the global Agent Skills switch with a lightweight catalog refresh.
   // handleSetAgentSkillsEnabled 使用轻量目录刷新持久化 Agent Skills 全局开关。
   const handleSetAgentSkillsEnabled = React.useCallback(async (enabled: boolean) => {
-    const previousAgentSkills = workbenchState.agentSkills;
-    applyAgentSkillsCatalog({
-      ...previousAgentSkills,
-      globalEnabled: enabled,
-      skills: previousAgentSkills.skills.map((skill) => ({ ...skill, enabled: enabled && skill.enabled })),
-    });
-    try {
-      applyAgentSkillsCatalog(await setAgentSkillsEnabled(enabled));
-    } catch (error) {
-      applyAgentSkillsCatalog(previousAgentSkills);
-      throw error;
-    }
-  }, [applyAgentSkillsCatalog, workbenchState.agentSkills]);
+    await runAgentSkillsCatalogAction(() => setAgentSkillsEnabled(enabled));
+  }, [runAgentSkillsCatalogAction]);
 
   // handleSetAgentSkillEnabled persists one Agent Skill state with a lightweight catalog refresh.
   // handleSetAgentSkillEnabled 使用轻量目录刷新持久化单个 Agent Skill 状态。
   const handleSetAgentSkillEnabled = React.useCallback(async (name: string, enabled: boolean) => {
-    const previousAgentSkills = workbenchState.agentSkills;
-    applyAgentSkillsCatalog({
-      ...previousAgentSkills,
-      skills: previousAgentSkills.skills.map((skill) => (
-        skill.name === name ? { ...skill, enabled: enabled && previousAgentSkills.globalEnabled } : skill
-      )),
-    });
-    try {
-      applyAgentSkillsCatalog(await setAgentSkillEnabled(name, enabled));
-    } catch (error) {
-      applyAgentSkillsCatalog(previousAgentSkills);
-      throw error;
-    }
-  }, [applyAgentSkillsCatalog, workbenchState.agentSkills]);
+    await runAgentSkillsCatalogAction(() => setAgentSkillEnabled(name, enabled));
+  }, [runAgentSkillsCatalogAction]);
 
-  // handleSetAgentDefinitionEnabled persists one agent state with a lightweight catalog patch.
-  // handleSetAgentDefinitionEnabled 使用轻量目录补丁持久化单个智能体状态。
+  // handleSetAgentDefinitionEnabled persists one agent state and applies the revisioned full catalog domain.
+  // handleSetAgentDefinitionEnabled 持久化单个智能体状态并应用带版本的完整目录领域。
   const handleSetAgentDefinitionEnabled = React.useCallback(async (agentId: string, enabled: boolean) => {
-    const previousDefinition = workbenchState.subagentCatalog.definitions.find((definition) => definition.agentId === agentId);
-    const previousEnabled = previousDefinition?.enabled ?? !enabled;
-    applySubagentCatalogPatch((catalog) => patchSubagentDefinitionEnabled(catalog, agentId, enabled));
-    try {
-      const update = await setSubagentDefinitionEnabled(agentId, enabled);
-      applySubagentCatalogPatch((catalog) => patchSubagentDefinitionEnabled(catalog, update.agentId, update.enabled, update.notice));
-    } catch (error) {
-      applySubagentCatalogPatch((catalog) => patchSubagentDefinitionEnabled(catalog, agentId, previousEnabled));
-      throw error;
-    }
-  }, [applySubagentCatalogPatch, workbenchState.subagentCatalog.definitions]);
+    await runSubagentCatalogAction(() => setSubagentDefinitionEnabled(agentId, enabled));
+  }, [runSubagentCatalogAction]);
 
   // skillActions groups service-backed skill management actions for every skills surface.
   // skillActions 为所有技能界面归组服务端技能管理动作。
   const skillActions = React.useMemo<SkillActionProps>(() => ({
-    onRefreshLuaSkills: () => applySkillWorkbenchAction(refreshLuaSkillsCatalog),
-    onInstallLuaSkill: (skillId, source, sourceType) => applySkillWorkbenchAction(() => installLuaSkill(skillId, source, sourceType)),
-    onUpdateLuaSkill: (skillId) => applySkillWorkbenchAction(() => updateLuaSkill(skillId)),
-    onSetLuaSkillEnabled: (skillId, enabled) => applySkillWorkbenchAction(() => setLuaSkillEnabled(skillId, enabled)),
-    onUninstallLuaSkill: (skillId) => applySkillWorkbenchAction(() => uninstallLuaSkill(skillId)),
+    onRefreshLuaSkills: () => runLuaSkillsCatalogAction(refreshLuaSkillsCatalog),
+    onInstallLuaSkill: (skillId, source, sourceType) => runLuaSkillsCatalogAction(() => installLuaSkill(skillId, source, sourceType)),
+    onUpdateLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId)),
+    onSetLuaSkillEnabled: (skillId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillEnabled(skillId, enabled)),
+    onUninstallLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => uninstallLuaSkill(skillId)),
     onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
-      applySkillWorkbenchAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))
+      runLuaSkillsCatalogAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))
     ),
-    onRefreshAgentSkills: () => applySkillWorkbenchAction(refreshAgentSkillsCatalog),
+    onRefreshAgentSkills: () => runAgentSkillsCatalogAction(refreshAgentSkillsCatalog),
     onSetAgentSkillsEnabled: handleSetAgentSkillsEnabled,
     onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
-  }), [applySkillWorkbenchAction, handleSetAgentSkillEnabled, handleSetAgentSkillsEnabled]);
+  }), [handleSetAgentSkillEnabled, handleSetAgentSkillsEnabled, runAgentSkillsCatalogAction, runLuaSkillsCatalogAction]);
 
   // agentActions groups service-backed independent agent management actions.
   // agentActions 归组独立智能体管理使用的服务端动作。
   const agentActions = React.useMemo<AgentActionProps>(() => ({
-    onRefreshAgentCatalog: () => applySkillWorkbenchAction(refreshSubagentCatalog),
-    onOpenAgentUserDirectory: () => applySkillWorkbenchAction(openSubagentUserDirectory),
+    onRefreshAgentCatalog: () => runSubagentCatalogAction(refreshSubagentCatalog),
+    onOpenAgentUserDirectory: () => runSubagentCatalogAction(openSubagentUserDirectory),
     onSetAgentDefinitionEnabled: handleSetAgentDefinitionEnabled,
-    onSaveAgentDefinition: (definition) => applySkillWorkbenchAction(() => saveSubagentDefinition(definition)),
-    onDeleteAgentDefinition: (agentId) => applySkillWorkbenchAction(() => deleteSubagentDefinition(agentId)),
-    onRestoreAgentDefinitionDefault: (agentId) => applySkillWorkbenchAction(() => restoreSubagentDefinitionDefault(agentId)),
-  }), [applySkillWorkbenchAction, handleSetAgentDefinitionEnabled]);
+    onSaveAgentDefinition: (definition) => runSubagentCatalogAction(() => saveSubagentDefinition(definition)),
+    onDeleteAgentDefinition: (agentId) => runSubagentCatalogAction(() => deleteSubagentDefinition(agentId)),
+    onRestoreAgentDefinitionDefault: (agentId) => runSubagentCatalogAction(() => restoreSubagentDefinitionDefault(agentId)),
+  }), [handleSetAgentDefinitionEnabled, runSubagentCatalogAction]);
 
   // handleProjectIconConfirm persists the selected project icon override.
   // handleProjectIconConfirm 持久化选择的项目图标覆盖。
@@ -431,38 +432,6 @@ function projectAgentSkillSaveMessage(
     stateKey === "enabled" ? "projectActions.skillEnabled" : "projectActions.skillDisabled",
     { skill: name },
   );
-}
-
-// patchSubagentDefinitionEnabled updates one projected agent row and catalog notice.
-// patchSubagentDefinitionEnabled 更新单个已投影智能体行与目录提示。
-function patchSubagentDefinitionEnabled(
-  // Current projected subagent catalog.
-  // 当前已投影的子智能体目录。
-  catalog: SubagentCatalogSummary,
-  // Stable agent id to update.
-  // 需要更新的稳定智能体标识。
-  agentId: string,
-  // Next enabled state.
-  // 新的启停状态。
-  enabled: boolean,
-  // Optional service-confirmed notice.
-  // 可选的服务端确认提示。
-  notice?: string,
-): SubagentCatalogSummary {
-  const definitions = catalog.definitions.map((definition) => (
-    definition.agentId === agentId ? { ...definition, enabled } : definition
-  ));
-  return {
-    ...catalog,
-    definitions,
-    notice: notice ?? subagentCatalogNotice(definitions.length, definitions.filter((definition) => definition.enabled).length, catalog.errors.length),
-  };
-}
-
-// subagentCatalogNotice formats the compact catalog metrics shown in the agents page.
-// subagentCatalogNotice 格式化智能体页面展示的紧凑目录指标。
-function subagentCatalogNotice(total: number, enabled: number, warnings: number): string {
-  return `智能体定义 ${total} 个，已启用 ${enabled} 个，加载警告 ${warnings}。`;
 }
 
 // formatProjectActionTranslation replaces named placeholders in localized project action messages.

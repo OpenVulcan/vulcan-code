@@ -1398,29 +1398,6 @@ fn wait_agent_mailbox_event_kind_label(kind: SubagentMailboxEventKind) -> &'stat
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verifies progress-only status updates do not satisfy wait_agent.
-    /// 验证仅表示进度的状态更新不会满足 wait_agent 等待。
-    #[test]
-    fn status_update_mailbox_events_do_not_satisfy_wait_agent() {
-        assert!(!wait_agent_mailbox_event_is_actionable(
-            SubagentMailboxEventKind::Started
-        ));
-        assert!(!wait_agent_mailbox_event_is_actionable(
-            SubagentMailboxEventKind::StatusUpdate
-        ));
-        assert!(wait_agent_mailbox_event_is_actionable(
-            SubagentMailboxEventKind::Message
-        ));
-        assert!(wait_agent_mailbox_event_is_actionable(
-            SubagentMailboxEventKind::Completed
-        ));
-    }
-}
-
 /// Returns whether an event payload contains a non-empty result-like field.
 /// 返回事件载荷是否包含非空结果类字段。
 ///
@@ -1479,4 +1456,27 @@ pub(super) fn build_wait_agent_steered_tool_result(
             payload,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies progress-only status updates do not satisfy wait_agent.
+    /// 验证仅表示进度的状态更新不会满足 wait_agent 等待。
+    #[test]
+    fn status_update_mailbox_events_do_not_satisfy_wait_agent() {
+        assert!(!wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::Started
+        ));
+        assert!(!wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::StatusUpdate
+        ));
+        assert!(wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::Message
+        ));
+        assert!(wait_agent_mailbox_event_is_actionable(
+            SubagentMailboxEventKind::Completed
+        ));
+    }
 }

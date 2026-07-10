@@ -92,6 +92,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
         live_context_budgets,
         agent_runtime_for_status,
         live_listener_task_ids,
+        captured_workbench_generation,
     ) = {
         let guard = state
             .lock()
@@ -122,6 +123,9 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
         let live_context_budgets = guard.live_context_budgets.clone();
+        // captured_workbench_generation identifies whether a focused domain committed during asynchronous refresh I/O.
+        // captured_workbench_generation 标识异步刷新 I/O 期间是否已有聚焦领域完成提交。
+        let captured_workbench_generation = guard.workbench_generation;
         (
             controller_runtime,
             luaskills_catalog,
@@ -134,6 +138,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             live_context_budgets,
             guard.agent_runtime.clone(),
             guard.detached_subagent_task_listeners.clone(),
+            captured_workbench_generation,
         )
     };
 
@@ -236,12 +241,53 @@ async fn refresh_workbench_snapshot_with_selected_session(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        preserve_focused_catalog_domains_after_concurrent_refresh(
+            &mut workbench,
+            &guard.workbench,
+            captured_workbench_generation,
+            guard.workbench_generation,
+        );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
     Ok(workbench)
+}
+
+/// Preserves focused Skills and Agents domains when a generic refresh crossed a newer commit.
+/// 当通用刷新跨越了较新的提交时，保留聚焦的 Skills 与 Agents 领域。
+///
+/// # Parameters
+/// 参数
+/// `workbench` is the generic refresh result built from values captured before asynchronous I/O.
+/// `workbench` 是基于异步 I/O 前捕获值构建的通用刷新结果。
+/// `retained_workbench` is the latest committed in-memory workbench.
+/// `retained_workbench` 是最新提交的内存工作台。
+/// `captured_generation` is the workbench generation observed when refresh inputs were captured.
+/// `captured_generation` 是捕获刷新输入时观察到的工作台版本。
+/// `current_generation` is the workbench generation immediately before the generic refresh commits.
+/// `current_generation` 是通用刷新提交前一刻的工作台版本。
+///
+/// # Returns
+/// 返回值
+/// This function returns nothing and rewrites only focused catalog domains after a concurrent commit.
+/// 本函数无返回值，仅在发生并发提交后重写聚焦目录领域。
+fn preserve_focused_catalog_domains_after_concurrent_refresh(
+    workbench: &mut WorkbenchSnapshot,
+    retained_workbench: &WorkbenchSnapshot,
+    captured_generation: u64,
+    current_generation: u64,
+) {
+    if captured_generation == current_generation {
+        return;
+    }
+    // Focused Skills and Agents transactions own these domains; an older generic refresh must not overwrite them.
+    // 聚焦的 Skills 与 Agents 事务拥有这些领域；较早启动的通用刷新不得覆盖它们。
+    workbench.lua_skills = retained_workbench.lua_skills.clone();
+    workbench.plugins = retained_workbench.plugins.clone();
+    workbench.agent_skills = retained_workbench.agent_skills.clone();
+    workbench.subagent_catalog = retained_workbench.subagent_catalog.clone();
 }
 
 /// Returns the selection after a refresh, preferring a visible requested session.
@@ -931,6 +977,84 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
+
+    /// Verifies a generic refresh keeps its freshly rebuilt catalog domains without a concurrent commit.
+    /// 验证没有并发提交时通用刷新保留自身刚重建的目录领域。
+    #[test]
+    fn focused_catalog_domains_keep_generic_refresh_without_concurrent_commit() {
+        // refreshed_workbench represents the catalog domains rebuilt by the generic refresh.
+        // refreshed_workbench 表示通用刷新重建出的目录领域。
+        let mut refreshed_workbench = fallback_workbench_snapshot(&[]);
+        refreshed_workbench.lua_skills.notice = String::from("refreshed lua");
+        refreshed_workbench.agent_skills.notice = String::from("refreshed agent skills");
+        refreshed_workbench.subagent_catalog.notice = String::from("refreshed agents");
+        // retained_workbench represents an older in-memory projection at the same generation.
+        // retained_workbench 表示同一版本下较旧的内存投影。
+        let mut retained_workbench = fallback_workbench_snapshot(&[]);
+        retained_workbench.lua_skills.notice = String::from("retained lua");
+        retained_workbench.agent_skills.notice = String::from("retained agent skills");
+        retained_workbench.subagent_catalog.notice = String::from("retained agents");
+
+        preserve_focused_catalog_domains_after_concurrent_refresh(
+            &mut refreshed_workbench,
+            &retained_workbench,
+            7,
+            7,
+        );
+
+        assert_eq!(refreshed_workbench.lua_skills.notice, "refreshed lua");
+        assert_eq!(
+            refreshed_workbench.agent_skills.notice,
+            "refreshed agent skills"
+        );
+        assert_eq!(
+            refreshed_workbench.subagent_catalog.notice,
+            "refreshed agents"
+        );
+    }
+
+    /// Verifies a generic refresh preserves every focused catalog domain after a concurrent commit.
+    /// 验证发生并发提交后通用刷新保留全部聚焦目录领域。
+    #[test]
+    fn focused_catalog_domains_preserve_newer_concurrent_commit() {
+        // refreshed_workbench represents a stale generic refresh result built before the newer commit.
+        // refreshed_workbench 表示在较新提交前构建的过期通用刷新结果。
+        let mut refreshed_workbench = fallback_workbench_snapshot(&[]);
+        refreshed_workbench.lua_skills.notice = String::from("stale lua");
+        refreshed_workbench.agent_skills.notice = String::from("stale agent skills");
+        refreshed_workbench.subagent_catalog.notice = String::from("stale agents");
+        // retained_workbench represents the focused domains committed while asynchronous refresh I/O was running.
+        // retained_workbench 表示异步刷新 I/O 期间已经提交的聚焦领域。
+        let mut retained_workbench = fallback_workbench_snapshot(&[]);
+        retained_workbench.lua_skills.notice = String::from("current lua");
+        retained_workbench.agent_skills.notice = String::from("current agent skills");
+        retained_workbench.subagent_catalog.notice = String::from("current agents");
+        retained_workbench.plugins = vec![PluginSummary {
+            id: String::from("current-plugin"),
+            name: String::from("Current Plugin"),
+            kind: String::from("LuaSkill / USER"),
+            status: String::from("已启用"),
+            capability: String::from("1 个入口"),
+        }];
+
+        preserve_focused_catalog_domains_after_concurrent_refresh(
+            &mut refreshed_workbench,
+            &retained_workbench,
+            7,
+            8,
+        );
+
+        assert_eq!(refreshed_workbench.lua_skills.notice, "current lua");
+        assert_eq!(
+            refreshed_workbench.agent_skills.notice,
+            "current agent skills"
+        );
+        assert_eq!(
+            refreshed_workbench.subagent_catalog.notice,
+            "current agents"
+        );
+        assert_eq!(refreshed_workbench.plugins, retained_workbench.plugins);
+    }
 
     /// Builds one workspace snapshot for cached project VMM layer tests.
     /// 构建用于缓存项目 VMM 配置层测试的工作区快照。

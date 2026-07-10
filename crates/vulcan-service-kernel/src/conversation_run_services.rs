@@ -5,11 +5,12 @@ use super::*;
 
 /// Requested stop behavior for a WebUI conversation run.
 /// WebUI 会话运行请求的停止行为。
-#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StopConversationRunMode {
     /// Ask the caller for confirmation when live child agents are still running.
     /// 当仍有运行中智能体时要求调用方先确认。
+    #[default]
     AskIfRunningSubagents,
     /// Stop only the main conversation run and leave child agents running.
     /// 只停止主会话运行，并保留智能体继续运行。
@@ -17,12 +18,6 @@ pub(crate) enum StopConversationRunMode {
     /// Stop the main conversation run and every running child agent.
     /// 停止主会话运行以及所有运行中的智能体。
     MainAndSubagents,
-}
-
-impl Default for StopConversationRunMode {
-    fn default() -> Self {
-        Self::AskIfRunningSubagents
-    }
 }
 
 /// RPC response returned by one conversation stop request.
@@ -192,13 +187,23 @@ pub(crate) async fn service_compact_selected_conversation_context(
     Ok(workbench)
 }
 
-/// Stops the selected WebUI conversation run and clears guided internal queue work.
-/// 停止当前选中的 WebUI 会话运行，并清理已引导的内部队列任务。
+/// Stops one exact WebUI conversation run and clears its guided internal queue work.
+/// 停止一个精确 WebUI 会话运行，并清理其已引导内部队列任务。
+/// Parameters: `app` emits snapshots, `state` owns runtime data, `conversation_id` fixes the target, and `mode` selects child-agent handling.
+/// 参数：`app` 发布快照，`state` 持有运行数据，`conversation_id` 固定目标，`mode` 选择子代理处理方式。
+/// Returns: the confirmation payload or stopped workbench snapshot, or an explicit validation/runtime error.
+/// 返回值：确认载荷或已停止工作台快照，或显式验证/运行错误。
 pub(crate) async fn service_stop_conversation_run(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
+    conversation_id: String,
     mode: Option<StopConversationRunMode>,
 ) -> Result<StopConversationRunResponse, String> {
+    // target_session_id is the validated immutable target shared by preflight and final mutation.
+    // target_session_id 是预检与最终变更共享的已验证不可变目标。
+    let target_session_id = parse_session_id(conversation_id.trim())
+        .ok_or_else(|| format!("无效的停止目标会话标识：{conversation_id}"))?;
+    ensure_regular_session_exists(&state, target_session_id, "停止")?;
     let (
         controller_runtime,
         agent_runtime,
@@ -207,17 +212,16 @@ pub(crate) async fn service_stop_conversation_run(
         mcp_catalog,
         logs,
     ) = runtime_parts_from_state(&state)?;
-    let selected_session_id = selected_session_id_from_state(&state)?;
     let mode = mode.unwrap_or_default();
     webui_trace(
         "stop_conversation_requested",
-        format!("session={selected_session_id} mode={mode:?}"),
+        format!("session={target_session_id} mode={mode:?}"),
     );
     let preflight_running_subagent_task_states = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, selected_session_id)
+        running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, target_session_id)
     };
     if mode == StopConversationRunMode::AskIfRunningSubagents
         && !preflight_running_subagent_task_states.is_empty()
@@ -233,12 +237,12 @@ pub(crate) async fn service_stop_conversation_run(
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .active_stream_tasks
-        .remove(&selected_session_id);
+        .remove(&target_session_id);
     let had_active_kernel_turn = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        stop_webui_session_kernel_generation(&mut guard, selected_session_id)
+        stop_webui_session_kernel_generation(&mut guard, target_session_id)
     };
     let had_active_stream_task = active_task.is_some();
     if let Some(active_task) = active_task {
@@ -248,7 +252,7 @@ pub(crate) async fn service_stop_conversation_run(
         &app,
         &state,
         |workspace| {
-            mark_webui_session_stop_requested_in_workspace(workspace, selected_session_id);
+            mark_webui_session_stop_requested_in_workspace(workspace, target_session_id);
         },
     )?;
     let running_subagent_task_states = if stop_running_subagents {
@@ -258,7 +262,7 @@ pub(crate) async fn service_stop_conversation_run(
         running_webui_subagent_task_states_for_tree_from_cache(
             &mut guard,
             &workspace_snapshot,
-            selected_session_id,
+            target_session_id,
         )
     } else {
         Vec::new()
@@ -266,7 +270,7 @@ pub(crate) async fn service_stop_conversation_run(
     webui_trace(
         "stop_conversation_state",
         format!(
-            "session={selected_session_id} had_active_kernel_turn={had_active_kernel_turn} had_active_stream_task={had_active_stream_task} stop_running_subagents={stop_running_subagents} running_subagents={}",
+            "session={target_session_id} had_active_kernel_turn={had_active_kernel_turn} had_active_stream_task={had_active_stream_task} stop_running_subagents={stop_running_subagents} running_subagents={}",
             running_subagent_task_states.len()
         ),
     );
@@ -293,23 +297,23 @@ pub(crate) async fn service_stop_conversation_run(
     }
     let did_stop_work = stop_webui_session_work(
         &mut workspace_snapshot,
-        selected_session_id,
+        target_session_id,
         had_active_kernel_turn,
         !running_subagent_task_states.is_empty(),
     )?;
     if did_stop_work
         && !workspace_snapshot
             .session_runtime_state
-            .contains_key(&selected_session_id)
+            .contains_key(&target_session_id)
     {
         return Err(String::from("停止后未找到会话运行时状态。"));
     }
     if did_stop_work
         && let Some(goal) = VulcanGoalStore::new(controller_runtime.clone())
-            .pause_active_thread_goal(selected_session_id)
+            .pause_active_thread_goal(target_session_id)
             .await?
     {
-        cache_session_goal_summary(&state, selected_session_id, Some(goal))?;
+        cache_session_goal_summary(&state, target_session_id, Some(goal))?;
     }
     let workbench =
         store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {
@@ -341,7 +345,7 @@ pub(crate) async fn service_stop_conversation_run(
             };
             if !snapshot
                 .session_runtime_state
-                .contains_key(&selected_session_id)
+                .contains_key(&target_session_id)
             {
                 return;
             }
@@ -349,7 +353,7 @@ pub(crate) async fn service_stop_conversation_run(
                 Some(&state_for_persist),
                 controller_runtime_for_persist,
                 &snapshot,
-                selected_session_id,
+                target_session_id,
             )
             .await
             {
@@ -379,42 +383,6 @@ fn stop_conversation_running_subagent_summaries(
             },
         )
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verifies stop confirmation summaries preserve backend task identity and labels.
-    /// 验证停止确认摘要会保留后端任务身份与标签。
-    #[test]
-    fn stop_conversation_running_subagent_summaries_preserve_task_identity() {
-        let parent_session_id = SessionId::new_v4();
-        let task_id = SessionId::new_v4();
-        let states = vec![(
-            parent_session_id,
-            SubagentTaskPanelState {
-                task_id,
-                public_task_id: String::from("agent-alpha"),
-                parent_session_id,
-                subagent_label: String::from("agent-alpha"),
-                description: Some(String::from("running task")),
-                run_state: SubagentTaskRunState::Running,
-                result_text: String::new(),
-                conversation_state: None,
-            },
-        )];
-
-        let summaries = stop_conversation_running_subagent_summaries(&states);
-
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(
-            summaries[0].parent_conversation_id,
-            parent_session_id.to_string()
-        );
-        assert_eq!(summaries[0].task_id, task_id.to_string());
-        assert_eq!(summaries[0].label, "agent-alpha");
-    }
 }
 
 /// Stops one live command session and rebuilds the WebUI workbench snapshot.
@@ -683,4 +651,40 @@ pub(crate) async fn persist_workspace_session_addon_state_update(
     )
     .await
     .map_err(|error| format!("会话附属状态保存失败：{error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies stop confirmation summaries preserve backend task identity and labels.
+    /// 验证停止确认摘要会保留后端任务身份与标签。
+    #[test]
+    fn stop_conversation_running_subagent_summaries_preserve_task_identity() {
+        let parent_session_id = SessionId::new_v4();
+        let task_id = SessionId::new_v4();
+        let states = vec![(
+            parent_session_id,
+            SubagentTaskPanelState {
+                task_id,
+                public_task_id: String::from("agent-alpha"),
+                parent_session_id,
+                subagent_label: String::from("agent-alpha"),
+                description: Some(String::from("running task")),
+                run_state: SubagentTaskRunState::Running,
+                result_text: String::new(),
+                conversation_state: None,
+            },
+        )];
+
+        let summaries = stop_conversation_running_subagent_summaries(&states);
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].parent_conversation_id,
+            parent_session_id.to_string()
+        );
+        assert_eq!(summaries[0].task_id, task_id.to_string());
+        assert_eq!(summaries[0].label, "agent-alpha");
+    }
 }

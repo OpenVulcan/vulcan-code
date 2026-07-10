@@ -30,10 +30,10 @@ use super::{
     ensure_webui_session_runtime_state, hydrate_retained_submission_session_if_needed,
     is_active_session_run_phase, load_workspace_for_submission,
     mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
-    parse_ai_capability_target_order_overrides, parse_ai_capability_target_selectors,
-    parse_reasoning_effort, parse_session_id, pending_question_snapshots_from_agent_runtime,
-    preserve_active_session_run_state, refresh_conversation_attention_summary,
-    replace_conversation_messages_in_workbench_window,
+    owning_project_id_for_session, parse_ai_capability_target_order_overrides,
+    parse_ai_capability_target_selectors, parse_reasoning_effort, parse_session_id,
+    pending_question_snapshots_from_agent_runtime, preserve_active_session_run_state,
+    refresh_conversation_attention_summary, replace_conversation_messages_in_workbench_window,
     retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
     rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
     session_ai_tool_configuration_or_default, session_has_blocking_system_prompt_work,
@@ -153,6 +153,46 @@ pub(super) async fn service_submit_conversation_prompt(
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some(session_id) = submission_session_id
+            && guard.session_lifecycle_transition_ids.contains(&session_id)
+        {
+            return Err(format!(
+                "会话 `{session_id}` 正在执行归档或移除转换，无法提交新的提示词。"
+            ));
+        }
+        // retained_owner_project_id resolves an existing session owner when the request omits projectId.
+        // retained_owner_project_id 在请求省略 projectId 时解析现有会话所属项目。
+        let retained_owner_project_id = submission_session_id.and_then(|session_id| {
+            guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace_snapshot| {
+                    owning_project_id_for_session(workspace_snapshot, session_id)
+                })
+        });
+        // lifecycle_project_id is the exact project target used by the submission lifecycle gate.
+        // lifecycle_project_id 是提交生命周期闸门使用的精确项目目标。
+        let lifecycle_project_id = project_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|project_id| !project_id.is_empty())
+            .or(retained_owner_project_id.as_deref());
+        if let Some(lifecycle_project_id) = lifecycle_project_id {
+            if guard
+                .project_lifecycle_transition_ids
+                .contains(lifecycle_project_id)
+            {
+                return Err(format!(
+                    "项目 `{lifecycle_project_id}` 正在执行批量归档或移除转换，无法创建或运行子会话。"
+                ));
+            }
+        } else if submission_session_id.is_none()
+            && !guard.project_lifecycle_transition_ids.is_empty()
+        {
+            return Err(String::from(
+                "项目生命周期转换正在进行，未指定所属项目的新会话暂时无法提交。",
+            ));
+        }
         let active_kernel_sessions = active_kernel_session_ids(&guard);
         let retained_dialogue_context_available = submission_session_id.is_some_and(|session_id| {
             guard

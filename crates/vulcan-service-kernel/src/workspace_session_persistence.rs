@@ -49,11 +49,6 @@ pub(crate) async fn persist_workspace_session_update_unlocked(
     } else {
         &workspace_snapshot.session_messages
     };
-    let session_compactions = if archived {
-        &workspace_snapshot.archived_session_compactions
-    } else {
-        &workspace_snapshot.session_compactions
-    };
     let session_runtime_state = if archived {
         &workspace_snapshot.archived_session_runtime_state
     } else {
@@ -75,7 +70,6 @@ pub(crate) async fn persist_workspace_session_update_unlocked(
     } else {
         &[]
     };
-    let compactions = session_compactions.get(&session_id).map(Vec::as_slice);
     let task_projects = workspace_task_projects_for_persistence(workspace_snapshot);
 
     vulcan_workspace_store::workspace_store::persist_single_session_update(
@@ -84,11 +78,9 @@ pub(crate) async fn persist_workspace_session_update_unlocked(
         session,
         archived,
         messages,
-        compactions,
         runtime_state,
     )
     .await
-    .map(|_| ())
 }
 
 /// Returns whether a WebUI snapshot owns the id as a regular workspace-store session.

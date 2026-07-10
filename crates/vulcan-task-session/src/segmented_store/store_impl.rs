@@ -251,6 +251,11 @@ impl SegmentedTaskSessionStore {
 
     /// Loads every task metadata document under this root session.
     /// 加载该根会话下的全部子任务元数据文档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Canonically published task directories paired with their metadata documents.
+    /// 返回规范发布的子任务目录及其元数据文档。
     pub(super) fn load_all_task_documents(
         &self,
     ) -> Result<Vec<(PathBuf, SegmentedTaskMetadataDocument)>, SessionStoreError> {
@@ -267,6 +272,15 @@ impl SegmentedTaskSessionStore {
             }
             let metadata_path = task_metadata_path(&task_dir);
             if let Some(document) = read_task_metadata_document(&metadata_path)? {
+                // expected_directory_name derives the only published path identity from authoritative metadata.
+                // expected_directory_name 从权威元数据派生唯一已发布路径身份。
+                let expected_directory_name =
+                    sanitize_file_component(&document.task_session.task_session_id.to_string());
+                // Non-canonical siblings include unpublished staging layouts and are never discoverable tasks.
+                // 非规范同级目录包括尚未发布的暂存布局，绝不能被发现为子任务。
+                if entry.file_name() != std::ffi::OsStr::new(&expected_directory_name) {
+                    continue;
+                }
                 documents.push((task_dir, document));
             }
         }
@@ -289,15 +303,24 @@ impl SegmentedTaskSessionStore {
         }
     }
 
-    /// Creates the target segmented layout for one task session.
-    /// 为一个子任务会话创建目标分段布局。
-    pub(super) fn create_task_layout(task_dir: &Path) -> Result<(), SessionStoreError> {
-        create_dir_all(task_dir)?;
-        Ok(())
-    }
-
-    /// Appends one generic event line to a task session segment.
-    /// 向一个子任务会话分段追加一条通用事件行。
+    /// Appends one generic task event through the shared append transaction.
+    /// 通过共享追加事务追加一条通用子任务事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_session_id` identifies the task stream receiving the event.
+    /// `task_session_id` 标识接收事件的子任务流。
+    /// `kind` is the stable event kind stored in JSONL.
+    /// `kind` 是写入 JSONL 的稳定事件类型。
+    /// `timestamp_ms` is the event timestamp in Unix milliseconds.
+    /// `timestamp_ms` 是事件的 Unix 毫秒时间戳。
+    /// `payload` is the complete event JSON payload.
+    /// `payload` 是完整事件 JSON 载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The appended event line with its store-assigned sequence.
+    /// 返回包含存储层分配序号的已追加事件行。
     pub(super) fn append_task_segment_event(
         &self,
         task_session_id: TaskSessionId,
@@ -305,9 +328,45 @@ impl SegmentedTaskSessionStore {
         timestamp_ms: u64,
         payload: Value,
     ) -> Result<SegmentedEventLine, SessionStoreError> {
-        let _guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
-            .lock()
-            .map_err(to_store_error)?;
+        // transaction_guard protects JSONL append and both child metadata projections.
+        // transaction_guard 保护 JSONL 追加与两份子任务元数据投影。
+        let _transaction_guard =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+                .lock()
+                .map_err(to_store_error)?;
+        self.append_task_segment_event_with_owned_append_lock(
+            task_session_id,
+            kind,
+            timestamp_ms,
+            payload,
+        )
+    }
+
+    /// Appends one generic task event while the caller owns the shared append transaction.
+    /// 在调用方持有共享追加事务时追加一条通用子任务事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_session_id` identifies the task stream receiving the event.
+    /// `task_session_id` 标识接收事件的子任务流。
+    /// `kind` is the stable event kind stored in JSONL.
+    /// `kind` 是写入 JSONL 的稳定事件类型。
+    /// `timestamp_ms` is the event timestamp in Unix milliseconds.
+    /// `timestamp_ms` 是事件的 Unix 毫秒时间戳。
+    /// `payload` is the complete event JSON payload.
+    /// `payload` 是完整事件 JSON 载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The appended event line with its store-assigned sequence.
+    /// 返回包含存储层分配序号的已追加事件行。
+    fn append_task_segment_event_with_owned_append_lock(
+        &self,
+        task_session_id: TaskSessionId,
+        kind: impl Into<String>,
+        timestamp_ms: u64,
+        payload: Value,
+    ) -> Result<SegmentedEventLine, SessionStoreError> {
         let task_dir = self.indexed_task_dir(task_session_id)?;
         let main_metadata_path = task_main_metadata_path(&task_dir);
         let mut main_metadata = read_required_task_main_metadata_document(&main_metadata_path)?;
@@ -349,9 +408,49 @@ impl SegmentedTaskSessionStore {
         Ok(line)
     }
 
-    /// Appends one parent invocation event into the owning parent stream and root session index when needed.
-    /// 将一条父级调用事件追加到所属父级流中，并在需要时同步写入根会话索引。
+    /// Appends one parent invocation event through a single shared append transaction.
+    /// 通过单一共享追加事务追加一条父级调用事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `parent` identifies the direct parent stream receiving the invocation link.
+    /// `parent` 标识接收调用关联的直接父级流。
+    /// `event` is the complete task invocation event.
+    /// `event` 是完整的子任务调用事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the direct parent stream and root index are updated.
+    /// 直接父级流与根索引均更新后返回成功。
     pub(super) fn append_parent_invocation_event(
+        &self,
+        parent: &ParentSessionRef,
+        event: &TaskInvocationEvent,
+    ) -> Result<(), SessionStoreError> {
+        // transaction_guard prevents interleaving between the direct parent and root projections.
+        // transaction_guard 防止直接父级投影与根投影之间发生交错。
+        let _transaction_guard =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+                .lock()
+                .map_err(to_store_error)?;
+        self.append_parent_invocation_event_with_owned_append_lock(parent, event)
+    }
+
+    /// Appends one parent invocation event while the caller owns the shared append transaction.
+    /// 在调用方持有共享追加事务时追加一条父级调用事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `parent` identifies the direct parent stream receiving the invocation link.
+    /// `parent` 标识接收调用关联的直接父级流。
+    /// `event` is the complete task invocation event.
+    /// `event` 是完整的子任务调用事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the direct parent stream and root index are updated.
+    /// 直接父级流与根索引均更新后返回成功。
+    pub(super) fn append_parent_invocation_event_with_owned_append_lock(
         &self,
         parent: &ParentSessionRef,
         event: &TaskInvocationEvent,
@@ -361,20 +460,26 @@ impl SegmentedTaskSessionStore {
                 "A root session cannot own a task invocation log through TaskSessionStore.",
             )),
             ParentSessionRef::MainSession { .. } => {
-                let _ = append_main_session_task_link_event(&self.root_session_dir, event)?;
+                let _ = append_main_session_task_link_event_with_owned_append_lock(
+                    &self.root_session_dir,
+                    event,
+                )?;
                 Ok(())
             }
             ParentSessionRef::TaskSession {
                 parent_task_session_id,
                 ..
             } => {
-                self.append_task_segment_event(
+                self.append_task_segment_event_with_owned_append_lock(
                     *parent_task_session_id,
                     "subagent_task_event_linked",
                     event.timestamp_ms,
                     json!({ "task_invocation_event": event }),
                 )?;
-                let _ = append_main_session_task_link_event(&self.root_session_dir, event)?;
+                let _ = append_main_session_task_link_event_with_owned_append_lock(
+                    &self.root_session_dir,
+                    event,
+                )?;
                 Ok(())
             }
         }

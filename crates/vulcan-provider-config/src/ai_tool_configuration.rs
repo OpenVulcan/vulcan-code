@@ -3,7 +3,7 @@
 
 use crate::provider_config::{PersistedAiToolConfiguration, ProviderConfigurationFile};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Dedicated load source used to explain where the effective AI tool configuration came from.
 /// 用于说明生效 AI 工具配置来源位置的独立加载来源枚举。
@@ -78,18 +78,10 @@ pub fn save_ai_tool_configuration_file(
     configuration: &PersistedAiToolConfiguration,
 ) -> Result<(), String> {
     let path = ai_tool_configuration_file_path();
-    let parent = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    fs::create_dir_all(&parent)
-        .map_err(|error| format!("创建 AI 能力配置目录失败：{}。", error))?;
-
     let content = serde_json::to_string_pretty(configuration)
         .map_err(|error| format!("序列化 AI 能力配置失败：{}。", error))?;
-
-    fs::write(&path, content).map_err(|error| format!("写入 AI 能力配置失败：{}。", error))
+    crate::atomic_file::write_file_atomically(&path, content.as_bytes())
+        .map_err(|error| format!("写入 AI 能力配置失败：{error}。"))
 }
 
 /// Resolves the best-effort fallback AI capability configuration when the dedicated file does not exist yet.

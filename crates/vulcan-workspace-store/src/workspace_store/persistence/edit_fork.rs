@@ -137,7 +137,7 @@ pub async fn fork_persisted_session(
             source_session_id: source_session.id.to_string(),
             target_project_tag: project_id.to_string(),
             target_session_id: target_session_id_text.clone(),
-            target_created_date: persistence_segmented_session_date_from_unix_millis_text(&now),
+            target_created_date: session_directory_date_from_unix_millis_text(&now)?,
             target_created_at: now.clone(),
             target_title: target_title.clone(),
             target_title_source: source_session.title_source.as_persisted_key().to_string(),
@@ -254,9 +254,9 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
     runtime_state.context_start_message_id = retained_context_start_message_id;
     runtime_state.conversation_state.continuation = Default::default();
     let state_document = state_document_from_runtime_state(target_session_id_text, &runtime_state)?;
-    write_state(&session_dir, &state_document)?;
+    write_state(session_dir, &state_document)?;
     rebuild_runtime_log_from_conversation_state(
-        &session_dir,
+        session_dir,
         &runtime_state.conversation_state,
         &runtime_state.updated_at,
     )?;
@@ -390,7 +390,7 @@ fn record_persisted_session_fork_source_marker(
     anchor_message_id: Option<String>,
 ) -> Result<(), String> {
     write_segmented_session_fork_source(
-        &session_dir,
+        session_dir,
         SegmentedSessionForkSource {
             source_project_tag: source_project_id.to_string(),
             source_session_id: source_session.id.to_string(),

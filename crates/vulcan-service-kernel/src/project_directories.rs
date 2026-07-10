@@ -17,7 +17,7 @@ use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 use crate::{
     SharedServiceBridgeState, controller_runtime_from_state,
     normalized_workspace_path_text_from_path, refresh_workbench_snapshot,
-    service_add_project_initial_directory,
+    service_add_project_initial_directory, webui_workspace_persist_lock,
     workspace_task_project_for_project_id_including_archived,
 };
 
@@ -280,6 +280,12 @@ pub async fn service_add_project_from_path(
     }
     let normalized_path_text = normalized_workspace_path_text_from_path(&normalized_path);
     let controller_runtime = controller_runtime_from_state(&state)?;
+    // persist_lock serializes project restoration and creation with every session lifecycle writer.
+    // persist_lock 将项目恢复与创建同每个会话生命周期写入者串行化。
+    let persist_lock = webui_workspace_persist_lock();
+    // persist_guard protects the retained snapshot decision and its resulting storage mutation.
+    // persist_guard 保护保留快照决策及其结果存储变更。
+    let persist_guard = persist_lock.lock().await;
     let workspace_snapshot = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -294,7 +300,11 @@ pub async fn service_add_project_from_path(
         .iter()
         .any(|project| task_project_matches_path(project, &normalized_path_text))
     {
-        return refresh_workbench_snapshot(state).await.map(Some);
+        // refresh_result is computed while project/session writers remain serialized.
+        // refresh_result 在项目/会话写入者仍保持串行时计算。
+        let refresh_result = refresh_workbench_snapshot(state.clone()).await;
+        drop(persist_guard);
+        return refresh_result.map(Some);
     }
 
     if let Some(project) = workspace_snapshot
@@ -303,24 +313,13 @@ pub async fn service_add_project_from_path(
         .find(|project| task_project_matches_path(project, &normalized_path_text))
         .cloned()
     {
-        let restored_sessions = project
-            .session_ids
-            .iter()
-            .filter_map(|session_id| {
-                workspace_snapshot
-                    .archived_sessions
-                    .iter()
-                    .find(|session| session.id == *session_id)
-                    .cloned()
-            })
-            .collect::<Vec<_>>();
-        vulcan_workspace_store::workspace_store::restore_project_with_sessions(
-            controller_runtime,
-            &project,
-            &restored_sessions,
-        )
-        .await?;
-        return refresh_workbench_snapshot(state).await.map(Some);
+        vulcan_workspace_store::workspace_store::restore_project(controller_runtime, &project.id)
+            .await?;
+        // refresh_result publishes restored project/session membership before releasing the write gate.
+        // refresh_result 在释放写入闸门前发布已恢复的项目/会话成员关系。
+        let refresh_result = refresh_workbench_snapshot(state.clone()).await;
+        drop(persist_guard);
+        return refresh_result.map(Some);
     }
 
     let title = normalized_path
@@ -350,7 +349,11 @@ pub async fn service_add_project_from_path(
     );
     vulcan_workspace_store::workspace_store::persist_new_project(controller_runtime, &project)
         .await?;
-    refresh_workbench_snapshot(state).await.map(Some)
+    // refresh_result publishes the new project before another persistence writer proceeds.
+    // refresh_result 在其他持久化写入者继续前发布新项目。
+    let refresh_result = refresh_workbench_snapshot(state.clone()).await;
+    drop(persist_guard);
+    refresh_result.map(Some)
 }
 
 /// Normalizes one project path by resolving it when the host filesystem allows it.

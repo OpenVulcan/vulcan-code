@@ -25,7 +25,6 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use vldb_controller_client::ControllerSqliteValue;
 #[cfg(test)]
 use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 use vulcan_agent_runtime::{
@@ -91,26 +90,28 @@ use vulcan_provider_config::config::{
 };
 use vulcan_service_api::{
     AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary,
-    AppendMessageBodyDelta, CommandSessionSummary, CommandSessionsChangedDelta,
-    ComposerAttachmentSummary, ContextInjectionCardSummary, ContextInjectionChangedDelta,
-    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageChangedDelta,
-    ContextUsageSnapshot, ConversationForkSourceSummary, ConversationMessage, ConversationSummary,
-    FeatureAreaSummary, HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary,
-    LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary,
-    McpToolSummary, MemorySummary, MessageRole, OptionalTextPatch, PendingQuestionChangedDelta,
+    AgentSkillsCatalogUpdate, AppendMessageBodyDelta, CommandSessionSummary,
+    CommandSessionsChangedDelta, ComposerAttachmentSummary, ContextInjectionCardSummary,
+    ContextInjectionChangedDelta, ContextInjectionItemSummary, ContextInjectionSnapshot,
+    ContextUsageChangedDelta, ContextUsageSnapshot, ConversationArchivedDelta,
+    ConversationForkSourceSummary, ConversationMessage, ConversationSummary,
+    ConversationsArchivedDelta, FeatureAreaSummary, HydratedConversationWindowSummary,
+    KeyValueSummary, LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary,
+    LuaSkillsCatalogSummary, LuaSkillsCatalogUpdate, McpServerSummary, McpToolSummary,
+    MemorySummary, MessageRole, OptionalTextPatch, PendingQuestionChangedDelta,
     PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
-    PluginSummary, ProjectSummary, ProviderFieldSummary, ProviderModelSummary, ProviderSummary,
-    ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
-    ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent, SessionAddonsChangedDelta,
-    SessionAddonsChangedResponse, SessionGoalSummary, SessionPlanArtifactSummary,
-    SessionPlanModeSummary, SessionTodolistItemSummary, SessionTodolistSummary,
-    SessionVmmPolicyByConversation, SessionVmmPolicySummary, SettingSectionSummary,
-    StartupSnapshot, StartupStepStatus, SubagentCatalogIssueSummary, SubagentCatalogSummary,
-    SubagentCategorySummary, SubagentDefinitionEnabledUpdate, SubagentDefinitionLocaleSummary,
-    SubagentDefinitionSaveRequest, SubagentDefinitionSummary, SubagentNavigationChangedDelta,
-    SubagentNavigationSnapshot, SubagentPanelRouteResponse, ToolCallSummary,
-    UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary, VmmMemorySnapshot,
-    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+    PluginSummary, ProjectRemovedDelta, ProjectSummary, ProviderFieldSummary, ProviderModelSummary,
+    ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
+    RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent,
+    SessionAddonsChangedDelta, SessionAddonsChangedResponse, SessionGoalSummary,
+    SessionPlanArtifactSummary, SessionPlanModeSummary, SessionTodolistItemSummary,
+    SessionTodolistSummary, SessionVmmPolicyByConversation, SessionVmmPolicySummary,
+    SettingSectionSummary, StartupSnapshot, StartupStepStatus, SubagentCatalogIssueSummary,
+    SubagentCatalogSummary, SubagentCatalogUpdate, SubagentCategorySummary,
+    SubagentDefinitionLocaleSummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary,
+    SubagentNavigationChangedDelta, SubagentNavigationSnapshot, SubagentPanelRouteResponse,
+    ToolCallSummary, UpdateConversationRunPhaseDelta, UserPromptEditDraftSummary,
+    VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
     WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
     WorkbenchSnapshot, webui_service_discovery_snapshot_with_status,
     webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
@@ -160,7 +161,7 @@ use vulcan_workbench_model::{
     task_session_mirror_display_metadata_update, task_session_payload_from_tool_metadata,
 };
 use vulcan_workspace_store::{
-    data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
+    data_plane::ControllerRuntimeHandle,
     workspace_store::{
         GoalUpdate, SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
         WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot, fork_persisted_session,
@@ -453,6 +454,8 @@ pub fn create_service_bridge_state(
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        session_lifecycle_transition_ids: BTreeSet::new(),
+        project_lifecycle_transition_ids: BTreeSet::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),

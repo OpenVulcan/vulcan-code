@@ -1,55 +1,19 @@
-//! User-visible agent profile loading, persistence, and legacy migration helpers.
-//! 面向用户的 Agent 配置加载、持久化与旧配置迁移辅助模块。
+//! Deterministic user-visible agent profile loading and runtime form helpers.
+//! 确定性的用户可见 Agent 配置加载与运行时表单辅助模块。
 
 use crate::agent_runtime::config::{
     DEFAULT_WORKER_AGENT_ID, EXPLORE_AGENT_ID, LUA_SPECIALIST_AGENT_ID, MEMORY_SPECIALIST_AGENT_ID,
     PLAN_AGENT_ID, WORKSPACE_COORDINATOR_AGENT_ID,
 };
-use crate::provider_config::{PersistedAgentEntry, ProviderConfigurationFile};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use vulcan_session_core::ExecutionRuntimePolicyRequest;
 
-/// Stable synthetic picker identifier representing the system-default model-routed agent.
-/// 表示系统默认模型路由代理的稳定合成选择标识。
-pub const SYSTEM_DEFAULT_AGENT_CHOICE_ID: &str = "__system_default__";
-
-/// Legacy built-in worker agent identifier retained only for migration filtering.
-/// 仅用于迁移过滤的旧版内建工作代理标识。
-const LEGACY_DEFAULT_WORKER_AGENT_ID: &str = "default-worker";
-
-/// Legacy built-in Lua specialist agent identifier retained only for migration filtering.
-/// 仅用于迁移过滤的旧版内建 Lua 专家代理标识。
-const LEGACY_LUA_SPECIALIST_AGENT_ID: &str = "lua-specialist";
-
-/// Legacy built-in memory specialist agent identifier retained only for migration filtering.
-/// 仅用于迁移过滤的旧版内建记忆专家代理标识。
-const LEGACY_MEMORY_SPECIALIST_AGENT_ID: &str = "memory-specialist";
-
-/// Legacy built-in coordinator agent identifier retained only for migration filtering.
-/// 仅用于迁移过滤的旧版内建协调代理标识。
-const LEGACY_WORKSPACE_COORDINATOR_AGENT_ID: &str = "workspace-coordinator";
-
 /// Relative directory name that stores user-authored agent markdown files.
 /// 存放用户自定义 Agent Markdown 文件的相对目录名称。
 const USER_AGENT_DIRECTORY_NAME: &str = "agents";
-
-/// File name used by the user-agent selection state persisted in the user directory.
-/// 保存在用户目录中的 Agent 选择状态文件名。
-const AGENT_PROFILE_STATE_FILE_NAME: &str = "agent-config.json";
-
-/// Minimal persisted state used to remember the currently selected user agent.
-/// 用于记住当前已选用户 Agent 的最小持久化状态。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentProfileState {
-    /// Optional selected user-agent identifier; `None` means the system default should be used.
-    /// 可选的已选用户 Agent 标识；`None` 表示使用系统默认。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected_agent_id: Option<String>,
-}
 
 /// One parsed user-authored agent profile loaded from the user directory.
 /// 从用户目录载入的一条用户自定义 Agent 配置。
@@ -93,13 +57,10 @@ pub struct UserAgentProfile {
     pub runtime_policy: ExecutionRuntimePolicyRequest,
 }
 
-/// Aggregate user-agent catalog composed from one selection state and the visible markdown profiles.
-/// 由一份选择状态与可见 Markdown 配置组成的用户 Agent 目录聚合体。
+/// Aggregate user-agent catalog composed from the visible Markdown profiles.
+/// 由可见 Markdown 配置组成的用户 Agent 目录聚合体。
 #[derive(Debug, Clone, Default)]
 pub struct AgentProfileCatalog {
-    /// Persisted selection state remembered across launches.
-    /// 跨启动周期保留的持久化选择状态。
-    pub state: AgentProfileState,
     /// Visible user-authored agent profiles keyed by stable identifier.
     /// 以稳定标识为键保存的可见用户 Agent 配置集合。
     pub agents: BTreeMap<String, UserAgentProfile>,
@@ -107,7 +68,7 @@ pub struct AgentProfileCatalog {
 
 /// Frontmatter schema accepted by one user-authored agent markdown file.
 /// 单个用户自定义 Agent Markdown 文件接受的前置元数据结构。
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UserAgentFrontmatter {
     /// Optional explicit stable agent identifier.
@@ -130,28 +91,27 @@ struct UserAgentFrontmatter {
     pub max_turns: Option<u16>,
     /// Prompt skill identifiers bound to this agent profile.
     /// 绑定到该 Agent 配置的提示词技能标识集合。
-    #[serde(default, alias = "skills", skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, alias = "skills")]
     pub skill_ids: Vec<String>,
     /// Native tool identifiers directly exposed by this profile.
     /// 该配置直接暴露的原生工具标识集合。
-    #[serde(default, alias = "tools", skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, alias = "tools")]
     pub native_tools: Vec<String>,
     /// MCP tool identifiers directly exposed by this profile.
     /// 该配置直接暴露的 MCP 工具标识集合。
-    #[serde(default, alias = "mcp", skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, alias = "mcp")]
     pub mcp_tools: Vec<String>,
     /// Optional shared tool-policy identifier.
     /// 可选的共享工具策略标识。
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_policy: Option<String>,
     /// Optional task-session runtime feature overrides.
     /// 可选的子代理运行时能力覆盖。
-    #[serde(default, skip_serializing_if = "runtime_policy_request_is_empty")]
+    #[serde(default)]
     pub runtime_policy: ExecutionRuntimePolicyRequest,
 }
 
-/// Returns the user-scoped root directory that stores agent profile state and markdown files.
-/// 返回保存 Agent 状态与 Markdown 文件的用户级根目录。
+/// Returns the user-scoped root directory that stores Agent profile Markdown files.
+/// 返回保存 Agent 配置 Markdown 文件的用户级根目录。
 pub fn agent_profile_root_directory() -> PathBuf {
     let home = dirs::home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -165,28 +125,20 @@ pub fn agent_profiles_directory() -> PathBuf {
     agent_profile_root_directory().join(USER_AGENT_DIRECTORY_NAME)
 }
 
-/// Returns the persisted agent-profile state file path.
-/// 返回持久化 Agent 配置状态文件路径。
-pub fn agent_profile_state_file_path() -> PathBuf {
-    agent_profile_root_directory().join(AGENT_PROFILE_STATE_FILE_NAME)
-}
-
 /// Loads the visible user-agent catalog from disk.
 /// 从磁盘加载可见的用户 Agent 目录聚合体。
 pub fn load_agent_profile_catalog() -> Result<AgentProfileCatalog, String> {
-    let state = load_agent_profile_state()?;
     let agents = load_user_agent_profiles()?;
 
-    Ok(AgentProfileCatalog { state, agents })
+    Ok(AgentProfileCatalog { agents })
 }
 
-/// Returns whether one agent identifier is reserved by the built-in runtime or the synthetic system-default slot.
-/// 返回某个 Agent 标识是否被内置运行时或系统默认合成槽位保留。
+/// Returns whether one Agent identifier is reserved by the built-in runtime.
+/// 返回某个 Agent 标识是否被内置运行时保留。
 pub fn is_reserved_agent_identifier(agent_id: &str) -> bool {
     matches!(
         agent_id.trim(),
-        SYSTEM_DEFAULT_AGENT_CHOICE_ID
-            | DEFAULT_WORKER_AGENT_ID
+        DEFAULT_WORKER_AGENT_ID
             | LUA_SPECIALIST_AGENT_ID
             | MEMORY_SPECIALIST_AGENT_ID
             | WORKSPACE_COORDINATOR_AGENT_ID
@@ -195,155 +147,87 @@ pub fn is_reserved_agent_identifier(agent_id: &str) -> bool {
     )
 }
 
-/// Loads the persisted agent selection state from disk.
-/// 从磁盘加载持久化的 Agent 选择状态。
-pub fn load_agent_profile_state() -> Result<AgentProfileState, String> {
-    let path = agent_profile_state_file_path();
-    if !path.exists() {
-        return Ok(AgentProfileState::default());
-    }
-
-    let text = fs::read_to_string(&path)
-        .map_err(|error| format!("读取 Agent 状态配置失败：{}。", error))?;
-
-    serde_json::from_str(&text).map_err(|error| format!("解析 Agent 状态配置失败：{}。", error))
-}
-
-/// Saves the persisted agent selection state back to disk.
-/// 将持久化的 Agent 选择状态写回磁盘。
-pub fn save_agent_profile_state(state: &AgentProfileState) -> Result<(), String> {
-    let path = agent_profile_state_file_path();
-    let parent = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    fs::create_dir_all(&parent).map_err(|error| format!("创建 Agent 配置目录失败：{}。", error))?;
-
-    let content = serde_json::to_string_pretty(state)
-        .map_err(|error| format!("序列化 Agent 状态配置失败：{}。", error))?;
-
-    fs::write(&path, content).map_err(|error| format!("写入 Agent 状态配置失败：{}。", error))
-}
-
-/// Canonicalizes one user-provided agent identifier into the stable slug format used on disk.
-/// 将用户提供的 Agent 标识规范化为磁盘使用的稳定 slug 格式。
-pub fn canonicalize_agent_identifier(raw: &str) -> String {
-    slugify_identifier(raw)
-}
-
-/// Saves one user-authored agent profile into the user directory, optionally replacing one previous identifier.
-/// 将单条用户自定义 Agent 配置保存到用户目录，并可选替换某个旧标识。
-pub fn save_user_agent_profile(
-    profile: &UserAgentProfile,
-    previous_id: Option<&str>,
-) -> Result<(), String> {
-    if profile.id.trim().is_empty() {
-        return Err(String::from("Agent 标识不能为空。"));
-    }
-    if is_reserved_agent_identifier(&profile.id) {
-        return Err(String::from(
-            "该 Agent 标识已被系统内置 Agent 保留，请更换为其它标识。",
-        ));
-    }
-
-    fs::create_dir_all(agent_profiles_directory())
-        .map_err(|error| format!("创建用户 Agent 目录失败：{}。", error))?;
-
-    if let Some(previous_id) = previous_id
-        .map(str::trim)
-        .filter(|previous_id| !previous_id.is_empty() && *previous_id != profile.id)
-    {
-        let previous_path = user_agent_profile_file_path(previous_id);
-        if previous_path.exists() {
-            fs::remove_file(&previous_path).map_err(|error| {
-                format!(
-                    "移除旧 Agent 文件 `{}` 失败：{}。",
-                    previous_path.display(),
-                    error
-                )
-            })?;
-        }
-    }
-
-    save_user_agent_profile_markdown(profile)
-}
-
-/// Deletes one user-authored agent profile markdown file from the user directory.
-/// 从用户目录中删除单条用户自定义 Agent Markdown 文件。
-pub fn delete_user_agent_profile(agent_id: &str) -> Result<(), String> {
-    let normalized_id = canonicalize_agent_identifier(agent_id);
-    if normalized_id.is_empty() {
-        return Err(String::from("Agent 标识不能为空。"));
-    }
-
-    let path = user_agent_profile_file_path(&normalized_id);
-    if !path.exists() {
-        return Ok(());
-    }
-
-    fs::remove_file(&path)
-        .map_err(|error| format!("删除 Agent 文件 `{}` 失败：{}。", path.display(), error))
-}
-
-/// Migrates legacy provider-bound agent definitions into the user-agent directory when needed.
-/// 在需要时将旧版绑定在 Provider 配置中的 Agent 定义迁移到用户 Agent 目录。
-pub fn migrate_legacy_provider_agents(
-    config: &ProviderConfigurationFile,
-    catalog: &mut AgentProfileCatalog,
-) -> Result<bool, String> {
-    let mut changed = false;
-
-    for (agent_id, entry) in &config.legacy_agents {
-        if is_reserved_agent_identifier(agent_id) || is_legacy_builtin_agent_id(agent_id) {
-            continue;
-        }
-
-        if catalog.agents.contains_key(agent_id) {
-            continue;
-        }
-
-        let profile = user_agent_profile_from_legacy_entry(agent_id, entry);
-        save_user_agent_profile_markdown(&profile)?;
-        catalog.agents.insert(profile.id.clone(), profile);
-        changed = true;
-    }
-
-    if catalog.state.selected_agent_id.is_none()
-        && let Some(legacy_active_agent_id) = config
-            .legacy_active_agent
-            .as_deref()
-            .filter(|agent_id| !is_legacy_builtin_agent_id(agent_id))
-            .filter(|agent_id| catalog.agents.contains_key(*agent_id))
-    {
-        catalog.state.selected_agent_id = Some(legacy_active_agent_id.to_string());
-        changed = true;
-    }
-
-    if changed {
-        save_agent_profile_state(&catalog.state)?;
-    }
-
-    Ok(changed)
-}
-
 /// Loads every visible user-authored agent profile from the user directory.
 /// 从用户目录加载所有可见的用户自定义 Agent 配置。
 fn load_user_agent_profiles() -> Result<BTreeMap<String, UserAgentProfile>, String> {
+    // root is the single product-owned source directory for user-authored Agent markdown.
+    // root 是产品持有的用户自定义 Agent Markdown 唯一来源目录。
     let root = agent_profiles_directory();
-    if !root.exists() {
-        return Ok(BTreeMap::new());
+    load_user_agent_profiles_from_directory(&root)
+}
+
+/// Loads one deterministic Agent profile catalog from an explicit directory.
+/// 从显式目录加载一份确定性的 Agent 配置目录。
+///
+/// # Parameters
+/// 参数
+/// `root` is the directory recursively searched for user-authored Markdown profiles.
+/// `root` 是递归搜索用户自定义 Markdown 配置的目录。
+///
+/// # Returns
+/// 返回值
+/// A profile map when every file has a unique non-reserved identifier, otherwise an explicit configuration error.
+/// 当每个文件都具有唯一且非保留标识时返回配置映射，否则返回明确配置错误。
+fn load_user_agent_profiles_from_directory(
+    root: &Path,
+) -> Result<BTreeMap<String, UserAgentProfile>, String> {
+    // root_metadata distinguishes a missing source from a broken or redirected symbolic-link source.
+    // root_metadata 区分缺失来源与损坏或被重定向的符号链接来源。
+    let root_metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BTreeMap::new());
+        }
+        Err(error) => {
+            return Err(format!(
+                "读取 Agent 根目录 `{}` 元数据失败：{}。",
+                root.display(),
+                error
+            ));
+        }
+    };
+    if root_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Agent 根目录 `{}` 不能是符号链接。",
+            root.display()
+        ));
+    }
+    if !root_metadata.is_dir() {
+        return Err(format!("Agent 根路径 `{}` 不是目录。", root.display()));
     }
 
+    // profiles is the validated runtime-facing catalog keyed by stable identifier.
+    // profiles 是以稳定标识为键的已校验运行时目录。
     let mut profiles = BTreeMap::new();
+    // profile_sources retains the exact first source path for deterministic duplicate diagnostics.
+    // profile_sources 保留精确的首个来源路径，用于确定性的重复项诊断。
+    let mut profile_sources = BTreeMap::<String, PathBuf>::new();
+    // files is sorted because read_dir iteration order is explicitly unspecified across platforms.
+    // files 会被排序，因为 read_dir 的迭代顺序在不同平台上明确未指定。
     let mut files = Vec::new();
-    collect_markdown_files(&root, &mut files)?;
+    collect_markdown_files(root, &mut files)?;
+    files.sort();
 
+    // Each path is parsed exactly once after discovery order has been stabilized.
+    // 每个路径在发现顺序稳定后只解析一次。
     for path in files {
         let profile = load_user_agent_profile(&path)?;
         if is_reserved_agent_identifier(&profile.id) {
-            continue;
+            return Err(format!(
+                "Agent 文件 `{}` 使用了系统保留标识 `{}`。",
+                path.display(),
+                profile.id
+            ));
         }
+        if let Some(previous_path) = profile_sources.get(&profile.id) {
+            return Err(format!(
+                "Agent 标识 `{}` 同时由文件 `{}` 与 `{}` 声明。",
+                profile.id,
+                previous_path.display(),
+                path.display()
+            ));
+        }
+        profile_sources.insert(profile.id.clone(), path);
         profiles.insert(profile.id.clone(), profile);
     }
 
@@ -369,17 +253,36 @@ fn collect_markdown_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
                 error
             )
         })?;
+        // file_type is read without following symbolic links so recursive discovery cannot escape or cycle.
+        // file_type 在不跟随符号链接的情况下读取，使递归发现无法越界或形成循环。
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "读取 Agent 目录条目 `{}` 类型失败：{}。",
+                entry.path().display(),
+                error
+            )
+        })?;
+        // path is the exact source surfaced in every validation diagnostic.
+        // path 是所有校验诊断中展示的精确来源。
         let path = entry.path();
 
-        if path.is_dir() {
+        if file_type.is_symlink() {
+            return Err(format!(
+                "Agent 配置路径 `{}` 不能是符号链接。",
+                path.display()
+            ));
+        }
+
+        if file_type.is_dir() {
             collect_markdown_files(&path, files)?;
             continue;
         }
 
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
         {
             files.push(path);
         }
@@ -466,76 +369,6 @@ fn split_frontmatter_and_body(
     Ok((frontmatter, body.trim().to_string()))
 }
 
-/// Converts one legacy persisted agent entry into one user-authored profile snapshot.
-/// 将单条旧版持久化 Agent 条目转换为用户自定义配置快照。
-fn user_agent_profile_from_legacy_entry(
-    agent_id: &str,
-    entry: &PersistedAgentEntry,
-) -> UserAgentProfile {
-    UserAgentProfile {
-        id: agent_id.to_string(),
-        name: entry.name.clone(),
-        description: entry.description.clone().unwrap_or_default(),
-        prompt: entry.system_prompt.clone().unwrap_or_default(),
-        model: trim_to_option(entry.model.as_deref()),
-        temperature: entry.temperature,
-        max_turns: entry.max_turns,
-        skill_ids: Vec::new(),
-        native_tools: Vec::new(),
-        mcp_tools: Vec::new(),
-        tool_policy: None,
-        runtime_policy: ExecutionRuntimePolicyRequest::default(),
-    }
-}
-
-/// Saves one user-authored agent profile into the user markdown directory.
-/// 将单条用户自定义 Agent 配置保存到用户 Markdown 目录。
-fn save_user_agent_profile_markdown(profile: &UserAgentProfile) -> Result<(), String> {
-    let path = user_agent_profile_file_path(&profile.id);
-
-    let frontmatter = UserAgentFrontmatter {
-        id: Some(profile.id.clone()),
-        name: Some(profile.name.clone()),
-        description: trim_to_option(Some(profile.description.as_str())),
-        model: profile.model.clone(),
-        temperature: profile.temperature,
-        max_turns: profile.max_turns,
-        skill_ids: profile.skill_ids.clone(),
-        native_tools: profile.native_tools.clone(),
-        mcp_tools: profile.mcp_tools.clone(),
-        tool_policy: profile.tool_policy.clone(),
-        runtime_policy: profile.runtime_policy,
-    };
-    let frontmatter_text = serde_yaml::to_string(&frontmatter)
-        .map_err(|error| format!("序列化用户 Agent frontmatter 失败：{}。", error))?;
-    let content = format!(
-        "---\n{}---\n\n{}\n",
-        frontmatter_text,
-        profile.prompt.trim()
-    );
-
-    fs::write(&path, content)
-        .map_err(|error| format!("写入用户 Agent 文件 `{}` 失败：{}。", path.display(), error))
-}
-
-/// Returns the markdown file path used by one user-authored agent identifier.
-/// 返回某个用户自定义 Agent 标识对应的 Markdown 文件路径。
-fn user_agent_profile_file_path(agent_id: &str) -> PathBuf {
-    agent_profiles_directory().join(format!("{agent_id}.md"))
-}
-
-/// Returns whether one legacy agent identifier belongs to the built-in runtime seed set.
-/// 返回某个旧版 Agent 标识是否属于内建运行时种子集合。
-fn is_legacy_builtin_agent_id(agent_id: &str) -> bool {
-    matches!(
-        agent_id,
-        LEGACY_DEFAULT_WORKER_AGENT_ID
-            | LEGACY_LUA_SPECIALIST_AGENT_ID
-            | LEGACY_MEMORY_SPECIALIST_AGENT_ID
-            | LEGACY_WORKSPACE_COORDINATOR_AGENT_ID
-    )
-}
-
 /// Trims one optional string and returns `None` when it becomes empty.
 /// 裁剪单个可选字符串，并在结果为空时返回 `None`。
 fn trim_to_option(value: Option<&str>) -> Option<String> {
@@ -604,12 +437,6 @@ fn normalize_string_list(values: Vec<String>) -> Vec<String> {
     normalized
 }
 
-/// Returns whether a runtime-policy request has no explicit overrides.
-/// 返回运行时策略请求是否没有任何显式覆盖。
-fn runtime_policy_request_is_empty(policy: &ExecutionRuntimePolicyRequest) -> bool {
-    !policy.has_override()
-}
-
 /// Builds a compact stable identifier from one user-facing agent label.
 /// 根据某个人类可读 Agent 标签构建紧凑稳定标识。
 fn slugify_identifier(raw: &str) -> String {
@@ -633,7 +460,8 @@ fn slugify_identifier(raw: &str) -> String {
 mod tests {
     use super::{
         format_runtime_policy_request_text, is_reserved_agent_identifier, load_user_agent_profile,
-        parse_agent_profile_list_text, parse_runtime_policy_request_text,
+        load_user_agent_profiles_from_directory, parse_agent_profile_list_text,
+        parse_runtime_policy_request_text,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -644,8 +472,89 @@ mod tests {
     fn reserved_agent_identifiers_cover_built_in_analysis_entries() {
         assert!(is_reserved_agent_identifier("plan"));
         assert!(is_reserved_agent_identifier("explore"));
-        assert!(is_reserved_agent_identifier("__system_default__"));
+        assert!(is_reserved_agent_identifier("default-worker"));
         assert!(!is_reserved_agent_identifier("custom-agent"));
+    }
+
+    /// Verifies duplicate canonical Agent identifiers fail deterministically instead of overwriting by read_dir order.
+    /// 验证重复的规范 Agent 标识会确定性失败，而不是按 read_dir 顺序互相覆盖。
+    #[test]
+    fn user_agent_catalog_rejects_duplicate_identifiers_deterministically() {
+        // root owns an automatically cleaned isolated profile hierarchy.
+        // root 持有一套自动清理的隔离配置目录层级。
+        let root =
+            tempfile::tempdir().expect("temporary Agent profile directory should be created");
+        // nested exercises recursive discovery instead of only direct children.
+        // nested 覆盖递归发现，而不只覆盖直接子项。
+        let nested = root.path().join("nested");
+        fs::create_dir(&nested).expect("nested Agent profile directory should be created");
+        // first_path and second_path intentionally declare the same canonical frontmatter id.
+        // first_path 与 second_path 刻意声明相同的规范 frontmatter 标识。
+        let first_path = root.path().join("first.md");
+        let second_path = nested.join("second.md");
+        fs::write(
+            &first_path,
+            "---\nid: duplicate-agent\n---\n\nFirst prompt.\n",
+        )
+        .expect("first duplicate profile should be written");
+        fs::write(
+            &second_path,
+            "---\nid: duplicate-agent\n---\n\nSecond prompt.\n",
+        )
+        .expect("second duplicate profile should be written");
+
+        // first_error and second_error prove repeated loads return the same ordered diagnostic.
+        // first_error 与 second_error 证明重复加载会返回相同的有序诊断。
+        let first_error = load_user_agent_profiles_from_directory(root.path())
+            .expect_err("duplicate Agent identifiers should fail");
+        let second_error = load_user_agent_profiles_from_directory(root.path())
+            .expect_err("duplicate Agent identifiers should fail deterministically");
+
+        assert_eq!(first_error, second_error);
+        assert!(first_error.contains("duplicate-agent"));
+        assert!(first_error.contains(&first_path.display().to_string()));
+        assert!(first_error.contains(&second_path.display().to_string()));
+    }
+
+    /// Verifies a user profile cannot silently shadow or disappear behind a built-in Agent identifier.
+    /// 验证用户配置不能通过内建 Agent 标识静默遮蔽或消失。
+    #[test]
+    fn user_agent_catalog_rejects_reserved_identifier() {
+        // root owns an automatically cleaned isolated profile directory.
+        // root 持有一个自动清理的隔离配置目录。
+        let root =
+            tempfile::tempdir().expect("temporary Agent profile directory should be created");
+        // profile_path identifies the exact invalid user file expected in the diagnostic.
+        // profile_path 标识诊断中预期出现的精确无效用户文件。
+        let profile_path = root.path().join("plan.md");
+        fs::write(&profile_path, "Plan prompt.\n")
+            .expect("reserved Agent profile should be written");
+
+        // error must surface the invalid source rather than silently skipping it.
+        // error 必须暴露无效来源，而不是静默跳过。
+        let error = load_user_agent_profiles_from_directory(root.path())
+            .expect_err("reserved Agent identifier should fail");
+
+        assert!(error.contains("plan"));
+        assert!(error.contains(&profile_path.display().to_string()));
+    }
+
+    /// Verifies the catalog root must be an actual directory rather than an arbitrary filesystem entry.
+    /// 验证配置目录根必须是真实目录，而不能是任意文件系统条目。
+    #[test]
+    fn user_agent_catalog_rejects_non_directory_root() {
+        // root_file is an automatically cleaned regular file passed where a directory is required.
+        // root_file 是一个自动清理的普通文件，被传入必须为目录的位置。
+        let root_file = tempfile::NamedTempFile::new()
+            .expect("temporary Agent profile root file should be created");
+
+        // error must identify the exact invalid root instead of relying on a generic read_dir failure.
+        // error 必须标识精确的无效根，而不是依赖通用 read_dir 失败。
+        let error = load_user_agent_profiles_from_directory(root_file.path())
+            .expect_err("non-directory Agent profile root should fail");
+
+        assert!(error.contains("不是目录"));
+        assert!(error.contains(&root_file.path().display().to_string()));
     }
 
     /// Verifies advanced profile frontmatter survives parsing into the runtime-facing profile model.

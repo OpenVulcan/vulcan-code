@@ -24,6 +24,12 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
       return envelope.delta.payload.conversationId;
     case "conversationSummaryChanged":
       return envelope.delta.payload.conversation.id;
+    case "conversationArchived":
+      return envelope.delta.payload.conversationId;
+    case "conversationsArchived":
+      return null;
+    case "projectRemoved":
+      return null;
     case "pendingQuestionChanged":
       return null;
     case "commandSessionsChanged":

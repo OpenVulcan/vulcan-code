@@ -134,9 +134,20 @@ export interface VmmManagementSectionSummary {
 // VmmMemoryActionRequest describes one VMM action request.
 // VmmMemoryActionRequest 描述单个 VMM 动作请求。
 export interface VmmMemoryActionRequest {
+  // Stable action id.
+  // 稳定动作标识。
   action: string;
+  // VMM configuration scope, either global or project.
+  // VMM 配置作用域，可为 global 或 project。
   scope: string;
+  // Optional task project id used by project scope.
+  // 项目作用域使用的可选任务项目标识。
   projectId?: string | null;
+  // Exact persisted conversation id required by session-scoped actions.
+  // 会话级动作必须提供的准确已持久化会话标识。
+  conversationId?: string | null;
+  // Action-specific JSON payload.
+  // 动作专用 JSON 载荷。
   payload?: unknown;
 }
 

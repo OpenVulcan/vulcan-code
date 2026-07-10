@@ -2,6 +2,7 @@
 //! VMM config 辅助逻辑。
 
 use super::*;
+use crate::{mutate_project_configuration, mutate_provider_configuration};
 
 /// Saves one VMM memory configuration draft.
 /// 保存单个 VMM 记忆配置草稿。
@@ -17,45 +18,45 @@ use super::*;
 /// 返回值
 /// `Ok(())` after the configuration file and hook snapshot have been updated.
 /// 配置文件与 hook 快照更新完成后返回 `Ok(())`。
-pub(crate) fn save_vmm_memory_config(
+pub(crate) async fn save_vmm_memory_config(
     state: &SharedServiceBridgeState,
     mut request: VmmConfigSaveRequest,
 ) -> Result<(), String> {
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
         let project_path = vmm_project_scope_path(state, request.project_id.as_deref())?;
-        let mut project_configuration =
-            vulcan_provider_config::config::load_project_configuration_file(&PathBuf::from(
-                &project_path,
-            ))
-            .unwrap_or_default();
-        project_configuration.vmm = if request.draft.has_override {
-            vmm_config_layer_from_draft(&request.draft, false)?
-        } else {
-            vulcan_vmm::VmmConfigLayer::default()
-        };
-        vulcan_provider_config::config::save_project_configuration_file(
+        return mutate_project_configuration(
             &PathBuf::from(&project_path),
-            &project_configuration,
-        )?;
-        update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
-        refresh_service_vmm_hook_snapshot(state)?;
-        return Ok(());
+            "保存项目 VMM 配置失败",
+            |project_configuration| {
+                project_configuration.vmm = if request.draft.has_override {
+                    vmm_config_layer_from_draft(&request.draft, false)?
+                } else {
+                    vulcan_vmm::VmmConfigLayer::default()
+                };
+                Ok(())
+            },
+            |project_configuration| {
+                update_cached_project_vmm_layer(&project_path, project_configuration.vmm.clone());
+                refresh_service_vmm_hook_snapshot(state)
+            },
+        )
+        .await;
     }
-    let mut configuration = provider_configuration_from_state(state)?;
-    if request.draft.grpc_api_key.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
-        request.draft.grpc_api_key = configuration.vmm.grpc_api_key.clone().unwrap_or_default();
-    }
-    configuration.vmm = vmm_config_layer_from_draft(&request.draft, true)?;
-    vulcan_provider_config::config::save_configuration_file(&configuration)?;
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if let Some(runtime) = guard.agent_runtime.as_mut() {
-        runtime.provider_configuration = configuration.clone();
-    }
-    refresh_guard_vmm_hook_snapshot(&mut guard, &configuration);
-    Ok(())
+    mutate_provider_configuration(
+        state,
+        "保存 VMM 全局配置失败",
+        |configuration| {
+            if request.draft.grpc_api_key.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
+                request.draft.grpc_api_key =
+                    configuration.vmm.grpc_api_key.clone().unwrap_or_default();
+            }
+            configuration.vmm = vmm_config_layer_from_draft(&request.draft, true)?;
+            Ok(())
+        },
+        refresh_guard_vmm_hook_snapshot,
+    )
+    .await
 }
 
 /// Loads one persisted project VMM layer and resolves its effective editable fallback.

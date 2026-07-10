@@ -4,9 +4,9 @@ import {
   type GeneratedMediaAttachment,
 } from "@/components/media/generated-media";
 import {
+  conversationScrollToDistanceFromBottom,
   type ConversationTimelineUserScrollDirection,
-  type ConversationTimelineVirtualRestoreState,
-} from "@/components/conversation/conversation-virtualization";
+} from "@/components/conversation/chat-area-scroll";
 import { Split } from "lucide-react";
 import {
   createEmptyConversationSurfaceExpandedState,
@@ -73,10 +73,6 @@ const CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX = 40;
 // CONVERSATION_TURN_RESTORE_FRAME_COUNT 限制界面切换后的重复恢复帧数。
 const CONVERSATION_TURN_RESTORE_FRAME_COUNT = 4;
 
-// conversationTurnHeightMemory stores measured turn shell heights by surface and turn key.
-// conversationTurnHeightMemory 按界面与轮次键保存已测量的轮次外壳高度。
-const conversationTurnHeightMemory = new Map<string, Map<string, number>>();
-
 // ConversationTurnGroup represents one stable rendered conversation turn shell.
 // ConversationTurnGroup 表示单个稳定渲染的会话轮次外壳。
 interface ConversationTurnGroup {
@@ -87,6 +83,22 @@ interface ConversationTurnGroup {
   // 归属于该渲染轮次的时间线条目。
   items: ConversationTimelineItem[];
 }
+
+// ConversationWorkspaceInitialScrollRestore assigns initial viewport restoration to exactly one owner.
+// ConversationWorkspaceInitialScrollRestore 将初始视口恢复分配给唯一所有者。
+type ConversationWorkspaceInitialScrollRestore =
+  | {
+      // Parent owns initial restoration, so workspace distance input is forbidden.
+      // 父级拥有初始恢复，因此禁止工作区距离输入。
+      restoreInitialScrollDistance: false;
+      initialScrollDistanceFromBottom?: never;
+    }
+  | {
+      // Workspace owns initial restoration and requires an exact bottom distance.
+      // 工作区拥有初始恢复，并要求精确底部距离。
+      restoreInitialScrollDistance: true;
+      initialScrollDistanceFromBottom: number;
+    };
 
 // ConversationWorkspace renders the conversation transcript surface.
 // ConversationWorkspace 渲染会话转录展示面。
@@ -139,18 +151,15 @@ export function ConversationWorkspace(props: {
   // Scroll container ref owned by the shell.
   // 由外壳持有的滚动容器引用。
   scrollRef: React.RefObject<HTMLElement | null>;
-  // Initial bottom distance used before the virtual window has measured this surface.
-  // 虚拟窗口测量当前界面前使用的初始底部距离。
-  initialScrollDistanceFromBottom: number;
-  // Whether parent anchor restoration owns the initial scroll position.
-  // 父级锚点恢复是否接管初始滚动位置。
-  suppressInitialDistanceRestore: boolean;
-  // Previously measured virtualizer state for this transcript surface.
-  // 当前转录界面此前测量过的虚拟列表状态。
-  initialVirtualizerState: ConversationTimelineVirtualRestoreState | null;
-  // Persists the latest measured virtualizer state for the active surface.
-  // 持久保存当前界面最新测量到的虚拟列表状态。
-  onVirtualizerStateChange: (surfaceId: string, state: ConversationTimelineVirtualRestoreState | null) => void;
+  // Previously measured turn-shell heights for the active surface.
+  // 当前界面此前测量的轮次外壳高度。
+  initialTurnHeightsByKey?: Readonly<Record<string, number>> | null;
+  // Persists one measured turn-shell height for an owning surface.
+  // 为所属界面保存一条轮次外壳实测高度。
+  onTurnHeightChange?: (surfaceId: string, turnKey: string, height: number) => void;
+  // Removes stored turn heights that no longer belong to the active surface projection.
+  // 删除已不属于当前界面投影的轮次高度。
+  onRetainTurnHeights?: (surfaceId: string, liveTurnKeys: ReadonlySet<string>) => void;
   // Previously captured runtime expansion state for this surface.
   // 当前界面此前捕获的运行期展开状态。
   initialExpandedState: ConversationSurfaceExpandedState | null;
@@ -202,7 +211,7 @@ export function ConversationWorkspace(props: {
   // Optional trace callback for local diagnostics.
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
-}) {
+} & ConversationWorkspaceInitialScrollRestore) {
   const { t } = useI18n();
   // detail stores the currently opened transcript detail modal.
   // detail 保存当前打开的转录详情弹窗。
@@ -269,11 +278,29 @@ export function ConversationWorkspace(props: {
     );
   }, [visibleTimelineItems]);
   const timelineCacheScopeKey = props.conversation?.id ?? props.parentConversationId ?? "conversation";
+  // ownedInitialScrollDistance is exact only when the workspace is the declared restoration owner.
+  // ownedInitialScrollDistance 仅在工作区是已声明恢复所有者时保持精确。
+  const ownedInitialScrollDistance = props.restoreInitialScrollDistance
+    ? props.initialScrollDistanceFromBottom
+    : 0;
   const turnGroups = React.useMemo(
     () => groupConversationTimelineItems(visibleTimelineItems),
     [visibleTimelineItems],
   );
+  // liveTurnKeys is the authoritative set of turn shells in the current projection.
+  // liveTurnKeys 是当前投影中轮次外壳的权威键集合。
+  const liveTurnKeys = React.useMemo(
+    () => new Set(turnGroups.map((group) => group.key)),
+    [turnGroups],
+  );
+  // Retention removes measurements only after the current projection establishes its authoritative keys.
+  // 仅当当前投影建立权威键后，保留流程才删除旧测量值。
+  React.useEffect(() => {
+    props.onRetainTurnHeights?.(timelineCacheScopeKey, liveTurnKeys);
+  }, [liveTurnKeys, props.onRetainTurnHeights, timelineCacheScopeKey]);
   const turnRestoreFrameIdsRef = React.useRef<number[]>([]);
+  // restoredTurnSurfaceKeyRef tracks the last surface actually restored by this workspace.
+  // restoredTurnSurfaceKeyRef 跟踪最近一个由当前工作区实际恢复的界面。
   const restoredTurnSurfaceKeyRef = React.useRef<string | null>(null);
   // clearTurnSurfaceRestoreFrames cancels pending surface-scoped scroll restore frames.
   // clearTurnSurfaceRestoreFrames 取消待执行的界面级滚动恢复帧。
@@ -290,11 +317,11 @@ export function ConversationWorkspace(props: {
     if (!element || element.dataset.conversationSurfaceId !== timelineCacheScopeKey) {
       return;
     }
-    restoreElementDistanceFromBottom(element, props.initialScrollDistanceFromBottom);
-  }, [props.initialScrollDistanceFromBottom, props.scrollRef, timelineCacheScopeKey]);
+    conversationScrollToDistanceFromBottom(element, ownedInitialScrollDistance);
+  }, [ownedInitialScrollDistance, props.scrollRef, timelineCacheScopeKey]);
   React.useLayoutEffect(() => {
-    if (props.suppressInitialDistanceRestore) {
-      restoredTurnSurfaceKeyRef.current = timelineCacheScopeKey;
+    if (!props.restoreInitialScrollDistance) {
+      restoredTurnSurfaceKeyRef.current = null;
       clearTurnSurfaceRestoreFrames();
       return;
     }
@@ -304,19 +331,26 @@ export function ConversationWorkspace(props: {
     restoredTurnSurfaceKeyRef.current = timelineCacheScopeKey;
     clearTurnSurfaceRestoreFrames();
     restoreTurnSurfaceBottomDistance();
+    // runRestoreFrame schedules exactly the remaining number of workspace-owned correction frames.
+    // runRestoreFrame 精确调度剩余数量的工作区所有校正帧。
+    // Parameters: remainingFrames is the positive number of callbacks still required.
+    // 参数：remainingFrames 是仍需执行的正回调数量。
+    // Returns: nothing; zero remaining frames terminate recursion without scheduling.
+    // 返回值：无；剩余帧为零时终止递归且不再调度。
     const runRestoreFrame = (remainingFrames: number) => {
+      if (remainingFrames <= 0) {
+        return;
+      }
       const frameId = window.requestAnimationFrame(() => {
         turnRestoreFrameIdsRef.current = turnRestoreFrameIdsRef.current.filter((candidate) => candidate !== frameId);
         restoreTurnSurfaceBottomDistance();
-        if (remainingFrames > 0) {
-          runRestoreFrame(remainingFrames - 1);
-        }
+        runRestoreFrame(remainingFrames - 1);
       });
       turnRestoreFrameIdsRef.current.push(frameId);
     };
     runRestoreFrame(CONVERSATION_TURN_RESTORE_FRAME_COUNT);
     return clearTurnSurfaceRestoreFrames;
-  }, [clearTurnSurfaceRestoreFrames, props.suppressInitialDistanceRestore, restoreTurnSurfaceBottomDistance, timelineCacheScopeKey]);
+  }, [clearTurnSurfaceRestoreFrames, props.restoreInitialScrollDistance, restoreTurnSurfaceBottomDistance, timelineCacheScopeKey]);
   const autoExpandThinkingBlockId = props.sessionRunning && props.hiddenThinkingBlockIds.size === 0
     ? latestThinkingBlockIdAfterLastUser(props.renderItems)
     : null;
@@ -335,7 +369,6 @@ export function ConversationWorkspace(props: {
       return;
     }
     onExpandedStateChange(surfaceRestoreId, {
-      expandedById: Object.fromEntries(Object.entries(nextMeasuredCollapseById).map(([id, memory]) => [id, Boolean(memory.expanded)])),
       expandedToolPresentationIds: Array.from(expandedToolPresentationIds),
       expandedUserPromptIds: Array.from(expandedUserPromptIds),
       measuredCollapseById: nextMeasuredCollapseById,
@@ -612,7 +645,9 @@ export function ConversationWorkspace(props: {
               {turnGroups.map((group) => (
                 <ConversationTurnShell
                   estimatedHeight={conversationTurnGroupEstimatedHeight(group)}
+                  initialHeight={props.initialTurnHeightsByKey?.[group.key] ?? null}
                   key={`${timelineCacheScopeKey}:${group.key}`}
+                  onHeightChange={props.onTurnHeightChange}
                   shellKey={group.key}
                   surfaceKey={timelineCacheScopeKey}
                 >
@@ -724,6 +759,10 @@ function conversationPlanArtifactsMatch(
 
 // ConversationTurnShell keeps one loaded turn's outer height stable across remounts.
 // ConversationTurnShell 在重新挂载之间保持单个已加载轮次的外壳高度稳定。
+// Parameters: props identifies the surface and turn, supplies initial height guidance, and reports measurements.
+// 参数：props 标识界面与轮次，提供初始高度指引并上报测量值。
+// Returns: one measured section that releases its temporary minimum height after the first measurement.
+// 返回值：一个实测 section，在首次测量后释放临时最小高度。
 function ConversationTurnShell(props: {
   // Stable surface key used to isolate height memory between conversations.
   // 用于在不同会话之间隔离高度记忆的稳定界面键。
@@ -734,13 +773,26 @@ function ConversationTurnShell(props: {
   // Conservative height used before the first real measurement.
   // 首次真实测量之前使用的保守高度。
   estimatedHeight: number;
+  // Previously measured height restored for this exact turn shell.
+  // 当前精确轮次外壳此前测量的恢复高度。
+  initialHeight: number | null;
+  // Persists a changed measured height in the owning surface memory.
+  // 将变化后的实测高度保存到所属界面记忆中。
+  onHeightChange?: (surfaceId: string, turnKey: string, height: number) => void;
   // Rendered turn content.
   // 渲染出的轮次内容。
   children: React.ReactNode;
 }) {
-  const memory = conversationTurnHeightMemory.get(props.surfaceKey);
-  const rememberedHeight = memory?.get(props.shellKey) ?? null;
-  const [measuredHeight, setMeasuredHeight] = React.useState<number | null>(rememberedHeight);
+  // minimumHeight stabilizes the first paint with a measured height or the conservative estimate.
+  // minimumHeight 用实测高度或保守估算值稳定首帧绘制。
+  const [minimumHeight, setMinimumHeight] = React.useState<number | null>(
+    props.initialHeight ?? props.estimatedHeight,
+  );
+  // measuredHeightRef lets the observer reject identical measurements without reconnecting.
+  // measuredHeightRef 让观察器在不重连的前提下拒绝相同测量值。
+  const measuredHeightRef = React.useRef<number | null>(props.initialHeight);
+  // shellRef points to the measured turn-shell element.
+  // shellRef 指向被测量的轮次外壳元素。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
@@ -748,24 +800,30 @@ function ConversationTurnShell(props: {
     if (!element) {
       return;
     }
+    // updateHeight publishes changed measurements and releases the first-paint stabilizer.
+    // updateHeight 发布变化后的测量值，并释放首帧稳定高度。
+    // Parameters: none; the callback measures shellRef's current element.
+    // 参数：无；回调测量 shellRef 当前元素。
+    // Returns: nothing; local state and optional owner memory receive the result.
+    // 返回值：无；结果写入本地状态与可选的所有者记忆。
     const updateHeight = () => {
       const nextHeight = Math.ceil(element.getBoundingClientRect().height);
       if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
         return;
       }
-      let surfaceMemory = conversationTurnHeightMemory.get(props.surfaceKey);
-      if (!surfaceMemory) {
-        surfaceMemory = new Map<string, number>();
-        conversationTurnHeightMemory.set(props.surfaceKey, surfaceMemory);
+      if (measuredHeightRef.current === nextHeight) {
+        setMinimumHeight(null);
+        return;
       }
-      surfaceMemory.set(props.shellKey, nextHeight);
-      setMeasuredHeight((current) => current === nextHeight ? current : nextHeight);
+      measuredHeightRef.current = nextHeight;
+      props.onHeightChange?.(props.surfaceKey, props.shellKey, nextHeight);
+      setMinimumHeight(null);
     };
     updateHeight();
     const observer = new ResizeObserver(updateHeight);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [props.shellKey, props.surfaceKey]);
+  }, [props.onHeightChange, props.shellKey, props.surfaceKey]);
 
   return (
     <section
@@ -773,7 +831,7 @@ function ConversationTurnShell(props: {
       data-conversation-row-key={props.shellKey}
       data-conversation-turn-shell={props.shellKey}
       ref={shellRef}
-      style={measuredHeight === null ? { minHeight: props.estimatedHeight } : undefined}
+      style={minimumHeight === null ? undefined : { minHeight: minimumHeight }}
     >
       {props.children}
     </section>
@@ -815,18 +873,6 @@ function conversationTimelineItemKey(item: ConversationTimelineItem): string {
     return `final-assistant-meta:${item.item.renderKey ?? item.item.id}`;
   }
   return item.process.renderKey ?? `process:${item.process.id}`;
-}
-
-// restoreElementDistanceFromBottom restores one scroll element by visual bottom distance.
-// restoreElementDistanceFromBottom 按视觉底部距离恢复单个滚动元素。
-function restoreElementDistanceFromBottom(element: HTMLElement, distanceFromBottom: number): void {
-  const safeDistance = Math.max(0, distanceFromBottom);
-  if (safeDistance <= 0) {
-    element.scrollTop = element.scrollHeight;
-    return;
-  }
-  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
-  element.scrollTop = Math.max(0, Math.min(maxScrollTop, element.scrollHeight - element.clientHeight - safeDistance));
 }
 
 // groupConversationTimelineItems groups projected rows into stable rendered turns.

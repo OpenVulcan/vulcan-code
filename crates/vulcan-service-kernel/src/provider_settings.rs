@@ -16,8 +16,8 @@ use vulcan_provider_config::config::{
 use vulcan_service_api::{ServiceEventEmitter, WorkbenchSnapshot};
 
 use crate::{
-    SharedServiceBridgeState, emit_workbench_event, provider_field_request_key,
-    refresh_settings_projection_locked,
+    SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
+    provider_field_request_key, refresh_settings_projection_locked,
 };
 
 /// Provider configuration save request sent by the WebUI settings page.
@@ -107,31 +107,28 @@ pub(super) async fn service_save_provider_configuration(
         options.set(field, value);
     }
 
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        let is_new = !next_configuration.provider.contains_key(&provider_id);
-        let entry = next_configuration
-            .provider
-            .entry(provider_id.clone())
-            .or_insert_with(PersistedProviderEntry::default);
-        entry.name = Some(definition.name.clone());
-        entry.options = options;
-        if is_new {
-            entry.set_enabled_models(Vec::<String>::new());
-        }
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存供应商配置失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存供应商配置失败",
+        |configuration| {
+            let is_new = !configuration.provider.contains_key(&provider_id);
+            let entry = configuration
+                .provider
+                .entry(provider_id.clone())
+                .or_insert_with(PersistedProviderEntry::default);
+            entry.name = Some(definition.name.clone());
+            entry.options = options;
+            if is_new {
+                entry.set_enabled_models(Vec::<String>::new());
+            }
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
@@ -144,30 +141,27 @@ pub(super) async fn service_remove_provider_configuration(
     provider_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let provider_id = provider_id.trim().to_ascii_lowercase();
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        next_configuration.provider.remove(&provider_id);
-        if next_configuration
-            .model
-            .as_deref()
-            .and_then(provider_config::parse_active_model_reference)
-            .is_some_and(|(active_provider_id, _)| active_provider_id == provider_id)
-        {
-            next_configuration.model = None;
-        }
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("移除供应商配置失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "移除供应商配置失败",
+        |configuration| {
+            configuration.provider.remove(&provider_id);
+            if configuration
+                .model
+                .as_deref()
+                .and_then(provider_config::parse_active_model_reference)
+                .is_some_and(|(active_provider_id, _)| active_provider_id == provider_id)
+            {
+                configuration.model = None;
+            }
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
@@ -180,36 +174,33 @@ pub(super) async fn service_save_provider_enabled_models(
     request: ProviderEnabledModelsSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let provider_id = request.provider_id.trim().to_ascii_lowercase();
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        let catalog_ids = provider_config::catalog_model_choices(&provider_id, &next_configuration)
-            .into_iter()
-            .map(|model| model.id)
-            .collect::<BTreeSet<_>>();
-        let next_ids = normalize_provider_enabled_model_ids_for_save(
-            &provider_id,
-            request.enabled_model_ids,
-            &catalog_ids,
-        )?;
-        let entry = next_configuration
-            .provider
-            .get_mut(&provider_id)
-            .ok_or_else(|| format!("供应商 `{provider_id}` 尚未保存，无法配置模型。"))?;
-        entry.set_enabled_models(next_ids);
-        reconcile_active_model_after_enabled_models_change(&mut next_configuration, &provider_id);
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存启用模型失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存启用模型失败",
+        |configuration| {
+            let catalog_ids = provider_config::catalog_model_choices(&provider_id, configuration)
+                .into_iter()
+                .map(|model| model.id)
+                .collect::<BTreeSet<_>>();
+            let next_ids = normalize_provider_enabled_model_ids_for_save(
+                &provider_id,
+                request.enabled_model_ids,
+                &catalog_ids,
+            )?;
+            let entry = configuration
+                .provider
+                .get_mut(&provider_id)
+                .ok_or_else(|| format!("供应商 `{provider_id}` 尚未保存，无法配置模型。"))?;
+            entry.set_enabled_models(next_ids);
+            reconcile_active_model_after_enabled_models_change(configuration, &provider_id);
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
@@ -233,54 +224,51 @@ pub(super) async fn service_save_provider_model_override(
                 .map_err(|error| format!("推理模式附加配置 JSON 无效：{error}"))?,
         ),
     };
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        let catalog_ids = provider_config::catalog_model_choices(&provider_id, &next_configuration)
-            .into_iter()
-            .map(|model| model.id)
-            .collect::<BTreeSet<_>>();
-        if !catalog_ids.contains(&model_id) {
-            return Err(format!("模型 `{model_id}` 不属于供应商 `{provider_id}`。"));
-        }
-        let entry = next_configuration
-            .provider
-            .get_mut(&provider_id)
-            .ok_or_else(|| format!("供应商 `{provider_id}` 尚未保存，无法编辑模型能力。"))?;
-        let override_entry = PersistedModelOverrideEntry {
-            reasoning: request.reasoning,
-            attachment: request.attachment,
-            context_limit: request.context_limit,
-            input_limit: request.input_limit,
-            output_limit: request.output_limit,
-            reasoning_profile,
-            input_modalities: request
-                .input_modalities
-                .map(normalize_model_override_text_list)
-                .filter(|items| !items.is_empty()),
-            output_modalities: request
-                .output_modalities
-                .map(normalize_model_override_text_list)
-                .filter(|items| !items.is_empty()),
-        };
-        if override_entry.is_empty() {
-            entry.model_overrides.remove(&model_id);
-        } else {
-            entry.model_overrides.insert(model_id, override_entry);
-        }
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存模型能力失败：{error}"))?;
-        invalidate_runtime_prompt_tool_visibility_cache();
-        agent_runtime.provider_configuration = next_configuration.clone();
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存模型能力失败",
+        |configuration| {
+            let catalog_ids = provider_config::catalog_model_choices(&provider_id, configuration)
+                .into_iter()
+                .map(|model| model.id)
+                .collect::<BTreeSet<_>>();
+            if !catalog_ids.contains(&model_id) {
+                return Err(format!("模型 `{model_id}` 不属于供应商 `{provider_id}`。"));
+            }
+            let entry = configuration
+                .provider
+                .get_mut(&provider_id)
+                .ok_or_else(|| format!("供应商 `{provider_id}` 尚未保存，无法编辑模型能力。"))?;
+            let override_entry = PersistedModelOverrideEntry {
+                reasoning: request.reasoning,
+                attachment: request.attachment,
+                context_limit: request.context_limit,
+                input_limit: request.input_limit,
+                output_limit: request.output_limit,
+                reasoning_profile,
+                input_modalities: request
+                    .input_modalities
+                    .map(normalize_model_override_text_list)
+                    .filter(|items| !items.is_empty()),
+                output_modalities: request
+                    .output_modalities
+                    .map(normalize_model_override_text_list)
+                    .filter(|items| !items.is_empty()),
+            };
+            if override_entry.is_empty() {
+                entry.model_overrides.remove(&model_id);
+            } else {
+                entry.model_overrides.insert(model_id, override_entry);
+            }
+            Ok(())
+        },
+        |guard, configuration| {
+            invalidate_runtime_prompt_tool_visibility_cache();
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }

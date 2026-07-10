@@ -51,6 +51,170 @@ fn build_test_attachment(
     attachment
 }
 
+/// Verifies concurrent staging into one workspace preserves every independently created index record.
+/// 验证并发暂存到同一工作区时会保留每条独立创建的索引记录。
+#[test]
+fn concurrent_staging_preserves_every_attachment_index_record() {
+    /// Number of simultaneous staging operations used to exercise one shared index transaction.
+    /// 用于覆盖同一共享索引事务的并发暂存操作数量。
+    const STAGING_OPERATION_COUNT: usize = 24;
+
+    // workspace_directory isolates the concurrent index and managed files from other tests.
+    // workspace_directory 将并发索引与托管文件同其他测试隔离。
+    let workspace_directory = unique_workspace_directory();
+    // barrier releases every worker into the staging path at the same time.
+    // barrier 使全部 worker 同时进入暂存路径。
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(STAGING_OPERATION_COUNT));
+    // handles retain every worker so the test can join and collect its unique asset id.
+    // handles 保留全部 worker，使测试可以等待并收集其唯一资产标识。
+    let handles = (0..STAGING_OPERATION_COUNT)
+        .map(|operation_index| {
+            // worker_workspace provides this worker with the exact same transaction identity.
+            // worker_workspace 为当前 worker 提供完全相同的事务身份。
+            let worker_workspace = workspace_directory.clone();
+            // worker_barrier participates in the shared simultaneous release point.
+            // worker_barrier 参与共享的同时释放点。
+            let worker_barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                // descriptor is resolved inside the worker so no cross-thread borrow is retained.
+                // descriptor 在 worker 内解析，因此不会保留跨线程借用。
+                let descriptor = attachment_descriptor_from_mime_type("image/png")
+                    .expect("PNG attachment descriptor should resolve");
+                worker_barrier.wait();
+                stage_attachment_bytes(
+                    &worker_workspace.to_string_lossy(),
+                    &descriptor,
+                    &format!("concurrent-{operation_index}.png"),
+                    None,
+                    &[operation_index as u8],
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    // staged_asset_ids records the exact identifiers returned by successful production staging calls.
+    // staged_asset_ids 记录成功生产暂存调用返回的精确标识。
+    let staged_asset_ids = handles
+        .into_iter()
+        .map(|handle| {
+            handle
+                .join()
+                .expect("concurrent staging worker should not panic")
+                .expect("concurrent attachment should stage")
+                .asset_id
+                .expect("staged attachment should have an asset id")
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    // asset_root resolves through the same production workspace mapping used by every worker.
+    // asset_root 通过每个 worker 使用的同一生产工作区映射解析。
+    let asset_root = resolve_managed_attachment_root(&workspace_directory.to_string_lossy());
+    // document is loaded after every worker has committed its serialized index transaction.
+    // document 在每个 worker 提交串行化索引事务后加载。
+    let document = load_attachment_asset_index_document(&asset_root)
+        .expect("concurrently updated attachment index should load");
+    // indexed_asset_ids projects the durable record identity set for exact comparison.
+    // indexed_asset_ids 投影持久记录身份集合以便精确比较。
+    let indexed_asset_ids = document
+        .assets
+        .iter()
+        .map(|record| record.asset_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    std::fs::remove_dir_all(&workspace_directory)
+        .expect("concurrent staging workspace should be removed");
+
+    assert_eq!(staged_asset_ids.len(), STAGING_OPERATION_COUNT);
+    assert_eq!(indexed_asset_ids, staged_asset_ids);
+}
+
+/// Verifies the next index mutation resumes a deletion that stopped after its durable tombstone.
+/// 验证下一次索引变更会恢复停在持久墓碑之后的删除操作。
+#[test]
+fn index_mutation_recovers_pending_attachment_deletion() {
+    // workspace_directory isolates the simulated interrupted deletion transaction.
+    // workspace_directory 隔离模拟的中断删除事务。
+    let workspace_directory = unique_workspace_directory();
+    // pending_attachment represents the file whose deletion intent was persisted before interruption.
+    // pending_attachment 表示中断前已经持久化删除意图的文件。
+    let pending_attachment = build_test_attachment(
+        &workspace_directory,
+        "pending.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    // survivor_attachment triggers recovery and must retain its own newly acquired staging reference.
+    // survivor_attachment 触发恢复，并且必须保留自身新获取的暂存引用。
+    let survivor_attachment = build_test_attachment(
+        &workspace_directory,
+        "survivor.png",
+        ConversationAttachmentKind::Image,
+        "image/png",
+    );
+    // pending_asset_id is the exact tombstone identity expected to disappear after recovery.
+    // pending_asset_id 是恢复后预期消失的精确墓碑身份。
+    let pending_asset_id = pending_attachment
+        .asset_id
+        .clone()
+        .expect("pending attachment should have an asset id");
+    // pending_file_path must remain present while only the durable intent has been simulated.
+    // pending_file_path 在仅模拟持久意图时必须仍然存在。
+    let pending_file_path = std::path::PathBuf::from(&pending_attachment.local_path);
+    // asset_root resolves the production index containing both records.
+    // asset_root 解析包含两条记录的生产索引。
+    let asset_root = resolve_managed_attachment_root(&workspace_directory.to_string_lossy());
+    // document is edited exactly into the state left by a crash after phase-one persistence.
+    // document 被精确编辑为第一阶段持久化后崩溃留下的状态。
+    let mut document = load_attachment_asset_index_document(&asset_root)
+        .expect("attachment index should load before pending-delete simulation");
+    // pending_record receives the durable replay-safe deletion marker.
+    // pending_record 接收持久且回放安全的删除标记。
+    let pending_record = document
+        .assets
+        .iter_mut()
+        .find(|record| record.asset_id == pending_asset_id)
+        .expect("pending attachment record should exist");
+    pending_record.deletion_pending = true;
+    pending_record.purged_at_local_text = Some(String::from("2026-07-10 00:00:00"));
+    pending_record.purged_at_unix_millis = Some(1_783_622_400_000);
+    pending_record.purge_reason = Some(String::from("discarded-unreferenced-staged-attachment"));
+    save_attachment_asset_index_document(&asset_root, &document)
+        .expect("pending deletion tombstone should save");
+    assert!(pending_file_path.is_file());
+
+    acquire_staged_attachment_ref(
+        &workspace_directory.to_string_lossy(),
+        "recovery-trigger",
+        std::slice::from_ref(&survivor_attachment),
+    )
+    .expect("next mutation should recover pending deletion and acquire survivor ref");
+
+    // recovered_document proves recovery removal and the requested mutation committed together.
+    // recovered_document 证明恢复移除与请求的变更共同提交。
+    let recovered_document = load_attachment_asset_index_document(&asset_root)
+        .expect("recovered attachment index should load");
+    // survivor_asset_id selects the record whose normal mutation followed recovery.
+    // survivor_asset_id 选择在恢复后执行正常变更的记录。
+    let survivor_asset_id = survivor_attachment
+        .asset_id
+        .as_deref()
+        .expect("survivor attachment should have an asset id");
+    // survivor_record must retain the requested staging reference.
+    // survivor_record 必须保留请求的暂存引用。
+    let survivor_record = recovered_document
+        .assets
+        .iter()
+        .find(|record| record.asset_id == survivor_asset_id)
+        .expect("survivor attachment record should remain");
+    assert!(!pending_file_path.exists());
+    assert!(
+        recovered_document
+            .assets
+            .iter()
+            .all(|record| record.asset_id != pending_asset_id)
+    );
+    assert_eq!(survivor_record.staging_refs, vec!["recovery-trigger"]);
+    std::fs::remove_dir_all(&workspace_directory)
+        .expect("pending deletion recovery workspace should be removed");
+}
+
 /// Verifies staged attachments are indexed and later enriched with session/message references.
 /// 验证已暂存附件会写入索引，并可在后续补充会话/消息引用关系。
 #[test]

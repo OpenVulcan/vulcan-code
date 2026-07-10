@@ -87,6 +87,7 @@ pub(crate) fn update_service_failure(
             normalized_workspace_path_text_from_path(&workspace_root())
         ),
     ];
+    eprintln!("{}", logs[0]);
     let mut startup = startup_snapshot_with_phase(
         "failed",
         startup_failure_steps(OffsetDateTime::now_utc(), &error),

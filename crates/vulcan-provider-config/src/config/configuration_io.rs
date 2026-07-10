@@ -105,14 +105,6 @@ pub struct ProviderConfigurationFile {
     /// 以供应商标识为键保存的供应商映射。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider: BTreeMap<String, PersistedProviderEntry>,
-    /// Legacy active-agent identifier retained only for one-time migration into the dedicated agent profile store.
-    /// 仅为一次性迁移到独立 Agent 配置存储而保留的旧版激活代理标识。
-    #[serde(rename = "active_agent", default, skip_serializing)]
-    pub legacy_active_agent: Option<String>,
-    /// Legacy persisted multi-agent definitions retained only for one-time migration into the dedicated agent profile store.
-    /// 仅为一次性迁移到独立 Agent 配置存储而保留的旧版多代理定义集合。
-    #[serde(rename = "agents", default, skip_serializing)]
-    pub legacy_agents: BTreeMap<String, PersistedAgentEntry>,
     /// Persisted skill definitions keyed by stable skill id.
     /// 以稳定技能标识为键保存的技能定义集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -223,14 +215,10 @@ pub fn save_project_configuration_file(
     config: &ProjectVulcanCodeConfigurationFile,
 ) -> Result<(), String> {
     let path = project_configuration_file_path(workspace_path);
-    let parent = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| workspace_path.to_path_buf());
-    fs::create_dir_all(&parent).map_err(|error| format!("创建项目配置目录失败：{}。", error))?;
     let content = serde_json::to_string_pretty(config)
         .map_err(|error| format!("序列化项目配置失败：{}。", error))?;
-    fs::write(&path, content).map_err(|error| format!("写入项目配置失败：{}。", error))
+    crate::atomic_file::write_file_atomically(&path, content.as_bytes())
+        .map_err(|error| format!("写入项目配置失败：{error}。"))
 }
 
 /// Loads the shared controller bootstrap configuration from the runtime configuration directory.
@@ -267,18 +255,11 @@ pub fn load_configuration_file() -> Result<ProviderConfigurationFile, String> {
 /// 将供应商配置文件写回磁盘，并在需要时创建父目录。
 pub fn save_configuration_file(config: &ProviderConfigurationFile) -> Result<(), String> {
     let path = configuration_file_path();
-    let parent = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    fs::create_dir_all(&parent).map_err(|error| format!("创建配置目录失败：{}。", error))?;
-
     let normalized_config = normalize_provider_configuration_for_save(config);
     let content = serde_json::to_string_pretty(&normalized_config)
         .map_err(|error| format!("序列化供应商配置失败：{}。", error))?;
-
-    fs::write(&path, content).map_err(|error| format!("写入供应商配置失败：{}。", error))
+    crate::atomic_file::write_file_atomically(&path, content.as_bytes())
+        .map_err(|error| format!("写入供应商配置失败：{error}。"))
 }
 
 /// Resolves the supported provider definition by identifier.

@@ -40,7 +40,7 @@ fn read_event_window_projects_back_to_session_messages() {
             "second answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+    append_segmented_session_message_update(&session_dir, &messages).expect("append messages");
 
     // Read the current newest event through the same backward event-window path used by lazy paging.
     // 通过懒分页使用的同一反向事件窗口路径读取当前最新事件。
@@ -126,7 +126,7 @@ fn read_turn_window_preserves_complete_display_turns() {
             "third answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+    append_segmented_session_message_update(&session_dir, &messages).expect("append messages");
 
     let latest_window =
         read_segmented_session_turn_window(&session_dir, None, 2).expect("read turn window");
@@ -185,7 +185,7 @@ fn read_turn_window_repairs_corrupt_jsonl_tail_before_loading() {
             "first answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+    append_segmented_session_message_update(&session_dir, &messages).expect("append messages");
     let segment_path = session_dir.join("s001.jsonl");
     let mut file = OpenOptions::new()
         .append(true)

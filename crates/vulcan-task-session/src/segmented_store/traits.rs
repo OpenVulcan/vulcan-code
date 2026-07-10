@@ -38,6 +38,15 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
     /// 将当前 API 实际上下文文档保存到 state.json。
     fn save_context(&self, context: SessionContextDocument) -> Result<(), SessionStoreError> {
         let task_dir = self.indexed_task_dir(context.node_id)?;
+        // state_path is the shared document containing both context and runtime checkpoint fields.
+        // state_path 是同时包含上下文与运行时检查点字段的共享文档。
+        let state_path = task_dir.join(SEGMENTED_STATE_FILE);
+        // transaction_lock serializes this complete read-modify-write with checkpoint saves.
+        // transaction_lock 将该完整读改写周期与检查点保存串行化。
+        let transaction_lock = json_file_transaction_lock(&state_path)?;
+        // transaction_guard remains held until the merged state document is atomically published.
+        // transaction_guard 保持到合并后的状态文档完成原子发布。
+        let _transaction_guard = transaction_lock.lock().map_err(to_store_error)?;
         let mut state = read_task_state(&task_dir)?.unwrap_or_else(|| {
             SegmentedTaskStateDocument::new(context.node_id, current_unix_millis_u64())
         });
@@ -45,7 +54,7 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
         state.runtime_state = task_main_runtime_state_from_context(&context, &state.updated_at);
         state.current_context = task_main_current_context_from_context(&context, &state.updated_at);
         state.task_context = Some(context);
-        write_json_file(&task_dir.join(SEGMENTED_STATE_FILE), &state)
+        write_json_file(&state_path, &state)
     }
 
     /// Loads the current API-facing context document from state.json.
@@ -65,12 +74,21 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
         checkpoint: SessionRuntimeCheckpoint,
     ) -> Result<(), SessionStoreError> {
         let task_dir = self.indexed_task_dir(checkpoint.node_id)?;
+        // state_path is the same shared document written by save_context.
+        // state_path 是 save_context 写入的同一共享文档。
+        let state_path = task_dir.join(SEGMENTED_STATE_FILE);
+        // transaction_lock prevents checkpoint saves from overwriting a concurrently merged context.
+        // transaction_lock 防止检查点保存覆盖并发合并的上下文。
+        let transaction_lock = json_file_transaction_lock(&state_path)?;
+        // transaction_guard covers loading the latest state, updating checkpoint, and atomic publication.
+        // transaction_guard 覆盖加载最新状态、更新检查点与原子发布。
+        let _transaction_guard = transaction_lock.lock().map_err(to_store_error)?;
         let mut state = read_task_state(&task_dir)?.unwrap_or_else(|| {
             SegmentedTaskStateDocument::new(checkpoint.node_id, current_unix_millis_u64())
         });
         state.updated_at = current_unix_millis_u64().to_string();
         state.runtime_checkpoint = Some(checkpoint);
-        write_json_file(&task_dir.join(SEGMENTED_STATE_FILE), &state)
+        write_json_file(&state_path, &state)
     }
 
     /// Loads a lightweight runtime checkpoint from state.json.
@@ -85,22 +103,51 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
 }
 
 impl TaskSessionStore for SegmentedTaskSessionStore {
-    /// Creates a task session using the segmented task layout.
-    /// 使用分段子任务布局创建子任务会话。
+    /// Creates and atomically publishes a complete segmented task-session layout.
+    /// 创建并原子发布完整的分段子任务会话布局。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `metadata` is the authoritative metadata snapshot for the new task session.
+    /// `metadata` 是新子任务会话的权威元数据快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the complete child layout and its parent invocation link are published.
+    /// 完整子任务布局及其父级调用关联均发布后返回成功。
     fn create_task_session(&self, metadata: TaskSessionMetadata) -> Result<(), SessionStoreError> {
+        // transaction_guard serializes existence checks, publication, and parent-link append.
+        // transaction_guard 将存在性检查、发布与父级关联追加串行化。
+        let _transaction_guard =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+                .lock()
+                .map_err(to_store_error)?;
         create_dir_all(&self.task_root_dir())?;
-        if self.find_task_dir(metadata.task_session_id)?.is_some() {
-            return Err(SessionStoreError::new(format!(
-                "TaskSession `{}` already exists.",
-                metadata.task_session_id
-            )));
-        }
+        // task_dir is the single authoritative directory for this stable task-session id.
+        // task_dir 是该稳定子任务会话标识对应的唯一权威目录。
         let task_dir = self.new_task_dir(&metadata)?;
-        Self::create_task_layout(&task_dir)?;
+        match fs::symlink_metadata(&task_dir) {
+            Ok(_) => {
+                return Err(SessionStoreError::new(format!(
+                    "TaskSession directory already exists: {}",
+                    task_dir.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(to_store_error(error)),
+        }
+        // root_metadata seeds inherited layout fields without exposing the staged directory.
+        // root_metadata 为继承布局字段提供初值，且不会暴露暂存目录。
         let root_metadata = read_root_metadata_value(&self.root_session_dir)?;
+        // main_metadata indexes the child JSONL stream stored in the staged layout.
+        // main_metadata 索引暂存布局中的子任务 JSONL 流。
         let mut main_metadata =
             SegmentedTaskSessionMainMetadataDocument::new(&metadata, root_metadata.as_ref());
+        // document contains the API-facing authoritative task metadata projection.
+        // document 包含面向 API 的权威子任务元数据投影。
         let mut document = SegmentedTaskMetadataDocument::new(metadata.clone());
+        // meta_line is the first immutable event in every published task stream.
+        // meta_line 是每个已发布子任务流中的首条不可变事件。
         let meta_line = SegmentedEventLine {
             seq: 0,
             timestamp: metadata.created_at.to_string(),
@@ -119,23 +166,46 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
             }),
             turn_index: None,
         };
-        let bytes = append_json_line(&task_dir.join(&main_metadata.active_segment), &meta_line)?;
-        if let Some(segment) = main_metadata.segments.first_mut() {
-            segment.line_count = 1;
-            segment.byte_len = bytes;
-            segment.start_seq = 0;
-            segment.first_timestamp = Some(meta_line.timestamp.clone());
-            segment.last_timestamp = Some(meta_line.timestamp.clone());
+        // staged_task_dir remains invisible to task discovery until every child artifact is complete.
+        // staged_task_dir 在全部子任务产物完成前始终对任务发现不可见。
+        let staged_task_dir = create_task_directory_staging(&task_dir)?;
+        // staging_result captures every fallible child write so failures can remove the whole layout.
+        // staging_result 捕获全部可能失败的子任务写入，以便失败时删除整个布局。
+        let staging_result = (|| -> Result<(), SessionStoreError> {
+            // bytes records the exact initial JSONL footprint reflected in segment metadata.
+            // bytes 记录分段元数据所反映的初始 JSONL 精确字节占用。
+            let bytes = append_json_line(
+                &staged_task_dir.join(&main_metadata.active_segment),
+                &meta_line,
+            )?;
+            if let Some(segment) = main_metadata.segments.first_mut() {
+                segment.line_count = 1;
+                segment.byte_len = bytes;
+                segment.start_seq = 0;
+                segment.first_timestamp = Some(meta_line.timestamp.clone());
+                segment.last_timestamp = Some(meta_line.timestamp.clone());
+            }
+            main_metadata.next_global_seq = 1;
+            sync_task_metadata_segments_from_main(&mut document, &main_metadata);
+            write_json_file(&task_main_metadata_path(&staged_task_dir), &main_metadata)?;
+            write_json_file(&task_metadata_path(&staged_task_dir), &document)?;
+            write_json_file(
+                &staged_task_dir.join(SEGMENTED_STATE_FILE),
+                &SegmentedTaskStateDocument::new(metadata.task_session_id, metadata.created_at),
+            )?;
+            Ok(())
+        })();
+        if let Err(error) = staging_result {
+            remove_task_directory_staging(&staged_task_dir);
+            return Err(error);
         }
-        main_metadata.next_global_seq = 1;
-        sync_task_metadata_segments_from_main(&mut document, &main_metadata);
-        write_json_file(&task_main_metadata_path(&task_dir), &main_metadata)?;
-        write_json_file(&task_metadata_path(&task_dir), &document)?;
-        write_json_file(
-            &task_dir.join(SEGMENTED_STATE_FILE),
-            &SegmentedTaskStateDocument::new(metadata.task_session_id, metadata.created_at),
-        )?;
+        if let Err(error) = publish_task_directory(&staged_task_dir, &task_dir) {
+            remove_task_directory_staging(&staged_task_dir);
+            return Err(error);
+        }
 
+        // created_event links the now-complete child layout into its direct parent and root index.
+        // created_event 将现已完整的子任务布局关联到直接父级与根索引。
         let created_event = TaskInvocationEvent {
             event_id: format!("task-created-{}", metadata.task_session_id),
             root_session_id: metadata.root_session_id,
@@ -158,12 +228,28 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
                 }
             }),
         };
-        self.append_task_invocation_event(metadata.parent, created_event)
+        self.append_parent_invocation_event_with_owned_append_lock(&metadata.parent, &created_event)
     }
 
-    /// Saves task-session metadata into task_metadata.json.
-    /// 将子任务会话元数据保存到 task_metadata.json。
+    /// Saves task-session metadata and its root mirror as one shared append transaction.
+    /// 将子任务会话元数据及其根镜像作为一次共享追加事务保存。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `metadata` is the authoritative task-session metadata snapshot to persist.
+    /// `metadata` 是要持久化的权威子任务会话元数据快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after both child metadata documents and the root mirror are published.
+    /// 两份子任务元数据文档与根镜像均发布后返回成功。
     fn save_task_session(&self, metadata: TaskSessionMetadata) -> Result<(), SessionStoreError> {
+        // The append lock protects the complete read-modify-write set shared with event appends.
+        // 追加锁保护与事件追加共享的完整读改写集合。
+        let _transaction_guard =
+            vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+                .lock()
+                .map_err(to_store_error)?;
         let task_dir = self.indexed_task_dir(metadata.task_session_id)?;
         let metadata_path = task_metadata_path(&task_dir);
         let mut document = read_required_task_metadata_document(&metadata_path)?;
@@ -179,7 +265,10 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         sync_task_metadata_segments_from_main(&mut document, &main_metadata);
         write_json_file(&main_metadata_path, &main_metadata)?;
         write_json_file(&metadata_path, &document)?;
-        refresh_main_session_task_mirror_from_metadata(&self.root_session_dir, &document)?;
+        refresh_main_session_task_mirror_from_metadata_with_owned_append_lock(
+            &self.root_session_dir,
+            &document,
+        )?;
         Ok(())
     }
 

@@ -1,11 +1,11 @@
 import type {
-  AgentSkillsCatalogSummary,
-  SubagentDefinitionEnabledUpdate,
+  AgentSkillsCatalogUpdate,
+  LuaSkillsCatalogUpdate,
+  SubagentCatalogUpdate,
   SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
 } from "@/types";
 import {
-  browserFallbackSnapshot,
   updateBrowserFallbackWorkbench,
 } from "@/service/browser-fallback-workbench";
 import {
@@ -35,21 +35,64 @@ function browserPreviewAgentDefinitionPath(userRoot: string, agentId: string, ex
   return `${userRoot}/definitions/${agentId}.${extension}`;
 }
 
+// luaSkillsCatalogUpdateFromSnapshot projects one browser-preview workbench into the LuaSkills domain contract.
+// luaSkillsCatalogUpdateFromSnapshot 将单个浏览器预览工作台投影为 LuaSkills 领域契约。
+//
+// Parameters: snapshot is the committed browser-preview workbench snapshot.
+// 参数：snapshot 是已提交的浏览器预览工作台快照。
+// Returns: the revisioned LuaSkills catalog and its derived plugin rows.
+// 返回值：带版本的 LuaSkills 目录及其派生插件行。
+function luaSkillsCatalogUpdateFromSnapshot(snapshot: WorkbenchSnapshot): LuaSkillsCatalogUpdate {
+  return {
+    revision: snapshot.revision ?? 0,
+    luaSkills: snapshot.luaSkills,
+    plugins: snapshot.plugins,
+  };
+}
+
+// agentSkillsCatalogUpdateFromSnapshot projects one browser-preview workbench into the Agent Skills domain contract.
+// agentSkillsCatalogUpdateFromSnapshot 将单个浏览器预览工作台投影为 Agent Skills 领域契约。
+//
+// Parameters: snapshot is the committed browser-preview workbench snapshot.
+// 参数：snapshot 是已提交的浏览器预览工作台快照。
+// Returns: the revisioned complete Agent Skills catalog.
+// 返回值：带版本的完整 Agent Skills 目录。
+function agentSkillsCatalogUpdateFromSnapshot(snapshot: WorkbenchSnapshot): AgentSkillsCatalogUpdate {
+  return {
+    revision: snapshot.revision ?? 0,
+    agentSkills: snapshot.agentSkills,
+  };
+}
+
+// subagentCatalogUpdateFromSnapshot projects one browser-preview workbench into the agent-catalog domain contract.
+// subagentCatalogUpdateFromSnapshot 将单个浏览器预览工作台投影为智能体目录领域契约。
+//
+// Parameters: snapshot is the committed browser-preview workbench snapshot.
+// 参数：snapshot 是已提交的浏览器预览工作台快照。
+// Returns: the revisioned complete agent catalog.
+// 返回值：带版本的完整智能体目录。
+function subagentCatalogUpdateFromSnapshot(snapshot: WorkbenchSnapshot): SubagentCatalogUpdate {
+  return {
+    revision: snapshot.revision ?? 0,
+    subagentCatalog: snapshot.subagentCatalog,
+  };
+}
+
 // refreshLuaSkillsCatalog refreshes the Lua Skills catalog through the local service.
 // refreshLuaSkillsCatalog 通过本地服务刷新 Lua Skills 目录。
-export async function refreshLuaSkillsCatalog(): Promise<WorkbenchSnapshot> {
+export async function refreshLuaSkillsCatalog(): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return browserFallbackSnapshot();
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench(() => undefined));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_refresh_luaskills_catalog");
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_refresh_luaskills_catalog");
 }
 
 // installLuaSkill installs one Lua Skill package through the local service.
 // installLuaSkill 通过本地服务安装单个 Lua Skill 包。
-export async function installLuaSkill(skillId: string, source: string, sourceType: string): Promise<WorkbenchSnapshot> {
+export async function installLuaSkill(skillId: string, source: string, sourceType: string): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
     const normalizedSkillId = skillId.trim() || source.split("/").filter(Boolean).pop() || "preview-skill";
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       if (snapshot.luaSkills.skills.some((skill) => skill.skillId === normalizedSkillId)) {
         return;
       }
@@ -67,101 +110,101 @@ export async function installLuaSkill(skillId: string, source: string, sourceTyp
         systemOwned: false,
         tools: [],
       });
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_install_luaskill", { skillId: skillId.trim() || null, source, sourceType });
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_install_luaskill", { skillId: skillId.trim() || null, source, sourceType });
 }
 
 // updateLuaSkill updates one managed Lua Skill package.
 // updateLuaSkill 更新单个受管 Lua Skill 包。
-export async function updateLuaSkill(skillId: string): Promise<WorkbenchSnapshot> {
+export async function updateLuaSkill(skillId: string): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
       if (skill) {
         skill.version = skill.version || "0.1.0";
       }
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_update_luaskill", { skillId });
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_update_luaskill", { skillId });
 }
 
 // setLuaSkillEnabled toggles one Lua Skill package lifecycle state.
 // setLuaSkillEnabled 切换单个 Lua Skill 包生命周期状态。
-export async function setLuaSkillEnabled(skillId: string, enabled: boolean): Promise<WorkbenchSnapshot> {
+export async function setLuaSkillEnabled(skillId: string, enabled: boolean): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
       if (skill) {
         skill.enabled = enabled;
         skill.disabledReason = enabled ? null : "disabled from browser preview";
       }
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_set_luaskill_enabled", { skillId, enabled });
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskill_enabled", { skillId, enabled });
 }
 
 // uninstallLuaSkill removes one ordinary Lua Skill package.
 // uninstallLuaSkill 移除单个普通 Lua Skill 包。
-export async function uninstallLuaSkill(skillId: string): Promise<WorkbenchSnapshot> {
+export async function uninstallLuaSkill(skillId: string): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.luaSkills.skills = snapshot.luaSkills.skills.filter((skill) => skill.skillId !== skillId || skill.systemOwned);
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_uninstall_luaskill", { skillId });
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_uninstall_luaskill", { skillId });
 }
 
 // setLuaSkillToolRegistrationState persists one Lua Skill tool visibility state.
 // setLuaSkillToolRegistrationState 持久化单个 Lua Skill 工具可见性状态。
-export async function setLuaSkillToolRegistrationState(skillId: string, localName: string, registrationState: string): Promise<WorkbenchSnapshot> {
+export async function setLuaSkillToolRegistrationState(skillId: string, localName: string, registrationState: string): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
       const tool = skill?.tools.find((item) => item.localName === localName);
       if (tool) {
         tool.registrationState = registrationState as "explicit" | "implicit" | "disabled";
         tool.registrationLabel = luaSkillRegistrationLabel(registrationState);
       }
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_set_luaskill_tool_registration_state", { skillId, localName, registrationState });
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskill_tool_registration_state", { skillId, localName, registrationState });
 }
 
 // refreshAgentSkillsCatalog refreshes prompt-based Agent Skills through the local service.
 // refreshAgentSkillsCatalog 通过本地服务刷新基于提示词的 Agent Skills。
-export async function refreshAgentSkillsCatalog(): Promise<WorkbenchSnapshot> {
+export async function refreshAgentSkillsCatalog(): Promise<AgentSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return browserFallbackSnapshot();
+    return agentSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench(() => undefined));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_refresh_agent_skills_catalog");
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_refresh_agent_skills_catalog");
 }
 
 // refreshSubagentCatalog refreshes subagent and expert definitions through the local service.
 // refreshSubagentCatalog 通过本地服务刷新子代理与专家定义。
-export async function refreshSubagentCatalog(): Promise<WorkbenchSnapshot> {
+export async function refreshSubagentCatalog(): Promise<SubagentCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return browserFallbackSnapshot();
+    return subagentCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench(() => undefined));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_refresh_subagent_catalog");
+  return serviceClient.request<SubagentCatalogUpdate>("service_refresh_subagent_catalog");
 }
 
 // openSubagentUserDirectory opens the user-owned agent definition directory.
 // openSubagentUserDirectory 打开用户拥有的智能体定义目录。
-export async function openSubagentUserDirectory(): Promise<WorkbenchSnapshot> {
+export async function openSubagentUserDirectory(): Promise<SubagentCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return subagentCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.subagentCatalog.notice = `Browser preview user agent directory: ${snapshot.subagentCatalog.userRoot}`;
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_open_subagent_user_directory");
+  return serviceClient.request<SubagentCatalogUpdate>("service_open_subagent_user_directory");
 }
 
 // saveSubagentDefinition persists one editable agent definition.
 // saveSubagentDefinition 持久化单个可编辑智能体定义。
-export async function saveSubagentDefinition(definition: SubagentDefinitionSaveRequest): Promise<WorkbenchSnapshot> {
+export async function saveSubagentDefinition(definition: SubagentDefinitionSaveRequest): Promise<SubagentCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return subagentCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const targetAgentId = browserPreviewTargetAgentId(definition);
       const originalAgentId = definition.originalAgentId?.trim() || definition.agentId;
       const existingIndex = snapshot.subagentCatalog.definitions.findIndex((item) => item.agentId === originalAgentId);
@@ -221,9 +264,9 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
       } else {
         snapshot.subagentCatalog.definitions.push(nextDefinition);
       }
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_subagent_definition", { definition });
+  return serviceClient.request<SubagentCatalogUpdate>("service_save_subagent_definition", { definition });
 }
 
 // browserPreviewTargetAgentId applies package assignment in browser fallback mode.
@@ -277,44 +320,39 @@ function preferredBrowserPreviewLocaleField(
 
 // setSubagentDefinitionEnabled persists one subagent definition enabled state.
 // setSubagentDefinitionEnabled 持久化单个子代理定义启停状态。
-export async function setSubagentDefinitionEnabled(agentId: string, enabled: boolean): Promise<SubagentDefinitionEnabledUpdate> {
+export async function setSubagentDefinitionEnabled(agentId: string, enabled: boolean): Promise<SubagentCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    const snapshot = await updateBrowserFallbackWorkbench((snapshot) => {
+    return subagentCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const definition = snapshot.subagentCatalog.definitions.find((item) => item.agentId === agentId);
       if (definition) {
         definition.enabled = enabled;
       }
-    });
-    return {
-      agentId,
-      enabled,
-      notice: snapshot.subagentCatalog.notice,
-    };
+    }));
   }
-  return serviceClient.request<SubagentDefinitionEnabledUpdate>("service_set_subagent_definition_enabled", { agentId, enabled });
+  return serviceClient.request<SubagentCatalogUpdate>("service_set_subagent_definition_enabled", { agentId, enabled });
 }
 
 // deleteSubagentDefinition removes one user-owned subagent definition.
 // deleteSubagentDefinition 移除单个用户拥有的子代理定义。
-export async function deleteSubagentDefinition(agentId: string): Promise<WorkbenchSnapshot> {
+export async function deleteSubagentDefinition(agentId: string): Promise<SubagentCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return subagentCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const index = snapshot.subagentCatalog.definitions.findIndex((item) => item.agentId === agentId);
       const definition = index >= 0 ? snapshot.subagentCatalog.definitions[index] : undefined;
       if (!definition || (definition.scopeKey !== "user" && definition.scopeKey !== "package") || definition.overrideOf) {
         throw new Error("只有用户自定义智能体允许删除。");
       }
       snapshot.subagentCatalog.definitions.splice(index, 1);
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_delete_subagent_definition", { agentId });
+  return serviceClient.request<SubagentCatalogUpdate>("service_delete_subagent_definition", { agentId });
 }
 
 // restoreSubagentDefinitionDefault removes one user override for a system-backed definition.
 // restoreSubagentDefinitionDefault 移除单个系统集成定义的用户覆盖。
-export async function restoreSubagentDefinitionDefault(agentId: string): Promise<WorkbenchSnapshot> {
+export async function restoreSubagentDefinitionDefault(agentId: string): Promise<SubagentCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    return subagentCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const definition = snapshot.subagentCatalog.definitions.find((item) => item.agentId === agentId);
       if (definition?.canRestoreDefault || definition?.overrideOf) {
         definition.scope = "System";
@@ -322,37 +360,35 @@ export async function restoreSubagentDefinitionDefault(agentId: string): Promise
         definition.overrideOf = null;
         definition.canRestoreDefault = false;
       }
-    });
+    }));
   }
-  return serviceClient.request<WorkbenchSnapshot>("service_restore_subagent_definition_default", { agentId });
+  return serviceClient.request<SubagentCatalogUpdate>("service_restore_subagent_definition_default", { agentId });
 }
 
 // setAgentSkillsEnabled persists the global Agent Skills switch.
 // setAgentSkillsEnabled 持久化 Agent Skills 全局开关。
-export async function setAgentSkillsEnabled(enabled: boolean): Promise<AgentSkillsCatalogSummary> {
+export async function setAgentSkillsEnabled(enabled: boolean): Promise<AgentSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    const snapshot = updateBrowserFallbackWorkbench((snapshot) => {
+    return agentSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.agentSkills.globalEnabled = enabled;
       snapshot.agentSkills.skills = snapshot.agentSkills.skills.map((skill) => ({ ...skill, enabled }));
-    });
-    return snapshot.agentSkills;
+    }));
   }
-  return serviceClient.request<AgentSkillsCatalogSummary>("service_set_agent_skills_enabled", { enabled });
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_set_agent_skills_enabled", { enabled });
 }
 
 // setAgentSkillEnabled persists one global Agent Skill state.
 // setAgentSkillEnabled 持久化单个全局 Agent Skill 状态。
-export async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<AgentSkillsCatalogSummary> {
+export async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<AgentSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    const snapshot = updateBrowserFallbackWorkbench((snapshot) => {
+    return agentSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.agentSkills.skills.find((item) => item.name === name);
       if (skill) {
         skill.enabled = enabled && snapshot.agentSkills.globalEnabled;
       }
-    });
-    return snapshot.agentSkills;
+    }));
   }
-  return serviceClient.request<AgentSkillsCatalogSummary>("service_set_agent_skill_enabled", { name, enabled });
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_set_agent_skill_enabled", { name, enabled });
 }
 
 // loadProjectAgentSkillOverrides loads project-local Agent Skill overrides.

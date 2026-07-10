@@ -32,14 +32,13 @@ mod session_load;
 pub use self::segmented_session_store::find_segmented_session_directory_for_task_store_created_at;
 use self::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,
-    SegmentedSessionEventKind, SegmentedSessionMetadataPatch, append_segmented_boundary_events,
-    append_segmented_session_events, backup_runtime_log_before_compaction,
-    create_segmented_session_in_location, find_segmented_session_directory,
-    find_segmented_session_directory_by_id, load_session_boundary_state,
-    patch_segmented_session_metadata, read_runtime_log_lines, read_segmented_session_event_window,
+    SegmentedSessionEventKind, append_segmented_boundary_events, append_segmented_session_events,
+    backup_runtime_log_before_compaction, create_segmented_session_in_location,
+    find_segmented_session_directory, find_segmented_session_directory_by_id,
+    load_session_boundary_state, read_runtime_log_lines, read_segmented_session_event_window,
     read_state, record_runtime_audit_event, record_runtime_injection_applied,
-    replace_session_boundary_state, segmented_session_directory, state_document_from_runtime_state,
-    write_state,
+    replace_session_boundary_state, segmented_session_directory,
+    segmented_session_directory_exists, state_document_from_runtime_state, write_state,
 };
 use self::session_addon_store::read_session_addon_state;
 pub use goal_store::{
@@ -48,17 +47,13 @@ pub use goal_store::{
 };
 pub use persistence::{
     PersistedSessionForkResult, PersistedUserPromptEditDraft, PersistedUserPromptRollbackResult,
-    append_single_session_transcript_suffix, archive_project_sessions,
-    archive_project_with_sessions, archive_single_session, archive_single_session_for_project,
-    fork_persisted_session, load_persisted_user_prompt_edit_draft,
-    permanently_delete_archived_project, permanently_delete_archived_session,
-    persist_collapsed_task_project_ids, persist_new_project, persist_project_order_update,
+    archive_project_sessions, archive_single_session, fork_persisted_session,
+    load_persisted_user_prompt_edit_draft, persist_collapsed_task_project_ids, persist_new_project,
+    persist_project_icon_update, persist_project_order_update,
     persist_project_pinned_and_order_update, persist_single_session_addon_state_update,
     persist_single_session_runtime_state_update, persist_single_session_transcript_messages,
-    persist_single_session_update, persist_workspace_snapshot,
-    remove_project_after_archiving_sessions, rename_project, rename_single_session_metadata,
-    restore_project_with_sessions, rollback_persisted_session_before_user_prompt,
-    toggle_project_pinned,
+    persist_single_session_update, remove_project_after_archiving_sessions, rename_project,
+    rename_single_session, restore_project, rollback_persisted_session_before_user_prompt,
 };
 pub use session_load::{
     load_session_display_hydration_snapshot_for_project_created_at,
@@ -96,8 +91,7 @@ pub use models::*;
 pub use runtime_logs::*;
 
 use boundary_store::{
-    find_existing_segmented_context_session_dir, segmented_session_date_from_unix_millis_text,
-    session_boundary_event_from_segment_line,
+    find_existing_segmented_context_session_dir, session_boundary_event_from_segment_line,
 };
 use loading::sanitize_loaded_runtime_state_for_fresh_process;
 use queries::*;

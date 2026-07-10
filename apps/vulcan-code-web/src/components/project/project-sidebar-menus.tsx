@@ -251,6 +251,9 @@ export function ConversationContextMenu(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // isRunning keeps every archive entrypoint aligned with the backend lifecycle boundary.
+  // isRunning 让所有归档入口与后端生命周期边界保持一致。
+  const isRunning = props.conversation.status.toLowerCase() === "running";
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
@@ -263,7 +266,10 @@ export function ConversationContextMenu(props: {
           <Pencil size={15} />
           <span>{t("conversationMenu.rename")}</span>
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => props.onAction("archive", props.conversation)}>
+        <ContextMenuItem
+          disabled={isRunning}
+          onSelect={() => props.onAction("archive", props.conversation)}
+        >
           <Archive size={15} />
           <span>{t("conversationMenu.archive")}</span>
         </ContextMenuItem>

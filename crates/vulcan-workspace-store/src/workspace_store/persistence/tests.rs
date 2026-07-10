@@ -20,17 +20,36 @@ fn test_session_summary(id: SessionId, project_id: &str, title: &str) -> Session
 #[test]
 fn segmented_session_date_uses_unix_millis_text() {
     assert_eq!(
-        persistence_segmented_session_date_from_unix_millis_text("0"),
+        session_directory_date_from_unix_millis_text("0").expect("zero timestamp should decode"),
         "1970-01-01"
     );
     assert_eq!(
-        persistence_segmented_session_date_from_unix_millis_text("86400000"),
+        session_directory_date_from_unix_millis_text("86400000")
+            .expect("one-day timestamp should decode"),
         "1970-01-02"
     );
     assert_eq!(
-        persistence_segmented_session_date_from_unix_millis_text(" 1722470400000 "),
+        session_directory_date_from_unix_millis_text(" 1722470400000 ")
+            .expect("surrounding whitespace should be ignored"),
         "2024-08-01"
     );
+}
+
+/// Verifies invalid persisted timestamps fail instead of silently targeting the Unix epoch.
+/// 验证无效持久化时间戳会失败，而不是静默定位到 Unix 纪元。
+#[test]
+fn segmented_session_date_rejects_invalid_timestamp_text() {
+    // blank_error proves missing locator identity is not rewritten as zero milliseconds.
+    // blank_error 证明缺失的定位身份不会被改写为零毫秒。
+    let blank_error = session_directory_date_from_unix_millis_text("   ")
+        .expect_err("blank timestamp should fail");
+    // malformed_error proves non-numeric locator identity remains an explicit corruption error.
+    // malformed_error 证明非数字定位身份保持为显式损坏错误。
+    let malformed_error = session_directory_date_from_unix_millis_text("not-a-time")
+        .expect_err("malformed timestamp should fail");
+
+    assert!(blank_error.contains("不能为空"));
+    assert!(malformed_error.contains("not-a-time"));
 }
 
 /// Verifies segmented locators keep creation time stable when a session is updated later.
@@ -44,34 +63,6 @@ fn segmented_session_locator_uses_created_at_not_updated_at() {
     let locator = segmented_session_locator_from_summary(&session, "project-a", false);
 
     assert_eq!(locator.created_at, "0");
-}
-
-/// Verifies bulk snapshot mirroring only touches sessions with a loaded transcript window.
-/// 验证批量快照镜像只会处理已有已加载转录窗口的会话。
-#[test]
-fn snapshot_session_transcript_is_loaded_requires_messages_or_hydration() {
-    let loaded_by_messages = SessionId::from_u128(401);
-    let loaded_by_hydration = SessionId::from_u128(402);
-    let not_loaded = SessionId::from_u128(403);
-    let mut session_messages = BTreeMap::new();
-    session_messages.insert(loaded_by_messages, Vec::new());
-    let hydrated_session_ids = BTreeSet::from([loaded_by_hydration]);
-
-    assert!(snapshot_session_transcript_is_loaded(
-        loaded_by_messages,
-        &session_messages,
-        &hydrated_session_ids
-    ));
-    assert!(snapshot_session_transcript_is_loaded(
-        loaded_by_hydration,
-        &session_messages,
-        &hydrated_session_ids
-    ));
-    assert!(!snapshot_session_transcript_is_loaded(
-        not_loaded,
-        &session_messages,
-        &hydrated_session_ids
-    ));
 }
 
 /// Verifies runtime-state persistence preserves caller-retained display rows.
@@ -135,34 +126,4 @@ fn effective_session_messages_for_persistence_preserves_display_history() {
             .iter()
             .any(|message| message.body.contains("已总结旧过程"))
     );
-}
-
-/// Verifies bulk persistence rejects explicit session project ids when project membership is missing.
-/// 验证批量持久化在项目成员关系缺失时会拒绝会话自身项目标识回退。
-#[test]
-fn required_session_project_owner_rejects_session_project_id_without_membership() {
-    let session = test_session_summary(SessionId::from_u128(501), "explicit-project", "Loose");
-    let owner_map = BTreeMap::new();
-
-    let error = required_session_project_owner(&owner_map, &session, "测试索引")
-        .expect_err("missing project membership should fail");
-
-    assert!(error.contains("未找到会话所属项目"));
-    assert!(error.contains(&session.id.to_string()));
-}
-
-/// Verifies bulk persistence reads project ownership only from project membership.
-/// 验证批量持久化只从项目成员关系读取项目归属。
-#[test]
-fn required_session_project_owner_returns_project_membership() {
-    let session_id = SessionId::from_u128(502);
-    let session = test_session_summary(session_id, "stale-project", "Owned");
-    let mut owner_map = BTreeMap::new();
-    owner_map.insert(session_id, (String::from("owner-project"), 7));
-
-    let (project_id, sort_order) = required_session_project_owner(&owner_map, &session, "测试索引")
-        .expect("project membership should resolve");
-
-    assert_eq!(project_id, "owner-project");
-    assert_eq!(sort_order, 7);
 }

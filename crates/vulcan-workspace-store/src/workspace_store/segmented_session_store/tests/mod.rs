@@ -226,6 +226,7 @@ fn write_legacy_task_session_fixture(parent_session_dir: &Path, task_session_id:
 }
 
 mod append_events;
+mod atomic_io;
 mod metadata_archive;
 mod reverse_replay;
 mod rollback_updates;

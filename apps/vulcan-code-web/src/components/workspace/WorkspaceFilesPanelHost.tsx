@@ -21,6 +21,7 @@ import {
   WorkspaceFilePreview,
   workspaceFilePreviewErrorMessage,
 } from "@/components/workspace/workspace-files-preview";
+import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -56,6 +57,9 @@ const workspaceFileFilterStorageKey = "vulcan.workspace.files.filters.v1";
 // WorkspaceFilesPanelCacheEntry stores one right file panel state snapshot.
 // WorkspaceFilesPanelCacheEntry 保存单个右侧文件面板状态快照。
 interface WorkspaceFilesPanelCacheEntry {
+  // Backend directory-filter fingerprint that produced the cached listings.
+  // 生成缓存目录列表的后端过滤器指纹。
+  listingFiltersKey: string;
   // Expanded directory absolute paths.
   // 已展开目录的绝对路径。
   expandedPaths: string[];
@@ -143,9 +147,6 @@ export function WorkspaceFilesPanelHost(props: {
     () => workspaceFilesPanelCacheKey(activeSurfaceId, workspacePath, props.instanceId),
     [activeSurfaceId, props.instanceId, workspacePath],
   );
-  // initialCache restores state from a previously collapsed panel.
-  // initialCache 从先前折叠的面板恢复状态。
-  const initialCache = React.useMemo(() => workspaceFilesPanelCache.get(cacheKey) ?? null, [cacheKey]);
   // filters stores the active backend file tree filtering options.
   // filters 保存当前后端文件树过滤选项。
   const [filters, setFilters] = React.useState<WorkspaceFileFilterOptions>(() => (
@@ -157,6 +158,17 @@ export function WorkspaceFilesPanelHost(props: {
     () => workspaceFileListingFilters(filters),
     [filters.filterNonPreviewFiles, filters.ignoreDotNames, filters.ignoreHidden, filters.useGitignore, filters.useIgnoreFiles],
   );
+  // listingFiltersKey is the exact backend-filter fingerprint used to validate cached listings and request scope.
+  // listingFiltersKey 是用于校验缓存目录与请求作用域的准确后端过滤器指纹。
+  const listingFiltersKey = React.useMemo(() => JSON.stringify(listingFilters), [listingFilters]);
+  // initialCache restores only panel state produced by the active backend directory filters.
+  // initialCache 仅恢复由当前后端目录过滤器生成的面板状态。
+  const initialCache = React.useMemo(() => {
+    // cachedEntry is the route-local snapshot retained across right-rail unmounts.
+    // cachedEntry 是右侧栏卸载期间保留的路由局部快照。
+    const cachedEntry = workspaceFilesPanelCache.get(cacheKey) ?? null;
+    return cachedEntry?.listingFiltersKey === listingFiltersKey ? cachedEntry : null;
+  }, [cacheKey, listingFiltersKey]);
   // filterText stores the local file tree filter query.
   // filterText 保存本地文件树过滤查询。
   const [filterText, setFilterText] = React.useState(() => initialCache?.filterText ?? "");
@@ -201,15 +213,34 @@ export function WorkspaceFilesPanelHost(props: {
   // panelError stores the latest directory loading error.
   // panelError 保存最近一次目录加载错误。
   const [panelError, setPanelError] = React.useState<string | null>(null);
-  // listingFiltersKey stores a stable string used to refresh the root after tree filter changes.
-  // listingFiltersKey 保存目录树过滤变化后刷新根目录使用的稳定字符串。
-  const listingFiltersKey = React.useMemo(() => JSON.stringify(listingFilters), [listingFilters]);
   // loadedInitialDirectoryRef separates first directory hydration from user filter changes.
   // loadedInitialDirectoryRef 区分首次目录水合与用户过滤规则变化。
   const loadedInitialDirectoryRef = React.useRef(false);
   // skipNextDirectoryResetRef prevents cache hydration from looking like a user filter change.
   // skipNextDirectoryResetRef 防止缓存水合被误判为用户过滤规则变化。
   const skipNextDirectoryResetRef = React.useRef(false);
+  // lastHydratedCacheKeyRef prevents filter changes from rerunning route-cache hydration.
+  // lastHydratedCacheKeyRef 防止过滤器变化重新执行路由缓存水合。
+  const lastHydratedCacheKeyRef = React.useRef<string | null>(null);
+  // requestScopeKey binds async writers to the current panel route and backend directory filters.
+  // requestScopeKey 将异步写入者绑定到当前面板路由与后端目录过滤器。
+  const requestScopeKey = React.useMemo(
+    () => JSON.stringify([cacheKey, listingFiltersKey]),
+    [cacheKey, listingFiltersKey],
+  );
+  // requestOwnership enforces per-directory coalescing and latest-file preview ownership.
+  // requestOwnership 强制逐目录请求合并与最新文件预览所有权。
+  const requestOwnership = useWorkspaceFilesRequestOwnership(requestScopeKey);
+  // hydratedRequestScopeKey records which route and filter scope owns the current React state fields.
+  // hydratedRequestScopeKey 记录当前 React 状态字段所属的路由与过滤作用域。
+  const [hydratedRequestScopeKey, setHydratedRequestScopeKey] = React.useState(requestScopeKey);
+
+  React.useLayoutEffect(() => {
+    // Scope changes synchronously clear loading indicators owned by invalidated requests.
+    // 作用域变化会同步清理由失效请求持有的加载指示器。
+    setLoadingDirectories(new Set());
+    setPreviewLoading(false);
+  }, [requestScopeKey]);
 
   // loadDirectory fetches one directory and merges it into the directory cache.
   // loadDirectory 获取单个目录并合并到目录缓存。
@@ -217,10 +248,20 @@ export function WorkspaceFilesPanelHost(props: {
     if (!workspacePath) {
       return;
     }
+    // loadingKey identifies one directory request and loading indicator inside the active scope.
+    // loadingKey 标识当前作用域内的一次目录请求及其加载指示器。
     const loadingKey = directoryPath ?? workspacePath;
+    // ownedRequest prevents duplicate loads and binds every continuation to the committed scope.
+    // ownedRequest 防止重复加载，并将全部延续逻辑绑定到已提交作用域。
+    const ownedRequest = requestOwnership.beginDirectoryRequest(loadingKey);
+    if (!ownedRequest) {
+      return;
+    }
     setLoadingDirectories((current) => new Set(current).add(loadingKey));
     setPanelError(null);
     try {
+      // listing is the backend directory projection captured for this exact route and filter scope.
+      // listing 是为该准确路由与过滤作用域捕获的后端目录投影。
       const listing = await props.loadWorkspaceFileDirectory(
         workspacePath,
         workspaceProjectId,
@@ -228,6 +269,9 @@ export function WorkspaceFilesPanelHost(props: {
         directoryPath,
         listingFilters,
       );
+      if (!requestOwnership.ownsDirectoryRequest(loadingKey, ownedRequest)) {
+        return;
+      }
       setDirectories((current) => {
         const next = new Map(current);
         next.set(listing.path, listing);
@@ -237,18 +281,31 @@ export function WorkspaceFilesPanelHost(props: {
         toast.info(listing.notice);
       }
     } catch (error) {
-      setPanelError(error instanceof Error ? error.message : String(error));
+      if (requestOwnership.ownsDirectoryRequest(loadingKey, ownedRequest)) {
+        setPanelError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setLoadingDirectories((current) => {
-        const next = new Set(current);
-        next.delete(loadingKey);
-        return next;
-      });
+      if (requestOwnership.finishDirectoryRequest(loadingKey, ownedRequest)) {
+        setLoadingDirectories((current) => {
+          const next = new Set(current);
+          next.delete(loadingKey);
+          return next;
+        });
+      }
     }
-  }, [listingFilters, props.loadWorkspaceFileDirectory, props.selectedConversationId, workspacePath, workspaceProjectId]);
+  }, [listingFilters, props.loadWorkspaceFileDirectory, props.selectedConversationId, requestOwnership, workspacePath, workspaceProjectId]);
 
   React.useEffect(() => {
-    const nextCache = workspaceFilesPanelCache.get(cacheKey) ?? null;
+    if (lastHydratedCacheKeyRef.current === cacheKey) {
+      return;
+    }
+    lastHydratedCacheKeyRef.current = cacheKey;
+    // cachedEntry is the route-local snapshot retained across right-rail unmounts.
+    // cachedEntry 是右侧栏卸载期间保留的路由局部快照。
+    const cachedEntry = workspaceFilesPanelCache.get(cacheKey) ?? null;
+    // nextCache rejects directory state produced by different backend filters.
+    // nextCache 拒绝由不同后端过滤器生成的目录状态。
+    const nextCache = cachedEntry?.listingFiltersKey === listingFiltersKey ? cachedEntry : null;
     loadedInitialDirectoryRef.current = false;
     skipNextDirectoryResetRef.current = true;
     setFilters(readPersistedWorkspaceFileFilters());
@@ -262,12 +319,14 @@ export function WorkspaceFilesPanelHost(props: {
     setPreviewError(null);
     setMediaPermissionEntry(null);
     setPanelError(null);
-  }, [cacheKey]);
+    setHydratedRequestScopeKey(requestScopeKey);
+  }, [cacheKey, listingFiltersKey, requestScopeKey]);
 
   React.useEffect(() => {
     if (!loadedInitialDirectoryRef.current || skipNextDirectoryResetRef.current) {
       loadedInitialDirectoryRef.current = true;
       skipNextDirectoryResetRef.current = false;
+      setHydratedRequestScopeKey(requestScopeKey);
       void loadDirectory(null);
       return;
     }
@@ -279,21 +338,26 @@ export function WorkspaceFilesPanelHost(props: {
     setSelectedPath(null);
     setSelectedEntrySnapshot(null);
     props.onTitleChange(t("workspaceFilePreview.openFile"));
+    setHydratedRequestScopeKey(requestScopeKey);
     void loadDirectory(null);
-  }, [listingFiltersKey, loadDirectory, props.onTitleChange, t, workspacePath]);
+  }, [listingFiltersKey, loadDirectory, props.onTitleChange, requestScopeKey, t, workspacePath]);
 
   React.useEffect(() => {
+    if (hydratedRequestScopeKey !== requestScopeKey) {
+      return;
+    }
     const cacheEntry: WorkspaceFilesPanelCacheEntry = {
       directories: Array.from(directories.entries()),
       drawerPinnedOpen: fileTreeDrawerPinnedOpen,
       expandedPaths: Array.from(expandedPaths),
       filterText,
+      listingFiltersKey,
       selectedEntry: selectedEntrySnapshot,
       selectedPath,
     };
     workspaceFilesPanelCache.set(cacheKey, cacheEntry);
     trimWorkspaceFilesPanelCache();
-  }, [cacheKey, directories, expandedPaths, fileTreeDrawerPinnedOpen, filterText, selectedEntrySnapshot, selectedPath]);
+  }, [cacheKey, directories, expandedPaths, fileTreeDrawerPinnedOpen, filterText, hydratedRequestScopeKey, listingFiltersKey, requestScopeKey, selectedEntrySnapshot, selectedPath]);
 
   // rootListing stores the currently loaded root directory listing.
   // rootListing 保存当前已加载的根目录列表。
@@ -318,10 +382,10 @@ export function WorkspaceFilesPanelHost(props: {
   // handleDirectoryOpenStateChange lazily loads children when the shared drawer opens a directory.
   // handleDirectoryOpenStateChange 在共享抽屉展开目录时懒加载子项。
   const handleDirectoryOpenStateChange = React.useCallback((path: string, open: boolean) => {
-    if (open && !directories.has(path)) {
+    if (hydratedRequestScopeKey === requestScopeKey && open && !directories.has(path)) {
       void loadDirectory(path);
     }
-  }, [directories, loadDirectory]);
+  }, [directories, hydratedRequestScopeKey, loadDirectory, requestScopeKey]);
 
   // loadFilePreview loads the preview payload for one already selected file.
   // loadFilePreview 为一个已选中文件加载预览载荷。
@@ -333,7 +397,13 @@ export function WorkspaceFilesPanelHost(props: {
     // 后端预览权限检查使用的过滤器。
     previewFilters: WorkspaceFileFilterOptions,
   ) => {
-    if (!workspacePath) {
+    if (!workspacePath || hydratedRequestScopeKey !== requestScopeKey) {
+      return;
+    }
+    // ownedRequest makes only the latest selected file eligible to update preview state.
+    // ownedRequest 仅允许最近选择的文件更新预览状态。
+    const ownedRequest = requestOwnership.beginPreviewRequest();
+    if (!ownedRequest) {
       return;
     }
     setPreview(null);
@@ -348,15 +418,24 @@ export function WorkspaceFilesPanelHost(props: {
         entry.path,
         previewFilters,
       );
-      setPreview(response);
+      if (requestOwnership.ownsPreviewRequest(ownedRequest)) {
+        setPreview(response);
+      }
     } catch (error) {
-      setPreviewError(workspaceFilePreviewErrorMessage(error, entry, t));
+      if (requestOwnership.ownsPreviewRequest(ownedRequest)) {
+        setPreviewError(workspaceFilePreviewErrorMessage(error, entry, t));
+      }
     } finally {
-      setPreviewLoading(false);
+      if (requestOwnership.finishPreviewRequest(ownedRequest)) {
+        setPreviewLoading(false);
+      }
     }
-  }, [props.loadWorkspaceFilePreview, props.selectedConversationId, t, workspacePath, workspaceProjectId]);
+  }, [hydratedRequestScopeKey, props.loadWorkspaceFilePreview, props.selectedConversationId, requestOwnership, requestScopeKey, t, workspacePath, workspaceProjectId]);
 
   React.useEffect(() => {
+    if (hydratedRequestScopeKey !== requestScopeKey) {
+      return;
+    }
     // Restored file tabs must reload their previous preview even before the tree is reopened.
     // 恢复的文件页签必须在目录树重新展开前重新加载上次预览。
     if (!selectedEntry || selectedEntry.isDirectory || preview || previewLoading || previewError || mediaPermissionEntry) {
@@ -366,22 +445,25 @@ export function WorkspaceFilesPanelHost(props: {
       return;
     }
     if (workspaceFileEntryNeedsMediaPermission(selectedEntry, filters)) {
+      requestOwnership.invalidatePreviewRequest();
+      setPreviewLoading(false);
       setMediaPermissionEntry(selectedEntry);
       return;
     }
     void loadFilePreview(selectedEntry, filters);
-  }, [filters, loadFilePreview, mediaPermissionEntry, preview, previewError, previewLoading, selectedEntry]);
+  }, [filters, hydratedRequestScopeKey, loadFilePreview, mediaPermissionEntry, preview, previewError, previewLoading, requestOwnership, requestScopeKey, selectedEntry]);
 
   // selectFile loads a preview for one file row.
   // selectFile 为单个文件行加载预览。
   const selectFile = React.useCallback(async (entry: WorkspaceFileEntrySummary) => {
-    if (!workspacePath || entry.isDirectory) {
+    if (!workspacePath || hydratedRequestScopeKey !== requestScopeKey || entry.isDirectory) {
       return;
     }
     setSelectedPath(entry.path);
     setSelectedEntrySnapshot(entry);
     props.onTitleChange(entry.name || workspaceFileNameFromPath(entry.relativePath || entry.path, t("workspaceFilePreview.openFile")));
     if (entry.kind === "other") {
+      requestOwnership.invalidatePreviewRequest();
       setPreview(null);
       setPreviewError(null);
       setPreviewLoading(false);
@@ -389,6 +471,7 @@ export function WorkspaceFilesPanelHost(props: {
       return;
     }
     if (workspaceFileEntryNeedsMediaPermission(entry, filters)) {
+      requestOwnership.invalidatePreviewRequest();
       setPreview(null);
       setPreviewError(null);
       setPreviewLoading(false);
@@ -396,7 +479,7 @@ export function WorkspaceFilesPanelHost(props: {
       return;
     }
     await loadFilePreview(entry, filters);
-  }, [filters, loadFilePreview, props.onTitleChange, t, workspacePath]);
+  }, [filters, hydratedRequestScopeKey, loadFilePreview, props.onTitleChange, requestOwnership, requestScopeKey, t, workspacePath]);
 
   // allowMediaPreview grants one media kind and immediately opens the selected media file.
   // allowMediaPreview 授权单个媒体类型并立即打开已选中的媒体文件。
@@ -444,6 +527,7 @@ export function WorkspaceFilesPanelHost(props: {
   // closePreviewAndShowTree clears the file preview and reopens the shared directory drawer.
   // closePreviewAndShowTree 清空文件预览并重新打开共享目录抽屉。
   const closePreviewAndShowTree = React.useCallback(() => {
+    requestOwnership.invalidatePreviewRequest();
     setSelectedPath(null);
     setSelectedEntrySnapshot(null);
     setPreview(null);
@@ -452,7 +536,7 @@ export function WorkspaceFilesPanelHost(props: {
     setPreviewLoading(false);
     setFileTreeDrawerPinnedOpen(true);
     props.onTitleChange(t("workspaceFilePreview.openFile"));
-  }, [props.onTitleChange, t]);
+  }, [props.onTitleChange, requestOwnership, t]);
 
   if (!workspacePath) {
     return (

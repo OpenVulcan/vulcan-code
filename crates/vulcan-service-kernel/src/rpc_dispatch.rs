@@ -170,14 +170,15 @@ pub(super) async fn dispatch_service_rpc(
                 rpc_required_param(&params, "projectId")?,
             ))
         }
-        "service_set_agent_skill_project_state" => {
-            rpc_json_result(service_set_agent_skill_project_state(
+        "service_set_agent_skill_project_state" => rpc_json_result(
+            service_set_agent_skill_project_state(
                 state,
                 rpc_required_param(&params, "projectId")?,
                 rpc_required_param(&params, "name")?,
                 rpc_required_param(&params, "stateKey")?,
-            ))
-        }
+            )
+            .await,
+        ),
         "service_run_vmm_memory_action" => rpc_json_result(
             service_run_vmm_memory_action(state, rpc_required_param(&params, "request")?).await,
         ),
@@ -243,7 +244,13 @@ pub(super) async fn dispatch_service_rpc(
             .await,
         ),
         "service_stop_conversation_run" => rpc_json_result(
-            service_stop_conversation_run(app, state, rpc_optional_param(&params, "mode")?).await,
+            service_stop_conversation_run(
+                app,
+                state,
+                rpc_required_param(&params, "conversationId")?,
+                rpc_optional_param(&params, "mode")?,
+            )
+            .await,
         ),
         "service_stop_command_session" => rpc_json_result(
             service_stop_command_session(
@@ -322,7 +329,6 @@ pub(super) async fn dispatch_service_rpc(
         )),
         "service_open_subagent_panel" => rpc_json_result(
             service_open_subagent_panel(
-                app,
                 state,
                 rpc_required_param(&params, "parentConversationId")?,
                 rpc_required_param(&params, "taskId")?,
@@ -588,11 +594,15 @@ pub(super) async fn dispatch_service_rpc(
                 .await,
         ),
         "service_archive_project_conversations" => rpc_json_result(
-            service_archive_project_conversations(state, rpc_required_param(&params, "projectId")?)
-                .await,
+            service_archive_project_conversations(
+                app,
+                state,
+                rpc_required_param(&params, "projectId")?,
+            )
+            .await,
         ),
         "service_remove_project" => rpc_json_result(
-            service_remove_project(state, rpc_required_param(&params, "projectId")?).await,
+            service_remove_project(app, state, rpc_required_param(&params, "projectId")?).await,
         ),
         "service_rename_conversation" => rpc_json_result(
             service_rename_conversation(
@@ -603,8 +613,12 @@ pub(super) async fn dispatch_service_rpc(
             .await,
         ),
         "service_archive_conversation" => rpc_json_result(
-            service_archive_conversation(state, rpc_required_param(&params, "conversationId")?)
-                .await,
+            service_archive_conversation(
+                app,
+                state,
+                rpc_required_param(&params, "conversationId")?,
+            )
+            .await,
         ),
         "service_mark_conversation_read" => rpc_json_result(
             service_mark_conversation_read(state, rpc_required_param(&params, "conversationId")?)

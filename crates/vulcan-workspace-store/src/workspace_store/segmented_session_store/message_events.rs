@@ -60,32 +60,69 @@ pub(in crate::workspace_store) fn append_segmented_boundary_events(
     Ok(lines)
 }
 
-/// Appends only the not-yet-persisted tail of a transcript message slice to the main segmented session.
-/// 只将转录消息切片中尚未持久化的尾部追加到主分段会话。
-pub(in crate::workspace_store) fn append_segmented_session_message_tail(
+/// Persists one complete transcript snapshot by appending a verified tail or rewriting divergent rows.
+/// 通过追加已校验尾部或重写分歧行来持久化一份完整转录快照。
+///
+/// # Parameters
+/// # 参数
+/// `session_dir` is the existing segmented session directory that owns the transcript.
+/// `session_dir` 是拥有该转录的既有分段会话目录。
+/// `messages` is the complete authoritative transcript snapshot supplied by the caller.
+/// `messages` 是调用方提供的完整权威转录快照。
+///
+/// # Returns
+/// # 返回值
+/// Returns the appended or changed event lines after one in-process atomic update decision.
+/// 在一次进程内原子更新决策后返回新增或变更的事件行。
+pub(in crate::workspace_store) fn append_segmented_session_message_update(
     session_dir: &Path,
     messages: &[SessionMessageEntry],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    // Keep transcript tail detection, sequence assignment, and file append atomic in-process.
-    // 让转录尾部检测、序号分配与文件追加在进程内保持原子。
-    let _guard = segmented_append_file_io_lock()
+    // append_guard keeps boundary detection and the selected append/rewrite commit indivisible in-process.
+    // append_guard 让边界检测与选定的追加/重写提交在进程内不可分割。
+    let _append_guard = segmented_append_file_io_lock()
         .lock()
         .map_err(to_store_error)?;
     repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
+    // metadata is the single checkpoint snapshot used by both the decision and the selected write path.
+    // metadata 是决策与选定写入路径共同使用的唯一检查点快照。
     let mut metadata = read_session_metadata(session_dir)?;
-    let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
-    if messages.len() < first_new_index {
-        return Err(format!(
-            "Segmented session append rejected non-tail transcript change: persisted message count {} exceeds incoming message count {}.",
-            first_new_index,
-            messages.len()
-        ));
+    if segmented_message_tail_matches(&metadata, messages)? {
+        append_segmented_session_message_tail_locked(session_dir, messages, &mut metadata)
+    } else {
+        rewrite_segmented_session_message_records_locked(session_dir, messages, &mut metadata)
     }
+}
+
+/// Appends the new portion of a transcript whose persisted boundary was already verified under the append lock.
+/// 在追加锁内已校验持久化边界后，追加转录中的新增部分。
+///
+/// # Parameters
+/// # 参数
+/// `session_dir` is the segmented session directory currently protected by the append lock.
+/// `session_dir` 是当前受追加锁保护的分段会话目录。
+/// `messages` is the complete transcript whose prefix matches the persisted checkpoint.
+/// `messages` 是前缀与已持久化检查点匹配的完整转录。
+/// `metadata` is the same metadata snapshot used for boundary verification.
+/// `metadata` 是用于边界校验的同一份元数据快照。
+///
+/// # Returns
+/// # 返回值
+/// Returns only the newly appended event lines.
+/// 仅返回新追加的事件行。
+fn append_segmented_session_message_tail_locked(
+    session_dir: &Path,
+    messages: &[SessionMessageEntry],
+    metadata: &mut SegmentedSessionMetadata,
+) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    // first_new_index is the verified persisted prefix length.
+    // first_new_index 是已经校验的持久化前缀长度。
+    let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
     if messages.len() == first_new_index {
-        validate_segmented_message_tail_boundary(&metadata, messages)?;
         return Ok(Vec::new());
     }
-    validate_segmented_message_tail_boundary(&metadata, messages)?;
+    // new_message_ids rejects duplicate identities inside the newly appended slice.
+    // new_message_ids 用于拒绝新增切片内部的重复身份。
     let mut new_message_ids = BTreeSet::new();
     for (index, message) in messages.iter().enumerate().skip(first_new_index) {
         let message_id = stable_segmented_message_id(index, message);
@@ -95,8 +132,12 @@ pub(in crate::workspace_store) fn append_segmented_session_message_tail(
             ));
         }
     }
+    // turn_indexes preserves turn ownership for only the new suffix.
+    // turn_indexes 仅为新增尾部保留轮次归属。
     let turn_indexes =
-        assign_segmented_tail_message_turn_indexes(&metadata, &messages[first_new_index..]);
+        assign_segmented_tail_message_turn_indexes(metadata, &messages[first_new_index..]);
+    // events is the exact append batch derived from the verified suffix.
+    // events 是从已校验尾部派生出的精确追加批次。
     let mut events = messages
         .iter()
         .enumerate()
@@ -107,80 +148,33 @@ pub(in crate::workspace_store) fn append_segmented_session_message_tail(
         })
         .collect::<Result<Vec<_>, _>>()?;
     backfill_tool_detail_ref_sequences(&mut events, metadata.next_global_seq);
-    let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
-    update_segmented_message_checkpoint(&mut metadata, messages)?;
-    write_metadata(session_dir, &metadata)?;
+    let appended_lines = append_events_with_metadata(session_dir, metadata, &events)?;
+    update_segmented_message_checkpoint(metadata, messages)?;
+    write_metadata(session_dir, metadata)?;
     Ok(appended_lines)
 }
 
-/// Appends or physically rewrites one transcript update without creating rollback bloat.
-/// 追加或物理重写一次转录更新，避免创建回滚膨胀。
-pub(in crate::workspace_store) fn append_segmented_session_message_update(
+/// Rewrites persisted message rows while the caller holds the append lock and owns the verified metadata snapshot.
+/// 在调用方持有追加锁并拥有已校验元数据快照时重写持久化消息行。
+///
+/// # Parameters
+/// # 参数
+/// `session_dir` is the segmented session directory currently protected by the append lock.
+/// `session_dir` 是当前受追加锁保护的分段会话目录。
+/// `messages` is the complete authoritative transcript replacing divergent persisted rows.
+/// `messages` 是替换分歧持久化行的完整权威转录。
+/// `metadata` is the metadata snapshot read before the append/rewrite decision.
+/// `metadata` 是追加/重写决策前读取的元数据快照。
+///
+/// # Returns
+/// # 返回值
+/// Returns all rewritten or newly appended event lines.
+/// 返回全部被重写或新追加的事件行。
+fn rewrite_segmented_session_message_records_locked(
     session_dir: &Path,
     messages: &[SessionMessageEntry],
+    metadata: &mut SegmentedSessionMetadata,
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    match append_segmented_session_message_tail(session_dir, messages) {
-        Ok(lines) => Ok(lines),
-        Err(error) if error.contains("non-tail transcript change") => {
-            rewrite_segmented_session_message_records(session_dir, messages)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Appends caller-verified new display messages after the persisted transcript tail.
-/// 在已持久化转录尾部之后追加调用方已确认的新显示消息。
-pub(in crate::workspace_store) fn append_segmented_session_message_suffix(
-    session_dir: &Path,
-    messages: &[SessionMessageEntry],
-) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    if messages.is_empty() {
-        return Ok(Vec::new());
-    }
-    let _guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
-    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
-    let mut metadata = read_session_metadata(session_dir)?;
-    let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
-    let mut new_message_ids = BTreeSet::new();
-    for (offset, message) in messages.iter().enumerate() {
-        let message_id = stable_segmented_message_id(first_new_index + offset, message);
-        if !new_message_ids.insert(message_id.clone()) {
-            return Err(format!(
-                "Segmented session suffix append rejected duplicate message `{message_id}` after message index {first_new_index}."
-            ));
-        }
-    }
-    let turn_indexes = assign_segmented_tail_message_turn_indexes(&metadata, messages);
-    let mut events = messages
-        .iter()
-        .enumerate()
-        .zip(turn_indexes)
-        .map(|((offset, message), turn_index)| {
-            segmented_event_input_from_message(first_new_index + offset, message, turn_index)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    backfill_tool_detail_ref_sequences(&mut events, metadata.next_global_seq);
-    let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
-    advance_segmented_message_checkpoint_with_suffix(&mut metadata, first_new_index, messages)?;
-    write_metadata(session_dir, &metadata)?;
-    Ok(appended_lines)
-}
-
-/// Physically rewrites persisted message rows to match the supplied transcript.
-/// 将已持久化的消息行物理重写为给定转录。
-pub(in crate::workspace_store) fn rewrite_segmented_session_message_records(
-    session_dir: &Path,
-    messages: &[SessionMessageEntry],
-) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    // Message-row rewrites update segment files and metadata under the same append lock.
-    // 消息行重写会在同一把追加锁下更新分段文件与元数据。
-    let _guard = segmented_append_file_io_lock()
-        .lock()
-        .map_err(to_store_error)?;
-    repair_segmented_session_jsonl_files_if_needed_locked(session_dir)?;
-    let mut metadata = read_session_metadata(session_dir)?;
     let turn_indexes = assign_segmented_message_turn_indexes(messages);
     let original_segments = metadata.segments.clone();
     let mut rewritten_segments = Vec::new();
@@ -268,10 +262,10 @@ pub(in crate::workspace_store) fn rewrite_segmented_session_message_records(
         )?);
     }
     backfill_tool_detail_ref_sequences(&mut missing_events, metadata.next_global_seq);
-    let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &missing_events)?;
+    let appended_lines = append_events_with_metadata(session_dir, metadata, &missing_events)?;
     changed_lines.extend(appended_lines);
-    update_segmented_message_checkpoint(&mut metadata, messages)?;
-    write_metadata(session_dir, &metadata)?;
+    update_segmented_message_checkpoint(metadata, messages)?;
+    write_metadata(session_dir, metadata)?;
     Ok(changed_lines)
 }
 
@@ -498,42 +492,45 @@ pub(in crate::workspace_store) fn truncate_segmented_session_after_message(
     write_metadata(session_dir, &metadata)
 }
 
-/// Validates the persisted transcript tail boundary without scanning historical segment files.
-/// 不扫描历史分段文件，仅校验已持久化转录尾部边界。
-pub(in crate::workspace_store) fn validate_segmented_message_tail_boundary(
+/// Determines whether a complete incoming transcript preserves the persisted tail checkpoint.
+/// 判断完整传入转录是否保留已持久化尾部检查点。
+///
+/// # Parameters
+/// # 参数
+/// `metadata` is the persisted transcript checkpoint read under the append lock.
+/// `metadata` 是在追加锁内读取的已持久化转录检查点。
+/// `messages` is the complete authoritative transcript proposed for persistence.
+/// `messages` 是拟持久化的完整权威转录。
+///
+/// # Returns
+/// # 返回值
+/// Returns `true` only when count, tail identity, and tail content fingerprint all match exactly.
+/// 仅当数量、尾部身份与尾部内容指纹全部精确匹配时返回 `true`。
+fn segmented_message_tail_matches(
     metadata: &SegmentedSessionMetadata,
     messages: &[SessionMessageEntry],
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    // message_count is the exact persisted prefix length represented by the checkpoint.
+    // message_count 是检查点表示的精确持久化前缀长度。
     let message_count = usize::try_from(metadata.message_count).map_err(to_store_error)?;
     if message_count == 0 {
-        return Ok(());
+        return Ok(
+            metadata.last_message_id.is_none() && metadata.last_message_fingerprint.is_none()
+        );
     }
-    let Some(previous_message) = messages.get(message_count.saturating_sub(1)) else {
-        return Ok(());
+    let Some(previous_message) = messages.get(message_count - 1) else {
+        return Ok(false);
     };
-    let previous_message_id =
-        stable_segmented_message_id(message_count.saturating_sub(1), previous_message);
-    if metadata
-        .last_message_id
-        .as_deref()
-        .is_some_and(|stored_id| stored_id != previous_message_id)
-    {
-        return Err(format!(
-            "Segmented session append rejected non-tail transcript change: persisted tail message id changed from `{}` to `{previous_message_id}`.",
-            metadata.last_message_id.as_deref().unwrap_or_default()
-        ));
+    // previous_message_id binds the incoming boundary row to its persisted position and identity.
+    // previous_message_id 将传入边界行绑定到其持久化位置与身份。
+    let previous_message_id = stable_segmented_message_id(message_count - 1, previous_message);
+    if metadata.last_message_id.as_deref() != Some(previous_message_id.as_str()) {
+        return Ok(false);
     }
+    // previous_message_fingerprint proves the boundary row content is unchanged.
+    // previous_message_fingerprint 证明边界行内容未发生变化。
     let previous_message_fingerprint = segmented_message_fingerprint(previous_message)?;
-    if metadata
-        .last_message_fingerprint
-        .as_deref()
-        .is_some_and(|stored_fingerprint| stored_fingerprint != previous_message_fingerprint)
-    {
-        return Err(format!(
-            "Segmented session append rejected non-tail transcript change: persisted tail message `{previous_message_id}` changed."
-        ));
-    }
-    Ok(())
+    Ok(metadata.last_message_fingerprint.as_deref() == Some(previous_message_fingerprint.as_str()))
 }
 
 /// Stores the current persisted transcript tail checkpoint in metadata.
@@ -549,22 +546,6 @@ pub(in crate::workspace_store) fn update_segmented_message_checkpoint(
     } else {
         metadata.last_message_id = None;
         metadata.last_message_fingerprint = None;
-    }
-    Ok(())
-}
-
-/// Advances the persisted transcript checkpoint after suffix-only append.
-/// 在仅追加尾部消息后推进已持久化转录检查点。
-pub(in crate::workspace_store) fn advance_segmented_message_checkpoint_with_suffix(
-    metadata: &mut SegmentedSessionMetadata,
-    first_new_index: usize,
-    messages: &[SessionMessageEntry],
-) -> Result<(), String> {
-    metadata.message_count = first_new_index.saturating_add(messages.len()) as u64;
-    if let Some((offset, message)) = messages.iter().enumerate().next_back() {
-        let index = first_new_index + offset;
-        metadata.last_message_id = Some(stable_segmented_message_id(index, message));
-        metadata.last_message_fingerprint = Some(segmented_message_fingerprint(message)?);
     }
     Ok(())
 }

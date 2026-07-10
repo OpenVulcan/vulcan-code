@@ -251,7 +251,13 @@ pub fn stage_attachment_bytes(
         )
     })?;
 
-    set_managed_attachment_file_times(&managed_file_path, timestamp.unix_millis)?;
+    if let Err(error) = set_managed_attachment_file_times(&managed_file_path, timestamp.unix_millis)
+    {
+        return Err(rollback_failed_managed_attachment(
+            &managed_file_path,
+            error,
+        ));
+    }
     let attachment = ConversationAttachment {
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
@@ -264,8 +270,38 @@ pub fn stage_attachment_bytes(
         preview_local_path: None,
         mime_type: descriptor.mime_type.to_string(),
     };
-    record_staged_attachment(workspace_path, &attachment, &timestamp)?;
+    if let Err(error) = record_staged_attachment(workspace_path, &attachment, &timestamp) {
+        return Err(rollback_failed_managed_attachment(
+            &managed_file_path,
+            error,
+        ));
+    }
     Ok(attachment)
+}
+
+/// Removes one managed attachment file after post-write metadata or index publication fails.
+/// 在写入后的元数据或索引发布失败时删除一个托管附件文件。
+///
+/// # Parameters
+/// 参数
+/// `managed_file_path` is the newly written file that must not remain unindexed.
+/// `managed_file_path` 是不得以未索引状态遗留的新写入文件。
+/// `primary_error` is the authoritative staging failure returned by the failed operation.
+/// `primary_error` 是失败操作返回的权威暂存错误。
+///
+/// # Returns
+/// 返回值
+/// The primary error, enriched with rollback failure details when cleanup also fails.
+/// 返回首要错误；若清理也失败则附加回滚失败详情。
+fn rollback_failed_managed_attachment(managed_file_path: &Path, primary_error: String) -> String {
+    match fs::remove_file(managed_file_path) {
+        Ok(()) => primary_error,
+        Err(rollback_error) => format!(
+            "{primary_error} 同时回滚未索引托管附件 `{}` 失败：{}。",
+            managed_file_path.display(),
+            rollback_error
+        ),
+    }
 }
 
 /// Materializes one in-memory attachment payload into one caller-selected directory while keeping host-controlled extension normalization and collision avoidance.
@@ -790,6 +826,59 @@ mod tests {
         assert!(std::path::Path::new(&attachment.local_path).is_file());
 
         cleanup_workspace_directory(&workspace_directory);
+    }
+
+    /// Verifies an index publication failure rolls back the managed file written earlier in staging.
+    /// 验证索引发布失败时会回滚暂存流程中较早写入的托管文件。
+    #[test]
+    fn stage_attachment_bytes_rolls_back_file_when_index_publication_fails() {
+        // workspace_directory isolates the deliberately blocked index directory.
+        // workspace_directory 隔离刻意阻塞的索引目录。
+        let workspace_directory = unique_workspace_directory();
+        // asset_root is resolved through the production workspace mapping.
+        // asset_root 通过生产工作区映射解析。
+        let asset_root = resolve_managed_attachment_root(&workspace_directory.to_string_lossy());
+        std::fs::create_dir_all(&asset_root).expect("managed attachment root should be created");
+        // blocking_index_path is a regular file where the index directory must be created.
+        // blocking_index_path 是位于索引目录预期位置的普通文件。
+        let blocking_index_path = asset_root.join("index");
+        std::fs::write(&blocking_index_path, b"blocks index directory")
+            .expect("blocking index file should be written");
+        // descriptor drives the normal image-category staging path before index publication fails.
+        // descriptor 在索引发布失败前驱动正常的图片分类暂存路径。
+        let descriptor = attachment_descriptor_from_mime_type("image/png")
+            .expect("png mime type should stay supported");
+
+        // result must report the index failure after rolling back the managed file.
+        // result 必须在回滚托管文件后报告索引失败。
+        let result = stage_attachment_bytes(
+            &workspace_directory.to_string_lossy(),
+            &descriptor,
+            "rollback-image.png",
+            None,
+            &[0_u8, 1, 2, 3],
+        );
+        // managed_file_count counts files inside category directories while excluding the deliberate index blocker.
+        // managed_file_count 统计分类目录内文件，并排除刻意设置的索引阻塞文件。
+        let mut managed_file_count = 0usize;
+        for entry in std::fs::read_dir(&asset_root).expect("managed attachment root should read") {
+            // entry is one direct child of the managed attachment root.
+            // entry 是托管附件根目录的一个直接子项。
+            let entry = entry.expect("managed attachment root entry should read");
+            if entry
+                .file_type()
+                .expect("managed attachment root entry type should read")
+                .is_dir()
+            {
+                managed_file_count += std::fs::read_dir(entry.path())
+                    .expect("managed attachment category should read")
+                    .count();
+            }
+        }
+        cleanup_workspace_directory(&workspace_directory);
+
+        assert!(result.is_err());
+        assert_eq!(managed_file_count, 0);
     }
 
     /// Verifies caller-supplied mismatched extensions are discarded so the managed file name always reflects the host-selected format.

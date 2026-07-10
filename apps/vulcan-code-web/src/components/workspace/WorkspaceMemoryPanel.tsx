@@ -24,6 +24,10 @@ import type {
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
 } from "@/types";
+import {
+  useWorkspaceMemoryRequestOwnership,
+  workspaceMemoryPanelRouteKey,
+} from "@/components/workspace/workspace-memory-panel-request-ownership";
 
 // WorkspaceMemoryPanel renders WebUI-aligned dynamic and static context injection lists.
 // WorkspaceMemoryPanel 渲染对齐 WebUI 的动态与静态上下文注入列表。
@@ -31,6 +35,9 @@ export function WorkspaceMemoryPanel(props: {
   // Selected-session context injection snapshot from the service.
   // 来自服务的当前选中会话上下文注入快照。
   snapshot: ContextInjectionSnapshot | null;
+  // Exact persisted conversation represented by the selected-session snapshot.
+  // 当前选中会话快照所代表的准确已持久化会话。
+  selectedConversationId: string | null;
   // Optional project id used to resolve project-scoped VMM configuration.
   // 用于解析项目级 VMM 配置的可选项目标识。
   selectedProjectId?: string | null;
@@ -41,6 +48,18 @@ export function WorkspaceMemoryPanel(props: {
   // t translates stable side-panel labels.
   // t 翻译稳定侧面板标签。
   const { t } = useI18n();
+  // selectedProjectId normalizes the optional project prop for route identity and request capture.
+  // selectedProjectId 规范化可选项目属性，用于路由身份与请求捕获。
+  const selectedProjectId = props.selectedProjectId ?? null;
+  // routeKey separates every session-scoped optimistic state and asynchronous result writer.
+  // routeKey 隔离每个会话级乐观状态与异步结果写入者。
+  const routeKey = workspaceMemoryPanelRouteKey(props.selectedConversationId, selectedProjectId);
+  // requestOwnership synchronously arbitrates destructive actions and latest-wins lookups.
+  // requestOwnership 同步仲裁破坏性动作与仅最新结果生效的查询。
+  const requestOwnership = useWorkspaceMemoryRequestOwnership(routeKey);
+  // stateRouteKeyRef records which route owns the current optimistic state and dialogs.
+  // stateRouteKeyRef 记录当前乐观状态与弹窗所属的路由。
+  const stateRouteKeyRef = React.useRef(routeKey);
   const [hiddenMemoryIds, setHiddenMemoryIds] = React.useState<Set<number>>(() => new Set());
   const [hiddenDedupeKeys, setHiddenDedupeKeys] = React.useState<Set<string>>(() => new Set());
   const [busyDeleteKey, setBusyDeleteKey] = React.useState<string | null>(null);
@@ -50,6 +69,21 @@ export function WorkspaceMemoryPanel(props: {
   const dynamicCards = props.snapshot?.dynamicCards ?? [];
   const staticCards = props.snapshot?.staticCards ?? [];
   const staticProfile = props.snapshot?.staticProfile ?? null;
+
+  React.useLayoutEffect(() => {
+    if (stateRouteKeyRef.current === routeKey) {
+      return;
+    }
+    stateRouteKeyRef.current = routeKey;
+    // Optimistic removals and dialogs describe one selected session only and must not cross routes.
+    // 乐观移除与弹窗仅描述一个选中会话，不能跨路由保留。
+    setHiddenMemoryIds(new Set());
+    setHiddenDedupeKeys(new Set());
+    setBusyDeleteKey(null);
+    setPendingDelete(null);
+    setLookupDialog(null);
+    setDeleteNotice(null);
+  }, [routeKey]);
 
   // hideDeleteTarget removes one target from the current rendered panel.
   // hideDeleteTarget 从当前渲染面板中隐藏一个目标条目。
@@ -66,38 +100,62 @@ export function WorkspaceMemoryPanel(props: {
   // handleSuppressDeleteTarget hides one target only for this session.
   // handleSuppressDeleteTarget 仅在本会话中隐藏一个目标条目。
   const handleSuppressDeleteTarget = React.useCallback(async (target: ContextInjectionDeleteTarget) => {
-    if (!props.onRunVmmAction || busyDeleteKey != null) {
+    if (!props.onRunVmmAction || !props.selectedConversationId || !target.suppressibleInSession) {
       return;
     }
+    // request excludes synchronous duplicate submissions and binds the result to this committed route.
+    // request 排除同步重复提交，并将结果绑定到当前已提交路由。
+    const request = requestOwnership.beginMutationRequest();
+    if (!request) {
+      return;
+    }
+    // conversationId captures the exact backend session that owns this visible injection.
+    // conversationId 捕获拥有当前可见注入内容的准确后端会话。
+    const conversationId = props.selectedConversationId;
     const deleteKey = contextInjectionDeleteKey(target);
     setBusyDeleteKey(deleteKey);
     setDeleteNotice(null);
     try {
       const result = await props.onRunVmmAction({
         action: "suppress_context_injection_item",
-        scope: props.selectedProjectId ? "project" : "global",
-        projectId: props.selectedProjectId ?? null,
+        scope: selectedProjectId ? "project" : "global",
+        projectId: selectedProjectId,
+        conversationId,
         payload: {
           dedupeKey: target.dedupeKey,
           memoryId: target.memoryId > 0 ? target.memoryId : null,
           reason: "manual context injection suppression from memory panel",
         },
       });
+      if (!requestOwnership.ownsMutationRequest(request)) {
+        return;
+      }
       hideDeleteTarget(target);
       setDeleteNotice(result.summary || t("workspaceMemory.suppressedNotice"));
       setPendingDelete(null);
     } catch (error) {
+      if (!requestOwnership.ownsMutationRequest(request)) {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setDeleteNotice(t("workspaceMemory.suppressFailed").replace("{error}", message));
     } finally {
-      setBusyDeleteKey(null);
+      if (requestOwnership.finishMutationRequest(request)) {
+        setBusyDeleteKey(null);
+      }
     }
-  }, [busyDeleteKey, hideDeleteTarget, props, t]);
+  }, [hideDeleteTarget, props.onRunVmmAction, props.selectedConversationId, requestOwnership, selectedProjectId, t]);
 
   // handlePermanentDeleteTarget deletes one durable VMM memory id.
   // handlePermanentDeleteTarget 删除单个长期 VMM 记忆标识。
   const handlePermanentDeleteTarget = React.useCallback(async (target: ContextInjectionDeleteTarget) => {
-    if (!props.onRunVmmAction || busyDeleteKey != null || target.memoryId <= 0) {
+    if (!props.onRunVmmAction || target.memoryId <= 0) {
+      return;
+    }
+    // request excludes synchronous duplicate destructive actions and captures visible-route ownership.
+    // request 排除同步重复破坏性动作，并捕获可见路由所有权。
+    const request = requestOwnership.beginMutationRequest();
+    if (!request) {
       return;
     }
     const deleteKey = contextInjectionDeleteKey(target);
@@ -106,13 +164,16 @@ export function WorkspaceMemoryPanel(props: {
     try {
       const result = await props.onRunVmmAction({
         action: "delete_memories",
-        scope: props.selectedProjectId ? "project" : "global",
-        projectId: props.selectedProjectId ?? null,
+        scope: selectedProjectId ? "project" : "global",
+        projectId: selectedProjectId,
         payload: {
           memoryIds: [target.memoryId],
           reason: "manual memory delete from context panel",
         },
       });
+      if (!requestOwnership.ownsMutationRequest(request)) {
+        return;
+      }
       if (vmmDeletedMemoryIds(result.response).has(target.memoryId)) {
         hideDeleteTarget(target);
         setDeleteNotice(t("workspaceMemory.deletedNotice"));
@@ -121,12 +182,17 @@ export function WorkspaceMemoryPanel(props: {
         setDeleteNotice(result.summary || t("workspaceMemory.deletedWithoutId"));
       }
     } catch (error) {
+      if (!requestOwnership.ownsMutationRequest(request)) {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setDeleteNotice(t("workspaceMemory.deleteFailed").replace("{error}", message));
     } finally {
-      setBusyDeleteKey(null);
+      if (requestOwnership.finishMutationRequest(request)) {
+        setBusyDeleteKey(null);
+      }
     }
-  }, [busyDeleteKey, hideDeleteTarget, props, t]);
+  }, [hideDeleteTarget, props.onRunVmmAction, requestOwnership, selectedProjectId, t]);
 
   // handleLookupTurn loads one full VMM turn detail and opens a dialog.
   // handleLookupTurn 加载单条完整 VMM 回合详情并打开弹窗。
@@ -134,22 +200,41 @@ export function WorkspaceMemoryPanel(props: {
     if (!props.onRunVmmAction || target.turnId <= 0) {
       return;
     }
+    // request replaces every older lookup and binds this result to the currently committed route.
+    // request 替换全部旧查询，并将当前结果绑定到已提交路由。
+    const request = requestOwnership.beginLookupRequest();
+    if (!request) {
+      return;
+    }
     setLookupDialog({ target, loading: true });
     try {
       const result = await props.onRunVmmAction({
         action: "get_turn_details",
-        scope: props.selectedProjectId ? "project" : "global",
-        projectId: props.selectedProjectId ?? null,
+        scope: selectedProjectId ? "project" : "global",
+        projectId: selectedProjectId,
         payload: {
           turnIds: [target.turnId],
         },
       });
-      setLookupDialog({ target, result, loading: false });
+      if (requestOwnership.ownsLookupRequest(request)) {
+        setLookupDialog({ target, result, loading: false });
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setLookupDialog({ target, error: message, loading: false });
+      if (requestOwnership.ownsLookupRequest(request)) {
+        const message = error instanceof Error ? error.message : String(error);
+        setLookupDialog({ target, error: message, loading: false });
+      }
+    } finally {
+      requestOwnership.finishLookupRequest(request);
     }
-  }, [props]);
+  }, [props.onRunVmmAction, requestOwnership, selectedProjectId]);
+
+  // handleCloseLookupDialog invalidates pending lookup ownership before removing the visible dialog.
+  // handleCloseLookupDialog 在移除可见弹窗前使待处理查询所有权失效。
+  const handleCloseLookupDialog = React.useCallback(() => {
+    requestOwnership.invalidateLookupRequest();
+    setLookupDialog(null);
+  }, [requestOwnership]);
 
   return (
     <Tabs className="context-injection-tabs" defaultValue="dynamic">
@@ -196,6 +281,7 @@ export function WorkspaceMemoryPanel(props: {
       {pendingDelete ? (
         <ContextInjectionDeleteDialog
           busy={busyDeleteKey === contextInjectionDeleteKey(pendingDelete)}
+          canSuppress={Boolean(props.selectedConversationId && pendingDelete.suppressibleInSession)}
           target={pendingDelete}
           onCancel={() => setPendingDelete(null)}
           onPermanentDelete={() => void handlePermanentDeleteTarget(pendingDelete)}
@@ -205,7 +291,7 @@ export function WorkspaceMemoryPanel(props: {
       {lookupDialog ? (
         <ContextInjectionLookupDialog
           state={lookupDialog}
-          onClose={() => setLookupDialog(null)}
+          onClose={handleCloseLookupDialog}
         />
       ) : null}
     </Tabs>
@@ -434,7 +520,12 @@ function ContextInjectionCardView(props: {
           const scoreLabel = contextInjectionScoreLabel(item);
           const scoreTone = contextInjectionScoreTone(scoreLabel);
           const dateLabel = contextInjectionDateLabel(item);
-          const deleteTarget = { content: item.content, dedupeKey, memoryId };
+          const deleteTarget = {
+            content: item.content,
+            dedupeKey,
+            memoryId,
+            suppressibleInSession: props.mode === "dynamic",
+          };
           const lookupTarget = { content: item.content, turnId };
           const deleteKey = contextInjectionDeleteKey(deleteTarget);
           const canDelete = Boolean((memoryId > 0 || dedupeKey) && props.onRequestDelete);
@@ -526,6 +617,9 @@ interface ContextInjectionDeleteTarget {
   // Optional durable VMM memory id.
   // 可选长期 VMM 记忆标识。
   memoryId: number;
+  // Whether this item belongs to transient injection state that supports session suppression.
+  // 当前条目是否属于支持会话级抑制的瞬态注入状态。
+  suppressibleInSession: boolean;
 }
 
 // ContextInjectionLookupTarget identifies one VMM turn detail lookup request.
@@ -562,6 +656,9 @@ function ContextInjectionDeleteDialog(props: {
   // Whether the selected delete target is currently busy.
   // 当前删除目标是否正在处理中。
   busy: boolean;
+  // Whether the panel owns an exact persisted session that can receive suppression.
+  // 面板是否拥有可接收抑制动作的准确已持久化会话。
+  canSuppress: boolean;
   // Target selected by the user.
   // 用户选择的目标条目。
   target: ContextInjectionDeleteTarget;
@@ -602,7 +699,7 @@ function ContextInjectionDeleteDialog(props: {
           <Button disabled={props.busy} onClick={props.onCancel} type="button" variant="ghost">
             {t("conversation.action.cancel")}
           </Button>
-          <Button disabled={props.busy} onClick={props.onSuppress} type="button" variant="outline">
+          <Button disabled={props.busy || !props.canSuppress} onClick={props.onSuppress} type="button" variant="outline">
             {t("workspaceMemory.suppressForSession")}
           </Button>
           <Button

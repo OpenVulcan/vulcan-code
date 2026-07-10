@@ -158,6 +158,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
   }],
   pendingQuestion: null,
+  plugins: [],
   luaSkills: {
     runtimeRoot: "D:/openvulcan/vulcan-code/output/lua_runtime",
     systemLuaLib: "D:/openvulcan/vulcan-code/output/lua_runtime/system_lua_lib",
@@ -499,7 +500,19 @@ export function loadBrowserFallbackConversationMessages(sessionId: string): Conv
 // updateBrowserFallbackWorkbench 修改预览状态并返回新的快照。
 export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnapshot) => void): WorkbenchSnapshot {
   mutator(browserFallbackWorkbenchState);
+  // Browser preview mutations follow the same monotonic revision contract as service-backed snapshots.
+  // 浏览器预览变更遵循与服务端快照相同的单调版本契约。
+  browserFallbackWorkbenchState.revision = (browserFallbackWorkbenchState.revision ?? 0) + 1;
   browserFallbackWorkbenchState.luaSkills.entryCount = browserFallbackWorkbenchState.luaSkills.skills
     .reduce((total, skill) => total + (skill.enabled ? skill.entryCount : 0), 0);
+  // Plugin rows are a projection of the same LuaSkills catalog and must advance atomically with it.
+  // 插件行是同一份 LuaSkills 目录的投影，必须与其原子推进。
+  browserFallbackWorkbenchState.plugins = browserFallbackWorkbenchState.luaSkills.skills.map((skill) => ({
+    id: skill.skillId,
+    name: skill.displayName,
+    kind: `LuaSkill / ${skill.rootName}`,
+    status: skill.enabled ? "已启用" : "已停用",
+    capability: `${skill.entryCount} 个入口`,
+  }));
   return browserFallbackSnapshot();
 }

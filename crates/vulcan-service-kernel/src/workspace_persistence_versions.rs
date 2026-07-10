@@ -81,6 +81,75 @@ pub(crate) fn invalidate_webui_session_persist_version(
     Ok(())
 }
 
+/// Invalidates every pending persistence channel before or after a session lifecycle transition.
+/// 在会话生命周期转换前后使全部待处理持久化通道失效。
+///
+/// # Parameters
+/// 参数
+/// `state` owns whole-session, transcript, and addon persistence version tables.
+/// `state` 持有整会话、转录与附属状态持久化版本表。
+/// `session_id` selects the session whose stale background writes must be fenced out.
+/// `session_id` 选择必须隔离过期后台写入的会话。
+///
+/// # Returns
+/// 返回值
+/// Returns success after all currently allocated persistence channels advance atomically under one state lock.
+/// 全部当前已分配持久化通道在同一状态锁下原子推进后返回成功。
+pub(crate) fn invalidate_webui_session_lifecycle_persist_versions(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // guard advances every persistence domain in one coherent critical section.
+    // guard 在一个一致临界区内推进每个持久化领域。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // next_session_version invalidates whole-session and runtime-state persistence tasks.
+    // next_session_version 使整会话与运行态持久化任务失效。
+    let next_session_version = guard
+        .session_persist_versions
+        .get(&session_id)
+        .copied()
+        .unwrap_or_default()
+        .saturating_add(1);
+    guard
+        .session_persist_versions
+        .insert(session_id, next_session_version);
+    // next_transcript_version invalidates transcript-only persistence tasks.
+    // next_transcript_version 使仅转录持久化任务失效。
+    let next_transcript_version = guard
+        .session_transcript_persist_versions
+        .get(&session_id)
+        .copied()
+        .unwrap_or_default()
+        .saturating_add(1);
+    guard
+        .session_transcript_persist_versions
+        .insert(session_id, next_transcript_version);
+    // addon_keys capture every namespace that already has a pending or completed version lineage.
+    // addon_keys 捕获已经具有待处理或已完成版本谱系的每个命名空间。
+    let addon_keys = guard
+        .session_addon_persist_versions
+        .keys()
+        .filter(|(candidate_session_id, _namespace)| *candidate_session_id == session_id)
+        .copied()
+        .collect::<Vec<_>>();
+    for addon_key in addon_keys {
+        // next_addon_version invalidates the pending writer for this exact namespace.
+        // next_addon_version 使该精确命名空间的待处理写入者失效。
+        let next_addon_version = guard
+            .session_addon_persist_versions
+            .get(&addon_key)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1);
+        guard
+            .session_addon_persist_versions
+            .insert(addon_key, next_addon_version);
+    }
+    Ok(())
+}
+
 /// Allocates the next live transcript persistence version for one WebUI session.
 /// 为一个 WebUI 会话分配下一次运行中转录持久化版本。
 ///
@@ -707,4 +776,101 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         ),
     );
     Ok(workbench)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No-op shell host used to construct isolated persistence-version state.
+    /// 用于构造隔离持久化版本状态的空操作壳宿主。
+    struct PersistenceVersionTestShellHost;
+
+    impl ServiceShellHost for PersistenceVersionTestShellHost {
+        /// Ignores filesystem open requests in persistence-version tests.
+        /// 在持久化版本测试中忽略文件系统打开请求。
+        fn open_path(&self, _path: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        /// Ignores URL open requests in persistence-version tests.
+        /// 在持久化版本测试中忽略 URL 打开请求。
+        fn open_url(&self, _url: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// Verifies one lifecycle fence invalidates whole-session, transcript, and allocated addon writers only for its target session.
+    /// 验证一次生命周期隔离只对目标会话的整会话、转录与已分配附属写入者生效。
+    #[test]
+    fn lifecycle_persistence_fence_invalidates_every_target_channel() {
+        // state owns isolated version maps for this test.
+        // state 持有本测试使用的隔离版本表。
+        let state =
+            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
+        // session_id is the lifecycle transition target.
+        // session_id 是生命周期转换目标。
+        let session_id = SessionId::from_u128(0x71);
+        // other_session_id proves unrelated session versions remain current.
+        // other_session_id 证明无关会话版本保持当前状态。
+        let other_session_id = SessionId::from_u128(0x72);
+        // whole_version represents a queued whole-session or runtime-state writer.
+        // whole_version 表示排队中的整会话或运行态写入者。
+        let whole_version = next_webui_session_persist_version(&state, session_id)
+            .expect("whole-session version should allocate");
+        // transcript_version represents a queued transcript-only writer.
+        // transcript_version 表示排队中的仅转录写入者。
+        let transcript_version = next_webui_session_transcript_persist_version(&state, session_id)
+            .expect("transcript version should allocate");
+        // addon_versions represent queued writers for two independent addon namespaces.
+        // addon_versions 表示两个独立附属命名空间的排队写入者。
+        let addon_versions = vec![
+            (
+                SessionAddonNamespace::WorkMode,
+                next_webui_session_addon_persist_version(
+                    &state,
+                    session_id,
+                    SessionAddonNamespace::WorkMode,
+                )
+                .expect("work-mode addon version should allocate"),
+            ),
+            (
+                SessionAddonNamespace::RuntimeControls,
+                next_webui_session_addon_persist_version(
+                    &state,
+                    session_id,
+                    SessionAddonNamespace::RuntimeControls,
+                )
+                .expect("runtime-controls addon version should allocate"),
+            ),
+        ];
+        // other_version remains valid because the fence is session-scoped.
+        // other_version 保持有效，因为隔离按会话划分。
+        let other_version = next_webui_session_persist_version(&state, other_session_id)
+            .expect("unrelated session version should allocate");
+
+        invalidate_webui_session_lifecycle_persist_versions(&state, session_id)
+            .expect("lifecycle fence should advance every target channel");
+
+        assert!(!webui_session_persist_version_is_current(
+            &state,
+            session_id,
+            whole_version
+        ));
+        assert!(!webui_session_transcript_persist_version_is_current(
+            &state,
+            session_id,
+            transcript_version
+        ));
+        assert!(!webui_session_addon_persist_versions_are_current(
+            &state,
+            session_id,
+            &addon_versions
+        ));
+        assert!(webui_session_persist_version_is_current(
+            &state,
+            other_session_id,
+            other_version
+        ));
+    }
 }

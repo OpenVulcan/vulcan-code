@@ -424,9 +424,12 @@ pub(crate) fn parse_ai_tool_kind(value: &str) -> Result<AiToolKind, String> {
 
 /// Reprojects Agent Skills after a focused prompt-skill configuration change.
 /// 在聚焦的提示词技能配置变更后重新投影 Agent Skills。
-pub(crate) fn refresh_agent_skills_local_state(
+pub(crate) async fn refresh_agent_skills_local_state(
     state: &SharedServiceBridgeState,
-) -> Result<AgentSkillsCatalogSummary, String> {
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    // Keep configuration capture and domain projection ordered with every skill configuration mutation.
+    // 使配置捕获与领域投影和每次技能配置变更保持有序。
+    let _configuration_transaction = begin_provider_configuration_transaction().await;
     let provider_configuration = provider_configuration_from_state(state)?;
     let summary = agent_skills_catalog_summary(&provider_configuration);
     let mut guard = state
@@ -435,14 +438,20 @@ pub(crate) fn refresh_agent_skills_local_state(
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.agent_skills = summary.clone();
-    Ok(summary)
+    Ok(AgentSkillsCatalogUpdate {
+        revision: guard.workbench_generation,
+        agent_skills: summary,
+    })
 }
 
 /// Reprojects LuaSkills after a focused tool-registration configuration change.
 /// 在聚焦的工具注册配置变更后重新投影 LuaSkills。
-pub(crate) fn refresh_luaskills_local_state(
+pub(crate) async fn refresh_luaskills_local_state(
     state: &SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Keep registration-state capture ordered with every skill configuration mutation.
+    // 使注册状态捕获与每次技能配置变更保持有序。
+    let _configuration_transaction = begin_provider_configuration_transaction().await;
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -456,7 +465,11 @@ pub(crate) fn refresh_luaskills_local_state(
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
     guard.workbench.plugins = plugins_from_luaskills(&catalog);
-    Ok(guard.workbench.clone())
+    Ok(LuaSkillsCatalogUpdate {
+        revision: guard.workbench_generation,
+        lua_skills: guard.workbench.lua_skills.clone(),
+        plugins: guard.workbench.plugins.clone(),
+    })
 }
 
 /// Parses the project-level Agent Skill tri-state key from the WebUI.

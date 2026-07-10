@@ -49,6 +49,9 @@ export interface VmmSectionRenderProps {
   // Action id currently running.
   // 当前正在运行的动作标识。
   busyAction: string | null
+  // Whether one exclusive memory-page operation prevents new submissions.
+  // 是否有一个独占记忆页面操作阻止新提交。
+  operationBusy: boolean
   // Global configuration draft.
   // 全局配置草稿。
   globalDraft: VmmConfigDraftSummary
@@ -76,6 +79,9 @@ export interface VmmSectionRenderProps {
   // Project configuration draft.
   // 项目配置草稿。
   projectDraft: VmmConfigDraftSummary
+  // Whether projectDraft belongs to the currently selected project id.
+  // projectDraft 是否属于当前选中项目标识。
+  projectDraftReady: boolean
   // Selected project id.
   // 选中的项目标识。
   projectId: string
@@ -169,6 +175,9 @@ export interface VmmSectionRenderProps {
 // renderVmmSectionDetail 渲染当前激活的 VMM 管理分区。
 export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
   const { t } = props;
+  // projectDraftUnavailable prevents one project's form from rendering under another project's id.
+  // projectDraftUnavailable 防止一个项目的表单渲染到另一个项目标识下。
+  const projectDraftUnavailable = props.scope === "project" && !props.projectDraftReady;
   if (props.activeSection === "project_manager") {
     return (
       <section className="vmm-section-panel">
@@ -181,10 +190,10 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
           <label className="vmm-check-row"><input checked={props.migrateConfirmed} onChange={(event) => props.setMigrateConfirmed(event.target.checked)} type="checkbox" />{t("vmm.field.confirmMigrate")}</label>
         </div>
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "ensure_project"} icon={<Search size={15} />} label={t("vmm.action.precheckProject")} onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: false })} />
-          <VmmActionButton busy={props.busyAction === "ensure_project"} icon={<PackagePlus size={15} />} label={t("vmm.action.confirmCreate")} onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: true })} />
-          <VmmActionButton danger busy={props.busyAction === "delete_project"} icon={<Trash2 size={15} />} label={t("vmm.action.deleteProject")} onClick={() => props.onRunAction("delete_project", { projectPath: props.projectPath, confirmDelete: props.projectDeleteConfirmed })} />
-          <VmmActionButton danger busy={props.busyAction === "migrate_project"} icon={<GitBranch size={15} />} label={t("vmm.action.runMigrate")} onClick={() => props.onRunAction("migrate_project", { sourceProjectPath: props.migrateSource, targetProjectPath: props.migrateTarget, confirmMigrate: props.migrateConfirmed })} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "ensure_project"} icon={<Search size={15} />} label={t("vmm.action.precheckProject")} onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: false })} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "ensure_project"} icon={<PackagePlus size={15} />} label={t("vmm.action.confirmCreate")} onClick={() => props.onRunAction("ensure_project", { projectPath: props.projectPath, confirmCreate: true })} />
+          <VmmActionButton disabled={props.operationBusy} danger busy={props.busyAction === "delete_project"} icon={<Trash2 size={15} />} label={t("vmm.action.deleteProject")} onClick={() => props.onRunAction("delete_project", { projectPath: props.projectPath, confirmDelete: props.projectDeleteConfirmed })} />
+          <VmmActionButton disabled={props.operationBusy} danger busy={props.busyAction === "migrate_project"} icon={<GitBranch size={15} />} label={t("vmm.action.runMigrate")} onClick={() => props.onRunAction("migrate_project", { sourceProjectPath: props.migrateSource, targetProjectPath: props.migrateTarget, confirmMigrate: props.migrateConfirmed })} />
         </div>
         <VmmProjectRows result={props.result} />
       </section>
@@ -207,8 +216,8 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
           <VmmTextField label={t("vmm.field.profileInstruction")} placeholder={t("vmm.placeholder.profileInstruction")} value={props.profileInstruction} onChange={props.setProfileInstruction} />
         </div>
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "load_profile_nodes"} icon={<RefreshCw size={15} />} label={t("vmm.action.refreshNodes")} onClick={() => props.onRunAction("load_profile_nodes", { target: props.profileTarget })} />
-          <VmmActionButton busy={props.busyAction === "apply_profile_instruction"} icon={<Hammer size={15} />} label={t("vmm.action.applyInstruction")} onClick={() => props.onRunAction("apply_profile_instruction", { target: props.profileTarget, instruction: props.profileInstruction })} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "load_profile_nodes"} icon={<RefreshCw size={15} />} label={t("vmm.action.refreshNodes")} onClick={() => props.onRunAction("load_profile_nodes", { target: props.profileTarget })} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "apply_profile_instruction"} icon={<Hammer size={15} />} label={t("vmm.action.applyInstruction")} onClick={() => props.onRunAction("apply_profile_instruction", { target: props.profileTarget, instruction: props.profileInstruction })} />
         </div>
         <VmmProfileRows result={props.result} />
       </section>
@@ -219,7 +228,7 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
       <section className="vmm-section-panel">
         <VmmPanelHeading icon={<ScrollText size={16} />} title={t("vmm.section.bundle.title")} subtitle={t("vmm.section.bundle.subtitle")} />
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "load_profile_bundle"} icon={<RefreshCw size={15} />} label={t("vmm.action.loadProfileBundle")} onClick={() => props.onRunAction("load_profile_bundle")} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "load_profile_bundle"} icon={<RefreshCw size={15} />} label={t("vmm.action.loadProfileBundle")} onClick={() => props.onRunAction("load_profile_bundle")} />
         </div>
         <VmmBundlePreview result={props.result} />
       </section>
@@ -243,14 +252,14 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
           <VmmTextField label="Level" placeholder="2" value={props.writeMemoryLevel} onChange={props.setWriteMemoryLevel} />
         </div>
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "search_memory_events"} icon={<Search size={15} />} label="SearchMemoryEvents" onClick={() => props.onRunAction("search_memory_events", { queries: props.searchQueries, topK: props.searchTopK })} />
-          <VmmActionButton busy={props.busyAction === "get_turn_details"} icon={<FileText size={15} />} label="GetTurnDetails" onClick={() => props.onRunAction("get_turn_details", { turnIds: props.turnIds })} />
-          <VmmActionButton busy={props.busyAction === "write_memories"} icon={<Database size={15} />} label="WriteMemories" onClick={() => props.onRunAction("write_memories", { sessionId: props.snapshot.selectedConversationId ?? null, abstractText: props.writeAbstract, details: props.writeDetails, scopeLevel: props.writeScopeLevel, category: props.writeCategory, priority: props.writePriority, memoryLevel: props.writeMemoryLevel })} />
-          <VmmActionButton danger busy={props.busyAction === "delete_memories"} icon={<Trash2 size={15} />} label="DeleteMemories" onClick={() => props.onRunAction("delete_memories", { memoryIds: props.deleteMemoryIds, reason: props.deleteReason })} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "search_memory_events"} icon={<Search size={15} />} label="SearchMemoryEvents" onClick={() => props.onRunAction("search_memory_events", { queries: props.searchQueries, topK: props.searchTopK })} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "get_turn_details"} icon={<FileText size={15} />} label="GetTurnDetails" onClick={() => props.onRunAction("get_turn_details", { turnIds: props.turnIds })} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "write_memories"} icon={<Database size={15} />} label="WriteMemories" onClick={() => props.onRunAction("write_memories", { sessionId: props.snapshot.selectedConversationId ?? null, abstractText: props.writeAbstract, details: props.writeDetails, scopeLevel: props.writeScopeLevel, category: props.writeCategory, priority: props.writePriority, memoryLevel: props.writeMemoryLevel })} />
+          <VmmActionButton disabled={props.operationBusy} danger busy={props.busyAction === "delete_memories"} icon={<Trash2 size={15} />} label="DeleteMemories" onClick={() => props.onRunAction("delete_memories", { memoryIds: props.deleteMemoryIds, reason: props.deleteReason })} />
         </div>
         <VmmToolResult
           result={props.result}
-          onDeleteMemory={(memoryId) => props.onRunAction("delete_memories", {
+          onDeleteMemory={props.operationBusy ? undefined : (memoryId) => props.onRunAction("delete_memories", {
             memoryIds: [memoryId],
             reason: props.deleteReason || "manual memory delete from memory search result",
           })}
@@ -262,10 +271,16 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
     return (
       <section className="vmm-section-panel">
         <VmmPanelHeading icon={<SlidersHorizontal size={16} />} title={t("vmm.section.memory.title")} subtitle={t("vmm.section.memory.subtitle")} />
-        <VmmSettingsForm draft={props.activeDraft} mode="memory" onChange={props.setActiveDraft} />
-        <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === `save-${props.scope}`} icon={<Save size={15} />} label={props.scope === "global" ? t("vmm.action.saveGlobal") : t("vmm.action.saveProject")} onClick={() => props.onSaveDraft()} />
-        </div>
+        {projectDraftUnavailable ? (
+          <p className="vmm-muted">{props.notice}</p>
+        ) : (
+          <>
+            <VmmSettingsForm draft={props.activeDraft} mode="memory" onChange={props.setActiveDraft} />
+            <div className="vmm-action-row">
+              <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === `save-${props.scope}`} icon={<Save size={15} />} label={props.scope === "global" ? t("vmm.action.saveGlobal") : t("vmm.action.saveProject")} onClick={() => props.onSaveDraft()} />
+            </div>
+          </>
+        )}
       </section>
     );
   }
@@ -275,7 +290,7 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
         <VmmPanelHeading icon={<PlugZap size={16} />} title={t("vmm.section.transport.title")} subtitle={t("vmm.section.transport.subtitle")} />
         <VmmSettingsForm draft={props.globalDraft} mode="transport" onChange={(patch) => props.setGlobalDraft((draft) => ({ ...draft, ...patch }))} />
         <div className="vmm-action-row">
-          <VmmActionButton busy={props.busyAction === "save-global"} icon={<Save size={15} />} label={t("vmm.action.saveGlobal")} onClick={() => props.onSaveDraft("global")} />
+          <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "save-global"} icon={<Save size={15} />} label={t("vmm.action.saveGlobal")} onClick={() => props.onSaveDraft("global")} />
         </div>
       </section>
     );
@@ -288,9 +303,9 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
         <VmmTextField label={t("vmm.field.deleteConfirmationCode")} placeholder={t("vmm.placeholder.deleteConfirmationCode")} value={props.userConfirmationCode} onChange={props.setUserConfirmationCode} />
       </div>
       <div className="vmm-action-row">
-        <VmmActionButton busy={props.busyAction === "resolve_user"} icon={<Search size={15} />} label={t("vmm.action.resolveUser")} onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: false })} />
-        <VmmActionButton busy={props.busyAction === "resolve_user"} icon={<PackagePlus size={15} />} label={t("vmm.action.confirmCreate")} onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: true })} />
-        <VmmActionButton danger busy={props.busyAction === "delete_user"} icon={<Trash2 size={15} />} label={t("vmm.action.deleteUser")} onClick={() => props.onRunAction("delete_user", { userRef: props.userRef, confirmationCode: props.userConfirmationCode })} />
+        <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "resolve_user"} icon={<Search size={15} />} label={t("vmm.action.resolveUser")} onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: false })} />
+        <VmmActionButton disabled={props.operationBusy} busy={props.busyAction === "resolve_user"} icon={<PackagePlus size={15} />} label={t("vmm.action.confirmCreate")} onClick={() => props.onRunAction("resolve_user", { userRef: props.userRef, confirmCreate: true })} />
+        <VmmActionButton disabled={props.operationBusy} danger busy={props.busyAction === "delete_user"} icon={<Trash2 size={15} />} label={t("vmm.action.deleteUser")} onClick={() => props.onRunAction("delete_user", { userRef: props.userRef, confirmationCode: props.userConfirmationCode })} />
       </div>
       <VmmUserRows result={props.result} />
     </section>

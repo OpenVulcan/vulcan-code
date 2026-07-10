@@ -203,11 +203,11 @@ fn append_session_events_rolls_over_by_line_count() {
     assert_eq!(metadata.segments[1].start_seq, 2);
 }
 
-/// Verifies transcript tail appends are idempotent and preserve transcript-facing event kinds.
-/// 验证转录尾部追加具备幂等性，并保留面向转录的事件类型。
+/// Verifies complete transcript updates append verified tails idempotently and preserve event kinds.
+/// 验证完整转录更新会幂等追加已校验尾部，并保留事件类型。
 #[test]
-fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
-    let root = test_root("append_message_tail_is_idempotent_and_maps_transcript_kinds");
+fn append_message_update_is_idempotent_and_maps_transcript_kinds() {
+    let root = test_root("append_message_update_is_idempotent_and_maps_transcript_kinds");
     let session_dir = create_segmented_session_in_location(
         &root,
         false,
@@ -232,7 +232,7 @@ fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
         ),
     ];
 
-    let first_append = append_segmented_session_message_tail(&session_dir, &first_messages)
+    let first_append = append_segmented_session_message_update(&session_dir, &first_messages)
         .expect("append first tail");
     assert_eq!(first_append.len(), 2);
     assert_eq!(first_append[0].kind, SegmentedSessionEventKind::UserPrompt);
@@ -241,7 +241,7 @@ fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
         SegmentedSessionEventKind::AssistantOutput
     );
 
-    let second_append = append_segmented_session_message_tail(&session_dir, &first_messages)
+    let second_append = append_segmented_session_message_update(&session_dir, &first_messages)
         .expect("repeat append");
     assert!(second_append.is_empty());
 
@@ -252,10 +252,13 @@ fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
         SessionMessageRecordKind::ToolResultOutput,
         "tool output",
     ));
-    let tail_append = append_segmented_session_message_tail(&session_dir, &second_messages)
+    let appended_tail = append_segmented_session_message_update(&session_dir, &second_messages)
         .expect("append second tail");
-    assert_eq!(tail_append.len(), 1);
-    assert_eq!(tail_append[0].kind, SegmentedSessionEventKind::DisplayEvent);
+    assert_eq!(appended_tail.len(), 1);
+    assert_eq!(
+        appended_tail[0].kind,
+        SegmentedSessionEventKind::DisplayEvent
+    );
 
     let metadata: SegmentedSessionMetadata =
         read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
@@ -286,7 +289,7 @@ fn append_message_update_repairs_duplicate_persisted_message_index() {
         SessionMessageRecordKind::AssistantOutput,
         "answer",
     );
-    append_segmented_session_message_tail(
+    append_segmented_session_message_update(
         &session_dir,
         &[original_user.clone(), assistant.clone()],
     )
@@ -342,8 +345,8 @@ fn append_message_update_repairs_duplicate_persisted_message_index() {
 /// Verifies tool-call detail references are backfilled with assigned JSONL sequence numbers.
 /// 验证工具调用详情引用会回填已分配的 JSONL 序号。
 #[test]
-fn append_message_tail_backfills_tool_detail_ref_sequence() {
-    let root = test_root("append_message_tail_backfills_tool_detail_ref_sequence");
+fn append_message_update_backfills_tool_detail_ref_sequence() {
+    let root = test_root("append_message_update_backfills_tool_detail_ref_sequence");
     let session_dir = create_segmented_session_in_location(
         &root,
         false,
@@ -388,7 +391,7 @@ fn append_message_tail_backfills_tool_detail_ref_sequence() {
         "tool_result_id": "tool-result-call-1"
     }));
 
-    let lines = append_segmented_session_message_tail(&session_dir, &[user, call, detail])
+    let lines = append_segmented_session_message_update(&session_dir, &[user, call, detail])
         .expect("append messages");
 
     assert_eq!(

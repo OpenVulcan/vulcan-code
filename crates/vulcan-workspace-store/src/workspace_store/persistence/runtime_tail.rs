@@ -54,9 +54,29 @@ pub(super) fn sync_segmented_runtime_log_for_state(
     Ok(())
 }
 
-/// Mirrors one full session update into the segmented append-only stream and overwrite state file.
-/// 将一次完整会话更新镜像到分段追加流与覆盖式状态文件。
-pub(super) async fn persist_segmented_session_tail_update(
+/// Persists one complete session snapshot into segmented transcript and runtime-state files.
+/// 将一份完整会话快照持久化到分段转录与运行态文件。
+///
+/// # Parameters
+/// # 参数
+/// `controller` owns the segmented data root used for session directory resolution.
+/// `controller` 持有用于解析会话目录的分段数据根。
+/// `session` supplies the authoritative session identity and timestamps.
+/// `session` 提供权威会话身份与时间戳。
+/// `project_id` identifies the session owner used by the filesystem locator.
+/// `project_id` 标识文件系统定位器使用的会话归属项目。
+/// `archived` selects the active or archived segmented directory tree.
+/// `archived` 选择活动或归档分段目录树。
+/// `messages` is the complete transcript snapshot to append or physically reconcile.
+/// `messages` 是需要追加或物理校正的完整转录快照。
+/// `runtime_state` optionally supplies the runtime checkpoint and provider-facing log state.
+/// `runtime_state` 可选提供运行态检查点与 Provider 可见日志状态。
+///
+/// # Returns
+/// # 返回值
+/// Returns success only after transcript reconciliation and every supplied runtime artifact are durable.
+/// 仅在转录校正与全部已提供运行态工件均完成耐久化后返回成功。
+pub(super) async fn persist_segmented_session_update(
     controller: &ControllerRuntimeHandle,
     session: &SessionSummary,
     project_id: &str,
@@ -64,23 +84,23 @@ pub(super) async fn persist_segmented_session_tail_update(
     messages: &[SessionMessageEntry],
     runtime_state: Option<&SessionRuntimeStateEntry>,
 ) -> Result<(), String> {
+    // locator is the single filesystem identity derived from the authoritative session owner and lifecycle state.
+    // locator 是从权威会话归属与生命周期状态派生的唯一文件系统身份。
     let locator = segmented_session_locator_from_summary(session, project_id, archived);
+    // session_id_text is the canonical textual session identity stored in segmented metadata and state files.
+    // session_id_text 是写入分段元数据与状态文件的规范会话文本身份。
     let session_id_text = session.id.to_string();
+    // session_dir is created or resolved before transcript reconciliation begins.
+    // session_dir 会在转录校正开始前完成创建或解析。
     let session_dir =
         ensure_segmented_session_directory_for_locator(controller, &session_id_text, &locator)?;
-    let transcript_tail_error = match append_segmented_session_message_tail(&session_dir, messages)
-    {
-        Ok(_) => None,
-        Err(error) if error.contains("non-tail transcript change") => Some(error),
-        Err(error) => return Err(error),
-    };
+    append_segmented_session_message_update(&session_dir, messages)?;
     if let Some(runtime_state) = runtime_state {
+        // state_document is the exact overwrite snapshot paired with the reconciled transcript.
+        // state_document 是与已校正转录配套的精确覆盖式快照。
         let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
         write_state(&session_dir, &state_document)?;
         sync_segmented_runtime_log_for_state(&session_dir, runtime_state)?;
-    }
-    if let Some(error) = transcript_tail_error {
-        return Err(error);
     }
     Ok(())
 }

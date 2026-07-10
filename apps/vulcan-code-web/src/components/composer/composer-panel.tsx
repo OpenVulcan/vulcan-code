@@ -1,29 +1,15 @@
 import React from "react";
-import { Check, CheckCircle2, Circle, Edit3, ListChecks, PauseCircle, PlayCircle, Route, Search, Target, Trash2, X } from "lucide-react";
-import { toast } from "sonner";
 import {
   ModelPickerControl,
-  modelPickerChoiceKey,
-  modelPickerChoicesFromProviders,
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
 import {
-  aiCapabilitySignature,
   composerAttachmentAccept,
-  composerSlashCommandMatchesInput,
-  defaultAiCapabilityTargetOrder,
-  defaultDisabledAiCapabilityKinds,
-  defaultDisabledAiCapabilityTargetSelectors,
-  exactComposerSlashCommand,
   hasBlockingComposerPopup,
   isComposerAiCapabilityKind,
   isComposerPrintableKey,
   isComposerTextEntryElement,
-  normalizedComposerSlashCommandId,
-  serializeAiCapabilityTargetOrder,
-  type AiCapabilityKind,
   type ComposerAiCapabilityConfigurationSave,
-  type ComposerSelectOption,
   type ComposerSlashCommandResult,
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
@@ -33,15 +19,9 @@ import {
   ComposerSlashCommandPanel,
   PendingPromptQueueStrip,
 } from "@/components/composer/composer-controls";
-import { useComposerAttachments } from "@/components/composer/composer-attachments";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
-import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { ProgressRing } from "@/components/ui/progress-ring";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -58,28 +38,25 @@ import type {
   ReasoningSelectionSummary,
   SessionGoalSummary,
   SessionPlanModeSummary,
-  SessionTodolistItemSummary,
   SessionTodolistSummary,
   SessionVmmPolicySummary,
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
-// ComposerSessionMemoryDraft stores unsent composer content for one conversation slot.
-// ComposerSessionMemoryDraft 保存单个会话槽中尚未发送的输入区内容。
-import {
-  composerSessionDraftKey,
-  composerShortcutHint,
-  defaultAiCapabilityTargetOrderFromRecord,
-  readComposerSessionMemoryDraft,
-  writeComposerSessionMemoryDraft,
-  type ComposerSessionMemoryDraft,
-} from "@/components/composer/composer-panel/helpers";
+import { composerShortcutHint } from "@/components/composer/composer-panel/helpers";
 import { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
-import { ModelSecondaryRouteControl, parseModelPickerChoiceKey } from "@/components/composer/composer-panel/model-secondary-route-control";
+import { ModelSecondaryRouteControl } from "@/components/composer/composer-panel/model-secondary-route-control";
 import { ComposerGoalStrip, ComposerPlanModeChip } from "@/components/composer/composer-panel/goal-strip";
 import { ComposerPanelAttachmentPreviewStrip } from "@/components/composer/composer-panel/attachment-preview-strip";
 import { ComposerGoalDialog } from "@/components/composer/composer-panel/goal-dialog";
 import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
+import { useComposerGoalController } from "@/components/composer/composer-panel/use-composer-goal-controller";
+import { useComposerSessionDraft } from "@/components/composer/composer-panel/use-composer-session-draft";
+import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
+import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
+import { useComposerAiCapabilities } from "@/components/composer/composer-panel/use-composer-ai-capabilities";
+import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
+import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -216,63 +193,25 @@ export function ComposerPanel(props: {
   // t translates stable composer labels while model names remain provider data.
   // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
   const { locale, t } = useI18n();
-  // composerDraftKey scopes unsent input to the selected session or current project's new-chat slot.
-  // composerDraftKey 将尚未发送的输入限定到当前会话或当前项目的新建会话槽。
-  const composerDraftKey = React.useMemo(
-    () => composerSessionDraftKey(props.projectId, props.conversationId),
-    [props.conversationId, props.projectId],
-  );
-  // initialComposerDraftRef captures the draft that should seed this component mount.
-  // initialComposerDraftRef 捕获本次组件挂载时用于初始化的草稿。
-  const initialComposerDraftRef = React.useRef<ComposerSessionMemoryDraft | null>(null);
-  if (initialComposerDraftRef.current === null) {
-    initialComposerDraftRef.current = readComposerSessionMemoryDraft(composerDraftKey);
-  }
-  // activeComposerDraftKeyRef tracks which draft slot currently owns local state.
-  // activeComposerDraftKeyRef 跟踪当前本地状态所属的草稿槽。
-  const activeComposerDraftKeyRef = React.useRef(composerDraftKey);
-  // draftInputRef mirrors draftInput for key-switch saves without stale closures.
-  // draftInputRef 镜像 draftInput，避免切换会话保存时闭包过期。
-  const draftInputRef = React.useRef(initialComposerDraftRef.current.input);
-  // draftAttachmentsRef mirrors attachments for key-switch saves without stale closures.
-  // draftAttachmentsRef 镜像 attachments，避免切换会话保存时闭包过期。
-  const draftAttachmentsRef = React.useRef<ComposerAttachmentSummary[]>(initialComposerDraftRef.current.attachments);
-  // composerDraftRestoredRef marks that the initial draft slot has been hydrated.
-  // composerDraftRestoredRef 标记初始草稿槽已经完成恢复。
-  const composerDraftRestoredRef = React.useRef(false);
-  // draftInput stores the current unsent composer text.
-  // draftInput 保存当前尚未发送的输入区文本。
-  const [draftInput, setDraftInput] = React.useState(() => initialComposerDraftRef.current?.input ?? "");
-  // slashHighlightedIndex stores the highlighted command row while the slash panel is visible.
-  // slashHighlightedIndex 保存 slash 面板可见时的高亮指令行。
-  const [slashHighlightedIndex, setSlashHighlightedIndex] = React.useState(0);
-  // slashDismissedInput stores the exact input dismissed by Escape.
-  // slashDismissedInput 保存被 Escape 隐藏的精确输入内容。
-  const [slashDismissedInput, setSlashDismissedInput] = React.useState<string | null>(null);
-  // modelPickerOpenSignal opens the existing model picker from /model.
-  // modelPickerOpenSignal 通过 /model 打开现有模型筛选器。
-  const [modelPickerOpenSignal, setModelPickerOpenSignal] = React.useState(0);
-  // reasoningPickerOpenSignal opens the existing reasoning selector from /reasoning.
-  // reasoningPickerOpenSignal 通过 /reasoning 打开现有思考档位选择器。
-  const [reasoningPickerOpenSignal, setReasoningPickerOpenSignal] = React.useState(0);
   // composerMediaPlayer stores an attachment preview opened from the composer strip.
   // composerMediaPlayer 保存从输入区附件条打开的附件预览。
   const [composerMediaPlayer, setComposerMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);
   // composerTextareaRef focuses the prompt field from global workspace typing.
   // composerTextareaRef 用于从工作台全局输入聚焦提示词输入框。
   const composerTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
-  // composerAttachments owns attachment filtering, picker, paste, drag-drop, and staging behavior.
-  // composerAttachments 管理附件过滤、选择器、粘贴、拖拽投放与暂存行为。
-  const composerAttachments = useComposerAttachments({
-    initialAttachments: initialComposerDraftRef.current.attachments,
+  // composerDraft owns text, attachments, slot persistence, and submission rollback as one transaction.
+  // composerDraft 将文本、附件、草稿槽持久化与提交回滚作为一个事务管理。
+  const composerDraft = useComposerSessionDraft({
     attachmentCapabilities: props.attachmentCapabilities,
     projectId: props.projectId,
     conversationId: props.conversationId,
     onStageAttachmentBytes: props.onStageAttachmentBytes,
   });
   const {
+    draftSlotKey,
+    draftInput,
+    setDraftInput,
     attachments,
-    setAttachments,
     isAttachmentDragOver,
     setIsAttachmentDragOver,
     attachmentFileInputRef,
@@ -284,341 +223,90 @@ export function ComposerPanel(props: {
     handleComposerDragOver,
     handleComposerDrop,
     removeComposerAttachment,
-  } = composerAttachments;
+    clearForSubmission,
+    restoreFailedSubmission,
+    restoreInputToSlot,
+    replaceDraft,
+  } = composerDraft;
 
-  React.useLayoutEffect(() => {
-    const previousKey = activeComposerDraftKeyRef.current;
-    if (composerDraftRestoredRef.current && previousKey === composerDraftKey) {
-      return;
-    }
-    if (composerDraftRestoredRef.current) {
-      writeComposerSessionMemoryDraft(previousKey, draftInputRef.current, draftAttachmentsRef.current);
-    }
-    const restoredDraft = readComposerSessionMemoryDraft(composerDraftKey);
-    activeComposerDraftKeyRef.current = composerDraftKey;
-    draftInputRef.current = restoredDraft.input;
-    draftAttachmentsRef.current = restoredDraft.attachments;
-    composerDraftRestoredRef.current = true;
-    setDraftInput(restoredDraft.input);
-    setAttachments(restoredDraft.attachments);
-    setSlashDismissedInput(null);
-    setSlashHighlightedIndex(0);
-    setComposerMediaPlayer(null);
-  }, [composerDraftKey, setAttachments]);
-
-  React.useEffect(() => {
-    if (!composerDraftRestoredRef.current) {
-      return;
-    }
-    draftInputRef.current = draftInput;
-    writeComposerSessionMemoryDraft(activeComposerDraftKeyRef.current, draftInput, draftAttachmentsRef.current);
-  }, [draftInput]);
-
-  React.useEffect(() => {
-    if (!composerDraftRestoredRef.current) {
-      return;
-    }
-    draftAttachmentsRef.current = attachments;
-    writeComposerSessionMemoryDraft(activeComposerDraftKeyRef.current, draftInputRef.current, attachments);
-  }, [attachments]);
-
-  // executionMode stores the local preview execution-mode selection.
-  // executionMode 保存本地预览用的执行模式选择。
-  const [executionMode, setExecutionMode] = React.useState("build");
-  // draftPlanModeEnabled stores Plan mode before a draft conversation is materialized.
-  // draftPlanModeEnabled 保存草稿会话实体化之前的计划模式状态。
-  const [draftPlanModeEnabled, setDraftPlanModeEnabled] = React.useState(false);
-  // modelChoice stores the selected provider/model key shown by the shared model picker.
-  // modelChoice 保存共享模型筛选器展示的 provider/model 选择键。
-  const [modelChoice, setModelChoice] = React.useState("");
-  // disabledAiCapabilityKinds stores the session-synchronized quick-toggle disables.
-  // disabledAiCapabilityKinds 保存与会话同步的快捷开关禁用项。
-  const [disabledAiCapabilityKinds, setDisabledAiCapabilityKinds] = React.useState<Set<AiCapabilityKind>>(() => new Set());
-  // disabledAiCapabilityTargetSelectors stores the session-synchronized target-route disables.
-  // disabledAiCapabilityTargetSelectors 保存与会话同步的目标路由禁用项。
-  const [disabledAiCapabilityTargetSelectors, setDisabledAiCapabilityTargetSelectors] = React.useState<Set<string>>(() => new Set());
-  // aiCapabilityTargetOrder stores the session-synchronized target route ordering.
-  // aiCapabilityTargetOrder 保存与会话同步的目标路由顺序。
-  const [aiCapabilityTargetOrder, setAiCapabilityTargetOrder] = React.useState<Map<AiCapabilityKind, string[]>>(() => new Map());
-  // reasoningEffort stores the backend-synchronized reasoning-effort selection.
-  // reasoningEffort 保存与后端同步的思考档位选择。
-  const [reasoningEffort, setReasoningEffort] = React.useState("");
-  // isComposerRunning stores the local send/stop preview state.
-  // isComposerRunning 保存输入区发送/停止的本地预览状态。
-  const [isComposerRunning, setIsComposerRunning] = React.useState(false);
-  // goalDialogOpen controls the user-facing session goal editor.
-  // goalDialogOpen 控制面向用户的会话目标编辑器。
-  const [goalDialogOpen, setGoalDialogOpen] = React.useState(false);
-  // goalDialogMode distinguishes ordinary edits from budget-stage resumes.
-  // goalDialogMode 区分普通编辑与预算阶段继续。
-  const [goalDialogMode, setGoalDialogMode] = React.useState<"edit" | "resume">("edit");
-  // goalObjectiveDraft stores the editable goal objective.
-  // goalObjectiveDraft 保存可编辑的目标文本。
-  const [goalObjectiveDraft, setGoalObjectiveDraft] = React.useState("");
-  // goalTokenBudgetDraft stores the optional token budget as input text.
-  // goalTokenBudgetDraft 以输入文本保存可选 token 预算。
-  const [goalTokenBudgetDraft, setGoalTokenBudgetDraft] = React.useState("");
-  // goalSaving stores whether a goal mutation is currently in flight.
-  // goalSaving 保存当前是否存在飞行中的目标修改。
-  const [goalSaving, setGoalSaving] = React.useState(false);
   // visibleSessionGoal hides completed goals from the composer-level control strip.
   // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
   const visibleSessionGoal = props.sessionGoal?.status === "complete" ? null : props.sessionGoal;
-  // planModeEnabled follows the backend-persisted session Plan mode state.
-  // planModeEnabled 跟随后端持久化的会话计划模式状态。
-  const planModeEnabled = props.sessionPlanMode?.executionMode?.toLowerCase() === "plan" || (!props.conversationId && draftPlanModeEnabled);
-  // availableModelChoices flattens provider data into selectable workbench models.
-  // availableModelChoices 将 Provider 数据扁平化为可选择的工作台模型。
-  const availableModelChoices = React.useMemo(
-    () => modelPickerChoicesFromProviders(props.providers),
-    [props.providers],
-  );
-  // activeModelChoiceKey follows the service-reported active model when available.
-  // activeModelChoiceKey 在可用时跟随 service 上报的激活模型。
-  const activeModelChoiceKey = React.useMemo(() => {
-    const activeChoice = availableModelChoices.find((choice) => choice.active) ?? availableModelChoices[0];
-    return modelPickerChoiceKey(activeChoice);
-  }, [availableModelChoices]);
-  // activeProviderModelSummary resolves the full API model row for secondary-route controls.
-  // activeProviderModelSummary 为二级路由控件解析完整 API 模型行。
-  const activeProviderModelSummary = React.useMemo(() => {
-    const parsedChoice = parseModelPickerChoiceKey(modelChoice || activeModelChoiceKey);
-    const providerId = parsedChoice?.providerId;
-    const modelId = parsedChoice?.modelId;
-    if (!providerId || !modelId) {
-      return null;
-    }
-    const provider = props.providers.find((candidate) => candidate.id === providerId);
-    const model = provider?.models?.find((candidate) => candidate.id === modelId) ?? null;
-    return provider && model ? { provider, model } : null;
-  }, [activeModelChoiceKey, modelChoice, props.providers]);
-  // capabilitySignature prevents unrelated workbench streaming snapshots from resetting session-synced capability state.
-  // capabilitySignature 防止无关的工作台流式快照重置会话同步的能力状态。
-  const capabilitySignature = React.useMemo(
-    () => aiCapabilitySignature(props.aiCapabilities),
-    [props.aiCapabilities],
-  );
-
-  React.useEffect(() => {
-    if (!activeModelChoiceKey) {
-      return;
-    }
-    if (modelChoice !== activeModelChoiceKey) {
-      setModelChoice(activeModelChoiceKey);
-    }
-  }, [activeModelChoiceKey, modelChoice]);
-
-  React.useEffect(() => {
-    setDisabledAiCapabilityKinds(defaultDisabledAiCapabilityKinds(props.aiCapabilities));
-    setDisabledAiCapabilityTargetSelectors(defaultDisabledAiCapabilityTargetSelectors(props.aiCapabilities));
-    setAiCapabilityTargetOrder(defaultAiCapabilityTargetOrder(props.aiCapabilities));
-  }, [capabilitySignature]);
-  React.useEffect(() => {
-    setExecutionMode(planModeEnabled ? "plan" : "build");
-  }, [planModeEnabled]);
-
-  React.useEffect(() => {
-    if (props.conversationId) {
-      setDraftPlanModeEnabled(false);
-    }
-  }, [props.conversationId]);
-  // fallbackReasoningEffortOptions is only used when no backend selector view is available.
-  // fallbackReasoningEffortOptions 仅在没有后端选择器视图时使用。
-  const fallbackReasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => [
-    { value: "off", label: t("composer.reasoning.off") },
-    { value: "low", label: t("composer.reasoning.low") },
-    { value: "medium", label: t("composer.reasoning.medium") },
-    { value: "high", label: t("composer.reasoning.high") },
-    { value: "x-high", label: t("composer.reasoning.max") },
-  ], [t]);
-  // reasoningEffortOptions uses the shared backend selector view before falling back to local preview labels.
-  // reasoningEffortOptions 优先使用共享后端选择器视图，再回退到本地预览标签。
-  const reasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => {
-    if (props.reasoningSelection?.options.length) {
-      return props.reasoningSelection.options.map((option) => ({
-        value: option.value,
-        label: option.label,
-      }));
-    }
-    return fallbackReasoningEffortOptions;
-  }, [fallbackReasoningEffortOptions, props.reasoningSelection]);
-  // serviceSelectedReasoningEffort mirrors the active backend-selected effort when available.
-  // serviceSelectedReasoningEffort 在可用时镜像后端选中的生效思考档位。
-  const serviceSelectedReasoningEffort = props.reasoningSelection?.selectedEffort;
-  // submittedReasoningEffort is non-null only when the backend selector confirms the value.
-  // submittedReasoningEffort 仅在后端选择器确认该值时才为非空。
-  const submittedReasoningEffort = React.useMemo(() => {
-    if (!props.reasoningSelection?.options.some((option) => option.value === reasoningEffort)) {
-      return null;
-    }
-    return reasoningEffort;
-  }, [props.reasoningSelection, reasoningEffort]);
-
-  React.useEffect(() => {
-    if (serviceSelectedReasoningEffort && serviceSelectedReasoningEffort !== reasoningEffort) {
-      setReasoningEffort(serviceSelectedReasoningEffort);
-      return;
-    }
-    if (!reasoningEffortOptions.some((option) => option.value === reasoningEffort)) {
-      setReasoningEffort(reasoningEffortOptions[0]?.value ?? "medium");
-    }
-  }, [reasoningEffort, reasoningEffortOptions, serviceSelectedReasoningEffort]);
+  // Plan controller unifies scoped draft state, persisted snapshots, goal exclusion, and shortcuts.
+  // Plan 控制器统一作用域草稿状态、持久化快照、目标互斥与快捷键。
+  const {
+    planModeEnabled,
+    executionMode,
+    setPlanMode: handlePlanModeChange,
+    prepareGoalEditor,
+    handleContainerKeyDown: handleComposerContainerKeyDown,
+  } = useComposerPlanMode({
+    scopeKey: draftSlotKey,
+    conversationId: props.conversationId,
+    sessionPlanMode: props.sessionPlanMode,
+    goal: visibleSessionGoal,
+    onSetSessionPlanMode: props.onSetSessionPlanMode,
+  });
+  // AI capability controller synchronizes session routes and produces the shared submission protocol.
+  // AI 能力控制器同步会话路由并生成共享提交协议。
+  const {
+    disabledKinds: disabledAiCapabilityKinds,
+    disabledTargetSelectors: disabledAiCapabilityTargetSelectors,
+    targetOrder: aiCapabilityTargetOrder,
+    submissionConfiguration: aiCapabilitySubmissionConfiguration,
+    saveConfiguration: handleAiCapabilityConfigurationSave,
+  } = useComposerAiCapabilities({
+    scopeKey: draftSlotKey,
+    capabilities: props.aiCapabilities,
+    onSaveConfiguration: props.onSaveAiCapabilityConfiguration,
+  });
+  // Model selection controller synchronizes service snapshots, optimistic choices, and slash-open signals.
+  // 模型选择控制器同步服务快照、乐观选择与 slash 打开信号。
+  const {
+    modelChoice,
+    activeProviderModel: activeProviderModelSummary,
+    modelPickerOpenSignal,
+    reasoningEffort,
+    reasoningEffortOptions,
+    submittedReasoningEffort,
+    reasoningPickerOpenSignal,
+    selectModel: handleModelChoiceChange,
+    selectReasoningEffort: handleReasoningEffortChange,
+    openModelPicker,
+    openReasoningPicker,
+  } = useComposerModelSelection({
+    providers: props.providers,
+    reasoningSelection: props.reasoningSelection,
+    onSelectModel: props.onSelectWorkbenchModel,
+    onSelectReasoningEffort: props.onSelectWorkbenchReasoningEffort,
+  });
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = React.useMemo(() => {
     return t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
   }, [t]);
-  // visibleSlashCommands mirrors WebUI prefix filtering for the slash command panel.
-  // visibleSlashCommands 对齐 WebUI 前缀过滤逻辑，供 slash 指令面板展示。
-  const visibleSlashCommands = React.useMemo(() => {
-    if (!draftInput.startsWith("/") || slashDismissedInput === draftInput) {
-      return [];
-    }
-    return props.slashCommands.filter((command) => composerSlashCommandMatchesInput(command, draftInput));
-  }, [draftInput, props.slashCommands, slashDismissedInput]);
-  // slashPanelVisible controls whether the current slash input has at least one match.
-  // slashPanelVisible 控制当前 slash 输入是否存在至少一个匹配项。
-  const slashPanelVisible = visibleSlashCommands.length > 0;
-  // highlightedSlashCommand resolves the currently highlighted command row.
-  // highlightedSlashCommand 解析当前高亮的指令行。
-  const highlightedSlashCommand = visibleSlashCommands[Math.min(slashHighlightedIndex, Math.max(visibleSlashCommands.length - 1, 0))] ?? null;
-  // exactSlashCommand mirrors WebUI exact trigger activation before the highlighted row.
-  // exactSlashCommand 对齐 WebUI 精确触发优先于高亮项的激活规则。
-  const exactSlashCommand = React.useMemo(
-    () => exactComposerSlashCommand(visibleSlashCommands, draftInput),
-    [draftInput, visibleSlashCommands],
-  );
-
-  React.useEffect(() => {
-    setSlashHighlightedIndex((current) => {
-      if (!visibleSlashCommands.length) {
-        return 0;
-      }
-      return Math.min(current, visibleSlashCommands.length - 1);
-    });
-  }, [visibleSlashCommands.length]);
-
-  // handleDraftInputChange tracks typed content and re-enables slash matching after edits.
-  // handleDraftInputChange 跟踪输入内容，并在编辑后重新启用 slash 匹配。
-  const handleDraftInputChange = React.useCallback((value: string) => {
-    setDraftInput(value);
-    if (slashDismissedInput !== null && value !== slashDismissedInput) {
-      setSlashDismissedInput(null);
-    }
-  }, [slashDismissedInput]);
-
-  React.useEffect(() => {
-    // handleGlobalWorkspaceTyping redirects ordinary workspace typing into the composer.
-    // handleGlobalWorkspaceTyping 将工作台中的普通键入重定向到输入区。
-    const handleGlobalWorkspaceTyping = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isComposerPrintableKey(event)) {
-        return;
-      }
-      const textarea = composerTextareaRef.current;
-      if (!textarea || document.activeElement === textarea) {
-        return;
-      }
-      if (hasBlockingComposerPopup() || isComposerTextEntryElement(document.activeElement)) {
-        return;
-      }
-      event.preventDefault();
-      textarea.focus({ preventScroll: true });
-      setDraftInput((current) => `${current}${event.key}`);
-      if (slashDismissedInput !== null) {
-        setSlashDismissedInput(null);
-      }
-    };
-    document.addEventListener("keydown", handleGlobalWorkspaceTyping);
-    return () => document.removeEventListener("keydown", handleGlobalWorkspaceTyping);
-  }, [slashDismissedInput]);
-
-  // handleComposerSend validates input and forwards it to the real backend runtime.
-  // handleComposerSend 校验输入并转发到真实后端运行时。
-  const handleComposerSend = React.useCallback(async () => {
-    const prompt = draftInput.trim();
-    const hasSubmittableContent = Boolean(prompt || attachments.length > 0);
-    props.onTrace?.("composer.send_or_stop", {
-      isConversationRunning: props.isConversationRunning,
-      hasSubmittableContent,
-      promptChars: prompt.length,
-      attachmentCount: attachments.length,
-    });
-    if (props.isConversationRunning && !hasSubmittableContent) {
-      const stopped = await props.onStopConversationRun();
-      if (!stopped) {
-        toast.error(t("composer.error.stopCurrentFailed"));
-      }
-      return;
-    }
-    if (isComposerRunning) {
-      return;
-    }
-    if (!hasSubmittableContent) {
-      toast.info(t("composer.error.promptEmpty"));
-      return;
-    }
-    // submittedInput preserves the exact textarea content for a failure-only restore.
-    // submittedInput 保存精确输入内容，仅在发送失败时用于恢复。
-    const submittedInput = draftInput;
-    // submittedAttachments preserves staged files for a failure-only restore.
-    // submittedAttachments 保存已暂存文件，仅在发送失败时用于恢复。
-    const submittedAttachments = attachments;
-    draftInputRef.current = "";
-    draftAttachmentsRef.current = [];
-    writeComposerSessionMemoryDraft(activeComposerDraftKeyRef.current, "", []);
-    setDraftInput("");
-    setAttachments([]);
-    setIsComposerRunning(true);
-    try {
-      const sent = await props.onSubmitPrompt({
-        prompt,
-        attachments: submittedAttachments,
-        executionMode,
-        reasoningEffort: submittedReasoningEffort,
-        disabledAiCapabilityKinds: Array.from(disabledAiCapabilityKinds),
-        disabledAiCapabilityTargetSelectors: Array.from(disabledAiCapabilityTargetSelectors),
-        aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(aiCapabilityTargetOrder),
-      });
-      if (!sent) {
-        setDraftInput((current) => {
-          const restoredInput = current || submittedInput;
-          draftInputRef.current = restoredInput;
-          writeComposerSessionMemoryDraft(
-            activeComposerDraftKeyRef.current,
-            restoredInput,
-            draftAttachmentsRef.current,
-          );
-          return restoredInput;
-        });
-        setAttachments((current) => {
-          const restoredAttachments = current.length ? current : submittedAttachments;
-          draftAttachmentsRef.current = restoredAttachments;
-          writeComposerSessionMemoryDraft(
-            activeComposerDraftKeyRef.current,
-            draftInputRef.current,
-            restoredAttachments,
-          );
-          return restoredAttachments;
-        });
-      }
-    } finally {
-      setIsComposerRunning(false);
-    }
-  }, [aiCapabilityTargetOrder, attachments, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, submittedReasoningEffort, t]);
-
-  // handleComposerStop stops the active backend conversation without consuming draft text.
-  // handleComposerStop 在不消费草稿文本的前提下停止活跃后端会话。
-  const handleComposerStop = React.useCallback(async () => {
-    props.onTrace?.("composer.stop", {
-      isConversationRunning: props.isConversationRunning,
-      draftChars: draftInput.trim().length,
-      attachmentCount: attachments.length,
-    });
-    const stopped = await props.onStopConversationRun();
-    if (!stopped) {
-      toast.error(t("composer.error.stopCurrentFailed"));
-    }
-  }, [attachments.length, draftInput, props, t]);
+  // Send controller owns duplicate gating, stop routing, draft consumption, and failure recovery.
+  // 发送控制器管理重复门控、停止路由、草稿消费与失败恢复。
+  const {
+    canAutoSubmitCreatedGoal,
+    sendDraft: handleComposerSend,
+    stopConversation: handleComposerStop,
+    submitCreatedGoal,
+  } = useComposerSendController({
+    draftSlotKey,
+    draftInput,
+    attachments,
+    executionMode,
+    reasoningEffort: submittedReasoningEffort,
+    capabilityConfiguration: aiCapabilitySubmissionConfiguration,
+    isConversationRunning: props.isConversationRunning,
+    clearForSubmission,
+    restoreFailedSubmission,
+    restoreInputToSlot,
+    onSubmitPrompt: props.onSubmitPrompt,
+    onStopConversationRun: props.onStopConversationRun,
+    onTrace: props.onTrace,
+  });
 
   // handlePendingPromptEdit restores one queued prompt into the composer draft.
   // handlePendingPromptEdit 将单条排队提示词恢复到输入区草稿。
@@ -628,262 +316,90 @@ export function ComposerPanel(props: {
     if (!entry) {
       return;
     }
-    setDraftInput(entry.prompt);
-    setAttachments(entry.attachments ?? []);
+    replaceDraft(entry.prompt, entry.attachments ?? []);
     window.requestAnimationFrame(() => composerTextareaRef.current?.focus({ preventScroll: true }));
-  }, [props]);
+  }, [props.onEditPendingPrompt, props.onTrace, replaceDraft]);
 
-  // handleAiCapabilityConfigurationSave persists the dialog draft and mirrors it locally after success.
-  // handleAiCapabilityConfigurationSave 持久化弹窗草稿，并在成功后同步到本地。
-  const handleAiCapabilityConfigurationSave = React.useCallback(async (request: ComposerAiCapabilityConfigurationSave) => {
-    const saved = await props.onSaveAiCapabilityConfiguration(request);
-    if (!saved) {
-      return false;
-    }
-    setDisabledAiCapabilityKinds(new Set(request.disabledAiCapabilityKinds));
-    setDisabledAiCapabilityTargetSelectors(new Set(request.disabledAiCapabilityTargetSelectors));
-    setAiCapabilityTargetOrder(defaultAiCapabilityTargetOrderFromRecord(request.aiCapabilityTargetOrderOverrides));
-    return true;
-  }, [props]);
+  // Goal controller state and actions isolate goal lifecycle orchestration from the composer input flow.
+  // 目标控制器状态与操作将目标生命周期编排从输入区输入流程中隔离出来。
+  const {
+    dialogOpen: goalDialogOpen,
+    dialogMode: goalDialogMode,
+    objectiveDraft: goalObjectiveDraft,
+    tokenBudgetDraft: goalTokenBudgetDraft,
+    saving: goalSaving,
+    setDialogOpen: setGoalDialogOpen,
+    setObjectiveDraft: setGoalObjectiveDraft,
+    setTokenBudgetDraft: setGoalTokenBudgetDraft,
+    openEditor: openGoalDialog,
+    openResumeEditor: openGoalResumeDialog,
+    save: handleGoalSave,
+    toggleStatus: handleGoalStatusToggle,
+    clear: handleGoalClear,
+  } = useComposerGoalController({
+    scopeKey: draftSlotKey,
+    goal: visibleSessionGoal,
+    canAutoSubmitCreatedGoal,
+    onPrepareEditor: prepareGoalEditor,
+    onSaveGoal: props.onSaveSessionGoal,
+    onResumeGoal: props.onResumeSessionGoal,
+    onClearGoal: props.onClearSessionGoal,
+    onUpdateGoalStatus: props.onUpdateSessionGoalStatus,
+    onSubmitCreatedGoal: submitCreatedGoal,
+  });
 
-  // openGoalDialog seeds the goal editor from the current persisted goal.
-  // openGoalDialog 使用当前持久化目标初始化目标编辑器。
-  const openGoalDialog = React.useCallback(async () => {
-    if (planModeEnabled) {
-      if (!props.conversationId) {
-        setDraftPlanModeEnabled(false);
-        setExecutionMode("build");
-      } else {
-        const disabled = await props.onSetSessionPlanMode(false);
-        if (!disabled) {
-          return;
-        }
-      }
-    }
-    setGoalDialogMode("edit");
-    setGoalObjectiveDraft(visibleSessionGoal?.objective ?? "");
-    setGoalTokenBudgetDraft(visibleSessionGoal?.tokenBudget ? String(visibleSessionGoal.tokenBudget) : "");
-    setGoalDialogOpen(true);
-  }, [planModeEnabled, props, visibleSessionGoal]);
+  // Slash controller owns filtering, navigation, activation, and Enter-key priority.
+  // slash 控制器管理筛选、导航、激活与 Enter 键优先级。
+  const {
+    visibleCommands: visibleSlashCommands,
+    panelVisible: slashPanelVisible,
+    highlightedIndex: slashHighlightedIndex,
+    setHighlightedIndex: setSlashHighlightedIndex,
+    handleInputChange: handleDraftInputChange,
+    appendGlobalInput,
+    activateCommand: activateSlashCommand,
+    handleKeyDown: handleComposerKeyDown,
+    reset: resetSlashCommands,
+  } = useComposerSlashCommands({
+    input: draftInput,
+    setInput: setDraftInput,
+    commands: props.slashCommands,
+    planModeEnabled,
+    onSetPlanMode: handlePlanModeChange,
+    onRouteCommand: props.onSlashCommand,
+    onOpenModelPicker: openModelPicker,
+    onOpenReasoningPicker: openReasoningPicker,
+    onSend: handleComposerSend,
+  });
 
-  // handlePlanModeChange toggles session Plan mode through the persisted service API.
-  // handlePlanModeChange 通过持久化服务 API 切换会话计划模式。
-  const handlePlanModeChange = React.useCallback(async (enabled: boolean) => {
-    if (enabled && visibleSessionGoal) {
-      toast.error(t("composer.planMode.goalConflict"));
-      return false;
-    }
-    if (!props.conversationId) {
-      setDraftPlanModeEnabled(enabled);
-      setExecutionMode(enabled ? "plan" : "build");
-      return true;
-    }
-    const saved = await props.onSetSessionPlanMode(enabled);
-    if (saved) {
-      setExecutionMode(enabled ? "plan" : "build");
-    }
-    return saved;
-  }, [props, t, visibleSessionGoal]);
+  React.useLayoutEffect(() => {
+    resetSlashCommands();
+    setComposerMediaPlayer(null);
+  }, [draftSlotKey, resetSlashCommands]);
 
-  // activateSlashCommand dispatches one selected command and applies its UI route result.
-  // activateSlashCommand 分派单个选中的指令并应用其 UI 路由结果。
-  const activateSlashCommand = React.useCallback((command: ComposerSlashCommandSummary) => {
-    if (normalizedComposerSlashCommandId(command) === "plan") {
-      void handlePlanModeChange(!planModeEnabled).then((handled) => {
-        if (!handled) {
-          return;
-        }
-        setDraftInput("");
-        setSlashDismissedInput(null);
-        setSlashHighlightedIndex(0);
-      });
-      return;
-    }
-    const result = props.onSlashCommand(command);
-    if (!result.handled) {
-      return;
-    }
-    setDraftInput("");
-    setSlashDismissedInput(null);
-    setSlashHighlightedIndex(0);
-    if (result.replacementText !== undefined) {
-      setDraftInput(result.replacementText);
-    }
-    if (result.openTarget === "model") {
-      setModelPickerOpenSignal((current) => current + 1);
-    }
-    if (result.openTarget === "reasoning") {
-      setReasoningPickerOpenSignal((current) => current + 1);
-    }
-  }, [handlePlanModeChange, planModeEnabled, props]);
-
-  // openGoalResumeDialog seeds the next-stage goal editor from the stopped goal.
-  // openGoalResumeDialog 使用已停止目标初始化下一阶段目标编辑器。
-  const openGoalResumeDialog = React.useCallback(() => {
-    if (!visibleSessionGoal) {
-      return;
-    }
-    setGoalDialogMode("resume");
-    setGoalObjectiveDraft(visibleSessionGoal.objective);
-    setGoalTokenBudgetDraft(visibleSessionGoal.tokenBudget ? String(visibleSessionGoal.tokenBudget) : "");
-    setGoalDialogOpen(true);
-  }, [visibleSessionGoal]);
-
-  // handleGoalSave persists the current goal dialog draft.
-  // handleGoalSave 持久化当前目标弹窗草稿。
-  const handleGoalSave = React.useCallback(async () => {
-    const objective = goalObjectiveDraft.trim();
-    const tokenBudgetText = goalTokenBudgetDraft.trim();
-    const tokenBudget = tokenBudgetText ? Number(tokenBudgetText) : null;
-    if (!objective) {
-      toast.error(t("composer.goal.error.empty"));
-      return;
-    }
-    if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
-      toast.error(t("composer.goal.error.budgetInvalid"));
-      return;
-    }
-    setGoalSaving(true);
-    try {
-      const shouldSubmitCreatedGoal = !visibleSessionGoal && !props.isConversationRunning && !isComposerRunning;
-      const saved = goalDialogMode === "resume"
-        ? await props.onResumeSessionGoal(objective, tokenBudget)
-        : await props.onSaveSessionGoal(objective, tokenBudget);
-      if (saved) {
-        setGoalDialogOpen(false);
-        if (goalDialogMode === "edit" && shouldSubmitCreatedGoal) {
-          setIsComposerRunning(true);
-          try {
-            const sent = await props.onSubmitPrompt({
-              prompt: objective,
-              attachments: [],
-              executionMode,
-              reasoningEffort: submittedReasoningEffort,
-              disabledAiCapabilityKinds: Array.from(disabledAiCapabilityKinds),
-              disabledAiCapabilityTargetSelectors: Array.from(disabledAiCapabilityTargetSelectors),
-              aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(aiCapabilityTargetOrder),
-            });
-            if (!sent) {
-              setDraftInput((current) => current || objective);
-            }
-          } finally {
-            setIsComposerRunning(false);
-          }
-        }
-      }
-    } finally {
-      setGoalSaving(false);
-    }
-  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, executionMode, goalDialogMode, goalObjectiveDraft, goalTokenBudgetDraft, isComposerRunning, props, submittedReasoningEffort, t, visibleSessionGoal]);
-
-  // handleGoalStatusToggle pauses or resumes the current goal.
-  // handleGoalStatusToggle 暂停或恢复当前目标。
-  const handleGoalStatusToggle = React.useCallback(async () => {
-    if (!visibleSessionGoal) {
-      return;
-    }
-    const nextStatus = visibleSessionGoal.status === "paused" ? "active" : "paused";
-    setGoalSaving(true);
-    try {
-      await props.onUpdateSessionGoalStatus(nextStatus);
-    } finally {
-      setGoalSaving(false);
-    }
-  }, [props, visibleSessionGoal]);
-
-  // handleGoalClear clears the current goal after a direct user action.
-  // handleGoalClear 在用户直接操作后清理当前目标。
-  const handleGoalClear = React.useCallback(async () => {
-    setGoalSaving(true);
-    try {
-      await props.onClearSessionGoal();
-    } finally {
-      setGoalSaving(false);
-    }
-  }, [props]);
-
-  // handleModelChoiceChange applies one model choice locally and through the shared backend.
-  // handleModelChoiceChange 在本地与共享后端应用单个模型选择。
-  const handleModelChoiceChange = React.useCallback(async (choice: ModelPickerChoice) => {
-    const previousChoice = modelChoice;
-    const nextChoice = modelPickerChoiceKey(choice);
-    setModelChoice(nextChoice);
-    const ok = await props.onSelectWorkbenchModel(choice);
-    if (!ok) {
-      setModelChoice(previousChoice);
-    }
-  }, [modelChoice, props]);
-
-  // handleReasoningEffortChange applies one backend-routed reasoning selection with rollback.
-  // handleReasoningEffortChange 应用单个后端路由的思考档位选择并支持失败回滚。
-  const handleReasoningEffortChange = React.useCallback(async (value: string) => {
-    const previousEffort = reasoningEffort;
-    setReasoningEffort(value);
-    const ok = await props.onSelectWorkbenchReasoningEffort(value);
-    if (!ok) {
-      setReasoningEffort(previousEffort);
-    }
-  }, [props, reasoningEffort]);
-
-  // toggleExecutionMode switches between build and plan without leaving the composer focus flow.
-  // toggleExecutionMode 在不离开输入区焦点流的情况下切换构建与计划模式。
-  const toggleExecutionMode = React.useCallback(() => {
-    void handlePlanModeChange(!planModeEnabled);
-  }, [handlePlanModeChange, planModeEnabled]);
-
-  // handleComposerContainerKeyDown captures Shift+Tab as the work-mode shortcut.
-  // handleComposerContainerKeyDown 将 Shift+Tab 捕获为工作模式快捷键。
-  const handleComposerContainerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Tab" || !event.shiftKey) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    toggleExecutionMode();
-  }, [toggleExecutionMode]);
-
-  // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
-  // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
-  const handleComposerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (slashPanelVisible) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setSlashHighlightedIndex((current) => (current + 1) % visibleSlashCommands.length);
+  React.useEffect(() => {
+    // handleGlobalWorkspaceTyping redirects ordinary workspace typing into the composer.
+    // handleGlobalWorkspaceTyping 将工作台中的普通键入重定向到输入区。
+    const handleGlobalWorkspaceTyping = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !isComposerPrintableKey(event)) {
         return;
       }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setSlashHighlightedIndex((current) => (current - 1 + visibleSlashCommands.length) % visibleSlashCommands.length);
+      // textarea is the unique composer input that receives redirected typing.
+      // textarea 是接收重定向输入的唯一输入区文本框。
+      const textarea = composerTextareaRef.current;
+      if (!textarea || document.activeElement === textarea) {
         return;
       }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setSlashDismissedInput(draftInput);
+      if (hasBlockingComposerPopup() || isComposerTextEntryElement(document.activeElement)) {
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-        const command = exactSlashCommand ?? highlightedSlashCommand;
-        if (command) {
-          event.preventDefault();
-          activateSlashCommand(command);
-          return;
-        }
-      }
-    }
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
-      return;
-    }
-    event.preventDefault();
-    void handleComposerSend();
-  }, [
-    activateSlashCommand,
-    draftInput,
-    exactSlashCommand,
-    handleComposerSend,
-    highlightedSlashCommand,
-    slashPanelVisible,
-    visibleSlashCommands.length,
-  ]);
+      event.preventDefault();
+      textarea.focus({ preventScroll: true });
+      appendGlobalInput(event.key);
+    };
+    document.addEventListener("keydown", handleGlobalWorkspaceTyping);
+    return () => document.removeEventListener("keydown", handleGlobalWorkspaceTyping);
+  }, [appendGlobalInput]);
 
   return (
     <>
@@ -995,6 +511,7 @@ export function ComposerPanel(props: {
               targetOrder={aiCapabilityTargetOrder}
               locale={locale}
               onSaveConfiguration={handleAiCapabilityConfigurationSave}
+              scopeKey={draftSlotKey}
             />
           </div>
           <ComposerPanelToolbarRight

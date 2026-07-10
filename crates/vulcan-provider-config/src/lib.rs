@@ -2,6 +2,7 @@
 //! 共享的 Provider 配置、目录与能力解析表面。
 
 pub mod ai_tool_configuration;
+mod atomic_file;
 pub mod capabilities;
 pub mod catalog;
 pub mod config;

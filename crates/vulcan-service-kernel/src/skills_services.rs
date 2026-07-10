@@ -2,6 +2,40 @@
 //! LuaSkills 与 AgentSkills 服务处理器。
 
 use super::*;
+
+/// Serializes user-agent catalog file mutations across concurrent service requests.
+/// 串行化并发服务请求之间的用户智能体目录文件变更。
+static SUBAGENT_CATALOG_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Serializes LuaSkills lifecycle requests through catalog storage and domain projection.
+/// 将 LuaSkills 生命周期请求串行化到目录存储与领域投影完成为止。
+static LUASKILLS_MANAGEMENT_MUTATION_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
+/// Acquires the process-wide user-agent catalog mutation guard.
+/// 获取进程级用户智能体目录变更守卫。
+///
+/// # Returns
+/// 返回值
+/// A guard that keeps catalog discovery, file mutation, and state reprojection in one transaction.
+/// 返回一个守卫，使目录发现、文件变更与状态重投影保持在同一事务中。
+fn lock_subagent_catalog_mutation() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    SUBAGENT_CATALOG_MUTATION_LOCK
+        .lock()
+        .map_err(|error| format!("failed to lock subagent catalog mutation: {error}"))
+}
+
+/// Acquires the process-wide LuaSkills lifecycle transaction guard.
+/// 获取进程级 LuaSkills 生命周期事务守卫。
+///
+/// # Returns
+/// 返回值
+/// An asynchronous guard retained until runtime mutation, catalog storage, and projection finish.
+/// 返回一个异步守卫，并保持到运行时变更、目录存储与投影全部结束。
+async fn lock_luaskills_management_mutation() -> tokio::sync::MutexGuard<'static, ()> {
+    LUASKILLS_MANAGEMENT_MUTATION_LOCK.lock().await
+}
+
 pub(crate) async fn run_luaskills_management_blocking<T, F>(
     label: &'static str,
     operation: F,
@@ -19,14 +53,17 @@ where
 /// 刷新 WebUI 技能页面使用的 LuaSkills 目录。
 pub(crate) async fn service_refresh_luaskills_catalog(
     state: SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Keep the runtime refresh and its returned catalog projection in one ordered transaction.
+    // 将运行时刷新及其返回的目录投影保持在同一个有序事务中。
+    let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
     let catalog = run_luaskills_management_blocking("refresh catalog", move || {
         vulcan_service_runtime::luaskills_bridge::refresh_luaskills_catalog(&handle)
     })
     .await?;
     store_luaskills_catalog(&state, catalog)?;
-    refresh_workbench_snapshot(state).await
+    refresh_luaskills_local_state(&state).await
 }
 
 /// Installs one LuaSkill package into the USER layer and refreshes the WebUI snapshot.
@@ -36,7 +73,10 @@ pub(crate) async fn service_install_luaskill(
     skill_id: Option<String>,
     source: String,
     source_type: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Keep installation and its returned catalog projection in one ordered transaction.
+    // 将安装及其返回的目录投影保持在同一个有序事务中。
+    let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("install skill", move || {
         vulcan_service_runtime::luaskills_bridge::install_luaskill(
@@ -48,7 +88,7 @@ pub(crate) async fn service_install_luaskill(
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_workbench_snapshot(state).await
+    refresh_luaskills_local_state(&state).await
 }
 
 /// Updates one managed LuaSkill package and refreshes the WebUI snapshot.
@@ -56,14 +96,17 @@ pub(crate) async fn service_install_luaskill(
 pub(crate) async fn service_update_luaskill(
     state: SharedServiceBridgeState,
     skill_id: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Keep update and its returned catalog projection in one ordered transaction.
+    // 将更新及其返回的目录投影保持在同一个有序事务中。
+    let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("update skill", move || {
         vulcan_service_runtime::luaskills_bridge::update_luaskill(&handle, skill_id)
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_workbench_snapshot(state).await
+    refresh_luaskills_local_state(&state).await
 }
 
 /// Enables or disables one LuaSkill package and refreshes the WebUI snapshot.
@@ -72,14 +115,17 @@ pub(crate) async fn service_set_luaskill_enabled(
     state: SharedServiceBridgeState,
     skill_id: String,
     enabled: bool,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Keep lifecycle state mutation and its returned catalog projection in one ordered transaction.
+    // 将生命周期状态变更及其返回的目录投影保持在同一个有序事务中。
+    let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("set skill enabled", move || {
         vulcan_service_runtime::luaskills_bridge::set_luaskill_enabled(&handle, skill_id, enabled)
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_workbench_snapshot(state).await
+    refresh_luaskills_local_state(&state).await
 }
 
 /// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
@@ -87,14 +133,17 @@ pub(crate) async fn service_set_luaskill_enabled(
 pub(crate) async fn service_uninstall_luaskill(
     state: SharedServiceBridgeState,
     skill_id: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Keep uninstall and its returned catalog projection in one ordered transaction.
+    // 将卸载及其返回的目录投影保持在同一个有序事务中。
+    let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("uninstall skill", move || {
         vulcan_service_runtime::luaskills_bridge::uninstall_luaskill(&handle, skill_id)
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_workbench_snapshot(state).await
+    refresh_luaskills_local_state(&state).await
 }
 
 /// Persists one LuaSkill tool registration state and refreshes the WebUI snapshot.
@@ -104,30 +153,42 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
     skill_id: String,
     local_name: String,
     registration_state: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Keep tool registration ordered with lifecycle catalog mutations so every response projects one coherent domain.
+    // 使工具注册与生命周期目录变更保持有序，让每个响应都投影同一个一致领域。
+    let _management_guard = lock_luaskills_management_mutation().await;
     let next_state = parse_luaskill_tool_registration_state(&registration_state)?;
-    mutate_provider_configuration(&state, |configuration| {
-        configuration
-            .luaskills
-            .set_tool_registration_state(&skill_id, &local_name, next_state);
-        Ok(())
-    })?;
-    refresh_luaskills_local_state(&state)
+    mutate_provider_configuration(
+        &state,
+        "保存 LuaSkills 工具注册失败",
+        |configuration| {
+            configuration
+                .luaskills
+                .set_tool_registration_state(&skill_id, &local_name, next_state);
+            Ok(())
+        },
+        |_guard, _configuration| (),
+    )
+    .await?;
+    refresh_luaskills_local_state(&state).await
 }
 
-/// Refreshes Agent Skills by rebuilding the current WebUI workbench snapshot.
-/// 通过重建当前 WebUI 工作台快照刷新 Agent Skills。
+/// Refreshes only the Agent Skills domain and returns its committed revision.
+/// 仅刷新 Agent Skills 领域并返回其已提交版本。
 pub(crate) async fn service_refresh_agent_skills_catalog(
     state: SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
-    refresh_workbench_snapshot(state).await
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    refresh_agent_skills_local_state(&state).await
 }
 
 /// Refreshes the agent catalog and updates the shared task runtime snapshot.
 /// 刷新智能体目录并更新共享任务运行时快照。
 pub(crate) async fn service_refresh_subagent_catalog(
     state: SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentCatalogUpdate, String> {
+    // Prevent refresh from committing a catalog loaded between another request's file mutation and projection.
+    // 防止刷新提交在其他请求文件变更与投影之间加载到的目录。
+    let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
     refresh_subagent_catalog_local_state(&state)
 }
 
@@ -135,7 +196,7 @@ pub(crate) async fn service_refresh_subagent_catalog(
 /// 在宿主文件管理器中打开用户拥有的智能体定义目录。
 pub(crate) async fn service_open_subagent_user_directory(
     state: SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentCatalogUpdate, String> {
     let user_definition_root = user_subagent_definition_root();
     std::fs::create_dir_all(&user_definition_root).map_err(|error| {
         format!(
@@ -143,7 +204,13 @@ pub(crate) async fn service_open_subagent_user_directory(
             user_definition_root.display()
         )
     })?;
+    // Keep the directory refresh ordered with all catalog file mutations before opening the projected path.
+    // 在打开已投影路径前，使目录刷新与全部目录文件变更保持有序。
+    let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
     let snapshot = refresh_subagent_catalog_local_state(&state)?;
+    // Release catalog serialization before the external file-manager request, which does not mutate catalog state.
+    // 在不变更目录状态的外部文件管理器请求前释放目录串行守卫。
+    drop(_catalog_mutation_guard);
     shell_host_from_state(&state)?.open_path(&user_definition_root.to_string_lossy())?;
     Ok(snapshot)
 }
@@ -154,11 +221,14 @@ pub(crate) async fn service_set_subagent_definition_enabled(
     state: SharedServiceBridgeState,
     agent_id: String,
     enabled: bool,
-) -> Result<SubagentDefinitionEnabledUpdate, String> {
+) -> Result<SubagentCatalogUpdate, String> {
     let agent_id = agent_id.trim();
     if agent_id.is_empty() {
         return Err(String::from("智能体定义标识不能为空。"));
     }
+    // Keep the filesystem override and both retained runtime projections ordered as one catalog transaction.
+    // 将文件系统覆盖与两份保留的运行时投影按同一个目录事务排序。
+    let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
     {
         let guard = state
             .lock()
@@ -207,11 +277,10 @@ pub(crate) async fn service_set_subagent_definition_enabled(
     let notice = subagent_catalog_notice_from_summary(&guard.workbench.subagent_catalog);
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
-    guard.workbench.subagent_catalog.notice = notice.clone();
-    Ok(SubagentDefinitionEnabledUpdate {
-        agent_id: agent_id.to_string(),
-        enabled,
-        notice,
+    guard.workbench.subagent_catalog.notice = notice;
+    Ok(SubagentCatalogUpdate {
+        revision: guard.workbench_generation,
+        subagent_catalog: guard.workbench.subagent_catalog.clone(),
     })
 }
 
@@ -220,7 +289,7 @@ pub(crate) async fn service_set_subagent_definition_enabled(
 pub(crate) async fn service_save_subagent_definition(
     state: SharedServiceBridgeState,
     request: SubagentDefinitionSaveRequest,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentCatalogUpdate, String> {
     let requested_agent_id = normalize_agent_file_name_input(&request.agent_id);
     if requested_agent_id.is_empty() {
         return Err(String::from("智能体标识不能为空。"));
@@ -235,6 +304,9 @@ pub(crate) async fn service_save_subagent_definition(
     let original_agent_id = submitted_original_agent_id
         .as_deref()
         .unwrap_or(requested_agent_id.as_str());
+    // Prevent concurrent save, delete, restore, and toggle requests from observing an intermediate catalog.
+    // 防止并发保存、删除、恢复与启停请求观察到目录中间态。
+    let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
     let catalog = load_current_subagent_catalog();
     let existing = submitted_original_agent_id
         .as_deref()
@@ -415,11 +487,14 @@ pub(crate) async fn service_save_subagent_definition(
 pub(crate) async fn service_delete_subagent_definition(
     state: SharedServiceBridgeState,
     agent_id: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentCatalogUpdate, String> {
     let agent_id = agent_id.trim();
     if agent_id.is_empty() {
         return Err(String::from("智能体定义标识不能为空。"));
     }
+    // Keep catalog discovery and deletion under the same process-wide mutation guard.
+    // 在同一个进程级变更守卫下完成目录发现与删除。
+    let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
     let catalog = load_current_subagent_catalog();
     let definition = catalog
         .definitions
@@ -453,11 +528,14 @@ pub(crate) async fn service_delete_subagent_definition(
 pub(crate) async fn service_restore_subagent_definition_default(
     state: SharedServiceBridgeState,
     agent_id: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentCatalogUpdate, String> {
     let agent_id = agent_id.trim();
     if agent_id.is_empty() {
         return Err(String::from("智能体定义标识不能为空。"));
     }
+    // Keep restore eligibility checks and override deletion in one serialized catalog transaction.
+    // 将恢复资格检查与覆盖删除保持在同一个串行目录事务中。
+    let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
     let catalog = load_current_subagent_catalog();
     let definition = catalog
         .definitions
@@ -491,12 +569,18 @@ pub(crate) async fn service_restore_subagent_definition_default(
 pub(crate) async fn service_set_agent_skills_enabled(
     state: SharedServiceBridgeState,
     enabled: bool,
-) -> Result<AgentSkillsCatalogSummary, String> {
-    mutate_provider_configuration(&state, |configuration| {
-        configuration.prompt_skills.enabled = enabled;
-        Ok(())
-    })?;
-    refresh_agent_skills_local_state(&state)
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    mutate_provider_configuration(
+        &state,
+        "保存 Agent Skills 全局状态失败",
+        |configuration| {
+            configuration.prompt_skills.enabled = enabled;
+            Ok(())
+        },
+        |_guard, _configuration| (),
+    )
+    .await?;
+    refresh_agent_skills_local_state(&state).await
 }
 
 /// Persists one global Agent Skill state and refreshes only the Agent Skills catalog.
@@ -505,19 +589,25 @@ pub(crate) async fn service_set_agent_skill_enabled(
     state: SharedServiceBridgeState,
     name: String,
     enabled: bool,
-) -> Result<AgentSkillsCatalogSummary, String> {
+) -> Result<AgentSkillsCatalogUpdate, String> {
     let state_override = if enabled {
         PersistedPromptSkillState::Enabled
     } else {
         PersistedPromptSkillState::Disabled
     };
-    mutate_provider_configuration(&state, |configuration| {
-        configuration
-            .prompt_skills
-            .set_skill_state(&name, Some(state_override));
-        Ok(())
-    })?;
-    refresh_agent_skills_local_state(&state)
+    mutate_provider_configuration(
+        &state,
+        "保存 Agent Skill 状态失败",
+        |configuration| {
+            configuration
+                .prompt_skills
+                .set_skill_state(&name, Some(state_override));
+            Ok(())
+        },
+        |_guard, _configuration| (),
+    )
+    .await?;
+    refresh_agent_skills_local_state(&state).await
 }
 
 /// Loads project-level Agent Skill overrides for the WebUI project settings modal.
@@ -545,44 +635,48 @@ pub(crate) fn service_load_project_agent_skill_overrides(
 
 /// Persists one project-level Agent Skill tri-state override without rebuilding the full snapshot.
 /// 持久化单个项目级 Agent Skill 三态覆盖，但不重建完整快照。
-pub(crate) fn service_set_agent_skill_project_state(
+pub(crate) async fn service_set_agent_skill_project_state(
     state: SharedServiceBridgeState,
     project_id: String,
     name: String,
     state_key: String,
 ) -> Result<(), String> {
     let project_path = vmm_project_scope_path(&state, Some(&project_id))?;
-    let mut project_configuration = load_project_configuration(&project_path);
     let stable_name = name.trim();
     if stable_name.is_empty() {
         return Err(String::from("项目级 Agent Skill 名称不能为空。"));
     }
-    match parse_agent_skill_project_state(&state_key)? {
-        Some(state_override) => {
-            project_configuration
-                .prompt_skills
-                .skill_overrides
-                .insert(stable_name.to_string(), state_override);
-        }
-        None => {
-            project_configuration
-                .prompt_skills
-                .skill_overrides
-                .remove(stable_name);
-        }
-    }
-    vulcan_provider_config::config::save_project_configuration_file(
+    let state_override = parse_agent_skill_project_state(&state_key)?;
+    mutate_project_configuration(
         &PathBuf::from(&project_path),
-        &project_configuration,
-    )?;
-    Ok(())
+        "保存项目 Agent Skill 状态失败",
+        |project_configuration| {
+            match state_override {
+                Some(state_override) => {
+                    project_configuration
+                        .prompt_skills
+                        .skill_overrides
+                        .insert(stable_name.to_string(), state_override);
+                }
+                None => {
+                    project_configuration
+                        .prompt_skills
+                        .skill_overrides
+                        .remove(stable_name);
+                }
+            }
+            Ok(())
+        },
+        |_project_configuration| Ok(()),
+    )
+    .await
 }
 
 /// Reprojects agent catalog after a focused catalog write or refresh.
 /// 在聚焦的目录写入或刷新后重新投影智能体目录。
 fn refresh_subagent_catalog_local_state(
     state: &SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentCatalogUpdate, String> {
     refresh_subagent_catalog_local_state_with_errors(state, Vec::new())
 }
 
@@ -591,7 +685,7 @@ fn refresh_subagent_catalog_local_state(
 fn refresh_subagent_catalog_local_state_with_errors(
     state: &SharedServiceBridgeState,
     transient_errors: Vec<vulcan_task_session::SubagentCatalogLoadError>,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<SubagentCatalogUpdate, String> {
     let mut catalog = load_current_subagent_catalog();
     catalog.errors.extend(transient_errors);
     let mut guard = state
@@ -612,7 +706,10 @@ fn refresh_subagent_catalog_local_state_with_errors(
         .unwrap_or_default();
     guard.workbench.subagent_catalog =
         subagent_catalog_summary_from_catalog(&catalog, &provider_configuration);
-    Ok(guard.workbench.clone())
+    Ok(SubagentCatalogUpdate {
+        revision: guard.workbench_generation,
+        subagent_catalog: guard.workbench.subagent_catalog.clone(),
+    })
 }
 
 /// Builds the agent catalog notice from the current projected summary.

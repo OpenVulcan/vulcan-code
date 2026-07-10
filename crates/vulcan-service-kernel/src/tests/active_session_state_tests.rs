@@ -759,3 +759,187 @@ fn preserve_active_session_run_state_ignores_blank_project_membership() {
     );
     assert!(refreshed_snapshot.task_projects[0].session_ids.is_empty());
 }
+
+/// Verifies hydrated retained state cannot resurrect a session already archived by the authoritative refresh.
+/// 验证已水合保留态不能复活已被权威刷新归档的会话。
+#[test]
+fn preserve_active_session_run_state_does_not_resurrect_archived_session() {
+    // session_id identifies the session moved from the active index into the archived index.
+    // session_id 标识从活动索引移动到归档索引的会话。
+    let session_id = SessionId::new_v4();
+    // project_id owns the session before and after archival.
+    // project_id 在归档前后均归属该会话。
+    let project_id = String::from("project-a");
+    // session is the retained summary captured before the archive transaction commits.
+    // session 是归档事务提交前捕获的保留摘要。
+    let session = SessionSummary::new(
+        session_id,
+        Some(project_id.clone()),
+        "待归档会话",
+        "已水合正文",
+        SessionState::Completed,
+        0,
+        0,
+        "刚刚",
+    );
+    // previous_snapshot models the selected hydrated WebUI state immediately before archival.
+    // previous_snapshot 模拟归档前一刻已选中且已水合的 WebUI 状态。
+    let previous_snapshot = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            project_id.clone(),
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            vec![session_id],
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: vec![session.clone()],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::from([(
+            session_id,
+            vec![SessionMessageEntry::new(
+                SessionMessageKind::Assistant,
+                "助手",
+                "已保留的正文",
+            )],
+        )]),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::from([session_id]),
+    };
+    // refreshed_snapshot is the authoritative post-archive SQLite and directory projection.
+    // refreshed_snapshot 是归档后的权威 SQLite 与目录投影。
+    let mut refreshed_snapshot = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            project_id,
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: Vec::new(),
+        archived_sessions: vec![session],
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: SessionId::nil(),
+        hydrated_session_ids: BTreeSet::new(),
+    };
+    // preserved_workspace_run_state captures the stale hydrated row that previously overrode archival.
+    // preserved_workspace_run_state 捕获此前会覆盖归档事实的过期水合行。
+    let preserved_workspace_run_state =
+        capture_preserved_workspace_run_state(Some(&previous_snapshot), &BTreeSet::new(), None);
+
+    preserve_active_session_run_state(
+        preserved_workspace_run_state.as_ref(),
+        &mut refreshed_snapshot,
+    );
+
+    assert!(refreshed_snapshot.sessions.is_empty());
+    assert_eq!(refreshed_snapshot.archived_sessions.len(), 1);
+    assert_eq!(refreshed_snapshot.selected_session, SessionId::nil());
+    assert!(
+        !refreshed_snapshot
+            .session_messages
+            .contains_key(&session_id)
+    );
+    assert!(
+        !refreshed_snapshot
+            .hydrated_session_ids
+            .contains(&session_id)
+    );
+}
+
+/// Verifies retained hydration state cannot resurrect a session whose owning project was removed.
+/// 验证保留的水合状态不能复活所属项目已经移除的会话。
+#[test]
+fn preserve_active_session_run_state_does_not_resurrect_removed_project_session() {
+    // session_id identifies the retained session excluded by the removed-project tombstone.
+    // session_id 标识被项目删除墓碑排除的保留会话。
+    let session_id = SessionId::from_u128(0x93);
+    // project_id is the exact owner that disappears from the authoritative refresh.
+    // project_id 是从权威刷新中消失的精确所属项目。
+    let project_id = String::from("removed-project");
+    // previous_snapshot models a selected hydrated session immediately before project removal.
+    // previous_snapshot 模拟项目移除前一刻选中且已水合的会话。
+    let previous_snapshot = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            project_id.clone(),
+            "Removed Project",
+            "D:/removed-project",
+            false,
+            0,
+            None,
+            None,
+            vec![session_id],
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: vec![SessionSummary::new(
+            session_id,
+            Some(project_id),
+            "项目删除会话",
+            "已水合正文",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        archived_sessions: Vec::new(),
+        session_messages: BTreeMap::from([(
+            session_id,
+            vec![SessionMessageEntry::new(
+                SessionMessageKind::Assistant,
+                "助手",
+                "项目删除前正文",
+            )],
+        )]),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: session_id,
+        hydrated_session_ids: BTreeSet::from([session_id]),
+    };
+    // refreshed_snapshot mirrors the loader result after the owner row has been deleted.
+    // refreshed_snapshot 镜像所属项目行删除后的加载器结果。
+    let mut refreshed_snapshot = previous_snapshot.clone();
+    refreshed_snapshot.task_projects.clear();
+    refreshed_snapshot.sessions.clear();
+    refreshed_snapshot.session_messages.clear();
+    refreshed_snapshot.selected_session = SessionId::nil();
+    refreshed_snapshot.hydrated_session_ids.clear();
+    // preserved_workspace_run_state captures the stale selected and hydrated in-memory row.
+    // preserved_workspace_run_state 捕获过期的选中且已水合内存行。
+    let preserved_workspace_run_state =
+        capture_preserved_workspace_run_state(Some(&previous_snapshot), &BTreeSet::new(), None);
+
+    preserve_active_session_run_state(
+        preserved_workspace_run_state.as_ref(),
+        &mut refreshed_snapshot,
+    );
+
+    assert!(refreshed_snapshot.sessions.is_empty());
+    assert!(refreshed_snapshot.session_messages.is_empty());
+    assert_eq!(refreshed_snapshot.selected_session, SessionId::nil());
+}

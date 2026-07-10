@@ -24,10 +24,10 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
         return Err(String::from("ERR_SESSION_FORK_TARGET_EXISTS"));
     }
     let fork_result = (|| {
-        let source_metadata = copy_segmented_session_tree_without_tasks(&source_dir, &target_dir)?;
+        let source_metadata = copy_segmented_session_tree_without_tasks(source_dir, &target_dir)?;
         let identity_replacements = forked_identity_replacements(request);
         write_forked_session_identity_events_from_source(
-            &source_dir,
+            source_dir,
             &target_dir,
             request,
             &source_metadata,

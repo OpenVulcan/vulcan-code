@@ -8,10 +8,12 @@ use crate::conversation_protocol::{
 };
 use crate::model::{
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRuntimeStateEntry,
+    SessionTitleSource,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -279,7 +281,9 @@ pub fn find_segmented_session_directory_for_task_store_created_at(
     if created_at.trim().is_empty() {
         return None;
     }
-    let created_date = super::segmented_session_date_from_unix_millis_text(created_at);
+    // created_date is absent when the optional task-store locator receives invalid timestamp text.
+    // created_date 在可选任务存储定位器收到无效时间戳文本时保持缺失。
+    let created_date = super::session_directory_date_from_unix_millis_text(created_at).ok()?;
     let active_dir =
         segmented_session_directory(data_root, false, project_tag, &created_date, session_id);
     if active_dir.is_dir() {

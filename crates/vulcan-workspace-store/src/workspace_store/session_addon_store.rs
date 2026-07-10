@@ -2,11 +2,12 @@
 //! 会话附属状态文档的文件持久化辅助。
 
 use crate::model::SessionAddonState;
-use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::{BufReader, Write};
+use serde::Deserialize;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
+
+use super::segmented_session_store::write_json_file_atomic;
 
 /// Durable filename used for session addon state beside segmented transcript files.
 /// 分段转录文件旁用于保存会话附属状态的持久化文件名。
@@ -92,72 +93,4 @@ where
     let reader = BufReader::new(file);
     serde_json::from_reader(reader)
         .map_err(|error| format!("解析 JSON 文件失败 `{}`：{error}", path.display()))
-}
-
-/// Writes one JSON document through a temporary file and rename.
-/// 通过临时文件与重命名写入一个 JSON 文档。
-///
-/// # Parameters
-/// 参数
-/// `path` is the target JSON document path.
-/// `path` 是目标 JSON 文档路径。
-/// `value` is the serializable payload to persist.
-/// `value` 是要持久化的可序列化载荷。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` when the JSON file has been replaced atomically.
-/// JSON 文件被原子替换成功时返回 `Ok(())`。
-fn write_json_file_atomic<T>(path: &Path, value: &T) -> Result<(), String>
-where
-    T: Serialize,
-{
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(to_store_error)?;
-    }
-    let temp_path = unique_json_temp_path(path);
-    let mut file = File::create(&temp_path).map_err(to_store_error)?;
-    serde_json::to_writer_pretty(&mut file, value).map_err(|error| error.to_string())?;
-    file.write_all(b"\n").map_err(to_store_error)?;
-    file.flush().map_err(to_store_error)?;
-    fs::rename(&temp_path, path).map_err(|error| {
-        let _ = fs::remove_file(&temp_path);
-        to_store_error(error)
-    })
-}
-
-/// Builds a unique temporary JSON path next to the target file.
-/// 在目标文件旁构建唯一临时 JSON 路径。
-///
-/// # Parameters
-/// 参数
-/// `path` is the target path that will eventually be replaced.
-/// `path` 是最终会被替换的目标路径。
-///
-/// # Returns
-/// 返回值
-/// A unique sibling temporary file path.
-/// 唯一的同级临时文件路径。
-fn unique_json_temp_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("addons.json");
-    path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::new_v4()))
-}
-
-/// Converts a filesystem error into the workspace-store error text convention.
-/// 将文件系统错误转换为 workspace-store 的错误文本约定。
-///
-/// # Parameters
-/// 参数
-/// `error` is the source filesystem error.
-/// `error` 是源文件系统错误。
-///
-/// # Returns
-/// 返回值
-/// A human-readable store error string.
-/// 可读的存储错误字符串。
-fn to_store_error(error: std::io::Error) -> String {
-    error.to_string()
 }

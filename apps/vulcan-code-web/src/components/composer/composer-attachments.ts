@@ -164,7 +164,14 @@ export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseCom
       });
       return [...current, ...unique].slice(0, MAX_COMPOSER_ATTACHMENTS);
     });
-  }, [args, attachments.length, enabledAttachmentKinds, t]);
+  }, [
+    args.conversationId,
+    args.onStageAttachmentBytes,
+    args.projectId,
+    attachments.length,
+    enabledAttachmentKinds,
+    t,
+  ]);
 
   // openAttachmentPicker opens the browser file picker with a kind-specific accept filter.
   // openAttachmentPicker 使用类型特定 accept 过滤器打开浏览器文件选择器。

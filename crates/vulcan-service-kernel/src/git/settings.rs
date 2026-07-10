@@ -12,7 +12,10 @@ use vulcan_service_api::{
 };
 use vulcan_workbench_model::SessionRuntimeStateEntry;
 
-use crate::{SharedServiceBridgeState, emit_workbench_event, refresh_settings_projection_locked};
+use crate::{
+    SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
+    refresh_settings_projection_locked,
+};
 
 /// Git commit settings save request sent by the WebUI settings page.
 /// WebUI 设置页发送的 Git 提交设置保存请求。
@@ -46,27 +49,24 @@ pub(crate) async fn service_save_git_commit_settings(
     let normalized_prefix = normalize_git_commit_new_branch_prefix(&request.new_branch_prefix);
     let summary_model = persisted_git_commit_summary_model_selection(request.summary_model);
     let summary_extra_prompt = request.summary_extra_prompt.trim().to_string();
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        validate_git_commit_summary_model_selection(&summary_model, &next_configuration)?;
-        next_configuration.git_commit.new_branch_prefix = normalized_prefix;
-        next_configuration.git_commit.summary_model = summary_model;
-        next_configuration.git_commit.summary_extra_prompt = summary_extra_prompt;
-        next_configuration.git_commit.use_rtk_summary = request.use_rtk_summary;
-        next_configuration.git_commit.normalize();
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存 Git 提交设置失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存 Git 提交设置失败",
+        |configuration| {
+            validate_git_commit_summary_model_selection(&summary_model, configuration)?;
+            configuration.git_commit.new_branch_prefix = normalized_prefix;
+            configuration.git_commit.summary_model = summary_model;
+            configuration.git_commit.summary_extra_prompt = summary_extra_prompt;
+            configuration.git_commit.use_rtk_summary = request.use_rtk_summary;
+            configuration.git_commit.normalize();
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }

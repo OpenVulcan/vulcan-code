@@ -61,8 +61,18 @@ pub(crate) async fn service_suppress_context_injection_item(
             .workspace_snapshot
             .as_mut()
             .ok_or_else(|| String::from("工作区尚未载入，无法隐藏动态记忆。"))?;
-        let (session_id, runtime_state) = selected_session_runtime_state_mut(workspace)
-            .ok_or_else(|| String::from("请先选择一个可用会话。"))?;
+        // session_id is resolved from the initiating request instead of mutable UI selection state.
+        // session_id 从动作发起请求解析，而不是依赖可变的 UI 选中状态。
+        let session_id = vmm_suppression_session_id(workspace, request.conversation_id.as_deref())?;
+        // runtime_state is the exact session entry that owns the rendered context injection.
+        // runtime_state 是拥有当前渲染上下文注入内容的准确会话条目。
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: current_unix_millis_text(),
+                ..SessionRuntimeStateEntry::default()
+            });
         let mut changed = false;
         if let Some(dedupe_key) = dedupe_key.as_deref() {
             changed |= runtime_state
@@ -103,6 +113,7 @@ pub(crate) async fn service_suppress_context_injection_item(
         },
         kind: String::from("suppress_context_injection_item"),
         request: json!({
+            "conversationId": request.conversation_id,
             "dedupeKey": dedupe_key,
             "memoryId": memory_id,
         }),
@@ -112,6 +123,45 @@ pub(crate) async fn service_suppress_context_injection_item(
             "suppressedMemoryId": memory_id,
         }),
     })
+}
+
+/// Resolves and validates the exact regular session targeted by a context-injection suppression.
+/// 解析并校验上下文注入抑制动作所指向的准确常规会话。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the retained workspace containing active regular sessions.
+/// `workspace` 是包含活动常规会话的保留工作区。
+/// `conversation_id` is the explicit persisted conversation id captured by the initiating WebUI route.
+/// `conversation_id` 是发起动作的 WebUI 路由捕获的明确已持久化会话标识。
+///
+/// # Returns
+/// 返回值
+/// The validated session id, or an explicit error when the request is missing, malformed, or stale.
+/// 返回校验后的会话标识；请求缺失、格式错误或已失效时返回明确错误。
+pub(crate) fn vmm_suppression_session_id(
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    conversation_id: Option<&str>,
+) -> Result<vulcan_workbench_model::SessionId, String> {
+    // conversation_id is mandatory because falling back to current selection can mutate the wrong session.
+    // conversation_id 为必填项，因为回退到当前选中状态可能修改错误会话。
+    let conversation_id = conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("缺少需要隐藏动态记忆的会话标识。"))?;
+    // session_id is the strongly typed identity used by workspace runtime-state maps.
+    // session_id 是工作区运行态映射使用的强类型身份标识。
+    let session_id = conversation_id
+        .parse::<vulcan_workbench_model::SessionId>()
+        .map_err(|error| format!("无效的动态记忆会话标识：{error}"))?;
+    if !workspace
+        .sessions
+        .iter()
+        .any(|session| session.id == session_id)
+    {
+        return Err(String::from("目标会话已不存在，无法隐藏动态记忆。"));
+    }
+    Ok(session_id)
 }
 
 /// Saves one VMM memory configuration draft and refreshes the WebUI snapshot.
@@ -132,7 +182,7 @@ pub(crate) async fn service_save_vmm_memory_config(
     state: SharedServiceBridgeState,
     request: VmmConfigSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
-    save_vmm_memory_config(&state, request)?;
+    save_vmm_memory_config(&state, request).await?;
     refresh_workbench_snapshot(state).await
 }
 

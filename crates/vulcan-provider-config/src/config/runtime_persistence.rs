@@ -59,35 +59,6 @@ pub struct PersistedSkillEntry {
     pub confidence_delta: Option<f32>,
 }
 
-/// Persisted agent family used by the compose runtime foundation.
-/// compose 运行时基础架构使用的持久化代理类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PersistedAgentKind {
-    /// General worker agent driven by a skill chain.
-    /// 由技能链驱动的常规执行代理。
-    Worker,
-    /// Specialist agent focused on one capability domain.
-    /// 聚焦单一能力域的专家代理。
-    Specialist,
-    /// Coordinator agent that deterministically routes to specialists.
-    /// 将任务确定性路由给专家代理的协调代理。
-    Coordinator,
-}
-
-/// One deterministic routing rule used by a coordinator agent.
-/// 协调代理使用的单条确定性路由规则。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PersistedAgentRoute {
-    /// Signal name that activates the route.
-    /// 激活该路由的信号名称。
-    pub signal: String,
-    /// Delegate agent identifier that should receive the routed investigation.
-    /// 应接收该路由调查的委派代理标识。
-    pub delegate: String,
-}
-
 /// One persisted tool-policy entry that scopes native and MCP tools.
 /// 用于限定原生工具与 MCP 工具的单个持久化工具策略条目。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -481,67 +452,6 @@ impl PersistedPromptSkillsConfiguration {
 /// 返回默认提示词技能状态。
 fn default_prompt_skill_state() -> PersistedPromptSkillState {
     PersistedPromptSkillState::Enabled
-}
-
-/// One persisted agent entry stored in the shared Vulcan configuration file.
-/// 存储在共享 Vulcan 配置文件中的单个持久化代理条目。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PersistedAgentEntry {
-    /// Human-readable agent name.
-    /// 人类可读的代理名称。
-    pub name: String,
-    /// High-level agent family.
-    /// 高层代理类型。
-    pub kind: PersistedAgentKind,
-    /// Optional agent description shown in management surfaces.
-    /// 展示在管理界面中的可选代理描述。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Optional system prompt or working charter.
-    /// 可选的系统提示词或工作章程。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    /// Skill identifiers bound to the agent.
-    /// 绑定到该代理的技能标识集合。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<String>,
-    /// Native tool identifiers directly attached to the agent.
-    /// 直接附着到该代理上的原生工具标识集合。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub native_tools: Vec<String>,
-    /// MCP tool identifiers directly attached to the agent.
-    /// 直接附着到该代理上的 MCP 工具标识集合。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_tools: Vec<String>,
-    /// Delegate agent identifiers that may be exposed as sub-agent tools later.
-    /// 后续可作为子代理工具暴露的委派代理标识集合。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delegates: Vec<String>,
-    /// Optional shared tool-policy identifier referenced by the agent.
-    /// 代理引用的可选共享工具策略标识。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_policy: Option<String>,
-    /// Optional deterministic routing table used by coordinator agents.
-    /// 协调代理使用的可选确定性路由表。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<PersistedAgentRoute>,
-    /// Optional fallback delegate used by coordinator agents.
-    /// 协调代理使用的可选回退委派目标。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fallback_delegate: Option<String>,
-    /// Optional model override in `provider/model` form.
-    /// 以 `provider/model` 形式声明的可选模型覆盖。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Optional temperature override for the agent.
-    /// 该代理的可选温度参数覆盖值。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    /// Optional maximum step count or turn ceiling.
-    /// 可选的最大步数或轮次数上限。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_turns: Option<u16>,
 }
 
 /// Supported MCP transport families persisted inside the shared configuration file.

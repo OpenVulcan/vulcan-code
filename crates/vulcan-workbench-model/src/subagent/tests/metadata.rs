@@ -881,7 +881,12 @@ fn subagent_feedback_display_records_builds_visible_rows_and_stats() {
         SessionMessageRecordKind::TurnStats
     );
     let stats: SessionTurnStats = serde_json::from_value(
-        records.stats_entry.metadata.as_ref().unwrap()["turn_stats"].clone(),
+        records
+            .stats_entry
+            .metadata
+            .as_ref()
+            .expect("stats entry should contain metadata")["turn_stats"]
+            .clone(),
     )
     .expect("stats metadata should parse");
     assert_eq!(stats.turn_kind, SessionTurnStatsKind::SubagentFeedback);

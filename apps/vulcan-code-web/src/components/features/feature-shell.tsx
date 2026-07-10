@@ -112,6 +112,9 @@ function FeatureShell(props: {
   // skillHeaderBusyAction stores the title-bar action that should show busy feedback.
   // skillHeaderBusyAction 保存需要在标题栏展示忙碌反馈的动作。
   const [skillHeaderBusyAction, setSkillHeaderBusyAction] = React.useState<SkillHeaderBusyActionId | null>(null)
+  // skillHeaderActionRunningRef closes the synchronous repeat-click window before React commits busy state.
+  // skillHeaderActionRunningRef 在 React 提交忙碌状态前关闭同步重复点击窗口。
+  const skillHeaderActionRunningRef = React.useRef(false)
   // providerPickerOpen controls the model-provider catalog dialog from the shared header.
   // providerPickerOpen 从共享标题栏控制模型供应商目录弹窗。
   const [providerPickerOpen, setProviderPickerOpen] = React.useState(false)
@@ -129,7 +132,16 @@ function FeatureShell(props: {
   }, [props.activeSettingsSubArea])
   // runSkillHeaderAction wraps title-bar actions with disabled and spinner feedback.
   // runSkillHeaderAction 为标题栏动作包裹禁用与旋转反馈。
+  //
+  // Parameters: actionId selects the busy indicator and action performs the registered service request.
+  // 参数：actionId 选择忙碌提示，action 执行已注册的服务请求。
+  // Returns: a promise that settles after feedback timing and the synchronous guard are released.
+  // 返回值：在反馈时长结束且同步守卫释放后结束的 Promise。
   const runSkillHeaderAction = React.useCallback(async (actionId: SkillHeaderBusyActionId, action: () => Promise<void>) => {
+    if (skillHeaderActionRunningRef.current) {
+      return
+    }
+    skillHeaderActionRunningRef.current = true
     setSkillHeaderBusyAction(actionId)
     const startedAt = window.performance.now()
     try {
@@ -141,6 +153,7 @@ function FeatureShell(props: {
           window.setTimeout(resolve, remainingMs)
         })
       }
+      skillHeaderActionRunningRef.current = false
       setSkillHeaderBusyAction(null)
     }
   }, [])

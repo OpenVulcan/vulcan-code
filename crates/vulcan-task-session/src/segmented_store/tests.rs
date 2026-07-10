@@ -116,6 +116,126 @@ fn root_task_link_repairs_missing_jsonl_tail_newline() {
     assert_eq!(metadata["segments"][0]["line_count"], json!(2));
 }
 
+/// Verifies concurrent JSONL atomic rewrites use independent staging files and publish complete rows.
+/// 验证并发 JSONL 原子重写使用独立暂存文件并发布完整记录。
+#[test]
+fn concurrent_jsonl_atomic_rewrites_publish_complete_files() {
+    /// Number of synchronized rewrite attempts issued by each worker.
+    /// 每个工作线程执行的同步重写次数。
+    const REWRITE_COUNT_PER_WORKER: usize = 16;
+
+    // root isolates the shared JSONL target and its sibling staging files.
+    // root 隔离共享 JSONL 目标及其同级暂存文件。
+    let root = test_root("concurrent_jsonl_atomic_rewrites_publish_complete_files");
+    // segment_path is deliberately rewritten by both workers without an outer append lock.
+    // segment_path 由两个工作线程在没有外层追加锁的情况下刻意共同重写。
+    let segment_path = root.join("s001.jsonl");
+    // first_values form one complete candidate file with two distinguishable rows.
+    // first_values 构成包含两条可区分记录的完整候选文件。
+    let first_values = vec![
+        SegmentedEventLine {
+            seq: 1,
+            timestamp: String::from("101"),
+            kind: String::from("first-a"),
+            payload: json!({ "producer": "first", "row": 1 }),
+            turn_index: None,
+        },
+        SegmentedEventLine {
+            seq: 2,
+            timestamp: String::from("102"),
+            kind: String::from("first-b"),
+            payload: json!({ "producer": "first", "row": 2 }),
+            turn_index: None,
+        },
+    ];
+    // second_values form the other complete candidate file with three distinguishable rows.
+    // second_values 构成包含三条可区分记录的另一完整候选文件。
+    let second_values = vec![
+        SegmentedEventLine {
+            seq: 11,
+            timestamp: String::from("201"),
+            kind: String::from("second-a"),
+            payload: json!({ "producer": "second", "row": 1 }),
+            turn_index: None,
+        },
+        SegmentedEventLine {
+            seq: 12,
+            timestamp: String::from("202"),
+            kind: String::from("second-b"),
+            payload: json!({ "producer": "second", "row": 2 }),
+            turn_index: None,
+        },
+        SegmentedEventLine {
+            seq: 13,
+            timestamp: String::from("203"),
+            kind: String::from("second-c"),
+            payload: json!({ "producer": "second", "row": 3 }),
+            turn_index: None,
+        },
+    ];
+    // barrier synchronizes every rewrite iteration to maximize staging-name collision pressure.
+    // barrier 同步每轮重写，以最大化暂存名称碰撞压力。
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    // first_path is the first worker's owned handle to the shared target path.
+    // first_path 是第一个工作线程独占的共享目标路径句柄。
+    let first_path = segment_path.clone();
+    // first_barrier participates in every paired rewrite release.
+    // first_barrier 参与每次成对重写释放。
+    let first_barrier = std::sync::Arc::clone(&barrier);
+    // first_worker repeatedly publishes the first complete candidate.
+    // first_worker 重复发布第一份完整候选内容。
+    let first_worker = std::thread::spawn(move || {
+        for _ in 0..REWRITE_COUNT_PER_WORKER {
+            first_barrier.wait();
+            write_json_lines_file_atomic(&first_path, &first_values)
+                .expect("first concurrent JSONL rewrite");
+        }
+    });
+    // second_worker repeatedly publishes the second complete candidate.
+    // second_worker 重复发布第二份完整候选内容。
+    let second_worker = std::thread::spawn(move || {
+        for _ in 0..REWRITE_COUNT_PER_WORKER {
+            barrier.wait();
+            write_json_lines_file_atomic(&segment_path, &second_values)
+                .expect("second concurrent JSONL rewrite");
+        }
+    });
+    first_worker.join().expect("join first JSONL writer");
+    second_worker.join().expect("join second JSONL writer");
+
+    // published_lines must equal one whole candidate rather than a truncated or mixed file.
+    // published_lines 必须等于某一份完整候选内容，不能是截断或混合文件。
+    let published_lines = read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl"))
+        .expect("read concurrently published JSONL");
+    // staging_entries capture any leaked unique sibling files after successful publication.
+    // staging_entries 捕获成功发布后可能泄漏的唯一同级暂存文件。
+    let staging_entries = fs::read_dir(&root)
+        .expect("read JSONL root")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect JSONL root entries")
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".vulcan-stage-")
+        })
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&root);
+
+    // published_kinds provide an exact, compact identity for the final complete candidate.
+    // published_kinds 为最终完整候选内容提供精确而紧凑的身份。
+    let published_kinds = published_lines
+        .iter()
+        .map(|line| line.kind.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        published_kinds == ["first-a", "first-b"]
+            || published_kinds == ["second-a", "second-b", "second-c"]
+    );
+    assert!(staging_entries.is_empty());
+}
+
 /// Verifies the segmented store writes task metadata, state, segments, and parent links without old tasks layout files.
 /// 验证分段存储会写入子任务元数据、状态、分段和父关联，同时不产生旧 tasks 布局文件。
 #[test]
@@ -320,6 +440,119 @@ fn segmented_store_round_trips_task_session_artifacts() {
     assert_eq!(root_lines[1].payload["line_count"], 1);
 }
 
+/// Verifies concurrent context and checkpoint saves preserve both field families in shared state.json.
+/// 验证并发上下文与检查点保存会在共享 state.json 中保留两类字段。
+#[test]
+fn concurrent_state_saves_preserve_context_and_checkpoint() {
+    /// Number of writes issued by each concurrent state producer.
+    /// 每个并发状态生产者执行的写入次数。
+    const WRITE_COUNT_PER_PRODUCER: u64 = 32;
+
+    // root isolates one segmented TaskSession hierarchy.
+    // root 隔离一套分段 TaskSession 层级。
+    let root = test_root("concurrent_state_saves_preserve_context_and_checkpoint");
+    // store owns the shared task state document exercised by both worker threads.
+    // store 持有两个 worker 线程共同覆盖的任务状态文档。
+    let store = SegmentedTaskSessionStore::new(&root);
+    // root_session_id identifies the parent session required by task creation.
+    // root_session_id 标识创建任务所需的父会话。
+    let root_session_id = SessionNodeId::new_v4();
+    // task_session_id identifies the single shared state.json target.
+    // task_session_id 标识单个共享 state.json 目标。
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    store
+        .create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent: ParentSessionRef::MainSession { root_session_id },
+            public_task_id: String::from("concurrent-state"),
+            display_title: String::from("Concurrent state"),
+            requested_config: SessionRequestedConfig::default(),
+            effective_config: SessionEffectiveConfig::default(),
+            depth: 1,
+            timestamp_ms: 200,
+        }))
+        .expect("concurrent state task session should create");
+
+    // barrier releases context and checkpoint producers into the transaction at the same time.
+    // barrier 使上下文与检查点生产者同时进入事务。
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    // context_store is the clone used by the context producer.
+    // context_store 是上下文生产者使用的克隆。
+    let context_store = store.clone();
+    // context_barrier participates in the shared simultaneous release point.
+    // context_barrier 参与共享的同时释放点。
+    let context_barrier = std::sync::Arc::clone(&barrier);
+    // context_worker repeatedly updates only the context field family.
+    // context_worker 重复更新仅属于上下文的字段族。
+    let context_worker = std::thread::spawn(move || {
+        context_barrier.wait();
+        for revision in 0..WRITE_COUNT_PER_PRODUCER {
+            context_store
+                .save_context(SessionContextDocument {
+                    schema_version: 1,
+                    node_id: task_session_id,
+                    provider_id: Some(String::from("provider")),
+                    model_id: Some(String::from("model")),
+                    reasoning_effort: None,
+                    system_prompt_layers: Vec::new(),
+                    conversation_state: json!({ "revision": revision }),
+                    compaction_anchor: None,
+                    context_budget_fingerprint: None,
+                    tool_catalog_snapshot: Value::Null,
+                    provider_request_preview: None,
+                })
+                .expect("concurrent context save should succeed");
+        }
+    });
+    // checkpoint_store is the clone used by the checkpoint producer.
+    // checkpoint_store 是检查点生产者使用的克隆。
+    let checkpoint_store = store.clone();
+    // checkpoint_worker repeatedly updates only the runtime checkpoint field family.
+    // checkpoint_worker 重复更新仅属于运行时检查点的字段族。
+    let checkpoint_worker = std::thread::spawn(move || {
+        barrier.wait();
+        for sequence in 0..WRITE_COUNT_PER_PRODUCER {
+            checkpoint_store
+                .save_runtime_checkpoint(SessionRuntimeCheckpoint {
+                    node_id: task_session_id,
+                    status: String::from("running"),
+                    last_sequence: sequence,
+                    payload: json!({ "sequence": sequence }),
+                })
+                .expect("concurrent checkpoint save should succeed");
+        }
+    });
+
+    context_worker
+        .join()
+        .expect("context producer should not panic");
+    checkpoint_worker
+        .join()
+        .expect("checkpoint producer should not panic");
+    // loaded_context proves checkpoint writes did not erase the latest context family.
+    // loaded_context 证明检查点写入没有擦除最新上下文字段族。
+    let loaded_context = store
+        .load_context(task_session_id)
+        .expect("concurrent context should load")
+        .expect("concurrent context should remain present");
+    // loaded_checkpoint proves context writes did not erase the latest checkpoint family.
+    // loaded_checkpoint 证明上下文写入没有擦除最新检查点字段族。
+    let loaded_checkpoint = store
+        .load_runtime_checkpoint(task_session_id)
+        .expect("concurrent checkpoint should load")
+        .expect("concurrent checkpoint should remain present");
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(loaded_context.provider_id.as_deref(), Some("provider"));
+    assert_eq!(loaded_checkpoint.status, "running");
+    assert_eq!(
+        loaded_checkpoint.last_sequence,
+        WRITE_COUNT_PER_PRODUCER - 1
+    );
+}
+
 /// Verifies saving child metadata refreshes the root task mirror without appending parent events.
 /// 验证保存子任务元数据会刷新根任务镜像，且不会追加父级事件。
 #[test]
@@ -367,6 +600,310 @@ fn save_task_session_refreshes_root_task_mirror_without_parent_event() {
     assert_eq!(task_mirror["status"], "archived");
     assert_eq!(task_mirror["updated_at"], "300");
     assert_eq!(root_lines_after.len(), root_lines_before.len());
+}
+
+/// Verifies metadata saves join the same transaction lock used by segmented event appends.
+/// 验证元数据保存加入分段事件追加所使用的同一事务锁。
+#[test]
+fn save_task_session_waits_for_segment_transaction_lock() {
+    // root isolates the persistence layout owned by this regression test.
+    // root 隔离本回归测试持有的持久化布局。
+    let root = test_root("save_task_session_waits_for_segment_transaction_lock");
+    // store is the production segmented store handle exercised by the worker.
+    // store 是工作线程实际调用的生产分段存储句柄。
+    let store = SegmentedTaskSessionStore::new(&root);
+    // root_session_id identifies the owning main session.
+    // root_session_id 标识所属主会话。
+    let root_session_id = SessionNodeId::new_v4();
+    // task_session_id identifies the child whose metadata is updated.
+    // task_session_id 标识元数据被更新的子任务。
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    // metadata is the authoritative child snapshot passed to save_task_session.
+    // metadata 是传给 save_task_session 的权威子任务快照。
+    let mut metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent: ParentSessionRef::MainSession { root_session_id },
+        public_task_id: String::from("transactional-save"),
+        display_title: String::from("Transactional save"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 200,
+    });
+    store
+        .create_task_session(metadata.clone())
+        .expect("create task session");
+    metadata.status = TaskSessionStatus::Archived;
+    metadata.updated_at = 300;
+
+    // transaction_guard deliberately owns the append transaction before the worker starts saving.
+    // transaction_guard 在工作线程开始保存前刻意持有追加事务。
+    let transaction_guard = vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+        .lock()
+        .expect("lock segmented append transaction");
+    // ready_channel proves the worker reached the call boundary before the blocking assertion.
+    // ready_channel 证明工作线程在阻塞断言前已到达调用边界。
+    let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+    // result_channel carries the save result only after the transaction finishes.
+    // result_channel 仅在事务结束后传递保存结果。
+    let (result_sender, result_receiver) = std::sync::mpsc::channel();
+    // worker_store is an independent store handle sharing the same persistence root.
+    // worker_store 是共享同一持久化根目录的独立存储句柄。
+    let worker_store = store.clone();
+    // worker attempts the metadata transaction while the test owns the shared lock.
+    // worker 在测试持有共享锁期间尝试执行元数据事务。
+    let worker = std::thread::spawn(move || {
+        ready_sender.send(()).expect("announce save attempt");
+        // save_result remains blocked until the shared transaction lock is released.
+        // save_result 会一直阻塞到共享事务锁被释放。
+        let save_result = worker_store.save_task_session(metadata);
+        result_sender.send(save_result).expect("send save result");
+    });
+    ready_receiver.recv().expect("worker reached save boundary");
+
+    // A completed result here would prove save_task_session bypassed the append transaction.
+    // 此时若收到完成结果，就证明 save_task_session 绕过了追加事务。
+    assert!(matches!(
+        result_receiver.recv_timeout(std::time::Duration::from_millis(100)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    drop(transaction_guard);
+
+    // save_result proves the transaction completes without recursive-lock deadlock after release.
+    // save_result 证明释放锁后事务能够完成，且不存在递归加锁死锁。
+    let save_result = result_receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("save should finish after transaction release");
+    save_result.expect("save task session");
+    worker.join().expect("join save worker");
+    // persisted_metadata verifies the committed child metadata is visible after the transaction.
+    // persisted_metadata 验证事务完成后可见已提交的子任务元数据。
+    let persisted_metadata = store
+        .load_task_session(task_session_id)
+        .expect("load saved task session")
+        .expect("saved task session should exist");
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(persisted_metadata.status, TaskSessionStatus::Archived);
+    assert_eq!(persisted_metadata.updated_at, 300);
+}
+
+/// Verifies concurrent creation of one task id publishes exactly one complete task layout.
+/// 验证同一子任务标识的并发创建只会发布一份完整子任务布局。
+#[test]
+fn concurrent_task_creation_publishes_one_complete_layout() {
+    // root isolates the task hierarchy shared by both creation workers.
+    // root 隔离两个创建工作线程共享的子任务层级。
+    let root = test_root("concurrent_task_creation_publishes_one_complete_layout");
+    // store provides the first handle into the shared persistence root.
+    // store 提供进入共享持久化根目录的第一个句柄。
+    let store = SegmentedTaskSessionStore::new(&root);
+    // root_session_id identifies the parent main session.
+    // root_session_id 标识父级主会话。
+    let root_session_id = SessionNodeId::new_v4();
+    // task_session_id is deliberately shared by both creation attempts.
+    // task_session_id 由两个创建尝试刻意共享。
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    // metadata is the identical authoritative creation request cloned into both workers.
+    // metadata 是克隆给两个工作线程的相同权威创建请求。
+    let metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent: ParentSessionRef::MainSession { root_session_id },
+        public_task_id: String::from("concurrent-create"),
+        display_title: String::from("Concurrent create"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 200,
+    });
+    // barrier releases both creation requests at the same point.
+    // barrier 在同一点释放两个创建请求。
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    // first_store is the independent handle used by the first worker.
+    // first_store 是第一个工作线程使用的独立句柄。
+    let first_store = store.clone();
+    // first_metadata is the first worker's owned creation request.
+    // first_metadata 是第一个工作线程独占的创建请求。
+    let first_metadata = metadata.clone();
+    // first_barrier joins the common simultaneous release point.
+    // first_barrier 加入公共同时释放点。
+    let first_barrier = std::sync::Arc::clone(&barrier);
+    // first_worker executes one of the competing creation transactions.
+    // first_worker 执行其中一个竞争创建事务。
+    let first_worker = std::thread::spawn(move || {
+        first_barrier.wait();
+        first_store.create_task_session(first_metadata)
+    });
+    // second_store is the independent handle used by the second worker.
+    // second_store 是第二个工作线程使用的独立句柄。
+    let second_store = store.clone();
+    // second_worker executes the other competing creation transaction.
+    // second_worker 执行另一个竞争创建事务。
+    let second_worker = std::thread::spawn(move || {
+        barrier.wait();
+        second_store.create_task_session(metadata)
+    });
+    // first_result captures the first transaction outcome without assuming scheduling order.
+    // first_result 捕获第一个事务结果，且不假定调度顺序。
+    let first_result = first_worker.join().expect("join first creation worker");
+    // second_result captures the second transaction outcome without assuming scheduling order.
+    // second_result 捕获第二个事务结果，且不假定调度顺序。
+    let second_result = second_worker.join().expect("join second creation worker");
+    // results allow symmetric assertions over the scheduling-independent outcomes.
+    // results 用于对与调度无关的结果进行对称断言。
+    let results = [first_result, second_result];
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    // creation_error is the one rejected duplicate transaction.
+    // creation_error 是唯一被拒绝的重复创建事务。
+    let creation_error = results
+        .iter()
+        .find_map(|result| result.as_ref().err())
+        .expect("one duplicate creation should fail");
+    assert!(creation_error.message.contains("directory already exists"));
+    // task_dir is the final directory atomically published by the winning transaction.
+    // task_dir 是获胜事务原子发布的最终目录。
+    let task_dir = root
+        .join(SEGMENTED_TASK_DIR)
+        .join(task_session_id.to_string());
+    assert!(task_main_metadata_path(&task_dir).is_file());
+    assert!(task_metadata_path(&task_dir).is_file());
+    assert!(task_dir.join(SEGMENTED_STATE_FILE).is_file());
+    // task_lines prove the initial child event was not duplicated by the losing transaction.
+    // task_lines 证明失败事务没有重复写入初始子任务事件。
+    let task_lines = read_json_lines::<SegmentedEventLine>(&task_dir.join("s001.jsonl"))
+        .expect("read child task lines");
+    // root_lines prove the parent invocation link was published exactly once.
+    // root_lines 证明父级调用关联只发布了一次。
+    let root_lines =
+        read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl")).expect("read root lines");
+    // task_entries prove no unpublished staging directory remains beside the final task.
+    // task_entries 证明最终子任务旁没有遗留未发布暂存目录。
+    let task_entries = fs::read_dir(root.join(SEGMENTED_TASK_DIR))
+        .expect("read task root")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect task root entries");
+    // expected_task_dir_name retains the stable id text used as the final directory component.
+    // expected_task_dir_name 保留作为最终目录片段的稳定标识文本。
+    let expected_task_dir_name = task_session_id.to_string();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(task_lines.len(), 1);
+    assert_eq!(root_lines.len(), 2);
+    assert_eq!(task_entries.len(), 1);
+    assert_eq!(
+        task_entries[0].file_name(),
+        std::ffi::OsStr::new(&expected_task_dir_name)
+    );
+}
+
+/// Verifies an existing partial final directory is rejected instead of being reused and completed.
+/// 验证已存在的残缺最终目录会被拒绝，而不是被复用并补写。
+#[test]
+fn task_creation_rejects_existing_partial_final_directory() {
+    // root isolates the intentionally malformed task layout.
+    // root 隔离刻意构造的异常子任务布局。
+    let root = test_root("task_creation_rejects_existing_partial_final_directory");
+    // store is the production creation path under test.
+    // store 是被测的生产创建路径。
+    let store = SegmentedTaskSessionStore::new(&root);
+    // root_session_id identifies the valid owning main session.
+    // root_session_id 标识有效的所属主会话。
+    let root_session_id = SessionNodeId::new_v4();
+    // task_session_id identifies the malformed pre-existing directory.
+    // task_session_id 标识预先存在的异常目录。
+    let task_session_id = SessionNodeId::new_v4();
+    create_root_session_metadata(&root, root_session_id);
+    // partial_task_dir simulates an interrupted legacy creation before metadata publication.
+    // partial_task_dir 模拟元数据发布前中断的旧创建流程。
+    let partial_task_dir = root
+        .join(SEGMENTED_TASK_DIR)
+        .join(task_session_id.to_string());
+    fs::create_dir_all(&partial_task_dir).expect("create partial task directory");
+    // result must reject the occupied final identity without mutating the partial directory.
+    // result 必须拒绝已占用的最终身份，且不能改写异常目录。
+    let result = store.create_task_session(TaskSessionMetadata::new(TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent: ParentSessionRef::MainSession { root_session_id },
+        public_task_id: String::from("partial-create"),
+        display_title: String::from("Partial create"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 200,
+    }));
+    // partial_entries prove no production artifact was written into the occupied directory.
+    // partial_entries 证明生产路径没有向已占用目录写入任何产物。
+    let partial_entries = fs::read_dir(&partial_task_dir)
+        .expect("read partial task directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect partial task entries");
+    let _ = fs::remove_dir_all(&root);
+
+    let error = result.expect_err("partial final directory should be rejected");
+    assert!(error.message.contains("directory already exists"));
+    assert!(partial_entries.is_empty());
+}
+
+/// Verifies task discovery excludes complete-looking metadata inside an unpublished staging directory.
+/// 验证子任务发现会排除尚未发布暂存目录中看似完整的元数据。
+#[test]
+fn task_discovery_ignores_unpublished_staging_layouts() {
+    // root isolates the staged layout and discovery scan.
+    // root 隔离暂存布局与发现扫描。
+    let root = test_root("task_discovery_ignores_unpublished_staging_layouts");
+    // store provides the production metadata discovery path.
+    // store 提供生产元数据发现路径。
+    let store = SegmentedTaskSessionStore::new(&root);
+    // root_session_id identifies the metadata's owning main session.
+    // root_session_id 标识元数据所属的主会话。
+    let root_session_id = SessionNodeId::new_v4();
+    // task_session_id derives both the canonical final name and the non-canonical staging name.
+    // task_session_id 同时派生规范最终名称与非规范暂存名称。
+    let task_session_id = SessionNodeId::new_v4();
+    create_dir_all(&store.task_root_dir()).expect("create task root");
+    // metadata is the single authoritative document source used by path derivation and staging.
+    // metadata 是路径派生与暂存共同使用的唯一权威文档来源。
+    let metadata = TaskSessionMetadata::new(TaskSessionMetadataInit {
+        root_session_id,
+        task_session_id,
+        parent: ParentSessionRef::MainSession { root_session_id },
+        public_task_id: String::from("staged-discovery"),
+        display_title: String::from("Staged discovery"),
+        requested_config: SessionRequestedConfig::default(),
+        effective_config: SessionEffectiveConfig::default(),
+        depth: 1,
+        timestamp_ms: 200,
+    });
+    // final_task_dir is the canonical path that remains unpublished during this test.
+    // final_task_dir 是本测试期间始终未发布的规范路径。
+    let final_task_dir = store
+        .new_task_dir(&metadata)
+        .expect("resolve final task directory");
+    // staged_task_dir is a sibling populated with a valid metadata document before publication.
+    // staged_task_dir 是发布前写入有效元数据文档的同级暂存目录。
+    let staged_task_dir =
+        create_task_directory_staging(&final_task_dir).expect("create staged task directory");
+    // staged_metadata is intentionally valid so only canonical path identity can exclude it.
+    // staged_metadata 刻意保持有效，使其只能通过规范路径身份被排除。
+    let staged_metadata = SegmentedTaskMetadataDocument::new(metadata);
+    write_json_file(&task_metadata_path(&staged_task_dir), &staged_metadata)
+        .expect("write staged task metadata");
+
+    // discovered_metadata must remain empty until the directory receives its canonical final name.
+    // discovered_metadata 在目录取得规范最终名称前必须保持为空。
+    let discovered_metadata = store
+        .load_all_task_session_metadata()
+        .expect("discover published task metadata");
+    remove_task_directory_staging(&staged_task_dir);
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(discovered_metadata.is_empty());
 }
 
 /// Verifies root task mirrors restore child summaries without reading child metadata files.
@@ -933,7 +1470,13 @@ fn parent_task_link_rejects_missing_child_metadata() {
     create_root_session_metadata(&root, root_session_id);
     let parent = ParentSessionRef::MainSession { root_session_id };
 
-    let result = append_main_session_task_link_event(
+    // transaction_guard satisfies the owned-lock contract exercised by the root helper.
+    // transaction_guard 满足根 helper 所要求的已持锁契约。
+    let _transaction_guard =
+        vulcan_session_core::segmented_file_io::segmented_append_file_io_lock()
+            .lock()
+            .expect("lock root append transaction");
+    let result = append_main_session_task_link_event_with_owned_append_lock(
         &root,
         &TaskInvocationEvent {
             event_id: "task-created".to_string(),

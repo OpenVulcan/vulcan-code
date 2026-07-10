@@ -69,7 +69,7 @@ fn runtime_log_missing_does_not_rebuild_from_segmented_display_segments() {
             "first answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+    append_segmented_session_message_update(&session_dir, &messages).expect("append messages");
 
     let restored =
         ensure_runtime_log_from_segmented_context(&session_dir).expect("ensure runtime log");
@@ -122,7 +122,7 @@ fn runtime_log_missing_ignores_non_initial_display_segments() {
             "third prompt",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+    append_segmented_session_message_update(&session_dir, &messages).expect("append messages");
     let metadata = read_session_metadata(&session_dir).expect("read metadata");
 
     assert_eq!(metadata.active_segment, "s003.jsonl");
@@ -223,7 +223,7 @@ fn runtime_log_full_corruption_does_not_fall_back_to_segmented_replay() {
             "first answer",
         ),
     ];
-    append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+    append_segmented_session_message_update(&session_dir, &messages).expect("append messages");
     let conversation_state = conversation_state_from_session_messages(&messages);
     rebuild_runtime_log_from_conversation_state(
         &session_dir,

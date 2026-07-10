@@ -36,9 +36,7 @@ pub(super) fn ensure_segmented_session_directory_for_locator(
             SegmentedSessionCreateRequest {
                 session_id: session_id_text.to_string(),
                 project_tag: locator.project_id.clone(),
-                created_date: persistence_segmented_session_date_from_unix_millis_text(
-                    &locator.created_at,
-                ),
+                created_date: session_directory_date_from_unix_millis_text(&locator.created_at)?,
                 created_at: locator.created_at.clone(),
                 project_id: Some(locator.project_id.clone()),
                 title: Some(locator.title.clone()),

@@ -428,48 +428,6 @@ fn segmented_context_public_apis_write_state_and_turn_context() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies session rename updates only metadata without appending segmented JSONL rows.
-/// 验证会话重命名只更新元数据，不追加分段 JSONL 行。
-#[test]
-fn segmented_session_rename_updates_metadata_without_touching_segments() {
-    let root = std::env::temp_dir().join(format!(
-        "vulcan-segmented-rename-test-{}",
-        uuid::Uuid::new_v4()
-    ));
-    let session_id = SessionId::from_u128(7008);
-    let session_dir = create_segmented_session_in_location(
-        &root,
-        false,
-        SegmentedSessionCreateRequest {
-            session_id: session_id.to_string(),
-            project_tag: String::from("project-rename"),
-            created_date: String::from("2026-06-08"),
-            created_at: String::from("100"),
-            project_id: Some(String::from("project-rename")),
-            title: Some(String::from("旧标题")),
-            title_source: Some(String::from("generated")),
-            segment_policy: SegmentPolicy::default(),
-        },
-    )
-    .expect("create segmented session");
-    let before_lines =
-        read_segmented_session_event_window(&session_dir, None, 8).expect("read before lines");
-
-    rename_segmented_session_metadata(&root, session_id, "新标题", "200").expect("rename metadata");
-
-    let metadata_text =
-        std::fs::read_to_string(session_dir.join("metadata.json")).expect("read metadata");
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_text).expect("parse metadata");
-    assert_eq!(metadata["title"], "新标题");
-    assert_eq!(metadata["title_source"], "manual");
-    assert_eq!(metadata["updated_at"], "200");
-    let after_lines =
-        read_segmented_session_event_window(&session_dir, None, 8).expect("read after lines");
-    assert_eq!(after_lines.len(), before_lines.len());
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
 /// Verifies session boundary events create and append to the segmented session stream.
 /// 验证 会话边界事件会创建并追加到分段会话流。
 #[test]

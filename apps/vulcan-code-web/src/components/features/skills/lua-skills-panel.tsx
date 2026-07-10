@@ -30,6 +30,9 @@ export function LuaSkillsPanel(props: {
 }) {
   const { t } = useI18n();
   const [busyAction, setBusyAction] = React.useState<string | null>(null);
+  // actionRunningRef closes the synchronous repeat-click window before React commits busy state.
+  // actionRunningRef 在 React 提交忙碌状态前关闭同步重复点击窗口。
+  const actionRunningRef = React.useRef(false);
   // detailSkillId stores the Lua Skill selected for the details dialog.
   // detailSkillId 保存当前打开详情弹窗的 Lua Skill 标识。
   const [detailSkillId, setDetailSkillId] = React.useState<string | null>(null);
@@ -49,11 +52,23 @@ export function LuaSkillsPanel(props: {
     [props.skills, toolsSkillId],
   );
 
+  // runAction executes one page-exclusive LuaSkills mutation.
+  // runAction 执行单个页面互斥的 LuaSkills 变更。
+  //
+  // Parameters: label identifies the busy indicator and action performs the service mutation.
+  // 参数：label 标识忙碌提示，action 执行服务变更。
+  // Returns: a promise that settles after the accepted action releases the synchronous guard.
+  // 返回值：在已接受动作释放同步守卫后结束的 Promise。
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
+    if (actionRunningRef.current) {
+      return;
+    }
+    actionRunningRef.current = true;
     setBusyAction(label);
     try {
       await action();
     } finally {
+      actionRunningRef.current = false;
       setBusyAction(null);
     }
   }, []);
@@ -126,11 +141,15 @@ export function LuaSkillInstallDialog(props: {
   // installing tracks the active install request.
   // installing 跟踪当前安装请求。
   const [installing, setInstalling] = React.useState(false);
+  // installingRef rejects a second form submit before the installing render is committed.
+  // installingRef 在 installing 渲染提交前拒绝第二次表单提交。
+  const installingRef = React.useRef(false);
 
   React.useEffect(() => {
     if (props.open) {
       setSourceType("github");
       setSource("");
+      installingRef.current = false;
       setInstalling(false);
     }
   }, [props.open]);
@@ -139,20 +158,22 @@ export function LuaSkillInstallDialog(props: {
   // submitInstall 校验并执行单次 LuaSkills 安装请求。
   const submitInstall = React.useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (source.trim().length === 0) {
+    if (installingRef.current || source.trim().length === 0) {
       return;
     }
+    installingRef.current = true;
     setInstalling(true);
     try {
       await props.actions.onInstallLuaSkill("", source, sourceType);
       props.onOpenChange(false);
     } finally {
+      installingRef.current = false;
       setInstalling(false);
     }
   }, [props.actions, props.onOpenChange, source, sourceType]);
 
   return (
-    <Dialog open={props.open} onOpenChange={(open) => !installing && props.onOpenChange(open)}>
+    <Dialog open={props.open} onOpenChange={(open) => !installingRef.current && props.onOpenChange(open)}>
       <DialogContent className="lua-skill-install-dialog">
         <DialogHeader>
           <DialogTitle>{t("skills.lua.installTitle")}</DialogTitle>

@@ -184,6 +184,9 @@ export function VmmActionButton(props: {
   // Whether the action is currently running.
   // 动作是否正在运行。
   busy: boolean
+  // Whether another exclusive memory-page operation prevents this action from starting.
+  // 是否有其他独占记忆页面操作阻止当前动作启动。
+  disabled?: boolean
   // Whether the action is destructive.
   // 动作是否具有破坏性。
   danger?: boolean
@@ -199,7 +202,7 @@ export function VmmActionButton(props: {
 }) {
   const { t } = useI18n();
   return (
-    <button className={`vmm-icon-button${props.danger ? " danger" : ""}`} disabled={props.busy} onClick={props.onClick} type="button">
+    <button className={`vmm-icon-button${props.danger ? " danger" : ""}`} disabled={props.busy || props.disabled} onClick={props.onClick} type="button">
       {props.icon}{props.busy ? t("vmm.common.running") : props.label}
     </button>
   );

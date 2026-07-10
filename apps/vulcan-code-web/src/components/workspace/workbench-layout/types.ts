@@ -50,6 +50,11 @@ export interface StopConversationRunAgentPromptItem {
 // RequestStopConversationRunChoice asks the user how to handle running child agents.
 // RequestStopConversationRunChoice 询问用户如何处理运行中的智能体。
 export type RequestStopConversationRunChoice = (
+  // Persisted conversation captured before the stop preflight request.
+  // 停止预检请求前捕获的已持久化会话。
+  conversationId: string,
+  // Running child agents reported for that exact conversation tree.
+  // 当前精确会话树报告的运行中子代理。
   agents: StopConversationRunAgentPromptItem[],
 ) => Promise<StopConversationRunChoice | null>;
 

@@ -31,14 +31,29 @@ export function AgentSkillsPanel(props: {
 }) {
   const { t } = useI18n()
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
+  // actionRunningRef closes the synchronous repeat-click window before React commits busy state.
+  // actionRunningRef 在 React 提交忙碌状态前关闭同步重复点击窗口。
+  const actionRunningRef = React.useRef(false)
   // detailSkill stores the Agent Skill selected for the details dialog.
   // detailSkill 保存当前打开详情弹窗的 Agent Skill。
   const [detailSkill, setDetailSkill] = React.useState<AgentSkillSummary | null>(null)
+  // runAction executes one page-exclusive Agent Skills mutation.
+  // runAction 执行单个页面互斥的 Agent Skills 变更。
+  //
+  // Parameters: label identifies the busy indicator and action performs the service mutation.
+  // 参数：label 标识忙碌提示，action 执行服务变更。
+  // Returns: a promise that settles after the accepted action releases the synchronous guard.
+  // 返回值：在已接受动作释放同步守卫后结束的 Promise。
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
+    if (actionRunningRef.current) {
+      return
+    }
+    actionRunningRef.current = true
     setBusyAction(label)
     try {
       await action()
     } finally {
+      actionRunningRef.current = false
       setBusyAction(null)
     }
   }, [])

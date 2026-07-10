@@ -33,7 +33,6 @@ import {
   applySubagentPanelRouteResponse,
   injectCachedSubagentSurfaceMessages,
   reorderPendingPromptSummaries,
-  type InflightSubagentOpenRequest,
   type SubagentSurfaceMessageCache,
   type WorkbenchMergeOptions,
 } from "@/state/workbench-state";
@@ -42,6 +41,7 @@ import type {
   ConversationSummary,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
+  SubagentPanelRouteResponse,
   UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
@@ -53,6 +53,10 @@ import {
   type StopConversationRunAgentPromptItem,
   type StopConversationRunChoice,
 } from "./types";
+
+// SubagentOpenRequestMap owns one shared backend transcript request per parent/task route.
+// SubagentOpenRequestMap 为每条父级/任务路由持有一个共享后端转录请求。
+type SubagentOpenRequestMap = Map<string, Promise<SubagentPanelRouteResponse | null>>;
 
 // WorkbenchConversationActionsOptions groups selected conversation state and async service bridges.
 // WorkbenchConversationActionsOptions 归组选中会话状态与异步服务桥接。
@@ -88,18 +92,18 @@ interface WorkbenchConversationActionsOptions {
   // Latest selected conversation id for async stale-result guards.
   // 用于异步过期结果防护的最新会话标识。
   selectedConversationIdRef: React.MutableRefObject<string | null>;
+  // Persisted conversation id whose draft-to-session sidebar projection is still converging.
+  // 草稿转为持久化会话后仍在等待侧栏投影收敛的会话标识。
+  pendingMaterializedConversationIdRef: React.MutableRefObject<string | null>;
+  // Conversation ids created in this frontend lifetime whose transcript is already live and needs no history hydration.
+  // 当前前端生命周期内创建且转录已实时可用、无需历史水合的会话标识。
+  locallyCreatedConversationIdsRef: React.MutableRefObject<Set<string>>;
   // Latest workbench snapshot for callbacks that should not close over stale state.
   // 供回调读取最新工作台快照，避免闭包过期。
   workbenchStateRef: React.MutableRefObject<WorkbenchSnapshot>;
   // Asks the user whether running child agents should be stopped together.
   // 询问用户是否要同时停止运行中的智能体。
   requestStopConversationRunChoice: RequestStopConversationRunChoice;
-  // Monotonic subagent route request sequence.
-  // 单调递增的子代理路由请求序号。
-  subagentNavigationRequestSeqRef: React.MutableRefObject<number>;
-  // In-flight backend open request for subagent surfaces.
-  // 正在进行的子代理界面后端打开请求。
-  inflightSubagentOpenRequestRef: React.MutableRefObject<InflightSubagentOpenRequest | null>;
   // Cached subagent transcript surfaces for instant route switching.
   // 用于即时路由切换的子代理转录界面缓存。
   subagentSurfaceMessageCacheRef: React.MutableRefObject<SubagentSurfaceMessageCache>;
@@ -118,12 +122,15 @@ export function useWorkbenchConversationActions(options: WorkbenchConversationAc
     setDraftConversation,
     setSelectedConversationId,
     selectedConversationIdRef,
+    pendingMaterializedConversationIdRef,
+    locallyCreatedConversationIdsRef,
     workbenchStateRef,
     requestStopConversationRunChoice,
-    subagentNavigationRequestSeqRef,
-    inflightSubagentOpenRequestRef,
     subagentSurfaceMessageCacheRef,
   } = options;
+  // inflightSubagentOpenRequestsRef coalesces duplicate opens without serializing independent side-panel tabs.
+  // inflightSubagentOpenRequestsRef 合并重复打开请求，但不串行化彼此独立的侧栏页签。
+  const inflightSubagentOpenRequestsRef = React.useRef<SubagentOpenRequestMap>(new Map());
   // conversationForkInFlightRef synchronously gates duplicate fork submissions before React state commits.
   // conversationForkInFlightRef 在 React 状态提交前同步拦截重复分叉提交。
   const conversationForkInFlightRef = React.useRef(false);
@@ -166,19 +173,44 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
       toast.info(translate("conversationActions.previewCannotSend"));
       return false;
     }
-    setDraftConversation(null);
     const nextConversationId = ack.conversationId || activeConversationId;
     if (nextConversationId) {
-      if (selectedConversationIdRef.current === submittedSelectionId) {
-        setSelectedConversationId(nextConversationId);
+      // A successful draft submit creates the persisted id before its ordered sidebar delta is rendered.
+      // 草稿提交成功后，持久化标识会先于有序侧栏增量完成渲染。
+      if (selectedDraftConversation?.id === submittedSelectionId) {
+        locallyCreatedConversationIdsRef.current.add(nextConversationId);
+        // materializedConversationAlreadyVisible closes the transition immediately when the delta won the race.
+        // materializedConversationAlreadyVisible 在增量先到达时立即结束转正过渡。
+        const materializedConversationAlreadyVisible = workbenchStateRef.current.conversations
+          .some((conversation) => conversation.id === nextConversationId);
+        pendingMaterializedConversationIdRef.current = materializedConversationAlreadyVisible
+          ? null
+          : nextConversationId;
       }
+      setSelectedConversationId((current) => (
+        current === submittedSelectionId ? nextConversationId : current
+      ));
     }
+    // Only retire the exact submitted draft so a newer draft created during the RPC is preserved.
+    // 仅清理本次提交的精确草稿，避免覆盖 RPC 期间新建的草稿。
+    setDraftConversation((current) => (
+      current?.id === submittedSelectionId ? null : current
+    ));
     return true;
   } catch (nextError) {
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, [selectedConversation, selectedConversationId, selectedDraftConversation, setDraftConversation, setSelectedConversationId, translate]);
+}, [
+  pendingMaterializedConversationIdRef,
+  locallyCreatedConversationIdsRef,
+  selectedConversation,
+  selectedConversationId,
+  selectedDraftConversation,
+  setDraftConversation,
+  setSelectedConversationId,
+  translate,
+]);
 
 // handleInsertPendingPrompt routes one queued prompt through the shared backend queue router.
 // handleInsertPendingPrompt 通过共享后端队列路由引导单条排队提示词。
@@ -195,19 +227,26 @@ const handleInsertPendingPrompt = React.useCallback(async (entryId: string): Pro
 // handleStopConversationRun 停止当前活跃的后端会话流。
 const handleStopConversationRun = React.useCallback(async (): Promise<boolean> => {
   webuiClickTrace("conversation.stop.invoke");
+  // conversationId freezes the stop target across preflight, user confirmation, and final mutation.
+  // conversationId 在预检、用户确认与最终变更之间固定停止目标。
+  const conversationId = selectedConversation?.id ?? null;
+  if (!conversationId) {
+    return false;
+  }
   try {
-    let response = await stopConversationRun("ask_if_running_subagents");
+    let response = await stopConversationRun(conversationId, "ask_if_running_subagents");
     if (!response) {
       return false;
     }
     if (response.status === "needs_confirmation") {
       const choice = await requestStopConversationRunChoice(
+        conversationId,
         stopConversationRunPromptItems(response),
       );
       if (!choice) {
         return false;
       }
-      response = await stopConversationRun(stopConversationRunModeFromChoice(choice));
+      response = await stopConversationRun(conversationId, stopConversationRunModeFromChoice(choice));
       if (!response) {
         return false;
       }
@@ -221,7 +260,7 @@ const handleStopConversationRun = React.useCallback(async (): Promise<boolean> =
     toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     return false;
   }
-}, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, setWorkbenchState]);
+}, [mergeWorkbenchWithLocalCaches, requestStopConversationRunChoice, selectedConversation?.id, setWorkbenchState]);
 
 // handleCompactSelectedConversationContext starts manual compaction from slash commands.
 // handleCompactSelectedConversationContext 从斜杠指令启动手动上下文压缩。
@@ -241,11 +280,12 @@ const handleCompactSelectedConversationContext = React.useCallback(async (): Pro
   }
 }, [translate]);
 
-// handleOpenSubagentPanel loads one child transcript without replacing the parent conversation surface.
-// handleOpenSubagentPanel 加载单个子任务转录，但不替换父会话主界面。
+// handleOpenSubagentPanel loads one child transcript and coalesces only callers targeting the same tab route.
+// handleOpenSubagentPanel 加载单个子任务转录，并且只合并指向同一页签路由的调用方。
 const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
+  // routeKey is the stable concurrency boundary for one parent/task transcript.
+  // routeKey 是单个父级/任务转录的稳定并发边界。
   const routeKey = `${parentConversationId}:${taskId}`;
-  const existingRequest = inflightSubagentOpenRequestRef.current;
   if (canOpenCachedSubagentSurface(
     workbenchStateRef.current,
     subagentSurfaceMessageCacheRef.current,
@@ -256,91 +296,70 @@ const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: s
     setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
     return true;
   }
-  if (existingRequest?.key === routeKey) {
-    webuiClickTrace("subagent.open.coalesced", { parentConversationId, taskId, routeKey });
-    setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
-    try {
-      // Coalesced opens must wait for the original route load so empty child surfaces are not shown as loaded.
-      // 合并打开必须等待原始路由加载完成，避免空子界面被误显示为已载入。
-      const response = await existingRequest.promise;
-      if (response) {
-        if (subagentNavigationRequestSeqRef.current !== existingRequest.requestSeq) {
-          webuiClickTrace("subagent.open.coalesced_stale_result", {
-            parentConversationId,
-            taskId,
-            requestSeq: existingRequest.requestSeq,
-            latestRequestSeq: subagentNavigationRequestSeqRef.current,
-          });
-          return false;
-        }
-        setWorkbenchState((current) => applySubagentPanelRouteResponse(
-          current,
-          response,
-          subagentSurfaceMessageCacheRef.current,
-        ));
-      }
-      webuiClickTrace("subagent.open.coalesced_result", {
-        parentConversationId,
-        taskId,
-        routeKey,
-        opened: Boolean(response),
-        activeConversationId: response?.activeConversationId ?? null,
-        activeTaskId: response?.subagentNavigation?.activeTaskId ?? null,
-      });
-      return Boolean(response);
-    } catch (nextError) {
-      const message = nextError instanceof Error ? nextError.message : String(nextError);
-      webuiClickTrace("subagent.open.coalesced_error", { parentConversationId, taskId, message });
-      return false;
-    }
+  // inflightRequests stores all independent route loads instead of one global last-click request.
+  // inflightRequests 保存全部独立路由加载，而不是只保存全局最后一次点击请求。
+  const inflightRequests = inflightSubagentOpenRequestsRef.current;
+  // existingRequest is shared only when another caller is already loading this exact tab route.
+  // existingRequest 仅在另一调用方已加载完全相同的页签路由时共享。
+  const existingRequest = inflightRequests.get(routeKey);
+  // coalesced records whether this caller owns the backend command or waits on an existing one.
+  // coalesced 记录当前调用方是后端命令拥有者还是复用既有请求。
+  const coalesced = existingRequest !== undefined;
+  // requestPromise remains route-local, so successful sibling tab loads never invalidate each other.
+  // requestPromise 保持路由局部性，因此成功的同级页签加载不会相互判定为过期。
+  const requestPromise = existingRequest ?? openSubagentPanel(parentConversationId, taskId);
+  if (!existingRequest) {
+    inflightRequests.set(routeKey, requestPromise);
   }
-  const requestSeq = subagentNavigationRequestSeqRef.current + 1;
-  subagentNavigationRequestSeqRef.current = requestSeq;
-  webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq, routeKey });
+  webuiClickTrace(coalesced ? "subagent.open.coalesced" : "subagent.open.invoke", {
+    parentConversationId,
+    taskId,
+    routeKey,
+  });
   setWorkbenchState((current) => injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current));
-  const requestPromise = openSubagentPanel(parentConversationId, taskId);
-  inflightSubagentOpenRequestRef.current = { key: routeKey, requestSeq, promise: requestPromise };
   try {
+    // Every route consumer waits for the shared command and applies its successful transcript independently.
+    // 每个路由调用方都等待共享命令，并独立应用其成功返回的转录。
     const response = await requestPromise;
-    if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
-      inflightSubagentOpenRequestRef.current = null;
-    }
     if (response) {
-      if (subagentNavigationRequestSeqRef.current !== requestSeq) {
-        webuiClickTrace("subagent.open.stale_result", {
-          parentConversationId,
-          taskId,
-          requestSeq,
-          latestRequestSeq: subagentNavigationRequestSeqRef.current,
-        });
-        return false;
-      }
       setWorkbenchState((current) => applySubagentPanelRouteResponse(
         current,
         response,
         subagentSurfaceMessageCacheRef.current,
       ));
     }
-    webuiClickTrace("subagent.open.result", {
+    webuiClickTrace(coalesced ? "subagent.open.coalesced_result" : "subagent.open.result", {
       parentConversationId,
       taskId,
-      requestSeq,
+      routeKey,
       opened: Boolean(response),
       activeConversationId: response?.activeConversationId ?? null,
       activeTaskId: response?.subagentNavigation?.activeTaskId ?? null,
     });
     return Boolean(response);
   } catch (nextError) {
-    if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
-      inflightSubagentOpenRequestRef.current = null;
-    }
+    // message normalizes backend failures for tracing and the single command owner toast.
+    // message 归一化后端失败，供追踪与唯一命令拥有者提示使用。
     const message = nextError instanceof Error ? nextError.message : String(nextError);
-    webuiClickTrace("subagent.open.error", { parentConversationId, taskId, message });
+    webuiClickTrace(coalesced ? "subagent.open.coalesced_error" : "subagent.open.error", {
+      parentConversationId,
+      taskId,
+      routeKey,
+      message,
+    });
     if (message.includes("不可恢复") || message.includes("没有找到可打开的智能体任务")) {
       return false;
     }
-    toast.error(message);
+    if (!coalesced) {
+      toast.error(message);
+    }
     return false;
+  } finally {
+    // Delete only the settled promise still registered for this route; a newer retry must remain untouched.
+    // 仅删除该路由中仍登记的已完成 Promise；更晚发起的重试必须保持不变。
+    if (inflightRequests.get(routeKey) === requestPromise) {
+      inflightRequests.delete(routeKey);
+    }
   }
 }, []);
 

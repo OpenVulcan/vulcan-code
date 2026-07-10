@@ -22,6 +22,22 @@ pub struct LuaSkillsCatalogSummary {
     pub skills: Vec<LuaSkillSummary>,
 }
 
+/// Revisioned full-domain response for one LuaSkills catalog mutation.
+/// 单次 LuaSkills 目录变更对应的带版本完整领域响应。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsCatalogUpdate {
+    /// Workbench generation committed together with this catalog projection.
+    /// 与当前目录投影一并提交的工作台版本。
+    pub revision: u64,
+    /// Complete LuaSkills catalog after the committed mutation.
+    /// 已提交变更后的完整 LuaSkills 目录。
+    pub lua_skills: LuaSkillsCatalogSummary,
+    /// Plugin rows derived from the same committed LuaSkills catalog.
+    /// 从同一份已提交 LuaSkills 目录派生的插件行。
+    pub plugins: Vec<PluginSummary>,
+}
+
 /// One Lua Skill package row projected for the WebUI.
 /// 投影给 WebUI 的单个 Lua Skill 包行。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -118,6 +134,19 @@ pub struct AgentSkillsCatalogSummary {
     pub errors: Vec<AgentSkillLoadIssueSummary>,
 }
 
+/// Revisioned full-domain response for one Agent Skills mutation.
+/// 单次 Agent Skills 变更对应的带版本完整领域响应。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillsCatalogUpdate {
+    /// Workbench generation committed together with this catalog projection.
+    /// 与当前目录投影一并提交的工作台版本。
+    pub revision: u64,
+    /// Complete Agent Skills catalog after the committed mutation.
+    /// 已提交变更后的完整 Agent Skills 目录。
+    pub agent_skills: AgentSkillsCatalogSummary,
+}
+
 /// Full WebUI summary for the agent and expert catalog.
 /// 智能体与专家目录的完整 WebUI 摘要。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -146,20 +175,17 @@ pub struct SubagentCatalogSummary {
     pub errors: Vec<SubagentCatalogIssueSummary>,
 }
 
-/// Lightweight response for one agent enabled-state update.
-/// 单个智能体启停状态更新的轻量响应。
+/// Revisioned full-domain response for one agent catalog mutation.
+/// 单次智能体目录变更对应的带版本完整领域响应。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct SubagentDefinitionEnabledUpdate {
-    /// Stable agent id that was updated.
-    /// 已更新的稳定智能体标识。
-    pub agent_id: String,
-    /// Updated enabled state.
-    /// 更新后的启停状态。
-    pub enabled: bool,
-    /// Updated catalog notice after the local mutation.
-    /// 局部变更后的目录提示。
-    pub notice: String,
+pub struct SubagentCatalogUpdate {
+    /// Workbench generation committed together with this catalog projection.
+    /// 与当前目录投影一并提交的工作台版本。
+    pub revision: u64,
+    /// Complete agent catalog after the committed mutation.
+    /// 已提交变更后的完整智能体目录。
+    pub subagent_catalog: SubagentCatalogSummary,
 }
 
 /// One agent catalog category projected for the WebUI.

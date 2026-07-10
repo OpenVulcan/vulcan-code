@@ -8,7 +8,7 @@ use std::{
 
 use serde::Deserialize;
 use tokio::{process::Command as TokioCommand, time::timeout};
-use vulcan_agent_runtime::provider_config::{self, ProviderConfigurationFile};
+use vulcan_agent_runtime::provider_config::ProviderConfigurationFile;
 use vulcan_host_tools::process_creation::apply_windows_release_no_window;
 use vulcan_provider_config::config::{PersistedRtkRouteMode, PersistedRtkToolConfiguration};
 use vulcan_runtime_assets::resolve_bundled_rtk_executable_path;
@@ -18,7 +18,10 @@ use vulcan_service_api::{
     RtkRoutingSettingsSummary, ServiceEventEmitter, WorkbenchSnapshot,
 };
 
-use crate::{SharedServiceBridgeState, emit_workbench_event, refresh_settings_projection_locked};
+use crate::{
+    SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
+    refresh_settings_projection_locked,
+};
 
 /// RTK routing settings save request sent by the WebUI settings page.
 /// WebUI 设置页发送的 RTK 路由设置保存请求。
@@ -55,28 +58,25 @@ pub(crate) async fn service_save_rtk_routing_settings(
     let route_mode = persisted_rtk_route_mode(&request.route_mode)?;
     let enabled_routes = normalize_rtk_route_names(request.enabled_routes)?;
     let disabled_routes = normalize_rtk_route_names(request.disabled_routes)?;
-    let workbench = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let agent_runtime = guard
-            .agent_runtime
-            .as_mut()
-            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
-        let mut next_configuration = agent_runtime.provider_configuration.clone();
-        next_configuration.host_tools.rtk = PersistedRtkToolConfiguration {
-            enabled: request.enabled,
-            route_mode,
-            enabled_routes,
-            disabled_routes,
-            telemetry_disabled: request.telemetry_disabled,
-        };
-        provider_config::save_configuration_file(&next_configuration)
-            .map_err(|error| format!("保存 RTK 路由设置失败：{error}"))?;
-        agent_runtime.provider_configuration = next_configuration.clone();
-        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
-        guard.workbench.clone()
-    };
+    let workbench = mutate_provider_configuration(
+        &state,
+        "保存 RTK 路由设置失败",
+        |configuration| {
+            configuration.host_tools.rtk = PersistedRtkToolConfiguration {
+                enabled: request.enabled,
+                route_mode,
+                enabled_routes,
+                disabled_routes,
+                telemetry_disabled: request.telemetry_disabled,
+            };
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration, None);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }

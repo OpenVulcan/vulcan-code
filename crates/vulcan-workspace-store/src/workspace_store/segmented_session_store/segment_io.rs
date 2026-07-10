@@ -197,7 +197,7 @@ pub(in crate::workspace_store) fn repair_segmented_session_jsonl_files_if_needed
 /// `true` when at least one duplicate message row was removed.
 /// 当至少移除一条重复消息行时返回 `true`。
 fn repair_duplicate_segmented_message_indexes(
-    retained_segment_lines: &mut Vec<(String, Vec<SegmentedSessionEventLine>)>,
+    retained_segment_lines: &mut [(String, Vec<SegmentedSessionEventLine>)],
 ) -> bool {
     let mut latest_line_by_message_index = BTreeMap::new();
     for (_, lines) in retained_segment_lines.iter() {
@@ -606,14 +606,7 @@ pub(in crate::workspace_store) fn write_segment_event_lines_atomic_with_metadata
             segmented_line_turn_index(line),
         );
     }
-    let temp_path = unique_json_temp_path(path);
-    let mut output = File::create(&temp_path).map_err(to_store_error)?;
-    output.write_all(&encoded_lines).map_err(to_store_error)?;
-    output.flush().map_err(to_store_error)?;
-    fs::rename(&temp_path, path).map_err(|error| {
-        let _ = fs::remove_file(&temp_path);
-        to_store_error(error)
-    })?;
+    write_file_bytes_atomic(path, &encoded_lines, "segmented event JSONL")?;
     Ok(segment)
 }
 
@@ -752,7 +745,9 @@ where
     let boundary_bytes = ensure_jsonl_append_boundary(&mut file)?;
     file.write_all(encoded_line.as_bytes())
         .map_err(to_store_error)?;
-    file.flush().map_err(to_store_error)?;
+    // Synchronize durable event bytes before callers publish the corresponding segment metadata.
+    // 在调用方发布对应分段元数据前同步耐久事件字节。
+    file.sync_data().map_err(to_store_error)?;
     Ok(boundary_bytes + encoded_line.len() as u64)
 }
 
@@ -769,8 +764,8 @@ where
         .map_err(|error| format!("解析 JSON 文件失败 `{}`：{error}", path.display()))
 }
 
-/// Writes one JSON document through a temporary file and rename.
-/// 通过临时文件与重命名写入一个 JSON 文档。
+/// Writes one complete JSON document through the shared atomic byte publisher.
+/// 通过共享原子字节发布器写入一个完整 JSON 文档。
 pub(in crate::workspace_store) fn write_json_file_atomic<T>(
     path: &Path,
     value: &T,
@@ -778,24 +773,15 @@ pub(in crate::workspace_store) fn write_json_file_atomic<T>(
 where
     T: Serialize,
 {
-    if let Some(parent) = path.parent() {
-        create_dir_all(parent)?;
-    }
-    // The temporary file lives next to the target so rename stays on the same filesystem.
-    // 临时文件放在目标旁边，确保重命名位于同一文件系统。
-    let temp_path = unique_json_temp_path(path);
-    let mut file = File::create(&temp_path).map_err(to_store_error)?;
-    serde_json::to_writer_pretty(&mut file, value).map_err(to_store_error)?;
-    file.write_all(b"\n").map_err(to_store_error)?;
-    file.flush().map_err(to_store_error)?;
-    fs::rename(&temp_path, path).map_err(|error| {
-        let _ = fs::remove_file(&temp_path);
-        to_store_error(error)
-    })
+    // encoded is complete before any directory or staging file is created.
+    // encoded 在创建任何目录或暂存文件前已经完整生成。
+    let mut encoded = serde_json::to_vec_pretty(value).map_err(to_store_error)?;
+    encoded.push(b'\n');
+    write_file_bytes_atomic(path, &encoded, "JSON document")
 }
 
-/// Writes JSONL values through a temporary file and rename.
-/// 通过临时文件与重命名写入 JSONL 值集合。
+/// Writes complete JSONL values through the shared atomic byte publisher.
+/// 通过共享原子字节发布器写入完整 JSONL 值集合。
 pub(in crate::workspace_store) fn write_json_lines_file_atomic<T>(
     path: &Path,
     values: &[T],
@@ -803,20 +789,176 @@ pub(in crate::workspace_store) fn write_json_lines_file_atomic<T>(
 where
     T: Serialize,
 {
+    // encoded is complete before any directory or staging file is created.
+    // encoded 在创建任何目录或暂存文件前已经完整生成。
+    let mut encoded = Vec::new();
+    for value in values {
+        serde_json::to_writer(&mut encoded, value).map_err(to_store_error)?;
+        encoded.push(b'\n');
+    }
+    write_file_bytes_atomic(path, &encoded, "JSONL document")
+}
+
+/// Publishes complete file bytes through an exclusively created sibling staging file.
+/// 通过独占创建的同级暂存文件发布完整文件字节。
+///
+/// # Parameters
+/// 参数
+/// `path` is the final file path replaced after staging succeeds.
+/// `path` 是暂存成功后被替换的最终文件路径。
+/// `encoded` is the fully materialized file content.
+/// `encoded` 是已经完整生成的文件内容。
+/// `artifact_kind` is the stable English artifact label used in diagnostics.
+/// `artifact_kind` 是诊断信息使用的稳定英文产物标签。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the staged bytes and renamed parent entry are synchronized where supported.
+/// 暂存字节与受支持平台上的重命名父目录项完成同步后返回成功。
+pub(in crate::workspace_store) fn write_file_bytes_atomic(
+    path: &Path,
+    encoded: &[u8],
+    artifact_kind: &str,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         create_dir_all(parent)?;
     }
-    let temp_path = unique_json_temp_path(path);
-    let mut file = File::create(&temp_path).map_err(to_store_error)?;
-    for value in values {
-        serde_json::to_writer(&mut file, value).map_err(to_store_error)?;
-        file.write_all(b"\n").map_err(to_store_error)?;
+    // existing_permissions preserves the current access policy across replacement.
+    // existing_permissions 在替换期间保留当前访问策略。
+    let existing_permissions = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(format!(
+                "Refusing to replace symbolic-link {artifact_kind}: {}",
+                path.display()
+            ));
+        }
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(to_store_error(error)),
+    };
+    // staged_path and staged_file are exclusively owned by the current publication attempt.
+    // staged_path 与 staged_file 由当前发布尝试独占。
+    let (staged_path, mut staged_file) = create_unique_staging_file(path)?;
+    // staging_result makes complete bytes and inherited permissions durable before rename.
+    // staging_result 在重命名前使完整字节与继承权限耐久化。
+    let staging_result = (|| -> std::io::Result<()> {
+        staged_file.write_all(encoded)?;
+        if let Some(permissions) = existing_permissions {
+            staged_file.set_permissions(permissions)?;
+        }
+        staged_file.sync_all()
+    })();
+    if let Err(error) = staging_result {
+        drop(staged_file);
+        remove_staging_file(&staged_path);
+        return Err(format!(
+            "Failed to stage {artifact_kind} `{}` for `{}`: {error}",
+            staged_path.display(),
+            path.display()
+        ));
     }
-    file.flush().map_err(to_store_error)?;
-    fs::rename(&temp_path, path).map_err(|error| {
-        let _ = fs::remove_file(&temp_path);
-        to_store_error(error)
-    })
+    drop(staged_file);
+
+    if let Err(error) = fs::rename(&staged_path, path) {
+        remove_staging_file(&staged_path);
+        return Err(format!(
+            "Failed to replace {artifact_kind} `{}` from `{}`: {error}",
+            path.display(),
+            staged_path.display()
+        ));
+    }
+    // POSIX durability requires synchronizing the renamed parent directory entry.
+    // POSIX 持久性要求同步重命名后的父目录项。
+    #[cfg(unix)]
+    synchronize_parent_directory(path)?;
+    Ok(())
+}
+
+/// Creates one unique sibling staging file with authoritative create-new collision detection.
+/// 通过权威 create-new 碰撞检测创建一个唯一同级暂存文件。
+///
+/// # Parameters
+/// 参数
+/// `path` is the final file path whose exact name is retained in the staging name.
+/// `path` 是暂存名称中保留精确名称的最终文件路径。
+///
+/// # Returns
+/// 返回值
+/// The unique staging path and its exclusively created writable file handle.
+/// 返回唯一暂存路径及其独占创建的可写文件句柄。
+fn create_unique_staging_file(path: &Path) -> Result<(PathBuf, File), String> {
+    // parent keeps staging and target on the same filesystem.
+    // parent 使暂存文件与目标文件保持在同一文件系统。
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // file_name preserves non-Unicode target identity without lossy conversion.
+    // file_name 无需有损转换即可保留非 Unicode 目标身份。
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("Atomic file path has no file name: {}", path.display()))?;
+    loop {
+        // staged_name combines the exact target name with a diagnostic random suffix.
+        // staged_name 组合精确目标名称与可诊断随机后缀。
+        let mut staged_name = OsString::from(".");
+        staged_name.push(file_name);
+        staged_name.push(format!(".vulcan-stage-{}", Uuid::new_v4()));
+        // staged_path is always a sibling of the final target.
+        // staged_path 始终是最终目标的同级文件。
+        let staged_path = parent.join(staged_name);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged_path)
+        {
+            Ok(file) => return Ok((staged_path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(to_store_error(error)),
+        }
+    }
+}
+
+/// Removes one exclusively owned staging file after a failed publication.
+/// 在发布失败后删除一个独占暂存文件。
+///
+/// # Parameters
+/// 参数
+/// `staged_path` is the unpublished file owned by the failed attempt.
+/// `staged_path` 是失败尝试独占且尚未发布的文件。
+///
+/// # Returns
+/// 返回值
+/// Best-effort cleanup has no return value because the primary publication error remains authoritative.
+/// 尽力清理不返回值，因为首要发布错误保持权威性。
+fn remove_staging_file(staged_path: &Path) {
+    let _ = fs::remove_file(staged_path);
+}
+
+/// Synchronizes the parent directory containing a newly renamed entry on POSIX.
+/// 在 POSIX 上同步包含新重命名目录项的父目录。
+///
+/// # Parameters
+/// 参数
+/// `path` is the final file or directory whose parent directory entry changed.
+/// `path` 是父目录项发生变化的最终文件或目录。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the parent directory metadata reaches durable storage.
+/// 父目录元数据到达持久存储后返回成功。
+#[cfg(unix)]
+fn synchronize_parent_directory(path: &Path) -> Result<(), String> {
+    // parent is the directory containing both staging and final paths.
+    // parent 是同时包含暂存路径与最终路径的目录。
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // directory exists only for the post-rename synchronization call.
+    // directory 仅在重命名后的同步调用期间存在。
+    let directory = File::open(parent).map_err(to_store_error)?;
+    directory.sync_all().map_err(to_store_error)
 }
 
 /// Appends JSONL values to an existing file, creating its parent directory when needed.
@@ -850,7 +992,9 @@ where
     ensure_jsonl_append_boundary(&mut file)?;
     file.write_all(encoded_batch.as_bytes())
         .map_err(to_store_error)?;
-    file.flush().map_err(to_store_error)
+    // Synchronize the whole batch before runtime metadata/index files can reference it.
+    // 在运行时元数据与索引文件引用该批次前同步完整批次。
+    file.sync_data().map_err(to_store_error)
 }
 
 /// Ensures the existing JSONL file tail ends with a newline before appending another row.
@@ -881,33 +1025,149 @@ fn ensure_jsonl_append_boundary(file: &mut File) -> Result<u64, String> {
     Ok(0)
 }
 
-/// Builds a collision-free temporary JSON path next to the target file.
-/// 在目标文件旁构建不会互相冲突的 JSON 临时路径。
-pub(in crate::workspace_store) fn unique_json_temp_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("document.json");
-    let temp_name = format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4());
-    path.with_file_name(temp_name)
+/// Creates every missing destination-parent directory and durably publishes each new path component.
+/// 创建所有缺失的目标父目录，并耐久发布每个新路径片段。
+///
+/// # Parameters
+/// 参数
+/// `destination_parent` is the complete parent directory required by a later session-directory move.
+/// `destination_parent` 是后续会话目录移动所需的完整父目录。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after every required component is a real directory and each new entry is synchronized.
+/// 仅当所有必需片段都是真实目录且每个新目录项均已同步后返回成功。
+fn create_segmented_session_move_parent_durably(destination_parent: &Path) -> Result<(), String> {
+    // missing_directories records absent components from leaf to the nearest existing ancestor.
+    // missing_directories 按叶子到最近现有祖先的顺序记录缺失目录片段。
+    let mut missing_directories = Vec::new();
+    // current_directory walks upward without following a symbolic-link parent.
+    // current_directory 向上遍历且不跟随符号链接父目录。
+    let mut current_directory = destination_parent;
+    loop {
+        match fs::symlink_metadata(current_directory) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(format!(
+                    "Segmented session move parent is not a real directory: {}",
+                    current_directory.display()
+                ));
+            }
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing_directories.push(current_directory.to_path_buf());
+                current_directory = current_directory.parent().ok_or_else(|| {
+                    format!(
+                        "Segmented session move parent has no existing ancestor: {}",
+                        destination_parent.display()
+                    )
+                })?;
+            }
+            Err(error) => return Err(to_store_error(error)),
+        }
+    }
+
+    // Create ancestors before descendants so every parent entry can be synchronized immediately.
+    // 先创建祖先再创建后代，使每个父目录项都能立即同步。
+    for directory in missing_directories.into_iter().rev() {
+        match fs::create_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // competing_metadata validates a directory concurrently published after preflight.
+                // competing_metadata 验证预检后由并发方发布的目录。
+                let competing_metadata =
+                    fs::symlink_metadata(&directory).map_err(to_store_error)?;
+                if competing_metadata.file_type().is_symlink() || !competing_metadata.is_dir() {
+                    return Err(format!(
+                        "Segmented session move parent is not a real directory: {}",
+                        directory.display()
+                    ));
+                }
+            }
+            Err(error) => return Err(to_store_error(error)),
+        }
+        // Synchronizing the parent after every creation makes the full destination path durable before rename.
+        // 每次创建后同步父目录，使完整目标路径在重命名前已经耐久化。
+        #[cfg(unix)]
+        synchronize_parent_directory(&directory)?;
+    }
+    Ok(())
 }
 
-/// Moves one segmented session directory without overwriting an existing destination.
-/// 移动一个分段会话目录，且不覆盖已存在的目标目录。
+/// Moves one real segmented session directory without overwriting any destination entry.
+/// 移动一个真实分段会话目录，且不覆盖任何已有目标目录项。
+///
+/// # Parameters
+/// 参数
+/// `source` is the existing real directory to move.
+/// `source` 是要移动的现有真实目录。
+/// `destination` is the absent final directory path.
+/// `destination` 是必须不存在的最终目录路径。
+///
+/// # Returns
+/// 返回值
+/// Returns success after rename; callers own metadata updates and parent-directory synchronization.
+/// 重命名后返回成功；元数据更新与父目录同步由调用方负责。
 pub(in crate::workspace_store) fn move_segmented_session_directory(
     source: &Path,
     destination: &Path,
 ) -> Result<(), String> {
-    if destination.exists() {
+    // source_metadata rejects missing paths, non-directories, and symbolic-link indirection.
+    // source_metadata 拒绝缺失路径、非目录与符号链接间接跳转。
+    let source_metadata = fs::symlink_metadata(source).map_err(to_store_error)?;
+    if source_metadata.file_type().is_symlink() || !source_metadata.is_dir() {
         return Err(format!(
-            "Segmented session destination already exists: {}",
-            destination.display()
+            "Segmented session source is not a real directory: {}",
+            source.display()
         ));
     }
+    match fs::symlink_metadata(destination) {
+        Ok(_) => {
+            return Err(format!(
+                "Segmented session destination already exists: {}",
+                destination.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(to_store_error(error)),
+    }
     if let Some(parent) = destination.parent() {
-        create_dir_all(parent)?;
+        create_segmented_session_move_parent_durably(parent)?;
     }
     fs::rename(source, destination).map_err(to_store_error)
+}
+
+/// Synchronizes both parent directories affected by one completed session-directory move.
+/// 同步一次已完成会话目录移动所影响的两个父目录。
+///
+/// # Parameters
+/// 参数
+/// `source` is the removed source directory path.
+/// `source` 是已经移除的源目录路径。
+/// `destination` is the newly published destination directory path.
+/// `destination` 是新发布的目标目录路径。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the destination publication is durable before the source removal on supported platforms.
+/// 在受支持平台上目标发布先于源删除完成耐久化后返回成功。
+pub(in crate::workspace_store) fn synchronize_segmented_session_directory_move(
+    source: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        // Persist the destination first so a crash cannot durably remove the source before publishing its replacement.
+        // 先持久化目标，避免崩溃造成源已耐久删除而替代目标尚未发布。
+        synchronize_parent_directory(destination)?;
+        if source.parent() != destination.parent() {
+            synchronize_parent_directory(source)?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source, destination);
+    }
+    Ok(())
 }
 
 /// Reads JSONL values from a file, returning an empty list when the file is absent.

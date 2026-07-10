@@ -8,10 +8,6 @@ import {
   ConversationLoadingCenter,
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
-import type {
-  ConversationTimelineUserScrollDirection,
-  ConversationTimelineVirtualRestoreState,
-} from "@/components/conversation/conversation-virtualization";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
 import { StreamingThinkingOverlay } from "@/components/conversation/conversation-blocks";
 import {
@@ -23,36 +19,25 @@ import {
 import {
   activeThinkingOverlayBlock,
   hiddenThinkingBlockIdsForDisplayMode,
-  normalizeThinkingDisplayMode,
-  type ThinkingDisplayMode,
 } from "@/components/conversation/thinking-display";
 import {
   generatedMediaAttachmentsFromToolDetailPayload,
   projectConversationRenderItems,
-  thinkingOverlayBlockSignature,
 } from "@/components/conversation/conversation-transcript";
 import {
   buildConversationStreamSignature,
   captureConversationViewportAnchor,
   conversationDistanceFromBottom,
-  conversationScrollToDistanceFromBottom,
   conversationViewportAllowsTailFollow,
-  restoreConversationViewportAnchor,
+  restoreConversationScrollSnapshot,
   type ConversationScrollSnapshot,
+  type ConversationTimelineUserScrollDirection,
   type ConversationViewportAnchorSnapshot,
 } from "@/components/conversation/chat-area-scroll";
 import {
   CONVERSATION_LAYOUT_WILL_CHANGE_EVENT,
 } from "@/components/conversation/conversation-layout-events";
-import {
-  createConversationSurfaceLayoutRestoreState,
-  type ConversationSurfaceExpandedState,
-  type ConversationSurfaceLayoutRestoreState,
-} from "@/components/conversation/conversation-layout-restore";
-import type {
-  ConversationBlock,
-  ConversationPlanArtifact,
-} from "@/components/conversation/conversation-model";
+import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
@@ -64,6 +49,12 @@ import type {
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
 import { useUserPromptEditState } from "@/components/conversation/chat-area/user-prompt-edit-state";
+import {
+  useConversationVisualTransitions,
+  useThinkingDisplayMode,
+} from "@/components/conversation/chat-area/visual-state";
+import { useConversationSurfaceLayoutMemory } from "@/components/conversation/chat-area/surface-layout-memory";
+import { useConversationViewportFrameScheduler } from "@/components/conversation/chat-area/viewport-frame-scheduler";
 
 // CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS prevents near-bottom auto-follow from fighting slow upward scrolling.
 // CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS 防止近底部自动跟随抢夺慢速向上滚动。
@@ -104,11 +95,15 @@ export function ChatArea(props: ChatAreaProps) {
     onGetUserPromptEditDraft: props.onGetUserPromptEditDraft,
     onSubmitUserPromptEdit: props.onSubmitUserPromptEdit,
   });
-  // thinkingDisplayMode controls how thinking blocks flow between the popup and transcript.
-  // thinkingDisplayMode 控制思考块在弹窗与会话面板之间的展示方式。
-  const [thinkingDisplayMode, setThinkingDisplayMode] = React.useState<ThinkingDisplayMode>(() => (
-    normalizeThinkingDisplayMode(props.workbench.thinkingDisplayMode)
-  ));
+  // Thinking display state synchronizes the backend preference with stale-safe optimistic selection.
+  // 思考展示状态将后端偏好与过期安全的乐观选择保持同步。
+  const {
+    mode: thinkingDisplayMode,
+    selectMode: handleThinkingDisplayModeChange,
+  } = useThinkingDisplayMode({
+    authoritativeMode: props.workbench.thinkingDisplayMode,
+    onSelectMode: props.onSelectWorkbenchThinkingDisplayMode,
+  });
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
@@ -128,9 +123,28 @@ export function ChatArea(props: ChatAreaProps) {
   // renderedSurfaceConversationIdRef tracks the surface currently represented by the shared scroll element.
   // renderedSurfaceConversationIdRef 跟踪当前共享滚动元素代表的界面。
   const renderedSurfaceConversationIdRef = React.useRef<string | null>(activeSurfaceConversationId ?? null);
-  // conversationSurfaceLayoutStatesRef keeps scroll, virtualizer, and expansion restore data per surface.
-  // conversationSurfaceLayoutStatesRef 按界面保存滚动、虚拟列表与展开恢复数据。
-  const conversationSurfaceLayoutStatesRef = React.useRef<Map<string, ConversationSurfaceLayoutRestoreState>>(new Map());
+  // liveLayoutSurfaceIds includes every conversation and currently projected subagent task.
+  // liveLayoutSurfaceIds 包含全部会话与当前投影的子代理任务。
+  const liveLayoutSurfaceIds = React.useMemo(() => {
+    // surfaceIds starts with every live conversation id.
+    // surfaceIds 以全部存活会话标识初始化。
+    const surfaceIds = new Set(props.workbench.conversations.map((conversation) => conversation.id));
+    // task contributes one routed subagent surface whose layout can be restored.
+    // task 表示一个可恢复布局的已路由子代理界面。
+    for (const task of props.workbench.subagentNavigation?.tasks ?? []) {
+      surfaceIds.add(task.taskId);
+    }
+    return surfaceIds;
+  }, [props.workbench.conversations, props.workbench.subagentNavigation]);
+  // Surface layout memory owns scroll and expansion restore records.
+  // 界面布局记忆管理滚动与展开恢复记录。
+  const {
+    read: readConversationSurfaceLayoutState,
+    retainTurnHeights: retainSurfaceTurnHeights,
+    writeScroll: writeSurfaceScrollSnapshot,
+    writeExpandedState: handleExpandedStateChange,
+    writeTurnHeight: handleTurnHeightChange,
+  } = useConversationSurfaceLayoutMemory({ liveSurfaceIds: liveLayoutSurfaceIds });
   // pendingLayoutViewportRef stores the viewport anchor captured before shell geometry changes.
   // pendingLayoutViewportRef 保存外壳几何变化前捕获的视口锚点。
   const pendingLayoutViewportRef = React.useRef<{
@@ -158,9 +172,15 @@ export function ChatArea(props: ChatAreaProps) {
     // 转录是否应继续跟随最新内容。
     wasAtBottom: boolean;
   } | null>(null);
-  // layoutRestoreFramesRef stores scheduled viewport correction frames.
-  // layoutRestoreFramesRef 保存已排期的视口校正帧。
-  const layoutRestoreFramesRef = React.useRef<number[]>([]);
+  // Viewport frame scheduler makes every automatic scroll correction cancellable by user intent.
+  // 视口帧调度器使每个自动滚动校正都可被用户意图取消。
+  const {
+    cancelAll: cancelAllConversationViewportFrames,
+    schedule: scheduleConversationViewportFrames,
+  } = useConversationViewportFrameScheduler();
+  // pendingLayoutRestoreCancelRef owns only the repeated layout-event restore sequence.
+  // pendingLayoutRestoreCancelRef 仅持有重复布局事件恢复序列。
+  const pendingLayoutRestoreCancelRef = React.useRef<(() => void) | null>(null);
   // scrollRestoreGuardRef prevents transient restore measurements from overwriting tail-pinned memory.
   // scrollRestoreGuardRef 防止恢复过程中的临时测量覆盖贴底记忆。
   const scrollRestoreGuardRef = React.useRef<{ surfaceId: string; wasAtBottom: boolean } | null>(null);
@@ -200,21 +220,29 @@ export function ChatArea(props: ChatAreaProps) {
     props.selectedDraftConversation
       || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
   );
-  // emptyPromptVisible keeps the empty prompt mounted long enough to fade out after first submit.
-  // emptyPromptVisible 让空会话提示在首次提交后保留足够时间完成淡出。
-  const [emptyPromptVisible, setEmptyPromptVisible] = React.useState(isEmptyConversation);
-  // emptyPromptLeaving marks the empty prompt exit animation.
-  // emptyPromptLeaving 标记空会话提示退出动画。
-  const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
+  // isMaterializingConversationSurface identifies the brief draft-to-summary frame that must remain visually blank.
+  // isMaterializingConversationSurface 标识草稿转为真实摘要期间必须保持空白的短暂帧。
+  const isMaterializingConversationSurface = Boolean(
+    activeSurfaceConversationId && !surfaceConversation && !props.selectedDraftConversation,
+  );
+  // visualSurfaceKey distinguishes persisted sessions from project-scoped new-conversation surfaces.
+  // visualSurfaceKey 区分已持久化会话与项目范围的新建会话界面。
+  const visualSurfaceKey = activeSurfaceConversationId
+    ?? `draft:${props.selectedDraftConversation?.projectId ?? "workspace"}`;
   const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, renderItems);
   const displayedStreamingThinkingBlock = activeThinkingOverlayBlock(thinkingDisplayMode, streamingThinkingBlock);
-  // streamingThinkingOverlayBlock keeps the last thinking popup mounted during its delayed exit.
-  // streamingThinkingOverlayBlock 在思考弹窗延迟退场期间保留最后一个思考块。
-  const [streamingThinkingOverlayBlock, setStreamingThinkingOverlayBlock] = React.useState<ConversationBlock | null>(null);
-  // streamingThinkingOverlayLeaving marks the fade-out half of the delayed thinking popup exit.
-  // streamingThinkingOverlayLeaving 标记思考弹窗延迟退场中的淡出阶段。
-  const [streamingThinkingOverlayLeaving, setStreamingThinkingOverlayLeaving] = React.useState(false);
-  const visibleStreamingThinkingOverlayBlock = displayedStreamingThinkingBlock ?? streamingThinkingOverlayBlock;
+  // Visual transitions retain empty/overlay surfaces only within the current conversation scope.
+  // 视觉过渡仅在当前会话作用域内保留空状态与浮层。
+  const {
+    visibleThinkingBlock: visibleStreamingThinkingOverlayBlock,
+    thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
+    emptyPromptVisible,
+    emptyPromptLeaving,
+  } = useConversationVisualTransitions({
+    surfaceKey: visualSurfaceKey,
+    isEmptyConversation,
+    displayedThinkingBlock: displayedStreamingThinkingBlock,
+  });
   // hiddenThinkingBlockIds contains thinking blocks removed from the virtualized transcript projection.
   // hiddenThinkingBlockIds 包含从虚拟化会话投影中移除的思考块。
   const hiddenThinkingBlockIds = React.useMemo(
@@ -231,10 +259,6 @@ export function ChatArea(props: ChatAreaProps) {
     () => Array.from(hiddenThinkingBlockIds).sort().join("\u0000"),
     [hiddenThinkingBlockIds],
   );
-  const displayedStreamingThinkingOverlaySignature = displayedStreamingThinkingBlock
-    ? thinkingOverlayBlockSignature(displayedStreamingThinkingBlock)
-    : null;
-  const retainedStreamingThinkingOverlayId = streamingThinkingOverlayBlock?.id ?? null;
   // hasRunningSubagents reflects the backend-routed subagent lane rather than local UI inference.
   // hasRunningSubagents 反映后端路由的子代理通道，而不是本地界面推断。
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning || task.runState === "running") ?? false;
@@ -286,41 +310,6 @@ export function ChatArea(props: ChatAreaProps) {
     () => buildConversationStreamSignature(messages),
     [messages],
   );
-  React.useEffect(() => {
-    const liveSurfaceIds = new Set(props.workbench.conversations.map((conversation) => conversation.id));
-    const navigation = props.workbench.subagentNavigation;
-    if (navigation) {
-      for (const task of navigation.tasks ?? []) {
-        liveSurfaceIds.add(task.taskId);
-      }
-    }
-    for (const surfaceId of conversationSurfaceLayoutStatesRef.current.keys()) {
-      if (!liveSurfaceIds.has(surfaceId)) {
-        conversationSurfaceLayoutStatesRef.current.delete(surfaceId);
-      }
-    }
-  }, [props.workbench.conversations, props.workbench.subagentNavigation]);
-  // readConversationSurfaceLayoutState returns the current restore state without creating one.
-  // readConversationSurfaceLayoutState 读取当前恢复状态但不主动创建。
-  const readConversationSurfaceLayoutState = React.useCallback((surfaceId: string | null): ConversationSurfaceLayoutRestoreState | null => {
-    if (!surfaceId) {
-      return null;
-    }
-    return conversationSurfaceLayoutStatesRef.current.get(surfaceId) ?? null;
-  }, []);
-  // updateConversationSurfaceLayoutState merges one restore-state change for a surface.
-  // updateConversationSurfaceLayoutState 合并单个界面的恢复状态变化。
-  const updateConversationSurfaceLayoutState = React.useCallback((
-    surfaceId: string,
-    updater: (current: ConversationSurfaceLayoutRestoreState) => ConversationSurfaceLayoutRestoreState,
-  ) => {
-    const current = conversationSurfaceLayoutStatesRef.current.get(surfaceId)
-      ?? createConversationSurfaceLayoutRestoreState();
-    conversationSurfaceLayoutStatesRef.current.set(surfaceId, {
-      ...updater(current),
-      layoutVersion: current.layoutVersion + 1,
-    });
-  }, []);
   // writeConversationScrollSnapshot stores the current scroll snapshot inside the surface restore state.
   // writeConversationScrollSnapshot 将当前滚动快照写入界面恢复状态。
   const writeConversationScrollSnapshot = React.useCallback((surfaceId: string, snapshot: ConversationScrollSnapshot) => {
@@ -332,11 +321,8 @@ export function ChatArea(props: ChatAreaProps) {
     if (pendingSurfaceSwitch) {
       return;
     }
-    updateConversationSurfaceLayoutState(surfaceId, (current) => ({
-      ...current,
-      scroll: snapshot,
-    }));
-  }, [activeSurfaceConversationId, updateConversationSurfaceLayoutState]);
+    writeSurfaceScrollSnapshot(surfaceId, snapshot);
+  }, [activeSurfaceConversationId, writeSurfaceScrollSnapshot]);
   // rememberConversationScrollSnapshotForSurface captures the current DOM viewport for one exact surface.
   // rememberConversationScrollSnapshotForSurface 为指定界面精确捕获当前 DOM 视口。
   const rememberConversationScrollSnapshotForSurface = React.useCallback((surfaceId: string) => {
@@ -366,13 +352,11 @@ export function ChatArea(props: ChatAreaProps) {
     }
   }, [activeSurfaceConversationId, readConversationSurfaceLayoutState, rememberConversationScrollSnapshotForSurface]);
 
-  // clearLayoutRestoreFrames cancels pending viewport correction frames.
-  // clearLayoutRestoreFrames 取消待执行的视口校正帧。
-  const clearLayoutRestoreFrames = React.useCallback(() => {
-    for (const frame of layoutRestoreFramesRef.current) {
-      window.cancelAnimationFrame(frame);
-    }
-    layoutRestoreFramesRef.current = [];
+  // clearPendingLayoutRestoreFrames cancels only the layout-event restore sequence before replacement.
+  // clearPendingLayoutRestoreFrames 仅在替换前取消布局事件恢复序列。
+  const clearPendingLayoutRestoreFrames = React.useCallback(() => {
+    pendingLayoutRestoreCancelRef.current?.();
+    pendingLayoutRestoreCancelRef.current = null;
   }, []);
 
   // handleConversationUserScrollStart lets user intent cancel pending automatic viewport correction.
@@ -386,7 +370,8 @@ export function ChatArea(props: ChatAreaProps) {
     } else if (direction === "down") {
       upwardScrollTailSuppressUntilRef.current = 0;
     }
-    clearLayoutRestoreFrames();
+    cancelAllConversationViewportFrames();
+    pendingLayoutRestoreCancelRef.current = null;
     pendingLayoutViewportRef.current = null;
     if (surfaceId && scrollRestoreGuardRef.current?.surfaceId === surfaceId) {
       scrollRestoreGuardRef.current = null;
@@ -394,7 +379,7 @@ export function ChatArea(props: ChatAreaProps) {
     if (direction !== "down") {
       shouldFollowConversationTailRef.current = false;
     }
-  }, [activeSurfaceConversationId, clearLayoutRestoreFrames]);
+  }, [activeSurfaceConversationId, cancelAllConversationViewportFrames]);
 
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
   // updateConversationBottomState 根据时间线滚动位置刷新底部跳转按钮状态。
@@ -469,36 +454,26 @@ export function ChatArea(props: ChatAreaProps) {
   const restorePendingConversationLayoutViewport = React.useCallback(() => {
     const snapshot = pendingLayoutViewportRef.current;
     const element = workspaceRef.current;
-    if (!snapshot || !element || element.dataset.conversationSurfaceId !== snapshot.surfaceId) {
+    const userScrollSettling = Date.now() <= userScrollSettleUntilRef.current;
+    if (userScrollSettling || !snapshot || !element || element.dataset.conversationSurfaceId !== snapshot.surfaceId) {
       return;
     }
-    if (snapshot.wasAtBottom) {
-      element.scrollTop = element.scrollHeight;
-    } else if (!snapshot.anchor || !restoreConversationViewportAnchor(element, snapshot.anchor)) {
-      conversationScrollToDistanceFromBottom(element, snapshot.distanceFromBottom);
-    }
+    restoreConversationScrollSnapshot(element, snapshot);
     updateConversationBottomState();
   }, [updateConversationBottomState]);
   // schedulePendingConversationLayoutRestore replays viewport correction across multiple layout frames.
   // schedulePendingConversationLayoutRestore 跨多个布局帧重放视口校正。
   const schedulePendingConversationLayoutRestore = React.useCallback(() => {
-    clearLayoutRestoreFrames();
-    const runAfterFrame = (remainingFrames: number) => {
-      const frame = window.requestAnimationFrame(() => {
-        layoutRestoreFramesRef.current = layoutRestoreFramesRef.current.filter((candidate) => candidate !== frame);
-        restorePendingConversationLayoutViewport();
-        if (remainingFrames > 0) {
-          runAfterFrame(remainingFrames - 1);
-          return;
-        }
+    clearPendingLayoutRestoreFrames();
+    pendingLayoutRestoreCancelRef.current = scheduleConversationViewportFrames(
+      5,
+      restorePendingConversationLayoutViewport,
+      () => {
         pendingLayoutViewportRef.current = null;
-      });
-      layoutRestoreFramesRef.current.push(frame);
-    };
-    runAfterFrame(4);
-  }, [clearLayoutRestoreFrames, restorePendingConversationLayoutViewport]);
-
-  React.useEffect(() => () => clearLayoutRestoreFrames(), [clearLayoutRestoreFrames]);
+        pendingLayoutRestoreCancelRef.current = null;
+      },
+    );
+  }, [clearPendingLayoutRestoreFrames, restorePendingConversationLayoutViewport, scheduleConversationViewportFrames]);
 
   React.useEffect(() => {
     const handleLayoutWillChange = () => {
@@ -509,8 +484,8 @@ export function ChatArea(props: ChatAreaProps) {
     return () => window.removeEventListener(CONVERSATION_LAYOUT_WILL_CHANGE_EVENT, handleLayoutWillChange);
   }, [capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore]);
 
-  // Restore the virtualized transcript viewport when thinking display filters insert or remove rows.
-  // 当思考展示过滤插入或移除虚拟化行时恢复会话视口位置。
+  // Restore the turn-based transcript viewport when thinking display filters insert or remove rows.
+  // 当思考展示过滤插入或移除轮次行时恢复会话视口位置。
   React.useLayoutEffect(() => {
     if (!props.layoutStabilityKey) {
       return;
@@ -573,11 +548,7 @@ export function ChatArea(props: ChatAreaProps) {
       && surfaceId
       && previousSnapshot.surfaceId === surfaceId
     ) {
-      if (previousSnapshot.wasAtBottom) {
-        element.scrollTop = element.scrollHeight;
-      } else if (!previousSnapshot.anchor || !restoreConversationViewportAnchor(element, previousSnapshot.anchor)) {
-        conversationScrollToDistanceFromBottom(element, previousSnapshot.distanceFromBottom);
-      }
+      restoreConversationScrollSnapshot(element, previousSnapshot);
       pendingLayoutViewportRef.current = {
         anchor: previousSnapshot.anchor,
         distanceFromBottom: previousSnapshot.distanceFromBottom,
@@ -613,6 +584,9 @@ export function ChatArea(props: ChatAreaProps) {
   // scrollConversationToBottom moves the timeline to the latest content.
   // scrollConversationToBottom 将时间线滚动到最新内容。
   const scrollConversationToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
+    cancelAllConversationViewportFrames();
+    pendingLayoutRestoreCancelRef.current = null;
+    pendingLayoutViewportRef.current = null;
     const element = workspaceRef.current;
     if (!element) {
       return;
@@ -620,7 +594,7 @@ export function ChatArea(props: ChatAreaProps) {
     upwardScrollTailSuppressUntilRef.current = 0;
     const safeBehavior = behavior === "auto" || behavior === "instant" || behavior === "smooth" ? behavior : "smooth";
     element.scrollTo({ top: element.scrollHeight, behavior: safeBehavior });
-  }, []);
+  }, [cancelAllConversationViewportFrames]);
 
   // jumpConversationToBottom immediately pins the timeline to its latest rendered height.
   // jumpConversationToBottom 立即把时间线固定到最新已渲染高度。
@@ -652,7 +626,8 @@ export function ChatArea(props: ChatAreaProps) {
     const surfaceId = workspaceRef.current?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
     const pinComposerAdjustedTail = () => {
       const element = workspaceRef.current;
-      if (!element) {
+      const userScrollSettling = Date.now() <= userScrollSettleUntilRef.current;
+      if (userScrollSettling || !element) {
         return;
       }
       element.scrollTop = element.scrollHeight;
@@ -665,49 +640,17 @@ export function ChatArea(props: ChatAreaProps) {
       }
       setIsAtConversationBottom(true);
     };
-    let secondFrame: number | null = null;
     pinComposerAdjustedTail();
-    const firstFrame = window.requestAnimationFrame(() => {
-      pinComposerAdjustedTail();
-      secondFrame = window.requestAnimationFrame(pinComposerAdjustedTail);
-    });
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      if (secondFrame !== null) {
-        window.cancelAnimationFrame(secondFrame);
-      }
-    };
+    return scheduleConversationViewportFrames(2, pinComposerAdjustedTail);
   }, [
     activeSurfaceConversationId,
     composerDockHeight,
     isEmptyConversation,
+    scheduleConversationViewportFrames,
     showConversationLoadingOnly,
     updateConversationBottomState,
     writeConversationScrollSnapshot,
   ]);
-
-  // handleTimelineVirtualizerStateChange remembers measured row heights for the active surface.
-  // handleTimelineVirtualizerStateChange 记住当前界面的已测量行高。
-  const handleTimelineVirtualizerStateChange = React.useCallback((surfaceId: string, state: ConversationTimelineVirtualRestoreState | null) => {
-    if (!surfaceId) {
-      return;
-    }
-    updateConversationSurfaceLayoutState(surfaceId, (current) => ({
-      ...current,
-      virtualizer: state,
-    }));
-  }, [updateConversationSurfaceLayoutState]);
-  // handleExpandedStateChange stores row expansion state beside scroll and virtualizer data.
-  // handleExpandedStateChange 将行展开状态与滚动、虚拟列表数据一起保存。
-  const handleExpandedStateChange = React.useCallback((surfaceId: string, state: ConversationSurfaceExpandedState) => {
-    if (!surfaceId) {
-      return;
-    }
-    updateConversationSurfaceLayoutState(surfaceId, (current) => ({
-      ...current,
-      expandedState: state,
-    }));
-  }, [updateConversationSurfaceLayoutState]);
 
   React.useLayoutEffect(() => {
     if (!props.selectedConversationId || isEmptyConversation || showConversationLoadingOnly) {
@@ -725,20 +668,7 @@ export function ChatArea(props: ChatAreaProps) {
     const restoreSurfaceId = activeSurfaceConversationId;
     if (selectedChanged && savedScrollSnapshot && element && restoreSurfaceId) {
       const restoreSavedScrollPosition = () => {
-        if (savedScrollSnapshot.wasAtBottom) {
-          element.scrollTop = element.scrollHeight;
-          return;
-        }
-        if (savedScrollSnapshot.anchor) {
-          if (restoreConversationViewportAnchor(element, savedScrollSnapshot.anchor)) {
-            return;
-          }
-          element.scrollTop = element.scrollHeight;
-          return;
-        }
-        if (!savedScrollSnapshot.anchor) {
-          conversationScrollToDistanceFromBottom(element, savedScrollSnapshot.distanceFromBottom);
-        }
+        restoreConversationScrollSnapshot(element, savedScrollSnapshot);
       };
       shouldFollowConversationTailRef.current = savedScrollSnapshot.wasAtBottom;
       scrollRestoreGuardRef.current = {
@@ -746,22 +676,18 @@ export function ChatArea(props: ChatAreaProps) {
         wasAtBottom: savedScrollSnapshot.wasAtBottom,
       };
       restoreSavedScrollPosition();
-      let secondFrame: number | null = null;
-      const firstFrame = window.requestAnimationFrame(() => {
-        restoreSavedScrollPosition();
-        secondFrame = window.requestAnimationFrame(() => {
-          restoreSavedScrollPosition();
+      const cancelSavedScrollRestore = scheduleConversationViewportFrames(
+        2,
+        restoreSavedScrollPosition,
+        () => {
           updateConversationBottomState();
           if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
             scrollRestoreGuardRef.current = null;
           }
-        });
-      });
+        },
+      );
       return () => {
-        window.cancelAnimationFrame(firstFrame);
-        if (secondFrame !== null) {
-          window.cancelAnimationFrame(secondFrame);
-        }
+        cancelSavedScrollRestore();
         if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
           scrollRestoreGuardRef.current = null;
         }
@@ -774,30 +700,24 @@ export function ChatArea(props: ChatAreaProps) {
         surfaceId: restoreSurfaceId,
         wasAtBottom: true,
       };
-      // secondFrame keeps the default tail initialization stable after React paints the new transcript.
-      // secondFrame 在 React 绘制新转录后保持默认贴底初始化稳定。
-      let secondFrame: number | null = null;
       // restoreDefaultTailPosition initializes unseen surfaces without reusing the previous surface scrollTop.
       // restoreDefaultTailPosition 初始化未见过的界面，避免复用上一个界面的 scrollTop。
       const restoreDefaultTailPosition = () => {
         element.scrollTop = element.scrollHeight;
       };
       restoreDefaultTailPosition();
-      const firstFrame = window.requestAnimationFrame(() => {
-        restoreDefaultTailPosition();
-        secondFrame = window.requestAnimationFrame(() => {
-          restoreDefaultTailPosition();
+      const cancelDefaultTailRestore = scheduleConversationViewportFrames(
+        2,
+        restoreDefaultTailPosition,
+        () => {
           updateConversationBottomState();
           if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
             scrollRestoreGuardRef.current = null;
           }
-        });
-      });
+        },
+      );
       return () => {
-        window.cancelAnimationFrame(firstFrame);
-        if (secondFrame !== null) {
-          window.cancelAnimationFrame(secondFrame);
-        }
+        cancelDefaultTailRestore();
         if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
           scrollRestoreGuardRef.current = null;
         }
@@ -821,103 +741,28 @@ export function ChatArea(props: ChatAreaProps) {
     }
 
     shouldFollowConversationTailRef.current = true;
-    let secondFrame: number | null = null;
-    let thirdFrame: number | null = null;
     jumpConversationToBottom();
-    const firstFrame = window.requestAnimationFrame(() => {
+    return scheduleConversationViewportFrames(3, (frameIndex) => {
       jumpConversationToBottom();
-      secondFrame = window.requestAnimationFrame(() => {
-        jumpConversationToBottom();
-        thirdFrame = window.requestAnimationFrame(() => {
-          jumpConversationToBottom();
-          updateConversationBottomState();
-        });
+      if (frameIndex >= 1) {
         updateConversationBottomState();
-      });
+      }
     });
-
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      if (secondFrame !== null) {
-        window.cancelAnimationFrame(secondFrame);
-      }
-      if (thirdFrame !== null) {
-        window.cancelAnimationFrame(thirdFrame);
-      }
-    };
   }, [
     conversationStreamSignature,
     isEmptyConversation,
     jumpConversationToBottom,
     activeSurfaceConversationId,
     readConversationSurfaceLayoutState,
+    scheduleConversationViewportFrames,
     showConversationLoadingOnly,
     updateConversationBottomState,
-    writeConversationScrollSnapshot,
     props.selectedConversationId,
   ]);
 
   React.useEffect(() => {
     updateConversationBottomState();
   }, [activeSurfaceConversationId, conversationStreamSignature, updateConversationBottomState]);
-
-  React.useEffect(() => {
-    setThinkingDisplayMode(normalizeThinkingDisplayMode(props.workbench.thinkingDisplayMode));
-  }, [props.workbench.thinkingDisplayMode]);
-
-  // handleThinkingDisplayModeChange applies the WebUI preference immediately and persists it through the service.
-  // handleThinkingDisplayModeChange 立即应用 WebUI 偏好，并通过服务持久化该设置。
-  const handleThinkingDisplayModeChange = React.useCallback((mode: ThinkingDisplayMode) => {
-    setThinkingDisplayMode(mode);
-    void props.onSelectWorkbenchThinkingDisplayMode(mode).then((saved) => {
-      if (!saved) {
-        setThinkingDisplayMode(normalizeThinkingDisplayMode(props.workbench.thinkingDisplayMode));
-      }
-    });
-  }, [props.onSelectWorkbenchThinkingDisplayMode, props.workbench.thinkingDisplayMode]);
-
-  React.useEffect(() => {
-    if (displayedStreamingThinkingBlock) {
-      setStreamingThinkingOverlayBlock((current) => (
-        current && thinkingOverlayBlockSignature(current) === displayedStreamingThinkingOverlaySignature
-          ? current
-          : displayedStreamingThinkingBlock
-      ));
-      setStreamingThinkingOverlayLeaving(false);
-      return;
-    }
-    if (!streamingThinkingOverlayBlock) {
-      return;
-    }
-    const fadeTimer = window.setTimeout(() => {
-      setStreamingThinkingOverlayLeaving(true);
-    }, 500);
-    const removeTimer = window.setTimeout(() => {
-      setStreamingThinkingOverlayBlock(null);
-      setStreamingThinkingOverlayLeaving(false);
-    }, 1000);
-    return () => {
-      window.clearTimeout(fadeTimer);
-      window.clearTimeout(removeTimer);
-    };
-  }, [displayedStreamingThinkingBlock, displayedStreamingThinkingOverlaySignature, retainedStreamingThinkingOverlayId, streamingThinkingOverlayBlock]);
-
-  React.useEffect(() => {
-    if (isEmptyConversation) {
-      setEmptyPromptVisible(true);
-      setEmptyPromptLeaving(false);
-      return;
-    }
-    if (!emptyPromptVisible) {
-      return;
-    }
-    setEmptyPromptLeaving(true);
-    const timeout = window.setTimeout(() => {
-      setEmptyPromptVisible(false);
-      setEmptyPromptLeaving(false);
-    }, 360);
-    return () => window.clearTimeout(timeout);
-  }, [emptyPromptVisible, isEmptyConversation]);
 
   const {
     handlePlanArtifactCancel,
@@ -992,14 +837,14 @@ export function ChatArea(props: ChatAreaProps) {
         onUserScrollStart={handleConversationUserScrollStart}
         onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
         scrollRef={workspaceRef}
-        initialScrollDistanceFromBottom={activeSurfaceLayoutState?.scroll.distanceFromBottom ?? 0}
-        suppressInitialDistanceRestore={Boolean(activeSurfaceLayoutState?.scroll.anchor)}
-        initialVirtualizerState={activeSurfaceLayoutState?.virtualizer ?? null}
-        onVirtualizerStateChange={handleTimelineVirtualizerStateChange}
+        restoreInitialScrollDistance={false}
         initialExpandedState={activeSurfaceLayoutState?.expandedState ?? null}
+        initialTurnHeightsByKey={activeSurfaceLayoutState?.turnHeightsByKey ?? null}
         onExpandedStateChange={handleExpandedStateChange}
+        onRetainTurnHeights={retainSurfaceTurnHeights}
+        onTurnHeightChange={handleTurnHeightChange}
         footer={null}
-        suppressEmptyPlaceholder={isEmptyConversation}
+        suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
         onCopyText={props.onCopyText}
         onEditUserPrompt={userPromptEdit.open}
         onForkConversation={props.onForkConversation}
