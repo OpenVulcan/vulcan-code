@@ -397,28 +397,17 @@ async fn load_workspace_snapshot_with_runtime_state(
     controller: ControllerRuntimeHandle,
     load_runtime_state: bool,
 ) -> Result<WorkspaceSnapshot, String> {
-    eprintln!("[workspace-load] begin: load_runtime_state={load_runtime_state}");
     // project_rows are validated before their archive flags are allowed to trigger default seeding.
     // project_rows 在其归档标记获准触发默认播种前完成验证。
     let mut project_rows = query_validated_project_rows(&controller).await?;
-    eprintln!(
-        "[workspace-load] project query complete: rows={}",
-        project_rows.len()
-    );
     if workspace_requires_default_project(&project_rows) {
-        eprintln!("[workspace-load] default project seed begin");
         seed_default_workspace_project(&controller).await?;
-        eprintln!("[workspace-load] default project seed complete");
         project_rows = query_validated_project_rows(&controller).await?;
         if workspace_requires_default_project(&project_rows) {
             return Err(String::from("默认项目播种完成后仍不存在活动项目。"));
         }
     }
     let session_rows = query_session_index_rows(&controller).await?;
-    eprintln!(
-        "[workspace-load] session index query complete: rows={}",
-        session_rows.len()
-    );
 
     let mut task_projects = Vec::new();
     let mut archived_task_projects = Vec::new();
@@ -456,9 +445,6 @@ async fn load_workspace_snapshot_with_runtime_state(
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
     let mut session_updated_at = BTreeMap::new();
-    // removed_project_session_count records valid tombstones excluded from the live workspace projection.
-    // removed_project_session_count 记录从实时工作区投影中排除的合法项目删除墓碑。
-    let mut removed_project_session_count = 0usize;
     for stored_row in session_rows {
         // validated_row is the only representation allowed to address directories or build summaries.
         // validated_row 是唯一允许用于目录寻址或摘要构建的表示。
@@ -475,7 +461,6 @@ async fn load_workspace_snapshot_with_runtime_state(
         // project_row proves the locator does not reference a missing project record.
         // project_row 证明定位信息没有引用缺失的项目记录。
         let Some(project_row) = retained_project_row_for_session(&project_rows, project_id) else {
-            removed_project_session_count += 1;
             continue;
         };
         if !validated_row.archived && project_row.archived {
@@ -565,11 +550,6 @@ async fn load_workspace_snapshot_with_runtime_state(
         }
     }
 
-    eprintln!(
-        "[workspace-load] session projection complete: loaded={} removed_project_tombstones={removed_project_session_count}",
-        visible_sessions.len() + archived_sessions.len()
-    );
-
     for project in &mut task_projects {
         project.session_ids.sort_unstable_by_key(|session_id| {
             descending_session_updated_at_key(&session_updated_at, session_id)
@@ -591,10 +571,6 @@ async fn load_workspace_snapshot_with_runtime_state(
     let collapsed_task_projects = query_collapsed_task_project_ids(&controller)
         .await?
         .unwrap_or_default();
-    eprintln!(
-        "[workspace-load] collapsed-project query complete: rows={}",
-        collapsed_task_projects.len()
-    );
     let expanded_task_projects = task_projects
         .iter()
         .filter(|project| !collapsed_task_projects.contains(&project.id))
@@ -609,7 +585,6 @@ async fn load_workspace_snapshot_with_runtime_state(
         .map(|session| (session.id, SessionRunPhase::Idle))
         .collect::<BTreeMap<_, _>>();
 
-    eprintln!("[workspace-load] snapshot assembly complete");
     Ok(WorkspaceSnapshot {
         task_projects,
         archived_task_projects,

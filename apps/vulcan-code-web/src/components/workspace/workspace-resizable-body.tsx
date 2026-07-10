@@ -311,8 +311,9 @@ export function WorkspaceResizableBody(props: {
   );
   // renderedMainContent lets registered page panels share one adaptive layout implementation.
   // renderedMainContent 让页面注册面板共用同一套自适应布局实现。
+  // Keep descriptor shells mounted when panel content is temporarily absent so the main React subtree retains identity.
+  // 面板内容暂时不存在时仍保留描述槽外壳，使主 React 子树保持组件身份。
   const renderedMainContent = (props.toolPanels ?? [])
-    .filter((panel) => Boolean(panel.panel))
     .reduceRight<React.ReactNode>((content, panel) => (
       <AdaptiveToolPanel
         className={panel.className}

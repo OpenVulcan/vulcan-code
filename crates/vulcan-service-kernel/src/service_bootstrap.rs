@@ -434,7 +434,6 @@ fn run_service_bootstrap(
         )
     });
 
-    eprintln!("[webui-service] workspace index load begin");
     let workspace_snapshot = bootstrap_step(
         runtime.block_on(
             vulcan_workspace_store::workspace_store::load_or_seed_workspace_index(
@@ -444,7 +443,6 @@ fn run_service_bootstrap(
         "workspace",
         "Workspace",
     )?;
-    eprintln!("[webui-service] workspace index load complete");
     let selected_session_id = workspace_snapshot.selected_session;
     let vmm_hook_snapshot =
         build_vmm_hook_config_snapshot(&provider_configuration, &workspace_snapshot);
