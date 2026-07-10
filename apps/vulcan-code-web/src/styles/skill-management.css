@@ -150,8 +150,13 @@
 .conversation-session-tool-adaptive-panel .adaptive-tool-panel-slot {
   overflow: visible;
   transition:
+    right 220ms cubic-bezier(0.2, 0.72, 0.22, 1),
     width 320ms cubic-bezier(0.2, 0.8, 0.2, 1),
     height 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.workspace-resizable-body-shell.has-floating-context .conversation-session-tool-adaptive-panel.is-forced-overlay .adaptive-tool-panel-slot {
+  right: calc(var(--workspace-floating-context-panel-width) + 12px);
 }
 
 .conversation-session-tool-adaptive-panel:has(.conversation-session-tool-transitioning) .adaptive-tool-panel-slot {
@@ -159,7 +164,7 @@
 }
 
 .conversation-session-tool-adaptive-panel.is-expanded .adaptive-tool-panel-slot-inner {
-  width: min(var(--adaptive-tool-panel-width), calc(100vw - 40px));
+  width: max-content;
   max-width: min(var(--adaptive-tool-panel-width), calc(100vw - 40px));
 }
 

@@ -10,6 +10,9 @@ export interface WorkspacePagePanelDescriptor {
   // Whether the panel content is expanded.
   // 面板内容当前是否展开。
   expanded: boolean;
+  // Whether the panel must overlay content regardless of available inline width.
+  // 面板是否必须忽略可用内联宽度并浮动覆盖内容。
+  forceOverlay?: boolean;
   // Fixed expanded panel width used by shared reserve-space math.
   // 共享占位计算使用的展开面板固定宽度。
   panelWidth?: number;

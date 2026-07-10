@@ -14,6 +14,9 @@ export interface AdaptiveToolPanelProps {
   // Whether the panel is expanded.
   // 面板是否展开。
   expanded: boolean;
+  // Whether external layout state forces the panel to overlay instead of reserving content width.
+  // 外部布局状态是否强制面板浮动，而不是为内容预留宽度。
+  forceOverlay?: boolean;
   // Fixed panel width used for inline reservation math.
   // 用于内联占位计算的固定面板宽度。
   panelWidth?: number;
@@ -82,6 +85,9 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
   // inlineOffset stores half of the reserved inline width for centered child overlays.
   // inlineOffset 保存预留内联宽度的一半，供子级居中浮层使用。
   const inlineOffset = (panelWidth + inlineGap) / 2;
+  // panelReservesContent is the single rendered mode after external overlay constraints are applied.
+  // panelReservesContent 是应用外部浮动约束后的唯一渲染模式。
+  const panelReservesContent = props.expanded && reservesContent && !props.forceOverlay;
 
   React.useEffect(() => {
     const element = rootRef.current;
@@ -131,7 +137,8 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
         "adaptive-tool-panel",
         props.side === "right" ? "side-right" : "side-left",
         props.expanded ? "is-expanded" : "is-collapsed",
-        props.expanded && reservesContent ? "is-inline" : "is-overlay",
+        panelReservesContent ? "is-inline" : "is-overlay",
+        props.forceOverlay && "is-forced-overlay",
         props.className,
       )}
       ref={rootRef}

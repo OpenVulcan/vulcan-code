@@ -252,12 +252,21 @@ export function WorkspaceResizableBody(props: {
   // rightPanelVisualState selects the transition class shared by docked and floating panels.
   // rightPanelVisualState 选择停靠与浮动面板共用的过渡类名。
   const rightPanelVisualState = rightPanelTransition.visible ? "is-open" : "is-closed";
+  // renderedRightPanelFloating uses the preflight target while open and retains transition state only for exit.
+  // renderedRightPanelFloating 在打开期间使用预判目标，仅在退出期间保留过渡状态。
+  const renderedRightPanelFloating = props.rightPanelOpen
+    ? props.rightPanelFloating
+    : rightPanelTransition.floating;
+  // floatingContextLayoutActive exposes the preflight floating target before the panel mount animation begins.
+  // floatingContextLayoutActive 在面板挂载动画开始前暴露预判的浮动目标。
+  const floatingContextLayoutActive = renderedRightPanelFloating
+    && (props.rightPanelOpen || rightPanelTransition.mounted);
   // dockedPanelOpen indicates whether the non-floating panel currently reserves visible width.
   // dockedPanelOpen 表示非浮动面板当前是否保留可见宽度。
-  const dockedPanelOpen = rightPanelTransition.visible && !rightPanelTransition.floating;
+  const dockedPanelOpen = rightPanelTransition.visible && !renderedRightPanelFloating;
   // dockedPanelMounted indicates whether the non-floating panel remains in the flex layout.
   // dockedPanelMounted 表示非浮动面板是否仍保留在 flex 布局中。
-  const dockedPanelMounted = rightPanelTransition.mounted && !rightPanelTransition.floating;
+  const dockedPanelMounted = rightPanelTransition.mounted && !renderedRightPanelFloating;
   // rightPanelMounted keeps one context panel instance alive across floating and docked modes.
   // rightPanelMounted 让同一个上下文面板实例在浮动与停靠模式切换时保持存活。
   const rightPanelMounted = rightPanelTransition.mounted;
@@ -320,6 +329,7 @@ export function WorkspaceResizableBody(props: {
         contentClassName={panel.contentClassName}
         contentShellClassName={panel.contentShellClassName}
         expanded={panel.expanded}
+        forceOverlay={panel.forceOverlay}
         inlineGap={panel.inlineGap}
         minContentWidth={panel.minContentWidth}
         onLayoutModeWillChange={panel.onLayoutModeWillChange}
@@ -333,7 +343,7 @@ export function WorkspaceResizableBody(props: {
     ), mainContent);
 
   return (
-    <div className={cn("workspace-resizable-body-shell", rightPanelTransition.mounted && rightPanelTransition.floating && "has-floating-context")}>
+    <div className={cn("workspace-resizable-body-shell", floatingContextLayoutActive && "has-floating-context")}>
       <ConsoleHeader
         className={props.headerTitle ? "workspace-custom-header" : undefined}
         draftConversation={props.selectedDraftConversation}
@@ -369,13 +379,13 @@ export function WorkspaceResizableBody(props: {
             className={cn(
               "workspace-context-panel",
               rightPanelVisualState,
-              rightPanelTransition.floating && "is-floating",
+              renderedRightPanelFloating && "is-floating",
             )}
             id="workspaceContext"
           >
             <WorkspaceContextPanel
               activeTabId={props.contextPanelActiveTabId}
-              floating={rightPanelTransition.floating}
+              floating={renderedRightPanelFloating}
               reviewFocusRequest={props.reviewFocusRequest}
               selectedDraftConversation={props.selectedDraftConversation}
               selectedConversationId={props.selectedConversationId}

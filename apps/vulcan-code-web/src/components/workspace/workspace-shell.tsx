@@ -928,6 +928,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       contentClassName: "conversation-session-tool-content",
       contentShellClassName: "conversation-session-tool-content-shell",
       expanded: sessionToolPanelVisible && sessionToolExpanded,
+      forceOverlay: effectiveRightPanelOpen && rightPanelFloating,
       inlineGap: 52,
       minContentWidth: 800,
       onLayoutModeWillChange: notifyConversationLayoutWillChange,

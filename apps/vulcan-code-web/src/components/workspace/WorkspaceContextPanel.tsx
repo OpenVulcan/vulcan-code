@@ -314,10 +314,29 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
     if (!activeTab) {
       return;
     }
-    tabRefs.current.get(activeTab.id)?.scrollIntoView({
+    // activeTabElement stores the selected tab without asking outer scroll containers to reveal it.
+    // activeTabElement 保存选中的页签，且不要求外层滚动容器将其显示出来。
+    const activeTabElement = tabRefs.current.get(activeTab.id);
+    // tabStrip is the only scroll container that owns horizontal tab navigation.
+    // tabStrip 是唯一负责页签横向导航的滚动容器。
+    const tabStrip = activeTabElement?.parentElement;
+    if (!activeTabElement || !tabStrip) {
+      return;
+    }
+    // activeTabRect provides the selected tab position inside the translated panel.
+    // activeTabRect 提供平移面板内部所选页签的位置。
+    const activeTabRect = activeTabElement.getBoundingClientRect();
+    // tabStripRect provides the local viewport used to center the selected tab.
+    // tabStripRect 提供用于居中所选页签的局部视口。
+    const tabStripRect = tabStrip.getBoundingClientRect();
+    // Keep scrolling local because the floating panel is translated off-screen during its mount frame.
+    // 将滚动限制在页签条内，因为浮动面板挂载帧仍被平移到屏幕之外。
+    tabStrip.scrollTo({
       behavior: "smooth",
-      block: "nearest",
-      inline: "center",
+      left: tabStrip.scrollLeft
+        + activeTabRect.left
+        - tabStripRect.left
+        - ((tabStripRect.width - activeTabRect.width) / 2),
     });
   }, [activeTab]);
 
