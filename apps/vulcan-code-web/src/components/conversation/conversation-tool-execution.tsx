@@ -201,7 +201,7 @@ export function ToolExecutionBlock(props: {
         type="button"
       >
         <Wrench size={15} />
-        <span>{summary}</span>
+        <span className={cn(displayState === "running" && "shimmer")}>{summary}</span>
       </button>
       {displayedMediaAttachments.length > 0 ? (
         <GeneratedMediaStrip

@@ -14,7 +14,6 @@ import type {
 } from "@/components/composer/composer-control-types";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { Button } from "@/components/ui/button";
-import { ShinyText } from "@/components/ui/shiny-text";
 import {
   Tooltip,
   TooltipContent,
@@ -244,7 +243,7 @@ export function ComposerDock(props: {
           ) : null}
           {props.runtimeCue ? (
             <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
-              <ShinyText text={props.runtimeCue.text} />
+              <span className="shimmer">{props.runtimeCue.text}</span>
             </div>
           ) : null}
           {visibleSessionTodolist ? (

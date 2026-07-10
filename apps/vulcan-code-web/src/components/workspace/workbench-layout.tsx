@@ -3,20 +3,13 @@ import {
   FeatureShell as ExtractedFeatureShell,
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
-import {
-  RepositoryLink,
-  StatusbarRuntimeActivities,
-} from "@/components/shell/app-chrome";
+import { RepositoryLink } from "@/components/shell/app-chrome";
 import { StartupOverlay } from "@/components/shell/startup-screen";
 import {
   normalizedComposerSlashCommandId,
   SLASH_SKILL_PROMPT,
   type ComposerSlashCommandResult,
 } from "@/components/composer/composer-model";
-import {
-  buildStatusbarRuntimeActivities,
-} from "@/components/conversation/conversation-runtime";
-import { projectConversationRenderItems } from "@/components/conversation/conversation-transcript";
 import {
   restoreProjectDisplayName,
   type RenameTarget,
@@ -799,22 +792,6 @@ export function WorkbenchLayout(props: {
     mergeConversationHydrationWithLocalCaches,
     setWorkbenchState,
   });
-  // selectedConversationRenderItems stores parsed rows for sidebar/runtime summaries.
-  // selectedConversationRenderItems 保存侧栏与运行状态摘要复用的解析行。
-  const selectedConversationRenderItems = React.useMemo(
-    () => projectConversationRenderItems(selectedConversationMessages, i18n.t),
-    [i18n.t, selectedConversationMessages],
-  );
-  // statusbarRuntimeActivities stores bottom-bar normal-tool runtime badges for the selected conversation.
-  // statusbarRuntimeActivities 保存当前选中会话的底部普通工具运行徽标。
-  const statusbarRuntimeActivities = React.useMemo(
-    () => buildStatusbarRuntimeActivities(
-      selectedConversation,
-      selectedConversationRenderItems,
-      i18n.t,
-    ),
-    [i18n.t, selectedConversation, selectedConversationRenderItems],
-  );
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
@@ -1487,7 +1464,6 @@ export function WorkbenchLayout(props: {
             footer={(
               <footer className="statusbar workspace-statusbar">
                 <span>{formatWorkbenchTranslation(i18n.t, "workspaceShell.version", { version: props.workbench.appVersion })}</span>
-                <StatusbarRuntimeActivities activities={statusbarRuntimeActivities} />
                 <RepositoryLink onOpenExternalUrl={openExternalUrl} />
               </footer>
             )}

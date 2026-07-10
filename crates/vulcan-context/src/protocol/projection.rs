@@ -634,12 +634,14 @@ fn compaction_attachment_list_text(attachments: &[ConversationAttachment]) -> St
 ///
 /// # Returns
 /// 返回值
-/// A transcript window that preserves existing rows and upserts runtime-projected rows by id.
-/// 返回按标识更新运行态投影行且保留既有行的转录窗口。
+/// A transcript window that preserves unloaded history while treating runtime record order as canonical from the first shared row.
+/// 返回保留运行态未覆盖历史、并从首个共享行开始以运行态记录顺序为准的转录窗口。
 pub fn merge_session_messages_with_conversation_state_records(
     existing_messages: &[SessionMessageEntry],
     state: &SessionConversationState,
 ) -> Vec<SessionMessageEntry> {
+    // projected_messages preserves the canonical order of runtime conversation records.
+    // projected_messages 保留运行态会话记录的规范顺序。
     let projected_messages = conversation_state_to_session_messages(state);
     if projected_messages.is_empty() {
         return existing_messages.to_vec();
@@ -648,17 +650,42 @@ pub fn merge_session_messages_with_conversation_state_records(
         return projected_messages;
     }
 
-    let mut merged_messages = existing_messages.to_vec();
-    for projected_message in projected_messages {
-        if let Some(existing_message) = merged_messages
-            .iter_mut()
-            .find(|message| message.id == projected_message.id)
-        {
-            *existing_message = projected_message;
-        } else {
-            merged_messages.push(projected_message);
-        }
-    }
+    // projected_ids identifies rows owned by the runtime projection so stale display copies can be removed.
+    // projected_ids 标识由运行态投影拥有的行，用于移除显示层中的旧副本。
+    let projected_ids = projected_messages
+        .iter()
+        .map(|message| message.id.clone())
+        .collect::<BTreeSet<_>>();
+    // first_shared_index anchors the runtime-owned segment inside the larger loaded transcript window.
+    // first_shared_index 将运行态拥有的片段锚定在更大的已加载转录窗口中。
+    let Some(first_shared_index) = existing_messages
+        .iter()
+        .position(|message| projected_ids.contains(message.id.as_str()))
+    else {
+        // merged_messages appends a disjoint runtime segment after loaded history.
+        // merged_messages 将没有共享锚点的运行态片段追加到已加载历史之后。
+        let mut merged_messages = existing_messages.to_vec();
+        merged_messages.extend(projected_messages);
+        return merged_messages;
+    };
+
+    // merged_messages keeps history before the runtime anchor, then emits canonical runtime order.
+    // merged_messages 保留运行态锚点之前的历史，然后写入规范运行态顺序。
+    let mut merged_messages = Vec::with_capacity(
+        existing_messages
+            .len()
+            .saturating_add(projected_messages.len()),
+    );
+    merged_messages.extend_from_slice(&existing_messages[..first_shared_index]);
+    merged_messages.extend(projected_messages);
+    // trailing_unowned_messages preserves display-only rows that the runtime state does not own.
+    // trailing_unowned_messages 保留运行态不拥有的显示层尾部记录。
+    merged_messages.extend(
+        existing_messages[first_shared_index..]
+            .iter()
+            .filter(|message| !projected_ids.contains(message.id.as_str()))
+            .cloned(),
+    );
     merged_messages
 }
 

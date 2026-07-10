@@ -105,17 +105,6 @@ export interface RuntimeCue {
   text: string;
 }
 
-// StatusbarRuntimeActivity describes one centered footer runtime activity badge.
-// StatusbarRuntimeActivity 描述底部栏居中的单个运行活动徽标。
-export interface StatusbarRuntimeActivity {
-  // Stable activity family used to pick the footer icon.
-  // 用于选择底部栏图标的稳定活动类型。
-  kind: "tool";
-  // Localized status text.
-  // 本地化状态文本。
-  text: string;
-}
-
 // ConversationRenderItem describes one row rendered after transcript projection.
 // ConversationRenderItem 描述转录投影后的单条渲染行。
 export interface ConversationRenderItem {

@@ -1,5 +1,4 @@
 import React from "react";
-import { ShinyText } from "@/components/ui/shiny-text";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationHydrationProgress } from "@/types";
@@ -25,7 +24,7 @@ export function ConversationLoadingCenter(props: {
         <div className="conversation-loading-bar" aria-label={t("conversation.loading.title")} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
           <div className="conversation-loading-bar-value" style={{ width: `${percent}%` }} />
         </div>
-        <ShinyText text={phaseText} />
+        <span className="shimmer">{phaseText}</span>
       </div>
     </section>
   );

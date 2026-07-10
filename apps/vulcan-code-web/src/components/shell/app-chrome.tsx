@@ -1,6 +1,5 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { ShinyText } from "@/components/ui/shiny-text";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +10,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { StatusPill } from "@/components/shared/status";
-import type { StatusbarRuntimeActivity } from "@/components/conversation/conversation-model";
 import { areaIconMap } from "@/components/features/feature-shell";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -32,7 +30,6 @@ import {
   Moon,
   SquareIcon,
   Sun,
-  Wrench,
   X,
 } from "lucide-react";
 
@@ -263,27 +260,6 @@ export function GlobalActions(props: {
         </DropdownMenuSub>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-// StatusbarRuntimeActivities renders centered tool activities in the footer.
-// StatusbarRuntimeActivities 在底部栏居中渲染工具活动。
-export function StatusbarRuntimeActivities(props: {
-  // Activity badges currently visible for the selected conversation.
-  // 当前选中会话可见的活动徽标。
-  activities: StatusbarRuntimeActivity[];
-}) {
-  return (
-    <div className="statusbar-runtime-activities" aria-live="polite">
-      {props.activities.map((activity) => {
-        return (
-          <span className={cn("statusbar-runtime-activity", activity.kind)} key={activity.kind}>
-            <Wrench size={13} />
-            <ShinyText text={activity.text} speed={1.65} />
-          </span>
-        );
-      })}
-    </div>
   );
 }
 

@@ -1005,8 +1005,6 @@ export type TranslationKey =
   | "runtime.memoryRecall"
   | "runtime.requesting"
   | "runtime.thinking"
-  | "runtime.toolRunning"
-  | "runtime.toolActivity"
   | "runtime.thinkingOverlayHint"
   | "settings.general"
   | "settings.systemSettings"
@@ -2171,8 +2169,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.memoryRecall": "✨ 正在记忆召回",
     "runtime.requesting": "✨ 正在请求",
     "runtime.thinking": "✨ 正在思考",
-    "runtime.toolRunning": "✨ 正在调用工具",
-    "runtime.toolActivity": "工具调用中",
     "runtime.thinkingOverlayHint": "模型正在流式输出思考过程",
     "settings.general": "通用设置",
     "settings.systemSettings": "系统设置",
@@ -3334,8 +3330,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "runtime.memoryRecall": "✨ Recalling memory",
     "runtime.requesting": "✨ Requesting",
     "runtime.thinking": "✨ Thinking",
-    "runtime.toolRunning": "✨ Running tools",
-    "runtime.toolActivity": "Running tools",
     "runtime.thinkingOverlayHint": "The model is streaming its thinking process",
     "settings.general": "General",
     "settings.systemSettings": "System settings",

@@ -1,12 +1,9 @@
 import type { useI18n } from "@/i18n";
 import type { ConversationSummary } from "@/types";
-import { isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
-import { toolExecutionDisplayState } from "@/components/conversation/conversation-tool-execution";
 import type {
   ConversationBlock,
   ConversationRenderItem,
   RuntimeCue,
-  StatusbarRuntimeActivity,
 } from "@/components/conversation/conversation-model";
 
 // activeStreamingThinkingBlock returns the selected session thinking block that should float while streaming.
@@ -60,40 +57,6 @@ export function conversationIsRunning(conversation: ConversationSummary | undefi
   return conversation.status.trim().toLowerCase() === "running";
 }
 
-// buildStatusbarRuntimeActivities derives footer-only normal-tool activities for the selected session.
-// buildStatusbarRuntimeActivities 为当前选中会话推导仅显示在底部栏的普通工具活动。
-export function buildStatusbarRuntimeActivities(
-  conversation: ConversationSummary | undefined,
-  projectedItems: ConversationRenderItem[],
-  t: ReturnType<typeof useI18n>["t"],
-): StatusbarRuntimeActivity[] {
-  if (!conversation) {
-    return [];
-  }
-  const normalized = normalizedSessionRunPhase(conversation.runPhase);
-  const conversationRunning = conversationIsRunning(conversation);
-  const activeToolItems = projectedItems.filter((item) => {
-    const toolBlocks = item.blocks.filter(isMergeableToolBlock);
-    return toolBlocks.length > 0 && toolExecutionDisplayState(toolBlocks, conversationRunning) === "running";
-  });
-  if (!conversationRunning && activeToolItems.length === 0) {
-    return [];
-  }
-  const lastMeaningfulBlock = [...projectedItems]
-    .reverse()
-    .flatMap((item) => [...item.blocks].reverse())
-    .find((block) => block.kind !== "turn-stats") ?? null;
-  const hasActiveSubagentTool = activeToolItems.some((item) => item.blocks.some(blockLooksLikeSubagentTool));
-  const hasActiveNormalTool = activeToolItems.some((item) => !item.blocks.some(blockLooksLikeSubagentTool));
-  const phaseLooksLikeToolRunning = normalized === "toolrunning";
-  const phaseLooksLikeSubagentTool = Boolean(lastMeaningfulBlock && blockLooksLikeSubagentTool(lastMeaningfulBlock));
-  const activities: StatusbarRuntimeActivity[] = [];
-  if (hasActiveNormalTool || (phaseLooksLikeToolRunning && !hasActiveSubagentTool && !phaseLooksLikeSubagentTool)) {
-    activities.push({ kind: "tool", text: t("runtime.toolActivity") });
-  }
-  return activities;
-}
-
 // normalizedSessionRunPhase normalizes backend enum text and future route-style phase keys.
 // normalizedSessionRunPhase 规范化后端枚举文本以及未来路由式阶段键。
 export function normalizedSessionRunPhase(runPhase?: string | null): string | null {
@@ -121,17 +84,4 @@ function sessionRunPhaseCue(
     return null;
   }
   return { kind: "default", text: t("runtime.requesting") };
-}
-
-// blockLooksLikeSubagentTool detects session child-agent coordination tools.
-// blockLooksLikeSubagentTool 检测会话子代理协调工具。
-function blockLooksLikeSubagentTool(block: ConversationBlock): boolean {
-  const toolName = block.toolName?.trim().toLowerCase();
-  return toolName === "spawn_agent"
-    || toolName === "agent_orchestration_info"
-    || toolName === "send_message"
-    || toolName === "wait_agent"
-    || toolName === "list_agents"
-    || toolName === "interrupt_agent"
-    || toolName === "close_agent";
 }

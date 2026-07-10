@@ -6,7 +6,6 @@ import {
   ChevronRight,
   ScrollText,
 } from "lucide-react";
-import { ShinyText } from "@/components/ui/shiny-text";
 import {
   Tooltip,
   TooltipContent,
@@ -470,7 +469,7 @@ export function StreamingThinkingOverlay(props: {
       <header className="streaming-thinking-header">
         <span className="streaming-thinking-title">
           <BrainCircuit size={16} />
-          <ShinyText text={t("runtime.thinking")} />
+          <span className="shimmer">{t("runtime.thinking")}</span>
         </span>
         <span className="streaming-thinking-caption">{t("runtime.thinkingOverlayHint")}</span>
       </header>

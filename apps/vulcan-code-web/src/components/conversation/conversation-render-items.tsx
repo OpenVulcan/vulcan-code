@@ -194,7 +194,7 @@ function ConversationToolSequenceGroup(props: {
         type="button"
       >
         <Workflow size={14} />
-        <span>{summary}</span>
+        <span className={cn(props.runningCount > 0 && "shimmer")}>{summary}</span>
         {hasCompletedItems ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
       </button>
       {hasCompletedItems ? (

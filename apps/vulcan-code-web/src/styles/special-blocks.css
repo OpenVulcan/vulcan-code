@@ -345,22 +345,6 @@
   animation: tool-running-pulse 1.15s ease-in-out infinite;
 }
 
-.tool-execution-row.running span {
-  background-image: linear-gradient(
-    120deg,
-    var(--muted-foreground) 0%,
-    var(--muted-foreground) 34%,
-    var(--foreground) 50%,
-    var(--muted-foreground) 66%,
-    var(--muted-foreground) 100%
-  );
-  background-size: 220% auto;
-  background-position: 160% center;
-  background-clip: text;
-  color: transparent;
-  animation: shiny-text 1.45s linear infinite;
-}
-
 .tool-execution-row span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -623,7 +607,7 @@
   min-height: 32px;
   height: 32px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 0 14px;
@@ -646,44 +630,6 @@
 
 .statusbar > :first-child {
   justify-self: start;
-}
-
-.statusbar-runtime-activities {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  justify-self: center;
-}
-
-.statusbar-runtime-activity {
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--secondary);
-  color: var(--foreground);
-  font-weight: 600;
-}
-
-.statusbar-runtime-activity .shiny-text {
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.statusbar-runtime-activity svg {
-  width: 13px;
-  height: 13px;
-  flex-shrink: 0;
-}
-
-.statusbar-runtime-activity.subagent svg {
-  color: color-mix(in oklch, var(--primary) 78%, var(--foreground));
 }
 
 .repository-link {

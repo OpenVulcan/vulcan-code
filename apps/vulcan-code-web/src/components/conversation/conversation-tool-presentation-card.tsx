@@ -217,7 +217,7 @@ function MarkdownToolPresentationCard(props: {
         type="button"
       >
         <MarkdownToolIcon className="markdown-tool-icon" icon={hydratedPresentation.icon} size={15} />
-        <span className="tool-presentation-state">{markdownToolStatusLabel(hydratedPresentation.state, t)}</span>
+        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{markdownToolStatusLabel(hydratedPresentation.state, t)}</span>
         <span className="tool-presentation-command">{title}</span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -381,7 +381,7 @@ function SubagentOrchestrationPresentationCard(props: {
         type="button"
       >
         <Bot className="subagent-orchestration-icon" size={15} />
-        <span className="tool-presentation-state">{subagentOperationLabel(hydratedPresentation, t)}</span>
+        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{subagentOperationLabel(hydratedPresentation, t)}</span>
         <span className="tool-presentation-command">{subagentSummaryText(hydratedPresentation, t)}</span>
         {canExpand ? (
           expanded ? (
@@ -974,7 +974,7 @@ function CommandExecutionPresentationCard(props: {
         type="button"
       >
         <TerminalSquare className={cn("terminal-session-icon", terminalState && terminalStateClass(terminalState))} size={15} />
-        <span className="tool-presentation-state">{statusLabel}</span>
+        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{statusLabel}</span>
         <span className={cn("tool-presentation-route-badge", !hydratedPresentation.rtkRouted && "empty")}>
           {hydratedPresentation.rtkRouted ? "RTK" : ""}
         </span>
@@ -1193,7 +1193,7 @@ function AskQuestionPresentationCard(props: {
         type="button"
       >
         <MessageCircleQuestionMark className="ask-question-icon" size={15} />
-        <span className="tool-presentation-state">{askQuestionStatusLabel(hydratedPresentation.state, t)}</span>
+        <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{askQuestionStatusLabel(hydratedPresentation.state, t)}</span>
         <span className="tool-presentation-command">{hydratedPresentation.title}</span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -1362,7 +1362,7 @@ function FileChangePresentationCard(props: {
         type="button"
       >
         <FileChangeOperationIcon operation={presentation.operation} />
-        <span className="tool-presentation-state">{fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
+        <span className={cn("tool-presentation-state", presentation.state === "running" && "shimmer")}>{fileChangeStatusLabel(presentation, presentation.operation, t)} {formatTranslation(t, "toolPresentation.file.count", { count: String(presentation.files.length) })}</span>
         <span className="file-change-path multi">
           <span className="file-change-path-text">{t("toolPresentation.file.multiChange")}</span>
           <FileChangeCounts added={presentation.totalAdded} failed={presentation.state === "failed"} removed={presentation.totalRemoved} />
@@ -1449,7 +1449,7 @@ function FileChangeSummaryButton(props: {
       type="button"
     >
       {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
-      {showStatusLabel ? <span className="tool-presentation-state">{fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
+      {showStatusLabel ? <span className={cn("tool-presentation-state", props.presentation.state === "running" && "shimmer")}>{fileChangeStatusLabel(props.presentation, props.file.operation, props.t)}</span> : null}
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>

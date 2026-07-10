@@ -108,7 +108,7 @@
   color: var(--foreground);
 }
 
-.streaming-thinking-title .shiny-text {
+.streaming-thinking-title .shimmer {
   font-size: 14px;
   font-weight: 700;
 }
@@ -136,35 +136,10 @@
   font-size: 13px;
 }
 
-.shiny-text {
-  display: inline-block;
-  background-image: linear-gradient(
-    120deg,
-    var(--muted-foreground) 0%,
-    var(--muted-foreground) 35%,
-    var(--foreground) 50%,
-    var(--muted-foreground) 65%,
-    var(--muted-foreground) 100%
-  );
-  background-size: 200% auto;
-  background-position: 150% center;
-  background-clip: text;
-  color: transparent;
+.conversation-loading-card > .shimmer {
+  width: fit-content;
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0;
-  user-select: none;
-  animation: shiny-text var(--shiny-text-speed, 2s) linear infinite;
-}
-
-@keyframes shiny-text {
-  from {
-    background-position: 150% center;
-  }
-
-  to {
-    background-position: -50% center;
-  }
 }
 
 .composer-dock {
@@ -236,7 +211,7 @@
   pointer-events: none;
 }
 
-.composer-runtime-cue .shiny-text {
+.composer-runtime-cue .shimmer {
   font-size: 13px;
   font-weight: 600;
 }

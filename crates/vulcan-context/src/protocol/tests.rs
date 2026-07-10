@@ -186,6 +186,98 @@ fn merge_session_messages_with_conversation_state_records_preserves_loaded_histo
     assert_eq!(merged_messages[2].body, "继续提问");
 }
 
+/// Verifies runtime records restore thinking/tool interleaving after tool rows reached the display layer first.
+/// 验证工具行先进入显示层后，运行态记录会恢复思考与工具交错顺序。
+#[test]
+fn merge_session_messages_with_conversation_state_records_restores_runtime_order() {
+    // existing_messages mirrors the incomplete display order produced before checkpoint reconciliation.
+    // existing_messages 模拟 checkpoint 对账前产生的不完整显示顺序。
+    let existing_messages = vec![
+        transcript_entry(
+            "old-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "再测试下",
+            None,
+        ),
+        transcript_entry(
+            "tool-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "工具 1 旧状态",
+            None,
+        ),
+        transcript_entry(
+            "tool-2",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "工具 2 旧状态",
+            None,
+        ),
+        transcript_entry(
+            "display-tail",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::TurnStats,
+            "显示层尾部统计",
+            None,
+        ),
+    ];
+    // runtime_state carries the canonical order collected by the execution runtime.
+    // runtime_state 携带执行运行时收集到的规范顺序。
+    let runtime_state = conversation_state_from_session_messages(&[
+        transcript_entry(
+            "thinking-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ThinkingOutput,
+            "第一段思考",
+            None,
+        ),
+        transcript_entry(
+            "tool-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "工具 1 已完成",
+            None,
+        ),
+        transcript_entry(
+            "thinking-2",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ThinkingOutput,
+            "第二段思考",
+            None,
+        ),
+        transcript_entry(
+            "tool-2",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "工具 2 已完成",
+            None,
+        ),
+    ]);
+
+    // merged_messages must use runtime order from the first shared tool while retaining unrelated history and tail rows.
+    // merged_messages 必须从首个共享工具开始采用运行态顺序，同时保留无关历史与尾部记录。
+    let merged_messages =
+        merge_session_messages_with_conversation_state_records(&existing_messages, &runtime_state);
+
+    assert_eq!(
+        merged_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "old-user",
+            "thinking-1",
+            "tool-1",
+            "thinking-2",
+            "tool-2",
+            "display-tail",
+        ]
+    );
+    assert_eq!(merged_messages[2].body, "工具 1 已完成");
+    assert_eq!(merged_messages[4].body, "工具 2 已完成");
+}
+
 /// Verifies compaction planning projects runtime-log messages.
 /// 验证压缩规划会投影运行时日志消息。
 #[test]
