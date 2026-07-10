@@ -495,6 +495,67 @@ fn build_runtime_event_conversation_messages_patched_delta(
     Some(message_patch)
 }
 
+/// Keeps visible streaming rows ahead of a newly projected runtime tool event.
+/// 在新投影的运行时工具事件之前保留可见的流式记录。
+///
+/// `before_messages` is the exact visible order before the runtime event, while `projected_messages`
+/// contains stable retained rows plus the newly projected tool row. The result replaces matching stable
+/// rows in place, retains only transient thinking/assistant rows omitted from retained storage, and appends
+/// genuinely new runtime rows after everything that was already visible.
+///
+/// `before_messages` 是运行时事件前的精确可见顺序，`projected_messages` 包含稳定保留记录与新投影工具记录。
+/// 返回结果会原位替换匹配的稳定记录，仅保留未进入保留存储的临时思考/Assistant 记录，并将真正新增的运行时记录
+/// 追加到此前已经可见的全部内容之后。
+fn merge_visible_streaming_rows_with_runtime_projection(
+    before_messages: &[ConversationMessage],
+    projected_messages: &[ConversationMessage],
+) -> Vec<ConversationMessage> {
+    // projected_by_id provides authoritative stable replacements without changing prior visible positions.
+    // projected_by_id 提供权威稳定替换项，同时不改变此前的可见位置。
+    let projected_by_id = projected_messages
+        .iter()
+        .map(|message| (message.id.as_str(), message))
+        .collect::<BTreeMap<_, _>>();
+    // emitted_ids prevents stable rows already replaced in place from being appended again.
+    // emitted_ids 防止已经原位替换的稳定记录被再次追加。
+    let mut emitted_ids = BTreeSet::new();
+    // merged_messages stores the exact visible order for the runtime-event patch.
+    // merged_messages 保存运行时事件补丁使用的精确可见顺序。
+    let mut merged_messages = Vec::with_capacity(
+        before_messages
+            .len()
+            .saturating_add(projected_messages.len()),
+    );
+    for before_message in before_messages {
+        if let Some(projected_message) = projected_by_id.get(before_message.id.as_str()) {
+            merged_messages.push((*projected_message).clone());
+            emitted_ids.insert(before_message.id.as_str());
+            continue;
+        }
+        if runtime_projection_retains_visible_streaming_row(before_message) {
+            merged_messages.push(before_message.clone());
+            emitted_ids.insert(before_message.id.as_str());
+        }
+    }
+    for projected_message in projected_messages {
+        if emitted_ids.insert(projected_message.id.as_str()) {
+            merged_messages.push(projected_message.clone());
+        }
+    }
+    merged_messages
+}
+
+/// Returns whether one visible row is a transient stream that stable tool projection intentionally omits.
+/// 返回单条可见记录是否为稳定工具投影有意省略的临时流记录。
+fn runtime_projection_retains_visible_streaming_row(message: &ConversationMessage) -> bool {
+    matches!(
+        message.record_kind.as_deref(),
+        Some(kind)
+            if kind == SessionMessageRecordKind::ThinkingOutput.as_persisted_key()
+                || kind == SessionMessageRecordKind::AssistantOutput.as_persisted_key()
+    )
+}
+
 /// Replaces one conversation's visible message block while preserving unrelated message positions.
 /// 替换单个会话的可见消息块，同时保留无关消息的位置。
 pub(crate) fn replace_conversation_messages_in_workbench_window(
@@ -723,6 +784,10 @@ pub(crate) fn append_runtime_event_projection(
             workbench_should_emit_runtime_event_message_patch(&guard, &conversation_id, session_id);
         let mut message_window_deltas = Vec::new();
         if surface_matches && transcript_changed {
+            projected_messages = merge_visible_streaming_rows_with_runtime_projection(
+                before_visible_messages.as_slice(),
+                projected_messages.as_slice(),
+            );
             let message_patch = build_runtime_event_conversation_messages_patched_delta(
                 &conversation_id,
                 before_visible_messages.as_slice(),
@@ -1010,6 +1075,59 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
     use vulcan_subagent_core::STOPPED_SUBAGENT_TASK_IDS_KEY;
+
+    /// Builds one minimal visible message for runtime-projection ordering tests.
+    /// 为运行时投影顺序测试构建一条最小可见消息。
+    fn test_runtime_projection_message(
+        id: &str,
+        record_kind: SessionMessageRecordKind,
+    ) -> ConversationMessage {
+        ConversationMessage {
+            id: id.to_string(),
+            conversation_id: String::from("conversation"),
+            created_at: id.to_string(),
+            role: MessageRole::Assistant,
+            title: None,
+            record_kind: Some(record_kind.as_persisted_key().to_string()),
+            body: id.to_string(),
+            metadata: None,
+            attachments: Vec::new(),
+            editable_user_prompt: false,
+        }
+    }
+
+    /// Verifies a new tool projection remains after already visible thinking and assistant stream rows.
+    /// 验证新工具投影保持在已经可见的思考与 Assistant 流记录之后。
+    #[test]
+    fn runtime_tool_projection_preserves_visible_stream_order() {
+        // before_messages mirrors thinking and Assistant rows already shown before the tool event.
+        // before_messages 模拟工具事件前已经显示的思考与 Assistant 记录。
+        let before_messages = vec![
+            test_runtime_projection_message("1000", SessionMessageRecordKind::ThinkingOutput),
+            test_runtime_projection_message("1001", SessionMessageRecordKind::AssistantOutput),
+        ];
+        // projected_messages contains the newly stable tool row and intentionally omits active stream drafts.
+        // projected_messages 包含新稳定工具记录，并有意省略活跃流式草稿。
+        let projected_messages = vec![test_runtime_projection_message(
+            "1002",
+            SessionMessageRecordKind::ToolCallOutput,
+        )];
+
+        // merged_messages must retain the visible stream rows before appending the new tool.
+        // merged_messages 必须先保留可见流记录，再追加新工具。
+        let merged_messages = merge_visible_streaming_rows_with_runtime_projection(
+            before_messages.as_slice(),
+            projected_messages.as_slice(),
+        );
+
+        assert_eq!(
+            merged_messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1000", "1001", "1002"]
+        );
+    }
 
     /// Verifies close-agent UI cleanup reads only the structured host result task ids.
     /// 验证关闭代理的界面清理只读取结构化宿主结果中的任务标识。

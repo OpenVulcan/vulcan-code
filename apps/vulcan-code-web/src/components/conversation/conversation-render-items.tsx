@@ -8,6 +8,7 @@ import {
   Copy,
   Pencil,
   Split,
+  Workflow,
 } from "lucide-react";
 
 import {
@@ -21,6 +22,8 @@ import {
   type ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
+import { isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
+import { toolExecutionDisplayState } from "@/components/conversation/conversation-tool-execution-model";
 import {
   ConversationMeasuredCollapse,
   useConversationMeasuredExpansion,
@@ -45,6 +48,166 @@ import { cn } from "@/lib/utils";
 // USER_PROMPT_COLLAPSE_LINE_LIMIT limits long user bubbles before the user expands them.
 // USER_PROMPT_COLLAPSE_LINE_LIMIT 限制用户手动展开前长用户气泡的显示行数。
 const USER_PROMPT_COLLAPSE_LINE_LIMIT = 20;
+
+// ConversationProcessBodyEntry describes one visible process row or one consecutive tool sequence.
+// ConversationProcessBodyEntry 描述单条可见过程行或一组连续工具调用。
+type ConversationProcessBodyEntry =
+  | {
+    // Single row that remains outside tool-sequence folding.
+    // 保持在工具序列折叠之外的单条记录。
+    kind: "item";
+    // Visible process item.
+    // 可见过程记录。
+    item: ConversationRenderItem;
+  }
+  | {
+    // Consecutive tool rows folded behind one summary toggle.
+    // 折叠在单个摘要开关后的连续工具记录。
+    kind: "tool-sequence";
+    // Stable collapse identity derived from the first tool row.
+    // 从首条工具记录派生的稳定折叠标识。
+    collapseId: string;
+    // Terminal tool rows that belong inside the measured fold.
+    // 属于可测量折叠区的终态工具记录。
+    completedItems: ConversationRenderItem[];
+    // Running tool rows that must remain visible below the fold summary.
+    // 必须保持显示在折叠摘要下方的运行中工具记录。
+    runningItems: ConversationRenderItem[];
+  };
+
+// groupVisibleProcessBodyEntries folds only consecutive visible tool rows.
+// groupVisibleProcessBodyEntries 仅折叠显示层面连续出现的工具记录。
+// Parameters: processId identifies the owning turn, items contains already display-filtered rows,
+// and sessionRunning resolves tool calls without an explicit terminal result.
+// 参数：processId 标识所属回合，items 包含已经过显示策略过滤的记录，sessionRunning 用于判定尚无明确终态结果的工具调用。
+// Returns: ordered single rows and tool-sequence groups without moving assistant content.
+// 返回值：保持顺序的单条记录与工具序列组，且不会移动 Assistant 内容。
+function groupVisibleProcessBodyEntries(
+  processId: string,
+  items: ConversationRenderItem[],
+  sessionRunning: boolean,
+): ConversationProcessBodyEntry[] {
+  // entries stores the final display order of single rows and folded tool sequences.
+  // entries 保存单条记录与折叠工具序列的最终显示顺序。
+  const entries: ConversationProcessBodyEntry[] = [];
+  // pendingToolItems accumulates the current uninterrupted visible tool run.
+  // pendingToolItems 累积当前未被打断的可见工具序列。
+  let pendingToolItems: ConversationRenderItem[] = [];
+  // flushPendingTools emits one fold only when at least two visible tool rows are consecutive.
+  // flushPendingTools 仅在至少两条可见工具记录连续时生成折叠组。
+  const flushPendingTools = () => {
+    if (pendingToolItems.length > 1) {
+      // firstItem provides a stable identity even while a running sequence gains more tools.
+      // firstItem 在运行中序列继续增加工具时仍提供稳定标识。
+      const firstItem = pendingToolItems[0];
+      // completedItems contains every terminal tool row that can be folded immediately.
+      // completedItems 包含所有可立即折叠的终态工具记录。
+      const completedItems: ConversationRenderItem[] = [];
+      // runningItems contains every active tool row that must stay expanded.
+      // runningItems 包含所有必须保持展开的活动工具记录。
+      const runningItems: ConversationRenderItem[] = [];
+      for (const item of pendingToolItems) {
+        // toolBlocks is the already-confirmed execution block set for the current tool row.
+        // toolBlocks 是当前工具行中已经确认的执行块集合。
+        const toolBlocks = item.blocks.filter(isMergeableToolBlock);
+        if (toolExecutionDisplayState(toolBlocks, sessionRunning) === "running") {
+          runningItems.push(item);
+        } else {
+          completedItems.push(item);
+        }
+      }
+      entries.push({
+        kind: "tool-sequence",
+        collapseId: `tool-sequence:${processId}:${firstItem.renderKey ?? firstItem.id}`,
+        completedItems,
+        runningItems,
+      });
+    } else if (pendingToolItems.length === 1) {
+      entries.push({ kind: "item", item: pendingToolItems[0] });
+    }
+    pendingToolItems = [];
+  };
+
+  for (const item of items) {
+    if (item.blocks.length > 0 && item.blocks.every(isMergeableToolBlock)) {
+      pendingToolItems.push(item);
+      continue;
+    }
+    flushPendingTools();
+    entries.push({ kind: "item", item });
+  }
+  flushPendingTools();
+  return entries;
+}
+
+// ConversationToolSequenceGroup renders one pure display-only fold for consecutive tool rows.
+// ConversationToolSequenceGroup 渲染一个仅用于显示的连续工具记录折叠组。
+// Parameters: collapseId preserves expansion memory, completedCount and runningCount label the summary,
+// completedChildren belongs to the fold, and runningChildren always remains visible.
+// 参数：collapseId 保留展开记忆，completedCount 与 runningCount 标注摘要，completedChildren 属于折叠区，runningChildren 始终可见。
+// Returns: one compact summary, a measured terminal-tool fold, and visible running rows.
+// 返回值：一个紧凑摘要、一个可测量终态工具折叠区，以及保持可见的运行中记录。
+function ConversationToolSequenceGroup(props: {
+  // Stable collapse identity for virtualization-safe expansion memory.
+  // 用于虚拟滚动安全展开记忆的稳定折叠标识。
+  collapseId: string;
+  // Number of terminal tool executions owned by the fold.
+  // 折叠区包含的终态工具执行数量。
+  completedCount: number;
+  // Number of active tool executions shown below the summary.
+  // 显示在摘要下方的活动工具执行数量。
+  runningCount: number;
+  // Rendered terminal tool rows owned by the measured fold.
+  // 可测量折叠区包含的终态工具记录。
+  completedChildren: React.ReactNode;
+  // Rendered active tool rows that remain visible until completion.
+  // 完成前始终保持可见的活动工具记录。
+  runningChildren: React.ReactNode;
+}) {
+  // t resolves the localized sequence summary.
+  // t 解析本地化工具序列摘要。
+  const { t } = useI18n();
+  // expanded stores virtualization-safe manual expansion state for this tool sequence.
+  // expanded 保存当前工具序列可安全跨虚拟滚动恢复的手动展开状态。
+  const [expanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, false);
+  // hasCompletedItems controls whether the summary has foldable terminal rows.
+  // hasCompletedItems 控制摘要当前是否拥有可折叠的终态记录。
+  const hasCompletedItems = props.completedCount > 0;
+  // summary reports terminal and active counts without exposing hidden thinking rows.
+  // summary 报告终态与活动数量，不暴露被隐藏的思考记录。
+  const summary = props.runningCount > 0
+    ? t("conversation.toolSequence.runningSummary")
+      .replace("{completed}", String(props.completedCount))
+      .replace("{running}", String(props.runningCount))
+    : t("conversation.toolSequence.summary").replace("{count}", String(props.completedCount));
+  return (
+    <section className="conversation-tool-sequence" data-expanded={expanded ? "true" : "false"}>
+      <button
+        aria-expanded={hasCompletedItems ? expanded : false}
+        className="conversation-tool-sequence-toggle"
+        disabled={!hasCompletedItems}
+        onClick={() => {
+          if (hasCompletedItems) {
+            setExpanded(!expanded);
+          }
+        }}
+        type="button"
+      >
+        <Workflow size={14} />
+        <span>{summary}</span>
+        {hasCompletedItems ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
+      </button>
+      {hasCompletedItems ? (
+        <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
+          <div className="conversation-tool-sequence-body">{props.completedChildren}</div>
+        </ConversationMeasuredCollapse>
+      ) : null}
+      {props.runningCount > 0 ? (
+        <div className="conversation-tool-sequence-running">{props.runningChildren}</div>
+      ) : null}
+    </section>
+  );
+}
 
 // ConversationProcessGroup renders one per-turn process header and its foldable rows.
 // ConversationProcessGroup 渲染单个轮次过程标题及其可折叠处理行。
@@ -145,6 +308,13 @@ export function ConversationProcessGroup(props: {
   const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
   const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
   const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
+  // visibleProcessBodyEntries groups only after thinking-display filtering establishes the visible sequence.
+  // visibleProcessBodyEntries 仅在思考显示过滤确定可见序列后执行组合。
+  const visibleProcessBodyEntries = groupVisibleProcessBodyEntries(
+    props.process.id,
+    visibleProcessItems,
+    props.sessionRunning,
+  );
   const visibleCollapsedProcessUserItems = collapsed ? visibleProcessItems.filter(isTurnProcessUserRenderItem) : [];
   const streamingProcessItemId = props.process.running ? visibleProcessItems.at(-1)?.id ?? null : null;
   const liveDurationMs = props.process.running
@@ -158,6 +328,45 @@ export function ConversationProcessGroup(props: {
     : t("conversation.process.stopped");
   const bodyVisible = !props.process.collapsible || !collapsed;
   const processBodyCollapseId = `process-body:${props.process.id}`;
+  // renderProcessBodyItem renders one original process row without changing its order or assistant semantics.
+  // renderProcessBodyItem 渲染单条原始过程记录，不改变其顺序或 Assistant 语义。
+  // Parameters: item is the original projected row.
+  // 参数：item 是原始投影记录。
+  // Returns: the standard process-row renderer with live-stream state preserved.
+  // 返回值：保留实时流状态的标准过程记录渲染器。
+  const renderProcessBodyItem = (item: ConversationRenderItem) => (
+    <ConversationRenderItemView
+      autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+      hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
+      expandedToolPresentationIds={props.expandedToolPresentationIds}
+      workspacePath={props.workspacePath}
+      commandSessions={props.commandSessions}
+      item={item}
+      itemStreaming={item.id === streamingProcessItemId}
+      key={item.id}
+      parentConversationId={props.parentConversationId}
+      sessionRunning={props.sessionRunning}
+      expandedUserPromptIds={props.expandedUserPromptIds}
+      onCopyText={props.onCopyText}
+      onEditUserPrompt={props.onEditUserPrompt}
+      userPromptEditDisabled={props.userPromptEditDisabled}
+      onOpenDetail={props.onOpenDetail}
+      onOpenMedia={props.onOpenMedia}
+      onOpenSubagentPanel={props.onOpenSubagentPanel}
+      pendingPlanArtifact={props.pendingPlanArtifact}
+      onPlanArtifactExecute={props.onPlanArtifactExecute}
+      onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+      onPlanArtifactCancel={props.onPlanArtifactCancel}
+      onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
+      onUserPromptExpandedChange={props.onUserPromptExpandedChange}
+      resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
+      resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+      onLoadToolDetail={props.onLoadToolDetail}
+      onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+      onTrace={props.onTrace}
+      forceEagerMarkdown
+    />
+  );
   return (
     <section
       className={cn("work-process-group", props.process.running && "running", props.process.stopped && "stopped")}
@@ -251,38 +460,19 @@ export function ConversationProcessGroup(props: {
       </div>
       <ConversationMeasuredCollapse collapseId={processBodyCollapseId} expanded={bodyVisible}>
         <div className="work-process-body">
-          {visibleProcessItems.map((item) => (
-            <ConversationRenderItemView
-              autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
-              hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
-              expandedToolPresentationIds={props.expandedToolPresentationIds}
-              workspacePath={props.workspacePath}
-              commandSessions={props.commandSessions}
-              item={item}
-              itemStreaming={item.id === streamingProcessItemId}
-              key={item.id}
-              parentConversationId={props.parentConversationId}
-              sessionRunning={props.sessionRunning}
-              expandedUserPromptIds={props.expandedUserPromptIds}
-              onCopyText={props.onCopyText}
-              onEditUserPrompt={props.onEditUserPrompt}
-              userPromptEditDisabled={props.userPromptEditDisabled}
-              onOpenDetail={props.onOpenDetail}
-              onOpenMedia={props.onOpenMedia}
-              onOpenSubagentPanel={props.onOpenSubagentPanel}
-              pendingPlanArtifact={props.pendingPlanArtifact}
-              onPlanArtifactExecute={props.onPlanArtifactExecute}
-              onPlanArtifactSuggest={props.onPlanArtifactSuggest}
-              onPlanArtifactCancel={props.onPlanArtifactCancel}
-              onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-              onUserPromptExpandedChange={props.onUserPromptExpandedChange}
-              resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
-              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-              onLoadToolDetail={props.onLoadToolDetail}
-              onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-              onTrace={props.onTrace}
-              forceEagerMarkdown
-            />
+          {visibleProcessBodyEntries.map((entry) => (
+            entry.kind === "item"
+              ? renderProcessBodyItem(entry.item)
+              : (
+                <ConversationToolSequenceGroup
+                  collapseId={entry.collapseId}
+                  completedChildren={entry.completedItems.map(renderProcessBodyItem)}
+                  completedCount={entry.completedItems.length}
+                  key={entry.collapseId}
+                  runningChildren={entry.runningItems.map(renderProcessBodyItem)}
+                  runningCount={entry.runningItems.length}
+                />
+              )
           ))}
           {props.process.stopped ? (
             <div className="work-process-stopped-note">

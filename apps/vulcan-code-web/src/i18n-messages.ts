@@ -196,6 +196,8 @@ export type TranslationKey =
   | "conversation.process.stoppedAfter"
   | "conversation.process.stopped"
   | "conversation.process.duration"
+  | "conversation.toolSequence.summary"
+  | "conversation.toolSequence.runningSummary"
   | "conversation.action.editPrompt"
   | "conversation.action.editPromptFailed"
   | "conversation.action.cancel"
@@ -1360,6 +1362,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.process.stoppedAfter": "你在 {duration} 后停止了",
     "conversation.process.stopped": "你已停止本轮工作",
     "conversation.process.duration": "持续 {duration}",
+    "conversation.toolSequence.summary": "已执行 {count} 次工具调用",
+    "conversation.toolSequence.runningSummary": "已执行 {completed} 次调用，正在调用 {running} 个工具",
     "conversation.action.editPrompt": "编辑用户输入",
     "conversation.action.editPromptFailed": "编辑用户输入失败",
     "conversation.action.cancel": "取消",
@@ -2521,6 +2525,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.process.stoppedAfter": "You stopped after {duration}",
     "conversation.process.stopped": "You stopped this turn",
     "conversation.process.duration": "Duration {duration}",
+    "conversation.toolSequence.summary": "Ran {count} tool calls",
+    "conversation.toolSequence.runningSummary": "Ran {completed} calls, running {running} tools",
     "conversation.action.editPrompt": "Edit user input",
     "conversation.action.editPromptFailed": "Edit user input failed",
     "conversation.action.cancel": "Cancel",

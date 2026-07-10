@@ -103,6 +103,48 @@
   display: none;
 }
 
+.conversation-tool-sequence {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.conversation-tool-sequence-toggle {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.conversation-tool-sequence-toggle:not(:disabled):hover,
+.conversation-tool-sequence-toggle:not(:disabled):focus-visible {
+  color: var(--foreground);
+}
+
+.conversation-tool-sequence-toggle:disabled {
+  cursor: default;
+}
+
+.conversation-tool-sequence-toggle > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-tool-sequence-body,
+.conversation-tool-sequence-running {
+  display: grid;
+  gap: 12px;
+}
+
 .work-process-stopped-note {
   justify-self: end;
   padding: 4px 0;
