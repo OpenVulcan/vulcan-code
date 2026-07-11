@@ -271,8 +271,8 @@ fn rtk_route_allowance_honors_selected_and_disabled_routes() {
     assert!(!rtk_support.allows_routes(&BTreeSet::from([String::from("cargo")])));
 }
 
-/// The VMM write tool should expose category mappings through schema text and registration help.
-/// VMM 写入工具应通过 schema 文案与注册说明暴露分类映射。
+/// The VMM write tool should expose numeric mappings and reserve profile extraction for the automatic pipeline.
+/// VMM 写入工具应暴露数值映射，并将画像提取保留给自动流程。
 #[test]
 fn vmm_memory_write_tool_documents_numeric_mappings() {
     let snapshot = Arc::new(NativeToolRuntimeSnapshot {
@@ -297,6 +297,9 @@ fn vmm_memory_write_tool_documents_numeric_mappings() {
     assert!(help_text.contains("5 = project_context"));
     assert!(help_text.contains("7 = security_policy"));
     assert!(help_text.contains("2 = P1/ordinary durable"));
+    assert!(help_text.contains("Do not proactively write user or system profile information"));
+    assert!(help_text.contains("Information the user explicitly asks to remember may be written"));
+    assert!(!help_text.contains("stable user preferences"));
     assert_eq!(item_properties["category"]["maximum"], json!(7));
     assert_eq!(item_properties["priority"]["maximum"], json!(3));
     assert_eq!(item_properties["memoryLevel"]["maximum"], json!(4));

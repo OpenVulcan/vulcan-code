@@ -221,7 +221,9 @@ fn vmm_turn_details_args_schema() -> Value {
 /// Returns Markdown usage guidance for the VMM direct memory-write tool.
 /// 返回 VMM 主动写记忆工具的 Markdown 使用说明。
 fn vmm_memory_write_usage_help_markdown() -> &'static str {
-    r#"Use `vmm_memory_write` only for explicit durable memories: stable user preferences, project facts, architecture/API decisions, long-lived requirements, verified bug/debt notes, and user-approved memory candidates. It writes memory rows only; it does not create a turn, timeline, or profile update by itself.
+    r#"Use `vmm_memory_write` only for explicit durable memories: project facts, architecture/API decisions, long-lived requirements, verified bug/debt notes, and specific facts or preferences the user explicitly asks to persist. It writes memory rows only; it does not create a turn, timeline, or profile update by itself.
+
+Do not proactively write user or system profile information; automatic profile extraction owns that data. Information the user explicitly asks to remember may be written.
 
 Avoid writing transient current-turn context, duplicate recalled memories, secrets, credentials, or speculative claims. When a memory was retrieved from VMM, do not write it back unless the user corrects, confirms, or materially extends it.
 
@@ -231,7 +233,7 @@ Each `items[]` entry requires:
 - `category`: numeric category: `0 = general`, `1 = architecture_decision`, `2 = tech_spec_api`, `3 = business_logic`, `4 = requirement_todo`, `5 = project_context`, `6 = logical_bug_debt`, `7 = security_policy`.
 
 Optional numeric fields:
-- `scopeLevel`: `0 = VMM default`, `1 = session`, `2 = project`, `3 = user`. Prefer `2` for project facts and `3` for stable user preferences.
+- `scopeLevel`: `0 = VMM default`, `1 = session`, `2 = project`, `3 = user`. Prefer `2` for project facts. Use `3` only for a user-scoped item the user explicitly requested to persist.
 - `priority`: `0 = VMM default`, `1 = P0/highest`, `2 = P1/ordinary durable`, `3 = P2/weak or tentative`.
 - `memoryLevel`: `0 = VMM infer/default`, `1 = L0`, `2 = L1`, `3 = L2`, `4 = L3`. Prefer `2` for ordinary durable project/user memories unless the user or VMM policy indicates otherwise."#
 }
@@ -266,7 +268,7 @@ pub(crate) fn vmm_memory_write_args_schema() -> Value {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 3,
-                            "description": "Optional VMM scope level: 0=VMM default, 1=session, 2=project, 3=user. Prefer 2 for project facts and 3 for stable user preferences."
+                            "description": "Optional VMM scope level: 0=VMM default, 1=session, 2=project, 3=user."
                         },
                         "priority": {
                             "type": "integer",
