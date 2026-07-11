@@ -156,7 +156,7 @@ pub struct ConversationSnapshot {
 
 /// Represents one canonical protocol message stored in the active conversation window.
 /// 表示存储在活动会话窗口中的一条规范协议消息。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationMessage {
     /// Stable message identifier owned by the local workbench.
     /// 由本地工作台持有的稳定消息标识。
@@ -168,7 +168,7 @@ pub struct ConversationMessage {
 
 /// Represents one durable transcript record stored outside the active message window.
 /// 表示存储在活动消息窗口之外的一条持久化转录记录。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationRecord {
     /// Stable record identifier shared by projection caches and checkpoints.
     /// 被投影缓存与检查点共享的稳定记录标识。
@@ -198,7 +198,7 @@ pub struct ConversationRecord {
 
 /// Represents one canonical assistant tool-call entry.
 /// 表示一条规范的助手工具调用项。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationToolCall {
     /// Stable tool-call item identifier emitted by the provider.
     /// 由 Provider 发出的稳定工具调用项标识。
@@ -293,7 +293,7 @@ pub struct ConversationAttachment {
 
 /// Represents one structured canonical payload inside the controller message window.
 /// 表示控制器消息窗口内部的一条结构化规范载荷。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConversationPayload {
     /// Plain user-authored text input.
     /// 纯文本用户输入。
@@ -332,9 +332,6 @@ pub enum ConversationPayload {
     /// Tool-result payload returned to the model after one assistant tool call.
     /// 在一次助手工具调用后回传给模型的工具结果载荷。
     ToolResult {
-        /// Stable tool-result identifier emitted by the provider or synthesized locally.
-        /// 由 Provider 发出或在本地合成的稳定工具结果标识。
-        tool_result_id: String,
         /// Optional provider-visible tool-call identifier linked to the result.
         /// 与该结果关联的可选 Provider 可见工具调用标识。
         tool_call_id: Option<String>,
@@ -420,7 +417,7 @@ fn xml_escape_text(value: &str) -> String {
 
 /// Represents the role that a transcript record should surface in the projection layer.
 /// 表示转录记录在投影层应呈现的角色。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TranscriptRole {
     /// User-originated content.
     /// 用户发起的内容。
@@ -450,7 +447,7 @@ pub enum TranscriptRole {
 
 /// Represents the durable record category used by the projection and checkpoint layers.
 /// 表示投影层与检查点层使用的持久化记录类别。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TranscriptRecordKind {
     /// The record should appear in the visible transcript.
     /// 该记录应出现在可见转录中。

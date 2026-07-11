@@ -48,7 +48,7 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
             false,
         );
         let mut controller =
-            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default()).expect("valid core conversation snapshot");
 
         let result = controller
             .run_user_turn(&adapter, &executor, &AllowAllToolPolicy, "请检查主入口文件")
@@ -153,7 +153,8 @@ fn run_user_turn_streaming_reuses_host_preseeded_user_prompt() {
                 }],
                 continuation: ProviderContinuation::default(),
             },
-        );
+        )
+        .expect("valid core conversation snapshot");
 
         let result = controller
             .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "请先分析文件")
@@ -196,7 +197,8 @@ fn run_seeded_turn_streaming_uses_preseeded_agent_message() {
         )]);
         let executor = MockToolExecutor::new();
         let mut controller =
-            VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
         controller.append_agent_message(AgentMessageAppendRequest {
             message_type: String::from("FINAL_ANSWER"),
             task_name: String::from("quick_agent"),
@@ -213,7 +215,7 @@ fn run_seeded_turn_streaming_uses_preseeded_agent_message() {
                 &executor,
                 &AllowAllToolPolicy,
                 |_, _| {},
-                |_| false,
+                |_| Ok(false),
             )
             .await
             .expect("run seeded streaming turn");
@@ -261,7 +263,8 @@ fn run_user_turn_fails_when_provider_turn_budget_is_exhausted() {
         let executor =
             MockToolExecutor::new().with_outcome("read_file", "已读取 src/lib.rs。", None, false);
         let mut controller =
-            VulcanCoreController::new(build_test_config(1), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(1), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
 
         let error = controller
             .run_user_turn(&adapter, &executor, &AllowAllToolPolicy, "请继续检查")

@@ -392,7 +392,8 @@ fn segmented_context_public_apis_write_state_and_turn_context() {
         created_at: String::from("101"),
     };
     let runtime_state = SessionRuntimeStateEntry {
-        conversation_state: conversation_state_from_session_messages(&[message]),
+        conversation_state: conversation_state_from_session_messages(&[message])
+            .expect("valid replayed conversation identities"),
         updated_at: String::from("101"),
         ..SessionRuntimeStateEntry::default()
     };
@@ -747,7 +748,8 @@ fn runtime_state_rebuild_from_recent_messages_preserves_continuation() {
 
     let continuation = runtime_state.conversation_state.continuation.clone();
     let mut rebuilt = runtime_state;
-    rebuilt.conversation_state = conversation_state_from_session_messages(&messages);
+    rebuilt.conversation_state = conversation_state_from_session_messages(&messages)
+        .expect("valid replayed conversation identities");
     rebuilt.conversation_state.continuation = continuation;
 
     assert_eq!(rebuilt.conversation_state.records.len(), 1);

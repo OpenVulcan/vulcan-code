@@ -481,24 +481,18 @@ fn project_tool_result_message(
     message: &CoreConversationMessage,
     active_tool_call_ids: &mut BTreeSet<String>,
 ) -> CoreConversationMessage {
-    let CoreConversationPayload::ToolResult {
-        tool_result_id,
-        tool_call_id,
-        text,
-    } = &message.payload
-    else {
+    let CoreConversationPayload::ToolResult { tool_call_id, text } = &message.payload else {
         return message.clone();
     };
     let tool_call_key = tool_call_id.as_deref().unwrap_or_default().trim();
     let payload = if !tool_call_key.is_empty() && active_tool_call_ids.remove(tool_call_key) {
         CoreConversationPayload::ToolResult {
-            tool_result_id: tool_result_id.clone(),
             tool_call_id: tool_call_id.clone(),
             text: text.clone(),
         }
     } else {
         CoreConversationPayload::UserText {
-            text: orphan_tool_result_text(tool_result_id, tool_call_id, text),
+            text: orphan_tool_result_text(&message.id, tool_call_id, text),
             attachments: Vec::new(),
         }
     };
@@ -570,11 +564,7 @@ fn tool_call_identifier_groups(tool_calls: &[CoreConversationToolCall]) -> Vec<V
 
 /// Builds a provider-visible plain-text fallback for a tool result whose matching tool call was compacted away.
 /// 为匹配工具调用已被压缩移除的工具结果构建 Provider 可见的纯文本回退内容。
-fn orphan_tool_result_text(
-    tool_result_id: &str,
-    tool_call_id: &Option<String>,
-    text: &str,
-) -> String {
+fn orphan_tool_result_text(message_id: &str, tool_call_id: &Option<String>, text: &str) -> String {
     let call_label = tool_call_id
         .as_deref()
         .map(str::trim)
@@ -582,7 +572,7 @@ fn orphan_tool_result_text(
         .unwrap_or("unknown");
     format!(
         "ERROR: Tool result `{}` cannot be replayed as a tool response because matching assistant tool call `{}` is no longer present in context. Treat the following as historical text only.\n\n{}",
-        tool_result_id, call_label, text
+        message_id, call_label, text
     )
 }
 
@@ -617,11 +607,8 @@ fn partial_tool_batch_text(
     if !result_messages.is_empty() {
         lines.push(String::from("Completed tool results:"));
         for result_message in result_messages {
-            if let CoreConversationPayload::ToolResult {
-                tool_result_id,
-                tool_call_id,
-                text,
-            } = &result_message.payload
+            if let CoreConversationPayload::ToolResult { tool_call_id, text } =
+                &result_message.payload
             {
                 let call_label = tool_call_id
                     .as_deref()
@@ -629,8 +616,8 @@ fn partial_tool_batch_text(
                     .filter(|value| !value.is_empty())
                     .unwrap_or("unknown");
                 lines.push(format!(
-                    "- result={} call={}: {}",
-                    tool_result_id,
+                    "- message={} call={}: {}",
+                    result_message.id,
                     call_label,
                     text.trim()
                 ));

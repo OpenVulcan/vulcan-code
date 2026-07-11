@@ -305,7 +305,7 @@ pub(crate) async fn hydrate_selected_session_runtime_if_needed(
     };
     match hydration_result {
         Ok(hydration) => {
-            apply_selected_session_runtime_hydration(workspace_snapshot, session_id, hydration);
+            apply_selected_session_runtime_hydration(workspace_snapshot, session_id, hydration)?;
         }
         Err(error) if is_missing_segmented_session_file_error(&error) => {}
         Err(error) => return Err(error),
@@ -328,19 +328,22 @@ pub(crate) async fn hydrate_selected_session_runtime_if_needed(
 ///
 /// # Returns
 /// 返回值
-/// Applies the runtime context and hydration marker without returning a fallible result.
-/// 应用运行态上下文与水合标记，不返回可失败结果。
+/// Applies the validated runtime context and hydration marker, or returns the exact replay identity failure.
+/// 应用经过校验的运行态上下文与水合标记，或返回准确的重放身份失败。
 pub(crate) fn apply_selected_session_runtime_hydration(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     hydration: SessionHydrationSnapshot,
-) {
+) -> Result<(), String> {
     let SessionHydrationSnapshot {
         messages,
         tool_detail_messages,
-        runtime_state,
+        mut runtime_state,
         ..
     } = hydration;
+    if let Some(runtime_state) = runtime_state.as_mut() {
+        sanitize_runtime_state_legacy_goal_internal_messages(runtime_state)?;
+    }
     match workspace_snapshot.session_messages.entry(session_id) {
         std::collections::btree_map::Entry::Vacant(entry) => {
             let messages = hydration_messages_with_tool_details(messages, tool_detail_messages);
@@ -350,13 +353,13 @@ pub(crate) fn apply_selected_session_runtime_hydration(
             append_unique_session_messages(entry.get_mut(), tool_detail_messages);
         }
     }
-    if let Some(mut runtime_state) = runtime_state {
-        sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state);
+    if let Some(runtime_state) = runtime_state {
         workspace_snapshot
             .session_runtime_state
             .insert(session_id, runtime_state);
     }
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
+    Ok(())
 }
 
 /// Applies one session hydration snapshot to the submit workspace snapshot.
@@ -395,7 +398,7 @@ pub(crate) fn apply_submission_session_hydration(
         .session_messages
         .insert(session_id, messages);
     if let Some(mut runtime_state) = runtime_state {
-        sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state);
+        sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state)?;
         workspace_snapshot
             .session_runtime_state
             .insert(session_id, runtime_state);

@@ -52,6 +52,11 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     auto_compaction_already_attempted: bool,
 ) {
     let session_id = request.session_id;
+    let session_goal_id = request
+        .session_goal_context
+        .as_ref()
+        .map(|context| context.goal_id.clone());
+    let active_stream_task_id = Uuid::new_v4();
     webui_after_precheck_trace(
         "after_precheck_19_stream_task_scheduled",
         format!("session={session_id}"),
@@ -62,7 +67,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         .ok()
         .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
     let task_state = state.clone();
-    let handle = spawn_service_task(async move {
+    let registration_failure_app = app.clone();
+    let registration_failure_state = state.clone();
+    let task_future = async move {
         let stream_task_started_at = current_unix_millis_value();
         webui_after_precheck_trace(
             "after_precheck_20_stream_task_entered",
@@ -167,6 +174,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                         session_id,
                         stream_task_started_at,
                         auto_compaction_already_attempted,
+                        active_stream_task_id,
                     )
                     .await
                     {
@@ -593,13 +601,16 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             "[webui-service] live context budget usage update failed: {error}"
                         );
                     }
-                    if let Err(error) = cache_session_goal_live_usage_from_checkpoint(
-                        &task_state,
-                        session_id,
-                        &conversation_state,
-                        provider_request_count,
-                        true,
-                    ) {
+                    if let Some(goal_context) = request.session_goal_context.as_ref()
+                        && let Err(error) = cache_session_goal_live_usage_from_checkpoint(
+                            &task_state,
+                            session_id,
+                            &conversation_state,
+                            provider_request_count,
+                            true,
+                            &goal_context.goal_id,
+                        )
+                    {
                         eprintln!("[webui-service] session goal live usage update failed: {error}");
                     }
                     if let Err(error) = apply_conversation_checkpoint(
@@ -630,6 +641,43 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                                 .unwrap_or(0)
                         ),
                     );
+                    let owns_active_stream_entry = match task_state.lock() {
+                        Ok(mut guard) => {
+                            let owns_entry = remove_active_stream_task_if_id(
+                                &mut guard,
+                                finished_session_id,
+                                active_stream_task_id,
+                            )
+                            .is_some();
+                            if owns_entry {
+                                finish_webui_session_kernel_turn(
+                                    &mut guard,
+                                    finished_session_id,
+                                    if report.error.is_some() {
+                                        TurnTerminalStatus::Failed
+                                    } else {
+                                        TurnTerminalStatus::Completed
+                                    },
+                                );
+                            }
+                            owns_entry
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] finish stream ownership check failed: {error}"
+                            );
+                            false
+                        }
+                    };
+                    if !owns_active_stream_entry {
+                        webui_trace(
+                            "stream_finished_skipped_stale_owner",
+                            format!(
+                                "session={finished_session_id} task_id={active_stream_task_id}"
+                            ),
+                        );
+                        break;
+                    }
                     if let Err(error) =
                         record_webui_provider_response_checkpoint(&controller_runtime, &report)
                     {
@@ -651,18 +699,6 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     .await
                     {
                         eprintln!("[webui-service] session goal accounting failed: {error}");
-                    }
-                    if let Ok(mut guard) = task_state.lock() {
-                        guard.active_stream_tasks.remove(&finished_session_id);
-                        finish_webui_session_kernel_turn(
-                            &mut guard,
-                            finished_session_id,
-                            if report.error.is_some() {
-                                TurnTerminalStatus::Failed
-                            } else {
-                                TurnTerminalStatus::Completed
-                            },
-                        );
                     }
                     let terminal_lifecycle = report
                         .turn_completed_boundary_event(
@@ -789,17 +825,33 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 "stream_task_ended_without_finished",
                 format!("session={session_id}"),
             );
-            guard.active_stream_tasks.remove(&session_id);
-            finish_webui_session_kernel_turn(&mut guard, session_id, TurnTerminalStatus::Stopped);
+            if remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id)
+                .is_some()
+            {
+                finish_webui_session_kernel_turn(
+                    &mut guard,
+                    session_id,
+                    TurnTerminalStatus::Stopped,
+                );
+            }
         }
-    });
-    if let Ok(mut guard) = state.lock()
-        && let Some(previous_task) = guard.active_stream_tasks.insert(session_id, handle)
-    {
-        webui_trace(
-            "stream_task_abort_previous",
-            format!("session={session_id}"),
+    };
+    if let Err(error) = spawn_registered_active_stream_task(
+        &state,
+        session_id,
+        active_stream_task_id,
+        session_goal_id,
+        task_future,
+    ) {
+        eprintln!("[webui-service] register stream task failed: {error}");
+        if let Ok(mut guard) = registration_failure_state.lock() {
+            finish_webui_session_kernel_turn(&mut guard, session_id, TurnTerminalStatus::Failed);
+        }
+        let _ = apply_session_phase(
+            &registration_failure_app,
+            &registration_failure_state,
+            session_id,
+            SessionRunPhase::Failed,
         );
-        previous_task.abort();
     }
 }

@@ -134,7 +134,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       metadata: {
         tool_call_id: "preview-service-startup",
         tool_name: "service_startup_snapshot",
-        tool_result_id: "tool-result-preview-service-startup",
       },
     },
   ],

@@ -1,5 +1,9 @@
 use super::*;
 
+/// Host-result kind used by tools to return structured failure details before invocation identity is attached.
+/// 工具在附加调用身份前返回结构化失败详情时使用的宿主结果类型。
+pub const VULCAN_TOOL_ERROR_DETAIL_KIND: &str = "tool_error_detail";
+
 /// Stable execution mode used when resolving the final AI-visible tool surface.
 /// 在解析最终 AI 可见工具面时使用的稳定执行模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +113,38 @@ impl VulcanToolInvocationResult {
         Self {
             model_output,
             host_result: None,
+        }
+    }
+
+    /// Builds one tool-owned structured failure before the runtime attaches trusted invocation identity.
+    /// 在运行时附加可信调用身份前构建一条工具自有结构化失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `error`: Human-readable failure text required by every tool-error projection.
+    /// - `error`：每个工具错误投影都必须包含的人类可读失败文本。
+    /// - `details`: Tool-domain failure facts that do not contain invocation identity.
+    /// - `details`：不包含调用身份的工具领域失败事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Model-visible failure plus host-only error details for bridge canonicalization.
+    /// 供模型可见的失败与供桥接规范化的宿主专用错误详情。
+    pub fn from_tool_error_details(error: impl Into<String>, details: Value) -> Self {
+        let mut payload = Map::new();
+        payload.insert(
+            String::from("status"),
+            Value::String(String::from("failed")),
+        );
+        payload.insert(String::from("error"), Value::String(error.into()));
+        payload.insert(String::from("details"), details);
+        let payload = Value::Object(payload);
+        Self {
+            model_output: payload.clone(),
+            host_result: Some(VulcanToolHostResult {
+                kind: String::from(VULCAN_TOOL_ERROR_DETAIL_KIND),
+                payload,
+            }),
         }
     }
 

@@ -69,7 +69,8 @@ pub fn apply_task_session_compaction_result(
         compaction_result.created_at.clone(),
         compaction_result.source_until_message_id.as_deref(),
         compaction_result.policy,
-    );
+    )
+    .map_err(to_store_error)?;
     vulcan_context_compaction::compact_conversation_records_after_summary(
         &mut conversation_state,
         &summary_message_id,

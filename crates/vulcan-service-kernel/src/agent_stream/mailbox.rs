@@ -2,6 +2,8 @@
 //! WebUI mailbox 与 wait-agent 辅助函数。
 
 use super::*;
+use crate::pending_prompts::webui_pending_prompt_dispatch_context;
+use vulcan_workbench_model::take_runtime_intervention_guided_pending_prompt_entries;
 
 /// Builds the WebUI runtime intervention that injects guided prompts before the next provider request.
 /// 构建 WebUI 运行时干预器，用于在下一次 Provider 请求前注入引导提示词。
@@ -26,52 +28,188 @@ pub(crate) fn build_webui_prompt_intervention(
     ai_tool_configuration: PersistedAiToolConfiguration,
 ) -> RuntimePromptIntervention {
     Arc::new(move |session_id, controller: &mut VulcanCoreController| {
-        match take_webui_internal_guidance_prompts(
-            &app,
-            &state,
-            &provider_configuration,
-            session_id,
-        ) {
-            Ok(entries) => {
-                let pending_prompt_changed = entries
-                    .iter()
-                    .filter_map(|entry| {
-                        let (prompt, attachments) = normalize_webui_interjected_prompt_for_provider(
-                            &provider_configuration,
-                            &ai_tool_configuration,
-                            entry,
-                        );
-                        controller.append_interjected_user_turn_with_attachments(
-                            prompt.as_str(),
-                            attachments,
-                        )
-                    })
-                    .count()
-                    > 0;
-                if !entries.is_empty()
-                    && let Err(error) = emit_pending_prompts_changed_delta(&app, &state, session_id)
-                {
-                    eprintln!(
-                        "[webui-service] guided prompt queue delta emit failed after runtime intervention: {error}"
-                    );
-                }
-                let mailbox_changed = match append_webui_mailbox_intervention_messages(
-                    &state, session_id, controller,
-                ) {
-                    Ok(changed) => changed,
-                    Err(error) => {
-                        eprintln!("[webui-service] mailbox intervention append failed: {error}");
-                        false
-                    }
-                };
-                pending_prompt_changed || mailbox_changed
-            }
-            Err(error) => {
-                eprintln!("[webui-service] apply guided prompt intervention failed: {error}");
-                false
-            }
+        let (pending_queue_changed, controller_changed) =
+            apply_webui_prompt_intervention_transaction(
+                &state,
+                &provider_configuration,
+                &ai_tool_configuration,
+                session_id,
+                controller,
+            )?;
+        if pending_queue_changed
+            && let Err(error) = emit_pending_prompts_changed_delta(&app, &state, session_id)
+        {
+            eprintln!(
+                "[webui-service] guided prompt queue delta emit failed after runtime intervention: {error}"
+            );
         }
+        Ok(controller_changed)
     })
+}
+
+/// Applies guided prompts and mailbox inputs as one retained-state and Core-controller transaction.
+/// 将引导提示词与 mailbox 输入作为单个保留状态和 Core 控制器事务应用。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the workspace queue state and live session kernel.
+/// `state` 持有工作区队列状态与实时会话内核。
+/// `provider_configuration` supplies the shared pending-prompt dispatch context.
+/// `provider_configuration` 提供共享待发送提示词分发上下文。
+/// `ai_tool_configuration` controls provider normalization for guided attachments.
+/// `ai_tool_configuration` 控制引导附件的 Provider 归一化。
+/// `session_id` identifies the session reaching the safe Provider boundary.
+/// `session_id` 标识到达安全 Provider 边界的会话。
+/// `controller` owns the authoritative Core snapshot committed only after every draft succeeds.
+/// `controller` 持有仅在全部草稿成功后提交的权威 Core 快照。
+///
+/// # Returns
+/// 返回值
+/// Returns whether the pending queue and controller changed, or an error with every authoritative input unchanged.
+/// 返回待发送队列与控制器是否变化；失败时返回错误且全部权威输入保持不变。
+fn apply_webui_prompt_intervention_transaction(
+    state: &SharedServiceBridgeState,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+    session_id: SessionId,
+    controller: &mut VulcanCoreController,
+) -> Result<(bool, bool), RuntimePromptInterventionError> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| RuntimePromptInterventionError::StateAccess {
+            message: format!("failed to lock service state: {error}"),
+        })?;
+    let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        RuntimePromptInterventionError::StateUnavailable {
+            message: String::from("workspace snapshot is not ready"),
+        }
+    })?;
+    let dispatch_context =
+        webui_pending_prompt_dispatch_context(workspace, provider_configuration, session_id, false);
+    // runtime_state_draft isolates only the session-scoped pending UI state that this transaction can modify.
+    // runtime_state_draft 仅隔离该事务能够修改的会话级待发送 UI 状态。
+    let mut runtime_state_draft = workspace.session_runtime_state.get(&session_id).cloned();
+    // controller_draft makes guided and mailbox projections one Core commit.
+    // controller_draft 使引导投影与 mailbox 投影成为一次 Core 提交。
+    let mut controller_draft = controller.clone();
+    // guided_entries are removed only from the detached workspace draft.
+    // guided_entries 仅从分离的工作区草稿中移除。
+    let guided_entries = runtime_state_draft
+        .as_mut()
+        .map(|runtime_state| {
+            take_runtime_intervention_guided_pending_prompt_entries(
+                &mut runtime_state.ui_state,
+                dispatch_context,
+            )
+        })
+        .unwrap_or_default();
+    let mut guided_prompt_changed = false;
+    for entry in &guided_entries {
+        let (prompt, attachments) = normalize_webui_interjected_prompt_for_provider(
+            provider_configuration,
+            ai_tool_configuration,
+            entry,
+        );
+        guided_prompt_changed |= controller_draft
+            .append_interjected_user_turn_with_attachments(prompt.as_str(), attachments)
+            .is_some();
+    }
+    if !guided_entries.is_empty()
+        && let Some(runtime_state) = runtime_state_draft.as_mut()
+    {
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+    // kernel_draft isolates mailbox drains and consumption markers from conversion failures.
+    // kernel_draft 隔离 mailbox 取出与消费标记，避免转换失败污染权威状态。
+    let mut kernel_draft = guard.session_runtime_kernels.get(&session_id).cloned();
+    let mailbox_changed = match kernel_draft.as_mut() {
+        Some(kernel) => append_webui_mailbox_intervention_messages_to_draft(
+            kernel,
+            session_id,
+            &mut controller_draft,
+        )?,
+        None => false,
+    };
+
+    if let Some(runtime_state) = runtime_state_draft {
+        guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| RuntimePromptInterventionError::StateUnavailable {
+                message: String::from("workspace snapshot is not ready during commit"),
+            })?
+            .session_runtime_state
+            .insert(session_id, runtime_state);
+    }
+    if mailbox_changed && let Some(kernel) = kernel_draft {
+        guard.session_runtime_kernels.insert(session_id, kernel);
+        sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
+    }
+    *controller = controller_draft;
+    Ok((
+        !guided_entries.is_empty(),
+        guided_prompt_changed || mailbox_changed,
+    ))
+}
+
+/// Appends current-turn mailbox messages to detached kernel and controller drafts.
+/// 将当前回合 mailbox 消息追加到分离的内核与控制器草稿。
+///
+/// # Parameters
+/// 参数
+/// `kernel` is the detached session kernel whose input queue may be drained.
+/// `kernel` 是输入队列可被取出的分离会话内核。
+/// `session_id` identifies the parent WebUI session encoded into typed messages.
+/// `session_id` 标识编码到类型化消息中的父 WebUI 会话。
+/// `controller` is the detached Core controller receiving all converted messages.
+/// `controller` 是接收全部已转换消息的分离 Core 控制器。
+///
+/// # Returns
+/// 返回值
+/// Returns whether mailbox input was appended, or a conversion error without touching authoritative state.
+/// 返回是否追加了 mailbox 输入；转换失败时返回错误且不修改权威状态。
+fn append_webui_mailbox_intervention_messages_to_draft(
+    kernel: &mut SessionRuntimeKernel,
+    session_id: SessionId,
+    controller: &mut VulcanCoreController,
+) -> Result<bool, RuntimePromptInterventionError> {
+    if kernel.has_wait_scopes() {
+        return Ok(false);
+    }
+    // inputs are cloned from the draft before any drain so every conversion must succeed first.
+    // inputs 在任何取出动作前从草稿克隆，因此全部转换必须先成功。
+    let inputs = kernel
+        .input_queue()
+        .get_pending_input()
+        .into_iter()
+        .filter(|input| input.kind == TurnInputKind::SubagentMessage)
+        .collect::<Vec<_>>();
+    if inputs.is_empty() {
+        return Ok(false);
+    }
+    // messages materializes the full typed batch before changing either draft.
+    // messages 在修改任一草稿前物化完整类型化批次。
+    let messages = inputs
+        .iter()
+        .map(|input| webui_provider_visible_agent_message_from_turn_input(session_id, input))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|message| RuntimePromptInterventionError::InvalidInput { message })?;
+    for message in messages {
+        controller.append_agent_message(message.to_core_append_request());
+    }
+    let drained_inputs = kernel
+        .input_queue_mut()
+        .drain_current_turn_inputs_by_kind(TurnInputKind::SubagentMessage);
+    if drained_inputs.len() != inputs.len() {
+        return Err(RuntimePromptInterventionError::InvariantViolation {
+            message: format!(
+                "Mailbox intervention expected to drain {} subagent input(s) but drained {}.",
+                inputs.len(),
+                drained_inputs.len()
+            ),
+        });
+    }
+    Ok(true)
 }
 
 /// Appends current-turn mailbox messages to the controller as typed inter-agent messages.
@@ -90,38 +228,39 @@ pub(crate) fn build_webui_prompt_intervention(
 /// 返回值
 /// `true` when at least one mailbox message was appended.
 /// 至少追加一条 mailbox 消息时返回 `true`。
+#[cfg(test)]
 pub(crate) fn append_webui_mailbox_intervention_messages(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     controller: &mut VulcanCoreController,
-) -> Result<bool, String> {
+) -> Result<bool, RuntimePromptInterventionError> {
     let mut guard = state
         .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let Some(kernel) = guard.session_runtime_kernels.get_mut(&session_id) else {
+        .map_err(|error| RuntimePromptInterventionError::StateAccess {
+            message: format!("failed to lock service state: {error}"),
+        })?;
+    let Some(mut kernel_draft) = guard.session_runtime_kernels.get(&session_id).cloned() else {
         return Ok(false);
     };
-    if kernel.has_wait_scopes() {
+    let mut controller_draft = controller.clone();
+    let changed = append_webui_mailbox_intervention_messages_to_draft(
+        &mut kernel_draft,
+        session_id,
+        &mut controller_draft,
+    )?;
+    if !changed {
         return Ok(false);
     }
-    let inputs = kernel
-        .input_queue_mut()
-        .drain_current_turn_inputs_by_kind(TurnInputKind::SubagentMessage);
-    if inputs.is_empty() {
-        return Ok(false);
-    }
-    let mut appended = 0usize;
-    for input in inputs {
-        let message = webui_provider_visible_agent_message_from_turn_input(session_id, &input)?;
-        controller.append_agent_message(message.to_core_append_request());
-        appended = appended.saturating_add(1);
-    }
+    guard
+        .session_runtime_kernels
+        .insert(session_id, kernel_draft);
     sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
+    *controller = controller_draft;
     webui_trace(
         "mailbox_agent_messages_appended",
-        format!("session={session_id} appended={appended}"),
+        format!("session={session_id}"),
     );
-    Ok(appended > 0)
+    Ok(true)
 }
 
 /// Renders one queued WebUI mailbox input as a Codex-compatible inter-agent message.

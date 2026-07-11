@@ -77,29 +77,6 @@ impl SegmentedTaskSessionStore {
         load_main_session_task_mirror_summaries(&self.root_session_dir)
     }
 
-    /// Returns whether the root main-session metadata document exists.
-    /// 返回根主会话元数据文档是否存在。
-    pub fn root_session_metadata_exists(&self) -> bool {
-        self.root_session_dir.join(SEGMENTED_METADATA_FILE).exists()
-    }
-
-    /// Returns whether the root metadata contains the task mirror array.
-    /// 返回根元数据是否包含子任务镜像数组。
-    pub fn root_session_task_mirror_exists(&self) -> Result<bool, SessionStoreError> {
-        let metadata_path = self.root_session_dir.join(SEGMENTED_METADATA_FILE);
-        if !metadata_path.exists() {
-            return Ok(false);
-        }
-        let metadata = read_required_json::<Value>(&metadata_path)?;
-        Ok(metadata.get("tasks").is_some_and(Value::is_array))
-    }
-
-    /// Returns whether the root session has a task-session directory.
-    /// 返回根会话是否存在子任务会话目录。
-    pub fn task_session_directory_exists(&self) -> bool {
-        self.root_session_dir.join(SEGMENTED_TASK_DIR).is_dir()
-    }
-
     /// Resolves the on-disk directory for one existing task session.
     /// 解析一个已存在子任务会话的磁盘目录。
     ///
@@ -240,8 +217,9 @@ impl SegmentedTaskSessionStore {
             .task_root_dir()
             .join(sanitize_file_component(&expected_id));
         let direct_metadata_path = task_metadata_path(&direct_task_dir);
-        if direct_metadata_path.exists()
-            && let Some(document) = read_task_metadata_document(&direct_metadata_path)?
+        // document is read once so no stale existence observation precedes parsing.
+        // document 只读取一次，因此解析前不存在过期的存在性观察。
+        if let Some(document) = read_task_metadata_document(&direct_metadata_path)?
             && document.task_session.task_session_id.to_string() == expected_id
         {
             return Ok(Some(direct_task_dir));
@@ -261,10 +239,19 @@ impl SegmentedTaskSessionStore {
     ) -> Result<Vec<(PathBuf, SegmentedTaskMetadataDocument)>, SessionStoreError> {
         let mut documents = Vec::new();
         let task_root = self.task_root_dir();
-        if !task_root.exists() {
-            return Ok(documents);
-        }
-        for entry in fs::read_dir(&task_root).map_err(to_store_error)? {
+        // entries uses `read_dir` as the authoritative existence and readability check.
+        // entries 使用 `read_dir` 作为存在性与可读性的权威检查。
+        let entries = match fs::read_dir(&task_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(documents),
+            Err(error) => {
+                return Err(SessionStoreError::new(format!(
+                    "Failed to read task directory root `{}`: {error}",
+                    task_root.display()
+                )));
+            }
+        };
+        for entry in entries {
             let entry = entry.map_err(to_store_error)?;
             let task_dir = entry.path();
             if !task_dir.is_dir() {

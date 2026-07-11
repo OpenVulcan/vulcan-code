@@ -83,7 +83,8 @@ pub use runtime_kernel::{
 pub use selector::{normalize_tool_selector, normalized_tool_selector_set, tool_selector_matches};
 pub use store::{SessionNodeStore, SessionStoreError};
 pub use subagent_registry::{
-    SessionSegmentSummary, SubagentKind, SubagentRegistry, SubagentRegistryEntry, SubagentStatus,
+    SessionSegmentSummary, SubagentKind, SubagentRegistry, SubagentRegistryEntry,
+    SubagentRegistryError, SubagentStatus,
 };
 pub use turn_input_queue::{MailboxDeliveryPhase, TurnInput, TurnInputKind, TurnInputQueue};
 

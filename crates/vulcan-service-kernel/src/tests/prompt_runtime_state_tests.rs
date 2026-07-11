@@ -2,6 +2,7 @@
 //! prompt runtime state tests。
 
 use super::*;
+use crate::session_goal_lifecycle::update_session_goal_live_usage;
 
 /// Verifies the initial WebUI prompt snapshot keeps memory recall visible instead of downgrading to a generic request cue.
 /// 验证 WebUI 提示词初始快照会保留记忆召回显示，而不是降级成通用请求提示。
@@ -80,7 +81,8 @@ fn ensure_webui_session_runtime_state_keeps_display_rows_out_of_dialogue_context
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, Some("turn-1"));
+    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, Some("turn-1"))
+        .expect("valid hydrated runtime identities");
 
     let runtime_state = workspace_snapshot
         .session_runtime_state
@@ -224,8 +226,10 @@ fn retained_submission_context_accepts_runtime_dialogue_context() {
     let runtime_state =
         SessionRuntimeStateEntry {
             conversation_state: conversation_state_from_session_messages(&[
-                SessionMessageEntry::new(SessionMessageKind::User, "用户", "继续之前的问题"),
-            ]),
+                SessionMessageEntry::new(SessionMessageKind::User, "用户", "继续之前的问题")
+                    .with_runtime_metadata("dialogue-user-1", "1"),
+            ])
+            .expect("valid replayed conversation identities"),
             ..SessionRuntimeStateEntry::default()
         };
     // workspace_snapshot simulates a retained snapshot whose dialogue layer is ready.
@@ -278,8 +282,10 @@ fn display_session_messages_prefer_display_window_over_dialogue_context() {
     let runtime_state =
         SessionRuntimeStateEntry {
             conversation_state: conversation_state_from_session_messages(&[
-                SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "对话层正文"),
-            ]),
+                SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "对话层正文")
+                    .with_runtime_metadata("dialogue-assistant-1", "1"),
+            ])
+            .expect("valid replayed conversation identities"),
             ..SessionRuntimeStateEntry::default()
         };
     // workspace_snapshot carries both layers so the projection priority can be checked directly.
@@ -608,6 +614,67 @@ fn goal_token_delta_ignores_subagent_usage_groups_inside_regular_stats() {
     });
 
     assert_eq!(goal_token_delta_for_turn_stats(&stats), Some(24));
+}
+
+/// Verifies live Goal usage follows the bound budget stage across terminal lifecycle states.
+/// 验证实时 Goal 用量会在终态生命周期状态下继续跟随绑定预算阶段。
+#[test]
+fn live_goal_usage_updates_bound_paused_and_complete_stages() {
+    let stats = SessionTurnStats {
+        turn_kind: SessionTurnStatsKind::UserTurn,
+        provider_call_count: 2,
+        tool_call_count: 3,
+        input_tokens: 30,
+        cached_input_tokens: Some(10),
+        output_tokens: 4,
+        reasoning_tokens: 1,
+        total_tokens: 35,
+        ..SessionTurnStats::default()
+    };
+    let mut goal = SessionGoalSummary {
+        session_id: SessionId::new_v4().to_string(),
+        goal_id: String::from("goal-stage-current"),
+        objective: String::from("验证实时用量"),
+        status: SessionGoalStatus::Paused,
+        token_budget: Some(1_000),
+        tokens_used: 100,
+        usage_tokens: 100,
+        api_call_count: 0,
+        tool_call_count: 0,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        time_used_seconds: 0,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+    };
+
+    assert!(update_session_goal_live_usage(
+        &mut goal,
+        &stats,
+        true,
+        "goal-stage-current"
+    ));
+    assert_eq!(goal.usage_tokens, 125);
+    assert_eq!(goal.api_call_count, 2);
+    assert_eq!(goal.tool_call_count, 3);
+
+    goal.status = SessionGoalStatus::Complete;
+    assert!(update_session_goal_live_usage(
+        &mut goal,
+        &stats,
+        false,
+        "goal-stage-current"
+    ));
+    assert_eq!(goal.usage_tokens, 100);
+    assert!(!update_session_goal_live_usage(
+        &mut goal,
+        &stats,
+        true,
+        "goal-stage-replacement"
+    ));
+    assert_eq!(goal.usage_tokens, 100);
 }
 
 /// Verifies runtime-only compaction sources do not become display fallback rows.

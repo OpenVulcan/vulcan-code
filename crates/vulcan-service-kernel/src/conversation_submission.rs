@@ -154,10 +154,11 @@ pub(super) async fn service_submit_conversation_prompt(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         if let Some(session_id) = submission_session_id
-            && guard.session_lifecycle_transition_ids.contains(&session_id)
+            && let Some(reservation) = guard.session_turn_admission_reservations.get(&session_id)
         {
             return Err(format!(
-                "会话 `{session_id}` 正在执行归档或移除转换，无法提交新的提示词。"
+                "会话 `{session_id}` 已由 {} 预留，无法提交新的提示词。",
+                reservation.kind.diagnostic_label()
             ));
         }
         // retained_owner_project_id resolves an existing session owner when the request omits projectId.
@@ -179,15 +180,15 @@ pub(super) async fn service_submit_conversation_prompt(
             .or(retained_owner_project_id.as_deref());
         if let Some(lifecycle_project_id) = lifecycle_project_id {
             if guard
-                .project_lifecycle_transition_ids
-                .contains(lifecycle_project_id)
+                .project_lifecycle_transition_reservations
+                .contains_key(lifecycle_project_id)
             {
                 return Err(format!(
                     "项目 `{lifecycle_project_id}` 正在执行批量归档或移除转换，无法创建或运行子会话。"
                 ));
             }
         } else if submission_session_id.is_none()
-            && !guard.project_lifecycle_transition_ids.is_empty()
+            && !guard.project_lifecycle_transition_reservations.is_empty()
         {
             return Err(String::from(
                 "项目生命周期转换正在进行，未指定所属项目的新会话暂时无法提交。",
@@ -400,7 +401,7 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(materialize_started_at)
         ),
     );
-    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None);
+    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)?;
     ensure_session_ai_tool_configuration(
         &mut workspace_snapshot,
         session_id,

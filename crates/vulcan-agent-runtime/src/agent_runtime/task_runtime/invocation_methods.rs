@@ -330,14 +330,13 @@ impl TaskRuntime {
         let registry = self.subagent_registry_snapshot()?;
         let mut session_ids = BTreeSet::new();
         for target in target_selectors {
-            let entry = registry.get(target).ok_or_else(|| {
-                format!("Unknown child agent `{target}` for parent session `{current_session_id}`.")
-            })?;
-            if entry.parent_session_id != parent_session_id {
-                return Err(format!(
-                    "Child agent `{target}` does not belong to parent session `{current_session_id}`."
-                ));
-            }
+            let entry = registry
+                .get_for_parent(parent_session_id, target)
+                .ok_or_else(|| {
+                    format!(
+                        "Unknown child agent `{target}` for parent session `{current_session_id}`."
+                    )
+                })?;
             if entry.status == SubagentStatus::Archived {
                 return Err(format!(
                     "Child agent `{target}` is already closed and cannot be waited on."
@@ -364,9 +363,9 @@ impl TaskRuntime {
             self.subagent_registry_entries_for_list_request(current_session_id, &args)?;
         let queued_message_counts = registry_entries
             .iter()
-            .map(|entry| {
+            .map(|(_, entry)| {
                 self.inter_agent_message_count_for_task(SessionId::from(entry.session_id))
-                    .map(|count| (entry.agent_id.clone(), count))
+                    .map(|count| (entry.session_id, count))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         let result = build_subagent_registry_status_tool_result(
@@ -403,7 +402,11 @@ impl TaskRuntime {
         &self,
         current_session_id: SessionId,
     ) -> Result<Vec<SubagentRegistryEntry>, String> {
-        self.subagent_registry_entries_for_list_request(current_session_id, &json!({}))
+        Ok(self
+            .subagent_registry_entries_for_list_request(current_session_id, &json!({}))?
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect())
     }
 
     /// Returns read-only subagent orchestration information for model planning.
@@ -640,20 +643,17 @@ impl TaskRuntime {
         &self,
         current_session_id: SessionId,
         args: &Value,
-    ) -> Result<Vec<SubagentRegistryEntry>, String> {
+    ) -> Result<Vec<(String, SubagentRegistryEntry)>, String> {
         let path_prefix = list_agents_path_prefix(args)?;
         let include_closed = list_agents_include_closed(args)?;
         let registry = self.subagent_registry_snapshot()?;
         let root_session_id = self.root_session_id_for_subagent_tree(current_session_id)?;
         let resident_session_ids = self.resident_subagent_session_ids_for_list()?;
-        let entries_by_session = registry
-            .list_all()
+        let entries = registry
+            .list_tree_paths_from_root(root_session_id)
+            .map_err(|error| error.to_string())?
             .into_iter()
-            .map(|entry| (entry.session_id, entry.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let mut entries = entries_by_session
-            .values()
-            .filter(|entry| {
+            .filter(|(_, entry)| {
                 let is_resident = resident_session_ids.contains(&entry.session_id);
                 let is_archived = entry.status == SubagentStatus::Archived;
                 let is_restored_stopped = entry.status == SubagentStatus::Stopped;
@@ -661,21 +661,14 @@ impl TaskRuntime {
                     || include_closed && is_archived
                     || !is_resident && is_restored_stopped
             })
-            .filter_map(|entry| {
-                let entry_path =
-                    subagent_entry_tree_path(entry, &entries_by_session, root_session_id)?;
+            .filter_map(|(entry_path, entry)| {
                 let matches_prefix = path_prefix
                     .as_deref()
                     .is_none_or(|prefix| subagent_tree_path_matches_prefix(&entry_path, prefix));
                 matches_prefix.then_some((entry_path, entry.clone()))
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|(left_path, left_entry), (right_path, right_entry)| {
-            left_path
-                .cmp(right_path)
-                .then_with(|| left_entry.agent_id.cmp(&right_entry.agent_id))
-        });
-        Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+        Ok(entries)
     }
 
     /// Closes one known child agent selected by a Vulcan target.
@@ -686,11 +679,10 @@ impl TaskRuntime {
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
         let target = close_agent_target(&args)?;
-        let cascade = close_agent_cascade(&args)?;
-        let normalized_target = normalize_public_task_identifier(&target)?;
         if is_root_agent_target(&target) {
             return Err(String::from("root is not a spawned agent."));
         }
+        let normalized_target = normalize_public_task_identifier(&target)?;
         if self.current_session_matches_public_target(current_session_id, &normalized_target)? {
             return Err(String::from(
                 "An agent cannot close itself; return your result and let the parent close you if needed.",
@@ -699,8 +691,7 @@ impl TaskRuntime {
         let parent_session_id = SessionNodeId::from(current_session_id);
         let entry = self
             .subagent_registry_snapshot()?
-            .get(&normalized_target)
-            .filter(|entry| entry.parent_session_id == parent_session_id)
+            .get_for_parent(parent_session_id, &normalized_target)
             .cloned()
             .ok_or_else(|| {
                 format!(
@@ -714,76 +705,229 @@ impl TaskRuntime {
         }
         let previous_status = entry.status;
         let root_session_id = self.root_session_id_for_subagent_tree(current_session_id)?;
-        let stopped_task_ids = self.stop_task_tree(SessionId::from(entry.session_id))?;
-        let archived_entries =
-            self.archive_subagent_registry_entries(&normalized_target, entry.session_id, cascade)?;
-        let archived_task_ids = archived_entries
-            .iter()
-            .map(|entry| SessionId::from(entry.session_id))
-            .collect::<Vec<_>>();
-        self.mark_archived_tasks_in_sessions(&archived_task_ids)?;
-        self.persist_archived_subagent_registry_entries(
+        let mut prepared_archive = self.prepare_close_agent_archive_entries(entry.session_id)?;
+        let transaction_locks =
+            self.ordered_task_execution_state_locks(&prepared_archive.task_ids)?;
+        let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
+        for transaction_lock in &transaction_locks {
+            transaction_guards.push(transaction_lock.lock().map_err(|_| {
+                String::from(
+                    "The task execution transaction is locked and cannot close the selected agent tree.",
+                )
+            })?);
+        }
+        // Stop ownership, persistence, runtime archival, and inbox clearing share these sorted
+        // task locks so an aborted background run cannot publish a newer non-archived state.
+        // 停止所有权、持久化、运行时归档与 inbox 清理共享这些有序任务锁，避免被中止后台运行写入更新的未归档状态。
+        let stopped_task_ids =
+            self.reserve_and_abort_selected_task_runs(&prepared_archive.task_ids)?;
+        self.mark_stopped_tasks_with_transaction_locks_held(&stopped_task_ids, "user_interrupt")?;
+        prepared_archive.restamp_after_task_stop(current_unix_millis_u64());
+        let transaction = CloseAgentTransaction {
+            parent_session_id: current_session_id,
+            target: normalized_target,
+            previous_status,
+            stopped_task_ids,
+            prepared_archive,
+        };
+        let persistence_commit = match self.persist_close_agent_archive_transaction(
             Uuid::from(root_session_id),
-            &archived_entries,
-        )?;
-        let cleared_message_count =
-            self.clear_inter_agent_messages_for_tasks(&archived_task_ids)?;
+            &transaction.prepared_archive,
+        ) {
+            Ok(persistence_commit) => persistence_commit,
+            Err(failure) => {
+                return Ok(build_close_agent_archive_failure_result(
+                    &transaction,
+                    failure,
+                ));
+            }
+        };
+        let committed_archive = match self
+            .commit_close_agent_runtime_archive_with_task_locks_held(&transaction.prepared_archive)
+        {
+            Ok(committed_archive) => committed_archive,
+            Err(commit_error) => {
+                let failure = CloseAgentArchiveFailure::new(
+                    CloseAgentArchiveFailurePhase::CommitRuntimeArchive,
+                    commit_error,
+                    persistence_commit.rollback(),
+                );
+                return Ok(build_close_agent_archive_failure_result(
+                    &transaction,
+                    failure,
+                ));
+            }
+        };
+        drop(transaction_guards);
         let result = VulcanToolInvocationResult::from_model_output(json!({
             "tool": CLOSE_AGENT_TOOL,
-            "target": normalized_target,
-            "previous_status": previous_status,
+            "target": transaction.target.as_str(),
+            "previous_status": transaction.previous_status,
             "closed": true,
-            "closed_agents": archived_entries.iter().map(|entry| entry.agent_id.clone()).collect::<Vec<_>>(),
-            "closed_count": archived_entries.len(),
-            "cleared_message_count": cleared_message_count,
+            "closed_agents": committed_archive.entries.iter().map(|entry| entry.agent_id.clone()).collect::<Vec<_>>(),
+            "closed_count": committed_archive.entries.len(),
+            "cleared_message_count": committed_archive.cleared_message_count,
         }))
         .with_host_result(VulcanToolHostResult {
             kind: String::from("subagent_control"),
             payload: json!({
                 "tool": CLOSE_AGENT_TOOL,
-                "parent_session_id": current_session_id.to_string(),
-                "matched_agents": archived_entries.iter().map(|entry| {
+                "parent_session_id": transaction.parent_session_id.to_string(),
+                "matched_agents": committed_archive.entries.iter().map(|entry| {
                     subagent_registry_entry_host_status_payload(entry, 0)
                 }).collect::<Vec<_>>(),
-                "closed_agents": archived_entries.iter().map(|entry| entry.agent_id.clone()).collect::<Vec<_>>(),
-                "closed_count": archived_entries.len(),
-                (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "stopped_count": stopped_task_ids.len(),
+                "closed_agents": committed_archive.entries.iter().map(|entry| entry.agent_id.clone()).collect::<Vec<_>>(),
+                "closed_count": committed_archive.entries.len(),
+                (STOPPED_SUBAGENT_TASK_IDS_KEY): transaction.stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "stopped_count": transaction.stopped_task_ids.len(),
                 "closed": true,
-                "cascade": cascade,
-                "cleared_message_count": cleared_message_count,
+                "cleared_message_count": committed_archive.cleared_message_count,
             }),
         });
         Ok(result)
     }
 
-    /// Marks one subagent registry subtree as archived.
-    /// 将一个子代理注册表子树标记为已归档。
-    fn archive_subagent_registry_entries(
+    /// Prepares immutable archived registry projections without mutating runtime state.
+    /// 在不修改运行时状态的前提下准备不可变的归档注册表投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `target_session_id`: Stable session id of the selected child agent.
+    /// - `target_session_id`：选中子代理的稳定会话标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Complete archived projections that may be persisted before the runtime commit.
+    /// 可在运行时提交前持久化的完整归档投影。
+    pub(super) fn prepare_close_agent_archive_entries(
         &self,
-        agent_id: &str,
         target_session_id: SessionNodeId,
-        cascade: bool,
-    ) -> Result<Vec<SubagentRegistryEntry>, String> {
-        let mut registry = self.subagent_registry.write().map_err(|_| {
-            String::from("The subagent registry is locked and cannot close agents.")
+    ) -> Result<PreparedCloseAgentArchive, String> {
+        let registry = self.subagent_registry.read().map_err(|_| {
+            String::from("The subagent registry is locked and cannot prepare agent closure.")
         })?;
-        let agent_ids =
-            subagent_registry_close_agent_ids(&registry, agent_id, target_session_id, cascade);
         let mut archived_entries = Vec::new();
         let archived_at = current_unix_millis_u64();
-        for agent_id in agent_ids {
-            let Some(entry) = registry.get_mut(&agent_id) else {
-                continue;
-            };
+        for entry in registry
+            .list_subtree_from_session(target_session_id)
+            .map_err(|error| error.to_string())?
+        {
             if entry.status == SubagentStatus::Archived {
                 continue;
             }
+            let mut entry = entry.clone();
             entry.set_status(SubagentStatus::Archived, archived_at);
             entry.stop_reason = Some(String::from("close_agent"));
-            archived_entries.push(entry.clone());
+            archived_entries.push(entry);
         }
-        Ok(archived_entries)
+        Ok(PreparedCloseAgentArchive::new(archived_entries))
+    }
+
+    /// Commits one prepared close transaction to all runtime-owned projections.
+    /// 将一个已准备的关闭事务提交到全部运行时自有投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `prepared_archive`: Authoritative entries and task ids prepared from one registry snapshot.
+    /// - `prepared_archive`：从同一注册表快照准备的权威条目与任务标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Latest committed registry projections and the number of removed queued messages.
+    /// 最新的已提交注册表投影与被移除的排队消息数量。
+    #[cfg(test)]
+    pub(super) fn commit_close_agent_runtime_archive(
+        &self,
+        prepared_archive: &PreparedCloseAgentArchive,
+    ) -> Result<CommittedCloseAgentRuntimeArchive, String> {
+        let transaction_locks =
+            self.ordered_task_execution_state_locks(&prepared_archive.task_ids)?;
+        let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
+        for transaction_lock in &transaction_locks {
+            transaction_guards.push(transaction_lock.lock().map_err(|_| {
+                String::from(
+                    "The task execution transaction is locked and cannot commit agent closure.",
+                )
+            })?);
+        }
+        self.commit_close_agent_runtime_archive_with_task_locks_held(prepared_archive)
+    }
+
+    /// Commits runtime archive projections while the caller owns every selected task lock.
+    /// 在调用方持有全部选中任务锁时提交运行时归档投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `prepared_archive`: Stable archive scope already protected by ordered transaction guards.
+    /// - `prepared_archive`：已由有序事务守卫保护的稳定归档范围。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Latest committed registry projections and the number of removed queued messages.
+    /// 最新的已提交注册表投影与被移除的排队消息数量。
+    fn commit_close_agent_runtime_archive_with_task_locks_held(
+        &self,
+        prepared_archive: &PreparedCloseAgentArchive,
+    ) -> Result<CommittedCloseAgentRuntimeArchive, String> {
+        let mut registry = self.subagent_registry.write().map_err(|_| {
+            String::from("The subagent registry is locked and cannot commit agent closure.")
+        })?;
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from("The task-session registry is locked and cannot commit agent closure.")
+        })?;
+        let mut inboxes = self.agent_inboxes.write().map_err(|_| {
+            String::from(
+                "The subagent agent-control inbox is locked and cannot commit agent closure.",
+            )
+        })?;
+        let mut committed_entries = Vec::with_capacity(prepared_archive.entries.len());
+        for prepared_entry in &prepared_archive.entries {
+            let current_entry = registry
+                .get_for_parent(prepared_entry.parent_session_id, &prepared_entry.agent_id)
+                .filter(|current_entry| current_entry.session_id == prepared_entry.session_id)
+                .ok_or_else(|| {
+                    format!(
+                        "The prepared close-agent entry `{}` no longer owns session `{}` under parent `{}`.",
+                        prepared_entry.agent_id,
+                        prepared_entry.session_id,
+                        prepared_entry.parent_session_id
+                    )
+                })?;
+            // Preserve task-finalization fields written after preparation and apply only the
+            // lifecycle transition authorized by the prepared close transaction.
+            // 保留准备后由任务收尾写入的字段，仅应用已准备关闭事务授权的生命周期转换。
+            let mut committed_entry = current_entry.clone();
+            committed_entry.set_status(
+                SubagentStatus::Archived,
+                prepared_entry
+                    .updated_at_ms
+                    .max(current_entry.updated_at_ms),
+            );
+            committed_entry.stop_reason = prepared_entry.stop_reason.clone();
+            committed_entries.push(committed_entry);
+        }
+        registry
+            .replace_existing_entries(&committed_entries)
+            .map_err(|error| error.to_string())?;
+        for archived_entry in &committed_entries {
+            if let Some(record) = sessions.get_mut(&SessionId::from(archived_entry.session_id)) {
+                record.last_status =
+                    status_name_for_task_session_status(TaskSessionStatus::Archived).to_string();
+                record.updated_at = archived_entry.updated_at_ms.to_string();
+                record.stop_reason = archived_entry.stop_reason.clone();
+            }
+        }
+        let mut cleared_message_count = 0;
+        for task_id in &prepared_archive.task_ids {
+            cleared_message_count += inboxes
+                .remove(task_id)
+                .map(|queue| queue.len())
+                .unwrap_or(0);
+        }
+        Ok(CommittedCloseAgentRuntimeArchive {
+            entries: committed_entries,
+            cleared_message_count,
+        })
     }
 
     /// Returns in-memory child sessions that are still resident for list_agents.
@@ -833,10 +977,10 @@ impl TaskRuntime {
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
         let target = interrupt_agent_target(&args)?;
-        let normalized_target = normalize_public_task_identifier(&target)?;
         if is_root_agent_target(&target) {
             return Err(String::from("root is not a spawned agent."));
         }
+        let normalized_target = normalize_public_task_identifier(&target)?;
         if self.current_session_matches_public_target(current_session_id, &normalized_target)? {
             return Err(String::from(
                 "An agent cannot interrupt itself; return your result and let the parent interrupt you if needed.",
@@ -850,18 +994,39 @@ impl TaskRuntime {
         let parent_session_id = SessionNodeId::from(current_session_id);
         let entry = self
             .subagent_registry_snapshot()?
-            .get(&normalized_target)
-            .filter(|entry| entry.parent_session_id == parent_session_id)
+            .get_for_parent(parent_session_id, &normalized_target)
             .cloned()
             .ok_or_else(|| {
                 format!(
                     "Unknown child agent `{normalized_target}` for parent session `{current_session_id}`."
                 )
             })?;
-        let previous_status = entry.status;
-        let queued_message_count =
-            self.inter_agent_message_count_for_task(SessionId::from(entry.session_id))?;
-        let stopped_task_ids = self.stop_task_tree(SessionId::from(entry.session_id))?;
+        let target_task_id = SessionId::from(entry.session_id);
+        let transaction_lock = self.task_execution_state_lock(target_task_id)?;
+        let transaction_guard = transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot interrupt the selected agent.",
+            )
+        })?;
+        let current_entry = self
+            .subagent_registry
+            .read()
+            .map_err(|_| String::from("The subagent registry is locked."))?
+            .get_for_parent(parent_session_id, &normalized_target)
+            .cloned()
+            .filter(|current_entry| current_entry.session_id == entry.session_id)
+            .ok_or_else(|| {
+                format!("Child agent `{normalized_target}` changed ownership before interruption.")
+            })?;
+        if current_entry.status == SubagentStatus::Archived {
+            return Err(format!(
+                "Child agent `{normalized_target}` is archived and cannot be interrupted."
+            ));
+        }
+        let previous_status = current_entry.status;
+        drop(transaction_guard);
+        let queued_message_count = self.inter_agent_message_count_for_task(target_task_id)?;
+        let stopped_task_ids = self.stop_task_tree(target_task_id)?;
         let result = VulcanToolInvocationResult::from_model_output(json!({
             "tool": INTERRUPT_AGENT_TOOL,
             "previous_status": previous_status,
@@ -870,7 +1035,7 @@ impl TaskRuntime {
             payload: json!({
                 "tool": INTERRUPT_AGENT_TOOL,
                 "parent_session_id": current_session_id.to_string(),
-                "matched_agents": [subagent_registry_entry_host_status_payload(&entry, queued_message_count)],
+                "matched_agents": [subagent_registry_entry_host_status_payload(&current_entry, queued_message_count)],
                 (STOPPED_SUBAGENT_TASK_IDS_KEY): stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "stopped_count": stopped_task_ids.len(),
             }),
@@ -927,35 +1092,44 @@ fn handle_prestart_cancelled_backend_error(
     Ok(Some(visible_error))
 }
 
-/// Collects registry agent ids that should be closed for one close_agent request.
-/// 收集一次 close_agent 请求应关闭的注册表智能体标识。
-fn subagent_registry_close_agent_ids(
-    registry: &SubagentRegistry,
-    agent_id: &str,
-    target_session_id: SessionNodeId,
-    cascade: bool,
-) -> Vec<String> {
-    if !cascade {
-        return vec![agent_id.to_string()];
+/// Builds one structured failed close-agent result after task stopping has already committed.
+/// 在任务停止已经提交后构建一条结构化 close-agent 失败结果。
+///
+/// # Parameters
+/// 参数
+/// - `transaction`: Complete request, stop, and archive facts for the close transaction.
+/// - `transaction`：关闭事务的完整请求、停止与归档事实。
+/// - `failure`: Unified phase error and proven rollback outcome.
+/// - `failure`：统一的阶段错误与已证实回滚结果。
+///
+/// # Returns
+/// 返回值
+/// Error-marked tool result carrying machine-readable close transaction facts.
+/// 携带机器可读关闭事务事实的错误工具结果。
+fn build_close_agent_archive_failure_result(
+    transaction: &CloseAgentTransaction,
+    failure: CloseAgentArchiveFailure,
+) -> VulcanToolInvocationResult {
+    let mut details = json!({
+        "tool": CLOSE_AGENT_TOOL,
+        "operation": "close",
+        "target": transaction.target.as_str(),
+        "parent_session_id": transaction.parent_session_id.to_string(),
+        "previous_status": transaction.previous_status,
+        "closed": false,
+        "stopped": true,
+        "archive_committed": false,
+        "failure_phase": failure.phase.as_str(),
+        "archive_rollback": failure.rollback.as_str(),
+        "archive_task_ids": transaction.prepared_archive.task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "archive_task_count": transaction.prepared_archive.task_ids.len(),
+        (STOPPED_SUBAGENT_TASK_IDS_KEY): transaction.stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "stopped_count": transaction.stopped_task_ids.len(),
+    });
+    if let Some(rollback_error) = failure.rollback.error() {
+        details["rollback_error"] = Value::String(rollback_error.to_string());
     }
-    let mut session_ids = BTreeSet::from([target_session_id]);
-    loop {
-        let previous_len = session_ids.len();
-        for entry in registry.list_all() {
-            if session_ids.contains(&entry.parent_session_id) {
-                session_ids.insert(entry.session_id);
-            }
-        }
-        if session_ids.len() == previous_len {
-            break;
-        }
-    }
-    registry
-        .list_all()
-        .into_iter()
-        .filter(|entry| session_ids.contains(&entry.session_id))
-        .map(|entry| entry.agent_id.clone())
-        .collect()
+    VulcanToolInvocationResult::from_tool_error_details(failure.error, details)
 }
 
 /// Returns whether one subagent definition matches a lowercase query.

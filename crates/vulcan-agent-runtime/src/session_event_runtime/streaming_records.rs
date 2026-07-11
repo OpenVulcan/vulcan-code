@@ -11,9 +11,9 @@ pub fn append_stream_delta_record_to_state(
     title: &str,
     delta: &str,
     collapsed_by_default: bool,
-) {
+) -> Result<(), String> {
     if delta.is_empty() {
-        return;
+        return Ok(());
     }
     if let Some(record_id) = record_id_slot.as_deref()
         && !append_record_body_delta(&mut runtime_state.conversation_state, record_id, delta)
@@ -38,10 +38,12 @@ pub fn append_stream_delta_record_to_state(
                 metadata: collapsed_by_default.then(|| json!({ "collapsed_by_default": true })),
                 created_at: now.to_string(),
             },
-        );
+        )
+        .map_err(|error| format!("Invalid streaming record identity: {error}"))?;
         *record_id_slot = Some(record_id);
     }
     runtime_state.updated_at = now.to_string();
+    Ok(())
 }
 
 /// Keeps the active streaming thinking record collapsed after the thinking phase completes.

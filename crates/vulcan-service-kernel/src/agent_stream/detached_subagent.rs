@@ -24,10 +24,21 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
         return Ok(());
     };
     let task_id = panel_state.task_id;
+    let execution_id = subagent_feedback_execution_id_from_tool_metadata(metadata)?;
+    if !agent_runtime
+        .task_runtime
+        .is_task_execution_current(task_id, &execution_id)?
+    {
+        webui_trace(
+            "detached_listener_delegate_started_stale_execution",
+            format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
+        );
+        return Ok(());
+    }
     webui_trace(
         "detached_listener_delegate_started",
         format!(
-            "parent={parent_session_id} task={task_id} public_task_id={} label={}",
+            "parent={parent_session_id} task={task_id} execution_id={execution_id} public_task_id={} label={}",
             panel_state.public_task_id, panel_state.subagent_label
         ),
     );
@@ -35,35 +46,39 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let should_start = guard.detached_subagent_task_listeners.insert(task_id);
+        let should_start =
+            guard.detached_subagent_task_listeners.get(&task_id) != Some(&execution_id);
         if should_start {
-            bind_webui_subagent_parent_turn(&mut guard, parent_session_id, task_id);
+            guard
+                .detached_subagent_task_listeners
+                .insert(task_id, execution_id.clone());
+            bind_webui_subagent_parent_turn(&mut guard, parent_session_id, task_id, &execution_id);
         }
         should_start
     };
     if !should_start {
         webui_trace(
             "detached_listener_already_running",
-            format!("parent={parent_session_id} task={task_id}"),
+            format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
         );
         return Ok(());
     }
     webui_trace(
         "detached_listener_spawn",
-        format!("parent={parent_session_id} task={task_id}"),
+        format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
     );
     spawn_service_task(async move {
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut stream = Box::pin(
             agent_runtime
                 .task_runtime
-                .subscribe_detached_task_events(task_id),
+                .subscribe_detached_task_events(task_id, &execution_id),
         );
         while let Some(event) = stream.next().await {
             webui_trace(
                 "detached_listener_event",
                 format!(
-                    "task={task_id} kind={} {}",
+                    "task={task_id} execution_id={execution_id} kind={} {}",
                     detached_task_event_label(&event),
                     detached_task_event_trace_detail(&event)
                 ),
@@ -74,6 +89,7 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
                 &controller_runtime,
                 &agent_runtime,
                 task_id,
+                &execution_id,
                 &mut record_ids,
                 event,
             )
@@ -94,11 +110,25 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     task_id: SessionId,
+    execution_id: &str,
     record_ids: &mut SessionStreamingRecordIds,
     event: DetachedTaskRuntimeEvent,
 ) -> Result<(), String> {
+    let listener_is_current = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .detached_subagent_task_listeners
+        .get(&task_id)
+        .is_some_and(|current_execution_id| current_execution_id == execution_id);
     match event {
         DetachedTaskRuntimeEvent::ChildExecution(event) => {
+            if !listener_is_current {
+                webui_trace(
+                    "detached_child_event_stale_execution",
+                    format!("task={task_id} execution_id={execution_id}"),
+                );
+                return Ok(());
+            }
             handle_webui_detached_child_execution_event(
                 app,
                 state,
@@ -117,7 +147,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
             webui_trace(
                 "detached_parent_event_received",
                 format!(
-                    "listener_task={task_id} parent={parent_session_id} kind={:?} is_finished={is_finished}",
+                    "listener_task={task_id} execution_id={execution_id} parent={parent_session_id} kind={:?} is_finished={is_finished} listener_is_current={listener_is_current}",
                     event.kind
                 ),
             );
@@ -148,18 +178,23 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     event.kind
                 ),
             );
-            let consumed = match ingest_webui_subagent_runtime_event(
-                app,
-                state,
-                agent_runtime,
-                parent_session_id,
-                &event,
-            ) {
-                Ok(consumed) => consumed,
-                Err(error) => {
-                    eprintln!("[webui-service] ingest subagent parent event failed: {error}");
-                    false
+            let consumed = if listener_is_current {
+                match ingest_webui_subagent_runtime_event_for_listener_execution(
+                    app,
+                    state,
+                    agent_runtime,
+                    parent_session_id,
+                    &event,
+                    Some(execution_id),
+                ) {
+                    Ok(consumed) => consumed,
+                    Err(error) => {
+                        eprintln!("[webui-service] ingest subagent parent event failed: {error}");
+                        false
+                    }
                 }
+            } else {
+                true
             };
             webui_trace(
                 "detached_parent_event_ingested",
@@ -174,12 +209,6 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
             acknowledge_runtime_event_projection_barrier(&event);
             let mut mailbox_delivery_error: Option<String> = None;
             if is_finished {
-                {
-                    let mut guard = state
-                        .lock()
-                        .map_err(|error| format!("failed to lock service state: {error}"))?;
-                    guard.detached_subagent_task_listeners.remove(&task_id);
-                }
                 if let Err(error) = enqueue_webui_session_mailbox_input_if_needed(
                     state,
                     parent_session_id,
@@ -194,26 +223,40 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                     );
                     mailbox_delivery_error = Some(error);
                 }
-                {
+                let cleaned_current_listener = {
                     let mut guard = state
                         .lock()
                         .map_err(|error| format!("failed to lock service state: {error}"))?;
-                    clear_webui_subagent_completion_gate_ignored(&mut guard, task_id);
-                    if mailbox_delivery_error.is_none() {
-                        clear_webui_subagent_parent_turn_binding(&mut guard, task_id);
-                    } else {
+                    let cleaned = clear_webui_detached_listener_execution_if_current(
+                        &mut guard,
+                        task_id,
+                        execution_id,
+                        mailbox_delivery_error.is_none(),
+                    );
+                    if cleaned && mailbox_delivery_error.is_some() {
                         webui_trace(
                             "subagent_parent_turn_binding_preserved_after_mailbox_error",
                             format!("parent={parent_session_id} task={task_id}"),
                         );
                     }
+                    if !cleaned && mailbox_delivery_error.is_none() {
+                        clear_webui_subagent_parent_turn_binding(&mut guard, task_id, execution_id);
+                        clear_webui_subagent_completion_gate_ignored(
+                            &mut guard,
+                            task_id,
+                            execution_id,
+                        );
+                    }
+                    cleaned
+                };
+                if cleaned_current_listener {
+                    refresh_webui_subagent_navigation_round_visibility(state, parent_session_id)?;
+                    emit_webui_subagent_navigation_changed_delta_for_parent(
+                        app,
+                        state,
+                        parent_session_id,
+                    )?;
                 }
-                refresh_webui_subagent_navigation_round_visibility(state, parent_session_id)?;
-                emit_webui_subagent_navigation_changed_delta_for_parent(
-                    app,
-                    state,
-                    parent_session_id,
-                )?;
             }
             if webui_detached_parent_event_should_continue_pending_prompt(
                 parent_is_regular_session,
@@ -298,6 +341,45 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
             Ok(())
         }
     }
+}
+
+/// Clears detached-listener state only when the caller still owns the exact execution generation.
+/// 仅当调用方仍拥有精确执行代际时清理分离监听器状态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns listener identities and parent-turn coordination under one lock.
+/// `state` 在同一锁下持有监听器身份与父回合协调状态。
+/// `task_id` identifies the stable child task.
+/// `task_id` 标识稳定子任务。
+/// `execution_id` identifies the listener execution attempting cleanup.
+/// `execution_id` 标识尝试清理的监听器执行。
+/// `clear_parent_binding` controls whether successful cleanup may release the parent binding.
+/// `clear_parent_binding` 控制成功清理时是否可以释放父级绑定。
+///
+/// # Returns
+/// 返回值
+/// Whether the exact execution still owned and cleared the listener row.
+/// 精确执行是否仍拥有并清理了监听器行。
+pub(crate) fn clear_webui_detached_listener_execution_if_current(
+    state: &mut ServiceBridgeState,
+    task_id: SessionId,
+    execution_id: &str,
+    clear_parent_binding: bool,
+) -> bool {
+    let owns_listener = state
+        .detached_subagent_task_listeners
+        .get(&task_id)
+        .is_some_and(|current_execution_id| current_execution_id == execution_id);
+    if !owns_listener {
+        return false;
+    }
+    state.detached_subagent_task_listeners.remove(&task_id);
+    clear_webui_subagent_completion_gate_ignored(state, task_id, execution_id);
+    if clear_parent_binding {
+        clear_webui_subagent_parent_turn_binding(state, task_id, execution_id);
+    }
+    true
 }
 
 /// Enqueues one completed subagent result into the parent kernel mailbox for provider delivery.
@@ -742,6 +824,7 @@ mod tests {
             cached_mcp_catalog: None,
             live_context_budgets: BTreeMap::new(),
             session_goal_summaries: BTreeMap::new(),
+            session_goal_dispatch_versions: BTreeMap::new(),
             budget_limit_reported_goal_ids: BTreeSet::new(),
             webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
             subagent_surface_detail_cache: BTreeMap::new(),
@@ -750,14 +833,14 @@ mod tests {
                 parent_session_id,
                 task_id: task_session_id,
             }),
-            detached_subagent_task_listeners: BTreeSet::new(),
+            detached_subagent_task_listeners: BTreeMap::new(),
             subagent_parent_turn_bindings: BTreeMap::new(),
             subagent_completion_gate_ignored_tasks: BTreeSet::new(),
             parent_sessions_waiting_for_subagents: BTreeSet::new(),
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
-            session_lifecycle_transition_ids: BTreeSet::new(),
-            project_lifecycle_transition_ids: BTreeSet::new(),
+            session_turn_admission_reservations: BTreeMap::new(),
+            project_lifecycle_transition_reservations: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
             session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),

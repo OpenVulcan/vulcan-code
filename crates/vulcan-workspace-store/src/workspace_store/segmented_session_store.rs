@@ -21,8 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 use vulcan_context::{
-    RuntimeContextCompactionAppliedEvent, RuntimeInjectionAppliedEvent, RuntimeLogEvent,
-    RuntimeLogEventLine, RuntimeRepairEvent, conversation_state_from_runtime_log_lines,
+    RUNTIME_LOG_SCHEMA_VERSION, RuntimeContextCompactionAppliedEvent, RuntimeInjectionAppliedEvent,
+    RuntimeLogEvent, RuntimeLogEventLine, RuntimeRepairEvent,
+    conversation_state_from_runtime_log_lines, decode_runtime_log_event_line_json,
     runtime_log_lines_from_conversation_state,
 };
 #[cfg(test)]

@@ -42,7 +42,6 @@ fn tool_result_metadata(tool_name: &str, tool_call_id: &str) -> Value {
     json!({
         "tool_name": tool_name,
         "tool_call_id": tool_call_id,
-        "tool_result_id": format!("tool-result-{tool_call_id}")
     })
 }
 
@@ -88,7 +87,8 @@ fn transcript_replay_groups_parallel_tool_rows_into_one_batch() {
         ),
     ];
 
-    let state = conversation_state_from_session_messages(&messages);
+    let state = conversation_state_from_session_messages(&messages)
+        .expect("valid replayed conversation identities");
 
     assert_eq!(state.messages.len(), 4);
     let SessionConversationPayload::Assistant { tool_calls, .. } = &state.messages[1].payload
@@ -129,7 +129,8 @@ fn transcript_replay_downgrades_interrupted_tool_row_to_text() {
         ),
     ];
 
-    let state = conversation_state_from_session_messages(&messages);
+    let state = conversation_state_from_session_messages(&messages)
+        .expect("valid replayed conversation identities");
 
     assert_eq!(state.messages.len(), 2);
     let SessionConversationPayload::UserText { text, attachments } = &state.messages[0].payload
@@ -175,7 +176,8 @@ fn merge_session_messages_with_conversation_state_records_preserves_loaded_histo
         SessionMessageRecordKind::Transcript,
         "继续提问",
         None,
-    )]);
+    )])
+    .expect("valid replayed conversation identities");
 
     let merged_messages =
         merge_session_messages_with_conversation_state_records(&existing_messages, &runtime_state);
@@ -253,7 +255,8 @@ fn merge_session_messages_with_conversation_state_records_restores_runtime_order
             "工具 2 已完成",
             None,
         ),
-    ]);
+    ])
+    .expect("valid replayed conversation identities");
 
     // merged_messages must use runtime order from the first shared tool while retaining unrelated history and tail rows.
     // merged_messages 必须从首个共享工具开始采用运行态顺序，同时保留无关历史与尾部记录。
@@ -408,4 +411,213 @@ fn compaction_source_rejects_record_only_state() {
     let messages = conversation_state_to_compaction_source_messages(&state);
 
     assert!(messages.is_empty());
+}
+
+/// Builds one minimal canonical record for identity-validation tests.
+/// 为身份校验测试构建一条最小规范记录。
+fn identity_test_record(record_id: &str) -> SessionConversationRecord {
+    SessionConversationRecord {
+        id: record_id.to_string(),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::Transcript,
+        visible: true,
+        title: String::new(),
+        body: String::new(),
+        metadata: None,
+        created_at: String::from("1"),
+    }
+}
+
+/// Verifies canonical record identities reject duplicate ownership instead of renaming records.
+/// 验证规范记录身份会拒绝重复归属，而不是重命名记录。
+#[test]
+fn record_identity_validation_rejects_duplicates() {
+    let records = vec![
+        identity_test_record("record-1"),
+        identity_test_record("record-1"),
+    ];
+
+    let error = validate_session_conversation_record_identities(&records)
+        .expect_err("duplicate record identity must be rejected");
+
+    assert_eq!(
+        error,
+        SessionConversationRecordIdentityError::Duplicate {
+            record_index: 1,
+            record_id: String::from("record-1"),
+        }
+    );
+}
+
+/// Verifies canonical record identities reject empty and padded values.
+/// 验证规范记录身份会拒绝空值与带首尾空白的值。
+#[test]
+fn record_identity_validation_rejects_non_canonical_text() {
+    assert!(matches!(
+        validate_session_conversation_record_identities(&[identity_test_record("  ")]),
+        Err(SessionConversationRecordIdentityError::Empty { record_index: 0 })
+    ));
+    assert!(matches!(
+        validate_session_conversation_record_identities(&[identity_test_record(" record-1 ")]),
+        Err(
+            SessionConversationRecordIdentityError::SurroundingWhitespace {
+                record_index: 0,
+                ..
+            }
+        )
+    ));
+}
+
+/// Builds one minimal canonical message for identity-validation tests.
+/// 为身份校验测试构建一条最小规范消息。
+fn identity_test_message(message_id: &str) -> SessionConversationMessage {
+    SessionConversationMessage {
+        id: message_id.to_string(),
+        payload: SessionConversationPayload::UserText {
+            text: String::new(),
+            attachments: Vec::new(),
+        },
+    }
+}
+
+/// Verifies canonical message identities reject duplicate ownership across the active window.
+/// 验证规范消息身份会拒绝活动窗口内的重复归属。
+#[test]
+fn message_identity_validation_rejects_duplicates() {
+    // messages contains the exact conflicting ownership that the validator must reject without mutation.
+    // messages 包含校验器必须无修改拒绝的精确冲突归属。
+    let messages = vec![
+        identity_test_message("message-1"),
+        identity_test_message("message-1"),
+    ];
+
+    // error captures the later conflicting position and the shared identifier.
+    // error 捕获后出现冲突的位置与共享标识。
+    let error = validate_session_conversation_message_identities(&messages)
+        .expect_err("duplicate message identity must be rejected");
+
+    assert_eq!(
+        error,
+        SessionConversationMessageIdentityError::Duplicate {
+            message_index: 1,
+            message_id: String::from("message-1"),
+        }
+    );
+}
+
+/// Verifies canonical message identities reject empty and padded values.
+/// 验证规范消息身份会拒绝空值与带首尾空白的值。
+#[test]
+fn message_identity_validation_rejects_non_canonical_text() {
+    assert!(matches!(
+        validate_session_conversation_message_identities(&[identity_test_message("  ")]),
+        Err(SessionConversationMessageIdentityError::Empty { message_index: 0 })
+    ));
+    assert!(matches!(
+        validate_session_conversation_message_identities(&[identity_test_message(" message-1 ")]),
+        Err(
+            SessionConversationMessageIdentityError::SurroundingWhitespace {
+                message_index: 0,
+                ..
+            }
+        )
+    ));
+}
+
+/// Verifies user-message append rejects a duplicate identity without changing the active window.
+/// 验证用户消息追加会拒绝重复身份且不修改活动窗口。
+#[test]
+fn user_message_append_is_atomic_on_identity_failure() {
+    // state owns one valid message whose identity the candidate attempts to reuse.
+    // state 持有一条有效消息，候选项将尝试复用其身份。
+    let mut state = SessionConversationState {
+        messages: vec![identity_test_message("message-1")],
+        ..SessionConversationState::default()
+    };
+    // original_state captures every canonical field before the rejected mutation.
+    // original_state 捕获被拒绝修改前的全部规范字段。
+    let original_state = serde_json::to_value(&state).expect("state should serialize");
+
+    // error proves the append boundary reports the precise duplicate instead of committing it.
+    // error 证明追加边界会报告准确重复项，而不是提交它。
+    let error = append_user_text_message(&mut state, "message-1", "duplicate", Vec::new())
+        .expect_err("duplicate append must fail");
+
+    assert!(matches!(
+        error,
+        SessionConversationMessageIdentityError::Duplicate {
+            message_index: 1,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_value(&state).expect("state should serialize after failure"),
+        original_state
+    );
+}
+
+/// Verifies record append rejects a duplicate identity without changing canonical state.
+/// 验证记录追加会拒绝重复身份且不修改规范状态。
+#[test]
+fn record_append_is_atomic_on_identity_failure() {
+    // record is the valid retained row whose identity the candidate attempts to reuse.
+    // record 是有效保留行，候选记录将尝试复用其身份。
+    let record = SessionConversationRecord {
+        id: String::from("record-1"),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::AssistantOutput,
+        visible: true,
+        title: String::from("Assistant"),
+        body: String::from("first"),
+        metadata: None,
+        created_at: String::from("1"),
+    };
+    // state starts with one valid record and must remain byte-equivalent after rejection.
+    // state 初始包含一条有效记录，拒绝后必须保持字节等价。
+    let mut state = SessionConversationState {
+        records: vec![record.clone()],
+        ..SessionConversationState::default()
+    };
+    let original_state = serde_json::to_value(&state).expect("state should serialize");
+
+    let error = append_record(&mut state, record).expect_err("duplicate append must fail");
+
+    assert!(matches!(
+        error,
+        SessionConversationRecordIdentityError::Duplicate {
+            record_index: 1,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_value(&state).expect("state should serialize after failure"),
+        original_state
+    );
+}
+
+/// Verifies transcript replay rejects duplicate record identities before returning partial state.
+/// 验证转录复放会拒绝重复记录身份，且不会返回局部状态。
+#[test]
+fn transcript_replay_rejects_duplicate_record_identity() {
+    let messages = [
+        transcript_entry(
+            "record-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first",
+            None,
+        ),
+        transcript_entry(
+            "record-1",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "duplicate",
+            None,
+        ),
+    ];
+
+    let error = conversation_state_from_session_messages(&messages)
+        .expect_err("duplicate replay must fail");
+
+    assert!(error.contains("conversation record 1 duplicates id \"record-1\""));
 }

@@ -84,7 +84,7 @@ pub(super) fn repair_anthropic_tool_result_topology(messages: Vec<Value>) -> Vec
             pending_tool_use_ids.as_ref().is_some_and(|tool_use_ids| {
                 !tool_use_ids.is_empty()
                     && tool_results.iter().all(|block| {
-                        anthropic_tool_result_id(block)
+                        anthropic_tool_result_call_id(block)
                             .map(|tool_use_id| tool_use_ids.contains(tool_use_id))
                             .unwrap_or(false)
                     })
@@ -191,7 +191,7 @@ pub(super) fn anthropic_assistant_tool_use_ids(message: &Value) -> Option<BTreeS
 
 /// Extracts one Anthropic tool-result identifier from a content block.
 /// 从一个 Anthropic 工具结果内容块中提取工具使用标识。
-pub(super) fn anthropic_tool_result_id(block: &Value) -> Option<&str> {
+pub(super) fn anthropic_tool_result_call_id(block: &Value) -> Option<&str> {
     let block_type = block.get("type").and_then(Value::as_str)?;
     if block_type != "tool_result" {
         return None;
@@ -237,7 +237,7 @@ pub(super) fn anthropic_downgraded_tool_result_text(tool_results: &[Value]) -> S
 
     for tool_result in tool_results {
         text.push_str("\n\n<tool_result");
-        if let Some(tool_use_id) = anthropic_tool_result_id(tool_result) {
+        if let Some(tool_use_id) = anthropic_tool_result_call_id(tool_result) {
             text.push_str(" tool_use_id=\"");
             text.push_str(tool_use_id);
             text.push('"');

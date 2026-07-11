@@ -56,7 +56,6 @@ fn request_payload_replays_stored_anthropic_provider_message_state() {
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("call-1")),
                 text: String::from("tool result body"),
             },
@@ -136,7 +135,6 @@ fn request_payload_ignores_foreign_provider_message_state_after_protocol_switch(
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("call-1")),
                 text: String::from("tool result body"),
             },
@@ -212,7 +210,6 @@ fn request_payload_falls_back_to_local_tool_id_when_provider_visible_id_is_missi
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("local-call-1")),
                 text: String::from("tool result body"),
             },
@@ -352,7 +349,6 @@ fn request_payload_repairs_stored_blank_tool_use_ids_for_parallel_tool_results()
             CoreConversationMessage {
                 id: String::from("tool-result-1"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-1"),
                     tool_call_id: Some(String::from("local-call-1")),
                     text: String::from("tool result body 1"),
                 },
@@ -360,7 +356,6 @@ fn request_payload_repairs_stored_blank_tool_use_ids_for_parallel_tool_results()
             CoreConversationMessage {
                 id: String::from("tool-result-2"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-2"),
                     tool_call_id: Some(String::from("local-call-2")),
                     text: String::from("tool result body 2"),
                 },
@@ -368,7 +363,6 @@ fn request_payload_repairs_stored_blank_tool_use_ids_for_parallel_tool_results()
             CoreConversationMessage {
                 id: String::from("tool-result-3"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-3"),
                     tool_call_id: Some(String::from("local-call-3")),
                     text: String::from("tool result body 3"),
                 },
@@ -377,7 +371,6 @@ fn request_payload_repairs_stored_blank_tool_use_ids_for_parallel_tool_results()
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-4"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-4"),
                 tool_call_id: Some(String::from("local-call-4")),
                 text: String::from("tool result body 4"),
             },

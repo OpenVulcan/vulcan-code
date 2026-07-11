@@ -1,4 +1,5 @@
 use super::*;
+use crate::ExecutionSessionGoalContext;
 
 /// Builds a resolved TaskSession configuration for controller-config tests.
 /// 为控制器配置测试构建已解析 TaskSession 配置。
@@ -190,7 +191,8 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
         .context_budget = Some(12_000);
 
     let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid task runtime preparation");
 
     assert_eq!(child_request.runtime_policy, resolved_config.runtime_policy);
     assert_eq!(
@@ -249,7 +251,8 @@ fn task_runtime_preparation_request_hides_parent_tools_by_default() {
     );
 
     let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid task runtime preparation");
 
     assert_eq!(
         child_request.tool_request_hidden_tool_ids,
@@ -304,7 +307,8 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
     );
 
     let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid task runtime preparation");
 
     assert!(child_request.tool_request_hidden_tool_ids.is_empty());
     assert_eq!(
@@ -508,7 +512,8 @@ fn spawn_agent_record_captures_parent_agent_prompt_snapshot() {
         &request.invocation_config,
     );
     let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &request, &resolved_config);
+        build_task_runtime_preparation_request(&context, &request, &resolved_config)
+            .expect("valid task runtime preparation");
     let child_prompt = child_request
         .agent_prompt_snapshot
         .expect("child launch should receive the fixed parent prompt");
@@ -695,7 +700,8 @@ fn task_runtime_preparation_request_carries_subagent_prompt_context() {
     );
 
     let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid task runtime preparation");
 
     let agent_prompt_snapshot = child_request
         .agent_prompt_snapshot
@@ -762,7 +768,8 @@ fn task_runtime_preparation_request_clears_parent_context_injection() {
     );
 
     let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid task runtime preparation");
 
     assert!(child_request.context_injection.is_none());
 }
@@ -812,7 +819,10 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
             fingerprint: Some(String::from("parent-fingerprint")),
             source: Some(String::from("parent")),
         });
-    parent_request.session_goal_context = Some(String::from("Parent goal context"));
+    parent_request.session_goal_context = Some(ExecutionSessionGoalContext {
+        goal_id: String::from("goal-1"),
+        prompt_context: String::from("Parent goal context"),
+    });
     parent_request.session_plan_context = Some(String::from("Parent plan context"));
     parent_request
         .embedded_turn_usage_segments
@@ -860,7 +870,8 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
     );
 
     let (_, child_request) =
-        build_task_runtime_preparation_request(&context, &invocation, &resolved_config);
+        build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+            .expect("valid task runtime preparation");
 
     assert!(child_request.tool_request_rejection_reason.is_none());
     assert!(!child_request.tool_request_rejection_all_tools);
@@ -1242,7 +1253,10 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         preparation: None,
         assistant_output: Some(String::from("done")),
         thinking_output: None,
-        conversation_state: Some(core_snapshot_to_session_conversation_state(&snapshot)),
+        conversation_state: Some(
+            core_snapshot_to_session_conversation_state(&snapshot)
+                .expect("valid task report conversation state"),
+        ),
         provider_request_count: 2,
         last_successful_provider_usage: Some(last_provider_usage),
         cumulative_successful_provider_usage: Some(cumulative_provider_usage),

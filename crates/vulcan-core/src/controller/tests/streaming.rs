@@ -32,7 +32,8 @@ fn run_user_turn_streaming_records_provider_deltas_before_finalizing() {
         )]);
         let executor = MockToolExecutor::new();
         let mut controller =
-            VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
 
         let result = controller
             .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "请先分析文件")
@@ -132,7 +133,8 @@ fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
             )
             .with_failure("second_tool", "第二个工具模拟失败");
         let mut controller =
-            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
         let mut checkpoints = Vec::<(ConversationSnapshot, Option<ProviderUsageSnapshot>)>::new();
 
         let result = controller

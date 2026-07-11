@@ -11,6 +11,7 @@ impl TaskRuntime {
             backends: RwLock::new(HashMap::new()),
             execution_contexts: RwLock::new(HashMap::new()),
             active_task_runs: RwLock::new(HashMap::new()),
+            task_execution_state_locks: Mutex::new(HashMap::new()),
             detached_task_event_streams: RwLock::new(HashMap::new()),
             subagent_mailbox: InMemorySubagentMailbox::default(),
             subagent_mailbox_activity_tx,

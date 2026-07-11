@@ -98,7 +98,9 @@ fn effective_session_messages_for_persistence_preserves_display_history() {
             SessionMessageKind::Assistant,
             "上下文摘要",
             "已总结旧过程",
-        )]),
+        )
+        .with_runtime_metadata("summary-record-1", "1")])
+        .expect("valid replayed conversation identities"),
         ..Default::default()
     };
     // stored_messages is the full visible transcript retained by the service layer.

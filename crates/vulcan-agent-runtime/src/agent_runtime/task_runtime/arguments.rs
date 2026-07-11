@@ -273,6 +273,11 @@ pub(super) fn normalize_public_task_identifier(task_id_text: &str) -> Result<Str
     if normalized_task_id.is_empty() {
         return Err(String::from("`task_id` cannot be empty."));
     }
+    if normalized_task_id.contains('/') {
+        return Err(String::from(
+            "`task_id` must be one path segment and cannot contain `/`.",
+        ));
+    }
     Ok(normalized_task_id.to_string())
 }
 

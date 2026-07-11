@@ -123,9 +123,6 @@ pub enum SessionConversationPayload {
     /// Tool-result payload returned to the model after one assistant tool call.
     /// 在一次助手工具调用后回传给模型的工具结果载荷。
     ToolResult {
-        /// Stable tool-result identifier emitted by the provider or synthesized locally.
-        /// 由 Provider 发出或在本地合成的稳定工具结果标识。
-        tool_result_id: String,
         /// Optional provider-visible tool-call identifier linked to the result.
         /// 与该结果关联的可选 Provider 可见工具调用标识。
         tool_call_id: Option<String>,

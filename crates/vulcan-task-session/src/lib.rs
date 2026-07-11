@@ -1,6 +1,9 @@
 //! Segmented task-session routing and scheduling boundaries.
 //! 分段子代理会话路由与调度边界。
 
+/// Private crash-resistant file replacement shared by task-session persistence layers.
+/// 任务会话持久化层共享的私有抗崩溃文件替换能力。
+mod atomic_file;
 /// Subagent catalog loading and profile conversion.
 /// 子代理目录加载与配置转换。
 pub mod catalog;
@@ -395,6 +398,182 @@ mod tests {
                 .expect("task compaction checkpoints should load"),
             vec![checkpoint]
         );
+
+        std::fs::remove_dir_all(temp_dir).expect("temporary task store should be removable");
+    }
+
+    /// Builds task metadata with deterministic configuration for segmented-store identity tests.
+    /// 使用确定性配置为分段存储身份测试构建子任务元数据。
+    ///
+    /// Parameters: root and task session identifiers, the direct parent, the public task id, and the creation timestamp.
+    /// 参数：根会话与子任务会话标识、直接父级、公开任务标识以及创建时间戳。
+    ///
+    /// Returns: a newly created task-session metadata document in its initial status.
+    /// 返回：处于初始状态的新建子任务会话元数据文档。
+    fn segmented_store_identity_test_metadata(
+        root_session_id: SessionNodeId,
+        task_session_id: SessionNodeId,
+        parent: ParentSessionRef,
+        public_task_id: &str,
+        timestamp_ms: u64,
+    ) -> TaskSessionMetadata {
+        // resolved provides the authoritative requested and effective configurations persisted by the fixture.
+        // resolved 提供夹具持久化的权威请求配置与有效配置。
+        let resolved = TaskSessionConfigResolver::resolve(TaskSessionConfigResolutionInput {
+            global_default_config: SessionEffectiveConfig::default(),
+            parent_config: None,
+            profile: None,
+            invocation: TaskInvocationConfig::main("persist identity fixture"),
+        });
+        TaskSessionMetadata::new(TaskSessionMetadataInit {
+            root_session_id,
+            task_session_id,
+            parent,
+            public_task_id: public_task_id.to_string(),
+            display_title: public_task_id.to_string(),
+            requested_config: resolved.requested_config,
+            effective_config: resolved.effective_config,
+            depth: 1,
+            timestamp_ms,
+        })
+    }
+
+    /// Rejects ambiguous open ownership for one parent-scoped public task identifier.
+    /// 拒绝同一父级作用域公开任务标识存在多个开放所有者的歧义状态。
+    #[test]
+    fn segmented_store_rejects_duplicate_open_parent_scoped_public_task_ids() {
+        // temp_dir isolates both persisted metadata documents from other store tests.
+        // temp_dir 将两个持久化元数据文档与其他存储测试隔离。
+        let temp_dir = std::env::temp_dir().join(format!(
+            "vulcan-task-session-duplicate-open-test-{}",
+            SessionNodeId::new_v4()
+        ));
+        // store is the real segmented store under test.
+        // store 是被测的真实分段存储。
+        let store = super::SegmentedTaskSessionStore::new(temp_dir.clone());
+        // root_session_id owns the direct parent scope used by both records.
+        // root_session_id 拥有两条记录共同使用的直接父级作用域。
+        let root_session_id = SessionNodeId::new_v4();
+        // parent is the exact identity scope whose uniqueness must be enforced.
+        // parent 是必须执行唯一性约束的精确身份作用域。
+        let parent = ParentSessionRef::MainSession { root_session_id };
+        // first_task_session_id identifies the first non-archived owner.
+        // first_task_session_id 标识第一个未归档所有者。
+        let first_task_session_id = SessionNodeId::new_v4();
+        // second_task_session_id identifies the conflicting non-archived owner.
+        // second_task_session_id 标识发生冲突的第二个未归档所有者。
+        let second_task_session_id = SessionNodeId::new_v4();
+        // first_metadata persists the first open record for the public slot.
+        // first_metadata 持久化公开槽位的第一条开放记录。
+        let first_metadata = segmented_store_identity_test_metadata(
+            root_session_id,
+            first_task_session_id,
+            parent.clone(),
+            "duplicate-slot",
+            100,
+        );
+        // second_metadata persists a second open record in that exact same slot.
+        // second_metadata 在完全相同的槽位中持久化第二条开放记录。
+        let second_metadata = segmented_store_identity_test_metadata(
+            root_session_id,
+            second_task_session_id,
+            parent.clone(),
+            "duplicate-slot",
+            200,
+        );
+
+        store
+            .create_task_session(first_metadata)
+            .expect("first open task metadata should be created");
+        store
+            .create_task_session(second_metadata)
+            .expect("second open task metadata should be created");
+
+        // error must expose the corrupted parent-scoped ownership instead of selecting one candidate.
+        // error 必须暴露损坏的父级作用域所有权，而不是任选一个候选记录。
+        let error = store
+            .find_task_session_by_parent_and_public_id(parent, "duplicate-slot")
+            .expect_err("duplicate open task ownership should be rejected");
+        // error_message is inspected to prove that the diagnostic identifies both competing sessions.
+        // error_message 用于证明诊断明确标识了两个竞争会话。
+        let error_message = error.to_string();
+        assert!(
+            error_message.contains("multiple open sessions"),
+            "unexpected duplicate ownership error: {error_message}"
+        );
+        assert!(error_message.contains(&first_task_session_id.to_string()));
+        assert!(error_message.contains(&second_task_session_id.to_string()));
+
+        std::fs::remove_dir_all(temp_dir).expect("temporary task store should be removable");
+    }
+
+    /// Prefers the unique open owner when archived history reuses the same public task identifier.
+    /// 当归档历史复用相同公开任务标识时，优先返回唯一开放所有者。
+    #[test]
+    fn segmented_store_selects_unique_open_owner_over_archived_history() {
+        // temp_dir isolates the archived-history reuse scenario from other store tests.
+        // temp_dir 将归档历史复用场景与其他存储测试隔离。
+        let temp_dir = std::env::temp_dir().join(format!(
+            "vulcan-task-session-archived-reuse-test-{}",
+            SessionNodeId::new_v4()
+        ));
+        // store is the real segmented store under test.
+        // store 是被测的真实分段存储。
+        let store = super::SegmentedTaskSessionStore::new(temp_dir.clone());
+        // root_session_id owns the direct parent scope used by both generations.
+        // root_session_id 拥有两代记录共同使用的直接父级作用域。
+        let root_session_id = SessionNodeId::new_v4();
+        // parent is the exact identity scope reused after archival.
+        // parent 是归档后被复用的精确身份作用域。
+        let parent = ParentSessionRef::MainSession { root_session_id };
+        // archived_task_session_id identifies the historical generation.
+        // archived_task_session_id 标识历史代记录。
+        let archived_task_session_id = SessionNodeId::new_v4();
+        // open_task_session_id identifies the sole current owner.
+        // open_task_session_id 标识当前唯一所有者。
+        let open_task_session_id = SessionNodeId::new_v4();
+        // archived_metadata starts as a valid record before being explicitly archived.
+        // archived_metadata 先作为有效记录创建，再被显式归档。
+        let mut archived_metadata = segmented_store_identity_test_metadata(
+            root_session_id,
+            archived_task_session_id,
+            parent.clone(),
+            "reused-slot",
+            100,
+        );
+        store
+            .create_task_session(archived_metadata.clone())
+            .expect("historical task metadata should be created");
+        archived_metadata.status = TaskSessionStatus::Archived;
+        store
+            .save_task_session(archived_metadata)
+            .expect("historical task metadata should be archived");
+
+        // open_metadata is the current generation that owns the reused public slot.
+        // open_metadata 是拥有复用公开槽位的当前代记录。
+        let mut open_metadata = segmented_store_identity_test_metadata(
+            root_session_id,
+            open_task_session_id,
+            parent.clone(),
+            "reused-slot",
+            200,
+        );
+        store
+            .create_task_session(open_metadata.clone())
+            .expect("current task metadata should be created");
+        open_metadata.status = TaskSessionStatus::Running;
+        store
+            .save_task_session(open_metadata)
+            .expect("current task metadata should be marked running");
+
+        // selected is required to be the sole non-archived owner, regardless of archived history.
+        // selected 必须是唯一未归档所有者，不受归档历史影响。
+        let selected = store
+            .find_task_session_by_parent_and_public_id(parent, "reused-slot")
+            .expect("reused public task id lookup should succeed")
+            .expect("the current open owner should exist");
+        assert_eq!(selected.task_session_id, open_task_session_id);
+        assert_eq!(selected.status, TaskSessionStatus::Running);
 
         std::fs::remove_dir_all(temp_dir).expect("temporary task store should be removable");
     }

@@ -2,6 +2,10 @@
 //! 分段会话状态文档持久化。
 
 use super::*;
+use vulcan_context::protocol::{
+    validate_session_conversation_message_identities,
+    validate_session_conversation_record_identities,
+};
 
 /// Overwrites the state document for one main session or task session directory.
 /// 覆盖写入某个主会话或子任务会话目录的状态文档。
@@ -93,6 +97,10 @@ pub(in crate::workspace_store) fn state_document_from_runtime_state(
     session_id: &str,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<SegmentedSessionStateDocument, String> {
+    validate_session_conversation_message_identities(&runtime_state.conversation_state.messages)
+        .map_err(|error| format!("Invalid canonical conversation message identity: {error}"))?;
+    validate_session_conversation_record_identities(&runtime_state.conversation_state.records)
+        .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
     // Serialize only lightweight runtime metadata; canonical conversation history lives in append-only segments.
     // 仅序列化轻量运行时元数据；规范会话历史保存在追加式分段中。
     let mut runtime_state_value = serde_json::to_value(runtime_state).map_err(to_store_error)?;

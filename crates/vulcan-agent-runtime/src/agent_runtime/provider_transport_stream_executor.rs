@@ -3,9 +3,8 @@
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::provider_protocol_bridge::{
-    attach_tool_name_to_runtime_metadata, build_host_tool_result_id,
-    build_tool_result_runtime_metadata, format_host_tool_result_runtime_detail,
-    format_tool_call_runtime_detail,
+    attach_tool_name_to_runtime_metadata, build_tool_result_runtime_metadata,
+    format_host_tool_result_runtime_detail, format_tool_call_runtime_detail,
 };
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::tool_runtime_bridge::{
@@ -137,7 +136,14 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                     .catch_unwind()
                     .await
                 {
-                    Ok(Ok(result)) => (result, "completed"),
+                    Ok(Ok(result)) => {
+                        let display_state = if result.is_error {
+                            "failed"
+                        } else {
+                            "completed"
+                        };
+                        (result, display_state)
+                    }
                     Ok(Err(error)) => (
                         build_tool_failure_invocation_result(request, error.to_string()),
                         "failed",
@@ -154,21 +160,19 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                     ),
                 }
             };
-        let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
         let event_metadata = attach_tool_name_to_runtime_metadata(
-            build_tool_result_runtime_metadata(
+            Some(build_tool_result_runtime_metadata(
                 &request.tool_call_id,
-                &tool_result_id,
                 result.host_result.as_ref(),
                 display_state,
-            ),
+            )),
             &request.tool_name,
         );
         let (tool_finished_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolFinished,
                 format!("工具返回 · {}", request.tool_call_id),
-                format_host_tool_result_runtime_detail(&tool_result_id, &result.model_output),
+                format_host_tool_result_runtime_detail(&result.model_output),
             )
             .with_metadata(event_metadata),
         );

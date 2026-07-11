@@ -46,9 +46,10 @@ pub mod workspace_path;
 
 pub use agent_runtime::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
-    ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionStreamEvent,
-    RuntimeFoundation, RuntimePromptIntervention, RuntimeSkillKind, ensure_runtime_defaults,
-    stream_runtime_run, stream_runtime_run_with_intervention,
+    ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionSessionGoalContext,
+    ExecutionStreamEvent, RuntimeFoundation, RuntimePromptIntervention,
+    RuntimePromptInterventionError, RuntimeSkillKind, ensure_runtime_defaults, stream_runtime_run,
+    stream_runtime_run_with_intervention,
 };
 pub use tooling::bridge as vulcan_tools_bridge;
 pub use vulcan_host_tools::project_temp_maintenance;

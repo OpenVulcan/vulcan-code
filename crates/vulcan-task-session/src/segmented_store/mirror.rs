@@ -20,10 +20,11 @@ pub(super) fn append_main_session_task_link_event_with_owned_append_lock(
     event: &TaskInvocationEvent,
 ) -> Result<bool, SessionStoreError> {
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
-    if !metadata_path.exists() {
+    // metadata is optional, while non-absence open failures remain observable.
+    // metadata 是可选文件，而非缺失类打开错误保持可观察。
+    let Some(mut metadata) = read_json_file::<Value>(&metadata_path)? else {
         return Ok(false);
-    }
-    let mut metadata = read_required_json::<Value>(&metadata_path)?;
+    };
     let mut segments = serde_json::from_value::<Vec<SegmentMetadata>>(
         metadata
             .get("segments")
@@ -167,10 +168,11 @@ pub(super) fn refresh_main_session_task_mirror_from_metadata_with_owned_append_l
     document: &SegmentedTaskMetadataDocument,
 ) -> Result<bool, SessionStoreError> {
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
-    if !metadata_path.exists() {
+    // metadata uses the shared optional-open contract before mirror mutation.
+    // metadata 在镜像修改前使用共享的可选打开契约。
+    let Some(mut metadata) = read_json_file::<Value>(&metadata_path)? else {
         return Ok(false);
-    }
-    let mut metadata = read_required_json::<Value>(&metadata_path)?;
+    };
     let task_session = &document.task_session;
     let task_dir = format!(
         "task/{}",
@@ -361,10 +363,11 @@ pub(super) fn load_main_session_task_mirror_summaries(
     root_session_dir: &Path,
 ) -> Result<Vec<TaskSessionMirrorSummary>, SessionStoreError> {
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
-    if !metadata_path.exists() {
+    // metadata separates an absent root document from an unreadable one.
+    // metadata 区分缺失的根文档与不可读的根文档。
+    let Some(metadata) = read_json_file::<Value>(&metadata_path)? else {
         return Ok(Vec::new());
-    }
-    let metadata = read_required_json::<Value>(&metadata_path)?;
+    };
     let Some(tasks) = metadata.get("tasks").and_then(Value::as_array) else {
         return Ok(Vec::new());
     };
@@ -389,10 +392,11 @@ pub(super) fn load_main_session_task_mirror_summaries_by_parent_for_root_tree(
     root_session_id: RootSessionId,
 ) -> Result<BTreeMap<ParentSessionRef, Vec<TaskSessionMirrorSummary>>, SessionStoreError> {
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
-    if !metadata_path.exists() {
+    // metadata preserves root open failures instead of returning an empty tree.
+    // metadata 保留根文档打开失败，而不是返回空树。
+    let Some(metadata) = read_json_file::<Value>(&metadata_path)? else {
         return Ok(BTreeMap::new());
-    }
-    let metadata = read_required_json::<Value>(&metadata_path)?;
+    };
     let Some(tasks) = metadata.get("tasks").and_then(Value::as_array) else {
         return Ok(BTreeMap::new());
     };

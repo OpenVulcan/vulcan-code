@@ -303,7 +303,7 @@ fn task_runtime_mirrors_lifecycle_into_subagent_registry() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let running_entry = running_registry
-        .get("agent-review")
+        .get_for_parent(SessionNodeId::from(root_session_id), "agent-review")
         .expect("running registry entry should exist");
     assert_eq!(running_entry.status, SubagentStatus::Running);
     assert_eq!(running_entry.agent_kind, SubagentKind::Clone);
@@ -316,7 +316,7 @@ fn task_runtime_mirrors_lifecycle_into_subagent_registry() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let completed_entry = completed_registry
-        .get("agent-review")
+        .get_for_parent(SessionNodeId::from(root_session_id), "agent-review")
         .expect("completed registry entry should exist");
     assert_eq!(completed_entry.status, SubagentStatus::Completed);
     assert_eq!(
@@ -376,7 +376,7 @@ fn task_runtime_mirrors_expert_profile_into_subagent_registry() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let entry = registry
-        .get("agent-review")
+        .get_for_parent(SessionNodeId::from(root_session_id), "agent-review")
         .expect("running expert registry entry should exist");
 
     assert_eq!(entry.agent_kind, SubagentKind::AgentMd);
@@ -433,7 +433,7 @@ fn task_runtime_mirrors_custom_prompt_into_subagent_registry() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let entry = registry
-        .get("custom-review")
+        .get_for_parent(SessionNodeId::from(root_session_id), "custom-review")
         .expect("running custom registry entry should exist");
 
     assert_eq!(entry.agent_kind, SubagentKind::Custom);
@@ -486,7 +486,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
         root_session_id,
         task_id: nested_task_id,
         execution_id: String::from("test-execution-nested"),
-        public_task_id: String::from("nested-check"),
+        public_task_id: String::from("agent-review"),
         prompt: String::from("nested review"),
         description: Some(String::from("Nested review")),
         subagent: Some(String::from("reviewer")),
@@ -516,6 +516,21 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     task_runtime
         .store_running_task_outcome_in_memory(task_id, &nested_invocation, &nested_outcome)
         .expect("nested running task outcome should store");
+    task_runtime
+        .agent_inboxes
+        .write()
+        .expect("inboxes should write")
+        .insert(
+            task_id,
+            VecDeque::from([QueuedInterAgentMessage {
+                delivery_id: String::from("same-name-root-message"),
+                author_session_id: root_session_id,
+                target_task_id: task_id,
+                target_agent_id: String::from("agent-review"),
+                content: String::from("root-scoped queued work"),
+                created_at_ms: current_unix_millis_u64(),
+            }]),
+        );
 
     let result = task_runtime
         .invoke_list_agents(root_session_id, json!({ "include_closed": true }))
@@ -540,9 +555,23 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     );
     assert_eq!(result.model_output["agents"][0]["agent_id"], "agent-review");
     assert_eq!(result.model_output["agents"][0]["lifecycle_state"], "open");
-    assert_eq!(result.model_output["agents"][0]["run_state"], "running");
+    assert_eq!(result.model_output["agents"][0]["run_state"], "queued");
     assert_eq!(result.model_output["agents"][0]["status"], "running");
-    assert_eq!(result.model_output["agents"][0]["queued_message_count"], 0);
+    assert_eq!(result.model_output["agents"][0]["queued_message_count"], 1);
+    assert_eq!(
+        result.model_output["agents"][0]["tree_path"],
+        "/root/agent-review"
+    );
+    assert_eq!(
+        result.model_output["agents"][1]["agent_name"],
+        "agent-review"
+    );
+    assert_eq!(result.model_output["agents"][1]["queued_message_count"], 0);
+    assert_eq!(result.model_output["agents"][1]["run_state"], "running");
+    assert_eq!(
+        result.model_output["agents"][1]["tree_path"],
+        "/root/agent-review/agent-review"
+    );
     assert_eq!(result.model_output["agents"][0]["can_send"], true);
     assert_eq!(result.model_output["agents"][0]["can_interrupt"], true);
     assert_eq!(result.model_output["agents"][0]["can_close"], true);
@@ -561,6 +590,22 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     assert_eq!(host_result.payload["agents"][0]["agent_kind"], "clone");
     assert_eq!(host_result.payload["agents"][0]["prompt_source"], "core");
     assert_eq!(
+        host_result.payload["agents"][0]["parent_session_id"],
+        root_session_id.to_string()
+    );
+    assert_eq!(
+        host_result.payload["agents"][1]["parent_session_id"],
+        task_id.to_string()
+    );
+    assert_eq!(
+        host_result.payload["agents"][0]["tree_path"],
+        "/root/agent-review"
+    );
+    assert_eq!(
+        host_result.payload["agents"][1]["tree_path"],
+        "/root/agent-review/agent-review"
+    );
+    assert_eq!(
         host_result.payload["agents"][0][SUBAGENT_TASK_ID_KEY],
         task_id.to_string()
     );
@@ -578,13 +623,13 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     );
     assert_eq!(
         filtered.model_output["agents"][1]["agent_name"],
-        "nested-check"
+        "agent-review"
     );
 
     let nested_only = task_runtime
         .invoke_list_agents(
             root_session_id,
-            json!({ "include_closed": true, "path_prefix": "/root/agent-review/nested-check" }),
+            json!({ "include_closed": true, "path_prefix": "/root/agent-review/agent-review" }),
         )
         .await
         .expect("list_agents nested path_prefix filter should succeed");
@@ -597,7 +642,7 @@ async fn list_agents_prefers_native_subagent_registry_payload() {
     );
     assert_eq!(
         nested_only.model_output["agents"][0]["agent_name"],
-        "nested-check"
+        "agent-review"
     );
 
     let empty = task_runtime
@@ -773,7 +818,8 @@ async fn list_agents_hides_registry_only_non_resident_entries() {
         .subagent_registry
         .write()
         .expect("registry should write")
-        .upsert(entry);
+        .upsert(entry)
+        .expect("historical registry entry should insert");
 
     let result = task_runtime
         .invoke_list_agents(root_session_id, json!({ "include_closed": true }))
@@ -786,6 +832,160 @@ async fn list_agents_hides_registry_only_non_resident_entries() {
             .expect("agents should be an array")
             .len(),
         0
+    );
+}
+
+/// Verifies the registry rejects duplicate session ownership at the write boundary.
+/// 验证注册表会在写入边界拒绝重复会话归属。
+#[test]
+fn subagent_registry_rejects_duplicate_session_ownership_at_write_boundary() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let duplicated_task_id = Uuid::new_v4();
+    let timestamp_ms = current_unix_millis_u64();
+    let first_entry = SubagentRegistryEntry::new(
+        "first-owner",
+        SessionNodeId::from(duplicated_task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        timestamp_ms,
+    );
+    let second_entry = SubagentRegistryEntry::new(
+        "second-owner",
+        SessionNodeId::from(duplicated_task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        timestamp_ms,
+    );
+    {
+        let mut registry = task_runtime
+            .subagent_registry
+            .write()
+            .expect("registry should write");
+        registry
+            .upsert(first_entry)
+            .expect("first session owner should insert");
+        let error = registry
+            .upsert(second_entry)
+            .expect_err("second session owner should be rejected");
+
+        assert!(matches!(
+            error,
+            vulcan_session_core::SubagentRegistryError::DuplicateSessionId {
+                session_id,
+                first_parent_session_id,
+                first_agent_id,
+                second_parent_session_id,
+                second_agent_id,
+            } if session_id == SessionNodeId::from(duplicated_task_id)
+                && first_parent_session_id == SessionNodeId::from(root_session_id)
+                && first_agent_id == "first-owner"
+                && second_parent_session_id == SessionNodeId::from(root_session_id)
+                && second_agent_id == "second-owner"
+        ));
+        assert!(
+            registry
+                .get_for_parent(SessionNodeId::from(root_session_id), "first-owner")
+                .is_some()
+        );
+        assert!(
+            registry
+                .get_for_parent(SessionNodeId::from(root_session_id), "second-owner")
+                .is_none()
+        );
+    }
+}
+
+/// Verifies close-agent preparation rejects a target missing from the current registry snapshot.
+/// 验证 close_agent 准备阶段会拒绝当前注册表快照中缺失的目标。
+#[test]
+fn close_agent_preparation_rejects_missing_registry_root() {
+    let task_runtime = TaskRuntime::new();
+    let missing_session_id = SessionNodeId::new_v4();
+
+    let error = task_runtime
+        .prepare_close_agent_archive_entries(missing_session_id)
+        .expect_err("missing close target must not become an empty archive transaction");
+
+    assert_eq!(
+        error,
+        format!("Subagent registry subtree root session `{missing_session_id}` does not exist.")
+    );
+}
+
+/// Verifies close-agent commit preserves fields finalized after archive preparation.
+/// 验证 close_agent 提交会保留归档准备后才完成写入的字段。
+#[test]
+fn close_agent_commit_derives_archive_from_latest_registry_entry() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let mut entry = SubagentRegistryEntry::new(
+        "latest-result",
+        SessionNodeId::from(task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    entry.status = SubagentStatus::Completed;
+    entry.result_summary = Some(String::from("summary before stop"));
+    entry.last_task_message = Some(String::from("message before stop"));
+    task_runtime
+        .subagent_registry
+        .write()
+        .expect("registry should write")
+        .upsert(entry)
+        .expect("initial registry entry should insert");
+
+    let prepared_archive = task_runtime
+        .prepare_close_agent_archive_entries(SessionNodeId::from(task_id))
+        .expect("close archive should prepare");
+    let finalized_at = prepared_archive.entries[0].updated_at_ms.saturating_add(10);
+    {
+        let mut registry = task_runtime
+            .subagent_registry
+            .write()
+            .expect("registry should write latest task outcome");
+        let mut latest_entry = registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "latest-result")
+            .cloned()
+            .expect("prepared entry should still exist");
+        latest_entry.set_status(SubagentStatus::Completed, finalized_at);
+        latest_entry.result_summary = Some(String::from("summary finalized during stop"));
+        latest_entry.last_task_message = Some(String::from("message finalized during stop"));
+        registry
+            .upsert(latest_entry)
+            .expect("latest task outcome should update the exact registry slot");
+    }
+
+    let committed_archive = task_runtime
+        .commit_close_agent_runtime_archive(&prepared_archive)
+        .expect("runtime archive should commit from the latest entry");
+
+    assert_eq!(committed_archive.entries.len(), 1);
+    assert_eq!(
+        committed_archive.entries[0].status,
+        SubagentStatus::Archived
+    );
+    assert_eq!(committed_archive.entries[0].updated_at_ms, finalized_at);
+    assert_eq!(
+        committed_archive.entries[0].result_summary.as_deref(),
+        Some("summary finalized during stop")
+    );
+    assert_eq!(
+        committed_archive.entries[0].last_task_message.as_deref(),
+        Some("message finalized during stop")
+    );
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should remain readable after commit");
+    let archived_entry = registry
+        .get_for_parent(SessionNodeId::from(root_session_id), "latest-result")
+        .expect("committed archived entry should remain in its exact slot");
+    assert_eq!(archived_entry.status, SubagentStatus::Archived);
+    assert_eq!(
+        archived_entry.result_summary.as_deref(),
+        Some("summary finalized during stop")
     );
 }
 
@@ -818,8 +1018,12 @@ async fn close_agent_archives_target_and_descendants_by_default() {
             .subagent_registry
             .write()
             .expect("registry should write");
-        registry.upsert(parent_entry);
-        registry.upsert(child_entry);
+        registry
+            .upsert(parent_entry)
+            .expect("parent registry entry should insert");
+        registry
+            .upsert(child_entry)
+            .expect("child registry entry should insert");
     }
     {
         let mut inboxes = task_runtime
@@ -871,14 +1075,14 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         .expect("registry should read after close");
     assert_eq!(
         registry
-            .get("parent-review")
+            .get_for_parent(SessionNodeId::from(root_session_id), "parent-review")
             .expect("parent should exist")
             .status,
         SubagentStatus::Archived
     );
     assert_eq!(
         registry
-            .get("parent-review")
+            .get_for_parent(SessionNodeId::from(root_session_id), "parent-review")
             .expect("parent should exist")
             .stop_reason
             .as_deref(),
@@ -886,7 +1090,7 @@ async fn close_agent_archives_target_and_descendants_by_default() {
     );
     assert_eq!(
         registry
-            .get("child-review")
+            .get_for_parent(SessionNodeId::from(parent_task_id), "child-review")
             .expect("child should exist")
             .status,
         SubagentStatus::Archived
@@ -960,7 +1164,7 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         .expect("registry should read after late outcome");
     assert_eq!(
         registry_after_late_outcome
-            .get("parent-review")
+            .get_for_parent(SessionNodeId::from(root_session_id), "parent-review")
             .expect("parent should still exist")
             .status,
         SubagentStatus::Archived
@@ -982,6 +1186,178 @@ async fn close_agent_archives_target_and_descendants_by_default() {
         .await
         .expect_err("closing an archived agent should fail");
     assert!(repeat_error.contains("already closed"));
+}
+
+/// Verifies close_agent rejects the removed cascade switch before closing the complete subtree.
+/// 验证 close_agent 会先拒绝已移除的级联开关，再关闭完整子树。
+#[tokio::test]
+async fn close_agent_rejects_non_cascade_orphans_and_closes_active_subtree() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let parent_task_id = Uuid::new_v4();
+    let child_task_id = Uuid::new_v4();
+    let mut parent_entry = SubagentRegistryEntry::new(
+        "non-cascade-parent",
+        SessionNodeId::from(parent_task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    parent_entry.status = SubagentStatus::Running;
+    let mut child_entry = SubagentRegistryEntry::new(
+        "non-cascade-child",
+        SessionNodeId::from(child_task_id),
+        SessionNodeId::from(parent_task_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    child_entry.status = SubagentStatus::Running;
+    {
+        let mut registry = task_runtime
+            .subagent_registry
+            .write()
+            .expect("registry should write");
+        registry
+            .upsert(parent_entry)
+            .expect("parent registry entry should insert");
+        registry
+            .upsert(child_entry)
+            .expect("child registry entry should insert");
+    }
+    let _parent_run = task_runtime
+        .reserve_active_task_run(parent_task_id, "non-cascade-parent-execution")
+        .expect("parent active run should reserve");
+    let _child_run = task_runtime
+        .reserve_active_task_run(child_task_id, "non-cascade-child-execution")
+        .expect("child active run should reserve");
+    {
+        let mut inboxes = task_runtime
+            .agent_inboxes
+            .write()
+            .expect("inboxes should write");
+        inboxes.insert(
+            parent_task_id,
+            VecDeque::from([QueuedInterAgentMessage {
+                delivery_id: String::from("non-cascade-parent-message"),
+                author_session_id: root_session_id,
+                target_task_id: parent_task_id,
+                target_agent_id: String::from("non-cascade-parent"),
+                content: String::from("parent message"),
+                created_at_ms: current_unix_millis_u64(),
+            }]),
+        );
+        inboxes.insert(
+            child_task_id,
+            VecDeque::from([QueuedInterAgentMessage {
+                delivery_id: String::from("non-cascade-child-message"),
+                author_session_id: parent_task_id,
+                target_task_id: child_task_id,
+                target_agent_id: String::from("non-cascade-child"),
+                content: String::from("child message"),
+                created_at_ms: current_unix_millis_u64(),
+            }]),
+        );
+    }
+
+    let unsupported_error = task_runtime
+        .invoke_close_agent(
+            root_session_id,
+            json!({ "target": "non-cascade-parent", "cascade": false }),
+        )
+        .await
+        .expect_err("removed cascade switch should be rejected");
+    assert!(unsupported_error.contains("unsupported keys: cascade"));
+    {
+        let active_runs = task_runtime
+            .active_task_runs
+            .read()
+            .expect("active runs should read after rejection");
+        assert!(!active_runs[&parent_task_id].stop_requested);
+        assert!(!active_runs[&child_task_id].stop_requested);
+    }
+    let registry_after_rejection = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read after rejection");
+    assert_eq!(
+        registry_after_rejection
+            .get_for_parent(SessionNodeId::from(root_session_id), "non-cascade-parent",)
+            .expect("parent should remain registered after rejection")
+            .status,
+        SubagentStatus::Running
+    );
+    assert_eq!(
+        registry_after_rejection
+            .get_for_parent(SessionNodeId::from(parent_task_id), "non-cascade-child",)
+            .expect("child should remain registered after rejection")
+            .status,
+        SubagentStatus::Running
+    );
+
+    let close_result = task_runtime
+        .invoke_close_agent(root_session_id, json!({ "target": "non-cascade-parent" }))
+        .await
+        .expect("subtree close should succeed");
+
+    assert_eq!(close_result.model_output["closed_count"], 2);
+    let closed_agents = close_result.model_output["closed_agents"]
+        .as_array()
+        .expect("closed agents should be an array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        closed_agents,
+        BTreeSet::from(["non-cascade-parent", "non-cascade-child"])
+    );
+    let host_result = close_result
+        .host_result
+        .expect("close result should retain host metadata");
+    assert_eq!(host_result.payload["stopped_count"], 2);
+    let stopped_task_ids = host_result.payload[STOPPED_SUBAGENT_TASK_IDS_KEY]
+        .as_array()
+        .expect("stopped task ids should be an array")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        stopped_task_ids,
+        BTreeSet::from([parent_task_id.to_string(), child_task_id.to_string()])
+    );
+    let active_runs = task_runtime
+        .active_task_runs
+        .read()
+        .expect("active runs should read after close");
+    assert!(
+        active_runs
+            .get(&parent_task_id)
+            .expect("parent run should remain resident until its guard settles")
+            .stop_requested
+    );
+    assert!(active_runs[&child_task_id].stop_requested);
+    drop(active_runs);
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read after close");
+    assert_eq!(
+        registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "non-cascade-parent",)
+            .expect("parent should remain registered")
+            .status,
+        SubagentStatus::Archived
+    );
+    assert_eq!(
+        registry
+            .get_for_parent(SessionNodeId::from(parent_task_id), "non-cascade-child",)
+            .expect("child should remain registered")
+            .status,
+        SubagentStatus::Archived
+    );
+    let inboxes = task_runtime
+        .agent_inboxes
+        .read()
+        .expect("inboxes should read after close");
+    assert!(inboxes.is_empty());
 }
 
 /// Verifies interrupt_agent reports the last known status for completed agents.
@@ -1033,6 +1409,47 @@ async fn interrupt_agent_reports_completed_status_for_known_completed_agent() {
 
     assert_eq!(result.model_output["previous_status"], "completed");
     assert_ne!(result.model_output["previous_status"], "unknown");
+}
+
+/// Verifies interrupt_agent cannot project a stale stop over an archived child session.
+/// 验证 interrupt_agent 不能用过期停止状态覆盖已归档子会话。
+#[tokio::test]
+async fn interrupt_agent_rejects_archived_child_session() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let mut entry = SubagentRegistryEntry::new(
+        "archived-review",
+        SessionNodeId::from(task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    entry.status = SubagentStatus::Archived;
+    entry.stop_reason = Some(String::from("close_agent"));
+    task_runtime
+        .subagent_registry
+        .write()
+        .expect("registry should write")
+        .upsert(entry)
+        .expect("archived child fixture should insert");
+
+    let error = task_runtime
+        .invoke_interrupt_agent(root_session_id, json!({ "target": "archived-review" }))
+        .await
+        .expect_err("archived child should reject interrupt_agent");
+
+    assert!(error.contains("archived"));
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should remain readable");
+    assert_eq!(
+        registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "archived-review")
+            .expect("archived child should remain registered")
+            .status,
+        SubagentStatus::Archived
+    );
 }
 
 /// Verifies interrupt_agent reports explicit errors for invalid targets.

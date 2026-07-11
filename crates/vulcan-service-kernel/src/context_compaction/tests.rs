@@ -41,7 +41,8 @@ fn webui_context_compaction_draft_prunes_expired_transient_injections_transactio
             .with_runtime_metadata("assistant-1", "1780000000001"),
     ];
     let mut active_runtime_state = SessionRuntimeStateEntry {
-        conversation_state: conversation_state_from_session_messages(&messages),
+        conversation_state: conversation_state_from_session_messages(&messages)
+            .expect("valid replayed conversation identities"),
         live_context_budget_fingerprint: Some(String::from("budget-live")),
         live_context_assembly_fingerprint: Some(String::from("assembly-live")),
         ..SessionRuntimeStateEntry::default()
@@ -153,7 +154,8 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
             .with_runtime_metadata("user-after", "1780000000003"),
     ];
     let active_runtime_state = SessionRuntimeStateEntry {
-        conversation_state: conversation_state_from_session_messages(&messages),
+        conversation_state: conversation_state_from_session_messages(&messages)
+            .expect("valid replayed conversation identities"),
         live_context_budget_fingerprint: Some(String::from("budget-live")),
         live_context_assembly_fingerprint: Some(String::from("assembly-live")),
         ..SessionRuntimeStateEntry::default()
@@ -239,7 +241,8 @@ fn webui_context_compaction_draft_appends_auto_continuation_only_for_auto_trigge
         .with_runtime_metadata("user-latest", "1780000000002"),
     ];
     let active_runtime_state = SessionRuntimeStateEntry {
-        conversation_state: conversation_state_from_session_messages(&messages),
+        conversation_state: conversation_state_from_session_messages(&messages)
+            .expect("valid replayed conversation identities"),
         live_context_budget_fingerprint: Some(String::from("budget-live")),
         live_context_assembly_fingerprint: Some(String::from("assembly-live")),
         ..SessionRuntimeStateEntry::default()
@@ -479,7 +482,8 @@ fn append_webui_context_compaction_end_message_preserves_input_prune_report() {
         AUTO_CONTEXT_COMPACTION_TRIGGER,
         7,
         Some(&prune_report),
-    );
+    )
+    .expect("valid compaction terminal record identity");
 
     let record = runtime_state
         .conversation_state
@@ -558,7 +562,8 @@ fn fail_webui_context_compaction_execution_records_auto_failure_metadata() {
         session_id,
         "预算说明",
         AUTO_CONTEXT_COMPACTION_TRIGGER,
-    );
+    )
+    .expect("valid compaction status record identity");
     runtime_state.conversation_state = workspace_snapshot
         .session_runtime_state
         .remove(&session_id)
@@ -575,7 +580,8 @@ fn fail_webui_context_compaction_execution_records_auto_failure_metadata() {
         "预算说明",
         AUTO_CONTEXT_COMPACTION_TRIGGER,
         "测试失败",
-    );
+    )
+    .expect("valid compaction failure record identity");
 
     let runtime_state = workspace_snapshot
         .session_runtime_state

@@ -76,7 +76,8 @@ fn latest_turn_stats(
 fn checkpoint_preserves_visible_records() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "1000", "介绍下你自己");
+    append_user_prompt_record(&mut runtime_state, session_id, "1000", "介绍下你自己")
+        .expect("valid user prompt identity");
     let mut output_record_id = None;
     append_stream_delta_record_to_state(
         &mut runtime_state,
@@ -87,14 +88,16 @@ fn checkpoint_preserves_visible_records() {
         "输出",
         "我是 VulcanCode。",
         false,
-    );
+    )
+    .expect("valid streaming record identity");
     let records_before_checkpoint = visible_record_projection(&runtime_state);
 
     apply_checkpoint_conversation_state(
         &mut runtime_state,
         SessionConversationState::default(),
         "1002",
-    );
+    )
+    .expect("valid checkpoint conversation identities");
 
     assert_eq!(
         visible_record_projection(&runtime_state),
@@ -109,7 +112,8 @@ fn checkpoint_preserves_visible_records() {
 fn checkpoint_merges_guided_user_record() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "1100", "先调用工具");
+    append_user_prompt_record(&mut runtime_state, session_id, "1100", "先调用工具")
+        .expect("valid user prompt identity");
     let mut output_record_id = None;
     append_stream_delta_record_to_state(
         &mut runtime_state,
@@ -120,7 +124,8 @@ fn checkpoint_merges_guided_user_record() {
         "输出",
         "工具已经完成。",
         false,
-    );
+    )
+    .expect("valid streaming record identity");
     let mut later_output_record_id = None;
     append_stream_delta_record_to_state(
         &mut runtime_state,
@@ -131,7 +136,8 @@ fn checkpoint_merges_guided_user_record() {
         "输出",
         "后续请求已经开始输出。",
         false,
-    );
+    )
+    .expect("valid streaming record identity");
     let mut checkpoint_state = runtime_state.conversation_state.clone();
     checkpoint_state.records.push(SessionConversationRecord {
         id: String::from("core-guided-user-record"),
@@ -152,7 +158,8 @@ fn checkpoint_merges_guided_user_record() {
         created_at: String::from("1102"),
     });
 
-    apply_checkpoint_conversation_state(&mut runtime_state, checkpoint_state, "1103");
+    apply_checkpoint_conversation_state(&mut runtime_state, checkpoint_state, "1103")
+        .expect("valid checkpoint conversation identities");
 
     let visible_bodies = runtime_state
         .conversation_state
@@ -212,7 +219,8 @@ fn checkpoint_merges_guided_user_record() {
 fn checkpoint_skips_session_mailbox_user_record() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "1200", "启动两个子代理");
+    append_user_prompt_record(&mut runtime_state, session_id, "1200", "启动两个子代理")
+        .expect("valid user prompt identity");
     let mut checkpoint_state = runtime_state.conversation_state.clone();
     checkpoint_state.records.push(SessionConversationRecord {
         id: String::from("core-mailbox-user-record"),
@@ -227,7 +235,8 @@ fn checkpoint_skips_session_mailbox_user_record() {
         created_at: String::from("1201"),
     });
 
-    apply_checkpoint_conversation_state(&mut runtime_state, checkpoint_state, "1202");
+    apply_checkpoint_conversation_state(&mut runtime_state, checkpoint_state, "1202")
+        .expect("valid checkpoint conversation identities");
 
     let visible_bodies = runtime_state
         .conversation_state
@@ -245,7 +254,8 @@ fn checkpoint_skips_session_mailbox_user_record() {
 fn terminal_report_preserves_streamed_records() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "2000", "随便调用两个工具");
+    append_user_prompt_record(&mut runtime_state, session_id, "2000", "随便调用两个工具")
+        .expect("valid user prompt identity");
     let mut thinking_record_id = None;
     append_stream_delta_record_to_state(
         &mut runtime_state,
@@ -256,7 +266,8 @@ fn terminal_report_preserves_streamed_records() {
         "思考",
         "我需要先判断可用工具。",
         true,
-    );
+    )
+    .expect("valid streaming record identity");
     let mut output_record_id = None;
     append_stream_delta_record_to_state(
         &mut runtime_state,
@@ -267,7 +278,8 @@ fn terminal_report_preserves_streamed_records() {
         "输出",
         "已完成，两个工具均正常。",
         false,
-    );
+    )
+    .expect("valid streaming record identity");
 
     let report = ExecutionRunReport {
         session_id,
@@ -286,7 +298,8 @@ fn terminal_report_preserves_streamed_records() {
         controller_events: Vec::new(),
     };
 
-    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2003", &report);
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2003", &report)
+        .expect("valid terminal report identities");
 
     let visible_bodies: Vec<&str> = runtime_state
         .conversation_state
@@ -320,10 +333,12 @@ fn terminal_report_preserves_streamed_records() {
 fn terminal_report_attaches_usage_to_appended_assistant_message() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "2100", "只输出 abc");
+    append_user_prompt_record(&mut runtime_state, session_id, "2100", "只输出 abc")
+        .expect("valid user prompt identity");
     let report = usage_report(session_id, "abc", 31, 2, 1, 34, Some(7));
 
-    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2101", &report);
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2101", &report)
+        .expect("valid terminal report identities");
 
     let assistant_usage = runtime_state
         .conversation_state
@@ -360,7 +375,8 @@ fn terminal_report_attaches_usage_to_appended_assistant_message() {
 fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "2150", "创建智能体");
+    append_user_prompt_record(&mut runtime_state, session_id, "2150", "创建智能体")
+        .expect("valid user prompt identity");
     let mut report = usage_report(session_id, "智能体完成。", 31, 2, 1, 34, Some(7));
     report
         .embedded_turn_usage_segments
@@ -380,7 +396,8 @@ fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
             cache_creation_input_tokens: None,
         });
 
-    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2151", &report);
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2151", &report)
+        .expect("valid terminal report identities");
 
     let turn_stats = latest_turn_stats(&runtime_state);
     assert_eq!(turn_stats.provider_call_count, 1);
@@ -409,7 +426,8 @@ fn terminal_report_keeps_embedded_subagent_usage_out_of_parent_totals() {
 fn terminal_report_attaches_usage_to_existing_assistant_message() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "2200", "只输出 xyz");
+    append_user_prompt_record(&mut runtime_state, session_id, "2200", "只输出 xyz")
+        .expect("valid user prompt identity");
     runtime_state
         .conversation_state
         .messages
@@ -426,7 +444,8 @@ fn terminal_report_attaches_usage_to_existing_assistant_message() {
         });
     let report = usage_report(session_id, "xyz", 13, 5, 0, 18, None);
 
-    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2201", &report);
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2201", &report)
+        .expect("valid terminal report identities");
 
     let assistant_messages = runtime_state
         .conversation_state
@@ -463,7 +482,8 @@ fn terminal_report_attaches_usage_to_existing_assistant_message() {
 fn terminal_report_backfills_usage_when_checkpoint_messages_lack_usage() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "2300", "只输出 123");
+    append_user_prompt_record(&mut runtime_state, session_id, "2300", "只输出 123")
+        .expect("valid user prompt identity");
     let report = ExecutionRunReport {
         session_id,
         preparation: None,
@@ -502,7 +522,8 @@ fn terminal_report_backfills_usage_when_checkpoint_messages_lack_usage() {
         controller_events: Vec::new(),
     };
 
-    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2301", &report);
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2301", &report)
+        .expect("valid terminal report identities");
 
     let turn_stats = latest_turn_stats(&runtime_state);
     assert_eq!(turn_stats.provider_call_count, 1);
@@ -525,7 +546,8 @@ fn terminal_report_backfills_usage_when_checkpoint_messages_lack_usage() {
 fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "2400", "连续调用工具后总结");
+    append_user_prompt_record(&mut runtime_state, session_id, "2400", "连续调用工具后总结")
+        .expect("valid user prompt identity");
     let report = ExecutionRunReport {
         session_id,
         preparation: None,
@@ -571,7 +593,8 @@ fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
         controller_events: Vec::new(),
     };
 
-    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2401", &report);
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "2401", &report)
+        .expect("valid terminal report identities");
 
     let turn_stats = latest_turn_stats(&runtime_state);
     assert_eq!(turn_stats.provider_call_count, 7);
@@ -591,7 +614,8 @@ fn terminal_report_backfills_multi_call_usage_from_cumulative_snapshot() {
 fn tool_result_projection_preserves_runtime_event_order() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "3000", "调用工具");
+    append_user_prompt_record(&mut runtime_state, session_id, "3000", "调用工具")
+        .expect("valid user prompt identity");
     let started = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
         "工具调用 · call-1 · vulcan_file_list",
@@ -601,12 +625,10 @@ fn tool_result_projection_preserves_runtime_event_order() {
         "tool_call_id": "call-1",
         "tool_name": "vulcan_file_list",
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3001",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3001", &started,)
+            .expect("valid runtime event record identities")
+    );
     let mut output_record_id = None;
     append_stream_delta_record_to_state(
         &mut runtime_state,
@@ -617,15 +639,17 @@ fn tool_result_projection_preserves_runtime_event_order() {
         "输出",
         "工具调用后继续输出。",
         false,
-    );
+    )
+    .expect("valid streaming record identity");
+    // finished carries only the authoritative call identity and structured completion state.
+    // finished 只携带权威调用身份与结构化完成状态。
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-1",
-        "## Result ID\n\n`tool-result-call-1`\n\n## Tool Result\n\nlisted files",
+        "## Tool Result\n\nlisted files",
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-1",
-        "tool_result_id": "tool-result-call-1",
         "tool_name": "vulcan_file_list",
         "display_state": "completed",
     })));
@@ -634,7 +658,7 @@ fn tool_result_projection_preserves_runtime_event_order() {
         session_id,
         "3003",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
 
     let visible_kinds = runtime_state
         .conversation_state
@@ -667,14 +691,12 @@ fn tool_result_projection_preserves_runtime_event_order() {
             .and_then(serde_json::Value::as_str),
         Some("completed")
     );
-    assert_eq!(
-        metadata
+    assert!(
+        !metadata
             .get("result")
-            .and_then(|result| result.get("tool_result_id"))
-            .and_then(serde_json::Value::as_str),
-        Some("tool-result-call-1")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|result| result.contains_key("tool_result_id"))
     );
-    assert!(metadata.get("tool_result_id").is_none());
     assert_eq!(
         metadata
             .get("result")
@@ -741,12 +763,10 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
         "tool_call_id": "call-change",
         "tool_name": "vulcan_file_create",
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3100",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3100", &started,)
+            .expect("valid runtime event record identities")
+    );
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-change",
@@ -754,7 +774,6 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-change",
-        "tool_result_id": "tool-result-call-change",
         "tool_name": "vulcan_file_create",
         "display_state": "completed",
         "host_result": {
@@ -775,7 +794,7 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
         session_id,
         "3101",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
 
     let tool_record = runtime_state
         .conversation_state
@@ -822,12 +841,10 @@ fn tool_result_projection_preserves_command_run_rtk_host_result() {
             "command": "git status"
         }
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3150",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3150", &started,)
+            .expect("valid runtime event record identities")
+    );
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-shell",
@@ -835,7 +852,6 @@ fn tool_result_projection_preserves_command_run_rtk_host_result() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-shell",
-        "tool_result_id": "tool-result-call-shell",
         "tool_name": "shell_command",
         "display_state": "completed",
         "host_result": {
@@ -858,7 +874,7 @@ fn tool_result_projection_preserves_command_run_rtk_host_result() {
         session_id,
         "3151",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
 
     let tool_record = runtime_state
         .conversation_state
@@ -936,12 +952,10 @@ fn tool_result_projection_preserves_compact_subagent_wait_usage() {
             "target": "reviewer"
         }
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3170",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3170", &started,)
+            .expect("valid runtime event record identities")
+    );
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-wait",
@@ -949,7 +963,6 @@ fn tool_result_projection_preserves_compact_subagent_wait_usage() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-wait",
-        "tool_result_id": "tool-result-call-wait",
         "tool_name": "wait_agent",
         "display_state": "completed",
         "host_result": {
@@ -994,7 +1007,7 @@ fn tool_result_projection_preserves_compact_subagent_wait_usage() {
         session_id,
         "3171",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
 
     let tool_record = runtime_state
         .conversation_state
@@ -1055,7 +1068,8 @@ fn tool_result_projection_preserves_compact_subagent_wait_usage() {
 fn terminal_report_groups_compact_wait_agent_child_usage() {
     let session_id = test_session_id();
     let mut runtime_state = SessionRuntimeStateEntry::default();
-    append_user_prompt_record(&mut runtime_state, session_id, "3180", "等待智能体");
+    append_user_prompt_record(&mut runtime_state, session_id, "3180", "等待智能体")
+        .expect("valid user prompt identity");
     let started = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
         "工具调用 · call-wait-stats · wait_agent",
@@ -1065,12 +1079,10 @@ fn terminal_report_groups_compact_wait_agent_child_usage() {
         "tool_call_id": "call-wait-stats",
         "tool_name": "wait_agent",
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3181",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3181", &started,)
+            .expect("valid runtime event record identities")
+    );
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-wait-stats",
@@ -1078,7 +1090,6 @@ fn terminal_report_groups_compact_wait_agent_child_usage() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-wait-stats",
-        "tool_result_id": "tool-result-call-wait-stats",
         "tool_name": "wait_agent",
         "display_state": "completed",
         "host_result": {
@@ -1115,10 +1126,11 @@ fn terminal_report_groups_compact_wait_agent_child_usage() {
         session_id,
         "3182",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
     let report = usage_report(session_id, "已收到。", 40, 4, 0, 44, Some(12));
 
-    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "3183", &report);
+    apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "3183", &report)
+        .expect("valid terminal report identities");
 
     let turn_stats = latest_turn_stats(&runtime_state);
     assert_eq!(turn_stats.total_tokens, 44);
@@ -1153,12 +1165,10 @@ fn tool_result_projection_requires_rtk_status_marker() {
             "command": "git status"
         }
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3160",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3160", &started,)
+            .expect("valid runtime event record identities")
+    );
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-shell-no-status",
@@ -1166,7 +1176,6 @@ fn tool_result_projection_requires_rtk_status_marker() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-shell-no-status",
-        "tool_result_id": "tool-result-call-shell-no-status",
         "tool_name": "shell_command",
         "display_state": "completed",
         "host_result": {
@@ -1188,7 +1197,7 @@ fn tool_result_projection_requires_rtk_status_marker() {
         session_id,
         "3161",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
 
     let detail_record = runtime_state
         .conversation_state
@@ -1237,12 +1246,10 @@ fn tool_result_projection_preserves_structured_ask_display() {
             }]
         }
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3200",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3200", &started,)
+            .expect("valid runtime event record identities")
+    );
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-ask",
@@ -1250,7 +1257,6 @@ fn tool_result_projection_preserves_structured_ask_display() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-ask",
-        "tool_result_id": "tool-result-call-ask",
         "tool_name": "ask",
         "display_state": "completed",
         "host_result": {
@@ -1276,7 +1282,7 @@ fn tool_result_projection_preserves_structured_ask_display() {
         session_id,
         "3201",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
 
     let tool_record = runtime_state
         .conversation_state
@@ -1354,12 +1360,10 @@ fn tool_result_projection_preserves_plan_artifact_host_result() {
             "name": "Test Plan"
         }
     })));
-    assert!(append_runtime_event_projection_to_state(
-        &mut runtime_state,
-        session_id,
-        "3300",
-        &started,
-    ));
+    assert!(
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, "3300", &started,)
+            .expect("valid runtime event record identities")
+    );
     let finished = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "工具返回 · call-plan",
@@ -1367,7 +1371,6 @@ fn tool_result_projection_preserves_plan_artifact_host_result() {
     )
     .with_metadata(Some(json!({
         "tool_call_id": "call-plan",
-        "tool_result_id": "tool-result-call-plan",
         "tool_name": "submit_plan",
         "display_state": "completed",
         "host_result": {
@@ -1385,7 +1388,7 @@ fn tool_result_projection_preserves_plan_artifact_host_result() {
         session_id,
         "3301",
         &finished,
-    ));
+    ).expect("valid runtime event record identities"));
 
     let tool_record = runtime_state
         .conversation_state
@@ -1416,7 +1419,6 @@ fn tool_result_projection_preserves_plan_artifact_host_result() {
 #[test]
 fn returned_tool_payload_wins_over_host_failure_hint() {
     let metadata = json!({
-        "tool_result_id": "tool-result-call-1",
         "host_result": {
             "kind": "tool_error",
             "payload": {
@@ -1435,7 +1437,6 @@ fn returned_tool_payload_wins_over_host_failure_hint() {
 #[test]
 fn running_task_session_result_keeps_running_display_state() {
     let metadata = json!({
-        "tool_result_id": "tool-result-call-task",
         "host_result": {
             "kind": "task_session",
             "payload": {
@@ -1449,6 +1450,81 @@ fn running_task_session_result_keeps_running_display_state() {
     assert_eq!(
         tool_display_state_for_finished_event(Some(&metadata), true),
         "running"
+    );
+}
+
+/// Verifies duplicate prompt identity rejection preserves every runtime field changed by a successful append.
+/// 验证重复提示词身份被拒绝时，会保留成功追加可能修改的每个运行态字段。
+#[test]
+fn user_prompt_append_is_atomic_on_duplicate_message_identity() {
+    // session_id fixes the generated protocol identity for both append attempts.
+    // session_id 固定两次追加生成的协议身份。
+    let session_id = test_session_id();
+    // runtime_state receives one valid prompt before the duplicate attempt is prepared.
+    // runtime_state 会先接收一条有效提示词，再准备重复追加。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_user_prompt_record(&mut runtime_state, session_id, "5000", "first")
+        .expect("first prompt identity should be valid");
+    runtime_state.ui_state.unread = true;
+    runtime_state.last_safe_provider_request_count = Some(7);
+    runtime_state.updated_at = String::from("before-duplicate");
+    // original_state captures the complete runtime transaction boundary before failure.
+    // original_state 捕获失败前的完整运行态事务边界。
+    let original_state =
+        serde_json::to_value(&runtime_state).expect("runtime state should serialize");
+
+    // error proves the same generated identity is rejected before transcript or runtime flags change.
+    // error 证明相同生成身份会在转录或运行标记变化前被拒绝。
+    let error = append_user_prompt_record(&mut runtime_state, session_id, "5000", "duplicate")
+        .expect_err("duplicate prompt identity must fail");
+
+    assert!(error.contains("duplicates id"));
+    assert_eq!(
+        serde_json::to_value(&runtime_state).expect("runtime state should serialize after failure"),
+        original_state
+    );
+}
+
+/// Verifies a terminal assistant identity collision leaves the complete runtime state unchanged.
+/// 验证终态助手身份冲突会使完整运行态保持不变。
+#[test]
+fn terminal_report_apply_is_atomic_on_assistant_identity_collision() {
+    // session_id and terminal timestamp define the exact assistant identity used by the report.
+    // session_id 与终态时间戳定义报告使用的准确助手身份。
+    let session_id = test_session_id();
+    // runtime_state already owns the terminal identity before the report transaction starts.
+    // runtime_state 在报告事务开始前已经持有该终态身份。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    append_session_conversation_message(
+        &mut runtime_state.conversation_state,
+        SessionConversationMessage {
+            id: format!("session-{session_id}-protocol-assistant-6000"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("collision owner"),
+                attachments: Vec::new(),
+            },
+        },
+    )
+    .expect("initial collision owner should be valid");
+    runtime_state.updated_at = String::from("before-terminal");
+    // original_state captures messages, records, usage, and UI fields before draft application.
+    // original_state 捕获草稿应用前的消息、记录、用量与界面字段。
+    let original_state =
+        serde_json::to_value(&runtime_state).expect("runtime state should serialize");
+    // report requires a new assistant message with the already-owned identity.
+    // report 要求使用已经被占用的身份创建新助手消息。
+    let report = usage_report(session_id, "terminal output", 10, 2, 0, 12, None);
+
+    // error proves the detached terminal draft is discarded in full.
+    // error 证明分离的终态草稿会被整体丢弃。
+    let error =
+        apply_terminal_execution_report_to_state(&mut runtime_state, session_id, "6000", &report)
+            .expect_err("terminal assistant identity collision must fail");
+
+    assert!(error.contains("duplicates id"));
+    assert_eq!(
+        serde_json::to_value(&runtime_state).expect("runtime state should serialize after failure"),
+        original_state
     );
 }
 

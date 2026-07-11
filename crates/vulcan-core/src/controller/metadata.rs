@@ -60,10 +60,86 @@ pub(super) fn interjected_user_turn_record_metadata(
     Some(metadata)
 }
 
-/// Derives the starting local identifier counter from the current snapshot sizes.
-/// 根据当前快照大小推导本地标识计数器的起始值。
-pub(super) fn derive_initial_local_id_counter(snapshot: &ConversationSnapshot) -> u64 {
-    (snapshot.messages.len() + snapshot.records.len()) as u64
+/// Validates canonical message and record identifiers before a snapshot enters controller ownership.
+/// 在快照进入控制器所有权前校验规范消息与记录标识。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the complete candidate snapshot whose two identity namespaces are validated.
+/// `snapshot` 是需要校验两个身份命名空间的完整候选快照。
+///
+/// # Returns
+/// 返回值
+/// Returns success for a canonical snapshot, or an invalid-state error naming the exact conflict.
+/// 规范快照返回成功；否则返回指出准确冲突的无效状态错误。
+pub(super) fn validate_conversation_snapshot_identities(
+    snapshot: &ConversationSnapshot,
+) -> Result<(), CoreError> {
+    // message_ids owns the canonical message namespace observed so far.
+    // message_ids 保存目前已观察到的规范消息命名空间。
+    let mut message_ids = std::collections::BTreeSet::new();
+    for (message_index, message) in snapshot.messages.iter().enumerate() {
+        validate_snapshot_identifier(
+            &mut message_ids,
+            message.id.as_str(),
+            "message",
+            message_index,
+        )?;
+    }
+    // record_ids owns the independent durable-record namespace observed so far.
+    // record_ids 保存目前已观察到的独立持久化记录命名空间。
+    let mut record_ids = std::collections::BTreeSet::new();
+    for (record_index, record) in snapshot.records.iter().enumerate() {
+        validate_snapshot_identifier(&mut record_ids, record.id.as_str(), "record", record_index)?;
+    }
+    Ok(())
+}
+
+/// Validates one identifier inside a single canonical snapshot namespace.
+/// 在单个规范快照命名空间内校验一个标识。
+///
+/// # Parameters
+/// 参数
+/// `identifiers` contains identifiers already accepted in this namespace.
+/// `identifiers` 包含该命名空间内已经接受的标识。
+/// `identifier` is the exact candidate value without normalization.
+/// `identifier` 是未经归一化的精确候选值。
+/// `entity` names the canonical entity kind used in diagnostics.
+/// `entity` 是诊断信息使用的规范实体类型名称。
+/// `index` is the zero-based position of the candidate in its snapshot collection.
+/// `index` 是候选项在快照集合中的零基位置。
+///
+/// # Returns
+/// 返回值
+/// Returns success after registration, or an invalid-state error without changing the snapshot.
+/// 注册成功后返回成功；否则返回无效状态错误且不修改快照。
+fn validate_snapshot_identifier<'a>(
+    identifiers: &mut std::collections::BTreeSet<&'a str>,
+    identifier: &'a str,
+    entity: &str,
+    index: usize,
+) -> Result<(), CoreError> {
+    // canonical_identifier proves callers did not rely on silent whitespace normalization.
+    // canonical_identifier 证明调用方没有依赖静默空白归一化。
+    let canonical_identifier = identifier.trim();
+    if canonical_identifier.is_empty() {
+        return Err(CoreError::InvalidState {
+            message: format!("conversation {entity} {index} has an empty id"),
+        });
+    }
+    if canonical_identifier != identifier {
+        return Err(CoreError::InvalidState {
+            message: format!(
+                "conversation {entity} {index} has surrounding whitespace in id {identifier:?}"
+            ),
+        });
+    }
+    if !identifiers.insert(identifier) {
+        return Err(CoreError::InvalidState {
+            message: format!("conversation {entity} {index} duplicates id {identifier:?}"),
+        });
+    }
+    Ok(())
 }
 
 /// Builds one stable JSON metadata object for a tool result record or event.

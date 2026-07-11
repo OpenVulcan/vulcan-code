@@ -58,7 +58,7 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
             false,
         );
         let mut controller =
-            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default()).expect("valid core conversation snapshot");
         let mut checkpoints = Vec::<ConversationSnapshot>::new();
         let mut injected = false;
         let guided_attachment = ConversationAttachment {
@@ -81,15 +81,15 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
                 |snapshot, _| checkpoints.push(snapshot.clone()),
                 |controller| {
                     if injected {
-                        return false;
+                        return Ok(false);
                     }
                     injected = true;
-                    controller
+                    Ok(controller
                         .append_interjected_user_turn_with_attachments(
                             "不需要配图了",
                             vec![guided_attachment.clone()],
                         )
-                        .is_some()
+                        .is_some())
                 },
             )
             .await
@@ -133,12 +133,78 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
     });
 }
 
+/// Verifies intervention errors discard callback mutations and fail the controller explicitly.
+/// 验证干预错误会丢弃回调修改并显式使控制器失败。
+#[test]
+fn streaming_intervention_error_discards_callback_draft() {
+    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        // adapter yields one tool boundary so the failing intervention is invoked exactly once.
+        // adapter 产生一个工具边界，使失败干预恰好调用一次。
+        let adapter = MockStreamingProviderAdapter::new(vec![(
+            Vec::new(),
+            ProviderTurnResponse {
+                assistant_text: String::new(),
+                assistant_reasoning: String::new(),
+                provider_message_id: Some(String::from("resp-error-1")),
+                provider_message_state: None,
+                tool_calls: vec![ConversationToolCall {
+                    id: String::from("tool-error"),
+                    tool_call_id: Some(String::from("call-error")),
+                    tool_name: String::from("read_file"),
+                    arguments: json!({"path": "README.md"}),
+                }],
+                continuation: None,
+                usage: None,
+            },
+        )]);
+        let executor = MockToolExecutor::new().with_outcome("read_file", "content", None, false);
+        let mut controller =
+            VulcanCoreController::new(build_test_config(2), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
+
+        let error = controller
+            .run_user_turn_streaming_with_checkpoints_and_interventions(
+                &adapter,
+                &executor,
+                &AllowAllToolPolicy,
+                "read the file",
+                |_, _| {},
+                |controller| {
+                    controller.append_interjected_user_turn("must be rolled back");
+                    Err(CoreError::InvalidState {
+                        message: String::from("intervention failed"),
+                    })
+                },
+            )
+            .await
+            .expect_err("intervention error must stop the controller");
+
+        assert!(error.to_string().contains("intervention failed"));
+        assert_eq!(controller.phase(), ControllerPhase::Failed);
+        assert!(!controller.snapshot().messages.iter().any(|message| {
+            matches!(
+                &message.payload,
+                ConversationPayload::UserText { text, .. } if text == "must be rolled back"
+            )
+        }));
+        assert!(
+            !controller
+                .snapshot()
+                .records
+                .iter()
+                .any(|record| record.body == "must be rolled back")
+        );
+    });
+}
+
 /// Verifies no-attachment interjected user turns still carry process metadata.
 /// 验证无附件插队用户回合仍然携带过程元数据。
 #[test]
 fn interjected_user_turn_without_attachments_keeps_process_metadata() {
     let mut controller =
-        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
 
     let message_id = controller
         .append_interjected_user_turn_with_attachments("停止当前循环", Vec::new())
@@ -235,7 +301,8 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
                 false,
             );
         let mut controller =
-            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
         let mut checkpoints = Vec::<ConversationSnapshot>::new();
         let mut injected = false;
 
@@ -248,12 +315,12 @@ fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
                 |snapshot, _| checkpoints.push(snapshot.clone()),
                 |controller| {
                     if injected {
-                        return false;
+                        return Ok(false);
                     }
                     injected = true;
-                    controller
+                    Ok(controller
                         .append_interjected_user_turn("批次完成后再引导")
-                        .is_some()
+                        .is_some())
                 },
             )
             .await

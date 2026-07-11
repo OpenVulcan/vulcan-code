@@ -185,7 +185,7 @@ impl VulcanCoreController {
             policy,
             user_prompt,
             on_safe_checkpoint,
-            |_| false,
+            |_| Ok(false),
         )
         .await
     }
@@ -206,7 +206,7 @@ impl VulcanCoreController {
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
         F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
-        I: FnMut(&mut Self) -> bool + Send,
+        I: FnMut(&mut Self) -> Result<bool, CoreError> + Send,
     {
         let user_prompt = user_prompt.into();
         let trimmed_prompt = user_prompt.trim();
@@ -246,7 +246,7 @@ impl VulcanCoreController {
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
         F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
-        I: FnMut(&mut Self) -> bool + Send,
+        I: FnMut(&mut Self) -> Result<bool, CoreError> + Send,
     {
         self.ensure_seeded_provider_turn()?;
         self.run_provider_tool_streaming_loop(
@@ -295,7 +295,7 @@ impl VulcanCoreController {
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
         F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
-        I: FnMut(&mut Self) -> bool + Send,
+        I: FnMut(&mut Self) -> Result<bool, CoreError> + Send,
     {
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
@@ -358,7 +358,18 @@ impl VulcanCoreController {
                 self.append_tool_result_message(&result);
                 on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
             }
-            if on_before_next_provider_turn(self) {
+            // intervention_draft prevents a failed or falsely reported host callback from partially mutating Core state.
+            // intervention_draft 防止失败或错误报告未变化的宿主回调局部修改 Core 状态。
+            let mut intervention_draft = self.clone();
+            let intervention_changed = match on_before_next_provider_turn(&mut intervention_draft) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    self.mark_failed(error.to_string());
+                    return Err(error);
+                }
+            };
+            if intervention_changed {
+                *self = intervention_draft;
                 on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
             }
         }

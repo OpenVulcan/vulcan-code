@@ -100,18 +100,24 @@ fn interrupt_agent_arguments_reject_task_name_alias() {
     assert!(error.contains("task_name"));
 }
 
-/// Verifies close_agent follows the Vulcan target schema.
-/// 验证 close_agent 遵循 Vulcan target Schema。
+/// Verifies close_agent exposes only a subtree target and rejects the removed cascade switch.
+/// 验证 close_agent 只暴露子树目标，并拒绝已移除的级联开关。
 #[test]
-fn close_agent_schema_exposes_target_and_cascade() {
+fn close_agent_schema_exposes_only_subtree_target() {
     let schema = close_agent_args_schema();
     let properties = schema["properties"]
         .as_object()
         .expect("close_agent properties should be an object");
 
     assert!(properties.contains_key("target"));
-    assert!(properties.contains_key("cascade"));
+    assert_eq!(properties.len(), 1);
     assert_eq!(schema["required"], json!(["target"]));
+    let error = close_agent_target(&json!({
+        "target": "reviewer",
+        "cascade": false
+    }))
+    .expect_err("removed cascade argument should be rejected");
+    assert!(error.contains("unsupported keys: cascade"));
 }
 
 /// Verifies agent_orchestration_info exposes only read-only query fields.
@@ -192,6 +198,8 @@ fn spawn_agent_schema_requires_task_name_and_message() {
         assert!(properties.contains_key(key), "missing {key}");
     }
     assert!(!properties.contains_key("description"));
+    assert_eq!(properties["task_name"]["minLength"], 1);
+    assert_eq!(properties["task_name"]["pattern"], "^[^/]+$");
     assert_eq!(schema["required"], json!(["task_name", "message"]));
 }
 

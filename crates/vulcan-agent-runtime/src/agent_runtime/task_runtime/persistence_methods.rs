@@ -1,4 +1,5 @@
 use super::*;
+use crate::conversation_protocol::append_record;
 use vulcan_workbench_model::session_conversation_record_is_subagent_send_message_display_note;
 
 impl TaskRuntime {
@@ -25,192 +26,537 @@ impl TaskRuntime {
                 .insert(root_session_uuid);
             return Ok(());
         };
-        let mut metadata_by_parent = store
-            .load_task_session_metadata_by_parent()
-            .map_err(|error| error.message)?;
-        let mut visited_parent_ids = BTreeSet::new();
-        let mut parents = vec![subagent_restore_start_parent_ref(
-            root_session_id,
-            SessionNodeId::from(current_session_id),
-        )];
-        while let Some(parent) = parents.pop() {
-            let parent_node_id = subagent_parent_ref_node_id(&parent);
-            if !visited_parent_ids.insert(parent_node_id) {
+        loop {
+            let metadata_to_lock = load_validated_open_subagent_metadata(&store, root_session_id)?;
+            let mut task_ids = Vec::with_capacity(metadata_to_lock.len().saturating_add(1));
+            task_ids.push(root_session_uuid);
+            task_ids.extend(
+                metadata_to_lock
+                    .iter()
+                    .map(|metadata| Uuid::from(metadata.task_session_id)),
+            );
+            let locked_task_ids = task_ids.iter().copied().collect::<BTreeSet<_>>();
+            let transaction_locks = self.ordered_task_execution_state_locks(&task_ids)?;
+            let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
+            for transaction_lock in &transaction_locks {
+                transaction_guards.push(transaction_lock.lock().map_err(|_| {
+                    String::from(
+                        "The task execution transaction is locked and cannot restore persisted subagents.",
+                    )
+                })?);
+            }
+            let metadata_to_restore =
+                load_validated_open_subagent_metadata(&store, root_session_id)?;
+            let mut current_task_ids = BTreeSet::from([root_session_uuid]);
+            current_task_ids.extend(
+                metadata_to_restore
+                    .iter()
+                    .map(|metadata| Uuid::from(metadata.task_session_id)),
+            );
+            if current_task_ids != locked_task_ids {
+                drop(transaction_guards);
                 continue;
             }
-            let Some(metadata_records) = metadata_by_parent.remove(&parent) else {
-                continue;
-            };
-            for metadata in metadata_records {
-                parents.push(ParentSessionRef::TaskSession {
-                    root_session_id,
-                    parent_task_session_id: metadata.task_session_id,
-                });
-                if metadata.status == TaskSessionStatus::Archived {
-                    continue;
-                }
-                self.upsert_subagent_registry_entry_from_metadata(&metadata)?;
-            }
+            let restored_at = current_unix_millis_u64();
+            let prepared_restores = metadata_to_restore
+                .iter()
+                .map(|metadata| {
+                    self.materialize_persisted_subagent_restore(&store, metadata, restored_at)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            self.commit_materialized_persisted_subagent_restores_with_task_locks_held(
+                &store,
+                &prepared_restores,
+            )?;
+            drop(transaction_guards);
+            self.restored_task_session_registry_roots
+                .write()
+                .map_err(|_| String::from("The restored task-session registry marker is locked."))?
+                .insert(root_session_uuid);
+            return Ok(());
         }
-        self.restored_task_session_registry_roots
-            .write()
-            .map_err(|_| String::from("The restored task-session registry marker is locked."))?
-            .insert(root_session_uuid);
-        Ok(())
     }
 
-    /// Upserts one subagent registry entry directly from persisted TaskSession metadata.
-    /// 直接根据持久化 TaskSession 元数据更新或插入一条子代理注册表条目。
-    fn upsert_subagent_registry_entry_from_metadata(
+    /// Materializes one persisted subagent into complete registry, session, and metadata projections.
+    /// 将一个持久化子代理完整物化为注册表、会话与元数据投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `store`: Exact segmented store that owns the persisted root tree.
+    /// - `store`：拥有持久化根树的精确分段存储。
+    /// - `metadata`: Non-archived metadata selected by validated root traversal.
+    /// - `metadata`：经根遍历校验选中的未归档元数据。
+    /// - `restored_at`: Shared timestamp for every runtime-lost lifecycle normalization.
+    /// - `restored_at`：全部 runtime-lost 生命周期规范化共享的时间戳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A fully materialized projection, or a read/decoding error before any mutation.
+    /// 完整物化投影，或任何变更发生前的读取或解码错误。
+    pub(super) fn materialize_persisted_subagent_restore(
         &self,
+        store: &SegmentedTaskSessionStore,
         metadata: &TaskSessionMetadata,
-    ) -> Result<(), String> {
-        let restored_status = subagent_restore_status_from_metadata(metadata.status);
-        let store = self.task_session_store_for_root(Uuid::from(metadata.root_session_id))?;
-        let mut entry = SubagentRegistryEntry::new(
-            metadata.public_task_id.clone(),
-            metadata.task_session_id,
-            subagent_parent_session_id_from_metadata(metadata),
-            subagent_kind_for_task_metadata(metadata),
-            metadata.created_at,
-        );
-        entry.status = restored_status;
-        entry.stop_reason = if metadata.status.is_active() {
-            Some(String::from("runtime_lost"))
+        restored_at: u64,
+    ) -> Result<PreparedPersistedSubagentRestore, String> {
+        let mut normalized_metadata = metadata.clone();
+        let normalized_active_metadata = if metadata.status.is_active() {
+            normalized_metadata.status = TaskSessionStatus::Stopped;
+            normalized_metadata.stop_reason = Some(String::from("runtime_lost"));
+            normalized_metadata.updated_at = restored_at;
+            Some(normalized_metadata.clone())
         } else {
-            metadata.stop_reason.clone()
+            None
         };
-        entry.updated_at_ms = metadata.updated_at;
+        let mut entry = subagent_registry_entry_identity_from_metadata(&normalized_metadata);
         entry.prompt_source = Some(subagent_prompt_source_for_task_config(
-            metadata.subagent_profile_id.as_deref(),
+            normalized_metadata.subagent_profile_id.as_deref(),
         ));
         entry.last_task_message = store
-            .as_ref()
-            .and_then(|store| {
-                store
-                    .load_latest_event_payload(metadata.task_session_id)
-                    .ok()
-                    .flatten()
-            })
-            .and_then(|payload| subagent_last_task_message_from_event_payload(&payload));
-        entry.result_summary = metadata.last_result_summary.clone();
-        entry.segments = store
-            .as_ref()
-            .map(|store| store.load_task_segment_summaries(metadata.task_session_id))
-            .transpose()
+            .load_latest_event_payload(normalized_metadata.task_session_id)
             .map_err(|error| error.message)?
-            .unwrap_or_default();
+            .and_then(|payload| subagent_last_task_message_from_event_payload(&payload));
+        entry.result_summary = normalized_metadata.last_result_summary.clone();
+        entry.segments = store
+            .load_task_segment_summaries(normalized_metadata.task_session_id)
+            .map_err(|error| error.message)?;
         let restored_prompt = entry
             .last_task_message
             .clone()
-            .or_else(|| metadata.last_result_summary.clone())
-            .unwrap_or_else(|| metadata.display_title.clone());
+            .or_else(|| normalized_metadata.last_result_summary.clone())
+            .unwrap_or_else(|| normalized_metadata.display_title.clone());
         let restored_context = store
-            .as_ref()
-            .map(|store| store.load_context(metadata.task_session_id))
-            .transpose()
-            .map_err(|error| error.message)?
-            .flatten();
-        self.restore_task_session_record_from_metadata(
-            metadata,
+            .load_context(normalized_metadata.task_session_id)
+            .map_err(|error| error.message)?;
+        let record = self.build_task_session_record_from_metadata(
+            &normalized_metadata,
             restored_context.as_ref(),
             restored_prompt,
         )?;
-        let inserted_from_persistence = {
-            let mut registry = self.subagent_registry.write().map_err(|_| {
-                String::from("The subagent registry is locked and cannot be restored.")
-            })?;
-            if let Some(existing) = registry.get_mut(&entry.agent_id) {
-                merge_persisted_subagent_entry_without_status_overwrite(existing, entry);
-                false
-            } else {
-                registry.upsert(entry);
-                true
-            }
-        };
-        if inserted_from_persistence && metadata.status.is_active() {
-            self.persist_restored_stopped_task_session_metadata(metadata)?;
+        Ok(PreparedPersistedSubagentRestore {
+            entry,
+            record,
+            original_metadata: metadata.clone(),
+            normalized_active_metadata,
+        })
+    }
+
+    /// Atomically commits fully materialized persisted subagent projections.
+    /// 原子提交已完整物化的持久化子代理投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `store`: Exact segmented store used for normalized metadata writes and rollback.
+    /// - `store`：用于规范化元数据写入与回滚的精确分段存储。
+    /// - `prepared_restores`: Fallible reads and decoding already completed for the whole tree.
+    /// - `prepared_restores`：整棵树已完成可失败读取与解码的准备投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after persistence and both runtime projections commit, or an error with rollback detail.
+    /// 持久化与两个运行时投影提交后返回成功，否则返回包含回滚详情的错误。
+    #[cfg(test)]
+    pub(super) fn commit_materialized_persisted_subagent_restores(
+        &self,
+        store: &SegmentedTaskSessionStore,
+        prepared_restores: &[PreparedPersistedSubagentRestore],
+    ) -> Result<(), String> {
+        let mut task_ids = Vec::with_capacity(prepared_restores.len().saturating_mul(2));
+        for prepared in prepared_restores {
+            task_ids.push(Uuid::from(prepared.entry.session_id));
+            task_ids.push(prepared.record.origin_session_id);
         }
+        let transaction_locks = self.ordered_task_execution_state_locks(&task_ids)?;
+        let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
+        for transaction_lock in &transaction_locks {
+            transaction_guards.push(transaction_lock.lock().map_err(|_| {
+                String::from(
+                    "The task execution transaction is locked and cannot restore persisted subagents.",
+                )
+            })?);
+        }
+        self.commit_materialized_persisted_subagent_restores_with_task_locks_held(
+            store,
+            prepared_restores,
+        )
+    }
+
+    /// Commits materialized restore projections while all root and task transaction locks are held.
+    /// 在全部根与任务事务锁已持有时提交物化恢复投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `store`: Exact segmented store used for metadata persistence and rollback.
+    /// - `store`：用于元数据持久化与回滚的精确分段存储。
+    /// - `prepared_restores`: Lock-stable materialized projections for the complete open tree.
+    /// - `prepared_restores`：完整开放树对应的锁稳定物化投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after persistence and runtime clone-swap, or an error before runtime mutation.
+    /// 持久化与运行时克隆交换后返回成功，否则在运行时变更前返回错误。
+    fn commit_materialized_persisted_subagent_restores_with_task_locks_held(
+        &self,
+        store: &SegmentedTaskSessionStore,
+        prepared_restores: &[PreparedPersistedSubagentRestore],
+    ) -> Result<(), String> {
+        let mut registry = self
+            .subagent_registry
+            .write()
+            .map_err(|_| String::from("The subagent registry is locked and cannot be restored."))?;
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from("The task-session registry is locked and cannot restore subagent records.")
+        })?;
+        let mut registry_preview = registry.clone();
+        let mut sessions_preview = sessions.clone();
+        let mut metadata_updates = Vec::new();
+        for prepared in prepared_restores {
+            let task_id = Uuid::from(prepared.entry.session_id);
+            let existing_registry_entry = registry_preview
+                .get_for_parent(prepared.entry.parent_session_id, &prepared.entry.agent_id)
+                .cloned();
+            let existing_record = sessions_preview.get(&task_id).cloned();
+            match (existing_registry_entry, existing_record) {
+                (Some(mut existing), Some(existing_record))
+                    if existing.session_id == prepared.entry.session_id =>
+                {
+                    Self::validate_resident_task_record_identity(&existing_record, prepared)?;
+                    let resident_status = subagent_status_from_task_session_status(
+                        task_session_status_from_record_status(
+                            existing_record.last_status.as_str(),
+                        )?,
+                    );
+                    if existing.status != resident_status {
+                        return Err(format!(
+                            "Resident task session `{task_id}` status `{resident_status:?}` conflicts with registry status `{:?}`.",
+                            existing.status
+                        ));
+                    }
+                    merge_persisted_subagent_entry_without_status_overwrite(
+                        &mut existing,
+                        prepared.entry.clone(),
+                    );
+                    registry_preview
+                        .upsert(existing)
+                        .map_err(|error| error.to_string())?;
+                    let resident_metadata = Self::resident_task_session_metadata_from_record(
+                        &prepared.original_metadata,
+                        &existing_record,
+                    )?;
+                    if resident_metadata != prepared.original_metadata {
+                        metadata_updates
+                            .push((prepared.original_metadata.clone(), resident_metadata));
+                    }
+                }
+                (Some(existing), _) => {
+                    registry_preview
+                        .upsert(prepared.entry.clone())
+                        .map_err(|error| error.to_string())?;
+                    return Err(format!(
+                        "Parent-scoped registry owner `{}` for session `{}` has no matching resident task record.",
+                        existing.agent_id, existing.session_id
+                    ));
+                }
+                (None, Some(existing_record)) => {
+                    Self::validate_resident_task_record_identity(&existing_record, prepared)?;
+                    let resident_entry = Self::resident_subagent_registry_entry_from_record(
+                        &existing_record,
+                        &prepared.entry,
+                    )?;
+                    registry_preview
+                        .upsert(resident_entry)
+                        .map_err(|error| error.to_string())?;
+                    let resident_metadata = Self::resident_task_session_metadata_from_record(
+                        &prepared.original_metadata,
+                        &existing_record,
+                    )?;
+                    if resident_metadata != prepared.original_metadata {
+                        metadata_updates
+                            .push((prepared.original_metadata.clone(), resident_metadata));
+                    }
+                }
+                (None, None) => {
+                    registry_preview
+                        .upsert(prepared.entry.clone())
+                        .map_err(|error| error.to_string())?;
+                    sessions_preview.insert(task_id, prepared.record.clone());
+                    if let Some(normalized_metadata) = prepared.normalized_active_metadata.as_ref()
+                    {
+                        metadata_updates.push((
+                            prepared.original_metadata.clone(),
+                            normalized_metadata.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        let mut rollback_snapshots = Vec::with_capacity(metadata_updates.len());
+        for (original_metadata, normalized_metadata) in metadata_updates {
+            rollback_snapshots.push(original_metadata);
+            if let Err(error) = store.save_task_session(normalized_metadata.clone()) {
+                let primary_error = format!(
+                    "Failed to persist normalized restored task session `{}`: {}",
+                    normalized_metadata.task_session_id, error.message
+                );
+                return match restore_task_session_metadata_snapshots(store, &rollback_snapshots) {
+                    Ok(()) => Err(format!(
+                        "{primary_error} Original metadata snapshots were restored."
+                    )),
+                    Err(rollback_error) => Err(format!(
+                        "{primary_error} Metadata rollback also failed: {rollback_error}"
+                    )),
+                };
+            }
+        }
+        *registry = registry_preview;
+        *sessions = sessions_preview;
         Ok(())
     }
 
-    /// Restores a lightweight in-memory TaskSession record for one open persisted subagent.
-    /// 为一个未关闭的持久化子代理恢复轻量内存 TaskSession 记录。
-    fn restore_task_session_record_from_metadata(
+    /// Validates stable identity shared by one resident and one persisted task-session record.
+    /// 校验一条驻留任务会话记录与一条持久化任务会话记录共享的稳定身份。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `existing_record`: Resident record treated as the live lifecycle authority.
+    /// - `existing_record`：作为实时生命周期权威的驻留记录。
+    /// - `prepared`: Fully materialized persisted projection for the same stable session id.
+    /// - `prepared`：同一稳定会话标识对应的完整物化持久化投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success only when task, public, root, parent, and depth identities match exactly.
+    /// 仅当任务、公开标识、根、父级与深度身份完全一致时返回成功。
+    fn validate_resident_task_record_identity(
+        existing_record: &TaskSessionRecord,
+        prepared: &PreparedPersistedSubagentRestore,
+    ) -> Result<(), String> {
+        let identity_matches = existing_record.task_id == prepared.record.task_id
+            && existing_record.public_task_id == prepared.record.public_task_id
+            && existing_record.origin_session_id == prepared.record.origin_session_id
+            && existing_record.parent_task_id == prepared.record.parent_task_id
+            && existing_record.depth == prepared.record.depth;
+        if identity_matches {
+            Ok(())
+        } else {
+            Err(format!(
+                "Resident task session `{}` conflicts with persisted subagent `{}` identity.",
+                existing_record.task_id, prepared.entry.agent_id
+            ))
+        }
+    }
+
+    /// Projects resident lifecycle authority back into one persisted metadata snapshot.
+    /// 将驻留生命周期权威回投到一份持久化元数据快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `metadata`: Original persisted metadata retaining configuration and structural fields.
+    /// - `metadata`：保留配置与结构字段的原始持久化元数据。
+    /// - `record`: Identity-validated resident lifecycle authority.
+    /// - `record`：已经身份校验的驻留生命周期权威。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Metadata with status, timestamp, stop reason, and result summary aligned to the resident record.
+    /// 状态、时间戳、停止原因与结果摘要已对齐驻留记录的元数据。
+    fn resident_task_session_metadata_from_record(
+        metadata: &TaskSessionMetadata,
+        record: &TaskSessionRecord,
+    ) -> Result<TaskSessionMetadata, String> {
+        let status = task_session_status_from_record_status(record.last_status.as_str())?;
+        let updated_at = record.updated_at.parse::<u64>().map_err(|error| {
+            format!(
+                "Resident task session `{}` has invalid updated_at `{}`: {error}",
+                record.task_id, record.updated_at
+            )
+        })?;
+        let mut resident_metadata = metadata.clone();
+        resident_metadata.status = status;
+        resident_metadata.updated_at = updated_at;
+        resident_metadata.stop_reason = record.stop_reason.clone();
+        resident_metadata.last_result_summary =
+            task_record_registry_result_summary(record, status).map(str::to_string);
+        Ok(resident_metadata)
+    }
+
+    /// Projects one live resident task record into a registry entry enriched by persisted display data.
+    /// 将一条实时驻留任务记录投影为由持久化展示数据增强的注册表条目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `record`: Resident lifecycle and stable identity authority.
+    /// - `record`：驻留生命周期与稳定身份权威。
+    /// - `persisted_entry`: Materialized display fields from persistent storage.
+    /// - `persisted_entry`：从持久化存储物化的展示字段。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A registry entry whose lifecycle matches the resident record, or an explicit decoding error.
+    /// 生命周期与驻留记录一致的注册表条目，或显式解码错误。
+    fn resident_subagent_registry_entry_from_record(
+        record: &TaskSessionRecord,
+        persisted_entry: &SubagentRegistryEntry,
+    ) -> Result<SubagentRegistryEntry, String> {
+        let status = task_session_status_from_record_status(record.last_status.as_str())?;
+        let created_at_ms = record.created_at.parse::<u64>().map_err(|error| {
+            format!(
+                "Resident task session `{}` has invalid created_at `{}`: {error}",
+                record.task_id, record.created_at
+            )
+        })?;
+        let updated_at_ms = record.updated_at.parse::<u64>().map_err(|error| {
+            format!(
+                "Resident task session `{}` has invalid updated_at `{}`: {error}",
+                record.task_id, record.updated_at
+            )
+        })?;
+        let parent_session_id = record.parent_task_id.unwrap_or(record.origin_session_id);
+        let mut entry = SubagentRegistryEntry::new(
+            record.public_task_id.clone(),
+            SessionNodeId::from(record.task_id),
+            SessionNodeId::from(parent_session_id),
+            subagent_kind_for_task_record(record),
+            created_at_ms,
+        );
+        entry.status = subagent_status_from_task_session_status(status);
+        entry.stop_reason = record.stop_reason.clone();
+        entry.updated_at_ms = updated_at_ms;
+        entry.prompt_source = Some(subagent_prompt_source_for_task_record(record));
+        if !record.last_prompt.trim().is_empty() {
+            entry.last_task_message = Some(record.last_prompt.clone());
+        }
+        if let Some(result_summary) = task_record_registry_result_summary(record, status) {
+            entry.result_summary = Some(result_summary.to_string());
+        }
+        let mut persisted_display_entry = persisted_entry.clone();
+        if status.is_active() {
+            persisted_display_entry.result_summary = None;
+        }
+        merge_persisted_subagent_entry_without_status_overwrite(
+            &mut entry,
+            persisted_display_entry,
+        );
+        Ok(entry)
+    }
+
+    /// Builds a lightweight in-memory TaskSession record for one open persisted subagent.
+    /// 为一个未关闭的持久化子代理构建轻量内存 TaskSession 记录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `metadata`: Normalized persisted identity and lifecycle metadata.
+    /// - `metadata`：规范化后的持久化身份与生命周期元数据。
+    /// - `context`: Optional persisted context document.
+    /// - `context`：可选的持久化上下文文档。
+    /// - `prompt`: Restored prompt used by the in-memory invocation projection.
+    /// - `prompt`：内存调用投影使用的恢复提示词。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One runtime record derived from the same normalized lifecycle projection.
+    /// 从同一规范化生命周期投影派生的一条运行时记录。
+    fn build_task_session_record_from_metadata(
         &self,
         metadata: &TaskSessionMetadata,
         context: Option<&SessionContextDocument>,
         prompt: String,
-    ) -> Result<(), String> {
+    ) -> Result<TaskSessionRecord, String> {
         if metadata.status == TaskSessionStatus::Archived {
-            return Ok(());
+            return Err(format!(
+                "Archived task session `{}` cannot be materialized as an open runtime record.",
+                metadata.task_session_id
+            ));
         }
-        let task_id = Uuid::from(metadata.task_session_id);
-        let mut record_metadata = metadata.clone();
-        if record_metadata.status.is_active() {
-            record_metadata.status = TaskSessionStatus::Stopped;
-            record_metadata.stop_reason = Some(String::from("runtime_lost"));
-        }
-        let record = task_session_record_from_persisted_metadata(
-            &record_metadata,
+        task_session_record_from_persisted_metadata(
+            metadata,
             context,
             prompt.clone(),
             TaskInvocationConfig::main(prompt),
             None,
             None,
-        )?;
-        let mut sessions = self.sessions.write().map_err(|_| {
-            String::from("The task-session registry is locked and cannot restore subagent records.")
-        })?;
-        sessions.entry(task_id).or_insert(record);
-        Ok(())
+        )
     }
 
-    /// Persists the runtime-lost recovery status for an active metadata record.
-    /// 为活动元数据记录持久化运行时丢失后的恢复停止状态。
-    fn persist_restored_stopped_task_session_metadata(
-        &self,
-        metadata: &TaskSessionMetadata,
-    ) -> Result<(), String> {
-        let Some(store) = self.task_session_store_for_root(Uuid::from(metadata.root_session_id))?
-        else {
-            return Ok(());
-        };
-        let mut restored = metadata.clone();
-        restored.status = TaskSessionStatus::Stopped;
-        restored.stop_reason = Some(String::from("runtime_lost"));
-        restored.updated_at = current_unix_millis_u64();
-        store
-            .save_task_session(restored)
-            .map_err(|error| error.message)
-    }
-
-    /// Persists archived status for closed child-agent entries when TaskSession metadata exists.
-    /// 当 TaskSession 元数据存在时，为已关闭子代理条目持久化归档状态。
-    pub(super) fn persist_archived_subagent_registry_entries(
+    /// Persists one close-agent archive transaction and retains its exact rollback resources.
+    /// 持久化一次 close-agent 归档事务，并保留其精确回滚资源。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `root_session_id`: Root session whose configured store owns the archive metadata.
+    /// - `root_session_id`：其已配置存储拥有归档元数据的根会话。
+    /// - `prepared_archive`: Prepared entries and task ids that define the exact transaction scope.
+    /// - `prepared_archive`：定义精确事务范围的已准备条目与任务标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Persistence commit retaining the exact store and rollback snapshots, or typed failure.
+    /// 保留精确存储与回滚快照的持久化提交，或类型化失败。
+    pub(super) fn persist_close_agent_archive_transaction(
         &self,
         root_session_id: SessionId,
-        entries: &[SubagentRegistryEntry],
-    ) -> Result<(), String> {
-        let Some(store) = self.task_session_store_for_root(root_session_id)? else {
-            return Ok(());
+        prepared_archive: &PreparedCloseAgentArchive,
+    ) -> Result<CloseAgentArchivePersistenceCommit, CloseAgentArchiveFailure> {
+        let Some(store) = self
+            .task_session_store_for_root(root_session_id)
+            .map_err(|error| {
+                CloseAgentArchiveFailure::new(
+                    CloseAgentArchiveFailurePhase::PersistArchive,
+                    error,
+                    CloseAgentArchiveRollbackOutcome::NotRequired,
+                )
+            })?
+        else {
+            return Ok(CloseAgentArchivePersistenceCommit {
+                store: None,
+                rollback_metadata_snapshots: Vec::new(),
+            });
         };
-        let archived_at = current_unix_millis_u64();
-        for entry in entries {
-            let Some(mut metadata) = store
-                .load_task_session(entry.session_id)
-                .map_err(|error| error.message)?
+        let mut original_metadata = Vec::new();
+        let mut archived_metadata = Vec::new();
+        for entry in &prepared_archive.entries {
+            let Some(metadata) = store.load_task_session(entry.session_id).map_err(|error| {
+                CloseAgentArchiveFailure::new(
+                    CloseAgentArchiveFailurePhase::PersistArchive,
+                    error.message,
+                    CloseAgentArchiveRollbackOutcome::NotRequired,
+                )
+            })?
             else {
                 continue;
             };
-            metadata.status = TaskSessionStatus::Archived;
-            metadata.stop_reason = Some(String::from("close_agent"));
-            metadata.updated_at = archived_at;
-            store
-                .save_task_session(metadata)
-                .map_err(|error| error.message)?;
+            let mut archived = metadata.clone();
+            archived.status = TaskSessionStatus::Archived;
+            archived.stop_reason = entry.stop_reason.clone();
+            // Never move persisted lifecycle time backwards when task finalization raced ahead
+            // of the archive projection prepared by close_agent.
+            // 当任务收尾先于 close_agent 准备的归档投影时，绝不回退持久化生命周期时间。
+            archived.updated_at = entry.updated_at_ms.max(metadata.updated_at);
+            original_metadata.push(metadata);
+            archived_metadata.push(archived);
         }
-        Ok(())
+        for (metadata_index, metadata) in archived_metadata.into_iter().enumerate() {
+            if let Err(save_error) = store.save_task_session(metadata) {
+                let touched_metadata = &original_metadata[..=metadata_index];
+                let rollback =
+                    match restore_task_session_metadata_snapshots(&store, touched_metadata) {
+                        Ok(()) => CloseAgentArchiveRollbackOutcome::Completed,
+                        Err(error) => CloseAgentArchiveRollbackOutcome::Incomplete { error },
+                    };
+                return Err(CloseAgentArchiveFailure::new(
+                    CloseAgentArchiveFailurePhase::PersistArchive,
+                    format!(
+                        "Failed to persist the close-agent transaction: {}",
+                        save_error.message
+                    ),
+                    rollback,
+                ));
+            }
+        }
+        Ok(CloseAgentArchivePersistenceCommit {
+            store: Some(store),
+            rollback_metadata_snapshots: original_metadata,
+        })
     }
 
     /// Persists stopped metadata for active tasks interrupted by application shutdown.
@@ -265,6 +611,25 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
+        let transaction_lock = self.task_execution_state_lock(invocation.task_id)?;
+        let _transaction = transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot store the terminal outcome.",
+            )
+        })?;
+        if !self.task_execution_can_commit_status(
+            invocation,
+            task_session_status_from_execution_status(outcome.execution_status),
+        )? {
+            task_runtime_trace(
+                "task_outcome_stale_execution_skipped",
+                format!(
+                    "task={} execution_id={}",
+                    invocation.task_id, invocation.execution_id
+                ),
+            );
+            return Ok(());
+        }
         let record = self.build_task_outcome_record(current_session_id, invocation, outcome)?;
         let persisted_status = self.persist_task_record_outcome(&record, invocation, outcome)?;
         let record = self.task_session_record_for_persisted_status(record, persisted_status)?;
@@ -293,6 +658,22 @@ impl TaskRuntime {
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
         debug_assert_eq!(outcome.execution_status, TaskExecutionStatus::Running);
+        let transaction_lock = self.task_execution_state_lock(invocation.task_id)?;
+        let _transaction = transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot store the running outcome.",
+            )
+        })?;
+        if !self.task_execution_can_commit_status(invocation, TaskSessionStatus::Running)? {
+            task_runtime_trace(
+                "task_running_outcome_stale_execution_skipped",
+                format!(
+                    "task={} execution_id={}",
+                    invocation.task_id, invocation.execution_id
+                ),
+            );
+            return Ok(());
+        }
         let record = self.build_task_outcome_record(current_session_id, invocation, outcome)?;
         let persisted_status = self.persist_task_record_state(
             &record,
@@ -386,6 +767,7 @@ impl TaskRuntime {
         record.last_result_text = outcome.final_output_text.clone();
         record.updated_at = now;
         record.last_status = status;
+        record.execution_id = Some(invocation.execution_id.clone());
         record.display_title = invocation.display_title.clone();
         record.invocation_config = invocation.invocation_config.clone();
         if record.description.is_none() {
@@ -472,6 +854,7 @@ impl TaskRuntime {
         record.last_result_text = error.to_string();
         record.updated_at = current_unix_millis_text();
         record.last_status = String::from("failed");
+        record.execution_id = Some(invocation.execution_id.clone());
         record.display_title = invocation.display_title.clone();
         record.invocation_config = invocation.invocation_config.clone();
         if record.controller_config.is_none() {
@@ -513,6 +896,7 @@ impl TaskRuntime {
             created_at_ms,
         );
         entry.status = subagent_status_from_task_session_status(status);
+        entry.stop_reason = record.stop_reason.clone();
         entry.updated_at_ms = updated_at_ms;
         entry.prompt_source = Some(subagent_prompt_source_for_task_record(record));
         if !record.last_prompt.trim().is_empty() {
@@ -531,7 +915,10 @@ impl TaskRuntime {
             .subagent_registry
             .write()
             .map_err(|_| String::from("The subagent registry is locked and cannot be updated."))?;
-        if let Some(existing) = registry.get(&entry.agent_id).cloned() {
+        if let Some(existing) = registry
+            .get_for_parent(entry.parent_session_id, &entry.agent_id)
+            .cloned()
+        {
             let same_task_session = existing.session_id == SessionNodeId::from(record.task_id);
             if same_task_session {
                 // Only late updates for the same closed task preserve archived state.
@@ -555,7 +942,7 @@ impl TaskRuntime {
                 }
             }
         }
-        registry.upsert(entry);
+        registry.upsert(entry).map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -567,6 +954,22 @@ impl TaskRuntime {
         invocation: &TaskExecutionRequest,
         error: &str,
     ) -> Result<(), String> {
+        let transaction_lock = self.task_execution_state_lock(invocation.task_id)?;
+        let _transaction = transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot store the failure outcome.",
+            )
+        })?;
+        if !self.task_execution_can_commit_status(invocation, TaskSessionStatus::Failed)? {
+            task_runtime_trace(
+                "task_failure_stale_execution_skipped",
+                format!(
+                    "task={} execution_id={}",
+                    invocation.task_id, invocation.execution_id
+                ),
+            );
+            return Ok(());
+        }
         let record = self.build_failed_task_record(invocation, error)?;
         let persisted_status = self.persist_task_record_failure(&record, invocation, error)?;
         let record = self.task_session_record_for_persisted_status(record, persisted_status)?;
@@ -592,8 +995,14 @@ impl TaskRuntime {
         &self,
         invocation: &TaskExecutionRequest,
     ) -> Result<(), String> {
+        let transaction_lock = self.task_execution_state_lock(invocation.task_id)?;
+        let _transaction = transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot discard the pre-start child agent.",
+            )
+        })?;
         let created_status = status_name_for_task_session_status(TaskSessionStatus::Created);
-        let removed_public_task_id = {
+        let removed_record = {
             let mut sessions = self.sessions.write().map_err(|_| {
                 String::from(
                     "The task session registry is locked and cannot discard the pre-start child agent.",
@@ -604,27 +1013,48 @@ impl TaskRuntime {
                     && record.origin_session_id == invocation.root_session_id
                     && record.parent_task_id == invocation.parent_task_id
                     && record.last_status == created_status
+                    && record.execution_id.as_deref() == Some(invocation.execution_id.as_str())
             });
             if should_remove {
-                sessions
-                    .remove(&invocation.task_id)
-                    .map(|record| record.public_task_id)
+                sessions.remove(&invocation.task_id)
             } else {
                 None
             }
         };
-        if let Some(public_task_id) = removed_public_task_id {
-            let mut registry = self.subagent_registry.write().map_err(|_| {
-                String::from(
-                    "The subagent registry is locked and cannot discard the pre-start child agent.",
-                )
-            })?;
-            let should_remove = registry.get(&public_task_id).is_some_and(|entry| {
-                entry.session_id == SessionNodeId::from(invocation.task_id)
-                    && entry.status == SubagentStatus::Created
-            });
-            if should_remove {
-                registry.remove(&public_task_id);
+        if let Some(record) = removed_record {
+            let parent_session_id =
+                SessionNodeId::from(record.parent_task_id.unwrap_or(record.origin_session_id));
+            let registry_removal = match self.subagent_registry.write() {
+                Ok(mut registry) => registry.remove_exact_leaf(
+                    parent_session_id,
+                    &record.public_task_id,
+                    SessionNodeId::from(record.task_id),
+                    SubagentStatus::Created,
+                ),
+                Err(_) => {
+                    self.sessions
+                        .write()
+                        .map_err(|_| {
+                            String::from(
+                                "The task session registry is locked and cannot roll back the pre-start discard after the registry lock failed.",
+                            )
+                        })?
+                        .insert(record.task_id, record);
+                    return Err(String::from(
+                        "The subagent registry is locked and cannot discard the pre-start child agent.",
+                    ));
+                }
+            };
+            if let Err(error) = registry_removal {
+                self.sessions
+                    .write()
+                    .map_err(|_| {
+                        String::from(
+                            "The task session registry is locked and cannot roll back the failed pre-start discard.",
+                        )
+                    })?
+                    .insert(record.task_id, record);
+                return Err(error.to_string());
             }
         }
         Ok(())
@@ -765,6 +1195,11 @@ impl TaskRuntime {
                 resolved_config.effective_config.subagent_profile_id.clone();
             metadata.inherit_parent_config = resolved_config.effective_config.inherit_parent_config;
             metadata.status = persisted_status;
+            metadata.stop_reason = if persisted_status.is_active() {
+                None
+            } else {
+                record.stop_reason.clone()
+            };
             metadata.runtime_policy = resolved_config.runtime_policy;
             metadata.agent_prompt_snapshot = record
                 .agent_prompt_snapshot
@@ -836,7 +1271,7 @@ impl TaskRuntime {
                 let previous_context = store
                     .load_context(task_session_id)
                     .map_err(|error| error.message)?;
-                let mut conversation_state = core_snapshot_to_session_conversation_state(snapshot);
+                let mut conversation_state = core_snapshot_to_session_conversation_state(snapshot)?;
                 scope_task_context_display_records_to_prompt(
                     &mut conversation_state,
                     invocation.prompt.as_str(),
@@ -852,7 +1287,7 @@ impl TaskRuntime {
                         status,
                         outcome,
                         initial_execution_started_at_ms,
-                    );
+                    )?;
                 }
                 let conversation_state_value =
                     serde_json::to_value(&conversation_state).unwrap_or(Value::Null);
@@ -1043,20 +1478,234 @@ impl TaskRuntime {
     }
 }
 
-/// Builds the first parent reference to scan when restoring persisted subagents.
-/// 构建恢复持久化子代理时首先扫描的父级引用。
-fn subagent_restore_start_parent_ref(
-    root_session_id: SessionNodeId,
-    current_session_id: SessionNodeId,
-) -> ParentSessionRef {
-    if current_session_id == root_session_id {
-        ParentSessionRef::MainSession { root_session_id }
-    } else {
-        ParentSessionRef::TaskSession {
-            root_session_id,
-            parent_task_session_id: current_session_id,
+impl CloseAgentArchivePersistenceCommit {
+    /// Restores this commit's exact metadata snapshots through the store that created it.
+    /// 通过创建本提交的存储恢复其精确元数据快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Proven rollback outcome, including aggregated errors when restoration is incomplete.
+    /// 已证实的回滚结果，恢复不完整时包含聚合错误。
+    pub(super) fn rollback(self) -> CloseAgentArchiveRollbackOutcome {
+        let Some(store) = self.store else {
+            return CloseAgentArchiveRollbackOutcome::NotRequired;
+        };
+        if self.rollback_metadata_snapshots.is_empty() {
+            return CloseAgentArchiveRollbackOutcome::NotRequired;
+        }
+        match restore_task_session_metadata_snapshots(&store, &self.rollback_metadata_snapshots) {
+            Ok(()) => CloseAgentArchiveRollbackOutcome::Completed,
+            Err(error) => CloseAgentArchiveRollbackOutcome::Incomplete { error },
         }
     }
+}
+
+/// Restores every supplied task metadata snapshot and reports all failed restores.
+/// 恢复全部给定任务元数据快照，并报告所有恢复失败。
+///
+/// # Parameters
+/// 参数
+/// - `store`: Task-session store that owns the persisted projections.
+/// - `store`：拥有持久化投影的任务会话存储。
+/// - `metadata_snapshots`: Exact snapshots to restore in reverse write order.
+/// - `metadata_snapshots`：按写入逆序恢复的精确快照。
+///
+/// # Returns
+/// 返回值
+/// Success when every snapshot is restored, otherwise all restore errors.
+/// 全部快照恢复时返回成功，否则返回全部恢复错误。
+fn restore_task_session_metadata_snapshots(
+    store: &SegmentedTaskSessionStore,
+    metadata_snapshots: &[TaskSessionMetadata],
+) -> Result<(), String> {
+    let mut restore_errors = Vec::new();
+    for metadata in metadata_snapshots.iter().rev() {
+        if let Err(error) = store.save_task_session(metadata.clone()) {
+            restore_errors.push(format!(
+                "task_session_id={}: {}",
+                metadata.task_session_id, error.message
+            ));
+        }
+    }
+    if restore_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(restore_errors.join("; "))
+    }
+}
+
+/// Loads, validates, and orders every open persisted subagent reachable from one root.
+/// 加载、校验并排序从单个根可达的全部开放持久化子代理。
+///
+/// # Parameters
+/// 参数
+/// `store` owns the segmented task metadata for the requested root.
+/// `store` 拥有所请求根的分段任务元数据。
+/// `root_session_id` is the only main-session root accepted by this restore transaction.
+/// `root_session_id` 是本次恢复事务唯一接受的主会话根。
+///
+/// # Returns
+/// 返回值
+/// Root-first open metadata for one unambiguous tree, or a deterministic read/integrity error.
+/// 单一无歧义树的根优先开放元数据，或确定性的读取或完整性错误。
+fn load_validated_open_subagent_metadata(
+    store: &SegmentedTaskSessionStore,
+    root_session_id: SessionNodeId,
+) -> Result<Vec<TaskSessionMetadata>, String> {
+    let mut metadata_by_parent = store
+        .load_task_session_metadata_by_parent()
+        .map_err(|error| error.message)?;
+    validate_persisted_subagent_metadata_forest(&metadata_by_parent, root_session_id)?;
+    let expected_restore_count = metadata_by_parent
+        .values()
+        .flat_map(|metadata| metadata.iter())
+        .filter(|metadata| metadata.status != TaskSessionStatus::Archived)
+        .count();
+    let mut visited_parent_ids = BTreeSet::new();
+    let mut parents = vec![ParentSessionRef::MainSession { root_session_id }];
+    let mut metadata_to_restore = Vec::with_capacity(expected_restore_count);
+    while let Some(parent) = parents.pop() {
+        let parent_node_id = subagent_parent_ref_node_id(&parent);
+        if !visited_parent_ids.insert(parent_node_id) {
+            continue;
+        }
+        let Some(metadata_records) = metadata_by_parent.remove(&parent) else {
+            continue;
+        };
+        for metadata in metadata_records {
+            if metadata.status == TaskSessionStatus::Archived {
+                continue;
+            }
+            parents.push(ParentSessionRef::TaskSession {
+                root_session_id,
+                parent_task_session_id: metadata.task_session_id,
+            });
+            metadata_to_restore.push(metadata);
+        }
+    }
+    if metadata_to_restore.len() != expected_restore_count {
+        return Err(format!(
+            "Persisted subagent metadata contains {} non-archived entries outside the root `{root_session_id}` tree.",
+            expected_restore_count.saturating_sub(metadata_to_restore.len())
+        ));
+    }
+    Ok(metadata_to_restore)
+}
+
+/// Validates persisted open-agent identity and ancestry before any in-memory restore mutation.
+/// 在任何内存恢复变更前校验持久化开放代理的身份与祖先关系。
+///
+/// # Parameters
+/// 参数
+/// `metadata_by_parent` contains every persisted task grouped by its encoded direct parent.
+/// `metadata_by_parent` 包含按编码直接父级分组的全部持久化任务。
+/// `root_session_id` is the only main-session root accepted by this restore transaction.
+/// `root_session_id` 是本次恢复事务唯一接受的主会话根。
+///
+/// # Returns
+/// 返回值
+/// Success for one unambiguous rooted forest, or a deterministic integrity error.
+/// 对单一无歧义根森林返回成功，否则返回确定性完整性错误。
+fn validate_persisted_subagent_metadata_forest(
+    metadata_by_parent: &BTreeMap<ParentSessionRef, Vec<TaskSessionMetadata>>,
+    root_session_id: SessionNodeId,
+) -> Result<(), String> {
+    let mut metadata_by_session = BTreeMap::new();
+    for metadata in metadata_by_parent
+        .values()
+        .flat_map(|metadata| metadata.iter())
+    {
+        if metadata.root_session_id != root_session_id {
+            return Err(format!(
+                "Persisted subagent session `{}` belongs to root `{}` instead of `{root_session_id}`.",
+                metadata.task_session_id, metadata.root_session_id
+            ));
+        }
+        if metadata_by_session
+            .insert(metadata.task_session_id, metadata)
+            .is_some()
+        {
+            return Err(format!(
+                "Persisted subagent session `{}` appears more than once.",
+                metadata.task_session_id
+            ));
+        }
+    }
+    let mut open_slots = BTreeMap::new();
+    for metadata in metadata_by_session
+        .values()
+        .copied()
+        .filter(|metadata| metadata.status != TaskSessionStatus::Archived)
+    {
+        match &metadata.parent {
+            ParentSessionRef::MainSession {
+                root_session_id: parent_root_session_id,
+            } if *parent_root_session_id == root_session_id => {}
+            ParentSessionRef::TaskSession {
+                root_session_id: parent_root_session_id,
+                parent_task_session_id,
+            } if *parent_root_session_id == root_session_id => {
+                let parent = metadata_by_session.get(parent_task_session_id).ok_or_else(|| {
+                    format!(
+                        "Persisted open subagent `{}` references missing parent session `{parent_task_session_id}`.",
+                        metadata.task_session_id
+                    )
+                })?;
+                if parent.status == TaskSessionStatus::Archived {
+                    return Err(format!(
+                        "Persisted open subagent `{}` belongs to archived parent session `{parent_task_session_id}`.",
+                        metadata.task_session_id
+                    ));
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "Persisted open subagent `{}` has an invalid parent outside root `{root_session_id}`.",
+                    metadata.task_session_id
+                ));
+            }
+        }
+        let slot = (metadata.parent.clone(), metadata.public_task_id.clone());
+        if let Some(existing_session_id) = open_slots.insert(slot, metadata.task_session_id) {
+            return Err(format!(
+                "Persisted parent-scoped agent `{}` is open in both sessions `{existing_session_id}` and `{}`.",
+                metadata.public_task_id, metadata.task_session_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Builds the identity and lifecycle projection used for registry restore preflight.
+/// 构建注册表恢复预检使用的身份与生命周期投影。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is one persisted task-session record.
+/// `metadata` 是一条持久化任务会话记录。
+///
+/// # Returns
+/// 返回值
+/// A registry entry containing only authoritative identity and lifecycle facts.
+/// 仅包含权威身份与生命周期事实的注册表条目。
+fn subagent_registry_entry_identity_from_metadata(
+    metadata: &TaskSessionMetadata,
+) -> SubagentRegistryEntry {
+    let mut entry = SubagentRegistryEntry::new(
+        metadata.public_task_id.clone(),
+        metadata.task_session_id,
+        subagent_parent_session_id_from_metadata(metadata),
+        subagent_kind_for_task_metadata(metadata),
+        metadata.created_at,
+    );
+    entry.status = subagent_restore_status_from_metadata(metadata.status);
+    entry.stop_reason = if metadata.status.is_active() {
+        Some(String::from("runtime_lost"))
+    } else {
+        metadata.stop_reason.clone()
+    };
+    entry.updated_at_ms = metadata.updated_at;
+    entry
 }
 
 /// Returns the node id represented by one persisted parent reference.
@@ -1130,9 +1779,6 @@ fn merge_persisted_subagent_entry_without_status_overwrite(
     existing: &mut SubagentRegistryEntry,
     persisted: SubagentRegistryEntry,
 ) {
-    if existing.stop_reason.is_none() {
-        existing.stop_reason = persisted.stop_reason;
-    }
     if existing.prompt_source.is_none() {
         existing.prompt_source = persisted.prompt_source;
     }
@@ -1317,7 +1963,7 @@ fn append_task_context_turn_stats_record(
     status: TaskSessionStatus,
     outcome: &TaskExecutionOutcome,
     initial_execution_started_at_ms: Option<u64>,
-) {
+) -> Result<(), String> {
     if outcome
         .final_assistant_message_id
         .as_deref()
@@ -1333,21 +1979,25 @@ fn append_task_context_turn_stats_record(
             })
         })
     {
-        return;
+        return Ok(());
     }
     let now = now_ms.to_string();
     let summary_record_id =
         build_session_record_message_id(task_id, now.as_str(), conversation_state.records.len());
-    conversation_state.records.push(SessionConversationRecord {
-        id: summary_record_id.clone(),
-        kind: SessionMessageKind::Assistant,
-        record_kind: SessionMessageRecordKind::SummaryOutput,
-        visible: false,
-        title: String::from("Summary"),
-        body: outcome.final_output_text.clone(),
-        metadata: Some(json!({ "preview": outcome.final_output_text.clone() })),
-        created_at: now.clone(),
-    });
+    append_record(
+        conversation_state,
+        SessionConversationRecord {
+            id: summary_record_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::SummaryOutput,
+            visible: false,
+            title: String::from("Summary"),
+            body: outcome.final_output_text.clone(),
+            metadata: Some(json!({ "preview": outcome.final_output_text.clone() })),
+            created_at: now.clone(),
+        },
+    )
+    .map_err(|error| format!("Invalid task summary record identity: {error}"))?;
     let status = match status {
         TaskSessionStatus::Failed => SessionTurnStatsStatus::Failed,
         TaskSessionStatus::Stopped => SessionTurnStatsStatus::Stopped,
@@ -1388,7 +2038,7 @@ fn append_task_context_turn_stats_record(
         )
     };
     let Some(mut turn_stats) = turn_stats else {
-        return;
+        return Ok(());
     };
     clamp_task_turn_stats_duration_to_initial_execution_start(
         &mut turn_stats,
@@ -1397,20 +2047,25 @@ fn append_task_context_turn_stats_record(
     );
     let stats_record_id =
         build_session_record_message_id(task_id, now.as_str(), conversation_state.records.len());
-    conversation_state.records.push(SessionConversationRecord {
-        id: stats_record_id,
-        kind: SessionMessageKind::Assistant,
-        record_kind: SessionMessageRecordKind::TurnStats,
-        visible: true,
-        title: format!("Turn Stats · {}", turn_stats.status.label()),
-        body: turn_stats.detail_body(),
-        metadata: Some(json!({
-            "turn_stats": turn_stats,
-            "turn_closing_record_id": summary_record_id,
-            "task_final_assistant_message_id": outcome.final_assistant_message_id,
-        })),
-        created_at: now,
-    });
+    append_record(
+        conversation_state,
+        SessionConversationRecord {
+            id: stats_record_id,
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::TurnStats,
+            visible: true,
+            title: format!("Turn Stats · {}", turn_stats.status.label()),
+            body: turn_stats.detail_body(),
+            metadata: Some(json!({
+                "turn_stats": turn_stats,
+                "turn_closing_record_id": summary_record_id,
+                "task_final_assistant_message_id": outcome.final_assistant_message_id,
+            })),
+            created_at: now,
+        },
+    )
+    .map_err(|error| format!("Invalid task statistics record identity: {error}"))?;
+    Ok(())
 }
 
 /// Clamps first-run child-agent duration so inherited display timestamps cannot extend it before task creation.

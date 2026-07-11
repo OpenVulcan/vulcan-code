@@ -59,7 +59,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
             session_id,
             &budget_note,
             AUTO_CONTEXT_COMPACTION_TRIGGER,
-        );
+        )?;
         workspace
             .session_run_phases
             .insert(session_id, SessionRunPhase::Preparing);

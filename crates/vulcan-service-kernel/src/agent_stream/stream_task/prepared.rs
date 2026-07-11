@@ -40,6 +40,8 @@ pub(crate) enum PreparedStreamEventAction {
 /// `stream_task_started_at` 用于延迟追踪。
 /// `auto_compaction_already_attempted` prevents repeated automatic compaction loops.
 /// `auto_compaction_already_attempted` 防止重复进入自动压缩循环。
+/// `active_stream_task_id` limits cleanup to the task handling this prepared event.
+/// `active_stream_task_id` 将清理限制为处理当前 Prepared 事件的任务。
 ///
 /// # Returns
 /// 返回值
@@ -55,6 +57,7 @@ pub(crate) async fn handle_prepared_stream_event(
     session_id: SessionId,
     stream_task_started_at: i128,
     auto_compaction_already_attempted: bool,
+    active_stream_task_id: Uuid,
 ) -> PreparedStreamEventAction {
     webui_after_precheck_trace(
         "after_precheck_24_prepared_event",
@@ -116,8 +119,15 @@ pub(crate) async fn handle_prepared_stream_event(
                 "stream_auto_compaction_restarting",
                 format!("session={session_id}"),
             );
-            if let Ok(mut guard) = task_state.lock() {
-                guard.active_stream_tasks.remove(&session_id);
+            let owns_active_stream_entry = task_state
+                .lock()
+                .ok()
+                .and_then(|mut guard| {
+                    remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id)
+                })
+                .is_some();
+            if !owns_active_stream_entry {
+                return PreparedStreamEventAction::Restarted;
             }
             spawn_agent_stream_task_with_auto_compaction_state(
                 app.clone(),
@@ -134,15 +144,28 @@ pub(crate) async fn handle_prepared_stream_event(
             eprintln!(
                 "[webui-service] automatic context compaction failed before provider request: {error}"
             );
-            if let Ok(mut guard) = task_state.lock() {
-                guard.active_stream_tasks.remove(&session_id);
-                finish_webui_session_kernel_turn(
-                    &mut guard,
-                    session_id,
-                    TurnTerminalStatus::Failed,
-                );
+            let owns_active_stream_entry = match task_state.lock() {
+                Ok(mut guard) => {
+                    let owns_entry = remove_active_stream_task_if_id(
+                        &mut guard,
+                        session_id,
+                        active_stream_task_id,
+                    )
+                    .is_some();
+                    if owns_entry {
+                        finish_webui_session_kernel_turn(
+                            &mut guard,
+                            session_id,
+                            TurnTerminalStatus::Failed,
+                        );
+                    }
+                    owns_entry
+                }
+                Err(_) => false,
+            };
+            if owns_active_stream_entry {
+                let _ = apply_session_phase(app, task_state, session_id, SessionRunPhase::Failed);
             }
-            let _ = apply_session_phase(app, task_state, session_id, SessionRunPhase::Failed);
             PreparedStreamEventAction::Failed
         }
     }

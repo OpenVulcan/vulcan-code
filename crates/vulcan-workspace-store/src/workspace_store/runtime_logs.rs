@@ -206,10 +206,17 @@ pub struct SessionRuntimeInjectionAppliedRecord<'a> {
 /// Records the provider-facing injection view applied to one session turn.
 /// 记录单个会话回合已应用的 Provider 可见注入视图。
 ///
+/// # Parameters
+/// 参数
+/// `request` contains the target session, injection fingerprints, source blocks, and timestamp.
+/// `request` 包含目标会话、注入指纹、源块与时间戳。
+///
 /// # Returns
 /// 返回值
-/// `true` when the runtime event was written; missing sessions or empty runtime logs return `false`.
-/// 写入运行时事件时返回 `true`；会话缺失或 runtime 日志为空时返回 `false`。
+/// `true` when written; missing sessions or consistently absent/empty runtime logs return `false`.
+/// 写入成功时返回 `true`；会话缺失或运行时日志一致缺失/为空时返回 `false`。
+/// Persisted runtime damage and I/O failures remain observable as errors.
+/// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn record_session_runtime_injection_applied(
     request: SessionRuntimeInjectionAppliedRecord<'_>,
 ) -> Result<bool, String> {
@@ -310,8 +317,10 @@ fn injection_applied_source_node_ids(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the runtime event was written; missing sessions or empty runtime logs return `false`.
-/// 写入运行时事件时返回 `true`；会话缺失或 runtime 日志为空时返回 `false`。
+/// `true` when written; missing sessions or consistently absent/empty runtime logs return `false`.
+/// 写入成功时返回 `true`；会话缺失或运行时日志一致缺失/为空时返回 `false`。
+/// Persisted runtime damage and I/O failures remain observable as errors.
+/// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn record_session_runtime_injection_cancelled(
     data_root: &std::path::Path,
     session_id: SessionId,
@@ -342,8 +351,10 @@ pub fn record_session_runtime_injection_cancelled(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the runtime event was written; missing sessions or empty runtime logs return `false`.
-/// 写入运行时事件时返回 `true`；会话缺失或 runtime 日志为空时返回 `false`。
+/// `true` when written; missing sessions or consistently absent/empty runtime logs return `false`.
+/// 写入成功时返回 `true`；会话缺失或运行时日志一致缺失/为空时返回 `false`。
+/// Persisted runtime damage and I/O failures remain observable as errors.
+/// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn record_session_runtime_injection_merged(
     data_root: &std::path::Path,
     session_id: SessionId,
@@ -374,8 +385,10 @@ pub fn record_session_runtime_injection_merged(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the runtime event was written; missing sessions or unavailable runtime logs return `false`.
-/// 写入运行时事件时返回 `true`；会话缺失或 runtime 日志不可用时返回 `false`。
+/// `true` when written; missing sessions or consistently absent/empty runtime logs return `false`.
+/// 写入成功时返回 `true`；会话缺失或运行时日志一致缺失/为空时返回 `false`。
+/// Persisted runtime damage and I/O failures remain observable as errors.
+/// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn record_session_runtime_audit_event(
     data_root: &std::path::Path,
     session_id: SessionId,
@@ -402,8 +415,10 @@ pub fn record_session_runtime_audit_event(
 ///
 /// # Returns
 /// 返回值
-/// Runtime system updates in log order; missing sessions or missing runtime logs return an empty list.
-/// 按日志顺序返回 runtime system update；会话或 runtime 日志缺失时返回空列表。
+/// Runtime system updates in log order; missing sessions or consistently absent logs return an empty list.
+/// 按日志顺序返回运行时系统更新；会话缺失或日志一致缺失时返回空列表。
+/// Persisted runtime damage and I/O failures remain observable as errors.
+/// 已持久化的运行时损坏与 I/O 失败会保持为可观察错误。
 pub fn load_session_runtime_system_updates(
     data_root: &std::path::Path,
     session_id: SessionId,

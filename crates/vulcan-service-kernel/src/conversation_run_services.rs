@@ -102,7 +102,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         selected_session_id,
     )
     .await?;
-    ensure_webui_session_runtime_state(&mut workspace_snapshot, selected_session_id, None);
+    ensure_webui_session_runtime_state(&mut workspace_snapshot, selected_session_id, None)?;
     let runtime_state_snapshot = workspace_snapshot
         .session_runtime_state
         .get(&selected_session_id)
@@ -131,7 +131,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         selected_session_id,
         &budget_note,
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
-    );
+    )?;
     workspace_snapshot
         .session_run_phases
         .insert(selected_session_id, SessionRunPhase::Preparing);
@@ -233,11 +233,16 @@ pub(crate) async fn service_stop_conversation_run(
         });
     }
     let stop_running_subagents = mode == StopConversationRunMode::MainAndSubagents;
-    let active_task = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .active_stream_tasks
-        .remove(&target_session_id);
+    let active_task = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.active_stream_tasks.remove(&target_session_id)
+    };
+    let goal_before_stop = active_task
+        .as_ref()
+        .and_then(ActiveStreamTask::session_goal_id)
+        .map(str::to_string);
     let had_active_kernel_turn = {
         let mut guard = state
             .lock()
@@ -308,12 +313,38 @@ pub(crate) async fn service_stop_conversation_run(
     {
         return Err(String::from("停止后未找到会话运行时状态。"));
     }
-    if did_stop_work
-        && let Some(goal) = VulcanGoalStore::new(controller_runtime.clone())
-            .pause_active_thread_goal(target_session_id)
+    if did_stop_work && let Some(expected_goal_id) = goal_before_stop {
+        let goal_transition_guard =
+            begin_session_turn_start_exclusion(&state, [target_session_id], "暂停目标")?;
+        match VulcanGoalStore::new(controller_runtime.clone())
+            .pause_thread_goal(target_session_id, &expected_goal_id)
             .await?
-    {
-        cache_session_goal_summary(&state, target_session_id, Some(goal))?;
+        {
+            Some(paused_goal)
+                if paused_goal.goal_id == expected_goal_id
+                    && paused_goal.status == ThreadGoalStatus::Paused =>
+            {
+                advance_session_goal_dispatch_version(&state, target_session_id)?;
+                clear_session_goal_stage_runtime_state(
+                    &state,
+                    target_session_id,
+                    &paused_goal.goal_id,
+                )?;
+                cache_session_goal_summary(&state, target_session_id, Some(paused_goal))?;
+            }
+            Some(_) => {
+                return Err(String::from(
+                    "停止运行后的目标状态结果与请求不一致，请刷新后重试。",
+                ));
+            }
+            None => {
+                webui_trace(
+                    "stop_conversation_goal_changed",
+                    format!("session={target_session_id} expected_goal_id={expected_goal_id}"),
+                );
+            }
+        }
+        drop(goal_transition_guard);
     }
     let workbench =
         store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {

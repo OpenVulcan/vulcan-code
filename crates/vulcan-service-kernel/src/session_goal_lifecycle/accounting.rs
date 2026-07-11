@@ -5,6 +5,22 @@ use super::*;
 
 /// Accounts one completed provider report against the selected session goal.
 /// 将单次完成的 Provider 报告计入所选会话目标。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the live goal projection updated after durable accounting.
+/// `state` 持有持久记账后更新的实时目标投影。
+/// `controller_runtime` provides the durable goal store connection.
+/// `controller_runtime` 提供持久目标存储连接。
+/// `report` carries the request-bound goal identity and final usage.
+/// `report` 携带请求绑定的目标身份与最终用量。
+/// `elapsed_seconds` is the elapsed wall-clock duration attributed to the run.
+/// `elapsed_seconds` 是归属于本次运行的墙钟耗时。
+///
+/// # Returns
+/// 返回值
+/// Success after applying or safely skipping accounting, or a durable/cache update error.
+/// 成功应用或安全跳过记账后返回成功，否则返回持久化或缓存更新错误。
 pub(crate) async fn account_session_goal_from_report(
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -18,6 +34,14 @@ pub(crate) async fn account_session_goal_from_report(
     {
         return Ok(());
     }
+    let Some(expected_goal_id) = report
+        .preparation
+        .as_ref()
+        .and_then(|preparation| preparation.session_goal_context.as_ref())
+        .map(|context| context.goal_id.as_str())
+    else {
+        return Ok(());
+    };
     let is_regular_session = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -56,12 +80,12 @@ pub(crate) async fn account_session_goal_from_report(
                 report.session_id,
                 token_delta,
                 elapsed_seconds,
-                GoalAccountingMode::ActiveOrComplete,
-                None,
+                expected_goal_id,
             )
             .await?;
         match outcome {
             GoalAccountingOutcome::Updated(goal) => {
+                advance_session_goal_dispatch_version(state, report.session_id)?;
                 let summary = session_goal_summary_from_thread_goal(&goal);
                 if goal.status == ThreadGoalStatus::BudgetLimited
                     && let Err(error) = enqueue_session_goal_budget_limited_guidance(
@@ -101,23 +125,52 @@ pub(crate) async fn account_session_goal_from_report(
                 conversation_state,
                 report.provider_request_count,
                 false,
+                expected_goal_id,
             )?;
         }
     }
     if let Some(error) = report.error.as_deref() {
-        apply_session_goal_error_status(state, &goal_store, report.session_id, error).await?;
+        apply_session_goal_error_status(
+            state,
+            &goal_store,
+            report.session_id,
+            expected_goal_id,
+            error,
+        )
+        .await?;
     }
     Ok(())
 }
 
 /// Updates the in-memory goal summary with live turn usage from one checkpoint.
 /// 使用单个检查点中的当前轮次用量更新内存目标摘要。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the live session-goal projection.
+/// `state` 持有实时会话目标投影。
+/// `session_id` identifies the checkpoint session.
+/// `session_id` 标识检查点所属会话。
+/// `conversation_state` supplies canonical turn usage counters.
+/// `conversation_state` 提供规范回合用量计数。
+/// `provider_request_count` overrides the live Provider request count.
+/// `provider_request_count` 覆盖实时 Provider 请求次数。
+/// `add_turn_usage_to_accounted_total` controls whether current-turn tokens are shown provisionally.
+/// `add_turn_usage_to_accounted_total` 控制是否临时显示当前回合 Token。
+/// `expected_goal_id` binds the checkpoint to the goal captured at launch.
+/// `expected_goal_id` 将检查点绑定到启动时捕获的目标。
+///
+/// # Returns
+/// 返回值
+/// Success after updating or safely skipping the cache, or a state-lock error.
+/// 更新或安全跳过缓存后返回成功，否则返回状态锁错误。
 pub(crate) fn cache_session_goal_live_usage_from_checkpoint(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     conversation_state: &SessionConversationState,
     provider_request_count: usize,
     add_turn_usage_to_accounted_total: bool,
+    expected_goal_id: &str,
 ) -> Result<(), String> {
     let Some(turn_stats) = latest_session_turn_stats_from_state(
         conversation_state,
@@ -132,10 +185,43 @@ pub(crate) fn cache_session_goal_live_usage_from_checkpoint(
     let Some(summary) = guard.session_goal_summaries.get_mut(&session_id) else {
         return Ok(());
     };
-    if summary.status == ThreadGoalStatus::Complete.as_str() {
-        return Ok(());
+    update_session_goal_live_usage(
+        summary,
+        &turn_stats,
+        add_turn_usage_to_accounted_total,
+        expected_goal_id,
+    );
+    Ok(())
+}
+
+/// Applies one live turn-statistics snapshot to its exact Goal projection.
+/// 将实时回合统计快照应用到其精确 Goal 投影。
+///
+/// # Parameters
+/// 参数
+/// `summary` is the mutable cached Goal projection.
+/// `summary` 是可变的缓存 Goal 投影。
+/// `turn_stats` contains cumulative statistics for the bound in-flight turn.
+/// `turn_stats` 包含绑定进行中回合的累计统计。
+/// `add_turn_usage_to_accounted_total` controls provisional usage display before durable accounting.
+/// `add_turn_usage_to_accounted_total` 控制持久记账前的临时用量显示。
+/// `expected_goal_id` is the budget-stage identity captured when the turn started.
+/// `expected_goal_id` 是回合启动时捕获的预算阶段身份。
+///
+/// # Returns
+/// 返回值
+/// `true` when the bound projection was updated, otherwise `false` for a replacement stage.
+/// 绑定投影已更新时返回 `true`，替换阶段则返回 `false`。
+pub(crate) fn update_session_goal_live_usage(
+    summary: &mut SessionGoalSummary,
+    turn_stats: &SessionTurnStats,
+    add_turn_usage_to_accounted_total: bool,
+    expected_goal_id: &str,
+) -> bool {
+    if summary.goal_id != expected_goal_id {
+        return false;
     }
-    let turn_usage = goal_token_delta_for_turn_stats(&turn_stats).unwrap_or_default();
+    let turn_usage = goal_token_delta_for_turn_stats(turn_stats).unwrap_or_default();
     summary.usage_tokens = if add_turn_usage_to_accounted_total {
         summary.tokens_used.saturating_add(turn_usage)
     } else {
@@ -148,7 +234,7 @@ pub(crate) fn cache_session_goal_live_usage_from_checkpoint(
         i64::try_from(turn_stats.cached_input_tokens.unwrap_or_default()).unwrap_or(i64::MAX);
     summary.output_tokens = i64::try_from(turn_stats.output_tokens).unwrap_or(i64::MAX);
     summary.total_tokens = i64::try_from(turn_stats.total_tokens).unwrap_or(i64::MAX);
-    Ok(())
+    true
 }
 
 /// Builds live turn statistics from the latest conversation record.
@@ -226,15 +312,37 @@ fn goal_token_delta_for_turn_usage_groups(stats: &SessionTurnStats) -> Option<i6
 
 /// Marks an active goal with the terminal status implied by a failed run.
 /// 根据失败运行暗示的终态标记当前 active 目标。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the live goal projection.
+/// `state` 持有实时目标投影。
+/// `goal_store` persists the lifecycle transition.
+/// `goal_store` 持久化生命周期转换。
+/// `session_id` identifies the failed run session.
+/// `session_id` 标识失败运行所属会话。
+/// `expected_goal_id` binds the error to the goal captured at launch.
+/// `expected_goal_id` 将错误绑定到启动时捕获的目标。
+/// `error` is the provider/runtime error used to choose the terminal status.
+/// `error` 是用于选择终态的 Provider/运行时错误。
+///
+/// # Returns
+/// 返回值
+/// Success after applying or safely skipping the transition, or a store/cache error.
+/// 应用或安全跳过转换后返回成功，否则返回存储或缓存错误。
 pub(crate) async fn apply_session_goal_error_status(
     state: &SharedServiceBridgeState,
     goal_store: &VulcanGoalStore,
     session_id: SessionId,
+    expected_goal_id: &str,
     error: &str,
 ) -> Result<(), String> {
     let Some(goal) = goal_store.get_thread_goal(session_id).await? else {
         return Ok(());
     };
+    if goal.goal_id != expected_goal_id {
+        return Ok(());
+    }
     if goal.status != ThreadGoalStatus::Active {
         cache_session_goal_summary(state, session_id, Some(goal))?;
         return Ok(());
@@ -248,10 +356,12 @@ pub(crate) async fn apply_session_goal_error_status(
                 status: Some(status),
                 token_budget: None,
                 expected_goal_id: Some(goal.goal_id),
+                expected_status: Some(goal.status),
             },
         )
         .await?;
     if let Some(updated_goal) = updated_goal {
+        advance_session_goal_dispatch_version(state, session_id)?;
         cache_session_goal_summary(state, session_id, Some(updated_goal))?;
     }
     Ok(())

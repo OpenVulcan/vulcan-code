@@ -471,12 +471,8 @@ fn render_message_layer_content(message: &ConversationMessage) -> String {
             }
             sections.join("\n")
         }
-        ConversationPayload::ToolResult {
-            tool_result_id,
-            tool_call_id,
-            text,
-        } => {
-            let mut sections = vec![format!("tool_result_id={tool_result_id}")];
+        ConversationPayload::ToolResult { tool_call_id, text } => {
+            let mut sections = vec![format!("message_id={}", message.id)];
             if let Some(tool_call_id) = tool_call_id.as_deref() {
                 sections.push(format!("tool_call_id={tool_call_id}"));
             }

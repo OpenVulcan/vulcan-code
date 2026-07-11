@@ -1,5 +1,8 @@
 use super::*;
-use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
+use crate::agent_runtime::provider_request_bridge_conversation::core_snapshot_to_session_conversation_state;
+use crate::agent_runtime::runtime_stream_intervention::{
+    RuntimePromptIntervention, RuntimePromptInterventionError,
+};
 use vulcan_core::controller::{
     AgentMessageAppendRequest, DisplayRecordAppendRequest, VulcanCoreController,
 };
@@ -74,6 +77,46 @@ impl InterAgentImmediateResumeResult {
     }
 }
 
+/// Structured failure produced after restoring messages drained from one child inbox.
+/// 恢复从子代理 inbox 取出的消息后产生的结构化失败。
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum InterAgentMessageRestoreError {
+    /// The original operation failed but inbox restoration succeeded.
+    /// 原始操作失败，但 inbox 恢复成功。
+    Operation {
+        /// Original operation error.
+        /// 原始操作错误。
+        message: String,
+    },
+    /// Both the original operation and inbox restoration failed.
+    /// 原始操作与 inbox 恢复均失败。
+    Recovery {
+        /// Original operation error.
+        /// 原始操作错误。
+        operation_error: String,
+        /// Inbox restoration error.
+        /// inbox 恢复错误。
+        recovery_error: String,
+    },
+}
+
+impl std::fmt::Display for InterAgentMessageRestoreError {
+    /// Formats one restore outcome for existing offline resume diagnostics.
+    /// 为既有离线续跑诊断格式化一次恢复结果。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Operation { message } => formatter.write_str(message),
+            Self::Recovery {
+                operation_error,
+                recovery_error,
+            } => write!(
+                formatter,
+                "{operation_error} Additionally, failed to restore queued inter-agent messages: {recovery_error}"
+            ),
+        }
+    }
+}
+
 impl TaskRuntime {
     /// Sends one message to a known child agent.
     /// 向一个已知子代理发送一条消息。
@@ -121,15 +164,31 @@ impl TaskRuntime {
         } else {
             Vec::new()
         };
+        let transaction_lock = self.task_execution_state_lock(target_session_id)?;
+        let transaction_guard = transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot admit the inter-agent message.",
+            )
+        })?;
+        let admitted_target =
+            self.resolve_inter_agent_message_target(current_session_id, &parsed.target)?;
+        if admitted_target.session_id != target.session_id {
+            return Err(format!(
+                "Child agent `{}` changed from session `{}` to `{}` before message admission.",
+                target.agent_id, target.session_id, admitted_target.session_id
+            ));
+        }
         let delivery_id = self.enqueue_inter_agent_message(
             current_session_id,
             target_session_id,
-            target.agent_id.clone(),
+            admitted_target.agent_id.clone(),
             parsed.message.clone(),
         )?;
+        let should_resume = !self.task_has_active_or_starting_run(target_session_id)?;
+        drop(transaction_guard);
 
-        let immediate_resume = if !self.task_has_active_or_starting_run(target_session_id)? {
-            self.resume_idle_agent_from_inbox(current_session_id, &target)
+        let immediate_resume = if should_resume {
+            self.resume_idle_agent_from_inbox(current_session_id, &admitted_target)
                 .await?
         } else {
             None
@@ -138,7 +197,7 @@ impl TaskRuntime {
         Ok(build_inter_agent_message_tool_result(
             SEND_MESSAGE_TOOL,
             current_session_id,
-            &target,
+            &admitted_target,
             &parsed.message,
             &delivery_id,
             parsed.delivery_mode,
@@ -233,8 +292,7 @@ impl TaskRuntime {
         let registry = self.subagent_registry_snapshot()?;
         let parent_session_id = SessionNodeId::from(current_session_id);
         let entry = registry
-            .get(&normalized_target)
-            .filter(|entry| entry.parent_session_id == parent_session_id)
+            .get_for_parent(parent_session_id, &normalized_target)
             .cloned()
             .ok_or_else(|| {
                 format!(
@@ -359,23 +417,72 @@ impl TaskRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// The original error, or a combined error when restoration also fails.
-    /// 原始错误；如果恢复也失败，则返回合并错误。
-    fn restore_inter_agent_messages_front_after_failure(
+    /// A structured original-operation or recovery failure after diagnostics are emitted.
+    /// 发出诊断后返回结构化的原操作失败或恢复失败。
+    pub(super) fn restore_inter_agent_messages_front_after_failure(
         &self,
         target_task_id: SessionId,
         messages: Vec<QueuedInterAgentMessage>,
         stage: &str,
         error: String,
-    ) -> String {
+    ) -> InterAgentMessageRestoreError {
         let message_count = messages.len();
+        let transaction_lock = match self.task_execution_state_lock(target_task_id) {
+            Ok(transaction_lock) => transaction_lock,
+            Err(lock_error) => {
+                return InterAgentMessageRestoreError::Recovery {
+                    operation_error: error,
+                    recovery_error: format!(
+                        "cannot coordinate recovery of {message_count} queued inter-agent message(s) for child agent `{target_task_id}` after `{stage}`: {lock_error}"
+                    ),
+                };
+            }
+        };
+        let _transaction_guard = match transaction_lock.lock() {
+            Ok(transaction_guard) => transaction_guard,
+            Err(_) => {
+                return InterAgentMessageRestoreError::Recovery {
+                    operation_error: error,
+                    recovery_error: format!(
+                        "cannot acquire the task transaction lock to recover {message_count} queued inter-agent message(s) for child agent `{target_task_id}` after `{stage}`"
+                    ),
+                };
+            }
+        };
+        let target_status = match self.subagent_registry.read() {
+            Ok(registry) => registry
+                .list_all()
+                .into_iter()
+                .find(|entry| entry.session_id == SessionNodeId::from(target_task_id))
+                .map(|entry| entry.status),
+            Err(_) => {
+                return InterAgentMessageRestoreError::Recovery {
+                    operation_error: error,
+                    recovery_error: format!(
+                        "cannot determine whether child agent `{target_task_id}` still owns {message_count} queued inter-agent message(s) after `{stage}` because the subagent registry is locked"
+                    ),
+                };
+            }
+        };
+        if target_status.is_none_or(|status| status == SubagentStatus::Archived) {
+            let discarded_error = format!(
+                "{error} The {message_count} in-flight inter-agent message(s) were discarded because child agent `{target_task_id}` is no longer open."
+            );
+            task_runtime_trace(
+                "subagent_message_discard_after_archived_failure",
+                format!("target={target_task_id} stage={stage} message_count={message_count}"),
+            );
+            return InterAgentMessageRestoreError::Operation {
+                message: discarded_error,
+            };
+        }
         match self.requeue_inter_agent_messages_front(target_task_id, messages) {
             Ok(()) => {
                 task_runtime_trace(
                     "subagent_message_requeue_after_failure",
                     format!("target={target_task_id} stage={stage} message_count={message_count}"),
                 );
-                error
+                InterAgentMessageRestoreError::Operation { message: error }
             }
             Err(restore_error) => {
                 let combined_error = format!(
@@ -388,7 +495,12 @@ impl TaskRuntime {
                         "target={target_task_id} stage={stage} message_count={message_count} error={restore_error}"
                     ),
                 );
-                combined_error
+                InterAgentMessageRestoreError::Recovery {
+                    operation_error: error,
+                    recovery_error: format!(
+                        "failed to restore {message_count} queued inter-agent message(s) for child agent `{target_task_id}` after `{stage}`: {restore_error}"
+                    ),
+                }
             }
         }
     }
@@ -414,31 +526,6 @@ impl TaskRuntime {
             .read()
             .map_err(|_| String::from("The subagent agent-control inbox is locked."))?;
         Ok(inboxes.get(&target_task_id).map(VecDeque::len).unwrap_or(0))
-    }
-
-    /// Clears queued inter-agent messages for closed child agents.
-    /// 清理已关闭子代理的排队代理间消息。
-    pub(super) fn clear_inter_agent_messages_for_tasks(
-        &self,
-        // Target child task ids whose inboxes should be removed.
-        // 需要移除 inbox 的目标子任务标识。
-        target_task_ids: &[SessionId],
-    ) -> Result<usize, String> {
-        if target_task_ids.is_empty() {
-            return Ok(0);
-        }
-        let mut inboxes = self
-            .agent_inboxes
-            .write()
-            .map_err(|_| String::from("The subagent agent-control inbox is locked."))?;
-        let mut cleared_count = 0;
-        for task_id in target_task_ids {
-            cleared_count += inboxes
-                .remove(task_id)
-                .map(|queue| queue.len())
-                .unwrap_or(0);
-        }
-        Ok(cleared_count)
     }
 
     /// Counts queued inter-agent messages for direct children of one parent session.
@@ -495,6 +582,9 @@ impl TaskRuntime {
             })?;
         let target_task_id = SessionId::from(target.session_id);
         let messages = self.take_inter_agent_messages(target_task_id)?;
+        if messages.is_empty() {
+            return Ok(None);
+        }
         let prompt = format_inter_agent_messages_for_model(&messages);
         let parsed_args = match parse_task_tool_arguments(json!({
             "task_id": target.agent_id,
@@ -502,26 +592,22 @@ impl TaskRuntime {
         })) {
             Ok(parsed_args) => parsed_args,
             Err(error) => {
-                return Err(self.restore_inter_agent_messages_front_after_failure(
-                    target_task_id,
-                    messages,
-                    "parse_task_tool_arguments",
-                    error,
-                ));
-            }
-        };
-        let resolved_identifier =
-            match resolve_task_session_id(self, current_session_id, &parsed_args) {
-                Ok(resolved_identifier) => resolved_identifier,
-                Err(error) => {
-                    return Err(self.restore_inter_agent_messages_front_after_failure(
+                return Err(self
+                    .restore_inter_agent_messages_front_after_failure(
                         target_task_id,
                         messages,
-                        "resolve_task_session_id",
+                        "parse_task_tool_arguments",
                         error,
-                    ));
-                }
-            };
+                    )
+                    .to_string());
+            }
+        };
+        let resolved_identifier = ResolvedTaskSessionIdentifier {
+            task_id: target_task_id,
+            public_task_id: target.agent_id.clone(),
+            is_resumed: true,
+            persisted_metadata: None,
+        };
         let mut invocation = match prepare_task_execution_request(
             self,
             current_session_id,
@@ -530,25 +616,39 @@ impl TaskRuntime {
         ) {
             Ok(invocation) => invocation,
             Err(error) => {
-                return Err(self.restore_inter_agent_messages_front_after_failure(
-                    target_task_id,
-                    messages,
-                    "prepare_task_execution_request",
-                    error,
-                ));
+                return Err(self
+                    .restore_inter_agent_messages_front_after_failure(
+                        target_task_id,
+                        messages,
+                        "prepare_task_execution_request",
+                        error,
+                    )
+                    .to_string());
             }
         };
-        append_inter_agent_agent_messages_to_snapshot(&mut invocation.snapshot, &messages);
-        append_inter_agent_display_records_to_snapshot(&mut invocation.snapshot, &messages);
+        if let Err(error) =
+            append_inter_agent_messages_to_snapshot(&mut invocation.snapshot, &messages)
+        {
+            return Err(self
+                .restore_inter_agent_messages_front_after_failure(
+                    target_task_id,
+                    messages,
+                    "append_inter_agent_messages_to_snapshot",
+                    error,
+                )
+                .to_string());
+        }
         let outcome = match backend(invocation.clone()).await {
             Ok(outcome) => outcome,
             Err(error) => {
-                let restored_error = self.restore_inter_agent_messages_front_after_failure(
-                    target_task_id,
-                    messages,
-                    "backend_invocation",
-                    error,
-                );
+                let restored_error = self
+                    .restore_inter_agent_messages_front_after_failure(
+                        target_task_id,
+                        messages,
+                        "backend_invocation",
+                        error,
+                    )
+                    .to_string();
                 if let Err(mark_error) =
                     self.mark_task_failure(current_session_id, &invocation, &restored_error)
                 {
@@ -638,19 +738,41 @@ pub(super) fn build_child_agent_prompt_intervention(
     task_id: SessionId,
 ) -> RuntimePromptIntervention {
     Arc::new(move |_session_id, controller| {
-        let messages = match task_runtime.take_inter_agent_messages(task_id) {
-            Ok(messages) => messages,
-            Err(error) => {
-                eprintln!("[subagent-agent-control] failed to drain child inbox: {error}");
-                Vec::new()
-            }
-        };
+        let messages = task_runtime
+            .take_inter_agent_messages(task_id)
+            .map_err(|message| RuntimePromptInterventionError::StateAccess { message })?;
         if messages.is_empty() {
-            return false;
+            return Ok(false);
         }
-        append_inter_agent_agent_messages_to_controller(controller, &messages);
-        append_inter_agent_display_records_to_controller(controller, &messages);
-        true
+        // controller_draft keeps provider-visible and display projections atomic on identity failure.
+        // controller_draft 在身份失败时保持 Provider 可见投影与显示投影的原子性。
+        let mut controller_draft = controller.clone();
+        append_inter_agent_agent_messages_to_controller(&mut controller_draft, &messages);
+        if let Err(error) =
+            append_inter_agent_display_records_to_controller(&mut controller_draft, &messages)
+        {
+            let operation_error = format!("Failed to append child display record: {error}");
+            let restore_error = task_runtime.restore_inter_agent_messages_front_after_failure(
+                task_id,
+                messages,
+                "append_child_display_record",
+                operation_error,
+            );
+            return Err(match restore_error {
+                InterAgentMessageRestoreError::Operation { message } => {
+                    RuntimePromptInterventionError::ProjectionConflict { message }
+                }
+                InterAgentMessageRestoreError::Recovery {
+                    operation_error,
+                    recovery_error,
+                } => RuntimePromptInterventionError::RecoveryFailure {
+                    operation_error,
+                    recovery_error,
+                },
+            });
+        }
+        *controller = controller_draft;
+        Ok(true)
     })
 }
 
@@ -783,41 +905,45 @@ fn append_inter_agent_agent_messages_to_controller(
     }
 }
 
-/// Appends provider-visible typed messages for delivered parent-to-child messages to a stored snapshot.
-/// 将已投递的父到子消息作为 Provider 可见类型化消息追加到已存储快照。
+/// Atomically appends provider-visible and display projections for delivered messages to a stored snapshot.
+/// 将已投递消息的 Provider 可见投影与显示投影原子追加到已存储快照。
 ///
 /// # Parameters
 /// 参数
 /// `snapshot` is the child-agent core snapshot used for the next run.
 /// `snapshot` 是下一次运行使用的子智能体核心快照。
-/// `messages` are the delivered inter-agent messages.
-/// `messages` 是已投递的智能体间消息。
-fn append_inter_agent_agent_messages_to_snapshot(
+/// `messages` are the delivered inter-agent messages whose deterministic identities must agree with retained owners.
+/// `messages` 是确定性身份必须与既有所有者一致的已投递智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// Returns success after one whole-snapshot commit, or the exact identity conflict without mutation.
+/// 完整快照一次提交后返回成功；身份冲突时返回准确错误且不修改状态。
+pub(super) fn append_inter_agent_messages_to_snapshot(
     snapshot: &mut CoreConversationSnapshot,
     messages: &[QueuedInterAgentMessage],
-) {
+) -> Result<(), String> {
+    // candidate isolates all three projections until their deterministic ownership is proven.
+    // candidate 隔离全部三种投影，直到其确定性所有权得到证明。
+    let mut candidate = snapshot.clone();
     for message in messages {
-        let message_id = inter_agent_message_id(message);
-        let message_exists = snapshot
-            .messages
-            .iter()
-            .any(|existing| existing.id == message_id);
-        if !message_exists {
-            snapshot.messages.push(CoreConversationMessage {
-                id: message_id,
-                payload: inter_agent_message_payload(message),
-            });
-        }
-        let record_id = inter_agent_agent_record_id(message);
-        if snapshot
-            .records
-            .iter()
-            .any(|existing| existing.id == record_id)
-        {
-            continue;
-        }
-        snapshot.records.push(CoreConversationRecord {
-            id: record_id,
+        // expected_message is the exact provider-visible projection owned by this delivery.
+        // expected_message 是该投递拥有的精确 Provider 可见投影。
+        let expected_message = CoreConversationMessage {
+            id: inter_agent_message_id(message),
+            payload: inter_agent_message_payload(message),
+        };
+        retain_or_append_inter_agent_projection(
+            &mut candidate.messages,
+            expected_message,
+            message.delivery_id.as_str(),
+            "provider-visible message",
+            |entry| entry.id.as_str(),
+        )?;
+        // expected_agent_record is the hidden transcript counterpart of the provider-visible message.
+        // expected_agent_record 是 Provider 可见消息对应的隐藏转录记录。
+        let expected_agent_record = CoreConversationRecord {
+            id: inter_agent_agent_record_id(message),
             role: CoreTranscriptRole::Assistant,
             record_kind: CoreTranscriptRecordKind::Visible,
             visible: false,
@@ -825,8 +951,75 @@ fn append_inter_agent_agent_messages_to_snapshot(
             body: inter_agent_message_model_text(message),
             metadata: Some(inter_agent_agent_message_metadata(message)),
             created_at: message.created_at_ms.to_string(),
-        });
+        };
+        retain_or_append_inter_agent_projection(
+            &mut candidate.records,
+            expected_agent_record,
+            message.delivery_id.as_str(),
+            "agent record",
+            |entry| entry.id.as_str(),
+        )?;
+        // expected_display_record is the visible delivery card with the externally stable delivery id.
+        // expected_display_record 是使用外部稳定投递标识的可见投递卡片。
+        let expected_display_record = inter_agent_display_conversation_record(message);
+        retain_or_append_inter_agent_projection(
+            &mut candidate.records,
+            expected_display_record,
+            message.delivery_id.as_str(),
+            "display record",
+            |entry| entry.id.as_str(),
+        )?;
     }
+    core_snapshot_to_session_conversation_state(&candidate)?;
+    *snapshot = candidate;
+    Ok(())
+}
+
+/// Retains an identical deterministic projection or appends it when the identity is unowned.
+/// 保留内容相同的确定性投影，或在身份尚未被占用时追加该投影。
+///
+/// # Parameters
+/// 参数
+/// `entries` is the canonical projection collection being updated.
+/// `entries` 是正在更新的规范投影集合。
+/// `expected` is the exact projection owned by the current delivery.
+/// `expected` 是当前投递拥有的精确投影。
+/// `delivery_id` identifies the owning inter-agent delivery in diagnostics.
+/// `delivery_id` 在诊断中标识拥有该投影的智能体间投递。
+/// `projection_name` labels the projection kind in conflict errors.
+/// `projection_name` 在冲突错误中标记投影类型。
+/// `entry_id` returns the stable identity of one projection entry.
+/// `entry_id` 返回单个投影条目的稳定身份。
+///
+/// # Returns
+/// 返回值
+/// Success for an identical replay or append, and an identity conflict for different retained content.
+/// 内容相同的重放或追加返回成功；既有内容不同时返回身份冲突。
+fn retain_or_append_inter_agent_projection<T, EntryId>(
+    entries: &mut Vec<T>,
+    expected: T,
+    delivery_id: &str,
+    projection_name: &str,
+    entry_id: EntryId,
+) -> Result<(), String>
+where
+    T: PartialEq,
+    EntryId: Fn(&T) -> &str,
+{
+    let expected_id = entry_id(&expected).to_string();
+    if let Some(existing) = entries
+        .iter()
+        .find(|existing| entry_id(existing) == expected_id)
+    {
+        if existing != &expected {
+            return Err(format!(
+                "Inter-agent delivery `{delivery_id}` conflicts with retained {projection_name} id {expected_id:?}."
+            ));
+        }
+    } else {
+        entries.push(expected);
+    }
+    Ok(())
 }
 
 /// Builds a controller append request for one typed parent-to-child message.
@@ -981,40 +1174,21 @@ fn inter_agent_agent_message_metadata(message: &QueuedInterAgentMessage) -> Valu
 /// `controller` 持有正在更新的子智能体核心快照。
 /// `messages` are the delivered inter-agent messages.
 /// `messages` 是已投递的智能体间消息。
+///
+/// # Returns
+/// 返回值
+/// Returns success after all display records append, or the exact Core identity failure.
+/// 全部显示记录追加后返回成功，否则返回准确的 Core 身份错误。
 fn append_inter_agent_display_records_to_controller(
     controller: &mut VulcanCoreController,
     messages: &[QueuedInterAgentMessage],
-) {
+) -> Result<(), String> {
     for message in messages {
-        let _ = controller.append_display_record(inter_agent_display_record_request(message));
+        controller
+            .append_display_record(inter_agent_display_record_request(message))
+            .map_err(|error| error.to_string())?;
     }
-}
-
-/// Appends display-only records for delivered parent-to-child messages to a stored snapshot.
-/// 将已投递的父到子消息作为仅显示记录追加到已存储快照。
-///
-/// # Parameters
-/// 参数
-/// `snapshot` is the child-agent core snapshot used for the next run.
-/// `snapshot` 是下一次运行使用的子智能体核心快照。
-/// `messages` are the delivered inter-agent messages.
-/// `messages` 是已投递的智能体间消息。
-fn append_inter_agent_display_records_to_snapshot(
-    snapshot: &mut CoreConversationSnapshot,
-    messages: &[QueuedInterAgentMessage],
-) {
-    for message in messages {
-        if snapshot
-            .records
-            .iter()
-            .any(|record| record.id == message.delivery_id)
-        {
-            continue;
-        }
-        snapshot
-            .records
-            .push(inter_agent_display_conversation_record(message));
-    }
+    Ok(())
 }
 
 /// Builds one controller display-record request for a parent-to-child message.

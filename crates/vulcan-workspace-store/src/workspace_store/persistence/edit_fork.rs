@@ -240,7 +240,7 @@ fn rebuild_forked_persisted_session_runtime_from_source_replay(
     retained_conversation_state = fork_conversation_state_from_retained_messages(
         &retained_messages,
         &original_runtime_messages,
-    );
+    )?;
     let mut metadata = read_session_metadata(session_dir)?;
     update_segmented_message_checkpoint(&mut metadata, &retained_messages)?;
     write_metadata(session_dir, &metadata)?;
@@ -355,8 +355,8 @@ fn ensure_fork_anchor_after_context_start(
 fn fork_conversation_state_from_retained_messages(
     retained_messages: &[SessionMessageEntry],
     original_runtime_messages: &[SessionConversationMessage],
-) -> SessionConversationState {
-    let mut conversation_state = conversation_state_from_session_messages(retained_messages);
+) -> Result<SessionConversationState, String> {
+    let mut conversation_state = conversation_state_from_session_messages(retained_messages)?;
     for message in &mut conversation_state.messages {
         if let Some(original_message) = original_runtime_messages
             .iter()
@@ -365,7 +365,7 @@ fn fork_conversation_state_from_retained_messages(
             *message = original_message.clone();
         }
     }
-    conversation_state
+    Ok(conversation_state)
 }
 
 /// Preserves the context-start anchor only when it is still present after fork truncation.
@@ -539,7 +539,8 @@ mod tests {
     /// 根据当前运行时上下文消息构建一份重放结果。
     fn replay_from_messages(messages: Vec<SessionMessageEntry>) -> SegmentedSessionReplayResult {
         SegmentedSessionReplayResult {
-            conversation_state: conversation_state_from_session_messages(&messages),
+            conversation_state: conversation_state_from_session_messages(&messages)
+                .expect("valid replayed conversation identities"),
             last_compaction_id: Some(String::from("segmented-compaction-test")),
             context_start_message_id: messages.first().map(|message| message.id.clone()),
             updated_at: Some(String::from("2026-07-09T10:00:00Z")),

@@ -32,7 +32,7 @@ use vulcan_core::provider::VulcanStreamingProviderAdapter;
 use vulcan_core::tool::AllowAllToolPolicy;
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
-    ProviderTurnResponse as CoreProviderTurnResponse,
+    CoreError, ProviderTurnResponse as CoreProviderTurnResponse,
 };
 
 /// Prepared adapter launch inputs handed to one concrete Provider adapter constructor after the shared runtime wrapper consumes controller-only fields.
@@ -95,8 +95,20 @@ where
             loop {
                 let (attempt_sender, mut attempt_receiver) =
                     unbounded_channel::<Result<ProviderStreamDelta, String>>();
-                let mut controller =
-                    VulcanCoreController::new(controller_config.clone(), core_snapshot.clone());
+                // controller rejects an invalid retry snapshot through the stream instead of panicking inside the task.
+                // controller 通过流拒绝无效的重试快照，而不是在任务内部触发 panic。
+                let mut controller = match VulcanCoreController::new(
+                    controller_config.clone(),
+                    core_snapshot.clone(),
+                ) {
+                    Ok(controller) => controller,
+                    Err(error) => {
+                        let _ = task_sender.send(Err(format!(
+                            "Invalid core conversation snapshot: {error}"
+                        )));
+                        break;
+                    }
+                };
                 let provider_adapter = BudgetCheckedStreamingAdapter::new(
                     provider_factory(attempt_sender.clone()),
                     request_budget_guard.clone(),
@@ -131,18 +143,26 @@ where
                         snapshot: &CoreConversationSnapshot,
                         usage: Option<&vulcan_core::types::ProviderUsageSnapshot>,
                     | {
-                        let _ = checkpoint_sender.send(Ok(
-                            ProviderStreamDelta::FinalConversationState(
-                                core_snapshot_to_session_conversation_state(snapshot),
-                                usage.cloned(),
-                            ),
-                        ));
+                        // checkpoint_delta exposes a checkpoint only after its complete message namespace passes validation.
+                        // checkpoint_delta 仅在完整消息命名空间通过校验后暴露检查点。
+                        let checkpoint_delta = core_snapshot_to_session_conversation_state(snapshot)
+                            .map(|conversation_state| {
+                                ProviderStreamDelta::FinalConversationState(
+                                    conversation_state,
+                                    usage.cloned(),
+                                )
+                            });
+                        let _ = checkpoint_sender.send(checkpoint_delta);
                     };
                     let intervention = move |controller: &mut VulcanCoreController| {
-                        prompt_intervention
-                            .as_ref()
-                            .map(|intervention| intervention(session_id, controller))
-                            .unwrap_or(false)
+                        let Some(intervention) = prompt_intervention.as_ref() else {
+                            return Ok(false);
+                        };
+                            intervention(session_id, controller).map_err(|error| {
+                                CoreError::InvalidState {
+                                    message: error.to_string(),
+                                }
+                            })
                     };
                     let run_future = async {
                         match turn_start_mode {
@@ -199,10 +219,18 @@ where
                     Ok(_) => {
                         let last_successful_provider_usage =
                             controller.last_successful_provider_usage().cloned();
-                        let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
-                            core_snapshot_to_session_conversation_state(controller.snapshot()),
-                            last_successful_provider_usage,
-                        )));
+                        // final_delta rejects an invalid successful snapshot instead of publishing corrupt terminal state.
+                        // final_delta 会拒绝无效的成功快照，而不是发布损坏的终态。
+                        let final_delta =
+                            core_snapshot_to_session_conversation_state(controller.snapshot()).map(
+                                |conversation_state| {
+                                    ProviderStreamDelta::FinalConversationState(
+                                        conversation_state,
+                                        last_successful_provider_usage,
+                                    )
+                                },
+                            );
+                        let _ = task_sender.send(final_delta);
                         break;
                     }
                     Err(error) => {
@@ -245,10 +273,18 @@ where
                             controller.last_successful_provider_usage().cloned();
                         // Preserve only the controller snapshot before the terminal error is reported.
                         // 只保留终态错误上报前的控制器快照，避免把损坏调用的流式输出写入上下文。
-                        let _ = task_sender.send(Ok(ProviderStreamDelta::FinalConversationState(
-                            core_snapshot_to_session_conversation_state(controller.snapshot()),
-                            last_successful_provider_usage,
-                        )));
+                        // final_delta preserves the last valid controller state only when its message identities remain canonical.
+                        // final_delta 仅在消息身份仍规范时保留最后一份有效控制器状态。
+                        let final_delta =
+                            core_snapshot_to_session_conversation_state(controller.snapshot()).map(
+                                |conversation_state| {
+                                    ProviderStreamDelta::FinalConversationState(
+                                        conversation_state,
+                                        last_successful_provider_usage,
+                                    )
+                                },
+                            );
+                        let _ = task_sender.send(final_delta);
                         let _ = task_sender.send(Err(format!(
                             "{}流式执行失败：{}。",
                             provider_label,

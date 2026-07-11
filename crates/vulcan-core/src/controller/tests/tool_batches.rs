@@ -47,7 +47,8 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
         ]);
         let executor = ConcurrentToolExecutor::default();
         let mut controller =
-            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
 
         let result = controller
             .run_user_turn_streaming(&adapter, &executor, &AllowAllToolPolicy, "并发调用两个工具")
@@ -56,7 +57,7 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
 
         assert_eq!(result.tool_calls_processed, 2);
         assert_eq!(executor.max_running.load(Ordering::SeqCst), 2);
-        let tool_result_ids = controller
+        let completed_tool_call_ids = controller
             .snapshot()
             .messages
             .iter()
@@ -65,7 +66,7 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(tool_result_ids, vec!["call-a", "call-b"]);
+        assert_eq!(completed_tool_call_ids, vec!["call-a", "call-b"]);
     });
 }
 
@@ -103,7 +104,8 @@ fn run_user_turn_synthesizes_skipped_tool_result_when_policy_blocks_tool() {
         let executor = MockToolExecutor::new();
         let policy = ExactToolSetPolicy::new(["allowed_tool"]);
         let mut controller =
-            VulcanCoreController::new(build_test_config(3), ConversationSnapshot::default());
+            VulcanCoreController::new(build_test_config(3), ConversationSnapshot::default())
+                .expect("valid core conversation snapshot");
 
         let result = controller
             .run_user_turn(&adapter, &executor, &policy, "请调用被限制的工具")

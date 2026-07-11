@@ -93,8 +93,8 @@ pub(super) fn patch_latest_prechecked_user_prompt_record(
 ///
 /// # Returns
 /// 返回值
-/// The visible transcript record id generated for the prompt.
-/// 返回为该提示词生成的可见转录记录标识。
+/// The visible transcript record id generated after atomic canonical-message append, or the exact identity failure.
+/// 返回规范消息原子追加后生成的可见转录记录标识，或准确的身份失败。
 pub(super) fn append_shared_user_prompt_record_with_attachments(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
@@ -102,16 +102,19 @@ pub(super) fn append_shared_user_prompt_record_with_attachments(
     prompt: &str,
     attachments: Vec<ConversationAttachment>,
     source: PendingSessionPromptSource,
-) -> String {
-    runtime_state.ui_state.unread = false;
-    runtime_state.last_safe_provider_request_count = None;
+) -> Result<String, String> {
+    // message_id is validated before any runtime-state field is changed, preserving transaction atomicity.
+    // message_id 会在修改任何运行态字段前完成校验，从而保持事务原子性。
     let message_id = format!("session-{session_id}-protocol-user-{now}");
     append_user_text_message(
         &mut runtime_state.conversation_state,
         message_id,
         prompt.to_string(),
         attachments.clone(),
-    );
+    )
+    .map_err(|error| format!("Invalid canonical user message identity: {error}"))?;
+    runtime_state.ui_state.unread = false;
+    runtime_state.last_safe_provider_request_count = None;
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -129,9 +132,10 @@ pub(super) fn append_shared_user_prompt_record_with_attachments(
             metadata: build_shared_user_prompt_transcript_metadata(prompt, &attachments, source),
             created_at: now.to_string(),
         },
-    );
+    )
+    .map_err(|error| format!("Invalid canonical user record identity: {error}"))?;
     runtime_state.updated_at = now.to_string();
-    record_id
+    Ok(record_id)
 }
 
 /// Builds the shared visible transcript body for one user prompt.

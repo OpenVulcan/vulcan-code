@@ -6,11 +6,25 @@ pub(super) const SUBAGENT_REJECTED_TOOL_REASON: &str = "The current execution is
 
 /// Builds one task-session execution request and provider configuration from a shared parent runtime context.
 /// 从共享父级运行时上下文构建一份子代理会话执行请求与供应商配置。
+///
+/// # Parameters
+/// 参数
+/// `context` provides the shared runtime foundation and parent request template.
+/// `context` 提供共享运行时基础与父请求模板。
+/// `invocation` provides the isolated task identity, prompt, and canonical snapshot.
+/// `invocation` 提供隔离任务身份、提示词与规范快照。
+/// `resolved_config` provides the immutable effective task configuration.
+/// `resolved_config` 提供不可变的任务有效配置。
+///
+/// # Returns
+/// 返回值
+/// Returns the task provider configuration and validated request, or the exact snapshot conversion failure.
+/// 返回任务 Provider 配置与经过校验的请求，或返回准确的快照转换失败。
 pub(super) fn build_task_runtime_preparation_request(
     context: &TaskExecutionRuntimeContext,
     invocation: &TaskExecutionRequest,
     resolved_config: &TaskSessionResolvedConfig,
-) -> (ProviderConfigurationFile, ExecutionPreparationRequest) {
+) -> Result<(ProviderConfigurationFile, ExecutionPreparationRequest), String> {
     let mut config = context.config.clone();
     apply_task_provider_model_override(
         &mut config,
@@ -33,7 +47,7 @@ pub(super) fn build_task_runtime_preparation_request(
     request.task_session_store_root = context.request_template.task_session_store_root.clone();
     request.session_title = invocation.display_title.clone();
     request.prompt = invocation.prompt.clone();
-    request.conversation_state = core_snapshot_to_session_conversation_state(&invocation.snapshot);
+    request.conversation_state = core_snapshot_to_session_conversation_state(&invocation.snapshot)?;
     request.context_compaction_policy = Some(task_context_compaction_policy_from_snapshot(
         &resolved_config.effective_config.context_compaction,
     ));
@@ -66,7 +80,7 @@ pub(super) fn build_task_runtime_preparation_request(
         &mut request,
         &resolved_config.effective_config.prompt_skills,
     );
-    (config, request)
+    Ok((config, request))
 }
 
 /// Clears parent-turn runtime state that must not leak into an isolated TaskSession request.
@@ -323,7 +337,7 @@ pub(crate) async fn prepare_task_runtime_stream_launch(
     resolved_config: &TaskSessionResolvedConfig,
 ) -> Result<crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch, String> {
     let (config, request) =
-        build_task_runtime_preparation_request(context, invocation, resolved_config);
+        build_task_runtime_preparation_request(context, invocation, resolved_config)?;
     let prepared = prepare_execution_with_tool_snapshot(
         &context.foundation,
         context.luaskills_runtime.clone(),
@@ -436,11 +450,10 @@ pub(super) fn task_execution_outcome_from_report(
         .count();
     let usage_segments =
         subagent_usage_segments_from_report(invocation, &report, tool_calls_processed);
-    let snapshot = report
-        .conversation_state
-        .as_ref()
-        .map(build_core_conversation_snapshot)
-        .unwrap_or_else(|| invocation.snapshot.clone());
+    let snapshot = match report.conversation_state.as_ref() {
+        Some(conversation_state) => build_core_conversation_snapshot(conversation_state)?,
+        None => invocation.snapshot.clone(),
+    };
     let final_output_text = report
         .assistant_output
         .filter(|output| !output.trim().is_empty())

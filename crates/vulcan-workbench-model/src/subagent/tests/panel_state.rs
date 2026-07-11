@@ -96,7 +96,8 @@ fn loads_panel_states_from_segmented_task_session_store() {
         "AI",
         "完整结果",
     )
-    .with_runtime_metadata("assistant-1", "20")]);
+    .with_runtime_metadata("assistant-1", "20")])
+    .expect("valid replayed conversation identities");
     store
         .save_context(SessionContextDocument {
             schema_version: 1,
@@ -404,7 +405,8 @@ fn live_runtime_state_overrides_stale_completed_payload() {
 fn panel_state_recoverable_conversation_accepts_messages() {
     let task_id = SessionId::new_v4();
     let mut conversation_state = SessionConversationState::default();
-    vulcan_context::append_assistant_text_message(&mut conversation_state, "assistant-1", "done");
+    vulcan_context::append_assistant_text_message(&mut conversation_state, "assistant-1", "done")
+        .expect("valid assistant message identity");
     let state = SubagentTaskPanelState {
         task_id,
         public_task_id: task_id.to_string(),

@@ -74,6 +74,37 @@ fn create_root_session_metadata(root: &Path, root_session_id: SessionNodeId) {
     .expect("write root segment");
 }
 
+/// Verifies optional JSON reads distinguish true absence from non-`NotFound` open failures.
+/// 验证可选 JSON 读取会区分真正缺失与非 `NotFound` 打开失败。
+#[test]
+fn optional_json_read_distinguishes_missing_path_from_open_failure() {
+    // root owns the missing-path fixture without affecting other store tests.
+    // root 持有缺失路径夹具，且不影响其他存储测试。
+    let root = test_root("optional_json_read_distinguishes_open_failures");
+    // missing_path never exists and must retain the optional `None` contract.
+    // missing_path 从未存在，必须保留可选 `None` 契约。
+    let missing_path = root.join("missing.json");
+    // missing captures the legitimate absence result from the authoritative open.
+    // missing 捕获权威打开操作返回的合法缺失结果。
+    let missing = read_json_file::<Value>(&missing_path).expect("missing JSON should be optional");
+    // invalid_path contains an embedded NUL that every supported filesystem API rejects.
+    // invalid_path 包含所有受支持文件系统 API 都会拒绝的内嵌 NUL。
+    let invalid_path = root.join("invalid\0metadata.json");
+    // invalid captures a deterministic non-`NotFound` open failure.
+    // invalid 捕获一个确定性的非 `NotFound` 打开失败。
+    let invalid = read_json_file::<Value>(&invalid_path);
+
+    fs::remove_dir_all(&root).expect("optional JSON test root should be removable");
+
+    assert!(missing.is_none());
+    assert!(
+        invalid
+            .expect_err("invalid JSON path should remain observable")
+            .to_string()
+            .starts_with("Failed to open optional file `")
+    );
+}
+
 /// Verifies root task-link appends repair a main-session JSONL tail that is missing its newline.
 /// 验证根任务关联追加会修复缺少尾部换行的主会话 JSONL 行。
 #[test]

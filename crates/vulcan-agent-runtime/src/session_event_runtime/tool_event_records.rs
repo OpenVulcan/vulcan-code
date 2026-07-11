@@ -5,10 +5,10 @@ pub(super) fn append_tool_started_projection_to_state(
     session_id: SessionId,
     now: &str,
     event: &RuntimeEvent,
-) -> bool {
+) -> Result<bool, String> {
     let Some((tool_call_id, tool_name)) = parse_tool_started_runtime_event_title(&event.title)
     else {
-        return false;
+        return Ok(false);
     };
     let record_id = build_session_record_message_id(
         session_id,
@@ -28,12 +28,13 @@ pub(super) fn append_tool_started_projection_to_state(
             metadata: Some(metadata),
             created_at: now.to_string(),
         },
-    );
+    )
+    .map_err(|error| format!("Invalid tool-start record identity: {error}"))?;
     runtime_state
         .tool_call_record_ids
         .insert(tool_call_id, record_id);
     runtime_state.updated_at = now.to_string();
-    true
+    Ok(true)
 }
 
 /// Appends one visible tool-result card for a tool-finish runtime event.
@@ -43,9 +44,9 @@ pub(super) fn append_tool_finished_projection_to_state(
     session_id: SessionId,
     now: &str,
     event: &RuntimeEvent,
-) -> bool {
+) -> Result<bool, String> {
     let Some(tool_call_id) = parse_tool_finished_runtime_event_title(&event.title) else {
-        return false;
+        return Ok(false);
     };
     let display_state = tool_display_state_for_finished_event(
         event.metadata.as_ref(),
@@ -66,21 +67,18 @@ pub(super) fn append_tool_finished_projection_to_state(
                 .rev()
                 .find_map(|record| tool_record_name_for_call_id(record, &tool_call_id))
         });
-    let tool_result_id = tool_result_id_from_metadata(event.metadata.as_ref(), &tool_call_id);
     let detail_ref = append_tool_result_detail_record(
         runtime_state,
         session_id,
         now,
         &tool_call_id,
-        &tool_result_id,
         tool_name.as_deref(),
         display_state,
         event.metadata.as_ref(),
         &event.detail,
-    );
+    )?;
     let result_metadata = normalize_tool_result_metadata(
         &tool_call_id,
-        &tool_result_id,
         tool_name.as_deref(),
         display_state,
         event.metadata.as_ref(),
@@ -119,10 +117,11 @@ pub(super) fn append_tool_finished_projection_to_state(
             metadata: Some(orphan_metadata),
             created_at: now.to_string(),
         };
-        runtime_state.conversation_state.records.push(record);
+        append_record(&mut runtime_state.conversation_state, record)
+            .map_err(|error| format!("Invalid orphan tool-result record identity: {error}"))?;
     }
     runtime_state.updated_at = now.to_string();
-    true
+    Ok(true)
 }
 
 /// Parses one tool-start runtime headline into its stable tool-call identifier and visible tool name.
@@ -217,12 +216,8 @@ pub(super) fn task_session_execution_status_from_metadata(
 /// 返回工具结束事件是否携带 API 层已返回载荷，即使该载荷自身描述了语义失败。
 pub(super) fn tool_metadata_contains_return_payload(metadata: &serde_json::Value) -> bool {
     metadata
-        .get("tool_result_id")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty())
-        || metadata
-            .get("host_result")
-            .is_some_and(|host_result| !host_result.is_null())
+        .get("host_result")
+        .is_some_and(|host_result| !host_result.is_null())
         || metadata
             .get("payload")
             .is_some_and(|payload| !payload.is_null())
@@ -272,25 +267,10 @@ pub(super) fn normalize_tool_call_metadata(
     serde_json::Value::Object(object)
 }
 
-/// Resolves the stable host-visible tool-result id for one tool call.
-/// 为单次工具调用解析稳定的宿主可见工具返回标识。
-pub(super) fn tool_result_id_from_metadata(
-    metadata: Option<&serde_json::Value>,
-    tool_call_id: &str,
-) -> String {
-    metadata
-        .and_then(|metadata| metadata.get("tool_result_id"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("tool-result-{tool_call_id}"))
-}
-
 /// Builds compact tool-result metadata that is safe to keep on the visible tool execution node.
 /// 构建可安全保存在可见工具执行节点上的紧凑工具返回元数据。
 pub(super) fn normalize_tool_result_metadata(
     tool_call_id: &str,
-    tool_result_id: &str,
     tool_name: Option<&str>,
     display_state: &str,
     event_metadata: Option<&serde_json::Value>,
@@ -298,10 +278,6 @@ pub(super) fn normalize_tool_result_metadata(
     synthetic: bool,
 ) -> serde_json::Value {
     let mut result = serde_json::Map::new();
-    result.insert(
-        String::from("tool_result_id"),
-        serde_json::Value::String(tool_result_id.to_string()),
-    );
     result.insert(
         String::from("status"),
         serde_json::Value::String(display_state.to_string()),

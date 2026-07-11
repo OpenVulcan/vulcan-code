@@ -16,15 +16,14 @@ pub(super) fn append_tool_result_detail_record(
     session_id: SessionId,
     now: &str,
     tool_call_id: &str,
-    tool_result_id: &str,
     tool_name: Option<&str>,
     display_state: &str,
     metadata: Option<&serde_json::Value>,
     detail: &str,
-) -> Option<ToolDetailRecordRef> {
+) -> Result<Option<ToolDetailRecordRef>, String> {
     let model_output = tool_result_model_output_from_detail(detail);
     if model_output.trim().is_empty() {
-        return None;
+        return Ok(None);
     }
     let display = tool_result_display_payload(tool_name, display_state, metadata, &model_output);
     let mut metadata_object = serde_json::Map::new();
@@ -32,10 +31,6 @@ pub(super) fn append_tool_result_detail_record(
     metadata_object.insert(
         String::from("tool_call_id"),
         serde_json::Value::String(tool_call_id.to_string()),
-    );
-    metadata_object.insert(
-        String::from("tool_result_id"),
-        serde_json::Value::String(tool_result_id.to_string()),
     );
     if let Some(tool_name) = tool_name.filter(|value| !value.trim().is_empty()) {
         metadata_object.insert(
@@ -65,11 +60,12 @@ pub(super) fn append_tool_result_detail_record(
             metadata: Some(serde_json::Value::Object(metadata_object)),
             created_at: now.to_string(),
         },
-    );
-    Some(ToolDetailRecordRef {
+    )
+    .map_err(|error| format!("Invalid tool detail record identity: {error}"))?;
+    Ok(Some(ToolDetailRecordRef {
         record_id,
         message_index,
-    })
+    }))
 }
 
 /// Extracts the model-facing tool result text from the host detail wrapper.

@@ -4,6 +4,7 @@ import type {
   ComposerAttachmentSummary,
   PendingPromptSummary,
   SessionAddonsChangedResponse,
+  SessionGoalUserStatusUpdate,
   SubagentPanelRouteResponse,
   SubmitConversationPromptAck,
   UserPromptEditDraftSummary,
@@ -394,7 +395,7 @@ export async function clearSessionGoal(conversationId: string | null): Promise<S
 // updateSessionGoalStatus 更新当前会话目标的持久化生命周期状态。
 export async function updateSessionGoalStatus(
   conversationId: string | null,
-  status: string,
+  status: SessionGoalUserStatusUpdate,
 ): Promise<SessionAddonsChangedResponse | null> {
   if (!hasServiceRuntime()) {
     return null;

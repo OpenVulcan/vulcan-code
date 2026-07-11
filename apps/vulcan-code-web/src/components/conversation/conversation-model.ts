@@ -56,9 +56,6 @@ export interface ConversationBlock {
   // Optional provider or host-visible tool call identifier.
   // 可选 Provider 或宿主可见工具调用标识。
   toolCallId?: string;
-  // Optional host-visible tool result identifier.
-  // 可选宿主可见工具返回标识。
-  toolResultId?: string;
   // Optional command-session identifier for command-like tool rows.
   // 命令类工具行使用的可选命令会话标识。
   commandSessionId?: string;

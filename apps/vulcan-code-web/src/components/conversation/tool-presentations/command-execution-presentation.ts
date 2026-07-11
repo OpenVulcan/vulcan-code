@@ -492,7 +492,7 @@ function mergeTerminalSessionDisplay(
 // commandPresentationId 根据工具标识与命令文本创建稳定展开键。
 function commandPresentationId(blocks: ToolExecutionConversationBlock[], command: string): string {
   const identifier = blocks
-    .map((block) => block.toolCallId ?? block.toolResultId ?? block.id)
+    .map((block) => block.toolCallId ?? block.id)
     .find(Boolean);
   return `command:${identifier ?? compactHash(command)}`;
 }

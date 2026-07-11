@@ -2,6 +2,9 @@
 //! goal todolist tests。
 
 use super::*;
+use crate::pending_prompts::clear_stale_session_goal_pending_prompts;
+use crate::session_goal_lifecycle::session_goal_execution_context;
+use vulcan_workbench_model::PendingPromptRuntimeOptions;
 
 /// Verifies todolist host results are projected into session runtime todolist state.
 /// 验证 todolist 宿主结果会投影为会话运行态 todolist 状态。
@@ -202,6 +205,7 @@ fn session_todolist_summary_counts_completed_items() {
 #[test]
 fn goal_summary_from_tool_finished_event_preserves_three_states() {
     let session_id = SessionId::new_v4();
+    let goal_id = Uuid::new_v4();
     let updated_event = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "goal finished",
@@ -213,7 +217,7 @@ fn goal_summary_from_tool_finished_event_preserves_three_states() {
             "payload": {
                 "goal": {
                     "sessionId": session_id.to_string(),
-                    "goalId": "goal-three-state",
+                    "goalId": goal_id.to_string(),
                     "objective": "完成三态测试",
                     "status": "active",
                     "tokenBudget": 1200,
@@ -259,25 +263,261 @@ fn goal_summary_from_tool_finished_event_preserves_three_states() {
         }
     })));
 
-    let Some(Some(summary)) = goal_summary_from_tool_finished_event(&updated_event) else {
+    let Some(Some(summary)) = goal_summary_from_tool_finished_event(&updated_event)
+        .expect("valid updated goal event should parse")
+    else {
         panic!("updated goal event should parse to a summary");
     };
 
     assert_eq!(summary.session_id, session_id.to_string());
-    assert_eq!(summary.goal_id, "goal-three-state");
+    assert_eq!(summary.goal_id, goal_id.to_string());
     assert_eq!(summary.objective, "完成三态测试");
-    assert_eq!(summary.status, "active");
+    assert_eq!(summary.status, SessionGoalStatus::Active);
     assert_eq!(summary.token_budget, Some(1200));
     assert_eq!(summary.tokens_used, 34);
     assert_eq!(summary.usage_tokens, 35);
     assert_eq!(
         goal_summary_from_tool_finished_event(&cleared_event),
-        Some(None)
+        Ok(Some(None))
     );
     assert_eq!(
         goal_summary_from_tool_finished_event(&unrelated_event),
-        None
+        Ok(None)
     );
+}
+
+/// Verifies declared goal host results reject malformed payloads instead of disappearing silently.
+/// 验证已声明的目标宿主结果会拒绝畸形载荷，而不是静默消失。
+#[test]
+fn goal_summary_from_tool_finished_event_rejects_malformed_goal_payload() {
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "goal finished",
+        "Goal updated",
+    )
+    .with_metadata(Some(json!({
+        "host_result": {
+            "kind": "session_goal",
+            "payload": {
+                "goal": {
+                    "sessionId": "not-a-session-id"
+                }
+            }
+        }
+    })));
+
+    let error = goal_summary_from_tool_finished_event(&event)
+        .expect_err("malformed declared goal projection must fail");
+
+    assert_eq!(
+        error,
+        "session_goal host result contains invalid field `sessionId`: expected UUID string"
+    );
+}
+
+/// Verifies goal projection diagnostics identify a missing required field exactly.
+/// 验证目标投影诊断会准确指出缺失的必填字段。
+#[test]
+fn goal_summary_from_tool_finished_event_reports_missing_required_field() {
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "goal finished",
+        "Goal updated",
+    )
+    .with_metadata(Some(json!({
+        "host_result": {
+            "kind": "session_goal",
+            "payload": {
+                "goal": { "sessionId": SessionId::new_v4().to_string() }
+            }
+        }
+    })));
+
+    let error = goal_summary_from_tool_finished_event(&event)
+        .expect_err("missing goalId must fail with field context");
+
+    assert_eq!(
+        error,
+        "session_goal host result contains missing required field `goalId`"
+    );
+}
+
+/// Verifies optional live counters default only when omitted and reject invalid supplied values.
+/// 验证可选实时计数仅在省略时使用默认值，并拒绝已提供的无效取值。
+#[test]
+fn goal_summary_from_tool_finished_event_validates_optional_live_counter() {
+    let base_goal = json!({
+        "sessionId": SessionId::new_v4().to_string(),
+        "goalId": Uuid::new_v4().to_string(),
+        "objective": "验证可选计数",
+        "status": "active",
+        "tokenBudget": null,
+        "tokensUsed": 12,
+        "timeUsedSeconds": 3,
+        "createdAtMs": 100,
+        "updatedAtMs": 200
+    });
+    let build_event = |goal: Value| {
+        RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "goal finished",
+            "Goal updated",
+        )
+        .with_metadata(Some(json!({
+            "host_result": {
+                "kind": "session_goal",
+                "payload": { "goal": goal }
+            }
+        })))
+    };
+
+    let Some(Some(summary)) =
+        goal_summary_from_tool_finished_event(&build_event(base_goal.clone()))
+            .expect("omitted optional counters should use zero defaults")
+    else {
+        panic!("valid goal projection should produce a summary");
+    };
+    assert_eq!(summary.usage_tokens, 12);
+    assert_eq!(summary.api_call_count, 0);
+    assert_eq!(summary.total_tokens, 0);
+    let mut invalid_goal = base_goal;
+    invalid_goal["apiCallCount"] = json!(-1);
+    let error = goal_summary_from_tool_finished_event(&build_event(invalid_goal.clone()))
+        .expect_err("negative optional count must not silently become zero");
+    assert_eq!(
+        error,
+        "session_goal host result contains invalid field `apiCallCount`: expected non-negative integer fitting usize or null"
+    );
+    invalid_goal["apiCallCount"] = json!(0);
+    invalid_goal["totalTokens"] = json!("12");
+    let type_error = goal_summary_from_tool_finished_event(&build_event(invalid_goal))
+        .expect_err("string token count must not silently become zero");
+    assert_eq!(
+        type_error,
+        "session_goal host result contains invalid field `totalTokens`: expected non-negative integer or null"
+    );
+}
+
+/// Verifies persisted goal status and positive-budget range contracts are enforced.
+/// 验证持久化目标状态与正预算范围契约会被强制执行。
+#[test]
+fn goal_summary_from_tool_finished_event_rejects_invalid_status_and_budget_range() {
+    let mut goal = json!({
+        "sessionId": SessionId::new_v4().to_string(),
+        "goalId": Uuid::new_v4().to_string(),
+        "objective": "验证字段范围",
+        "status": "unknown",
+        "tokenBudget": null,
+        "tokensUsed": 0,
+        "timeUsedSeconds": 0,
+        "createdAtMs": 100,
+        "updatedAtMs": 100
+    });
+    let build_event = |goal: Value| {
+        RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "goal finished",
+            "Goal updated",
+        )
+        .with_metadata(Some(json!({
+            "host_result": {
+                "kind": "session_goal",
+                "payload": { "goal": goal }
+            }
+        })))
+    };
+
+    let status_error = goal_summary_from_tool_finished_event(&build_event(goal.clone()))
+        .expect_err("unknown persisted status must fail");
+    assert_eq!(
+        status_error,
+        "session_goal host result contains invalid field `status`: expected active, paused, blocked, usage_limited, budget_limited, or complete"
+    );
+    goal["status"] = json!("active");
+    goal["tokenBudget"] = json!(0);
+    let budget_error = goal_summary_from_tool_finished_event(&build_event(goal.clone()))
+        .expect_err("zero token budget must fail");
+    assert_eq!(
+        budget_error,
+        "session_goal host result contains invalid field `tokenBudget`: expected positive integer or null"
+    );
+    goal["tokenBudget"] = Value::Null;
+    goal["objective"] = json!(
+        "x".repeat(vulcan_workspace_store::workspace_store::MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1)
+    );
+    let objective_error = goal_summary_from_tool_finished_event(&build_event(goal))
+        .expect_err("oversized objective must fail the shared store contract");
+    assert_eq!(
+        objective_error,
+        "session_goal host result contains invalid field `objective`: expected string with at most 4000 characters"
+    );
+}
+
+/// Verifies a goal projection cannot route one runtime event into another session's goal cache.
+/// 验证目标投影不能把当前运行时事件路由到另一个会话的目标缓存。
+#[test]
+fn runtime_event_goal_projection_rejects_cross_session_ownership_before_commit() {
+    let runtime_session_id = SessionId::new_v4();
+    let foreign_session_id = SessionId::new_v4();
+    let service_state = test_service_state_with_parent_session(runtime_session_id);
+    let workspace = service_state
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot should exist");
+    let original_messages = workspace.session_messages.clone();
+    let original_runtime_state = workspace.session_runtime_state.clone();
+    let original_hydrated_sessions = workspace.hydrated_session_ids.clone();
+    let original_selected_session = workspace.selected_session;
+    let state = Arc::new(Mutex::new(service_state));
+    let app = ServiceEventEmitter::new(Vec::new());
+    let event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "goal finished",
+        "Goal updated",
+    )
+    .with_metadata(Some(json!({
+        "host_result": {
+            "kind": "session_goal",
+            "payload": {
+                "goal": {
+                    "sessionId": foreign_session_id.to_string(),
+                    "goalId": Uuid::new_v4().to_string(),
+                    "objective": "不得污染其他会话",
+                    "status": "active",
+                    "tokenBudget": null,
+                    "tokensUsed": 0,
+                    "timeUsedSeconds": 0,
+                    "createdAtMs": 1,
+                    "updatedAtMs": 1
+                }
+            }
+        }
+    })));
+
+    let error = append_runtime_event_projection(&app, &state, runtime_session_id, &event)
+        .expect_err("cross-session goal projection must fail preflight");
+
+    assert!(error.contains("session_goal host result belongs to session"));
+    let guard = state.lock().expect("service state lock");
+    assert!(guard.session_goal_summaries.is_empty());
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot should remain");
+    assert_eq!(
+        serde_json::to_value(&workspace.session_messages)
+            .expect("retained session messages should serialize"),
+        serde_json::to_value(&original_messages)
+            .expect("original session messages should serialize")
+    );
+    assert_eq!(
+        serde_json::to_value(&workspace.session_runtime_state)
+            .expect("retained runtime state should serialize"),
+        serde_json::to_value(&original_runtime_state)
+            .expect("original runtime state should serialize")
+    );
+    assert_eq!(workspace.hydrated_session_ids, original_hydrated_sessions);
+    assert_eq!(workspace.selected_session, original_selected_session);
 }
 
 /// Verifies the active-goal continuation prompt keeps Codex's full completion and blocked audits.
@@ -288,7 +528,7 @@ fn goal_continuation_prompt_keeps_codex_audit_details() {
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-1"),
         objective: String::from("完成目标模式"),
-        status: String::from("active"),
+        status: SessionGoalStatus::Active,
         token_budget: Some(10_000),
         tokens_used: 1_234,
         usage_tokens: 1_234,
@@ -313,6 +553,153 @@ fn goal_continuation_prompt_keeps_codex_audit_details() {
     assert!(prompt.contains("call update_goal with status \"blocked\""));
 }
 
+/// Verifies prompt rendering keeps the durable goal identity in the execution binding.
+/// 验证提示词渲染会在执行绑定中保留持久目标身份。
+#[test]
+fn goal_execution_context_binds_prompt_to_goal_identity() {
+    let goal = SessionGoalSummary {
+        session_id: SessionId::new_v4().to_string(),
+        goal_id: String::from("goal-bound-to-run"),
+        objective: String::from("验证目标身份绑定"),
+        status: SessionGoalStatus::Active,
+        token_budget: None,
+        tokens_used: 0,
+        usage_tokens: 0,
+        api_call_count: 0,
+        tool_call_count: 0,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        time_used_seconds: 0,
+        created_at_ms: 1_000,
+        updated_at_ms: 1_000,
+    };
+
+    let context = session_goal_execution_context(&goal).expect("active goal context");
+
+    assert_eq!(context.goal_id, goal.goal_id);
+    assert!(context.prompt_context.contains("验证目标身份绑定"));
+}
+
+/// Verifies retiring one Goal stage removes live and crash-restored guidance owned by that stage.
+/// 验证退役 Goal 阶段会移除该阶段拥有的实时与崩溃恢复引导。
+#[test]
+fn retired_goal_stage_clears_live_and_restored_guidance() {
+    let session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let workspace = service_state
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot");
+    let runtime_state = workspace
+        .session_runtime_state
+        .entry(session_id)
+        .or_default();
+    runtime_state
+        .ui_state
+        .pending_prompt_queue
+        .push(PendingSessionPromptEntry {
+            id: String::from("old-guidance"),
+            prompt: String::from("old stage"),
+            hidden_model_guidance: None,
+            preview: String::from("old stage"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::GoalContinuation,
+            task_id: Some(String::from("goal-stage-old")),
+            panel_entry_id: Some(String::from("old-guidance")),
+            created_at: String::from("1"),
+        });
+    runtime_state
+        .ui_state
+        .pending_prompt_queue
+        .push(PendingSessionPromptEntry {
+            id: String::from("new-guidance"),
+            prompt: String::from("new stage"),
+            hidden_model_guidance: None,
+            preview: String::from("new stage"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::GoalContinuation,
+            task_id: Some(String::from("goal-stage-new")),
+            panel_entry_id: Some(String::from("new-guidance")),
+            created_at: String::from("2"),
+        });
+    service_state
+        .budget_limit_reported_goal_ids
+        .insert(String::from("goal-stage-old"));
+    let state = Arc::new(Mutex::new(service_state));
+
+    let removed = clear_session_goal_stage_runtime_state(&state, session_id, "goal-stage-old")
+        .expect("retired stage cleanup");
+
+    assert_eq!(removed, 1);
+    let guard = state.lock().expect("service state lock");
+    assert!(
+        !guard
+            .budget_limit_reported_goal_ids
+            .contains("goal-stage-old")
+    );
+    let queue = &guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .session_runtime_state
+        .get(&session_id)
+        .expect("runtime state")
+        .ui_state
+        .pending_prompt_queue;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].task_id.as_deref(), Some("goal-stage-new"));
+    drop(guard);
+
+    let mut guard = state.lock().expect("service state lock");
+    guard
+        .workspace_snapshot
+        .as_mut()
+        .expect("workspace snapshot")
+        .session_runtime_state
+        .get_mut(&session_id)
+        .expect("runtime state")
+        .ui_state
+        .pending_prompt_queue
+        .push(PendingSessionPromptEntry {
+            id: String::from("restored-old-guidance"),
+            prompt: String::from("restored old stage"),
+            hidden_model_guidance: None,
+            preview: String::from("restored old stage"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::GoalContinuation,
+            task_id: Some(String::from("goal-stage-old")),
+            panel_entry_id: Some(String::from("restored-old-guidance")),
+            created_at: String::from("3"),
+        });
+    drop(guard);
+
+    assert_eq!(
+        clear_stale_session_goal_pending_prompts(&state, session_id, Some("goal-stage-new"))
+            .expect("dispatch-time cleanup"),
+        1
+    );
+    let guard = state.lock().expect("service state lock");
+    let queue = &guard
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace snapshot")
+        .session_runtime_state
+        .get(&session_id)
+        .expect("runtime state")
+        .ui_state
+        .pending_prompt_queue;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].task_id.as_deref(), Some("goal-stage-new"));
+}
+
 /// Verifies objective-updated steering mirrors Codex's superseding-objective prompt.
 /// 验证目标更新引导会对齐 Codex 的新目标覆盖旧目标提示词。
 #[test]
@@ -321,7 +708,7 @@ fn goal_objective_updated_prompt_supersedes_previous_goal() {
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-1"),
         objective: String::from("完成修改后的目标"),
-        status: String::from("active"),
+        status: SessionGoalStatus::Active,
         token_budget: Some(10_000),
         tokens_used: 1_234,
         usage_tokens: 1_234,
@@ -353,7 +740,7 @@ fn goal_budget_limited_prompt_waits_for_user_resume() {
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-budget"),
         objective: String::from("完成预算测试"),
-        status: String::from("budget_limited"),
+        status: SessionGoalStatus::BudgetLimited,
         token_budget: Some(2_000),
         tokens_used: 2_345,
         usage_tokens: 2_345,
@@ -382,7 +769,7 @@ fn budget_limited_goal_is_not_regular_prompt_context() {
         session_id: SessionId::new_v4().to_string(),
         goal_id: String::from("goal-budget"),
         objective: String::from("完成预算测试"),
-        status: String::from("budget_limited"),
+        status: SessionGoalStatus::BudgetLimited,
         token_budget: Some(2_000),
         tokens_used: 2_345,
         usage_tokens: 2_345,

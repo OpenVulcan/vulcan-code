@@ -360,21 +360,24 @@ mod tests {
     /// Builds one minimal runtime-stream delta state used by terminal-batch tests.
     /// 构建一份供终态批次测试使用的最小运行时流式增量状态。
     fn build_stream_state() -> RuntimeStreamDeltaState {
-        RuntimeStreamDeltaState::new(VulcanCoreController::new(
-            ControllerConfig {
-                provider_id: String::from("openai"),
-                model_id: String::from("gpt-test"),
-                system_prompt: String::from("system"),
-                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                    String::from("system").clone(),
-                ),
-                temperature: Some(0.2),
-                max_turns: 4,
-                additional_params: None,
-                context_injection: None,
-            },
-            ConversationSnapshot::default(),
-        ))
+        RuntimeStreamDeltaState::new(
+            VulcanCoreController::new(
+                ControllerConfig {
+                    provider_id: String::from("openai"),
+                    model_id: String::from("gpt-test"),
+                    system_prompt: String::from("system"),
+                    prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                        String::from("system").clone(),
+                    ),
+                    temperature: Some(0.2),
+                    max_turns: 4,
+                    additional_params: None,
+                    context_injection: None,
+                },
+                ConversationSnapshot::default(),
+            )
+            .expect("valid core conversation snapshot"),
+        )
     }
 
     /// Builds one minimal structured request snapshot used to verify final preview backfill.

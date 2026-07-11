@@ -26,7 +26,6 @@ use super::segmented_session_store::{
 };
 use super::session_addon_store::read_session_addon_state;
 use super::*;
-use hydration::repair_duplicate_conversation_record_ids;
 use locator::{
     find_segmented_session_dir_for_locator, query_session_locator_for_project_created_at,
 };

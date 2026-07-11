@@ -11,6 +11,10 @@ pub(crate) async fn run_task_with_shared_runtime_context(
 ) -> Result<TaskExecutionOutcome, String> {
     let mut request = request;
     let task_id = request.task_id;
+    // active_task_run_guard reserves this protocol execution before any start event can escape.
+    // active_task_run_guard 在任何启动事件逸出前预留本协议执行。
+    let active_task_run_guard =
+        task_runtime.claim_and_reserve_active_task_run(task_id, &request.execution_id)?;
     let trace_started_at = current_unix_millis_u64();
     task_runtime_trace(
         "shared_task_start",
@@ -63,7 +67,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         &[],
         current_unix_millis_text(),
     );
-    task_runtime.open_detached_task_event_stream_for_run(task_id)?;
+    task_runtime.open_detached_task_event_stream_for_run(task_id, &request.execution_id)?;
     let (delegate_started_event, projection_barrier) =
         attach_runtime_event_projection_barrier(build_task_delegate_runtime_event(
             RuntimeEventKind::DelegateStarted,
@@ -78,7 +82,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         .is_err()
     {
         cancel_runtime_event_projection_barrier(projection_barrier);
-        task_runtime.close_detached_task_event_stream(task_id);
+        task_runtime.close_detached_task_event_stream(task_id, &request.execution_id);
         let error = task_start_parent_stream_closed_error(&request.public_task_id);
         task_runtime_trace(
             "shared_task_delegate_started_parent_stream_closed",
@@ -157,6 +161,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
             }
             background_task_runtime.publish_detached_task_event(
                 background_request.task_id,
+                &background_request.execution_id,
                 DetachedTaskRuntimeEvent::ChildExecution(event),
             );
         }
@@ -202,8 +207,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     let child_run_abort_guard = AbortChildRunOnDrop {
         handle: child_run_abort_handle.clone(),
     };
-    let active_task_run_guard =
-        task_runtime.install_active_task_run(task_id, child_run_abort_handle)?;
+    active_task_run_guard.attach_abort_handle(child_run_abort_handle)?;
     task_runtime_trace(
         "shared_task_child_spawned",
         format!(
@@ -405,7 +409,7 @@ pub(crate) async fn run_task_with_shared_runtime_context(
         };
         drop(active_task_run_guard.take());
         if !resumed_queued_messages && !task_runtime.task_has_active_descendant_runs(task_id) {
-            task_runtime.close_detached_task_event_stream(task_id);
+            task_runtime.close_detached_task_event_stream(task_id, &request.execution_id);
         }
         task_runtime_trace(
             "shared_task_background_completed",
@@ -669,7 +673,7 @@ pub(super) fn current_task_snapshot_from_store(
             "TaskSession context for task `{task_id}` contains invalid conversation state: {error}"
         )
     })?;
-    Ok(Some(build_core_conversation_snapshot(&conversation_state)))
+    Ok(Some(build_core_conversation_snapshot(&conversation_state)?))
 }
 
 /// Loads the latest stopped-task snapshot and logs corrupted persisted context before falling back.
@@ -760,7 +764,7 @@ pub(crate) async fn run_task_session_context_compaction(
         .map(|events| events.len() as u64)
         .unwrap_or(0);
     let (provider_configuration, _) =
-        build_task_runtime_preparation_request(&context, &request, &resolved_config);
+        build_task_runtime_preparation_request(&context, &request, &resolved_config)?;
     let model_label = provider_configuration.model.clone();
     let stream = stream_prompt_compaction_foundation_job(PromptCompactionFoundationJobRequest {
         session_id: request.task_id,
@@ -793,7 +797,7 @@ pub(crate) async fn run_task_session_context_compaction(
         let compacted_conversation_state: SessionConversationState =
             serde_json::from_value(application.context.conversation_state.clone())
                 .map_err(|error| error.to_string())?;
-        let compacted_snapshot = build_core_conversation_snapshot(&compacted_conversation_state);
+        let compacted_snapshot = build_core_conversation_snapshot(&compacted_conversation_state)?;
         let checkpoint_id = application.checkpoint.checkpoint_id.clone();
         let timestamp_ms = application.checkpoint.timestamp_ms;
         let summary = application.checkpoint.summary.clone();

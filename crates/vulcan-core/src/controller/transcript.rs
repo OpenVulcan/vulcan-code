@@ -214,15 +214,24 @@ impl VulcanCoreController {
     ///
     /// # Returns
     /// 返回值
-    /// The generated or supplied record id, or `None` when the display text is blank.
-    /// 返回生成或传入的记录标识；若显示文本为空则返回 `None`。
-    pub fn append_display_record(&mut self, request: DisplayRecordAppendRequest) -> Option<String> {
+    /// The generated or supplied record id, `None` for blank display text, or an identity error without mutation.
+    /// 返回生成或传入的记录标识；显示文本为空时返回 `None`；身份无效时返回错误且不修改状态。
+    pub fn append_display_record(
+        &mut self,
+        request: DisplayRecordAppendRequest,
+    ) -> Result<Option<String>, CoreError> {
         if request.title.trim().is_empty() && request.body.trim().is_empty() {
-            return None;
+            return Ok(None);
         }
-        let record_id = request
-            .record_id
-            .unwrap_or_else(|| self.next_local_id("display-record"));
+        // record_id preserves a supplied durable identity only after exact namespace validation.
+        // record_id 仅在完成精确命名空间校验后保留调用方提供的持久化身份。
+        let record_id = match request.record_id {
+            Some(record_id) => {
+                self.validate_new_record_id(record_id.as_str())?;
+                record_id
+            }
+            None => self.next_local_id("display-record"),
+        };
         let timestamp = current_unix_millis_text();
         self.snapshot.records.push(ConversationRecord {
             id: record_id.clone(),
@@ -234,7 +243,7 @@ impl VulcanCoreController {
             metadata: request.metadata,
             created_at: timestamp,
         });
-        Some(record_id)
+        Ok(Some(record_id))
     }
 
     /// Returns whether the controller still needs to append one new user turn instead of reusing the host-preseeded latest user prompt.
@@ -324,13 +333,11 @@ impl VulcanCoreController {
     /// 将一条工具结果回写到规范消息窗口与持久化记录流中。
     pub(super) fn append_tool_result_message(&mut self, result: &ToolInvocationResult) -> String {
         let message_id = self.next_local_id("tool-result-message");
-        let tool_result_id = self.next_local_id("tool-result");
         let record_id = self.next_local_id("tool-result-record");
         let timestamp = current_unix_millis_text();
         self.snapshot.messages.push(ConversationMessage {
             id: message_id.clone(),
             payload: ConversationPayload::ToolResult {
-                tool_result_id,
                 tool_call_id: Some(result.tool_call_id.clone()),
                 text: result.model_output.clone(),
             },

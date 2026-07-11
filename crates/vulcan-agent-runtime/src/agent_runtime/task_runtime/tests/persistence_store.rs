@@ -3,6 +3,7 @@ use std::fs;
 use std::io::BufReader;
 use std::path::Path;
 use vulcan_task_session::TaskSessionMetadataInit;
+use vulcan_tools_manager::VULCAN_TOOL_ERROR_DETAIL_KIND;
 
 /// Recursively copies one directory tree for directory-isolation tests.
 /// 为目录隔离测试递归复制一棵目录树。
@@ -109,7 +110,8 @@ fn prepare_task_execution_request_restores_persisted_context_for_resume() {
         .create_task_session(metadata.clone())
         .expect("task metadata should store");
     let conversation_state =
-        core_snapshot_to_session_conversation_state(&CoreConversationSnapshot::default());
+        core_snapshot_to_session_conversation_state(&CoreConversationSnapshot::default())
+            .expect("default snapshot should have valid message identities");
     store
         .save_context(SessionContextDocument {
             schema_version: 1,
@@ -201,7 +203,7 @@ async fn list_agents_uses_hydrated_registry_for_persisted_active_agent() {
         .subagent_registry_snapshot()
         .expect("registry should read after hydration");
     let restored_entry = restored_registry
-        .get("persisted-review")
+        .get_for_parent(SessionNodeId::from(root_session_id), "persisted-review")
         .expect("hydrated registry entry should exist");
     assert_eq!(restored_entry.prompt_source.as_deref(), Some("core"));
     let result = task_runtime
@@ -230,16 +232,492 @@ async fn list_agents_uses_hydrated_registry_for_persisted_active_agent() {
         restored_metadata.stop_reason.as_deref(),
         Some("runtime_lost")
     );
+    assert_eq!(restored_entry.updated_at_ms, restored_metadata.updated_at);
     let sessions = task_runtime
         .sessions
         .read()
         .expect("task session registry lock");
+    let restored_record = sessions
+        .get(&task_id)
+        .expect("restored task record should exist");
+    assert_eq!(restored_record.last_status, "stopped");
     assert_eq!(
-        sessions
-            .get(&task_id)
-            .expect("restored task record should exist")
-            .last_status,
-        "stopped"
+        restored_record.updated_at,
+        restored_metadata.updated_at.to_string()
+    );
+}
+
+/// Verifies hydration initiated from a resident nested task restores the complete root tree.
+/// 验证由驻留嵌套任务发起的恢复会还原完整根树。
+#[test]
+fn nested_session_hydration_restores_complete_persisted_root_tree() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let parent_task_id = Uuid::new_v4();
+    let nested_task_id = Uuid::new_v4();
+    let sibling_task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let root_parent = ParentSessionRef::MainSession {
+        root_session_id: SessionNodeId::from(root_session_id),
+    };
+    let nested_parent = ParentSessionRef::TaskSession {
+        root_session_id: SessionNodeId::from(root_session_id),
+        parent_task_session_id: SessionNodeId::from(parent_task_id),
+    };
+    for metadata in [
+        default_persisted_task_metadata(
+            root_session_id,
+            parent_task_id,
+            root_parent.clone(),
+            "tree-parent",
+            "Tree parent",
+        ),
+        default_persisted_task_metadata(
+            root_session_id,
+            sibling_task_id,
+            root_parent,
+            "tree-sibling",
+            "Tree sibling",
+        ),
+        default_persisted_task_metadata(
+            root_session_id,
+            nested_task_id,
+            nested_parent,
+            "tree-nested",
+            "Tree nested",
+        ),
+    ] {
+        let mut metadata = metadata;
+        if metadata.task_session_id == SessionNodeId::from(nested_task_id) {
+            metadata.depth = 2;
+        }
+        store
+            .create_task_session(metadata)
+            .expect("persisted tree metadata should store");
+    }
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(
+            nested_task_id,
+            build_task_session_record(TaskSessionRecordInit {
+                task_id: nested_task_id,
+                public_task_id: String::from("tree-nested"),
+                origin_session_id: root_session_id,
+                parent_task_id: Some(parent_task_id),
+                depth: 2,
+                description: None,
+                subagent: None,
+                invocation_config: TaskInvocationConfig::main("nested resident prompt"),
+                display_title: String::from("Tree nested"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("nested resident prompt"),
+                last_status: String::from("completed"),
+            }),
+        );
+
+    task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(nested_task_id)
+        .expect("nested hydration should restore the entire persisted root");
+
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("restored registry should be readable");
+    assert!(
+        registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "tree-parent")
+            .is_some()
+    );
+    assert!(
+        registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "tree-sibling")
+            .is_some()
+    );
+    assert!(
+        registry
+            .get_for_parent(SessionNodeId::from(parent_task_id), "tree-nested")
+            .is_some()
+    );
+    assert_eq!(registry.list_all().len(), 3);
+    assert!(
+        task_runtime
+            .restored_task_session_registry_roots
+            .read()
+            .expect("restored-root marker should be readable")
+            .contains(&root_session_id)
+    );
+}
+
+/// Verifies resident archived lifecycle authority heals stale open persisted metadata.
+/// 验证驻留归档生命周期权威会修复过期的开放持久化元数据。
+#[test]
+fn resident_archived_restore_heals_open_persisted_metadata() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let mut metadata = default_persisted_task_metadata(
+        root_session_id,
+        task_id,
+        ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        "resident-archived",
+        "Resident archived",
+    );
+    metadata.status = TaskSessionStatus::Running;
+    store
+        .create_task_session(metadata)
+        .expect("stale open metadata should store");
+    let mut record = build_task_session_record(TaskSessionRecordInit {
+        task_id,
+        public_task_id: String::from("resident-archived"),
+        origin_session_id: root_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: None,
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("resident archived prompt"),
+        display_title: String::from("Resident archived"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("resident archived prompt"),
+        last_status: String::from("archived"),
+    });
+    record.updated_at = String::from("500");
+    record.stop_reason = Some(String::from("close_agent"));
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(task_id, record);
+    let mut entry = SubagentRegistryEntry::new(
+        "resident-archived",
+        SessionNodeId::from(task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        100,
+    );
+    entry.status = SubagentStatus::Archived;
+    entry.updated_at_ms = 500;
+    entry.stop_reason = Some(String::from("close_agent"));
+    task_runtime
+        .subagent_registry
+        .write()
+        .expect("subagent registry should be writable")
+        .upsert(entry)
+        .expect("resident archived registry entry should insert");
+
+    task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
+        .expect("resident archived authority should reconcile stale metadata");
+
+    let reconciled = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("reconciled metadata should load")
+        .expect("reconciled metadata should remain present");
+    assert_eq!(reconciled.status, TaskSessionStatus::Archived);
+    assert_eq!(reconciled.updated_at, 500);
+    assert_eq!(reconciled.stop_reason.as_deref(), Some("close_agent"));
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should remain readable");
+    assert_eq!(
+        registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "resident-archived")
+            .expect("resident archived entry should remain")
+            .status,
+        SubagentStatus::Archived
+    );
+}
+
+/// Verifies an open persisted child below archived history is rejected before runtime mutation.
+/// 验证归档历史下的开放持久化子节点会在运行时变更前被拒绝。
+#[test]
+fn persisted_open_child_of_archived_parent_is_rejected_atomically() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let parent_task_id = Uuid::new_v4();
+    let child_task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let mut archived_parent = default_persisted_task_metadata(
+        root_session_id,
+        parent_task_id,
+        ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        "archived-parent",
+        "Archived parent",
+    );
+    archived_parent.status = TaskSessionStatus::Archived;
+    store
+        .create_task_session(archived_parent)
+        .expect("archived parent metadata should store");
+    let child = default_persisted_task_metadata(
+        root_session_id,
+        child_task_id,
+        ParentSessionRef::TaskSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+            parent_task_session_id: SessionNodeId::from(parent_task_id),
+        },
+        "orphaned-child",
+        "Orphaned child",
+    );
+    store
+        .create_task_session(child)
+        .expect("open child metadata should store for corruption fixture");
+
+    let error = task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
+        .expect_err("open child below archived parent should be rejected");
+
+    assert!(error.contains("belongs to archived parent session"));
+    assert!(
+        task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should remain readable")
+            .list_all()
+            .is_empty()
+    );
+    assert!(
+        task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should remain readable")
+            .is_empty()
+    );
+    assert!(
+        !task_runtime
+            .restored_task_session_registry_roots
+            .read()
+            .expect("restored-root marker should remain readable")
+            .contains(&root_session_id)
+    );
+}
+
+/// Verifies duplicate persisted owners of one open public slot fail without partial hydration.
+/// 验证一个开放公开槽位的重复持久化所有者会失败且不会产生部分恢复。
+#[test]
+fn duplicate_persisted_open_slot_is_rejected_without_partial_hydration() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let first_task_id = Uuid::new_v4();
+    let second_task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let parent = ParentSessionRef::MainSession {
+        root_session_id: SessionNodeId::from(root_session_id),
+    };
+    for task_id in [first_task_id, second_task_id] {
+        store
+            .create_task_session(default_persisted_task_metadata(
+                root_session_id,
+                task_id,
+                parent.clone(),
+                "duplicate-open-slot",
+                "Duplicate open slot",
+            ))
+            .expect("duplicate persisted metadata fixture should store");
+    }
+
+    let error = task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
+        .expect_err("duplicate open slot should be rejected");
+
+    assert!(error.contains("is open in both sessions"));
+    assert!(
+        task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should remain readable")
+            .list_all()
+            .is_empty()
+    );
+    assert!(
+        task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should remain readable")
+            .is_empty()
+    );
+    assert!(
+        !task_runtime
+            .restored_task_session_registry_roots
+            .read()
+            .expect("restored-root marker should remain readable")
+            .contains(&root_session_id)
+    );
+}
+
+/// Verifies one late materialization failure leaves the entire persisted tree out of runtime state.
+/// 验证后续单条物化失败不会把持久化树的任何部分写入运行时状态。
+#[test]
+fn persisted_restore_materialization_failure_has_no_partial_runtime_commit() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let valid_task_id = Uuid::new_v4();
+    let invalid_task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let parent = ParentSessionRef::MainSession {
+        root_session_id: SessionNodeId::from(root_session_id),
+    };
+    for (task_id, public_task_id) in [
+        (valid_task_id, "valid-materialized-task"),
+        (invalid_task_id, "invalid-materialized-task"),
+    ] {
+        let mut metadata = default_persisted_task_metadata(
+            root_session_id,
+            task_id,
+            parent.clone(),
+            public_task_id,
+            public_task_id,
+        );
+        metadata.status = TaskSessionStatus::Completed;
+        store
+            .create_task_session(metadata)
+            .expect("materialization fixture metadata should store");
+    }
+    store
+        .save_context(SessionContextDocument {
+            schema_version: 1,
+            node_id: SessionNodeId::from(invalid_task_id),
+            provider_id: Some(String::from("provider")),
+            model_id: Some(String::from("model")),
+            reasoning_effort: None,
+            system_prompt_layers: Vec::new(),
+            conversation_state: json!("invalid conversation state"),
+            compaction_anchor: None,
+            context_budget_fingerprint: None,
+            tool_catalog_snapshot: Value::Null,
+            provider_request_preview: None,
+        })
+        .expect("invalid persisted context fixture should store");
+
+    let error = task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
+        .expect_err("invalid context should abort whole-tree materialization");
+
+    assert!(error.contains("conversation"));
+    assert!(
+        task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should remain readable")
+            .list_all()
+            .is_empty()
+    );
+    assert!(
+        task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should remain readable")
+            .is_empty()
+    );
+    assert!(
+        !task_runtime
+            .restored_task_session_registry_roots
+            .read()
+            .expect("restored-root marker should remain readable")
+            .contains(&root_session_id)
+    );
+}
+
+/// Verifies normalized metadata failure rolls back earlier writes before runtime projections swap.
+/// 验证规范化元数据写入失败会在交换运行时投影前回滚更早写入。
+#[test]
+fn persisted_restore_write_failure_rolls_back_before_runtime_commit() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let first_task_id = Uuid::new_v4();
+    let second_task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let parent = ParentSessionRef::MainSession {
+        root_session_id: SessionNodeId::from(root_session_id),
+    };
+    let mut metadata = Vec::new();
+    for (task_id, public_task_id) in [
+        (first_task_id, "first-runtime-lost-task"),
+        (second_task_id, "second-runtime-lost-task"),
+    ] {
+        let mut task_metadata = default_persisted_task_metadata(
+            root_session_id,
+            task_id,
+            parent.clone(),
+            public_task_id,
+            public_task_id,
+        );
+        task_metadata.status = TaskSessionStatus::Running;
+        store
+            .create_task_session(task_metadata.clone())
+            .expect("active restore fixture metadata should store");
+        metadata.push(task_metadata);
+    }
+    let prepared_restores = metadata
+        .iter()
+        .map(|metadata| task_runtime.materialize_persisted_subagent_restore(&store, metadata, 500))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("all restore projections should materialize before sabotage");
+    let second_task_dir = store
+        .task_session_directory(SessionNodeId::from(second_task_id))
+        .expect("second task directory should resolve");
+    let second_metadata_path = second_task_dir.join("metadata.json");
+    fs::remove_file(&second_metadata_path).expect("second metadata file should be removable");
+    fs::create_dir(&second_metadata_path)
+        .expect("directory should block normalized metadata replacement");
+
+    let error = task_runtime
+        .commit_materialized_persisted_subagent_restores(&store, &prepared_restores)
+        .expect_err("second normalized metadata write should fail");
+
+    assert!(error.contains("Metadata rollback also failed"));
+    let first_metadata = store
+        .load_task_session(SessionNodeId::from(first_task_id))
+        .expect("first metadata should remain readable")
+        .expect("first metadata should remain present");
+    assert_eq!(first_metadata.status, TaskSessionStatus::Running);
+    assert_eq!(first_metadata.updated_at, 100);
+    assert!(
+        task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should remain readable")
+            .list_all()
+            .is_empty()
+    );
+    assert!(
+        task_runtime
+            .sessions
+            .read()
+            .expect("task session registry should remain readable")
+            .is_empty()
     );
 }
 
@@ -352,6 +830,13 @@ async fn close_agent_persists_archived_status_for_restored_agent() {
         archived_metadata.stop_reason.as_deref(),
         Some("close_agent")
     );
+    let archived_registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("archived registry snapshot should remain readable");
+    let archived_entry = archived_registry
+        .get_for_parent(SessionNodeId::from(root_session_id), "persisted-worker")
+        .expect("archived registry entry should remain present");
+    assert_eq!(archived_metadata.updated_at, archived_entry.updated_at_ms);
     let parent_ref = ParentSessionRef::MainSession {
         root_session_id: SessionNodeId::from(root_session_id),
     };
@@ -417,6 +902,46 @@ async fn close_agent_persists_archived_status_for_restored_agent() {
     assert_eq!(
         metadata_after_late_outcome.stop_reason.as_deref(),
         Some("close_agent")
+    );
+    let stale_stopped_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(
+            &controller_config,
+            &late_invocation.invocation_config,
+        ),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 0,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(STOPPED_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Stopped,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &late_invocation, &stale_stopped_outcome)
+        .expect("stale stopped outcome should be absorbed by archived state");
+    let metadata_after_stale_stop = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load after stale stopped outcome")
+        .expect("metadata should remain present after stale stopped outcome");
+    assert_eq!(
+        metadata_after_stale_stop.status,
+        TaskSessionStatus::Archived
+    );
+    assert_eq!(
+        metadata_after_stale_stop.stop_reason.as_deref(),
+        Some("close_agent")
+    );
+    let registry_after_stale_stop = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should remain readable after stale stopped outcome");
+    assert_eq!(
+        registry_after_stale_stop
+            .get_for_parent(SessionNodeId::from(root_session_id), "persisted-worker")
+            .expect("archived registry entry should remain")
+            .status,
+        SubagentStatus::Archived
     );
 
     let fresh_runtime = Arc::new(TaskRuntime::new());
@@ -513,6 +1038,239 @@ async fn close_agent_persists_archived_status_for_restored_agent() {
         SessionNodeId::from(fresh_task_id)
     );
     assert_eq!(selected_metadata.status, TaskSessionStatus::Completed);
+}
+
+/// Verifies a subtree persistence failure restores earlier writes and leaves runtime entries open.
+/// 验证子树持久化失败会恢复先前写入，并使运行时条目保持未归档。
+#[tokio::test]
+async fn close_agent_subtree_persistence_failure_rolls_back_archive_transaction() {
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let parent_task_id = Uuid::new_v4();
+    let child_task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let mut parent_metadata = default_persisted_task_metadata(
+        root_session_id,
+        parent_task_id,
+        ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        "transaction-parent",
+        "Transaction parent",
+    );
+    parent_metadata.status = TaskSessionStatus::Running;
+    store
+        .create_task_session(parent_metadata)
+        .expect("parent metadata should store");
+    let mut child_metadata = default_persisted_task_metadata(
+        root_session_id,
+        child_task_id,
+        ParentSessionRef::TaskSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+            parent_task_session_id: SessionNodeId::from(parent_task_id),
+        },
+        "transaction-child",
+        "Transaction child",
+    );
+    child_metadata.status = TaskSessionStatus::Running;
+    store
+        .create_task_session(child_metadata)
+        .expect("child metadata should store");
+    task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
+        .expect("session hydration should restore persisted subtree");
+    let child_task_dir = store
+        .task_session_directory(SessionNodeId::from(child_task_id))
+        .expect("child task directory should resolve");
+    let child_main_metadata_path = child_task_dir.join("metadata.json");
+    fs::remove_file(&child_main_metadata_path).expect("child main metadata should be removable");
+    fs::create_dir(&child_main_metadata_path)
+        .expect("directory should block the child metadata replacement");
+
+    let close_failure = task_runtime
+        .invoke_close_agent(root_session_id, json!({ "target": "transaction-parent" }))
+        .await
+        .expect("the sabotaged cascade should return a structured tool failure");
+
+    assert_eq!(close_failure.model_output["status"], "failed");
+    assert_eq!(close_failure.model_output["details"]["closed"], false);
+    assert_eq!(close_failure.model_output["details"]["stopped"], true);
+    assert_eq!(
+        close_failure.model_output["details"]["failure_phase"],
+        "persist_archive"
+    );
+    assert_eq!(
+        close_failure.model_output["details"]["archive_rollback"],
+        "incomplete"
+    );
+    assert_eq!(
+        close_failure.model_output["details"]["archive_task_count"],
+        2
+    );
+    let archive_task_ids = close_failure.model_output["details"]["archive_task_ids"]
+        .as_array()
+        .expect("archive task ids should be an array")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        archive_task_ids,
+        BTreeSet::from([parent_task_id.to_string(), child_task_id.to_string()])
+    );
+    assert!(
+        close_failure.model_output["error"]
+            .as_str()
+            .is_some_and(|error| !error.contains("rollback"))
+    );
+    assert!(
+        close_failure.model_output["details"]["rollback_error"]
+            .as_str()
+            .is_some_and(|error| error.contains(&child_task_id.to_string()))
+    );
+    let failure_host_result = close_failure
+        .host_result
+        .expect("structured close failure should retain host metadata");
+    assert_eq!(failure_host_result.kind, VULCAN_TOOL_ERROR_DETAIL_KIND);
+    assert_eq!(failure_host_result.payload, close_failure.model_output);
+    let restored_parent = store
+        .load_task_session(SessionNodeId::from(parent_task_id))
+        .expect("parent metadata should remain readable")
+        .expect("parent metadata should remain present");
+    assert_eq!(restored_parent.status, TaskSessionStatus::Stopped);
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry snapshot should remain readable");
+    assert_ne!(
+        registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "transaction-parent")
+            .expect("parent registry entry should remain")
+            .status,
+        SubagentStatus::Archived
+    );
+    assert_ne!(
+        registry
+            .get_for_parent(SessionNodeId::from(parent_task_id), "transaction-child")
+            .expect("child registry entry should remain")
+            .status,
+        SubagentStatus::Archived
+    );
+}
+
+/// Verifies an archive persistence commit rolls back through its original store after reconfiguration.
+/// 验证归档持久化提交在重新配置后仍通过其原始存储执行回滚。
+#[test]
+fn close_agent_archive_persistence_commit_owns_exact_rollback_store() {
+    let original_root = tempfile::tempdir().expect("original task-session root");
+    let replacement_root = tempfile::tempdir().expect("replacement task-session root");
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(original_root.path(), root_session_id);
+    write_test_segmented_root_metadata(replacement_root.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, original_root.path().to_path_buf())
+        .expect("original store root should configure");
+    let original_store = SegmentedTaskSessionStore::new(original_root.path());
+    let mut metadata = default_persisted_task_metadata(
+        root_session_id,
+        task_id,
+        ParentSessionRef::MainSession {
+            root_session_id: SessionNodeId::from(root_session_id),
+        },
+        "store-owned-rollback",
+        "Store-owned rollback",
+    );
+    metadata.status = TaskSessionStatus::Stopped;
+    metadata.stop_reason = Some(String::from("user_interrupt"));
+    metadata.updated_at = 300;
+    original_store
+        .create_task_session(metadata)
+        .expect("stopped metadata should store");
+    task_runtime
+        .restore_persisted_subagent_registry_for_parent_tree(root_session_id)
+        .expect("persisted entry should hydrate");
+    let mut archived_entry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry snapshot should remain readable")
+        .get_for_parent(SessionNodeId::from(root_session_id), "store-owned-rollback")
+        .expect("hydrated registry entry should exist")
+        .clone();
+    archived_entry.set_status(SubagentStatus::Archived, 200);
+    archived_entry.stop_reason = Some(String::from("close_agent"));
+    let prepared_archive = PreparedCloseAgentArchive::new(vec![archived_entry]);
+    let persistence_commit = task_runtime
+        .persist_close_agent_archive_transaction(root_session_id, &prepared_archive)
+        .expect("archive persistence should commit");
+    let archived_metadata = original_store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("archived metadata should load")
+        .expect("archived metadata should exist");
+    assert_eq!(archived_metadata.status, TaskSessionStatus::Archived);
+    assert_eq!(archived_metadata.updated_at, 300);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, replacement_root.path().to_path_buf())
+        .expect("replacement store root should configure");
+
+    assert_eq!(
+        persistence_commit.rollback(),
+        CloseAgentArchiveRollbackOutcome::Completed
+    );
+
+    let restored_metadata = original_store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("restored metadata should load")
+        .expect("restored metadata should exist");
+    assert_eq!(restored_metadata.status, TaskSessionStatus::Stopped);
+    assert_eq!(restored_metadata.updated_at, 300);
+    assert_eq!(
+        restored_metadata.stop_reason.as_deref(),
+        Some("user_interrupt")
+    );
+    let replacement_store = SegmentedTaskSessionStore::new(replacement_root.path());
+    assert!(
+        replacement_store
+            .load_task_session(SessionNodeId::from(task_id))
+            .expect("replacement store lookup should succeed")
+            .is_none()
+    );
+}
+
+/// Verifies persistence commits without metadata writes report that rollback was not required.
+/// 验证没有元数据写入的持久化提交会报告无需回滚。
+#[test]
+fn close_agent_archive_commit_without_metadata_writes_requires_no_rollback() {
+    let task_runtime = TaskRuntime::new();
+    let empty_archive = PreparedCloseAgentArchive::new(Vec::new());
+    let missing_store_commit = task_runtime
+        .persist_close_agent_archive_transaction(Uuid::new_v4(), &empty_archive)
+        .expect("missing store should produce an empty persistence commit");
+
+    assert_eq!(
+        missing_store_commit.rollback(),
+        CloseAgentArchiveRollbackOutcome::NotRequired
+    );
+    let empty_store_root = tempfile::tempdir().expect("empty task-session root");
+    let empty_root_session_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(empty_store_root.path(), empty_root_session_id);
+    task_runtime
+        .configure_task_session_store_root(
+            empty_root_session_id,
+            empty_store_root.path().to_path_buf(),
+        )
+        .expect("empty store root should configure");
+    let empty_store_commit = task_runtime
+        .persist_close_agent_archive_transaction(empty_root_session_id, &empty_archive)
+        .expect("empty store transaction should commit without snapshots");
+    assert_eq!(
+        empty_store_commit.rollback(),
+        CloseAgentArchiveRollbackOutcome::NotRequired
+    );
 }
 
 /// Verifies persisted completed metadata is returned directly when memory has no record.
@@ -682,9 +1440,10 @@ fn current_task_snapshot_from_store_reads_persisted_context() {
             model_id: Some(String::from("model")),
             reasoning_effort: None,
             system_prompt_layers: vec![String::from("Persisted system prompt")],
-            conversation_state: serde_json::to_value(core_snapshot_to_session_conversation_state(
-                &snapshot,
-            ))
+            conversation_state: serde_json::to_value(
+                core_snapshot_to_session_conversation_state(&snapshot)
+                    .expect("snapshot should have valid message identities"),
+            )
             .expect("conversation state should serialize"),
             compaction_anchor: Some(String::from("task-summary-existing")),
             context_budget_fingerprint: Some(String::from("budget-existing")),
@@ -1151,7 +1910,7 @@ fn store_task_outcome_persists_segmented_task_session_artifacts() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let entry = registry
-        .get("agent-review")
+        .get_for_parent(SessionNodeId::from(root_session_id), "agent-review")
         .expect("completed registry entry should exist");
     assert_eq!(entry.segments.len(), 1);
     assert_eq!(entry.segments[0].line_count, 7);
@@ -1820,7 +2579,7 @@ fn store_task_outcome_does_not_publish_mailbox_when_persistence_fails() {
         task_runtime
             .subagent_registry_snapshot()
             .expect("registry should read")
-            .get("agent-review")
+            .get_for_parent(SessionNodeId::from(root_session_id), "agent-review")
             .is_none(),
         "registry must not expose a terminal agent whose outcome failed to persist"
     );
@@ -1889,7 +2648,7 @@ fn store_running_task_does_not_commit_session_when_persistence_fails() {
         task_runtime
             .subagent_registry_snapshot()
             .expect("registry should read")
-            .get("agent-review")
+            .get_for_parent(SessionNodeId::from(root_session_id), "agent-review")
             .is_none(),
         "registry must not expose a running agent whose start state failed to persist"
     );
@@ -1970,7 +2729,7 @@ fn store_running_task_persists_start_metadata_and_registry_segments() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let entry = registry
-        .get("image-worker-a")
+        .get_for_parent(SessionNodeId::from(root_session_id), "image-worker-a")
         .expect("running registry entry should exist");
     assert_eq!(entry.status, SubagentStatus::Running);
     assert_eq!(entry.segments.len(), 1);
@@ -2039,7 +2798,7 @@ async fn list_agents_restore_preserves_resident_running_registry_entry() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let entry = registry
-        .get("live-reviewer")
+        .get_for_parent(SessionNodeId::from(root_session_id), "live-reviewer")
         .expect("running registry entry should remain resident");
     assert_eq!(entry.status, SubagentStatus::Running);
 
@@ -2098,9 +2857,12 @@ async fn app_shutdown_stops_active_subagents_and_persists_metadata() {
         .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
         .expect("running task should store");
     let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let _active_guard = task_runtime
-        .install_active_task_run(task_id, pending_join.abort_handle())
-        .expect("active task run should install");
+    let _active_guard = install_test_active_task_run(
+        &task_runtime,
+        task_id,
+        "shutdown-execution",
+        pending_join.abort_handle(),
+    );
 
     let stopped_task_ids = task_runtime
         .stop_active_tasks_for_app_shutdown()
@@ -2118,14 +2880,14 @@ async fn app_shutdown_stops_active_subagents_and_persists_metadata() {
         .expect("registry should read");
     assert_eq!(
         registry
-            .get("shutdown-worker")
+            .get_for_parent(SessionNodeId::from(root_session_id), "shutdown-worker")
             .expect("shutdown worker should remain registered")
             .status,
         SubagentStatus::Stopped
     );
     assert_eq!(
         registry
-            .get("shutdown-worker")
+            .get_for_parent(SessionNodeId::from(root_session_id), "shutdown-worker")
             .expect("shutdown worker should remain registered")
             .stop_reason
             .as_deref(),
@@ -2230,10 +2992,130 @@ fn late_running_snapshot_does_not_reopen_completed_task() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let entry = registry
-        .get("completed-worker")
+        .get_for_parent(SessionNodeId::from(root_session_id), "completed-worker")
         .expect("completed worker should remain registered");
     assert_eq!(entry.status, SubagentStatus::Completed);
     assert_eq!(entry.result_summary.as_deref(), Some("completed result"));
+}
+
+/// Verifies an explicit stop rejects late running/completed writes but accepts the stopped outcome.
+/// 验证显式停止会拒绝迟到的 running/completed 写入，但接受 stopped 结果。
+#[test]
+fn explicit_stop_only_accepts_matching_stopped_execution_outcome() {
+    // temp_dir owns the segmented store used to verify durable lifecycle status.
+    // temp_dir 持有用于验证持久生命周期状态的分段存储。
+    let temp_dir = tempfile::tempdir().expect("temp task-session root");
+    // task_runtime owns the execution transaction and stable record.
+    // task_runtime 持有执行事务与稳定记录。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // root_session_id identifies the persisted root session.
+    // root_session_id 标识持久化根会话。
+    let root_session_id = Uuid::new_v4();
+    // task_id identifies the explicitly stopped stable task.
+    // task_id 标识被显式停止的稳定任务。
+    let task_id = Uuid::new_v4();
+    write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+    task_runtime
+        .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+        .expect("store root should configure");
+    // invocation carries the execution allowed to persist only its stopped terminal state.
+    // invocation 携带仅允许持久化 stopped 终态的执行。
+    let invocation = TaskExecutionRequest {
+        current_session_id: root_session_id,
+        root_session_id,
+        task_id,
+        execution_id: String::from("explicit-stop-execution"),
+        public_task_id: String::from("stopped-worker"),
+        prompt: String::from("run until stopped"),
+        description: Some(String::from("Stopped worker")),
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("run until stopped"),
+        display_title: String::from("Stopped worker"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    // controller_config is shared by every outcome variant in this execution.
+    // controller_config 由本执行的全部结果变体共享。
+    let controller_config = build_test_controller_config("Base prompt");
+    // running_outcome establishes the initial active persisted state.
+    // running_outcome 建立初始活动持久状态。
+    let running_outcome = TaskExecutionOutcome {
+        task_id,
+        controller_config: controller_config.clone(),
+        resolved_config: test_resolved_config(&controller_config, &invocation.invocation_config),
+        snapshot: CoreConversationSnapshot::default(),
+        provider_turns_executed: 1,
+        tool_calls_processed: 0,
+        final_assistant_message_id: None,
+        final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Running,
+        usage_segments: Vec::new(),
+    };
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+        .expect("initial running outcome should store");
+    task_runtime
+        .mark_stopped_tasks_in_registry(&[task_id], "user_interrupt")
+        .expect("explicit stop should update the stable lifecycle state");
+
+    task_runtime
+        .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+        .expect("late running outcome should be ignored");
+    // completed_outcome simulates a provider completion racing after the explicit stop.
+    // completed_outcome 模拟显式停止之后竞态到达的 Provider 完成结果。
+    let completed_outcome = TaskExecutionOutcome {
+        final_assistant_message_id: Some(String::from("late-completed-message")),
+        final_output_text: String::from("late completed result"),
+        execution_status: TaskExecutionStatus::Completed,
+        ..running_outcome.clone()
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &completed_outcome)
+        .expect("late completed outcome should be ignored");
+    // stopped_outcome is the only terminal result allowed after explicit stop.
+    // stopped_outcome 是显式停止后唯一允许提交的终态结果。
+    let stopped_outcome = TaskExecutionOutcome {
+        final_output_text: String::from(STOPPED_TASK_RESULT_SUMMARY),
+        execution_status: TaskExecutionStatus::Stopped,
+        ..running_outcome
+    };
+    task_runtime
+        .store_task_outcome(root_session_id, &invocation, &stopped_outcome)
+        .expect("matching stopped outcome should persist");
+
+    let store = SegmentedTaskSessionStore::new(temp_dir.path());
+    let metadata = store
+        .load_task_session(SessionNodeId::from(task_id))
+        .expect("metadata should load")
+        .expect("metadata should exist");
+    assert_eq!(metadata.status, TaskSessionStatus::Stopped);
+    assert_eq!(metadata.stop_reason.as_deref(), Some("user_interrupt"));
+    assert_eq!(
+        metadata.last_result_summary.as_deref(),
+        Some(STOPPED_TASK_RESULT_SUMMARY)
+    );
+    let sessions = task_runtime
+        .sessions
+        .read()
+        .expect("task sessions should read");
+    let record = sessions
+        .get(&task_id)
+        .expect("stopped record should remain present");
+    assert_eq!(record.last_status, "stopped");
+    assert_eq!(record.last_result_text, STOPPED_TASK_RESULT_SUMMARY);
+    assert_eq!(record.stop_reason.as_deref(), Some("user_interrupt"));
+    drop(sessions);
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should read");
+    let entry = registry
+        .get_for_parent(SessionNodeId::from(root_session_id), "stopped-worker")
+        .expect("stopped worker should remain registered");
+    assert_eq!(entry.status, SubagentStatus::Stopped);
+    assert_eq!(entry.stop_reason.as_deref(), Some("user_interrupt"));
 }
 
 /// Verifies a late running snapshot cannot reopen a failed persisted task.
@@ -2312,7 +3194,7 @@ fn late_running_snapshot_does_not_reopen_failed_task() {
         .subagent_registry_snapshot()
         .expect("registry should read");
     let entry = registry
-        .get("failed-worker")
+        .get_for_parent(SessionNodeId::from(root_session_id), "failed-worker")
         .expect("failed worker should remain registered");
     assert_eq!(entry.status, SubagentStatus::Failed);
     assert_eq!(entry.result_summary.as_deref(), Some("failed result"));

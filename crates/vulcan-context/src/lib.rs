@@ -24,10 +24,10 @@ pub use protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
     SessionConversationState, SessionConversationToolCall, SessionProviderContinuationState,
     append_assistant_text_message, append_record, append_record_body_delta,
-    append_user_text_message, collect_host_visible_attachments,
-    conversation_state_from_session_messages, conversation_state_to_compaction_source_messages,
-    conversation_state_to_context_records, conversation_state_to_session_messages,
-    merge_session_messages_with_conversation_state_records,
+    append_session_conversation_message, append_user_text_message,
+    collect_host_visible_attachments, conversation_state_from_session_messages,
+    conversation_state_to_compaction_source_messages, conversation_state_to_context_records,
+    conversation_state_to_session_messages, merge_session_messages_with_conversation_state_records,
 };
 pub use request_mode::{
     ContextFullRequestReason, ContextIncrementalDisabledReason, ContextRequestMode,
@@ -36,13 +36,15 @@ pub use request_mode::{
 pub use runtime::{
     RUNTIME_LOG_SCHEMA_VERSION, RuntimeAssistantMessageEvent, RuntimeContextCompactionAppliedEvent,
     RuntimeInjectionAppliedEvent, RuntimeInjectionCancelledEvent, RuntimeInjectionMergedEvent,
-    RuntimeLogEvent, RuntimeLogEventLine, RuntimeProviderLoweringRepairEvent,
+    RuntimeLogEvent, RuntimeLogEventLine, RuntimeLogEventLineDecodeError,
+    RuntimeLogProjectionError, RuntimeLogReplayError, RuntimeProviderLoweringRepairEvent,
     RuntimeProviderNativeStateEnvelope, RuntimeProviderRequestCheckpointEvent,
     RuntimeProviderResponseCheckpointEvent, RuntimeProviderTurnCheckpointEvent, RuntimeRepairEvent,
     RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
     RuntimeToolBatchCompletedEvent, RuntimeToolBatchStartedEvent, RuntimeToolCallEvent,
     RuntimeToolResultEvent, RuntimeToolResultStatus, RuntimeUserMessageEvent,
-    conversation_state_from_runtime_log_lines, runtime_log_lines_from_conversation_state,
+    conversation_state_from_runtime_log_lines, decode_runtime_log_event_line_json,
+    runtime_log_lines_from_conversation_state,
 };
 pub use transcript::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,

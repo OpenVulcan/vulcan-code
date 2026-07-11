@@ -27,8 +27,9 @@ use super::{
     active_reasoning_selection_effort, apply_webui_prompt_begin_outer_steps,
     build_vmm_hook_config_snapshot, cache_session_goal_summary,
     commit_workspace_snapshot_and_emit_session_phase_delta, current_unix_millis_value,
-    ensure_webui_session_runtime_state, runtime_state_has_queued_pending_prompt_work,
-    session_has_pending_plan_artifact, start_webui_session_kernel_turn,
+    ensure_webui_goal_session_kernel_turn_start_allowed, ensure_webui_session_runtime_state,
+    runtime_state_has_queued_pending_prompt_work, session_goal_dispatch_version,
+    session_has_pending_plan_artifact, start_webui_goal_session_kernel_turn,
     webui_session_has_active_run, webui_session_kernel_has_active_turn, webui_trace,
     webui_trace_if_slow, workspace_path_for_session,
 };
@@ -212,7 +213,15 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         return Ok(false);
     }
     let goal_store = VulcanGoalStore::new(controller_runtime.clone());
-    let Some(goal) = goal_store.get_thread_goal(session_id).await? else {
+    let (goal, goal_dispatch_version) = loop {
+        let version_before_read = session_goal_dispatch_version(state, session_id)?;
+        let goal = goal_store.get_thread_goal(session_id).await?;
+        let version_after_read = session_goal_dispatch_version(state, session_id)?;
+        if version_before_read == version_after_read {
+            break (goal, version_after_read);
+        }
+    };
+    let Some(goal) = goal else {
         cache_session_goal_summary(state, session_id, None)?;
         webui_trace("goal_continuation_no_goal", format!("session={session_id}"));
         return Ok(false);
@@ -241,7 +250,7 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         preserved_workspace_run_state.as_ref(),
         &mut workspace_snapshot,
     );
-    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None);
+    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)?;
     let Some(session_title) = workspace_snapshot
         .sessions
         .iter()
@@ -256,7 +265,15 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
             .conversation_hook_runtime
             .lock()
             .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-        begin_shared_prompt_turn(
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        ensure_webui_goal_session_kernel_turn_start_allowed(
+            &guard,
+            session_id,
+            goal_dispatch_version,
+        )?;
+        let start = begin_shared_prompt_turn(
             &mut workspace_snapshot,
             &mut hook_runtime,
             SharedPromptTurnBeginInput {
@@ -279,19 +296,16 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
                 disabled_ai_capability_target_selectors: BTreeSet::new(),
                 ai_capability_target_order_overrides: BTreeMap::new(),
             },
-        )
-    }?;
-    {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        start_webui_session_kernel_turn(
+        )?;
+        start_webui_goal_session_kernel_turn(
             &mut guard,
             session_id,
+            goal_dispatch_version,
             start.precheck_request.turn_id(),
             ActiveTurnKind::GoalContinuation,
         )?;
-    }
+        start
+    };
     apply_webui_prompt_begin_outer_steps(
         controller_runtime,
         &mut workspace_snapshot,

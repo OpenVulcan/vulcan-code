@@ -260,10 +260,6 @@ fn synthesized_tool_detail_message(
         String::from("tool_call_id"),
         Value::String(missing_ref.tool_call_id.clone()),
     );
-    metadata.insert(
-        String::from("tool_result_id"),
-        Value::String(result.tool_result_id.clone()),
-    );
     if let Some(tool_name) = missing_ref.tool_name.as_ref() {
         metadata.insert(String::from("tool_name"), Value::String(tool_name.clone()));
     }
@@ -402,10 +398,10 @@ mod tests {
             "1783526954377",
             RuntimeLogEvent::ToolResult(RuntimeToolResultEvent {
                 turn_id: None,
+                message_id: String::from("runtime-result-message-1"),
                 tool_batch_id: None,
                 runtime_tool_call_id: Some(String::from("runtime-call-1")),
                 provider_tool_call_id: Some(String::from("call-legacy-1")),
-                tool_result_id: String::from("runtime-result-1"),
                 text: String::from("完整的历史工具输出\nline 2"),
                 status: RuntimeToolResultStatus::Completed,
                 error: None,
@@ -444,10 +440,7 @@ mod tests {
             metadata.get("tool_call_id").and_then(Value::as_str),
             Some("call-legacy-1")
         );
-        assert_eq!(
-            metadata.get("tool_result_id").and_then(Value::as_str),
-            Some("runtime-result-1")
-        );
+        assert!(!metadata.contains_key("tool_result_id"));
         assert_eq!(
             metadata
                 .get("display")

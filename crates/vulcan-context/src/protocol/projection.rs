@@ -1,6 +1,10 @@
 //! Conversion helpers between protocol state, transcript entries, and compaction sources.
 //! 协议状态、转录条目与压缩来源之间的转换辅助逻辑。
 
+use super::identity::{
+    SessionConversationMessageIdentityError, SessionConversationRecordIdentityError,
+    validate_session_conversation_message_append, validate_session_conversation_record_append,
+};
 use super::types::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
     SessionConversationState, SessionConversationToolCall,
@@ -10,47 +14,127 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use vulcan_core::types::{ConversationAttachment, ConversationPayload};
 
+/// Appends one fully structured canonical message after validating the active identity namespace.
+/// 在校验活动身份命名空间后追加一条完整结构化规范消息。
+///
+/// # Parameters
+/// 参数
+/// `state` is the canonical state mutated only after the candidate identity is accepted.
+/// `state` 是仅在候选身份被接受后才会修改的规范状态。
+/// `message` is the complete canonical message committed without payload rewriting.
+/// `message` 是不会改写载荷而直接提交的完整规范消息。
+///
+/// # Returns
+/// 返回值
+/// Returns success after atomic append, or the identity violation with `state` unchanged.
+/// 原子追加后返回成功；身份违规时返回错误且 `state` 保持不变。
+pub fn append_session_conversation_message(
+    state: &mut SessionConversationState,
+    message: SessionConversationMessage,
+) -> Result<(), SessionConversationMessageIdentityError> {
+    validate_session_conversation_message_append(&state.messages, &message.id)?;
+    state.messages.push(message);
+    Ok(())
+}
+
 /// Appends one user-authored text input to the canonical conversation state.
 /// 向规范会话状态追加一条用户文本输入。
+///
+/// # Parameters
+/// 参数
+/// `state` is the canonical state mutated only after identity validation succeeds.
+/// `state` 是仅在身份校验成功后才会修改的规范状态。
+/// `message_id` is the exact stable identity proposed for the new message.
+/// `message_id` 是为新消息提供的精确稳定身份。
+/// `text` and `attachments` are the complete structured user payload.
+/// `text` 与 `attachments` 是完整的结构化用户载荷。
+///
+/// # Returns
+/// 返回值
+/// Returns success after atomic append, or the identity violation with `state` unchanged.
+/// 原子追加后返回成功；身份违规时返回错误且 `state` 保持不变。
 pub fn append_user_text_message(
     state: &mut SessionConversationState,
     message_id: impl Into<String>,
     text: impl Into<String>,
     attachments: Vec<ConversationAttachment>,
-) {
-    state.messages.push(SessionConversationMessage {
-        id: message_id.into(),
-        payload: SessionConversationPayload::UserText {
-            text: text.into(),
-            attachments,
+) -> Result<(), SessionConversationMessageIdentityError> {
+    // message_id is materialized once so validation and committed storage use the exact same identity.
+    // message_id 只物化一次，确保校验与提交存储使用完全相同的身份。
+    let message_id = message_id.into();
+    append_session_conversation_message(
+        state,
+        SessionConversationMessage {
+            id: message_id,
+            payload: SessionConversationPayload::UserText {
+                text: text.into(),
+                attachments,
+            },
         },
-    });
+    )
 }
 
 /// Appends one assistant-authored text node used by hidden explore or summary records.
 /// 追加一条供隐藏 Explore 或 Summary 记录使用的助手文本节点。
+///
+/// # Parameters
+/// 参数
+/// `state` is the canonical state mutated only after identity validation succeeds.
+/// `state` 是仅在身份校验成功后才会修改的规范状态。
+/// `message_id` is the exact stable identity proposed for the new message.
+/// `message_id` 是为新消息提供的精确稳定身份。
+/// `text` is the assistant-authored text stored without reasoning or tool calls.
+/// `text` 是不带 reasoning 或工具调用保存的助手文本。
+///
+/// # Returns
+/// 返回值
+/// Returns success after atomic append, or the identity violation with `state` unchanged.
+/// 原子追加后返回成功；身份违规时返回错误且 `state` 保持不变。
 pub fn append_assistant_text_message(
     state: &mut SessionConversationState,
     message_id: impl Into<String>,
     text: impl Into<String>,
-) {
-    state.messages.push(SessionConversationMessage {
-        id: message_id.into(),
-        payload: SessionConversationPayload::Assistant {
-            text: text.into(),
-            reasoning: String::new(),
-            provider_message_id: None,
-            provider_message_state: None,
-            usage: None,
-            tool_calls: Vec::new(),
+) -> Result<(), SessionConversationMessageIdentityError> {
+    // message_id is materialized once so validation and committed storage use the exact same identity.
+    // message_id 只物化一次，确保校验与提交存储使用完全相同的身份。
+    let message_id = message_id.into();
+    append_session_conversation_message(
+        state,
+        SessionConversationMessage {
+            id: message_id,
+            payload: SessionConversationPayload::Assistant {
+                text: text.into(),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: None,
+                tool_calls: Vec::new(),
+            },
         },
-    });
+    )
 }
 
-/// Appends one canonical session record that later drives the visible transcript projection.
-/// 追加一条后续将驱动可见转录投影的规范会话记录。
-pub fn append_record(state: &mut SessionConversationState, record: SessionConversationRecord) {
+/// Appends one canonical session record after validating the complete record identity namespace.
+/// 在校验完整记录身份命名空间后追加一条规范会话记录。
+///
+/// # Parameters
+/// 参数
+/// `state` is the canonical state mutated only after the record identity is accepted.
+/// `state` 是仅在记录身份被接受后才会修改的规范状态。
+/// `record` is the complete durable record committed without payload rewriting.
+/// `record` 是不会改写载荷而直接提交的完整持久记录。
+///
+/// # Returns
+/// 返回值
+/// Returns success after atomic append, or the identity violation with `state` unchanged.
+/// 原子追加后返回成功；身份违规时返回错误且 `state` 保持不变。
+pub fn append_record(
+    state: &mut SessionConversationState,
+    record: SessionConversationRecord,
+) -> Result<(), SessionConversationRecordIdentityError> {
+    validate_session_conversation_record_append(&state.records, &record.id)?;
     state.records.push(record);
+    Ok(())
 }
 
 /// Collects one latest-first unique attachment list from the canonical conversation window for host-side capability tools.
@@ -115,29 +199,40 @@ pub fn append_record_body_delta(
 
 /// Rebuilds a canonical state from a bounded transcript window when only lazy-loaded rows are available.
 /// 当只有懒加载转录行可用时，根据有界转录窗口重建规范会话状态。
+///
+/// # Returns
+/// 返回值
+/// Returns the rebuilt canonical state, or an identity error when replayed rows conflict.
+/// 返回重建后的规范状态；当复放记录身份冲突时返回错误。
 pub fn conversation_state_from_session_messages(
     messages: &[SessionMessageEntry],
-) -> SessionConversationState {
+) -> Result<SessionConversationState, String> {
     let mut state = SessionConversationState::default();
     let mut protocol_messages = Vec::new();
     for message in messages {
-        state.records.push(SessionConversationRecord {
-            id: message.id.clone(),
-            kind: message.kind,
-            record_kind: message.record_kind,
-            visible: message.visible,
-            title: message.title.clone(),
-            body: message.body.clone(),
-            metadata: message.metadata.clone(),
-            created_at: message.created_at.clone(),
-        });
+        append_record(
+            &mut state,
+            SessionConversationRecord {
+                id: message.id.clone(),
+                kind: message.kind,
+                record_kind: message.record_kind,
+                visible: message.visible,
+                title: message.title.clone(),
+                body: message.body.clone(),
+                metadata: message.metadata.clone(),
+                created_at: message.created_at.clone(),
+            },
+        )
+        .map_err(|error| format!("Invalid replayed conversation record identity: {error}"))?;
 
         if let Some(protocol_message) = session_message_to_protocol_message(message) {
             protocol_messages.push(protocol_message);
         }
     }
     state.messages = normalize_replayed_protocol_messages(protocol_messages);
-    state
+    super::identity::validate_session_conversation_message_identities(&state.messages)
+        .map_err(|error| format!("Invalid replayed conversation message identity: {error}"))?;
+    Ok(state)
 }
 
 /// Normalizes replayed protocol messages so display-only tool rows cannot create dangling provider state.
@@ -347,20 +442,26 @@ fn historical_tool_call_text_message(
 
 /// Converts an unsafe replayed tool-result message into historical plain text.
 /// 将不安全的重放工具结果消息转换为历史纯文本。
-fn historical_tool_result_text_message(
+///
+/// # Parameters
+/// 参数
+/// - `message`: Canonical tool-result message that must no longer participate in matching.
+/// - `message`：不得再参与匹配的规范工具结果消息。
+///
+/// # Returns
+/// 返回值
+/// A user-text message preserving local message id, optional call id, and model-visible text.
+/// 返回保留本地消息标识、可选调用标识与模型可见文本的用户文本消息。
+pub(crate) fn historical_tool_result_text_message(
     message: &SessionConversationMessage,
 ) -> SessionConversationMessage {
     let text = match &message.payload {
-        SessionConversationPayload::ToolResult {
-            tool_result_id,
-            tool_call_id,
-            text,
-        } => {
+        SessionConversationPayload::ToolResult { tool_call_id, text } => {
             let mut parts = Vec::new();
             parts.push(String::from(
                 "[Historical tool result recovered as text only]",
             ));
-            parts.push(format!("result_id: {tool_result_id}"));
+            parts.push(format!("message_id: {}", message.id));
             if let Some(tool_call_id) = tool_call_id
                 .as_deref()
                 .map(str::trim)
@@ -478,16 +579,9 @@ fn conversation_message_to_compaction_source_message(
             tool_calls,
             provider_message_id.as_deref(),
         ),
-        SessionConversationPayload::ToolResult {
-            tool_result_id,
-            tool_call_id,
-            text,
-        } => compaction_tool_result_message(
-            message.id.clone(),
-            tool_result_id,
-            tool_call_id.as_deref(),
-            text,
-        ),
+        SessionConversationPayload::ToolResult { tool_call_id, text } => {
+            compaction_tool_result_message(message.id.clone(), tool_call_id.as_deref(), text)
+        }
         SessionConversationPayload::AgentMessage {
             message_type,
             task_name,
@@ -580,12 +674,10 @@ fn compaction_provider_message_metadata(provider_message_id: Option<&str>) -> Op
 /// 根据规范工具输出构建一条仅供压缩使用的工具结果转录条目。
 fn compaction_tool_result_message(
     id: String,
-    tool_result_id: &str,
     tool_call_id: Option<&str>,
     text: &str,
 ) -> SessionMessageEntry {
     let mut parts = Vec::new();
-    push_labeled_non_empty_part(&mut parts, "tool_result_id", tool_result_id);
     if let Some(tool_call_id) = tool_call_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -831,23 +923,9 @@ fn tool_result_session_message_to_protocol_message(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let tool_result_id = metadata
-        .and_then(|payload| payload.get("tool_result_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            tool_call_id
-                .as_deref()
-                .map(|tool_call_id| format!("tool-result-{tool_call_id}"))
-        })
-        .unwrap_or_else(|| message.id.clone());
-
     Some(SessionConversationMessage {
         id: message.id.clone(),
         payload: SessionConversationPayload::ToolResult {
-            tool_result_id,
             tool_call_id,
             text: message.body.clone(),
         },

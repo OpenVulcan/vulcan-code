@@ -304,25 +304,6 @@ function formatTurnStatsTranslation(
   );
 }
 
-// extractToolResultIdFromText recovers host result ids from legacy Markdown or compact plain text.
-// extractToolResultIdFromText 从旧版 Markdown 或紧凑纯文本中恢复宿主结果标识。
-export function extractToolResultIdFromText(source: string): string | null {
-  const normalized = source.replace(/\r\n/g, "\n");
-  const patterns = [
-    /tool_result_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i,
-    /##\s*Result ID\s*\n+\s*`([^`]+)`/im,
-    /(?:^|\n)\s*Result ID\s*\n+\s*`?([A-Za-z0-9_.:-]+)`?/im,
-    /(?:^|\n)\s*Result ID\s+([A-Za-z0-9_.:-]+)/im,
-  ];
-  for (const pattern of patterns) {
-    const value = normalized.match(pattern)?.[1]?.trim();
-    if (value) {
-      return value;
-    }
-  }
-  return null;
-}
-
 // normalizeToolDisplayState maps provider and host state words into WebUI display states.
 // normalizeToolDisplayState 将 Provider 与宿主状态词映射为 WebUI 展示状态。
 export function normalizeToolDisplayState(status?: string | null): string | undefined {
@@ -354,7 +335,7 @@ export function structuredKindLooksLikeToolBlock(kind: ConversationBlockKind): b
 // structuredMessageHasToolEvidence prevents assistant prose from being misrendered as a failed tool row.
 // structuredMessageHasToolEvidence 防止助手正文被误渲染为失败工具行。
 export function structuredMessageHasToolEvidence(message: ConversationMessage, attributes: Record<string, string>): boolean {
-  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.subagent_task_id) {
+  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.command_session_id || attributes.subagent_task_id) {
     return true;
   }
   const hostKind = metadataString(message.metadata, [
@@ -378,7 +359,7 @@ export function conversationBlockHasToolEvidence(
   if (!structuredKindLooksLikeToolBlock(kind)) {
     return false;
   }
-  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.subagent_task_id) {
+  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.command_session_id || attributes.subagent_task_id) {
     return true;
   }
   const hostKind = metadataString(rawMetadata, [
@@ -399,8 +380,7 @@ export function toolMetadataContainsReturnPayload(metadata: unknown, body?: stri
     return true;
   }
   return Boolean(
-    metadataString(metadata, ["tool_result_id"])
-      ?? metadataValue(metadata, ["host_result", "hostResult"]),
+    metadataValue(metadata, ["host_result", "hostResult"]),
   );
 }
 

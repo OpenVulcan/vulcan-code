@@ -26,10 +26,9 @@ use vulcan_agent_runtime::{
     },
     session_event_runtime::SessionStreamingRecordIds,
 };
-use vulcan_context::{
-    ContextBudgetSnapshot, SessionConversationMessage, SessionConversationPayload,
-    append_record_body_delta,
-};
+#[cfg(test)]
+use vulcan_context::SessionConversationMessage;
+use vulcan_context::{ContextBudgetSnapshot, SessionConversationPayload, append_record_body_delta};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
     CompactionPlanInput, plan_context_compaction,

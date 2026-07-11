@@ -2,7 +2,6 @@
 //! 面向分段会话的转录水合行为测试。
 
 use super::*;
-use crate::conversation_protocol::SessionConversationRecord;
 use serde_json::json;
 use vulcan_context::SessionMessageKind;
 use vulcan_session_boundary::{
@@ -463,7 +462,8 @@ fn restore_hydration_window_from_runtime_state_if_empty_rebuilds_visible_message
                 SessionMessageRecordKind::AssistantOutput,
                 "当然可以",
             ),
-        ]),
+        ])
+        .expect("valid replayed conversation identities"),
         ..Default::default()
     };
 
@@ -493,7 +493,8 @@ fn restore_hydration_window_from_runtime_state_if_empty_appends_tool_details_whe
     );
     hidden_tool_detail.visible = false;
     let runtime_state = SessionRuntimeStateEntry {
-        conversation_state: conversation_state_from_session_messages(&[hidden_tool_detail]),
+        conversation_state: conversation_state_from_session_messages(&[hidden_tool_detail])
+            .expect("valid replayed conversation identities"),
         ..Default::default()
     };
     let mut messages = vec![test_message(
@@ -530,7 +531,8 @@ fn segmented_current_context_restores_runtime_state_without_full_blob() {
         SessionMessageKind::Assistant,
         SessionMessageRecordKind::AssistantOutput,
         "分段上下文正文",
-    )]);
+    )])
+    .expect("valid replayed conversation identities");
     let current_context = serde_json::json!({
         "conversation_state": conversation_state,
         "last_compaction_id": "compaction-segment-1",
@@ -569,49 +571,4 @@ fn segmented_current_context_restores_runtime_state_without_full_blob() {
         Some("# Segmented Preview")
     );
     assert_eq!(runtime_state.updated_at, "9001");
-}
-
-/// Verifies hydration repairs duplicate canonical record ids that were previously persisted by the broken runtime id generator.
-/// 验证水合过程会修复旧版错误运行时标识生成器持久化下来的重复规范记录标识。
-#[test]
-fn repair_duplicate_conversation_record_ids_rewrites_later_duplicates() {
-    let session_id = SessionId::from_u128(0x30cf28c9);
-    let mut conversation_state = SessionConversationState {
-        messages: Vec::new(),
-        records: vec![
-            SessionConversationRecord {
-                id: String::from("session-old-message-100-1"),
-                kind: SessionMessageKind::Assistant,
-                record_kind: SessionMessageRecordKind::SummaryOutput,
-                visible: false,
-                title: String::from("Summary"),
-                body: String::from("done"),
-                metadata: None,
-                created_at: String::from("100"),
-            },
-            SessionConversationRecord {
-                id: String::from("session-old-message-100-1"),
-                kind: SessionMessageKind::Assistant,
-                record_kind: SessionMessageRecordKind::TurnStats,
-                visible: true,
-                title: String::from("Turn Stats"),
-                body: String::from("stats"),
-                metadata: None,
-                created_at: String::from("100"),
-            },
-        ],
-        continuation: Default::default(),
-    };
-
-    let repaired = repair_duplicate_conversation_record_ids(session_id, &mut conversation_state);
-
-    assert!(repaired);
-    assert_eq!(
-        conversation_state.records[0].id,
-        "session-old-message-100-1"
-    );
-    assert_eq!(
-        conversation_state.records[1].id,
-        format!("session-{session_id}-message-100-1")
-    );
 }

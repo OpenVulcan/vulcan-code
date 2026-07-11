@@ -42,8 +42,9 @@ use self::segmented_session_store::{
 };
 use self::session_addon_store::read_session_addon_state;
 pub use goal_store::{
-    GoalAccountingMode, GoalAccountingOutcome, GoalUpdate, ThreadGoal, ThreadGoalStatus,
-    VulcanGoalStore,
+    GoalAccountingOutcome, GoalResume, GoalUpdate, MAX_THREAD_GOAL_OBJECTIVE_CHARS, ThreadGoal,
+    ThreadGoalObjectiveError, ThreadGoalStatus, ThreadGoalTokenBudgetError, VulcanGoalStore,
+    normalize_thread_goal_objective, validate_thread_goal_token_budget,
 };
 pub use persistence::{
     PersistedSessionForkResult, PersistedUserPromptEditDraft, PersistedUserPromptRollbackResult,

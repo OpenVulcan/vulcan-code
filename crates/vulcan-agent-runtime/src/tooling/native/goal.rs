@@ -3,10 +3,6 @@
 
 use super::*;
 
-/// Maximum accepted objective length copied from Codex thread-goal validation.
-/// 从 Codex 线程目标校验复制的目标文本最大长度。
-const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
-
 /// Parsed argument payload accepted by the `create_goal` tool.
 /// `create_goal` 工具接受的已解析参数载荷。
 #[derive(Debug, Clone, Deserialize)]
@@ -257,9 +253,11 @@ async fn execute_create_goal_tool(
         serde_json::from_value(request.arguments.clone()).map_err(|error| {
             NativeToolError::new(format!("failed to parse function arguments: {error}"))
         })?;
-    args.objective = args.objective.trim().to_string();
-    validate_goal_objective(&args.objective)?;
-    validate_goal_budget(args.token_budget)?;
+    args.objective = normalize_thread_goal_objective(&args.objective)
+        .map_err(|error| NativeToolError::new(error.to_string()))?
+        .to_string();
+    validate_thread_goal_token_budget(args.token_budget)
+        .map_err(|error| NativeToolError::new(error.to_string()))?;
 
     let store = goal_store_from_request(&request)?;
     let session_id = goal_session_id_from_request(&request)?;
@@ -305,16 +303,22 @@ async fn execute_update_goal_tool(
         UpdateGoalStatusArg::Complete => ThreadGoalStatus::Complete,
         UpdateGoalStatusArg::Blocked => ThreadGoalStatus::Blocked,
     };
-    let accounting_mode = match args.status {
-        UpdateGoalStatusArg::Complete => GoalAccountingMode::ActiveOrComplete,
-        UpdateGoalStatusArg::Blocked => GoalAccountingMode::ActiveOrStopped,
-    };
-    let _ = store
-        .account_thread_goal_usage(session_id, 0, 0, accounting_mode, None)
+    let existing = store
+        .get_thread_goal(session_id)
         .await
-        .map_err(|error| {
-            NativeToolError::new(format!("failed to account goal progress: {error}"))
+        .map_err(|error| NativeToolError::new(format!("failed to read goal: {error}")))?
+        .ok_or_else(|| {
+            NativeToolError::new("cannot update goal because this thread has no goal")
         })?;
+    if !goal_status_allows_terminal_update(existing.status, target_status) {
+        return Err(NativeToolError::new(format!(
+            "cannot change goal status from {} to {}",
+            existing.status.as_str(),
+            target_status.as_str()
+        )));
+    }
+    let expected_goal_id = existing.goal_id;
+    let expected_status = existing.status;
     let goal = store
         .update_thread_goal(
             session_id,
@@ -322,18 +326,62 @@ async fn execute_update_goal_tool(
                 objective: None,
                 status: Some(target_status),
                 token_budget: None,
-                expected_goal_id: None,
+                expected_goal_id: Some(expected_goal_id.clone()),
+                expected_status: Some(expected_status),
             },
         )
         .await
         .map_err(|error| NativeToolError::new(format!("failed to update goal: {error}")))?
         .ok_or_else(|| {
-            NativeToolError::new("cannot update goal because this thread has no goal")
+            NativeToolError::new("cannot update goal because it changed concurrently")
         })?;
+    if goal.goal_id != expected_goal_id || goal.status != target_status {
+        return Err(NativeToolError::new(
+            "goal update returned a row that does not match the requested transition",
+        ));
+    }
     Ok(goal_tool_result_with_host(
         Some(goal),
         args.status == UpdateGoalStatusArg::Complete,
     ))
+}
+
+/// Returns whether a model-owned terminal update is valid from the persisted status.
+/// 返回模型拥有的终态更新是否可从当前持久化状态执行。
+///
+/// # Parameters
+/// 参数
+/// `current` is the status read before the atomic update.
+/// `current` 是原子更新前读取的状态。
+/// `target` is the terminal status requested by the model.
+/// `target` 是模型请求的终态状态。
+///
+/// # Returns
+/// 返回值
+/// `true` when the transition preserves the Goal lifecycle contract.
+/// 当转换符合 Goal 生命周期契约时返回 `true`。
+pub(crate) const fn goal_status_allows_terminal_update(
+    current: ThreadGoalStatus,
+    target: ThreadGoalStatus,
+) -> bool {
+    match target {
+        ThreadGoalStatus::Complete => matches!(
+            current,
+            ThreadGoalStatus::Active | ThreadGoalStatus::Complete
+        ),
+        ThreadGoalStatus::Blocked => matches!(
+            current,
+            ThreadGoalStatus::Active
+                | ThreadGoalStatus::Paused
+                | ThreadGoalStatus::Blocked
+                | ThreadGoalStatus::UsageLimited
+                | ThreadGoalStatus::BudgetLimited
+        ),
+        ThreadGoalStatus::Active
+        | ThreadGoalStatus::Paused
+        | ThreadGoalStatus::UsageLimited
+        | ThreadGoalStatus::BudgetLimited => false,
+    }
 }
 
 /// Resolves the goal store from one native-tool request.
@@ -398,53 +446,6 @@ fn ensure_empty_object_arguments(arguments: &Value) -> Result<(), NativeToolErro
             "get_goal does not accept any arguments.",
         )),
     }
-}
-
-/// Validates one goal objective using Codex-compatible constraints.
-/// 使用 Codex 兼容约束校验单条目标内容。
-///
-/// # Parameters
-/// 参数
-/// `objective` is the trimmed objective text.
-/// `objective` 是裁剪后的目标文本。
-///
-/// # Returns
-/// 返回值
-/// Success when the objective is non-empty and within the maximum length.
-/// 目标非空且未超过最大长度时返回成功。
-fn validate_goal_objective(objective: &str) -> Result<(), NativeToolError> {
-    if objective.is_empty() {
-        return Err(NativeToolError::new("goal objective must not be empty"));
-    }
-    if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
-        return Err(NativeToolError::new(format!(
-            "goal objective must be at most {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters"
-        )));
-    }
-    Ok(())
-}
-
-/// Validates one optional explicit token budget.
-/// 校验一个可选的显式 token 预算。
-///
-/// # Parameters
-/// 参数
-/// `token_budget` is the optional budget supplied by the model.
-/// `token_budget` 是模型提供的可选预算。
-///
-/// # Returns
-/// 返回值
-/// Success when the budget is absent or strictly positive.
-/// 预算缺省或严格为正数时返回成功。
-fn validate_goal_budget(token_budget: Option<i64>) -> Result<(), NativeToolError> {
-    if let Some(value) = token_budget
-        && value <= 0
-    {
-        return Err(NativeToolError::new(
-            "goal token_budget must be a positive integer",
-        ));
-    }
-    Ok(())
 }
 
 /// Converts a persisted goal into the Codex-compatible model view.

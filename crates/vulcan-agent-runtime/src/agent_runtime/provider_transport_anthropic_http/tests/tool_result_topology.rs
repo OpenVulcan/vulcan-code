@@ -59,7 +59,6 @@ fn request_payload_coalesces_consecutive_tool_results_into_one_user_message() {
             CoreConversationMessage {
                 id: String::from("tool-result-1"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-1"),
                     tool_call_id: Some(String::from("call-1")),
                     text: String::from("tool result body 1"),
                 },
@@ -67,7 +66,6 @@ fn request_payload_coalesces_consecutive_tool_results_into_one_user_message() {
             CoreConversationMessage {
                 id: String::from("tool-result-2"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-2"),
                     tool_call_id: Some(String::from("call-2")),
                     text: String::from("tool result body 2"),
                 },
@@ -75,7 +73,6 @@ fn request_payload_coalesces_consecutive_tool_results_into_one_user_message() {
             CoreConversationMessage {
                 id: String::from("tool-result-3"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-3"),
                     tool_call_id: Some(String::from("call-3")),
                     text: String::from("tool result body 3"),
                 },
@@ -84,7 +81,6 @@ fn request_payload_coalesces_consecutive_tool_results_into_one_user_message() {
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-4"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-4"),
                 tool_call_id: Some(String::from("call-4")),
                 text: String::from("tool result body 4"),
             },
@@ -245,7 +241,6 @@ fn request_payload_downgrades_leading_orphan_tool_result() {
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("call-1")),
                 text: String::from("tool result body"),
             },
@@ -277,7 +272,7 @@ fn request_payload_downgrades_leading_orphan_tool_result() {
 /// Verifies Anthropic request payloads downgrade tool results whose ids do not match the immediately preceding assistant tool-use batch.
 /// 验证 Anthropic 请求载荷会降级与紧邻上一条 assistant 工具调用批次不匹配的工具结果。
 #[test]
-fn request_payload_downgrades_mismatched_tool_result_id() {
+fn request_payload_downgrades_mismatched_tool_use_id() {
     let request = OpenAiCompatibleCoreTurnRequest {
         snapshot: build_test_request_snapshot("tool result body"),
         current_history: vec![CoreConversationMessage {
@@ -299,7 +294,6 @@ fn request_payload_downgrades_mismatched_tool_result_id() {
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("call-2")),
                 text: String::from("tool result body"),
             },

@@ -748,6 +748,6 @@ function subagentPresentationId(
   // 紧凑标题。
   title: string,
 ): string {
-  const rawId = blocks.map((block) => block.toolCallId ?? block.toolResultId ?? block.id).join(":");
+  const rawId = blocks.map((block) => block.toolCallId ?? block.id).join(":");
   return `subagent:${operation}:${compactHash(`${rawId}:${title}`)}`;
 }

@@ -79,19 +79,20 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         cached_mcp_catalog: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
+        session_goal_dispatch_versions: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
         webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,
-        detached_subagent_task_listeners: BTreeSet::new(),
+        detached_subagent_task_listeners: BTreeMap::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
-        session_lifecycle_transition_ids: BTreeSet::new(),
-        project_lifecycle_transition_ids: BTreeSet::new(),
+        session_turn_admission_reservations: BTreeMap::new(),
+        project_lifecycle_transition_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -421,7 +422,8 @@ fn task_session_checkpoint_replaces_seeded_prompt_with_runtime_records() {
         continuation: Default::default(),
     };
 
-    apply_checkpoint_conversation_state(runtime_state, checkpoint_state, "3");
+    apply_checkpoint_conversation_state(runtime_state, checkpoint_state, "3")
+        .expect("valid checkpoint conversation identities");
     let runtime_state_snapshot = workspace_snapshot
         .session_runtime_state
         .get(&task_session_id)
@@ -890,10 +892,10 @@ fn delegate_started_cache_without_registry_does_not_create_navigation_membership
     );
 }
 
-/// Verifies send_message projection refreshes an already loaded child detail cache.
-/// 验证 send_message 投影会刷新已加载的子代理详情缓存。
+/// Verifies missing persistence runtime rejects send-message projection before any in-memory commit.
+/// 验证缺少持久化运行时时会在任何内存提交前拒绝 send-message 投影。
 #[test]
-fn send_message_projection_updates_loaded_subagent_detail_cache() {
+fn send_message_projection_preflight_failure_preserves_in_memory_state() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -908,6 +910,23 @@ fn send_message_projection_updates_loaded_subagent_detail_cache() {
         conversation_state: None,
     }];
     cache_test_subagent_surface_detail_states(&mut service_state, &task_states);
+    // original_cache captures the loaded child surface before the preflight failure.
+    // original_cache 捕获预检失败前已加载的子会话表面。
+    let original_cache = service_state
+        .subagent_surface_detail_cache
+        .get(&task_session_id)
+        .expect("loaded child detail cache should exist")
+        .clone();
+    // original_workspace_messages captures the retained transcript map before projection.
+    // original_workspace_messages 捕获投影前保留的转录映射。
+    let original_workspace_messages = serde_json::to_value(
+        &service_state
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace snapshot")
+            .session_messages,
+    )
+    .expect("workspace messages should serialize");
     let state = Arc::new(Mutex::new(service_state));
     let app = ServiceEventEmitter::new(Vec::new());
     let event = RuntimeEvent::new(
@@ -936,34 +955,38 @@ fn send_message_projection_updates_loaded_subagent_detail_cache() {
 
     let projection_result =
         append_runtime_event_projection(&app, &state, parent_session_id, &event);
-    assert!(
-        projection_result.is_ok()
-            || projection_result
-                .as_ref()
-                .err()
-                .is_some_and(|error| error.contains("controller runtime is not ready")),
-        "send_message projection should only fail in this fixture after in-memory updates"
-    );
+    let error = projection_result.expect_err("missing controller runtime must fail preflight");
+    assert!(error.contains("controller runtime is not ready"));
 
     let guard = state.lock().expect("service state lock");
-    let cached_messages = guard
+    let retained_cache = guard
         .subagent_surface_detail_cache
         .get(&task_session_id)
-        .expect("loaded child detail cache should remain")
-        .messages
-        .iter()
-        .map(|message| message.body.as_str())
-        .collect::<Vec<_>>();
-    assert!(cached_messages.contains(&"你之前做了什么？请回忆并列出。"));
-    let workspace_messages = guard
-        .workspace_snapshot
-        .as_ref()
-        .and_then(|workspace| workspace.session_messages.get(&task_session_id))
-        .expect("workspace child messages should exist")
-        .iter()
-        .map(|message| message.body.as_str())
-        .collect::<Vec<_>>();
-    assert!(workspace_messages.contains(&"你之前做了什么？请回忆并列出。"));
+        .expect("loaded child detail cache should remain");
+    assert_eq!(
+        serde_json::to_value(&retained_cache.task_state)
+            .expect("retained task state should serialize"),
+        serde_json::to_value(&original_cache.task_state)
+            .expect("original task state should serialize")
+    );
+    assert_eq!(
+        serde_json::to_value(&retained_cache.messages)
+            .expect("retained cache messages should serialize"),
+        serde_json::to_value(&original_cache.messages)
+            .expect("original cache messages should serialize")
+    );
+    assert_eq!(retained_cache.last_access_ms, original_cache.last_access_ms);
+    assert_eq!(
+        serde_json::to_value(
+            &guard
+                .workspace_snapshot
+                .as_ref()
+                .expect("workspace snapshot should remain")
+                .session_messages,
+        )
+        .expect("retained workspace messages should serialize"),
+        original_workspace_messages
+    );
 }
 
 /// Verifies a live detached listener keeps the parent subagent navigation visible after the parent stream finishes.
@@ -988,9 +1011,10 @@ fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
     guard
         .session_subagent_navigation_rounds
         .insert(parent_session_id);
-    guard
-        .detached_subagent_task_listeners
-        .insert(task_session_id);
+    guard.detached_subagent_task_listeners.insert(
+        task_session_id,
+        String::from("navigation-visible-execution"),
+    );
     let workspace_snapshot = guard
         .workspace_snapshot
         .as_ref()
@@ -1016,6 +1040,100 @@ fn webui_detached_listener_keeps_running_subagent_navigation_visible() {
         &workspace_snapshot,
         parent_session_id
     ));
+}
+
+/// Verifies a terminal listener can clear only the execution generation it owns.
+/// 验证终态监听器只能清理其拥有的执行代际。
+#[test]
+fn detached_listener_cleanup_preserves_replacement_execution() {
+    // parent_session_id owns the child task surface used by the test state.
+    // parent_session_id 持有测试状态使用的子任务界面。
+    let parent_session_id = SessionId::from_u128(0x1180);
+    // task_id is reused by old and replacement execution attempts.
+    // task_id 被旧执行与替代执行尝试复用。
+    let task_id = SessionId::from_u128(0x1181);
+    // state stores the replacement execution as the current listener owner.
+    // state 将替代执行存储为当前监听器所有者。
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+    state
+        .detached_subagent_task_listeners
+        .insert(task_id, String::from("execution-new"));
+
+    let stale_cleared = clear_webui_detached_listener_execution_if_current(
+        &mut state,
+        task_id,
+        "execution-old",
+        true,
+    );
+
+    assert!(!stale_cleared);
+    assert_eq!(
+        state.detached_subagent_task_listeners.get(&task_id),
+        Some(&String::from("execution-new"))
+    );
+    let current_cleared = clear_webui_detached_listener_execution_if_current(
+        &mut state,
+        task_id,
+        "execution-new",
+        true,
+    );
+    assert!(current_cleared);
+    assert!(
+        !state
+            .detached_subagent_task_listeners
+            .contains_key(&task_id)
+    );
+}
+
+/// Verifies an old listener terminal event cannot overwrite the replacement execution projection.
+/// 验证旧监听器终态事件不能覆盖替代执行投影。
+#[test]
+fn stale_detached_terminal_event_skips_replacement_projection() {
+    // parent_session_id owns the stable child task across both executions.
+    // parent_session_id 跨两次执行持有稳定子任务。
+    let parent_session_id = SessionId::from_u128(0x1182);
+    // task_id is reused by the stale and replacement executions.
+    // task_id 被过期执行与替代执行复用。
+    let task_id = SessionId::from_u128(0x1183);
+    // state declares the replacement execution as the only current listener owner.
+    // state 将替代执行声明为唯一当前监听器所有者。
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    service_state
+        .detached_subagent_task_listeners
+        .insert(task_id, String::from("execution-new"));
+    // state exposes the shared projection state consumed by the ingest function.
+    // state 暴露 ingest 函数使用的共享投影状态。
+    let state = Arc::new(Mutex::new(service_state));
+    // app collects no external sinks while exercising projection ownership.
+    // app 在执行投影所有权测试时不收集外部接收器。
+    let app = ServiceEventEmitter::new(Vec::new());
+    // runtime supplies the existing ingest signature without external provider work.
+    // runtime 提供现有 ingest 签名且不触发外部 Provider 工作。
+    let runtime = test_agent_runtime_bridge();
+    // event is the stale execution's terminal delegate result.
+    // event 是过期执行的终态委派结果。
+    let event = test_delegate_finished_event(task_id, "repeat-agent", "old result");
+
+    let consumed = ingest_webui_subagent_runtime_event_for_listener_execution(
+        &app,
+        &state,
+        &runtime,
+        parent_session_id,
+        &event,
+        Some("execution-old"),
+    )
+    .expect("stale listener event should be safely consumed");
+
+    assert!(consumed);
+    let guard = state.lock().expect("service state lock");
+    assert_eq!(
+        guard
+            .detached_subagent_task_listeners
+            .get(&task_id)
+            .map(String::as_str),
+        Some("execution-new")
+    );
+    assert!(!guard.subagent_surface_detail_cache.contains_key(&task_id));
 }
 
 /// Verifies terminal listener cleanup immediately emits a non-running subagent navigation delta.
@@ -1069,7 +1187,7 @@ fn terminal_listener_cleanup_emits_non_running_subagent_navigation_delta() {
         });
         guard
             .detached_subagent_task_listeners
-            .insert(task_session_id);
+            .insert(task_session_id, String::from("terminal-cleanup-execution"));
     }
     let emitted_events = Arc::new(Mutex::new(Vec::<ServiceEvent>::new()));
     let app = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
@@ -1269,9 +1387,16 @@ fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
     guard
         .session_subagent_navigation_rounds
         .insert(parent_session_id);
-    guard
-        .detached_subagent_task_listeners
-        .extend([first_task_session_id, second_task_session_id]);
+    guard.detached_subagent_task_listeners.extend([
+        (
+            first_task_session_id,
+            String::from("first-completion-execution"),
+        ),
+        (
+            second_task_session_id,
+            String::from("second-completion-execution"),
+        ),
+    ]);
     let workspace_snapshot = guard
         .workspace_snapshot
         .as_ref()
@@ -1339,7 +1464,7 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
             .expect("service state lock should be available for stale payload setup");
         guard
             .detached_subagent_task_listeners
-            .insert(task_session_id);
+            .insert(task_session_id, String::from("stale-running-execution"));
     }
     let runtime = test_agent_runtime_bridge();
     let app = ServiceEventEmitter::new(Vec::new());
@@ -1372,7 +1497,7 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
     assert!(
         !guard
             .detached_subagent_task_listeners
-            .contains(&task_session_id)
+            .contains_key(&task_session_id)
     );
 }
 
@@ -1397,7 +1522,7 @@ fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
     );
     guard
         .detached_subagent_task_listeners
-        .insert(closed_task_id);
+        .insert(closed_task_id, String::from("closed-task-execution"));
     guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
         parent_session_id,
         task_id: closed_task_id,
@@ -1421,7 +1546,7 @@ fn close_agent_cleanup_removes_closed_webui_subagent_cache_entries() {
     assert!(
         !guard
             .detached_subagent_task_listeners
-            .contains(&closed_task_id)
+            .contains_key(&closed_task_id)
     );
     assert!(guard.active_subagent_panel.is_none());
 }
@@ -1567,6 +1692,9 @@ fn stopped_detached_parent_event_skips_pending_prompt_dispatch() {
 /// 验证由 send_message 续跑的子任务不会继续阻塞父级完成闸门。
 #[test]
 fn completion_gate_ignores_send_message_resumed_child_task() {
+    // ignored_execution_id identifies the exact send_message-resumed execution.
+    // ignored_execution_id 标识由 send_message 续跑的精确执行。
+    let ignored_execution_id = "ignored-completion-execution";
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let runtime = test_agent_runtime_bridge();
@@ -1577,7 +1705,7 @@ fn completion_gate_ignores_send_message_resumed_child_task() {
         let mut guard = state.lock().expect("state lock");
         guard
             .detached_subagent_task_listeners
-            .insert(task_session_id);
+            .insert(task_session_id, String::from(ignored_execution_id));
         let task_states = vec![SubagentTaskPanelState {
             task_id: task_session_id,
             public_task_id: String::from("reviewer"),
@@ -1602,12 +1730,28 @@ fn completion_gate_ignores_send_message_resumed_child_task() {
 
     {
         let mut guard = state.lock().expect("state lock");
-        mark_webui_subagent_completion_gate_ignored(&mut guard, task_session_id);
+        mark_webui_subagent_completion_gate_ignored(
+            &mut guard,
+            task_session_id,
+            ignored_execution_id,
+        );
     }
 
     let ignored_gate = webui_turn_completion_gate_from_state(&state, &runtime, parent_session_id)
         .expect("ignored gate should read");
     assert_eq!(ignored_gate.pending_subagent_count, 0);
+
+    {
+        let mut guard = state.lock().expect("state lock");
+        guard
+            .detached_subagent_task_listeners
+            .insert(task_session_id, String::from("replacement-execution"));
+    }
+
+    let replacement_gate =
+        webui_turn_completion_gate_from_state(&state, &runtime, parent_session_id)
+            .expect("replacement gate should read");
+    assert_eq!(replacement_gate.pending_subagent_count, 1);
 }
 
 /// Verifies live transcript persistence versioning does not invalidate session persistence.
@@ -1997,7 +2141,12 @@ fn active_parent_turn_appends_independent_subagent_feedback_display_rows() {
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
     start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
         .expect("parent user turn should start");
-    bind_webui_subagent_parent_turn(&mut service_state, parent_session_id, task_session_id);
+    bind_webui_subagent_parent_turn(
+        &mut service_state,
+        parent_session_id,
+        task_session_id,
+        "test-execution-image-worker-active",
+    );
     let state = Arc::new(Mutex::new(service_state));
     let runtime = test_agent_runtime_bridge();
     let app = ServiceEventEmitter::new(Vec::new());

@@ -45,7 +45,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
         .iter()
         .map(resolved_tool_definition_to_core_tool_schema)
         .collect::<Vec<_>>();
-    let mut core_snapshot = build_core_conversation_snapshot(conversation_state);
+    let mut core_snapshot = build_core_conversation_snapshot(conversation_state)?;
     core_snapshot.messages =
         core_messages_to_provider_visible_history_for_model_with_system_updates(
             &core_snapshot.messages,
@@ -67,7 +67,8 @@ pub(crate) async fn build_core_provider_request_snapshot(
             additional_params.clone(),
         ),
         core_snapshot,
-    );
+    )
+    .map_err(|error| format!("Invalid core conversation snapshot: {error}"))?;
     let preview_prompt = provider_request_snapshot_prompt(prompt, provider_visible_agent_messages);
     let adapter = CoreRequestPreviewProviderAdapter::new(
         preparation.model_blueprint.provider_id.clone(),

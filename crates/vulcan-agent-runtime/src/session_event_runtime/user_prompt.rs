@@ -2,41 +2,57 @@ use super::*;
 
 /// Appends one user prompt as both canonical context and visible transcript record.
 /// 将用户提示词同时追加为规范上下文与可见转录记录。
+///
+/// # Returns
+/// 返回值
+/// Returns success after both projections commit, or an identity error before any runtime mutation.
+/// 两种投影均提交后返回成功；身份错误时在任何运行态修改前返回失败。
 pub fn append_user_prompt_record(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     prompt: &str,
-) {
-    append_user_prompt_record_with_attachments(runtime_state, session_id, now, prompt, Vec::new());
+) -> Result<(), String> {
+    append_user_prompt_record_with_attachments(runtime_state, session_id, now, prompt, Vec::new())
 }
 
 /// Appends one user prompt with structured attachments as canonical context and visible transcript.
 /// 将带结构化附件的用户提示词同时追加为规范上下文与可见转录记录。
+///
+/// # Returns
+/// 返回值
+/// Returns success after the message, record, and runtime flags commit, or an identity error with the runtime state unchanged.
+/// 消息、记录与运行态标记提交后返回成功；身份错误时返回失败且运行态保持不变。
 pub fn append_user_prompt_record_with_attachments(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     prompt: &str,
     attachments: Vec<ConversationAttachment>,
-) {
-    runtime_state.ui_state.unread = false;
-    runtime_state.last_safe_provider_request_count = None;
+) -> Result<(), String> {
+    // draft_runtime_state isolates the paired message, record, and runtime-flag transaction.
+    // draft_runtime_state 会隔离成对消息、记录与运行态标记事务。
+    let mut draft_runtime_state = runtime_state.clone();
+    // message_id is validated before any runtime-state field is changed, preserving transaction atomicity.
+    // message_id 会在修改任何运行态字段前完成校验，从而保持事务原子性。
     let message_id = format!("session-{session_id}-protocol-user-{now}");
     append_user_text_message(
-        &mut runtime_state.conversation_state,
+        &mut draft_runtime_state.conversation_state,
         message_id,
         prompt.to_string(),
         attachments.clone(),
-    );
+    )
+    .map_err(|error| format!("Invalid canonical user message identity: {error}"))?;
+    draft_runtime_state.ui_state.unread = false;
+    draft_runtime_state.last_safe_provider_request_count = None;
     let record_id = build_session_record_message_id(
         session_id,
         now,
-        runtime_state.conversation_state.records.len(),
+        draft_runtime_state.conversation_state.records.len(),
     );
     let metadata = build_user_prompt_record_metadata(prompt, &attachments);
     append_record(
-        &mut runtime_state.conversation_state,
+        &mut draft_runtime_state.conversation_state,
         SessionConversationRecord {
             id: record_id,
             kind: SessionMessageKind::User,
@@ -47,8 +63,11 @@ pub fn append_user_prompt_record_with_attachments(
             metadata,
             created_at: now.to_string(),
         },
-    );
-    runtime_state.updated_at = now.to_string();
+    )
+    .map_err(|error| format!("Invalid canonical user record identity: {error}"))?;
+    draft_runtime_state.updated_at = now.to_string();
+    *runtime_state = draft_runtime_state;
+    Ok(())
 }
 
 /// Builds reload-safe metadata for one visible user prompt record.

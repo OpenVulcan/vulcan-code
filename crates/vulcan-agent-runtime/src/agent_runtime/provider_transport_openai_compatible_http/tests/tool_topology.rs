@@ -61,7 +61,6 @@ fn request_payload_keeps_parallel_tool_results_split_for_openai_compatible() {
             CoreConversationMessage {
                 id: String::from("tool-result-1"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-1"),
                     tool_call_id: Some(String::from("call-1")),
                     text: String::from("tool result body 1"),
                 },
@@ -69,7 +68,6 @@ fn request_payload_keeps_parallel_tool_results_split_for_openai_compatible() {
             CoreConversationMessage {
                 id: String::from("tool-result-2"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-2"),
                     tool_call_id: Some(String::from("call-2")),
                     text: String::from("tool result body 2"),
                 },
@@ -77,7 +75,6 @@ fn request_payload_keeps_parallel_tool_results_split_for_openai_compatible() {
             CoreConversationMessage {
                 id: String::from("tool-result-3"),
                 payload: CoreConversationPayload::ToolResult {
-                    tool_result_id: String::from("result-3"),
                     tool_call_id: Some(String::from("call-3")),
                     text: String::from("tool result body 3"),
                 },
@@ -86,7 +83,6 @@ fn request_payload_keeps_parallel_tool_results_split_for_openai_compatible() {
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-4"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-4"),
                 tool_call_id: Some(String::from("call-4")),
                 text: String::from("tool result body 4"),
             },

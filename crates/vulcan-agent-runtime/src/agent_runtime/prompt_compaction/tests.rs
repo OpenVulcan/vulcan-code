@@ -41,7 +41,8 @@ fn full_fidelity_attempt_uses_full_context_state() {
     let old_message = test_message("old-user", "old context");
     let tail_message = test_message("tail-user", "recent tail");
     let full_context_state =
-        conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()]);
+        conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()])
+            .expect("valid replayed conversation identities");
     let plan = test_plan(vec![old_message]);
     let prepared = prepared_compaction_source_for_attempt(
         &plan,
@@ -53,7 +54,8 @@ fn full_fidelity_attempt_uses_full_context_state() {
         &full_context_state,
         &prepared.source_messages,
         CompactionInputPruneMode::None,
-    );
+    )
+    .expect("valid compaction attempt identities");
 
     assert_eq!(
         attempt_state.messages.len(),
@@ -89,7 +91,8 @@ fn full_fidelity_boundary_rewrite_keeps_planned_tail() {
     let old_message = test_message("old-user", "old context");
     let tail_message = test_message("tail-user", "recent tail");
     let mut state =
-        conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()]);
+        conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()])
+            .expect("valid replayed conversation identities");
     let mut plan = test_plan(vec![old_message.clone()]);
     plan.source_until_message_id = Some(old_message.id.clone());
     let result = CompactionResult::from_model_summary(&plan, "summary");
@@ -102,7 +105,8 @@ fn full_fidelity_boundary_rewrite_keeps_planned_tail() {
         "t2",
         result.source_until_message_id.as_deref(),
         result.policy,
-    );
+    )
+    .expect("valid compacted message identities");
 
     assert_eq!(state.messages.len(), 2);
     assert_eq!(state.messages[0].id, "summary-message");
@@ -132,7 +136,8 @@ fn prompt_mode_follows_input_prune_mode() {
 #[test]
 fn observed_usage_drives_initial_downgrade_decision() {
     let full_context_state =
-        conversation_state_from_session_messages(&[test_message("small-user", "small")]);
+        conversation_state_from_session_messages(&[test_message("small-user", "small")])
+            .expect("valid replayed conversation identities");
 
     assert_eq!(
         initial_compaction_prune_mode(&full_context_state, Some(test_budget()), Some(101), Some(1),),
@@ -145,7 +150,8 @@ fn observed_usage_drives_initial_downgrade_decision() {
 #[test]
 fn budget_estimate_drives_initial_downgrade_without_observed_usage() {
     let full_context_state =
-        conversation_state_from_session_messages(&[test_message("small-user", "small")]);
+        conversation_state_from_session_messages(&[test_message("small-user", "small")])
+            .expect("valid replayed conversation identities");
 
     assert_eq!(
         initial_compaction_prune_mode(&full_context_state, Some(test_budget()), None, Some(101),),

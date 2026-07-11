@@ -35,9 +35,6 @@ export interface ToolExecutionConversationBlock {
   // Optional tool-call id for hidden detail lookup.
   // 用于隐藏详情查询的可选工具调用标识。
   toolCallId?: string;
-  // Optional tool-result id for status inference.
-  // 用于状态推断的可选工具返回标识。
-  toolResultId?: string;
   // Optional command-session id for display fallback.
   // 用于展示兜底的可选命令会话标识。
   commandSessionId?: string;

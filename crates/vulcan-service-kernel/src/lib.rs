@@ -30,6 +30,7 @@ use vulcan_agent_runtime::conversation_protocol::SessionConversationState;
 use vulcan_agent_runtime::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionProviderVisibleAgentMessage,
     ExecutionRunReport, ExecutionStreamEvent, RuntimePromptIntervention,
+    RuntimePromptInterventionError,
     agent_profile::AgentProfileCatalog,
     agent_runtime::{
         context_injection_runtime::{
@@ -88,6 +89,8 @@ use vulcan_provider_config::config::{
     PersistedMcpServerEntry, PersistedMcpTransportKind, PersistedPromptSkillState,
     ProviderFieldKey,
 };
+#[cfg(test)]
+use vulcan_service_api::SessionGoalStatus;
 use vulcan_service_api::{
     AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary,
     AgentSkillsCatalogUpdate, AppendMessageBodyDelta, CommandSessionSummary,
@@ -163,9 +166,10 @@ use vulcan_workbench_model::{
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
     workspace_store::{
-        GoalUpdate, SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
-        WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot, fork_persisted_session,
-        load_persisted_user_prompt_edit_draft, rollback_persisted_session_before_user_prompt,
+        GoalResume, GoalUpdate, SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus,
+        VulcanGoalStore, WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot,
+        fork_persisted_session, load_persisted_user_prompt_edit_draft,
+        rollback_persisted_session_before_user_prompt,
     },
 };
 
@@ -296,7 +300,7 @@ use pending_prompts::{
     clear_internal_pending_prompt_queue_for_stop, emit_pending_prompts_changed_delta,
     enqueue_webui_pending_prompt_from_submission, pending_prompt_summaries_from_runtime_state,
     provider_configuration_for_model_reference, runtime_state_has_queued_pending_prompt_work,
-    session_has_blocking_system_prompt_work, take_webui_internal_guidance_prompts,
+    session_has_blocking_system_prompt_work,
 };
 pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
@@ -317,14 +321,15 @@ use service_diagnostics_paths::*;
 use service_state_access::*;
 use session_ai_capabilities::*;
 use session_goal_lifecycle::{
-    account_session_goal_from_report, cache_session_goal_live_usage_from_checkpoint,
-    cache_session_goal_summary, clear_budget_limit_reported_goal_id,
-    enqueue_session_goal_objective_updated_guidance, ensure_regular_session_exists,
-    ensure_session_can_enter_plan_mode, ensure_session_not_in_plan_mode_for_goal,
-    goal_summary_from_tool_finished_event, parse_session_goal_status,
-    session_goal_context_for_prompt_from_state, session_goal_request_session_id,
+    account_session_goal_from_report, advance_session_goal_dispatch_version,
+    cache_session_goal_live_usage_from_checkpoint, cache_session_goal_summary,
+    clear_session_goal_stage_runtime_state, enqueue_session_goal_objective_updated_guidance,
+    ensure_regular_session_exists, ensure_session_can_enter_plan_mode,
+    ensure_session_not_in_plan_mode_for_goal, goal_summary_from_tool_finished_event,
+    normalize_session_goal_objective, session_goal_context_for_prompt_from_state,
+    session_goal_dispatch_version, session_goal_request_session_id,
     session_goal_summary_from_thread_goal, sync_selected_session_goal_summary_from_store,
-    validate_session_goal_budget, validate_session_goal_objective,
+    validate_session_goal_budget,
 };
 #[cfg(test)]
 use session_goal_lifecycle::{
@@ -443,19 +448,20 @@ pub fn create_service_bridge_state(
         cached_mcp_catalog: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
+        session_goal_dispatch_versions: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
         webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,
-        detached_subagent_task_listeners: BTreeSet::new(),
+        detached_subagent_task_listeners: BTreeMap::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
-        session_lifecycle_transition_ids: BTreeSet::new(),
-        project_lifecycle_transition_ids: BTreeSet::new(),
+        session_turn_admission_reservations: BTreeMap::new(),
+        project_lifecycle_transition_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),

@@ -240,7 +240,7 @@ pub(super) fn build_close_agent_tool_candidate(
             id: String::from(CLOSE_AGENT_TOOL),
             name: String::from(CLOSE_AGENT_TOOL),
             description: String::from(
-                "Close an open child agent and stop any active work it owns. A closed agent is no longer returned by default list_agents and cannot receive send_message calls.",
+                "Close an open child-agent subtree and stop every active run in that subtree. Closed agents are no longer returned by default list_agents and cannot receive send_message calls.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -288,7 +288,9 @@ pub(super) fn spawn_agent_args_schema() -> Value {
             },
             "task_name": {
                 "type": "string",
-                "description": "Task name for the new agent. Use lowercase letters, digits, and underscores."
+                "minLength": 1,
+                "pattern": "^[^/]+$",
+                "description": "Parent-scoped task name for the new agent. It must be one path segment and cannot contain `/`."
             }
         },
         "required": ["task_name", "message"],
@@ -402,10 +404,6 @@ pub(super) fn close_agent_args_schema() -> Value {
             "target": {
                 "type": "string",
                 "description": "Agent id or canonical task name to close (from spawn_agent)."
-            },
-            "cascade": {
-                "type": "boolean",
-                "description": "Whether to close descendants as well. Defaults to true."
             }
         },
         "required": ["target"],
@@ -421,7 +419,7 @@ pub(super) fn close_agent_target(args: &Value) -> Result<String, String> {
     };
     let unsupported_keys = map
         .keys()
-        .filter(|key| !matches!(key.as_str(), "target" | "cascade"))
+        .filter(|key| key.as_str() != "target")
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
@@ -432,15 +430,6 @@ pub(super) fn close_agent_target(args: &Value) -> Result<String, String> {
     }
     string_field(map, &["target"])
         .ok_or_else(|| String::from("close_agent requires target with the child-agent task name."))
-}
-
-/// Reads the optional close cascade flag from a close_agent request.
-/// 从 close_agent 请求中读取可选级联关闭标记。
-pub(super) fn close_agent_cascade(args: &Value) -> Result<bool, String> {
-    let Value::Object(map) = args else {
-        return Err(String::from("close_agent arguments must be a JSON object."));
-    };
-    Ok(map.get("cascade").and_then(Value::as_bool).unwrap_or(true))
 }
 
 /// Parsed request for agent_orchestration_info.
@@ -731,30 +720,6 @@ pub(super) fn list_agents_include_closed(args: &Value) -> Result<bool, String> {
         .unwrap_or(false))
 }
 
-/// Builds the Vulcan tree path for one registry entry when it belongs to the selected root.
-/// 当注册表条目属于选定根会话时，构建它的 Vulcan 树路径。
-pub(super) fn subagent_entry_tree_path(
-    entry: &SubagentRegistryEntry,
-    entries_by_session: &BTreeMap<SessionNodeId, SubagentRegistryEntry>,
-    root_session_id: SessionNodeId,
-) -> Option<String> {
-    let mut names = vec![entry.agent_id.as_str()];
-    let mut parent_session_id = entry.parent_session_id;
-    let mut visited = BTreeSet::new();
-    loop {
-        if parent_session_id == root_session_id {
-            names.reverse();
-            return Some(format!("/root/{}", names.join("/")));
-        }
-        if !visited.insert(parent_session_id) {
-            return None;
-        }
-        let parent_entry = entries_by_session.get(&parent_session_id)?;
-        names.push(parent_entry.agent_id.as_str());
-        parent_session_id = parent_entry.parent_session_id;
-    }
-}
-
 /// Returns whether a Vulcan tree path matches one optional path prefix.
 /// 返回 Vulcan 树路径是否匹配一个可选路径前缀。
 pub(super) fn subagent_tree_path_matches_prefix(entry_path: &str, path_prefix: &str) -> bool {
@@ -918,6 +883,7 @@ pub(super) fn subagent_registry_entry_host_status_payload(
         (SUBAGENT_TASK_ID_KEY): entry.session_id.to_string(),
         "display_title": &entry.agent_id,
         "agent_kind": entry.agent_kind,
+        "parent_session_id": entry.parent_session_id.to_string(),
         "prompt_source": entry.prompt_source.clone(),
         "updated_at": entry.updated_at_ms.to_string(),
         "segments": entry.segments.clone(),
@@ -1023,6 +989,8 @@ fn subagent_registry_agent_status_payload(entry: &SubagentRegistryEntry) -> Valu
 /// `current_session_id` 是父会话标识。
 /// `entries` are the registry entries to expose.
 /// `entries` 是需要暴露的注册表条目。
+/// `queued_message_counts` maps stable child sessions to their exact pending message counts.
+/// `queued_message_counts` 将稳定子会话映射到其精确待处理消息数量。
 /// `timeout_ms` is the wait timeout represented in the tool result.
 /// `timeout_ms` 是工具结果中表示的等待超时时间。
 /// `completed` indicates whether the requested wait/list operation is complete.
@@ -1035,29 +1003,34 @@ fn subagent_registry_agent_status_payload(entry: &SubagentRegistryEntry) -> Valu
 pub(super) fn build_subagent_registry_status_tool_result(
     tool_name: &str,
     current_session_id: SessionId,
-    entries: Vec<SubagentRegistryEntry>,
-    queued_message_counts: &BTreeMap<String, usize>,
+    entries: Vec<(String, SubagentRegistryEntry)>,
+    queued_message_counts: &BTreeMap<SessionNodeId, usize>,
     timeout_ms: u64,
     completed: bool,
 ) -> VulcanToolInvocationResult {
     let model_agents = entries
         .iter()
-        .map(|entry| {
+        .map(|(tree_path, entry)| {
             let queued_message_count = queued_message_counts
-                .get(entry.agent_id.as_str())
+                .get(&entry.session_id)
                 .copied()
                 .unwrap_or(0);
-            subagent_registry_entry_status_payload(entry, queued_message_count)
+            let mut payload = subagent_registry_entry_status_payload(entry, queued_message_count);
+            payload["tree_path"] = Value::String(tree_path.clone());
+            payload
         })
         .collect::<Vec<_>>();
     let host_agents = entries
         .iter()
-        .map(|entry| {
+        .map(|(tree_path, entry)| {
             let queued_message_count = queued_message_counts
-                .get(entry.agent_id.as_str())
+                .get(&entry.session_id)
                 .copied()
                 .unwrap_or(0);
-            subagent_registry_entry_host_status_payload(entry, queued_message_count)
+            let mut payload =
+                subagent_registry_entry_host_status_payload(entry, queued_message_count);
+            payload["tree_path"] = Value::String(tree_path.clone());
+            payload
         })
         .collect::<Vec<_>>();
     let model_payload = json!({

@@ -79,14 +79,17 @@ pub(super) fn apply_conversation_checkpoint(
             // 只有主会话 checkpoint 可以通过 workspace-store 持久化；TaskSession checkpoint 在这里仅更新内存显示态。
             let is_main_session =
                 workspace_session_summary_for_session(workspace, session_id).is_some();
-            let runtime_state = workspace
+            // runtime_state is a detached checkpoint draft so validation failure cannot insert or partially mutate workspace state.
+            // runtime_state 是分离的检查点草稿，因此校验失败不会插入或部分修改工作区状态。
+            let mut runtime_state = workspace
                 .session_runtime_state
-                .entry(session_id)
-                .or_insert_with(|| SessionRuntimeStateEntry {
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_else(|| SessionRuntimeStateEntry {
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
-            apply_checkpoint_conversation_state(runtime_state, conversation_state, &now);
+            apply_checkpoint_conversation_state(&mut runtime_state, conversation_state, &now)?;
             if let Some(usage) = last_successful_provider_usage {
                 runtime_state.last_provider_usage = Some(usage.clone());
                 runtime_state.last_successful_provider_usage = Some(usage);
@@ -95,6 +98,9 @@ pub(super) fn apply_conversation_checkpoint(
                 runtime_state.last_safe_provider_request_count = Some(provider_request_count);
             }
             let runtime_state_snapshot = runtime_state.clone();
+            workspace
+                .session_runtime_state
+                .insert(session_id, runtime_state);
             if is_main_session {
                 merge_runtime_state_records_into_display_messages(
                     workspace,
@@ -226,22 +232,28 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
                 task_display_prompt_anchor_from_workspace(workspace, session_id)
                     .or(cached_task_prompt_anchor);
             let (is_success, runtime_state_snapshot) = {
-                let runtime_state = workspace
+                // runtime_state is detached so terminal identity failure cannot insert or partially mutate TaskSession memory.
+                // runtime_state 保持分离，因此终态身份失败不会插入或部分修改 TaskSession 内存。
+                let mut runtime_state = workspace
                     .session_runtime_state
-                    .entry(session_id)
-                    .or_insert_with(|| SessionRuntimeStateEntry {
+                    .get(&session_id)
+                    .cloned()
+                    .unwrap_or_else(|| SessionRuntimeStateEntry {
                         updated_at: now.clone(),
                         ..SessionRuntimeStateEntry::default()
                     });
                 let apply_result = apply_terminal_execution_report_to_state(
-                    runtime_state,
+                    &mut runtime_state,
                     session_id,
                     &now,
                     report,
-                );
+                )?;
                 // runtime_state_snapshot is the authoritative state after terminal report application for display projection.
                 // runtime_state_snapshot 是终态报告应用后的权威状态，用于显示层投影。
                 let runtime_state_snapshot = runtime_state.clone();
+                workspace
+                    .session_runtime_state
+                    .insert(session_id, runtime_state);
                 (apply_result.is_success, runtime_state_snapshot)
             };
             replace_task_display_messages_with_runtime_state_records(
@@ -391,15 +403,22 @@ pub(super) fn apply_execution_report_to_memory(
             let is_main_session =
                 workspace_session_summary_for_session(workspace, session_id).is_some();
             let project_id = owning_project_id_for_session(workspace, session_id);
-            let runtime_state = workspace
+            // runtime_state is detached so terminal identity failure cannot insert or partially mutate main-session memory.
+            // runtime_state 保持分离，因此终态身份失败不会插入或部分修改主会话内存。
+            let mut runtime_state = workspace
                 .session_runtime_state
-                .entry(session_id)
-                .or_insert_with(|| SessionRuntimeStateEntry {
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_else(|| SessionRuntimeStateEntry {
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
-            let apply_result =
-                apply_terminal_execution_report_to_state(runtime_state, session_id, &now, &report);
+            let apply_result = apply_terminal_execution_report_to_state(
+                &mut runtime_state,
+                session_id,
+                &now,
+                &report,
+            )?;
             let conversation_state = runtime_state.conversation_state.clone();
             let should_dispatch_completion_hook = is_main_session
                 && apply_result.is_success
@@ -462,6 +481,9 @@ pub(super) fn apply_execution_report_to_memory(
                 runtime_state.ui_state.unread = true;
             }
             let runtime_state_snapshot = runtime_state.clone();
+            workspace
+                .session_runtime_state
+                .insert(session_id, runtime_state);
             merge_runtime_state_records_into_display_messages(
                 workspace,
                 session_id,

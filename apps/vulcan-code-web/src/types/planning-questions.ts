@@ -166,6 +166,20 @@ export interface SessionPlanArtifactSummary {
   updatedAt: string;
 }
 
+// SessionGoalStatus is the complete persisted lifecycle state exposed by the backend.
+// SessionGoalStatus 是后端暴露的完整持久化生命周期状态。
+export type SessionGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
+
+// SessionGoalUserStatusUpdate contains only lifecycle targets authorized for direct user toggles.
+// SessionGoalUserStatusUpdate 仅包含允许用户直接切换的生命周期目标。
+export type SessionGoalUserStatusUpdate = Extract<SessionGoalStatus, "active" | "paused">;
+
 // SessionGoalSummary describes the current persisted session goal.
 // SessionGoalSummary 描述当前持久化的会话目标。
 export interface SessionGoalSummary {
@@ -180,7 +194,7 @@ export interface SessionGoalSummary {
   objective: string;
   // Stable status key copied from the backend goal state.
   // 从后端目标状态复制的稳定状态键。
-  status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
+  status: SessionGoalStatus;
   // Optional explicit token budget.
   // 可选显式 token 预算。
   tokenBudget?: number | null;

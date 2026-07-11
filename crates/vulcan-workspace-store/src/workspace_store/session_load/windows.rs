@@ -206,7 +206,7 @@ pub(super) fn session_boundary_lines_to_window_messages(
     if events.is_empty() {
         return Ok(None);
     }
-    let projection = boundary_events_to_vulcan_conversation_state(&events);
+    let projection = boundary_events_to_vulcan_conversation_state(&events)?;
     let messages = conversation_state_to_session_messages(&projection.conversation_state);
     if messages.is_empty() {
         return Ok(None);

@@ -11,7 +11,6 @@ import type {
 } from "@/components/conversation/conversation-model";
 import {
   conversationBlockHasToolEvidence,
-  extractToolResultIdFromText,
   metadataToolFailureStatus,
   isSubagentFeedbackMetadata,
   normalizeToolDisplayState,
@@ -130,11 +129,6 @@ function structuredMessageAttributes(
     "host_result.tool_call_id",
     "hostResult.toolCallId",
   ]);
-  const toolResultId = metadataString(message.metadata, [
-    "tool_result_id",
-    "host_result.tool_result_id",
-    "hostResult.toolResultId",
-  ]);
   const commandSessionId = metadataString(message.metadata, [
     "command_session_id",
     "host_result.command_session_id",
@@ -186,7 +180,6 @@ function structuredMessageAttributes(
   if (message.recordKind) attributes.record_kind = message.recordKind;
   if (toolName) attributes.tool_name = toolName;
   if (toolCallId) attributes.tool_call_id = toolCallId;
-  if (toolResultId) attributes.tool_result_id = toolResultId;
   if (commandSessionId) attributes.command_session_id = commandSessionId;
   if (subagentTaskId) attributes.subagent_task_id = subagentTaskId;
   if (subagentName) attributes.subagent_name = subagentName;
@@ -379,8 +372,6 @@ function hasLegacyToolCallBlockMarker(source: string): boolean {
 // hasLegacyToolResultBlockMarker 检测明确的旧版工具返回转录块。
 function hasLegacyToolResultBlockMarker(source: string): boolean {
   return /^#{1,6}\s*Tool Result\b/im.test(source)
-    || /^#{1,6}\s*Result ID\b/im.test(source)
-    || /(?:^|\n)\s*tool_result_id["'`:\s=]+[A-Za-z0-9_.:-]+/i.test(source)
     || /(?:^|\n)\s*工具返回\s*[·:：]\s*[A-Za-z0-9_.:-]+/i.test(source);
 }
 
@@ -407,11 +398,9 @@ function hasLegacyThinkingBlockMarker(source: string): boolean {
 function detectToolAttributes(source: string): Record<string, string> {
   const attributes: Record<string, string> = {};
   const toolCallId = source.match(/tool_call_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
-  const toolResultId = extractToolResultIdFromText(source);
   const commandSessionId = source.match(/command_session_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
   const hasToolMarker = hasLegacyToolCallBlockMarker(source) || hasLegacyToolResultBlockMarker(source);
   if (toolCallId) attributes.tool_call_id = toolCallId;
-  if (toolResultId) attributes.tool_result_id = toolResultId;
   if (commandSessionId) attributes.command_session_id = commandSessionId;
   if (hasToolMarker) attributes.tool_evidence = "true";
   return attributes;
@@ -467,7 +456,6 @@ function conversationSpecialBlock(
     toolName,
     toolEvidence,
     toolCallId: attributes.tool_call_id,
-    toolResultId: attributes.tool_result_id,
     commandSessionId: attributes.command_session_id,
     subagentTaskId: attributes.subagent_task_id,
     subagentName: attributes.subagent_name,

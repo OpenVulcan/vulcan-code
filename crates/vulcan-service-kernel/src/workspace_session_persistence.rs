@@ -355,6 +355,40 @@ pub(crate) fn spawn_workspace_session_transcript_persist_task(
     if loaded_messages.is_empty() {
         return;
     }
+    spawn_session_transcript_messages_persist_task(
+        state,
+        controller_runtime,
+        session_id,
+        loaded_messages,
+        reason,
+    );
+}
+
+/// Spawns a background transcript write from an already-scoped session message snapshot.
+/// 从已经限定到单个会话的消息快照启动后台转录写入。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the live transcript persistence version table.
+/// `state` 持有运行中转录持久化版本表。
+/// `controller_runtime` provides workspace persistence.
+/// `controller_runtime` 提供工作区持久化能力。
+/// `session_id` selects the session transcript to persist.
+/// `session_id` 选择要持久化的会话转录。
+/// `loaded_messages` is the complete retained transcript for only that session.
+/// `loaded_messages` 是仅属于该会话的完整保留转录。
+/// `reason` is an optional diagnostic label for logs.
+/// `reason` 是用于日志的可选诊断标签。
+pub(crate) fn spawn_session_transcript_messages_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    session_id: SessionId,
+    loaded_messages: Vec<SessionMessageEntry>,
+    reason: Option<String>,
+) {
+    if loaded_messages.is_empty() {
+        return;
+    }
     let persist_version = match next_webui_session_transcript_persist_version(&state, session_id) {
         Ok(version) => version,
         Err(error) => {
@@ -419,6 +453,71 @@ pub(crate) fn spawn_workspace_session_addon_state_persist_task(
     if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
         return;
     }
+    let Some((session, archived)) =
+        workspace_session_with_archive_status(&workspace_snapshot, session_id)
+            .map(|(session, archived)| (session.clone(), archived))
+    else {
+        return;
+    };
+    let task_projects = workspace_task_projects_for_persistence(&workspace_snapshot);
+    spawn_session_addon_state_persist_task(
+        app,
+        state,
+        controller_runtime,
+        SessionAddonPersistenceScope {
+            task_projects,
+            session,
+            archived,
+        },
+        addon_state,
+        changed_namespaces,
+        reason,
+    );
+}
+
+/// Session-scoped ownership data required to persist one addon document.
+/// 持久化单个附属文档所需的会话级所有权数据。
+pub(crate) struct SessionAddonPersistenceScope {
+    /// Project ownership index required by workspace persistence.
+    /// 工作区持久化所需的项目所有权索引。
+    pub(crate) task_projects: Vec<TaskProjectSummary>,
+    /// Single active or archived session summary being updated.
+    /// 正在更新的单个活动或归档会话摘要。
+    pub(crate) session: SessionSummary,
+    /// Whether the session belongs to archived storage.
+    /// 会话是否属于归档存储。
+    pub(crate) archived: bool,
+}
+
+/// Spawns a background addon write from one pre-scoped session persistence context.
+/// 从一个预先限定的会话持久化上下文启动后台附属状态写入。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the post-persistence addon revision event.
+/// `app` 发出持久化后的附属状态修订事件。
+/// `state` owns namespace persistence versions.
+/// `state` 持有命名空间持久化版本。
+/// `controller_runtime` provides the data-plane persistence handle.
+/// `controller_runtime` 提供数据面持久化句柄。
+/// `scope` contains the project index, session summary, and archive ownership required by persistence.
+/// `scope` 包含持久化所需的项目索引、会话摘要与归档所有权。
+/// `addon_state` is the already-derived addon document.
+/// `addon_state` 是已经派生完成的附属状态文档。
+/// `changed_namespaces` identifies namespaces represented by this write.
+/// `changed_namespaces` 标识本次写入代表的命名空间。
+/// `reason` labels diagnostics.
+/// `reason` 标记诊断信息。
+pub(crate) fn spawn_session_addon_state_persist_task(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    scope: SessionAddonPersistenceScope,
+    addon_state: SessionAddonState,
+    changed_namespaces: Vec<SessionAddonNamespace>,
+    reason: Option<String>,
+) {
+    let session_id = scope.session.id;
     let mut persist_versions = Vec::new();
     for namespace in &changed_namespaces {
         match next_webui_session_addon_persist_version(&state, session_id, *namespace) {
@@ -438,18 +537,11 @@ pub(crate) fn spawn_workspace_session_addon_state_persist_task(
         {
             return;
         }
-        let Some((session, archived)) =
-            workspace_session_with_archive_status(&workspace_snapshot, session_id)
-                .map(|(session, archived)| (session.clone(), archived))
-        else {
-            return;
-        };
-        let task_projects = workspace_task_projects_for_persistence(&workspace_snapshot);
         match vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update(
             controller_runtime,
-            &task_projects,
-            &session,
-            archived,
+            &scope.task_projects,
+            &scope.session,
+            scope.archived,
             &addon_state,
         )
         .await

@@ -4,10 +4,11 @@ use crate::contract::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use vulcan_context::protocol::validate_session_conversation_record_identities;
 use vulcan_context::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
     SessionConversationState, SessionConversationToolCall, SessionMessageKind,
-    SessionMessageRecordKind, append_record,
+    SessionMessageRecordKind, append_record, append_session_conversation_message,
 };
 
 /// Display projection generated from boundary events for Vulcan transcript surfaces.
@@ -21,9 +22,19 @@ pub struct BoundaryConversationProjection {
 
 /// Projects a sorted or unsorted boundary event slice into Vulcan's canonical conversation state.
 /// 将有序或无序边界事件切片投影到 Vulcan 的规范会话状态。
+///
+/// # Parameters
+/// 参数
+/// `events` is the complete boundary-event slice sorted by sequence before projection.
+/// `events` 是投影前会按序号排序的完整边界事件切片。
+///
+/// # Returns
+/// 返回值
+/// Returns the validated projection, or the first duplicate or non-canonical identity failure.
+/// 返回经过校验的投影，或首个重复或非规范身份失败。
 pub fn boundary_events_to_vulcan_conversation_state(
     events: &[SessionBoundaryEvent],
-) -> BoundaryConversationProjection {
+) -> Result<BoundaryConversationProjection, String> {
     let mut events = events.iter().collect::<Vec<_>>();
     events.sort_by_key(|event| event.sequence);
     let mut conversation_state = SessionConversationState::default();
@@ -31,10 +42,13 @@ pub fn boundary_events_to_vulcan_conversation_state(
         let Some(record) = session_boundary_event_to_vulcan_record(event) else {
             continue;
         };
-        project_record_payload_to_conversation_messages(&mut conversation_state, event, &record);
-        append_record(&mut conversation_state, record);
+        project_record_payload_to_conversation_messages(&mut conversation_state, event, &record)?;
+        append_record(&mut conversation_state, record)
+            .map_err(|error| format!("Invalid boundary conversation record identity: {error}"))?;
     }
-    BoundaryConversationProjection { conversation_state }
+    validate_session_conversation_record_identities(&conversation_state.records)
+        .map_err(|error| format!("Invalid boundary conversation record identity: {error}"))?;
+    Ok(BoundaryConversationProjection { conversation_state })
 }
 
 /// Converts one session boundary event into a Vulcan transcript record when it is main-surface visible.
@@ -92,27 +106,34 @@ pub fn session_boundary_event_to_vulcan_record(
 
 /// Appends provider-context messages for records that should contribute to future turns.
 /// 为应进入未来轮次上下文的记录追加 Provider 上下文消息。
+///
+/// # Returns
+/// 返回值
+/// Returns success after an optional atomic message append, or the exact identity failure.
+/// 可选原子消息追加完成后返回成功，或返回准确的身份失败。
 fn project_record_payload_to_conversation_messages(
     conversation_state: &mut SessionConversationState,
     event: &SessionBoundaryEvent,
     record: &SessionConversationRecord,
-) {
+) -> Result<(), String> {
     match record.record_kind {
         SessionMessageRecordKind::Transcript if record.kind == SessionMessageKind::User => {
-            conversation_state
-                .messages
-                .push(SessionConversationMessage {
+            append_session_conversation_message(
+                conversation_state,
+                SessionConversationMessage {
                     id: record.id.clone(),
                     payload: SessionConversationPayload::UserText {
                         text: record.body.clone(),
                         attachments: Vec::new(),
                     },
-                });
+                },
+            )
+            .map_err(|error| format!("Invalid boundary user message identity: {error}"))?;
         }
         SessionMessageRecordKind::AssistantOutput => {
-            conversation_state
-                .messages
-                .push(SessionConversationMessage {
+            append_session_conversation_message(
+                conversation_state,
+                SessionConversationMessage {
                     id: record.id.clone(),
                     payload: SessionConversationPayload::Assistant {
                         text: record.body.clone(),
@@ -129,10 +150,13 @@ fn project_record_payload_to_conversation_messages(
                         usage: None,
                         tool_calls: session_boundary_event_tool_calls(event),
                     },
-                });
+                },
+            )
+            .map_err(|error| format!("Invalid boundary assistant message identity: {error}"))?;
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Returns the visible role represented by one event.
@@ -301,7 +325,8 @@ mod tests {
                 SessionEventVisibility::Visible,
                 json!({ "prompt": "hello" }),
             ),
-        ]);
+        ])
+        .expect("valid boundary conversation identities");
 
         assert_eq!(projection.conversation_state.records.len(), 2);
         assert_eq!(projection.conversation_state.records[0].body, "hello");
@@ -324,7 +349,8 @@ mod tests {
             SessionEventScope::Turn,
             SessionEventVisibility::Visible,
             json!({ "text": "hello" }),
-        )]);
+        )])
+        .expect("valid boundary conversation identities");
 
         assert!(projection.conversation_state.records.is_empty());
         assert!(projection.conversation_state.messages.is_empty());
@@ -352,7 +378,8 @@ mod tests {
                 SessionEventVisibility::Visible,
                 json!({ "text": "child transcript" }),
             ),
-        ]);
+        ])
+        .expect("valid boundary conversation identities");
 
         assert!(projection.conversation_state.records.is_empty());
         assert!(projection.conversation_state.messages.is_empty());
@@ -370,7 +397,8 @@ mod tests {
             SessionEventScope::Item,
             SessionEventVisibility::Visible,
             json!({ "tool_name": "spawn_agent", "text": "done" }),
-        )]);
+        )])
+        .expect("valid boundary conversation identities");
 
         assert_eq!(projection.conversation_state.records.len(), 1);
         assert_eq!(
@@ -392,7 +420,8 @@ mod tests {
             SessionEventScope::Item,
             SessionEventVisibility::Visible,
             json!({ "text": "done" }),
-        )]);
+        )])
+        .expect("valid boundary conversation identities");
 
         assert!(projection.conversation_state.records.is_empty());
         assert!(projection.conversation_state.messages.is_empty());
@@ -416,7 +445,8 @@ mod tests {
                     { "id": "call-3", "tool_call_id": "provider-call-3", "arguments": {} }
                 ]
             }),
-        )]);
+        )])
+        .expect("valid boundary conversation identities");
 
         assert_eq!(projection.conversation_state.records.len(), 1);
         assert_eq!(projection.conversation_state.messages.len(), 1);
@@ -428,5 +458,37 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "call-1");
         assert_eq!(tool_calls[0].tool_name, "read_file");
+    }
+
+    /// Verifies duplicate event ownership is rejected instead of producing an ambiguous boundary projection.
+    /// 验证重复事件归属会被拒绝，而不是生成含糊的边界投影。
+    #[test]
+    fn rejects_duplicate_boundary_event_identities() {
+        // thread_id and sequence jointly produce the same canonical record and message identity.
+        // thread_id 与 sequence 会共同生成相同的规范记录与消息身份。
+        let thread_id = SessionNodeId::new_v4();
+        // error captures the second event's attempt to reuse the first projected identity.
+        // error 捕获第二条事件复用首条投影身份的尝试。
+        let error = boundary_events_to_vulcan_conversation_state(&[
+            event(
+                thread_id,
+                1,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventScope::Turn,
+                SessionEventVisibility::Visible,
+                json!({ "prompt": "first" }),
+            ),
+            event(
+                thread_id,
+                1,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventScope::Turn,
+                SessionEventVisibility::Visible,
+                json!({ "prompt": "second" }),
+            ),
+        ])
+        .expect_err("duplicate boundary identities must fail");
+
+        assert!(error.contains("duplicates id"));
     }
 }

@@ -127,9 +127,49 @@ pub struct SessionPlanArtifactSummary {
     pub updated_at: String,
 }
 
+/// Stable lifecycle status exposed for one session goal.
+/// 单个会话目标对外暴露的稳定生命周期状态。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGoalStatus {
+    /// The goal is actively pursued by continuation.
+    /// 目标正在由续跑流程推进。
+    Active,
+    /// The goal is paused by the user.
+    /// 目标已被用户暂停。
+    Paused,
+    /// The goal is blocked on user or external input.
+    /// 目标正等待用户或外部输入。
+    Blocked,
+    /// The goal reached a provider or runtime usage limit.
+    /// 目标已触达 Provider 或运行时用量限制。
+    UsageLimited,
+    /// The goal consumed its explicit token budget.
+    /// 目标已消耗显式 Token 预算。
+    BudgetLimited,
+    /// The goal completed successfully.
+    /// 目标已成功完成。
+    Complete,
+}
+
+impl SessionGoalStatus {
+    /// Returns the stable snake_case protocol key for this status.
+    /// 返回该状态稳定的 snake_case 协议键。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Blocked => "blocked",
+            Self::UsageLimited => "usage_limited",
+            Self::BudgetLimited => "budget_limited",
+            Self::Complete => "complete",
+        }
+    }
+}
+
 /// Describes the current long-running goal for one selected session.
 /// 描述当前选中会话的长生命周期目标。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionGoalSummary {
     /// Stable session identifier that owns this goal.
@@ -143,7 +183,7 @@ pub struct SessionGoalSummary {
     pub objective: String,
     /// Stable status key: active, paused, blocked, usage_limited, budget_limited, or complete.
     /// 稳定状态键：active、paused、blocked、usage_limited、budget_limited 或 complete。
-    pub status: String,
+    pub status: SessionGoalStatus,
     /// Optional explicit token budget.
     /// 可选的显式 token 预算。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,4 +221,50 @@ pub struct SessionGoalSummary {
     /// Last update timestamp in Unix epoch milliseconds.
     /// Unix 纪元毫秒格式的最近更新时间。
     pub updated_at_ms: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the strict status enum preserves the existing snake_case JSON protocol.
+    /// 验证严格状态枚举保留既有 snake_case JSON 协议。
+    #[test]
+    fn session_goal_status_serializes_to_stable_protocol_key() {
+        assert_eq!(
+            serde_json::to_value(SessionGoalStatus::BudgetLimited)
+                .expect("goal status should serialize"),
+            serde_json::json!("budget_limited")
+        );
+    }
+
+    /// Verifies unknown goal status keys are rejected at the service API boundary.
+    /// 验证未知目标状态键会在 service API 边界被拒绝。
+    #[test]
+    fn session_goal_status_rejects_unknown_protocol_key() {
+        let error = serde_json::from_value::<SessionGoalStatus>(serde_json::json!("unknown"))
+            .expect_err("unknown goal status must not deserialize");
+
+        assert!(error.to_string().contains("unknown variant"));
+    }
+
+    /// Verifies every service status exposes the same key emitted through Serde.
+    /// 验证每个 service 状态暴露的键与 Serde 发出的键一致。
+    #[test]
+    fn session_goal_status_as_str_matches_serde() {
+        let statuses = [
+            SessionGoalStatus::Active,
+            SessionGoalStatus::Paused,
+            SessionGoalStatus::Blocked,
+            SessionGoalStatus::UsageLimited,
+            SessionGoalStatus::BudgetLimited,
+            SessionGoalStatus::Complete,
+        ];
+        for status in statuses {
+            assert_eq!(
+                serde_json::to_value(status).expect("goal status should serialize"),
+                serde_json::json!(status.as_str())
+            );
+        }
+    }
 }

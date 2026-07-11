@@ -1,7 +1,12 @@
 import React from "react";
 import type { ComposerAiCapabilityConfigurationSave } from "@/components/composer/composer-model";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
-import type { ConversationSummary, PendingPromptSummary, WorkbenchSnapshot } from "@/types";
+import type {
+  ConversationSummary,
+  PendingPromptSummary,
+  SessionGoalUserStatusUpdate,
+  WorkbenchSnapshot,
+} from "@/types";
 import {
   clearSessionGoal,
   editPendingPrompt,
@@ -156,7 +161,9 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
 
   // handleUpdateSessionGoalStatus updates the current goal lifecycle state.
   // handleUpdateSessionGoalStatus 更新当前目标生命周期状态。
-  const handleUpdateSessionGoalStatus = React.useCallback(async (status: string): Promise<boolean> => {
+  const handleUpdateSessionGoalStatus = React.useCallback(async (
+    status: SessionGoalUserStatusUpdate,
+  ): Promise<boolean> => {
     const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
     if (!activeConversationId) {
       toast.error(t("sessionActions.noExistingConversation"));

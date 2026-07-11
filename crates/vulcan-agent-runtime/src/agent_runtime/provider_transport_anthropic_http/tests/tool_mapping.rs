@@ -61,7 +61,6 @@ fn request_payload_sanitizes_invalid_anthropic_tool_names() {
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("call-1")),
                 text: String::from(r"D:\openvulcan\vulcan-code"),
             },

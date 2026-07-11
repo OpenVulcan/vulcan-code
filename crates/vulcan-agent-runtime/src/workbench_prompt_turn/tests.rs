@@ -252,7 +252,8 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
         "dialogue-history",
         "对话层历史",
         Vec::new(),
-    );
+    )
+    .expect("valid user prompt identity");
     // display_rows simulate a visible turn window that must not become the API source of truth.
     // display_rows 模拟不应变成 API 真相来源的可见 turn 窗口。
     let display_rows = vec![SessionMessageEntry::new(
@@ -298,4 +299,65 @@ fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
         })
         .collect::<Vec<_>>();
     assert_eq!(bodies, vec!["对话层历史", "继续"]);
+}
+
+/// Verifies invalid hydrated message ownership is rejected without changing the active runtime state.
+/// 验证无效的水合消息归属会被拒绝且不修改活动运行态。
+#[test]
+fn begin_prompt_rejects_invalid_hydration_atomically() {
+    // runtime_state is the empty active transaction target that must remain untouched.
+    // runtime_state 是必须保持不变的空活动事务目标。
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.ui_state.unread = true;
+    runtime_state.updated_at = String::from("before-hydration");
+    // original_state captures every field before detached hydration validation begins.
+    // original_state 捕获分离水合校验开始前的每个字段。
+    let original_state =
+        serde_json::to_value(&runtime_state).expect("runtime state should serialize");
+    // first_row and second_row intentionally claim the same canonical message identity.
+    // first_row 与 second_row 故意占用相同的规范消息身份。
+    let mut first_row = SessionMessageEntry::new(SessionMessageKind::User, "用户", "first");
+    first_row.id = String::from("duplicate-history");
+    let mut second_row = SessionMessageEntry::new(SessionMessageKind::User, "用户", "second");
+    second_row.id = String::from("duplicate-history");
+    // display_rows is the invalid detached hydration source presented to prompt start.
+    // display_rows 是提交给提示词启动流程的无效分离水合来源。
+    let display_rows = vec![first_row, second_row];
+    // hook_runtime remains available only if canonical preflight succeeds.
+    // hook_runtime 仅在规范预检成功后才会被实际使用。
+    let mut hook_runtime = ConversationHookRuntime::new();
+
+    // error proves hydration is rejected before assignment or unread-state mutation.
+    // error 证明水合会在赋值或 unread 状态修改前被拒绝。
+    let error = begin_shared_prompt_turn_with_runtime_state(
+        &mut runtime_state,
+        &mut hook_runtime,
+        SharedPromptTurnRuntimeBeginInput {
+            session_id: SessionId::from_u128(907),
+            session_title: "主会话",
+            workspace_path: "D:/workspace",
+            prompt_entry_id: String::from("followup-entry"),
+            prompt: "继续",
+            hidden_model_guidance: None,
+            provider_visible_agent_messages: Vec::new(),
+            attachments: Vec::new(),
+            append_canonical_user_message: true,
+            append_visible_user_prompt_record: true,
+            source: PendingSessionPromptSource::UserFollowup,
+            execution_mode: String::from("Build"),
+            reasoning_effort: None,
+            disabled_ai_capability_kinds: BTreeSet::new(),
+            disabled_ai_capability_target_selectors: BTreeSet::new(),
+            ai_capability_target_order_overrides: BTreeMap::new(),
+            owning_project_id: Some(String::from("project-a")),
+            prior_session_messages: Some(&display_rows),
+        },
+    )
+    .expect_err("invalid hydrated identities must fail");
+
+    assert!(error.contains("duplicates id"));
+    assert_eq!(
+        serde_json::to_value(&runtime_state).expect("runtime state should serialize after failure"),
+        original_state
+    );
 }

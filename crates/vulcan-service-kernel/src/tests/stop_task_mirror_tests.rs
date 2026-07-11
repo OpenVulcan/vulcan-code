@@ -27,7 +27,8 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
             metadata: user_entry.metadata.clone(),
             created_at: user_entry.created_at.clone(),
         },
-    );
+    )
+    .expect("valid stopped-turn record identity");
 
     let mut workspace_snapshot = WorkspaceSnapshot {
         task_projects: Vec::new(),
@@ -233,7 +234,8 @@ fn task_mirror_completed_status_repairs_projected_card_and_runtime_record() {
             metadata: message.metadata.clone(),
             created_at: message.created_at.clone(),
         },
-    );
+    )
+    .expect("valid task-card record identity");
     let mut messages = vec![message];
     let mirrors = vec![SessionTaskMirrorSnapshot {
         task_session_id: task_id,
@@ -387,7 +389,8 @@ fn webui_task_session_lookup_keeps_newest_projected_message_priority() {
             metadata: runtime_message.metadata.clone(),
             created_at: runtime_message.created_at.clone(),
         },
-    );
+    )
+    .expect("valid runtime task record identity");
     // Workspace snapshot with both projected messages and canonical runtime records.
     // 同时包含投影消息与规范运行时记录的工作区快照。
     let workspace_snapshot = WorkspaceSnapshot {

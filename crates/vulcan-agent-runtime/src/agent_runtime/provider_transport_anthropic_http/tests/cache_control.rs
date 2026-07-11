@@ -87,7 +87,6 @@ fn request_payload_marks_latest_tool_result_block_with_ephemeral_cache_control()
         current_prompt: CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("call-1")),
                 text: String::from("tool result body"),
             },

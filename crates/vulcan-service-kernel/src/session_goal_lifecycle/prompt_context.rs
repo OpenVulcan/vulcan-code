@@ -3,27 +3,64 @@
 
 use super::*;
 
+/// Captures one active goal identifier and its rendered prompt context from the same state snapshot.
+/// 从同一状态快照捕获一个活动目标标识及其已渲染提示上下文。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the cached session goal summaries.
+/// `state` 持有缓存的会话目标摘要。
+/// `session_id` identifies the session whose execution is being prepared.
+/// `session_id` 标识正在准备执行的会话。
+///
+/// # Returns
+/// 返回值
+/// The bound active-goal context, no context for a non-active goal, or a state-lock error.
+/// 返回已绑定的活动目标上下文；非活动目标返回空，锁状态失败时返回错误。
 pub(crate) fn session_goal_context_for_prompt_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<Option<String>, String> {
+) -> Result<Option<ExecutionSessionGoalContext>, String> {
     let goal = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .session_goal_summaries
         .get(&session_id)
         .cloned();
-    Ok(goal
-        .as_ref()
-        .and_then(render_session_goal_context_for_prompt))
+    Ok(goal.as_ref().and_then(session_goal_execution_context))
+}
+
+/// Binds one active goal identifier to the prompt text rendered from the same summary.
+/// 将活动目标标识绑定到由同一摘要渲染的提示词文本。
+///
+/// # Parameters
+/// 参数
+/// `goal` is the immutable summary captured for one execution request.
+/// `goal` 是为单次执行请求捕获的不可变摘要。
+///
+/// # Returns
+/// 返回值
+/// A bound execution context for an active goal, otherwise `None`.
+/// 活动目标返回已绑定执行上下文，否则返回 `None`。
+pub(crate) fn session_goal_execution_context(
+    goal: &SessionGoalSummary,
+) -> Option<ExecutionSessionGoalContext> {
+    render_session_goal_context_for_prompt(goal).map(|prompt_context| ExecutionSessionGoalContext {
+        goal_id: goal.goal_id.clone(),
+        prompt_context,
+    })
 }
 
 /// Renders one goal summary into the active prompt-goal template.
 /// 将单个目标摘要渲染进当前提示词目标模板。
 pub(crate) fn render_session_goal_context_for_prompt(goal: &SessionGoalSummary) -> Option<String> {
-    match goal.status.as_str() {
-        "active" => Some(render_goal_continuation_context(goal)),
-        _ => None,
+    match goal.status {
+        SessionGoalStatus::Active => Some(render_goal_continuation_context(goal)),
+        SessionGoalStatus::Paused
+        | SessionGoalStatus::Blocked
+        | SessionGoalStatus::UsageLimited
+        | SessionGoalStatus::BudgetLimited
+        | SessionGoalStatus::Complete => None,
     }
 }
 

@@ -398,12 +398,13 @@ pub(crate) fn ensure_webui_session_runtime_state(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     active_precheck_turn_id: Option<&str>,
-) {
+) -> Result<(), String> {
     let now = current_unix_millis_text();
-    let runtime_state = workspace_snapshot
+    let mut runtime_state = workspace_snapshot
         .session_runtime_state
-        .entry(session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_else(|| SessionRuntimeStateEntry {
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
@@ -418,12 +419,16 @@ pub(crate) fn ensure_webui_session_runtime_state(
         runtime_state.active_precheck_turn_id = Some(turn_id.to_string());
         runtime_state.updated_at = now.clone();
     }
-    let runtime_state_snapshot = if runtime_state_has_concrete_conversation_context(runtime_state) {
-        sanitize_runtime_state_legacy_goal_internal_messages(runtime_state);
+    let runtime_state_snapshot = if runtime_state_has_concrete_conversation_context(&runtime_state)
+    {
+        sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state)?;
         Some(runtime_state.clone())
     } else {
         None
     };
+    workspace_snapshot
+        .session_runtime_state
+        .insert(session_id, runtime_state);
     if let Some(runtime_state_snapshot) = runtime_state_snapshot.as_ref() {
         merge_runtime_state_records_into_display_messages(
             workspace_snapshot,
@@ -437,6 +442,7 @@ pub(crate) fn ensure_webui_session_runtime_state(
             .or_default();
     }
     sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
+    Ok(())
 }
 
 /// Returns whether the session has a submitted Plan artifact awaiting user confirmation.
@@ -519,19 +525,31 @@ pub(crate) fn webui_turn_completion_gate_from_state(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let running_tasks =
             running_webui_subagent_task_states_for_tree_from_live_cache(&mut guard, session_id);
-        let running_task_ids = running_tasks
+        let running_execution_keys = running_tasks
             .iter()
-            .map(|(_, state)| state.task_id)
+            .filter_map(|(_, state)| {
+                guard
+                    .detached_subagent_task_listeners
+                    .get(&state.task_id)
+                    .map(|execution_id| {
+                        SubagentExecutionKey::new(state.task_id, execution_id.as_str())
+                    })
+            })
             .collect::<BTreeSet<_>>();
         guard
             .subagent_completion_gate_ignored_tasks
-            .retain(|task_id| running_task_ids.contains(task_id));
+            .retain(|execution_key| running_execution_keys.contains(execution_key));
         running_tasks
             .iter()
             .filter(|(_, state)| {
-                !guard
-                    .subagent_completion_gate_ignored_tasks
-                    .contains(&state.task_id)
+                guard
+                    .detached_subagent_task_listeners
+                    .get(&state.task_id)
+                    .is_none_or(|execution_id| {
+                        !guard.subagent_completion_gate_ignored_tasks.contains(
+                            &SubagentExecutionKey::new(state.task_id, execution_id.as_str()),
+                        )
+                    })
             })
             .count()
     };
@@ -601,49 +619,76 @@ fn subagent_task_panel_state_from_registry_for_gate(
     }
 }
 
-/// Marks one child task run as non-blocking for the parent turn completion gate.
-/// 将单个子任务运行标记为不阻塞父级回合完成闸门。
+/// Marks one exact child execution as non-blocking for the parent turn completion gate.
+/// 将单个精确子执行标记为不阻塞父级回合完成闸门。
 ///
 /// # Parameters
 /// 参数
 /// `guard` owns the in-memory service state.
 /// `guard` 持有内存中的服务状态。
-/// `task_id` identifies the child task whose current run is asynchronous to the parent turn.
-/// `task_id` 标识当前运行相对父回合为异步的子任务。
+/// `task_id` identifies the stable child task.
+/// `task_id` 标识稳定子任务。
+/// `execution_id` identifies the concrete run asynchronous to the parent turn.
+/// `execution_id` 标识相对父回合异步的具体运行。
 pub(crate) fn mark_webui_subagent_completion_gate_ignored(
     guard: &mut ServiceBridgeState,
     task_id: SessionId,
+    execution_id: &str,
 ) {
-    if guard.subagent_completion_gate_ignored_tasks.insert(task_id) {
+    if guard
+        .subagent_completion_gate_ignored_tasks
+        .insert(SubagentExecutionKey::new(task_id, execution_id))
+    {
         webui_trace(
             "subagent_completion_gate_ignored",
-            format!("task={task_id}"),
+            format!("task={task_id} execution_id={execution_id}"),
         );
     }
 }
 
-/// Clears the non-blocking parent completion-gate marker for one child task.
-/// 清理单个子任务的非阻塞父级完成闸门标记。
+/// Clears the non-blocking parent completion-gate marker for one exact child execution.
+/// 清理单个精确子执行的非阻塞父级完成闸门标记。
 ///
 /// # Parameters
 /// 参数
 /// `guard` owns the in-memory service state.
 /// `guard` 持有内存中的服务状态。
-/// `task_id` identifies the child task whose marker should be removed.
-/// `task_id` 标识需要移除标记的子任务。
+/// `task_id` identifies the stable child task.
+/// `task_id` 标识稳定子任务。
+/// `execution_id` identifies the concrete execution whose marker should be removed.
+/// `execution_id` 标识需要移除标记的具体执行。
 pub(crate) fn clear_webui_subagent_completion_gate_ignored(
     guard: &mut ServiceBridgeState,
     task_id: SessionId,
+    execution_id: &str,
 ) {
     if guard
         .subagent_completion_gate_ignored_tasks
-        .remove(&task_id)
+        .remove(&SubagentExecutionKey::new(task_id, execution_id))
     {
         webui_trace(
             "subagent_completion_gate_ignore_cleared",
-            format!("task={task_id}"),
+            format!("task={task_id} execution_id={execution_id}"),
         );
     }
+}
+
+/// Clears every completion-gate marker owned by one stable child task.
+/// 清理单个稳定子任务持有的全部完成闸门标记。
+///
+/// # Parameters
+/// 参数
+/// `guard` owns the in-memory service state.
+/// `guard` 持有内存中的服务状态。
+/// `task_id` identifies the child task being explicitly stopped or closed.
+/// `task_id` 标识正在被显式停止或关闭的子任务。
+pub(crate) fn clear_all_webui_subagent_completion_gate_ignored_for_task(
+    guard: &mut ServiceBridgeState,
+    task_id: SessionId,
+) {
+    guard
+        .subagent_completion_gate_ignored_tasks
+        .retain(|execution_key| execution_key.task_id != task_id);
 }
 
 /// Marks the provided running WebUI subagent tasks as stopped and clears their live listener routes.
@@ -660,8 +705,8 @@ pub(crate) fn mark_webui_subagent_tasks_stopped_in_state(
             }
         }
         guard.detached_subagent_task_listeners.remove(task_id);
-        clear_webui_subagent_completion_gate_ignored(guard, *task_id);
-        clear_webui_subagent_parent_turn_binding(guard, *task_id);
+        clear_all_webui_subagent_completion_gate_ignored_for_task(guard, *task_id);
+        clear_all_webui_subagent_parent_turn_bindings_for_task(guard, *task_id);
         guard
             .session_subagent_navigation_rounds
             .remove(direct_parent_session_id);
@@ -700,13 +745,16 @@ pub(crate) fn remove_webui_closed_subagent_tasks_in_state(
             .remove(&parent_session_id);
     }
     for task_id in &task_ids {
-        changed |= guard.detached_subagent_task_listeners.remove(task_id);
-        clear_webui_subagent_completion_gate_ignored(guard, *task_id);
+        changed |= guard
+            .detached_subagent_task_listeners
+            .remove(task_id)
+            .is_some();
+        clear_all_webui_subagent_completion_gate_ignored_for_task(guard, *task_id);
         changed |= guard
             .subagent_surface_detail_cache
             .remove(task_id)
             .is_some();
-        clear_webui_subagent_parent_turn_binding(guard, *task_id);
+        clear_all_webui_subagent_parent_turn_bindings_for_task(guard, *task_id);
     }
     if guard
         .active_subagent_panel
@@ -731,16 +779,17 @@ pub(crate) fn stop_webui_session_work(
         .session_run_phases
         .get(&session_id)
         .is_some_and(|phase| *phase == SessionRunPhase::Preparing);
-    let runtime_state = workspace_snapshot
+    let mut runtime_state = workspace_snapshot
         .session_runtime_state
-        .entry(session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_else(|| SessionRuntimeStateEntry {
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
     let had_pending_precheck =
         had_pending_precheck || runtime_state.active_precheck_turn_id.is_some();
-    let cleared_system_queue = clear_internal_pending_prompt_queue_for_stop(runtime_state);
+    let cleared_system_queue = clear_internal_pending_prompt_queue_for_stop(&mut runtime_state);
     if !had_active_kernel_turn
         && !stopped_running_subagents
         && !had_pending_precheck
@@ -765,10 +814,10 @@ pub(crate) fn stop_webui_session_work(
         }
     };
     append_webui_session_message_entry_to_state(
-        runtime_state,
+        &mut runtime_state,
         session_id,
         SessionMessageEntry::new(SessionMessageKind::Assistant, "执行已停止", stop_body),
-    );
+    )?;
     let provider_request_count = runtime_state
         .last_safe_provider_request_count
         .filter(|count| *count > 0);
@@ -779,18 +828,24 @@ pub(crate) fn stop_webui_session_work(
         "The run was stopped manually before a summary could be produced.",
     );
     terminated_entry.metadata = Some(json!({ "preview": "" }));
-    let terminated_message_id =
-        append_webui_session_message_entry_to_state(runtime_state, session_id, terminated_entry);
+    let terminated_message_id = append_webui_session_message_entry_to_state(
+        &mut runtime_state,
+        session_id,
+        terminated_entry,
+    )?;
     let _ = append_webui_session_turn_stats_to_state(
-        runtime_state,
+        &mut runtime_state,
         session_id,
         &terminated_message_id,
         SessionTurnStatsStatus::Stopped,
         provider_request_count,
         SessionTurnStatsKind::UserTurn,
         Vec::new(),
-    );
+    )?;
     let runtime_state_snapshot = runtime_state.clone();
+    workspace_snapshot
+        .session_runtime_state
+        .insert(session_id, runtime_state);
     workspace_snapshot
         .session_run_phases
         .insert(session_id, SessionRunPhase::Stopped);
@@ -837,7 +892,7 @@ pub(crate) fn append_webui_session_message_entry_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     entry: SessionMessageEntry,
-) -> String {
+) -> Result<String, String> {
     let created_at = current_unix_millis_text();
     let conversation_record_count = runtime_state.conversation_state.records.len();
     let message_id =
@@ -855,9 +910,10 @@ pub(crate) fn append_webui_session_message_entry_to_state(
             metadata: materialized_entry.metadata.clone(),
             created_at: materialized_entry.created_at.clone(),
         },
-    );
+    )
+    .map_err(|error| format!("Invalid WebUI session record identity: {error}"))?;
     runtime_state.updated_at = materialized_entry.created_at;
-    message_id
+    Ok(message_id)
 }
 
 /// Appends one canonical WebUI turn-statistics record using the shared WebUI turn stats builder.
@@ -870,15 +926,17 @@ pub(crate) fn append_webui_session_turn_stats_to_state(
     provider_request_count_override: Option<usize>,
     turn_kind: SessionTurnStatsKind,
     usage_segments: Vec<SessionTurnUsageSegment>,
-) -> Option<String> {
-    let turn_stats = build_session_turn_stats_from_state_with_segments(
+) -> Result<Option<String>, String> {
+    let Some(turn_stats) = build_session_turn_stats_from_state_with_segments(
         &runtime_state.conversation_state,
         closing_record_id,
         status,
         provider_request_count_override,
         turn_kind,
         usage_segments,
-    )?;
+    ) else {
+        return Ok(None);
+    };
     let mut entry = SessionMessageEntry::new(
         SessionMessageKind::Assistant,
         format!("Turn Stats · {}", turn_stats.status.label()),
@@ -890,11 +948,7 @@ pub(crate) fn append_webui_session_turn_stats_to_state(
         "turn_closing_record_id": closing_record_id,
     }))
     .ok();
-    Some(append_webui_session_message_entry_to_state(
-        runtime_state,
-        session_id,
-        entry,
-    ))
+    append_webui_session_message_entry_to_state(runtime_state, session_id, entry).map(Some)
 }
 
 /// Returns the workspace path associated with one session.

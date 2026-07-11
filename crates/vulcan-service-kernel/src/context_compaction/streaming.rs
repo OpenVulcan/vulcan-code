@@ -2,6 +2,7 @@
 //! 上下文压缩 streaming 辅助逻辑。
 
 use super::*;
+use crate::{Uuid, remove_active_stream_task_if_id, spawn_registered_active_stream_task};
 
 /// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
 /// 流式执行一次提示词压缩请求，并将 Provider 增量镜像到 WebUI 状态。
@@ -116,7 +117,8 @@ pub(crate) fn spawn_webui_context_compaction_task(
     );
     let task_state = state.clone();
     let task_app = app.clone();
-    let handle = spawn_service_task(async move {
+    let active_stream_task_id = Uuid::new_v4();
+    let task_future = async move {
         let terminal_result = match request {
             Ok(request) => {
                 stream_webui_context_compaction_execution(
@@ -137,9 +139,20 @@ pub(crate) fn spawn_webui_context_compaction_task(
         } else {
             TurnTerminalStatus::Failed
         };
-        if let Ok(mut guard) = task_state.lock() {
-            guard.active_stream_tasks.remove(&session_id);
-            finish_webui_session_kernel_turn(&mut guard, session_id, terminal_status);
+        let owns_active_stream_entry = match task_state.lock() {
+            Ok(mut guard) => {
+                let owns_entry =
+                    remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id)
+                        .is_some();
+                if owns_entry {
+                    finish_webui_session_kernel_turn(&mut guard, session_id, terminal_status);
+                }
+                owns_entry
+            }
+            Err(_) => false,
+        };
+        if !owns_active_stream_entry {
+            return;
         }
         let finish_result = match terminal_result {
             Ok(execution) => finish_webui_context_compaction_execution(
@@ -183,13 +196,14 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 );
             }
         }
-    });
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if let Some(previous_task) = guard.active_stream_tasks.insert(session_id, handle) {
-        previous_task.abort();
-    }
+    };
+    spawn_registered_active_stream_task(
+        &state,
+        session_id,
+        active_stream_task_id,
+        None,
+        task_future,
+    )?;
     Ok(())
 }
 

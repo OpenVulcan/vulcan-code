@@ -1,5 +1,28 @@
 use super::*;
 use crate::tooling::native::NativeToolRuntimeSnapshot;
+use crate::tooling::native::goal_status_allows_terminal_update;
+
+/// Verifies model-owned terminal transitions reject incompatible lifecycle states.
+/// 验证模型拥有的终态转换会拒绝不兼容的生命周期状态。
+#[test]
+fn goal_terminal_update_filters_persisted_statuses() {
+    assert!(goal_status_allows_terminal_update(
+        ThreadGoalStatus::Active,
+        ThreadGoalStatus::Complete
+    ));
+    assert!(!goal_status_allows_terminal_update(
+        ThreadGoalStatus::Paused,
+        ThreadGoalStatus::Complete
+    ));
+    assert!(goal_status_allows_terminal_update(
+        ThreadGoalStatus::BudgetLimited,
+        ThreadGoalStatus::Blocked
+    ));
+    assert!(!goal_status_allows_terminal_update(
+        ThreadGoalStatus::Complete,
+        ThreadGoalStatus::Blocked
+    ));
+}
 
 /// Verifies todolist returns the Codex-compatible model text and a host todolist payload.
 /// 验证 todolist 返回与 Codex 兼容的模型文本以及宿主 todolist 载荷。

@@ -1,16 +1,75 @@
 use super::*;
+use vulcan_context::protocol::{
+    validate_session_conversation_message_identities,
+    validate_session_conversation_record_identities,
+};
 
 /// Applies the terminal execution report to one background conversation state.
 /// 将终态执行报告应用到单个后台会话状态。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the authoritative state replaced only after the detached draft succeeds.
+/// `runtime_state` 是仅在分离草稿成功后才会替换的权威状态。
+/// `session_id`, `now`, and `report` identify and describe the terminal transaction.
+/// `session_id`、`now` 与 `report` 标识并描述终态事务。
+///
+/// # Returns
+/// 返回值
+/// Returns the committed terminal result, or an error with the authoritative runtime state unchanged.
+/// 返回已提交的终态结果；失败时返回错误且权威运行态保持不变。
 pub fn apply_terminal_execution_report_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     report: &ExecutionRunReport,
-) -> SessionTerminalReportApplyResult {
+) -> Result<SessionTerminalReportApplyResult, String> {
+    // draft_runtime_state isolates the full multi-record terminal transaction until every identity check succeeds.
+    // draft_runtime_state 会隔离完整的多记录终态事务，直到每项身份校验成功。
+    let mut draft_runtime_state = runtime_state.clone();
+    // apply_result is produced only from the detached draft and therefore cannot leak partial failure state.
+    // apply_result 仅从分离草稿产出，因此不会泄漏部分失败状态。
+    let apply_result = apply_terminal_execution_report_to_draft(
+        &mut draft_runtime_state,
+        session_id,
+        now,
+        report,
+    )?;
+    validate_session_conversation_message_identities(
+        &draft_runtime_state.conversation_state.messages,
+    )
+    .map_err(|error| format!("Invalid terminal conversation message identity: {error}"))?;
+    validate_session_conversation_record_identities(
+        &draft_runtime_state.conversation_state.records,
+    )
+    .map_err(|error| format!("Invalid terminal conversation record identity: {error}"))?;
+    *runtime_state = draft_runtime_state;
+    Ok(apply_result)
+}
+
+/// Applies one terminal execution report to a detached runtime draft.
+/// 将一份终态执行报告应用到分离的运行态草稿。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the detached draft that may be freely mutated before commit.
+/// `runtime_state` 是提交前可以自由修改的分离草稿。
+/// `session_id`, `now`, and `report` identify and describe the terminal transaction.
+/// `session_id`、`now` 与 `report` 标识并描述终态事务。
+///
+/// # Returns
+/// 返回值
+/// Returns the terminal apply result, or the first canonical identity failure.
+/// 返回终态应用结果，或首个规范身份失败。
+fn apply_terminal_execution_report_to_draft(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    report: &ExecutionRunReport,
+) -> Result<SessionTerminalReportApplyResult, String> {
     let is_success = report.error.is_none();
     if let Some(conversation_state) = report.conversation_state.clone() {
-        apply_checkpoint_conversation_state(runtime_state, conversation_state, now);
+        apply_checkpoint_conversation_state(runtime_state, conversation_state, now)?;
     }
     if let Some(usage) = report.last_successful_provider_usage.clone() {
         runtime_state.last_provider_usage = Some(usage.clone());
@@ -26,7 +85,7 @@ pub fn apply_terminal_execution_report_to_state(
             now,
             "failed",
             "Tool call ended before returning a result.",
-        );
+        )?;
     } else {
         complete_open_tool_records(
             runtime_state,
@@ -34,14 +93,14 @@ pub fn apply_terminal_execution_report_to_state(
             now,
             "failed",
             "Tool call failed or was interrupted before returning a result.",
-        );
+        )?;
     }
     let closing_record_id = if is_success {
-        ensure_terminal_success_records(runtime_state, session_id, now, report);
-        ensure_terminal_success_assistant_message(runtime_state, session_id, now, report);
-        append_terminal_summary_record(runtime_state, session_id, now, report)
+        ensure_terminal_success_records(runtime_state, session_id, now, report)?;
+        ensure_terminal_success_assistant_message(runtime_state, session_id, now, report)?;
+        append_terminal_summary_record(runtime_state, session_id, now, report)?
     } else {
-        append_terminal_error_record(runtime_state, session_id, now, report);
+        append_terminal_error_record(runtime_state, session_id, now, report)?;
         append_terminal_terminated_record(
             runtime_state,
             session_id,
@@ -50,7 +109,7 @@ pub fn apply_terminal_execution_report_to_state(
                 .error
                 .as_deref()
                 .unwrap_or("真实执行失败，但未返回具体错误信息。"),
-        )
+        )?
     };
     let status = if is_success {
         SessionTurnStatsStatus::Completed
@@ -70,12 +129,12 @@ pub fn apply_terminal_execution_report_to_state(
             .as_ref()
             .or(report.last_successful_provider_usage.as_ref()),
         report.embedded_turn_usage_segments.clone(),
-    );
+    )?;
     runtime_state.updated_at = now.to_string();
-    SessionTerminalReportApplyResult {
+    Ok(SessionTerminalReportApplyResult {
         is_success,
         closing_record_id,
-    }
+    })
 }
 
 /// Result produced after applying one terminal report.
@@ -97,7 +156,7 @@ fn ensure_terminal_success_records(
     session_id: SessionId,
     now: &str,
     report: &ExecutionRunReport,
-) {
+) -> Result<(), String> {
     if !current_turn_has_visible_record(runtime_state, SessionMessageRecordKind::ThinkingOutput)
         && let Some(thinking_output) = report
             .thinking_output
@@ -155,8 +214,10 @@ fn ensure_terminal_success_records(
                 metadata: None,
                 created_at: now.to_string(),
             },
-        );
+        )
+        .map_err(|error| format!("Invalid terminal output record identity: {error}"))?;
     }
+    Ok(())
 }
 
 /// Ensures successful terminal output participates in future provider-visible history.
@@ -172,19 +233,24 @@ fn ensure_terminal_success_records(
 /// `now` 是当前 Unix 毫秒时间戳文本。
 /// `report` contains the terminal provider output.
 /// `report` 包含终态 Provider 输出。
+///
+/// # Returns
+/// 返回值
+/// Returns success when no append is needed or the atomic assistant append succeeds, otherwise the identity failure.
+/// 无需追加或助手消息原子追加成功时返回成功，否则返回身份失败。
 fn ensure_terminal_success_assistant_message(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     report: &ExecutionRunReport,
-) {
+) -> Result<(), String> {
     let Some(assistant_output) = report
         .assistant_output
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return;
+        return Ok(());
     };
     if runtime_state
         .conversation_state
@@ -193,15 +259,9 @@ fn ensure_terminal_success_assistant_message(
         .rev()
         .any(|message| terminal_assistant_message_accepts_usage(message, assistant_output, report))
     {
-        return;
+        return Ok(());
     }
-    append_terminal_assistant_text_message(
-        runtime_state,
-        session_id,
-        now,
-        assistant_output,
-        report,
-    );
+    append_terminal_assistant_text_message(runtime_state, session_id, now, assistant_output, report)
 }
 
 /// Returns whether the message is the terminal assistant output and attaches missing usage.
@@ -252,17 +312,21 @@ fn terminal_assistant_message_accepts_usage(
 /// `assistant_output` 是规范化后的终态助手文本。
 /// `report` carries the latest successful provider usage for this run.
 /// `report` 携带本次运行最近一次成功 Provider 用量。
+///
+/// # Returns
+/// 返回值
+/// Returns success after atomic append, or the exact canonical message identity failure.
+/// 原子追加后返回成功，或返回准确的规范消息身份失败。
 fn append_terminal_assistant_text_message(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     assistant_output: &str,
     report: &ExecutionRunReport,
-) {
-    runtime_state
-        .conversation_state
-        .messages
-        .push(SessionConversationMessage {
+) -> Result<(), String> {
+    append_session_conversation_message(
+        &mut runtime_state.conversation_state,
+        SessionConversationMessage {
             id: format!("session-{session_id}-protocol-assistant-{now}"),
             payload: SessionConversationPayload::Assistant {
                 text: assistant_output.to_string(),
@@ -272,7 +336,9 @@ fn append_terminal_assistant_text_message(
                 usage: report.last_successful_provider_usage.clone(),
                 tool_calls: Vec::new(),
             },
-        });
+        },
+    )
+    .map_err(|error| format!("Invalid terminal assistant message identity: {error}"))
 }
 
 /// Appends the same hidden summary record produced by the shared session-derived skill chain.
@@ -282,7 +348,7 @@ fn append_terminal_summary_record(
     session_id: SessionId,
     now: &str,
     report: &ExecutionRunReport,
-) -> String {
+) -> Result<String, String> {
     let derived_record =
         SessionDerivedSkillChain::default().run_summary_skill(SummarySkillInput { report });
     append_derived_record(runtime_state, session_id, now, derived_record)
@@ -295,7 +361,7 @@ fn append_terminal_error_record(
     session_id: SessionId,
     now: &str,
     report: &ExecutionRunReport,
-) {
+) -> Result<(), String> {
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -316,7 +382,9 @@ fn append_terminal_error_record(
             metadata: None,
             created_at: now.to_string(),
         },
-    );
+    )
+    .map_err(|error| format!("Invalid terminal error record identity: {error}"))?;
+    Ok(())
 }
 
 /// Appends the hidden terminal marker used to close failed or stopped turns.
@@ -326,7 +394,7 @@ fn append_terminal_terminated_record(
     session_id: SessionId,
     now: &str,
     error: &str,
-) -> String {
+) -> Result<String, String> {
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -344,8 +412,9 @@ fn append_terminal_terminated_record(
             metadata: Some(json!({ "preview": "" })),
             created_at: now.to_string(),
         },
-    );
-    record_id
+    )
+    .map_err(|error| format!("Invalid terminal marker record identity: {error}"))?;
+    Ok(record_id)
 }
 
 /// Appends one visible turn-statistics row using the shared statistics builder.
@@ -360,15 +429,17 @@ fn append_terminal_turn_stats_record(
     turn_kind: SessionTurnStatsKind,
     provider_usage_fallback: Option<&vulcan_core::types::ProviderUsageSnapshot>,
     usage_segments: Vec<SessionTurnUsageSegment>,
-) -> Option<String> {
-    let mut turn_stats = build_session_turn_stats_from_state_with_segments(
+) -> Result<Option<String>, String> {
+    let Some(mut turn_stats) = build_session_turn_stats_from_state_with_segments(
         &runtime_state.conversation_state,
         closing_record_id,
         status,
         provider_request_count_override,
         turn_kind,
         Vec::new(),
-    )?;
+    ) else {
+        return Ok(None);
+    };
     merge_terminal_provider_usage_fallback(
         &mut turn_stats,
         provider_request_count_override,
@@ -395,8 +466,9 @@ fn append_terminal_turn_stats_record(
             })),
             created_at: now.to_string(),
         },
-    );
-    Some(record_id)
+    )
+    .map_err(|error| format!("Invalid terminal statistics record identity: {error}"))?;
+    Ok(Some(record_id))
 }
 
 /// Merges authoritative provider usage when transcript messages did not retain token usage.
@@ -477,7 +549,7 @@ fn append_derived_record(
     session_id: SessionId,
     now: &str,
     record: SessionDerivedRecord,
-) -> String {
+) -> Result<String, String> {
     let record_id = build_session_record_message_id(
         session_id,
         now,
@@ -495,8 +567,9 @@ fn append_derived_record(
             metadata: Some(json!({ "preview": record.preview })),
             created_at: now.to_string(),
         },
-    );
-    record_id
+    )
+    .map_err(|error| format!("Invalid terminal derived record identity: {error}"))?;
+    Ok(record_id)
 }
 
 /// Returns whether the current logical turn already has a visible record of the requested kind.

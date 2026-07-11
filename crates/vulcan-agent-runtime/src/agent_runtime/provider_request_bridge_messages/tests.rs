@@ -118,7 +118,6 @@ fn provider_visible_history_moves_system_update_after_tool_result_gap() {
         CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("provider-call-1")),
                 text: String::from("file body"),
             },
@@ -178,7 +177,6 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
         CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("provider-call-1")),
                 text: String::from("file body"),
             },
@@ -186,7 +184,6 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
         CoreConversationMessage {
             id: String::from("tool-result-2"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-2"),
                 tool_call_id: Some(String::from("provider-call-2")),
                 text: String::from("file list"),
             },
@@ -327,7 +324,6 @@ fn provider_visible_history_preserves_matched_tool_result() {
         CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("provider-call")),
                 text: String::from("file body"),
             },
@@ -378,7 +374,6 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
         CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("provider-call-1")),
                 text: String::from("first done"),
             },
@@ -386,7 +381,6 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
         CoreConversationMessage {
             id: String::from("tool-result-2"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-2"),
                 tool_call_id: Some(String::from("local-call-2")),
                 text: String::from("second done"),
             },
@@ -444,7 +438,6 @@ fn provider_visible_tool_topology_validator_rejects_orphan_result() {
     let messages = vec![CoreConversationMessage {
         id: String::from("tool-result-1"),
         payload: CoreConversationPayload::ToolResult {
-            tool_result_id: String::from("result-1"),
             tool_call_id: Some(String::from("missing-call")),
             text: String::from("orphan body"),
         },
@@ -462,7 +455,6 @@ fn provider_visible_history_downgrades_orphan_tool_result() {
     let messages = vec![CoreConversationMessage {
         id: String::from("tool-result-1"),
         payload: CoreConversationPayload::ToolResult {
-            tool_result_id: String::from("result-1"),
             tool_call_id: Some(String::from("missing-call")),
             text: String::from("orphan body"),
         },
@@ -514,7 +506,6 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
         CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("provider-call-1")),
                 text: String::from("first done"),
             },
@@ -661,7 +652,6 @@ fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
         CoreConversationMessage {
             id: String::from("tool-result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("provider-call-1")),
                 text: String::from("file body"),
             },

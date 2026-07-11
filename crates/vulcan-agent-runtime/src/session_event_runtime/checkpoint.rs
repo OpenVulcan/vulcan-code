@@ -1,21 +1,46 @@
 use super::*;
+use vulcan_context::protocol::{
+    validate_session_conversation_message_identities,
+    validate_session_conversation_record_identities,
+};
 
 /// Replaces canonical context fields while preserving locally projected visible records.
 /// 替换规范上下文字段，同时保留本地投影出的可见记录。
+///
+/// # Returns
+/// 返回值
+/// Returns success after one validated atomic replacement, or an identity error with runtime state unchanged.
+/// 完成一次经过校验的原子替换后返回成功；身份错误时运行态保持不变。
 pub fn apply_checkpoint_conversation_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     checkpoint_state: SessionConversationState,
     now: &str,
-) {
+) -> Result<(), String> {
+    validate_session_conversation_message_identities(&checkpoint_state.messages)
+        .map_err(|error| format!("Invalid checkpoint conversation message identity: {error}"))?;
+    validate_session_conversation_record_identities(&checkpoint_state.records)
+        .map_err(|error| format!("Invalid checkpoint conversation record identity: {error}"))?;
+    // preserved_records is merged off-state so identity validation can fail without partial assignment.
+    // preserved_records 会在状态外合并，使身份校验失败时不会产生部分赋值。
     let mut preserved_records = runtime_state.conversation_state.records.clone();
     merge_checkpoint_user_records(&mut preserved_records, &checkpoint_state.records);
+    // preserved_messages supplies the exact fallback only when the checkpoint omits its active window.
+    // preserved_messages 仅在检查点省略活动窗口时提供准确回退。
     let preserved_messages = runtime_state.conversation_state.messages.clone();
-    runtime_state.conversation_state = checkpoint_state;
-    if runtime_state.conversation_state.messages.is_empty() && !preserved_messages.is_empty() {
-        runtime_state.conversation_state.messages = preserved_messages;
+    // next_conversation_state remains detached until the merged identity namespaces are valid.
+    // next_conversation_state 会保持分离，直到合并后的身份命名空间有效。
+    let mut next_conversation_state = checkpoint_state;
+    if next_conversation_state.messages.is_empty() && !preserved_messages.is_empty() {
+        next_conversation_state.messages = preserved_messages;
     }
-    runtime_state.conversation_state.records = preserved_records;
+    next_conversation_state.records = preserved_records;
+    validate_session_conversation_message_identities(&next_conversation_state.messages)
+        .map_err(|error| format!("Invalid merged checkpoint message identity: {error}"))?;
+    validate_session_conversation_record_identities(&next_conversation_state.records)
+        .map_err(|error| format!("Invalid merged checkpoint record identity: {error}"))?;
+    runtime_state.conversation_state = next_conversation_state;
     runtime_state.updated_at = now.to_string();
+    Ok(())
 }
 
 /// Merges user-visible checkpoint records that were created inside the host-owned controller.

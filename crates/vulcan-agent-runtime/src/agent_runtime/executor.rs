@@ -7,8 +7,7 @@ mod tests {
     use crate::agent_runtime::execution_models::ExecutionPreparation;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
     use crate::agent_runtime::provider_protocol_bridge::{
-        attach_tool_name_to_runtime_metadata, build_host_tool_result_id,
-        inject_previous_response_id_into_additional_params,
+        attach_tool_name_to_runtime_metadata, inject_previous_response_id_into_additional_params,
     };
     use crate::agent_runtime::provider_request_bridge_conversation::{
         build_core_conversation_snapshot, core_snapshot_to_session_conversation_state,
@@ -38,6 +37,7 @@ mod tests {
     use vulcan_core::types::{
         ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
+        ConversationSnapshot as CoreConversationSnapshot,
         ConversationToolCall as CoreConversationToolCall,
         ProviderContinuation as CoreProviderContinuation,
         ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -482,8 +482,10 @@ mod tests {
             },
         };
 
-        let snapshot = build_core_conversation_snapshot(&conversation_state);
-        let rebuilt_state = core_snapshot_to_session_conversation_state(&snapshot);
+        let snapshot = build_core_conversation_snapshot(&conversation_state)
+            .expect("valid canonical conversation snapshot");
+        let rebuilt_state = core_snapshot_to_session_conversation_state(&snapshot)
+            .expect("valid round-trip canonical conversation state");
 
         assert_eq!(rebuilt_state.records.len(), 3);
         assert_eq!(
@@ -505,6 +507,98 @@ mod tests {
                 .as_deref(),
             Some("resp-1")
         );
+    }
+
+    /// Verifies both directions of the core bridge reject invalid canonical message ownership.
+    /// 验证 core 桥接双向都会拒绝无效的规范消息归属。
+    #[test]
+    fn core_snapshot_bridge_rejects_duplicate_message_identifiers() {
+        // duplicate_session_message is cloned to prove outbound ownership cannot be ambiguous.
+        // duplicate_session_message 会被克隆，用于证明出站归属不能含糊。
+        let duplicate_session_message = SessionConversationMessage {
+            id: String::from("message-1"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("hello"),
+                attachments: Vec::new(),
+            },
+        };
+        // session_state is the invalid outbound canonical window presented to the core bridge.
+        // session_state 是提交给 core 桥接的无效出站规范窗口。
+        let session_state = SessionConversationState {
+            messages: vec![duplicate_session_message.clone(), duplicate_session_message],
+            ..SessionConversationState::default()
+        };
+        // outbound_error proves invalid session state never becomes a core snapshot.
+        // outbound_error 证明无效会话状态绝不会变成 core 快照。
+        let outbound_error = build_core_conversation_snapshot(&session_state)
+            .expect_err("outbound bridge must reject duplicate message ids");
+
+        // duplicate_core_message is cloned to prove inbound ownership is validated independently.
+        // duplicate_core_message 会被克隆，用于证明入站归属会被独立校验。
+        let duplicate_core_message = CoreConversationMessage {
+            id: String::from("message-1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("hello"),
+                attachments: Vec::new(),
+            },
+        };
+        // core_snapshot is the invalid inbound canonical window returned by core ownership.
+        // core_snapshot 是 core 归属返回的无效入站规范窗口。
+        let core_snapshot = CoreConversationSnapshot {
+            messages: vec![duplicate_core_message.clone(), duplicate_core_message],
+            ..CoreConversationSnapshot::default()
+        };
+        // inbound_error proves invalid core state never becomes host canonical state.
+        // inbound_error 证明无效 core 状态绝不会变成宿主规范状态。
+        let inbound_error = core_snapshot_to_session_conversation_state(&core_snapshot)
+            .expect_err("inbound bridge must reject duplicate message ids");
+
+        assert!(outbound_error.contains("duplicates id \"message-1\""));
+        assert!(inbound_error.contains("duplicates id \"message-1\""));
+    }
+
+    /// Verifies both directions of the core bridge reject invalid canonical record ownership.
+    /// 验证 core 桥接双向都会拒绝无效的规范记录归属。
+    #[test]
+    fn core_snapshot_bridge_rejects_duplicate_record_identifiers() {
+        // duplicate_record is reused verbatim to make durable record ownership ambiguous.
+        // duplicate_record 被逐字复用，使持久化记录归属产生歧义。
+        let duplicate_record = SessionConversationRecord {
+            id: String::from("record-1"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("Assistant"),
+            body: String::from("answer"),
+            metadata: None,
+            created_at: String::from("1"),
+        };
+        // outbound_state contains two owners for one session record identity.
+        // outbound_state 为同一个会话记录身份包含两个所有者。
+        let outbound_state = SessionConversationState {
+            records: vec![duplicate_record.clone(), duplicate_record.clone()],
+            ..SessionConversationState::default()
+        };
+
+        let outbound_error = build_core_conversation_snapshot(&outbound_state)
+            .expect_err("outbound bridge must reject duplicate record ids");
+
+        // valid_state provides one bridge-created Core record before the inbound duplicate is injected.
+        // valid_state 在注入入站重复项前提供一条由桥接创建的 Core 记录。
+        let valid_state = SessionConversationState {
+            records: vec![duplicate_record],
+            ..SessionConversationState::default()
+        };
+        let mut inbound_snapshot = build_core_conversation_snapshot(&valid_state)
+            .expect("single record identity should be valid");
+        inbound_snapshot
+            .records
+            .push(inbound_snapshot.records[0].clone());
+        let inbound_error = core_snapshot_to_session_conversation_state(&inbound_snapshot)
+            .expect_err("inbound bridge must reject duplicate record ids");
+
+        assert!(outbound_error.contains("duplicates id \"record-1\""));
+        assert!(inbound_error.contains("duplicates id \"record-1\""));
     }
 
     /// Verifies provider-visible history preserves tool calls while still excluding reasoning replay from assistant turns.
@@ -766,8 +860,8 @@ mod tests {
         assert!(!preamble.contains("FULL SHELL DESCRIPTION SHOULD NOT BE DUPLICATED"));
     }
 
-    /// Verifies host-side tool-result correlation prefers provider call ids while still generating stable synthetic tool-result ids.
-    /// 验证宿主侧工具结果关联会优先使用 Provider call id，同时仍生成稳定的合成工具结果标识。
+    /// Verifies host-side tool-result correlation uses the provider call id as its only identity.
+    /// 验证宿主侧工具结果关联会把 Provider call id 作为唯一身份。
     #[test]
     fn host_tool_result_correlation_prefers_provider_call_id() {
         let tool_call = CoreConversationToolCall {
@@ -780,10 +874,6 @@ mod tests {
         let resolved_tool_call_id = resolve_host_visible_tool_call_id(&tool_call);
 
         assert_eq!(resolved_tool_call_id, "provider-call-id");
-        assert_eq!(
-            build_host_tool_result_id(&resolved_tool_call_id),
-            "tool-result-provider-call-id"
-        );
     }
 
     /// Verifies tool-finished metadata always keeps the tool name even when host metadata already carries other structured payloads.
@@ -793,7 +883,6 @@ mod tests {
         let metadata = attach_tool_name_to_runtime_metadata(
             Some(json!({
                 "tool_call_id": "call-1",
-                "tool_result_id": "result-1",
                 "kind": "change_set"
             })),
             "write_file",
@@ -801,7 +890,6 @@ mod tests {
         .expect("metadata should exist");
 
         assert_eq!(metadata["tool_call_id"], "call-1");
-        assert_eq!(metadata["tool_result_id"], "result-1");
         assert_eq!(metadata["kind"], "change_set");
         assert_eq!(metadata["tool_name"], "write_file");
     }
@@ -858,7 +946,6 @@ mod tests {
         let prompt = CoreConversationMessage {
             id: String::from("result-1"),
             payload: CoreConversationPayload::ToolResult {
-                tool_result_id: String::from("result-1"),
                 tool_call_id: Some(String::from("call-1")),
                 text: String::from("文件修改完成"),
             },

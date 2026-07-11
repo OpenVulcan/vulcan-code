@@ -486,7 +486,7 @@ function uniqueStrings(values: string[]): string[] {
 // fileChangePresentationId 根据工具标识与文件列表创建稳定展开键。
 function fileChangePresentationId(blocks: ToolExecutionConversationBlock[], files: FileChangeFilePresentation[], prefix: string): string {
   const identifier = blocks
-    .map((block) => block.toolCallId ?? block.toolResultId ?? block.id)
+    .map((block) => block.toolCallId ?? block.id)
     .find(Boolean);
   const fileKey = files.map((file) => `${file.operation}:${file.path}`).join("|");
   return `file-change:${prefix}:${identifier ?? compactHash(fileKey)}`;

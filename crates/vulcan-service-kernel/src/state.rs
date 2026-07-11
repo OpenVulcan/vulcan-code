@@ -152,6 +152,29 @@ pub(crate) struct WebuiSubagentParentTurnBinding {
     pub(crate) parent_turn_id: Option<String>,
 }
 
+/// Exact child execution identity used by parent-turn bindings and terminal delivery.
+/// 父回合绑定与终态投递使用的精确子执行身份。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SubagentExecutionKey {
+    /// Stable child task session reused across executions.
+    /// 跨执行复用的稳定子任务会话。
+    pub(crate) task_id: SessionId,
+    /// Unique concrete execution attempt.
+    /// 唯一具体执行尝试。
+    pub(crate) execution_id: String,
+}
+
+impl SubagentExecutionKey {
+    /// Builds one owned key from a stable task and concrete execution identity.
+    /// 从稳定任务与具体执行身份构建一个有所有权的键。
+    pub(crate) fn new(task_id: SessionId, execution_id: &str) -> Self {
+        Self {
+            task_id,
+            execution_id: execution_id.to_string(),
+        }
+    }
+}
+
 /// Long-lived in-memory detail cache for one loaded WebUI subagent surface.
 /// 单个已加载 WebUI 子代理界面的长生命周期内存详情缓存。
 #[derive(Debug, Clone)]
@@ -165,6 +188,41 @@ pub(crate) struct WebuiSubagentSurfaceDetailCacheEntry {
     /// Last access timestamp in Unix milliseconds.
     /// 最近访问时间戳，单位为 Unix 毫秒。
     pub(crate) last_access_ms: i128,
+}
+
+/// Authoritative reason why one session temporarily rejects new kernel turn admission.
+/// 单个会话暂时拒绝新 kernel 回合准入的权威原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionTurnAdmissionReservationKind {
+    /// The session is crossing an archive or removal lifecycle transaction.
+    /// 会话正在跨越归档或删除生命周期事务。
+    LifecycleTransition,
+    /// The session Goal authority is being changed and stale dispatch must not register.
+    /// 会话 Goal 权威正在变更，过期分发不得注册。
+    GoalMutation,
+}
+
+impl SessionTurnAdmissionReservationKind {
+    /// Returns the stable diagnostic label for this reservation reason.
+    /// 返回此预留原因的稳定诊断标签。
+    pub(crate) const fn diagnostic_label(self) -> &'static str {
+        match self {
+            Self::LifecycleTransition => "archive or removal lifecycle transition",
+            Self::GoalMutation => "Goal authority mutation",
+        }
+    }
+}
+
+/// Owned reservation that blocks new kernel turns for one exact session.
+/// 阻止单个精确会话启动新 kernel 回合的有所有权预留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SessionTurnAdmissionReservation {
+    /// Unique owner identity used to prevent a stale guard from deleting a replacement reservation.
+    /// 用于防止过期守卫删除替代预留的唯一所有者身份。
+    pub(crate) reservation_id: Uuid,
+    /// Domain reason that owns the reservation.
+    /// 持有此预留的领域原因。
+    pub(crate) kind: SessionTurnAdmissionReservationKind,
 }
 
 /// Shared service state exposed to Tauri commands.
@@ -221,6 +279,9 @@ pub struct ServiceBridgeState {
     /// Latest goal summaries keyed by session id for synchronous workbench projection.
     /// 按会话标识索引的最近目标摘要，用于同步构建工作台投影。
     pub(crate) session_goal_summaries: BTreeMap<SessionId, SessionGoalSummary>,
+    /// Monotonic Goal dispatch-authority version keyed by session id.
+    /// 按会话标识索引的 Goal 分发权威单调版本号。
+    pub(crate) session_goal_dispatch_versions: BTreeMap<SessionId, u64>,
     /// Goal ids that already received one budget-limit wrap-up guidance in this process.
     /// 本进程内已经收到预算耗尽收尾引导的目标标识集合。
     pub(crate) budget_limit_reported_goal_ids: BTreeSet<String>,
@@ -237,30 +298,32 @@ pub struct ServiceBridgeState {
     /// Currently opened subagent surface selection.
     /// 当前打开的子代理界面选择。
     pub(crate) active_subagent_panel: Option<SelectedSubagentTaskPanel>,
-    /// Detached child-task listeners already started by the WebUI bridge.
-    /// WebUI 桥接层已经启动的分离子任务监听器集合。
-    pub(crate) detached_subagent_task_listeners: BTreeSet<SessionId>,
-    /// Parent-turn bindings keyed by detached child task id.
-    /// 按分离子任务标识索引的父回合绑定。
-    pub(crate) subagent_parent_turn_bindings: BTreeMap<SessionId, WebuiSubagentParentTurnBinding>,
-    /// Child tasks whose current run should not block the parent turn completion gate.
-    /// 当前运行不应阻塞父回合完成闸门的子任务集合。
-    pub(crate) subagent_completion_gate_ignored_tasks: BTreeSet<SessionId>,
+    /// Current detached child execution owned by each WebUI listener task id.
+    /// 每个 WebUI 监听任务标识当前拥有的分离子执行。
+    pub(crate) detached_subagent_task_listeners: BTreeMap<SessionId, String>,
+    /// Parent-turn bindings keyed by exact detached child execution.
+    /// 按精确分离子执行索引的父回合绑定。
+    pub(crate) subagent_parent_turn_bindings:
+        BTreeMap<SubagentExecutionKey, WebuiSubagentParentTurnBinding>,
+    /// Exact child executions that should not block the parent turn completion gate.
+    /// 不应阻塞父回合完成闸门的精确子执行集合。
+    pub(crate) subagent_completion_gate_ignored_tasks: BTreeSet<SubagentExecutionKey>,
     /// Parent sessions currently blocked inside a model-requested wait_agent call.
     /// 当前正阻塞在模型请求的 wait_agent 调用中的父会话集合。
     pub(crate) parent_sessions_waiting_for_subagents: BTreeSet<SessionId>,
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
-    pub(crate) active_stream_tasks: BTreeMap<SessionId, ServiceTaskHandle<()>>,
+    pub(crate) active_stream_tasks: BTreeMap<SessionId, ActiveStreamTask>,
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     pub(crate) session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
-    /// Sessions currently crossing an authoritative archive or removal lifecycle boundary.
-    /// 当前正在跨越权威归档或移除生命周期边界的会话集合。
-    pub(crate) session_lifecycle_transition_ids: BTreeSet<SessionId>,
-    /// Projects currently crossing an authoritative batch archive or removal lifecycle boundary.
-    /// 当前正在跨越权威批量归档或移除生命周期边界的项目集合。
-    pub(crate) project_lifecycle_transition_ids: BTreeSet<String>,
+    /// Owned turn-admission reservations keyed by exact session id.
+    /// 按精确会话标识索引的有所有权回合准入预留。
+    pub(crate) session_turn_admission_reservations:
+        BTreeMap<SessionId, SessionTurnAdmissionReservation>,
+    /// Owned lifecycle reservations keyed by exact project id.
+    /// 按精确项目标识索引的有所有权生命周期预留。
+    pub(crate) project_lifecycle_transition_reservations: BTreeMap<String, Uuid>,
     /// Latest background persistence version keyed by session id.
     /// 按会话标识索引的最新后台持久化版本。
     pub(crate) session_persist_versions: BTreeMap<SessionId, u64>,
@@ -291,6 +354,163 @@ pub trait ServiceShellHost: Send + Sync {
 /// Join handle type used by service-owned asynchronous tasks.
 /// 服务自有异步任务使用的 join 句柄类型。
 pub(crate) type ServiceTaskHandle<T> = tokio::task::JoinHandle<T>;
+
+/// Active provider or compaction task retained with its request-scoped Goal binding.
+/// 携带请求级 Goal 绑定保留的活动 Provider 或压缩任务。
+#[derive(Debug)]
+pub(crate) struct ActiveStreamTask {
+    /// Unique identity used to prevent stale cleanup from removing a replacement task.
+    /// 用于防止过期清理删除替换任务的唯一身份。
+    task_id: Uuid,
+    /// Abortable asynchronous task handle.
+    /// 可中止的异步任务句柄。
+    handle: ServiceTaskHandle<()>,
+    /// Goal identifier captured when the provider execution started.
+    /// Provider 执行启动时捕获的目标标识。
+    session_goal_id: Option<String>,
+}
+
+impl ActiveStreamTask {
+    /// Creates one retained active-stream task entry.
+    /// 创建一个保留的活动流任务条目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` is the unique identity shared by the retained entry and its cleanup path.
+    /// `task_id` 是保留条目与其清理路径共享的唯一身份。
+    /// `handle` is the abortable task spawned for the session.
+    /// `handle` 是为会话启动的可中止任务。
+    /// `session_goal_id` binds normal provider work to its launch-time Goal; compaction uses `None`.
+    /// `session_goal_id` 将普通 Provider 工作绑定到启动期目标；压缩任务使用 `None`。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A retained task entry with inseparable ownership metadata.
+    /// 返回带有不可分割所有权元数据的保留任务条目。
+    pub(crate) fn new(
+        task_id: Uuid,
+        handle: ServiceTaskHandle<()>,
+        session_goal_id: Option<String>,
+    ) -> Self {
+        Self {
+            task_id,
+            handle,
+            session_goal_id,
+        }
+    }
+
+    /// Returns the launch-time Goal identifier bound to this task.
+    /// 返回绑定到此任务的启动期目标标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The borrowed Goal identifier, or `None` for work unrelated to a Goal.
+    /// 返回借用的目标标识；与 Goal 无关的工作返回 `None`。
+    pub(crate) fn session_goal_id(&self) -> Option<&str> {
+        self.session_goal_id.as_deref()
+    }
+
+    /// Aborts the retained asynchronous task.
+    /// 中止保留的异步任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns nothing after forwarding cancellation to the Tokio task handle.
+    /// 将取消请求转发给 Tokio 任务句柄后无返回值。
+    pub(crate) fn abort(&self) {
+        self.handle.abort();
+    }
+}
+
+/// Removes an active stream task only when the caller still owns the retained entry.
+/// 仅当调用方仍拥有保留条目时移除活动流任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the active stream task map.
+/// `state` 持有活动流任务映射。
+/// `session_id` identifies the session slot being cleaned up.
+/// `session_id` 标识正在清理的会话槽位。
+/// `task_id` is the unique identity captured by the finishing task.
+/// `task_id` 是结束任务捕获的唯一身份。
+///
+/// # Returns
+/// 返回值
+/// The removed entry when identities match, otherwise `None` without changing the replacement.
+/// 身份匹配时返回已移除条目，否则返回 `None` 且不修改替换任务。
+pub(crate) fn remove_active_stream_task_if_id(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+) -> Option<ActiveStreamTask> {
+    let owns_entry = state
+        .active_stream_tasks
+        .get(&session_id)
+        .is_some_and(|entry| entry.task_id == task_id);
+    owns_entry
+        .then(|| state.active_stream_tasks.remove(&session_id))
+        .flatten()
+}
+
+/// Spawns one stream task behind a gate that opens only after durable in-memory registration.
+/// 在内存注册完成后才打开的闸门后启动一个流任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the authoritative active stream registry.
+/// `state` 持有权威活动流注册表。
+/// `session_id` selects the session slot to replace.
+/// `session_id` 选择要替换的会话槽位。
+/// `task_id` uniquely identifies the new task and all of its cleanup paths.
+/// `task_id` 唯一标识新任务及其所有清理路径。
+/// `session_goal_id` binds ordinary provider work to its launch-time Goal.
+/// `session_goal_id` 将普通 Provider 工作绑定到启动期目标。
+/// `future` is the task body that must not execute before registration succeeds.
+/// `future` 是注册成功前不得执行的任务主体。
+///
+/// # Returns
+/// 返回值
+/// Success after replacing and cancelling any previous task, or an explicit registration/start error.
+/// 替换并中止旧任务后返回成功，或返回显式注册/启动错误。
+pub(crate) fn spawn_registered_active_stream_task<F>(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+    session_goal_id: Option<String>,
+    future: F,
+) -> Result<(), String>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let (start_sender, start_receiver) = tokio::sync::oneshot::channel::<()>();
+    let handle = spawn_service_task(async move {
+        if start_receiver.await.is_ok() {
+            future.await;
+        }
+    });
+    let previous_task = match state.lock() {
+        Ok(mut guard) => guard.active_stream_tasks.insert(
+            session_id,
+            ActiveStreamTask::new(task_id, handle, session_goal_id),
+        ),
+        Err(error) => {
+            handle.abort();
+            return Err(format!("failed to lock service state: {error}"));
+        }
+    };
+    if let Some(previous_task) = previous_task {
+        previous_task.abort();
+    }
+    if start_sender.send(()).is_err() {
+        if let Ok(mut guard) = state.lock() {
+            remove_active_stream_task_if_id(&mut guard, session_id, task_id);
+        }
+        return Err(String::from(
+            "registered stream task exited before its start gate opened",
+        ));
+    }
+    Ok(())
+}
 
 /// Spawns one asynchronous service task through the active Tokio runtime.
 /// 通过当前 Tokio 运行时启动单个异步服务任务。

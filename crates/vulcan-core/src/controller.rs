@@ -55,9 +55,6 @@ pub struct VulcanCoreController {
     /// Current coarse-grained controller phase.
     /// 当前粗粒度控制器阶段。
     phase: ControllerPhase,
-    /// Local identifier counter used for synthesized message and record identifiers.
-    /// 用于合成消息与记录标识的本地递增计数器。
-    local_id_counter: u64,
     /// Last successful provider usage captured during the current controller run.
     /// 当前控制器运行期间捕获到的最近一次成功 Provider 用量。
     last_successful_provider_usage: Option<ProviderUsageSnapshot>,

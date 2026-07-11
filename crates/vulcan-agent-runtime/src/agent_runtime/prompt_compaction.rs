@@ -302,11 +302,17 @@ pub fn stream_prompt_compaction_job(
                 prune_mode,
             );
             yield prompt_compaction_progress("build_request");
-            let source_conversation_state = compaction_attempt_conversation_state(
+            let source_conversation_state = match compaction_attempt_conversation_state(
                 &request.full_context_state,
                 &prepared_source.source_messages,
                 prune_mode,
-            );
+            ) {
+                Ok(source_conversation_state) => source_conversation_state,
+                Err(error) => {
+                    yield PromptCompactionStreamEvent::Finished(Err(error));
+                    return;
+                }
+            };
             let prompt_mode =
                 compaction_prompt_mode_for_prune_mode(prepared_source.prune_report.mode);
             let launch_request = build_prompt_compaction_launch_request(
@@ -455,11 +461,17 @@ pub fn stream_prompt_compaction_foundation_job(
                 prune_mode,
             );
             yield prompt_compaction_progress("build_request");
-            let source_conversation_state = compaction_attempt_conversation_state(
+            let source_conversation_state = match compaction_attempt_conversation_state(
                 &request.full_context_state,
                 &prepared_source.source_messages,
                 prune_mode,
-            );
+            ) {
+                Ok(source_conversation_state) => source_conversation_state,
+                Err(error) => {
+                    yield PromptCompactionStreamEvent::Finished(Err(error));
+                    return;
+                }
+            };
             let prompt_mode =
                 compaction_prompt_mode_for_prune_mode(prepared_source.prune_report.mode);
             let launch_request = build_prompt_compaction_launch_request(

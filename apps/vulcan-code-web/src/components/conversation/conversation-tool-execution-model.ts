@@ -536,7 +536,6 @@ function subagentExecutionActionLabel(t?: (key: TranslationKey) => string): stri
 export function toolExecutionIdentifier(blocks: ToolExecutionConversationBlock[]): string | null {
   for (const block of blocks) {
     const identifier = block.toolCallId
-      ?? block.toolResultId
       ?? block.commandSessionId
       ?? block.subagentTaskId;
     if (identifier) {
@@ -637,7 +636,7 @@ export function toolExecutionDisplayState(blocks: ToolExecutionConversationBlock
   if (explicitStates.includes("completed")) {
     return "completed";
   }
-  if (blocks.some((block) => block.toolResultId || toolExecutionDetailRef([block]))) {
+  if (blocks.some((block) => toolExecutionDetailRef([block]))) {
     return "completed";
   }
   if (blocks.some((block) => block.kind === "tool-result" || block.kind === "command")) {

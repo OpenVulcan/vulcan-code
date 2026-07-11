@@ -34,24 +34,26 @@ pub(crate) fn append_stream_delta_record(
             _ => SessionRunPhase::Requesting,
         };
         let projected_entry = {
-            let runtime_state = workspace
+            let mut runtime_state = workspace
                 .session_runtime_state
-                .entry(session_id)
-                .or_insert_with(|| SessionRuntimeStateEntry {
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_else(|| SessionRuntimeStateEntry {
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
+            let mut record_id_draft = record_id_slot.clone();
             append_stream_delta_record_to_state(
-                runtime_state,
+                &mut runtime_state,
                 session_id,
                 &now,
-                record_id_slot,
+                &mut record_id_draft,
                 record_kind,
                 title,
                 delta,
                 collapsed_by_default,
-            );
-            let Some(message_id) = record_id_slot.as_deref() else {
+            )?;
+            let Some(message_id) = record_id_draft.as_deref() else {
                 return Err(String::from("streaming record id was not materialized"));
             };
             let projected_entry = runtime_state
@@ -61,6 +63,10 @@ pub(crate) fn append_stream_delta_record(
                 .find(|record| record.id == message_id)
                 .map(session_message_entry_from_conversation_record);
             runtime_state.updated_at = now.clone();
+            workspace
+                .session_runtime_state
+                .insert(session_id, runtime_state);
+            *record_id_slot = record_id_draft;
             projected_entry
         };
         workspace.session_run_phases.insert(session_id, run_phase);
@@ -611,6 +617,205 @@ pub(crate) fn collapse_streaming_thinking(
     Ok(())
 }
 
+/// Detached workspace fields changed by one runtime tool event.
+/// 单个运行时工具事件修改的分离工作区字段。
+struct RuntimeEventWorkspaceDraft {
+    /// Parent runtime state after record, todo-list, and plan projection.
+    /// 完成记录、待办列表与计划投影后的父会话运行态。
+    runtime_state: SessionRuntimeStateEntry,
+    /// Replacement parent transcript when stable runtime records changed.
+    /// 稳定运行时记录变化时使用的父会话替换转录。
+    parent_messages: Option<Vec<SessionMessageEntry>>,
+    /// Provider-visible parent projection derived from the replacement transcript.
+    /// 从替换转录派生的 Provider 可见父会话投影。
+    projected_parent_messages: Vec<ConversationMessage>,
+    /// Optional child transcript append and its projected surface rows.
+    /// 可选的子会话转录追加及其表面投影行。
+    child_projection: Option<RuntimeEventChildTranscriptDraft>,
+    /// Todo-list state changed by this event.
+    /// 本事件修改后的待办列表状态。
+    changed_todolist: Option<SessionTodolistState>,
+    /// Plan-mode state changed by this event.
+    /// 本事件修改后的计划模式状态。
+    changed_plan_mode: Option<SessionPlanModeState>,
+}
+
+/// Detached child transcript projection owned by one send-message event.
+/// 单个 send-message 事件持有的分离子会话转录投影。
+struct RuntimeEventChildTranscriptDraft {
+    /// Child task session identity.
+    /// 子任务会话身份。
+    task_id: SessionId,
+    /// Complete child display transcript after append.
+    /// 追加后的完整子会话显示转录。
+    messages: Vec<SessionMessageEntry>,
+    /// Projected child workbench messages.
+    /// 投影后的子会话工作台消息。
+    projected_messages: Vec<ConversationMessage>,
+    /// Whether the child hydrated marker must remain set.
+    /// 子会话水合标记是否必须保持置位。
+    hydrated: bool,
+}
+
+impl RuntimeEventWorkspaceDraft {
+    /// Commits only the parent/child session fields owned by this runtime event.
+    /// 仅提交本运行时事件拥有的父子会话字段。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `workspace` is the authoritative workspace receiving the validated patch.
+    /// `workspace` 是接收已验证补丁的权威工作区。
+    /// `session_id` identifies the parent session owning the runtime projection.
+    /// `session_id` 标识持有运行时投影的父会话。
+    fn commit(&self, workspace: &mut WorkspaceSnapshot, session_id: SessionId) {
+        workspace
+            .session_runtime_state
+            .insert(session_id, self.runtime_state.clone());
+        if let Some(messages) = self.parent_messages.as_ref() {
+            workspace
+                .session_messages
+                .insert(session_id, messages.clone());
+            set_workspace_session_hydrated_marker(
+                workspace,
+                session_id,
+                runtime_state_has_concrete_conversation_context(&self.runtime_state),
+            );
+        }
+        if let Some(child) = self.child_projection.as_ref() {
+            workspace
+                .session_messages
+                .insert(child.task_id, child.messages.clone());
+            set_workspace_session_hydrated_marker(workspace, child.task_id, child.hydrated);
+        }
+    }
+}
+
+/// Sets one workspace hydrated marker from an already-proven dialogue readiness value.
+/// 根据已经证明的对话就绪值设置单个工作区水合标记。
+fn set_workspace_session_hydrated_marker(
+    workspace: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    hydrated: bool,
+) {
+    if hydrated {
+        workspace.hydrated_session_ids.insert(session_id);
+    } else {
+        workspace.hydrated_session_ids.remove(&session_id);
+    }
+}
+
+/// Builds a session-scoped workspace patch for one preflighted runtime event.
+/// 为一个已预检运行时事件构建会话级工作区补丁。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the immutable authoritative workspace used as the draft baseline.
+/// `workspace` 是作为草稿基线的不可变权威工作区。
+/// `session_id` identifies the parent runtime session.
+/// `session_id` 标识父运行时会话。
+/// `conversation_id` is the parent workbench conversation identity.
+/// `conversation_id` 是父工作台会话身份。
+/// `event` is the preflighted runtime tool event.
+/// `event` 是已预检的运行时工具事件。
+/// `child_message` is the already-parsed optional child display row.
+/// `child_message` 是已经解析的可选子会话显示行。
+///
+/// # Returns
+/// 返回值
+/// Returns the complete session-scoped patch, or an identity error without modifying workspace state.
+/// 返回完整会话级补丁；身份错误时返回错误且不修改工作区状态。
+fn build_runtime_event_workspace_draft(
+    workspace: &WorkspaceSnapshot,
+    session_id: SessionId,
+    conversation_id: &str,
+    event: &RuntimeEvent,
+    child_message: Option<(SessionId, SessionMessageEntry)>,
+) -> Result<RuntimeEventWorkspaceDraft, String> {
+    let now = current_unix_millis_text();
+    // runtime_state is detached from the parent session until every projection succeeds.
+    // runtime_state 与父会话分离，直到全部投影成功。
+    let mut runtime_state = workspace
+        .session_runtime_state
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_else(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    let before_projection_records = runtime_state.conversation_state.records.clone();
+    let projection_changed =
+        append_runtime_event_projection_to_state(&mut runtime_state, session_id, &now, event)?;
+    let projection_entries = if projection_changed {
+        runtime_event_projection_entries_from_changed_records(
+            before_projection_records.as_slice(),
+            runtime_state.conversation_state.records.as_slice(),
+        )
+    } else {
+        Vec::new()
+    };
+    let parent_messages = (!projection_entries.is_empty()).then(|| {
+        merge_session_messages_with_runtime_event_entries(
+            workspace
+                .session_messages
+                .get(&session_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            projection_entries.as_slice(),
+        )
+    });
+    let projected_parent_messages = parent_messages
+        .as_ref()
+        .map(|messages| conversation_messages_from_session(conversation_id, messages, false))
+        .unwrap_or_default();
+    let changed_todolist = todolist_state_from_tool_finished_event(event, &now)
+        .filter(|todolist| runtime_state.todolist != *todolist);
+    if let Some(todolist) = changed_todolist.as_ref() {
+        runtime_state.todolist = todolist.clone();
+        runtime_state.updated_at = now.clone();
+    }
+    let changed_plan_mode =
+        plan_artifact_state_from_tool_finished_event(event).and_then(|artifact| {
+            let mut plan_mode = runtime_state.plan_mode.clone();
+            plan_mode.artifact = Some(artifact);
+            (runtime_state.plan_mode != plan_mode).then_some(plan_mode)
+        });
+    if let Some(plan_mode) = changed_plan_mode.as_ref() {
+        runtime_state.plan_mode = plan_mode.clone();
+        runtime_state.updated_at = now;
+    }
+    let child_projection = child_message.and_then(|(task_id, message)| {
+        let mut messages = workspace
+            .session_messages
+            .get(&task_id)
+            .cloned()
+            .unwrap_or_default();
+        if messages.iter().any(|existing| existing.id == message.id) {
+            return None;
+        }
+        messages.push(message);
+        let projected_messages =
+            conversation_messages_from_session(&task_id.to_string(), messages.as_slice(), false);
+        let hydrated = workspace
+            .session_runtime_state
+            .get(&task_id)
+            .is_some_and(runtime_state_has_concrete_conversation_context);
+        Some(RuntimeEventChildTranscriptDraft {
+            task_id,
+            messages,
+            projected_messages,
+            hydrated,
+        })
+    });
+    Ok(RuntimeEventWorkspaceDraft {
+        runtime_state,
+        parent_messages,
+        projected_parent_messages,
+        child_projection,
+        changed_todolist,
+        changed_plan_mode,
+    })
+}
+
 /// Projects runtime events that have user-facing transcript cards into the retained session state.
 /// 将具备用户可见转录卡片的运行时事件投影到保留的会话状态中。
 pub(crate) fn append_runtime_event_projection(
@@ -625,32 +830,42 @@ pub(crate) fn append_runtime_event_projection(
     ) {
         return Ok(());
     }
-    let mut changed_todolist: Option<SessionTodolistState> = None;
-    let mut changed_plan_mode: Option<SessionPlanModeState> = None;
+    // Preflight every fallible event decoder and persistence dependency before any service state mutation.
+    // 在修改任何服务状态前，预检全部可失败事件解码器与持久化依赖。
+    let subagent_send_message_resume = terminal_subagent_send_message_resume_from_event(event)?;
+    let running_subagent_send_message_resume =
+        running_subagent_send_message_resume_from_event(event)?;
+    let subagent_wait_consumed_executions =
+        terminal_subagent_wait_consumed_executions_from_event(event)?;
+    let closed_subagent_task_ids = close_agent_closed_subagent_task_ids_from_event(event)?;
+    let child_send_message = webui_subagent_send_message_from_event(event)?;
+    let goal_update = goal_summary_from_tool_finished_event(event)?;
+    if let Some(Some(summary)) = goal_update.as_ref() {
+        let goal_session_id = summary.session_id.parse::<SessionId>().map_err(|error| {
+            format!("session_goal host result contains an invalid session id: {error}")
+        })?;
+        if goal_session_id != session_id {
+            return Err(format!(
+                "session_goal host result belongs to session {goal_session_id}, not runtime event session {session_id}"
+            ));
+        }
+    }
+    let controller_runtime = controller_runtime_from_state(state)?;
+    let changed_todolist: Option<SessionTodolistState>;
+    let changed_plan_mode: Option<SessionPlanModeState>;
     let mut changed_addon_session_id: Option<SessionId> = None;
     let mut subagent_navigation_changed = false;
-    let mut transcript_changed = false;
-    let (workspace_snapshot, message_window_deltas) = {
+    let transcript_changed: bool;
+    let (
+        transcript_messages_for_persistence,
+        addon_task_projects,
+        addon_session,
+        message_window_deltas,
+    ) = {
         let conversation_id = session_id.to_string();
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if let Some(goal_update) = goal_summary_from_tool_finished_event(event) {
-            match goal_update {
-                Some(summary) => {
-                    if let Ok(summary_session_id) = summary.session_id.parse::<SessionId>() {
-                        guard
-                            .session_goal_summaries
-                            .insert(summary_session_id, summary);
-                        changed_addon_session_id = Some(summary_session_id);
-                    }
-                }
-                None => {
-                    guard.session_goal_summaries.remove(&session_id);
-                    changed_addon_session_id = Some(session_id);
-                }
-            }
-        }
         let before_visible_messages: Vec<ConversationMessage> = guard
             .workbench
             .messages
@@ -658,125 +873,106 @@ pub(crate) fn append_runtime_event_projection(
             .filter(|message| message.conversation_id == conversation_id)
             .cloned()
             .collect();
-        let mut projected_messages = Vec::new();
-        let mut child_message_projection: Option<(
-            SessionId,
-            Vec<SessionMessageEntry>,
-            Vec<ConversationMessage>,
-        )> = None;
-        let mut child_completion_gate_ignored_task_id: Option<SessionId> = None;
-        if let Some((child_task_id, execution_id)) =
-            terminal_subagent_send_message_resume_from_event(event)?
-        {
-            consume_webui_subagent_mailbox_input_for_execution(
-                &mut guard,
-                session_id,
-                child_task_id,
-                execution_id.as_str(),
-            );
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        let workspace_draft = build_runtime_event_workspace_draft(
+            workspace,
+            session_id,
+            &conversation_id,
+            event,
+            child_send_message,
+        )?;
+        let mut projected_messages = workspace_draft.projected_parent_messages.clone();
+        transcript_changed = workspace_draft.parent_messages.is_some();
+        changed_todolist = workspace_draft.changed_todolist.clone();
+        changed_plan_mode = workspace_draft.changed_plan_mode.clone();
+        if changed_todolist.is_some() || changed_plan_mode.is_some() {
+            changed_addon_session_id = Some(session_id);
         }
-        for (child_task_id, execution_id) in
-            terminal_subagent_wait_consumed_executions_from_event(event)?
-        {
-            consume_webui_subagent_mailbox_input_for_execution(
-                &mut guard,
+        let transcript_messages_for_persistence = workspace_draft.parent_messages.clone();
+        let addon_session = workspace
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .cloned();
+        let addon_task_projects = if changed_todolist.is_some() || changed_plan_mode.is_some() {
+            workspace_task_projects_for_persistence(workspace)
+        } else {
+            Vec::new()
+        };
+        let next_goal_dispatch_version = goal_update
+            .as_ref()
+            .map(|_| {
+                guard
+                    .session_goal_dispatch_versions
+                    .get(&session_id)
+                    .copied()
+                    .unwrap_or_default()
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        format!(
+                            "Goal dispatch authority version overflow for session `{session_id}`"
+                        )
+                    })
+            })
+            .transpose()?;
+        let child_message_projection = workspace_draft.child_projection.as_ref().map(|child| {
+            (
+                child.task_id,
+                child.messages.clone(),
+                child.projected_messages.clone(),
+            )
+        });
+        // No fallible operation may follow this commit boundary while the service lock is held.
+        // 持有服务锁时，该提交边界之后不允许再出现可失败操作。
+        workspace_draft.commit(
+            guard
+                .workspace_snapshot
+                .as_mut()
+                .expect("workspace preflight guarantees commit target"),
+            session_id,
+        );
+        if let Some(goal_update) = goal_update {
+            guard.session_goal_dispatch_versions.insert(
                 session_id,
-                child_task_id,
-                execution_id.as_str(),
+                next_goal_dispatch_version
+                    .expect("Goal update preflight guarantees a dispatch version"),
             );
-        }
-        let workspace_snapshot = {
-            let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
-                String::from("service is still starting; workspace snapshot is not ready")
-            })?;
-            let now = current_unix_millis_text();
-            // marker_sync_required defers workspace-level marker updates until the runtime-state borrow ends.
-            // marker_sync_required 将工作区级标记更新延后到运行态借用结束之后。
-            let mut marker_sync_required = false;
-            {
-                let runtime_state = workspace
-                    .session_runtime_state
-                    .entry(session_id)
-                    .or_insert_with(|| SessionRuntimeStateEntry {
-                        updated_at: now.clone(),
-                        ..SessionRuntimeStateEntry::default()
-                    });
-                let before_projection_records = runtime_state.conversation_state.records.clone();
-                if append_runtime_event_projection_to_state(runtime_state, session_id, &now, event)
-                {
-                    let projection_entries = runtime_event_projection_entries_from_changed_records(
-                        before_projection_records.as_slice(),
-                        runtime_state.conversation_state.records.as_slice(),
-                    );
-                    let merged_messages = merge_session_messages_with_runtime_event_entries(
-                        workspace
-                            .session_messages
-                            .get(&session_id)
-                            .map(Vec::as_slice)
-                            .unwrap_or(&[]),
-                        projection_entries.as_slice(),
-                    );
-                    if !projection_entries.is_empty() {
-                        // Runtime tool projection must use the same visible-message filter as final hydration.
-                        // 运行时工具投影必须使用与最终水合一致的可见消息过滤规则。
-                        projected_messages = conversation_messages_from_session(
-                            &conversation_id,
-                            &merged_messages,
-                            false,
-                        );
-                        workspace
-                            .session_messages
-                            .insert(session_id, merged_messages);
-                        marker_sync_required = true;
-                        transcript_changed = true;
-                    }
-                }
-                if let Some(todolist) = todolist_state_from_tool_finished_event(event, &now)
-                    && runtime_state.todolist != todolist
-                {
-                    runtime_state.todolist = todolist.clone();
-                    runtime_state.updated_at = now.clone();
-                    changed_todolist = Some(todolist);
+            match goal_update {
+                Some(summary) => {
+                    guard.session_goal_summaries.insert(session_id, summary);
                     changed_addon_session_id = Some(session_id);
                 }
-                if let Some(artifact) = plan_artifact_state_from_tool_finished_event(event) {
-                    let mut plan_mode = runtime_state.plan_mode.clone();
-                    plan_mode.artifact = Some(artifact);
-                    if runtime_state.plan_mode != plan_mode {
-                        runtime_state.plan_mode = plan_mode.clone();
-                        runtime_state.updated_at = now.clone();
-                        changed_plan_mode = Some(plan_mode);
-                        changed_addon_session_id = Some(session_id);
-                    }
+                None => {
+                    guard.session_goal_summaries.remove(&session_id);
+                    changed_addon_session_id = Some(session_id);
                 }
             }
-            if let Some(child_task_id) =
-                append_webui_subagent_send_message_from_event_if_needed(workspace, event)?
-            {
-                child_completion_gate_ignored_task_id = Some(child_task_id);
-                let child_conversation_id = child_task_id.to_string();
-                let child_messages = workspace
-                    .session_messages
-                    .get(&child_task_id)
-                    .cloned()
-                    .unwrap_or_default();
-                let child_projected_messages = conversation_messages_from_session(
-                    &child_conversation_id,
-                    child_messages.as_slice(),
-                    false,
-                );
-                child_message_projection =
-                    Some((child_task_id, child_messages, child_projected_messages));
-            }
-            if marker_sync_required {
-                sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-            }
-            workspace.clone()
-        };
-        if let Some(child_task_id) = child_completion_gate_ignored_task_id {
-            mark_webui_subagent_completion_gate_ignored(&mut guard, child_task_id);
         }
-        let closed_subagent_task_ids = close_agent_closed_subagent_task_ids_from_event(event)?;
+        if let Some((child_task_id, execution_id)) = subagent_send_message_resume {
+            consume_webui_subagent_mailbox_input_for_execution(
+                &mut guard,
+                session_id,
+                child_task_id,
+                execution_id.as_str(),
+            );
+        }
+        for (child_task_id, execution_id) in subagent_wait_consumed_executions {
+            consume_webui_subagent_mailbox_input_for_execution(
+                &mut guard,
+                session_id,
+                child_task_id,
+                execution_id.as_str(),
+            );
+        }
+        if let Some((child_task_id, execution_id)) = running_subagent_send_message_resume {
+            mark_webui_subagent_completion_gate_ignored(
+                &mut guard,
+                child_task_id,
+                execution_id.as_str(),
+            );
+        }
         if remove_webui_closed_subagent_tasks_in_state(&mut guard, &closed_subagent_task_ids) {
             subagent_navigation_changed = true;
         }
@@ -843,7 +1039,12 @@ pub(crate) fn append_runtime_event_projection(
                 });
             }
         }
-        (workspace_snapshot, message_window_deltas)
+        (
+            transcript_messages_for_persistence,
+            addon_task_projects,
+            addon_session,
+            message_window_deltas,
+        )
     };
     for event in message_window_deltas {
         emit_service_event_with_trace(
@@ -852,43 +1053,57 @@ pub(crate) fn append_runtime_event_projection(
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }
-    if subagent_navigation_changed {
-        emit_webui_subagent_navigation_changed_delta_for_parent(app, state, session_id)?;
+    if subagent_navigation_changed
+        && let Err(error) =
+            emit_webui_subagent_navigation_changed_delta_for_parent(app, state, session_id)
+    {
+        eprintln!(
+            "[webui-service] runtime event navigation delta emit failed after commit: {error}"
+        );
     }
-    if let Some(addon_session_id) = changed_addon_session_id {
-        emit_session_addons_changed_delta(app, state, addon_session_id)?;
+    if let Some(addon_session_id) = changed_addon_session_id
+        && let Err(error) = emit_session_addons_changed_delta(app, state, addon_session_id)
+    {
+        eprintln!("[webui-service] runtime event addon delta emit failed after commit: {error}");
     }
-    if transcript_changed {
-        let controller_runtime = controller_runtime_from_state(state)?;
-        spawn_workspace_session_transcript_persist_task(
+    if transcript_changed
+        && addon_session.is_some()
+        && let Some(messages) = transcript_messages_for_persistence
+    {
+        spawn_session_transcript_messages_persist_task(
             state.clone(),
-            controller_runtime,
-            workspace_snapshot.clone(),
+            controller_runtime.clone(),
             session_id,
+            messages,
             Some(String::from("runtime_event_projection")),
         );
     }
-    if let Some(todolist) = changed_todolist {
-        let controller_runtime = controller_runtime_from_state(state)?;
+    if let Some(todolist) = changed_todolist
+        && let Some(session) = addon_session.as_ref()
+    {
         let updated_at = todolist
             .updated_at
             .clone()
             .unwrap_or_else(current_unix_millis_text);
         let mut addon_state = SessionAddonState::new(session_id);
         let _ = addon_state.set_todolist(&todolist, updated_at);
-        spawn_workspace_session_addon_state_persist_task(
+        spawn_session_addon_state_persist_task(
             app.clone(),
             state.clone(),
-            controller_runtime,
-            workspace_snapshot.clone(),
-            session_id,
+            controller_runtime.clone(),
+            SessionAddonPersistenceScope {
+                task_projects: addon_task_projects.clone(),
+                session: session.clone(),
+                archived: false,
+            },
             addon_state,
             vec![SessionAddonNamespace::Todolist],
             Some(String::from("todolist_tool")),
         );
     }
-    if let Some(plan_mode) = changed_plan_mode {
-        let controller_runtime = controller_runtime_from_state(state)?;
+    if let Some(plan_mode) = changed_plan_mode
+        && let Some(session) = addon_session
+    {
         let updated_at = plan_mode
             .artifact
             .as_ref()
@@ -902,12 +1117,15 @@ pub(crate) fn append_runtime_event_projection(
             },
             updated_at,
         );
-        spawn_workspace_session_addon_state_persist_task(
+        spawn_session_addon_state_persist_task(
             app.clone(),
             state.clone(),
             controller_runtime,
-            workspace_snapshot,
-            session_id,
+            SessionAddonPersistenceScope {
+                task_projects: addon_task_projects,
+                session,
+                archived: false,
+            },
             addon_state,
             vec![SessionAddonNamespace::WorkMode],
             Some(String::from("submit_plan_tool")),
@@ -927,7 +1145,9 @@ pub(crate) fn workbench_should_emit_runtime_event_message_patch(
         || guard
             .subagent_surface_detail_cache
             .contains_key(&session_id)
-        || guard.detached_subagent_task_listeners.contains(&session_id)
+        || guard
+            .detached_subagent_task_listeners
+            .contains_key(&session_id)
 }
 
 /// Returns stable transcript entries created or updated by one runtime tool projection.
@@ -1178,12 +1398,15 @@ mod tests {
                 "command": "git diff --stat"
             }
         })));
-        assert!(append_runtime_event_projection_to_state(
-            &mut runtime_state,
-            session_id,
-            "1000",
-            &started,
-        ));
+        assert!(
+            append_runtime_event_projection_to_state(
+                &mut runtime_state,
+                session_id,
+                "1000",
+                &started,
+            )
+            .expect("valid runtime event record identities")
+        );
         let finished = RuntimeEvent::new(
             RuntimeEventKind::ToolFinished,
             "工具返回 · call-shell",
@@ -1191,7 +1414,6 @@ mod tests {
         )
         .with_metadata(Some(json!({
             "tool_call_id": "call-shell",
-            "tool_result_id": "tool-result-call-shell",
             "tool_name": "shell_command",
             "display_state": "completed",
             "host_result": {
@@ -1202,12 +1424,15 @@ mod tests {
                 }
             }
         })));
-        assert!(append_runtime_event_projection_to_state(
-            &mut runtime_state,
-            session_id,
-            "1001",
-            &finished,
-        ));
+        assert!(
+            append_runtime_event_projection_to_state(
+                &mut runtime_state,
+                session_id,
+                "1001",
+                &finished,
+            )
+            .expect("valid runtime event record identities")
+        );
 
         let merged_messages = merge_session_messages_with_conversation_state_records(
             &[],
@@ -1263,7 +1488,8 @@ mod tests {
             "思考过程",
             "正在整理工具调用。",
             true,
-        );
+        )
+        .expect("valid streaming record identity");
         let before_projection_records = runtime_state.conversation_state.records.clone();
         let started = RuntimeEvent::new(
             RuntimeEventKind::ToolStarted,
@@ -1278,12 +1504,15 @@ mod tests {
             }
         })));
 
-        assert!(append_runtime_event_projection_to_state(
-            &mut runtime_state,
-            session_id,
-            "1001",
-            &started,
-        ));
+        assert!(
+            append_runtime_event_projection_to_state(
+                &mut runtime_state,
+                session_id,
+                "1001",
+                &started,
+            )
+            .expect("valid runtime event record identities")
+        );
         let projection_entries = runtime_event_projection_entries_from_changed_records(
             before_projection_records.as_slice(),
             runtime_state.conversation_state.records.as_slice(),
@@ -1300,6 +1529,83 @@ mod tests {
             !merged_messages
                 .iter()
                 .any(|message| message.record_kind == SessionMessageRecordKind::ThinkingOutput)
+        );
+    }
+
+    /// Verifies a session-scoped runtime-event patch leaves unrelated workspace collections untouched.
+    /// 验证会话级运行时事件补丁不会修改无关工作区集合。
+    #[test]
+    fn runtime_event_workspace_draft_commits_only_owned_session_fields() {
+        let session_id = SessionId::new_v4();
+        let unrelated_session_id = SessionId::new_v4();
+        let unrelated_message =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "Unrelated", "unrelated body")
+                .with_runtime_metadata("unrelated-record", "1");
+        let mut workspace = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(
+                unrelated_session_id,
+                vec![unrelated_message.clone()],
+            )]),
+            archived_session_messages: BTreeMap::from([(
+                unrelated_session_id,
+                vec![unrelated_message],
+            )]),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::from([(
+                unrelated_session_id,
+                SessionRuntimeStateEntry::default(),
+            )]),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::from([String::from("unrelated-project")]),
+            selected_session: unrelated_session_id,
+            hydrated_session_ids: BTreeSet::from([unrelated_session_id]),
+        };
+        // unrelated_state captures every collection that the parent runtime patch does not own.
+        // unrelated_state 捕获父运行时补丁不拥有的全部集合。
+        let unrelated_state = serde_json::json!({
+            "active_messages": workspace.session_messages.get(&unrelated_session_id),
+            "archived_messages": workspace.archived_session_messages.get(&unrelated_session_id),
+            "archived_runtime": workspace.archived_session_runtime_state.get(&unrelated_session_id),
+            "expanded_projects": workspace.expanded_task_projects,
+            "selected_session": workspace.selected_session,
+        });
+        let event = RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "工具调用 · call-read · read_file",
+            "starting",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-read",
+            "tool_name": "read_file",
+            "arguments": { "path": "README.md" }
+        })));
+
+        let draft = build_runtime_event_workspace_draft(
+            &workspace,
+            session_id,
+            &session_id.to_string(),
+            &event,
+            None,
+        )
+        .expect("runtime event workspace draft should build");
+        draft.commit(&mut workspace, session_id);
+
+        assert!(workspace.session_runtime_state.contains_key(&session_id));
+        assert_eq!(
+            serde_json::json!({
+                "active_messages": workspace.session_messages.get(&unrelated_session_id),
+                "archived_messages": workspace.archived_session_messages.get(&unrelated_session_id),
+                "archived_runtime": workspace.archived_session_runtime_state.get(&unrelated_session_id),
+                "expanded_projects": workspace.expanded_task_projects,
+                "selected_session": workspace.selected_session,
+            }),
+            unrelated_state
         );
     }
 

@@ -238,7 +238,7 @@ pub(crate) fn fail_webui_context_compaction_execution(
             budget_note,
             trigger,
             error,
-        );
+        )?;
         workspace.clone()
     };
     emit_context_compaction_message_window_delta(app, state, session_id)?;
@@ -256,17 +256,18 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
     budget_note: &str,
     trigger: &str,
     error: &str,
-) {
+) -> Result<(), String> {
     let now = current_unix_millis_text();
-    let runtime_state = workspace
+    let mut runtime_state = workspace
         .session_runtime_state
-        .entry(session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_else(|| SessionRuntimeStateEntry {
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
     set_webui_context_compaction_section_metadata_in_state(
-        runtime_state,
+        &mut runtime_state,
         section_id,
         section_id,
         "start",
@@ -274,15 +275,15 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
         Some(budget_note),
         trigger,
     );
-    update_webui_context_compaction_body_state(runtime_state, section_id, "failed");
+    update_webui_context_compaction_body_state(&mut runtime_state, section_id, "failed");
     append_webui_context_compaction_failed_message_to_state(
-        runtime_state,
+        &mut runtime_state,
         session_id,
         section_id,
         budget_note,
         trigger,
         error,
-    );
+    )?;
     if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
         runtime_state.auto_compaction_consecutive_failures = runtime_state
             .auto_compaction_consecutive_failures
@@ -290,6 +291,9 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
     }
     runtime_state.updated_at = now;
     let runtime_state_snapshot = runtime_state.clone();
+    workspace
+        .session_runtime_state
+        .insert(session_id, runtime_state);
     merge_runtime_state_records_into_display_messages(
         workspace,
         session_id,
@@ -308,4 +312,5 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
         session.updated_at = current_unix_millis_text();
     }
     sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
+    Ok(())
 }

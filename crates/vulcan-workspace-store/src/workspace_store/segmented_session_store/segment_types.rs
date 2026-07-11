@@ -282,3 +282,18 @@ pub(in crate::workspace_store) struct RuntimeLogRepairRead {
     /// JSON 解码失败的 1 基源文件行号。
     pub(in crate::workspace_store) corrupt_line_numbers: Vec<usize>,
 }
+
+/// Validated runtime-log state captured during one append-lock transaction.
+/// 在一次追加锁事务中捕获的已验证运行时日志状态。
+#[derive(Debug)]
+pub(in crate::workspace_store) struct RuntimeLogSnapshot<'guard> {
+    /// Authoritative metadata validated against the persisted runtime segment.
+    /// 已与持久化运行时分段相互验证的权威元数据。
+    pub(in crate::workspace_store) metadata: RuntimeLogMetadata,
+    /// Ordered and sequence-contiguous runtime lines represented by the metadata.
+    /// 元数据所表示的有序且序号连续的运行时日志行。
+    pub(in crate::workspace_store) lines: Vec<RuntimeLogEventLine>,
+    /// Lifetime proof that the append lock used to create this snapshot is still owned.
+    /// 创建此快照时使用的追加锁仍被持有的生命周期证明。
+    pub(in crate::workspace_store) _append_guard: std::marker::PhantomData<&'guard ()>,
+}

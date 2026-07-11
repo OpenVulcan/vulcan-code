@@ -24,7 +24,16 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
         return Err(String::from("ERR_SESSION_FORK_TARGET_EXISTS"));
     }
     let fork_result = (|| {
+        // source_append_guard prevents runtime and display artifacts from crossing source versions.
+        // source_append_guard 防止运行时与展示产物跨越不同源版本。
+        let source_append_guard = segmented_append_file_io_lock()
+            .lock()
+            .map_err(to_store_error)?;
+        // source_metadata and every copied runtime artifact are captured under one append lock.
+        // source_metadata 与每个已复制运行时产物都在同一个追加锁下捕获。
         let source_metadata = copy_segmented_session_tree_without_tasks(source_dir, &target_dir)?;
+        // identity_replacements is shared by locked display conversion and later target rewriting.
+        // identity_replacements 由持锁展示转换与后续目标改写共享。
         let identity_replacements = forked_identity_replacements(request);
         write_forked_session_identity_events_from_source(
             source_dir,
@@ -33,6 +42,7 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
             &source_metadata,
             &identity_replacements,
         )?;
+        drop(source_append_guard);
         if request.source_anchor_message_id.is_none() {
             rewrite_forked_persisted_identity_artifacts(
                 &target_dir,
@@ -43,9 +53,18 @@ pub(in crate::workspace_store) fn fork_segmented_session_directory_from_source(
         }
         Ok::<(), String>(())
     })();
-    if let Err(error) = fork_result {
-        let _ = fs::remove_dir_all(&target_dir);
-        return Err(error);
+    if let Err(fork_error) = fork_result {
+        match fs::remove_dir_all(&target_dir) {
+            Ok(()) => {}
+            Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(cleanup_error) => {
+                return Err(format!(
+                    "Fork failed with `{fork_error}` and incomplete target cleanup failed for `{}`: {cleanup_error}",
+                    target_dir.display()
+                ));
+            }
+        }
+        return Err(fork_error);
     }
     Ok(target_dir)
 }
@@ -174,7 +193,7 @@ fn rewrite_forked_persisted_identity_artifacts(
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     rewrite_forked_state_identity_artifact(session_dir, session_id, updated_at, replacements)?;
-    rewrite_forked_runtime_identity_artifacts(session_dir, replacements)
+    rewrite_forked_runtime_identity_artifacts(session_dir, updated_at, replacements)
 }
 
 /// Rewrites state.json ownership fields while preserving copied runtime state content.
@@ -207,14 +226,43 @@ fn rewrite_forked_state_identity_artifact(
 
 /// Rewrites provider-facing runtime JSONL identity tokens and rebuilds its index.
 /// 改写 Provider 可见 runtime JSONL 的身份 token，并重建其索引。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the unpublished fork target whose copied runtime artifacts are rewritten.
+/// `session_dir` 是已复制运行时产物将被改写的未发布分叉目标。
+/// `updated_at` is the target fork timestamp recorded as the metadata update time.
+/// `updated_at` 是记录为元数据更新时间的目标分叉时间戳。
+/// `replacements` maps exact source identity tokens to target identity tokens.
+/// `replacements` 将精确源身份 token 映射为目标身份 token。
+///
+/// # Returns
+/// 返回值
+/// Success for consistent absence or a fully validated rewrite, otherwise a strict failure.
+/// 运行时产物一致缺失或完成完整验证改写时返回成功，否则返回严格失败。
 fn rewrite_forked_runtime_identity_artifacts(
     session_dir: &Path,
+    updated_at: &str,
     replacements: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    if !runtime_metadata_path(session_dir).exists() {
+    // append_guard keeps validation, identity rewrite, metadata refresh, and index rebuild atomic.
+    // append_guard 使验证、身份改写、元数据刷新与索引重建保持原子化。
+    let append_guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    // snapshot is absent only when metadata, index, and runtime directory are all absent.
+    // snapshot 仅在元数据、索引与运行时目录全部缺失时为空。
+    let Some(snapshot) = read_runtime_log_snapshot_with_owned_lock(session_dir, &append_guard)?
+    else {
         return Ok(());
-    }
-    let mut metadata = read_runtime_metadata(session_dir)?;
+    };
+    // metadata comes from the same validated lock transaction used by the rewrite.
+    // metadata 来自改写所使用的同一个已验证锁事务。
+    let RuntimeLogSnapshot {
+        mut metadata,
+        lines: _,
+        _append_guard: _,
+    } = snapshot;
     let mut all_lines = Vec::new();
     for segment in &mut metadata.segments {
         let segment_path = session_dir.join(&segment.file);
@@ -235,22 +283,24 @@ fn rewrite_forked_runtime_identity_artifacts(
                     .map_err(to_store_error)?,
             );
         }
-        segment.line_count = typed_segment_lines.len() as u64;
+        segment.line_count = u64::try_from(typed_segment_lines.len())
+            .map_err(|_| String::from("Runtime line count exceeds u64 metadata capacity."))?;
         segment.byte_len = fs::metadata(&segment_path)
-            .map(|metadata| metadata.len())
-            .unwrap_or(0);
+            .map_err(|error| {
+                format!(
+                    "Failed to inspect forked runtime segment `{}`: {error}",
+                    segment_path.display()
+                )
+            })?
+            .len();
         segment.end_seq = typed_segment_lines.last().map(|line| line.seq);
         segment.updated_at = typed_segment_lines
             .last()
             .map(|line| line.created_at.clone());
         all_lines.extend(typed_segment_lines);
     }
-    all_lines.sort_by_key(|line| line.seq);
-    metadata.next_seq = next_runtime_line_seq(&all_lines);
-    metadata.updated_at = all_lines
-        .last()
-        .map(|line| line.created_at.clone())
-        .unwrap_or_else(current_unix_millis_text);
+    metadata.next_seq = next_runtime_line_seq(&all_lines)?;
+    metadata.updated_at = updated_at.to_string();
     write_runtime_metadata(session_dir, &metadata)?;
     write_runtime_index(session_dir, &rebuild_runtime_log_index(&all_lines))
 }

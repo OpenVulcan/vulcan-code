@@ -751,17 +751,52 @@ where
     Ok(boundary_bytes + encoded_line.len() as u64)
 }
 
+/// Reads an optional JSON document through one authoritative file-open operation.
+/// 通过一次权威文件打开操作读取一个可选 JSON 文档。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact JSON document path to open and parse.
+/// `path` 是需要打开并解析的精确 JSON 文档路径。
+///
+/// # Returns
+/// 返回值
+/// The parsed document, `None` only for `NotFound`, or a path-aware open or parse failure.
+/// 返回已解析文档；仅在 `NotFound` 时返回 `None`，否则返回包含路径的打开或解析错误。
+pub(in crate::workspace_store) fn read_optional_json<T>(path: &Path) -> Result<Option<T>, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    // file comes from the authoritative open result so inspection failures cannot look absent.
+    // file 来自权威打开结果，因此检查失败不会伪装成缺失。
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("打开 JSON 文件失败 `{}`：{error}", path.display())),
+    };
+    let reader = BufReader::new(file);
+    serde_json::from_reader(reader)
+        .map(Some)
+        .map_err(|error| format!("解析 JSON 文件失败 `{}`：{error}", path.display()))
+}
+
 /// Reads a required JSON document from disk.
 /// 从磁盘读取一个必需的 JSON 文档。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact JSON document path that must exist and parse successfully.
+/// `path` 是必须存在且必须成功解析的精确 JSON 文档路径。
+///
+/// # Returns
+/// 返回值
+/// The parsed document, or a path-aware error when the file is absent, unreadable, or invalid.
+/// 返回已解析文档；文件缺失、不可读或无效时返回包含路径的错误。
 pub(in crate::workspace_store) fn read_required_json<T>(path: &Path) -> Result<T, String>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let file = File::open(path)
-        .map_err(|error| format!("打开 JSON 文件失败 `{}`：{error}", path.display()))?;
-    let reader = BufReader::new(file);
-    serde_json::from_reader(reader)
-        .map_err(|error| format!("解析 JSON 文件失败 `{}`：{error}", path.display()))
+    read_optional_json(path)?.ok_or_else(|| format!("必需 JSON 文件不存在：{}", path.display()))
 }
 
 /// Writes one complete JSON document through the shared atomic byte publisher.
@@ -791,12 +826,34 @@ where
 {
     // encoded is complete before any directory or staging file is created.
     // encoded 在创建任何目录或暂存文件前已经完整生成。
+    let encoded = encode_json_lines(values)?;
+    write_file_bytes_atomic(path, &encoded, "JSONL document")
+}
+
+/// Encodes complete newline-delimited JSON values without touching the filesystem.
+/// 在不接触文件系统的情况下编码完整的换行分隔 JSON 值。
+///
+/// # Parameters
+/// 参数
+/// `values` contains ordered serializable records for one complete JSONL document.
+/// `values` 包含一份完整 JSONL 文档的有序可序列化记录。
+///
+/// # Returns
+/// 返回值
+/// One complete byte buffer ending every record with a newline, or a serialization failure.
+/// 返回每条记录都以换行结尾的完整字节缓冲，序列化失败时返回错误。
+pub(in crate::workspace_store) fn encode_json_lines<T>(values: &[T]) -> Result<Vec<u8>, String>
+where
+    T: Serialize,
+{
+    // encoded accumulates the whole candidate before any persistence mutation is authorized.
+    // encoded 在允许任何持久化修改前累积完整候选内容。
     let mut encoded = Vec::new();
     for value in values {
         serde_json::to_writer(&mut encoded, value).map_err(to_store_error)?;
         encoded.push(b'\n');
     }
-    write_file_bytes_atomic(path, &encoded, "JSONL document")
+    Ok(encoded)
 }
 
 /// Publishes complete file bytes through an exclusively created sibling staging file.
@@ -961,8 +1018,20 @@ fn synchronize_parent_directory(path: &Path) -> Result<(), String> {
     directory.sync_all().map_err(to_store_error)
 }
 
-/// Appends JSONL values to an existing file, creating its parent directory when needed.
-/// 将 JSONL 值追加到已有文件，并在需要时创建父目录。
+/// Appends JSONL values to an existing file without creating a missing persistence artifact.
+/// 将 JSONL 值追加到已有文件，且不会创建缺失的持久化产物。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact existing JSONL file that receives the serialized values.
+/// `path` 是接收序列化值的精确已有 JSONL 文件。
+/// `values` contains the ordered records appended as newline-delimited JSON.
+/// `values` 包含按顺序以换行分隔 JSON 形式追加的记录。
+///
+/// # Returns
+/// 返回值
+/// Success after all bytes are flushed and synchronized, or a path-aware persistence error.
+/// 全部字节刷新并同步后返回成功，否则返回包含路径的持久化错误。
 pub(in crate::workspace_store) fn append_json_lines_file<T>(
     path: &Path,
     values: &[T],
@@ -972,9 +1041,6 @@ where
 {
     if values.is_empty() {
         return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        create_dir_all(parent)?;
     }
     // Build the full batch first so each append call emits one contiguous byte buffer.
     // 先构建完整批次，使每次追加调用输出一个连续字节缓冲。
@@ -986,9 +1052,13 @@ where
     let mut file = OpenOptions::new()
         .append(true)
         .read(true)
-        .create(true)
         .open(path)
-        .map_err(to_store_error)?;
+        .map_err(|error| {
+            format!(
+                "Failed to open existing JSONL file `{}` for append: {error}",
+                path.display()
+            )
+        })?;
     ensure_jsonl_append_boundary(&mut file)?;
     file.write_all(encoded_batch.as_bytes())
         .map_err(to_store_error)?;
@@ -1170,16 +1240,24 @@ pub(in crate::workspace_store) fn synchronize_segmented_session_directory_move(
     Ok(())
 }
 
-/// Reads JSONL values from a file, returning an empty list when the file is absent.
-/// 从文件读取 JSONL 值，文件不存在时返回空列表。
+/// Reads JSONL values from one required file.
+/// 从一个必需文件读取 JSONL 值。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact required JSONL file opened and decoded line by line.
+/// `path` 是需要打开并逐行解码的精确必需 JSONL 文件。
+///
+/// # Returns
+/// 返回值
+/// Ordered decoded values, or a path-and-line-aware open, read, or parse failure.
+/// 返回有序解码值，否则返回包含路径与行号的打开、读取或解析失败。
 pub(in crate::workspace_store) fn read_json_lines<T>(path: &Path) -> Result<Vec<T>, String>
 where
     T: for<'de> Deserialize<'de>,
 {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let file = File::open(path).map_err(to_store_error)?;
+    let file = File::open(path)
+        .map_err(|error| format!("打开 JSONL 文件失败 `{}`：{error}", path.display()))?;
     let reader = BufReader::new(file);
     let mut values = Vec::new();
     for (line_index, line) in reader.lines().enumerate() {

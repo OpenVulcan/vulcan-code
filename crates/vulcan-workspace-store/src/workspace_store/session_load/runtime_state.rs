@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
+use vulcan_context::protocol::validate_session_conversation_record_identities;
 /// Loads the overwrite-only runtime state from the segmented session state file when available.
 /// 可用时从分段会话状态文件加载覆盖式运行态。
 pub(super) fn load_segmented_runtime_state(
@@ -20,16 +21,14 @@ pub(super) fn load_segmented_runtime_state(
     };
     let runtime_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)?;
     let Some(state_document) = read_state(&session_dir)? else {
-        let mut runtime_state =
-            runtime_state_from_runtime_log(session_id, runtime_conversation_state);
+        let mut runtime_state = runtime_state_from_runtime_log(runtime_conversation_state)?;
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
         return Ok(runtime_state);
     };
     let has_runtime_state = !state_document.runtime_state.is_null();
     if !has_runtime_state && state_document.current_context.is_null() {
-        let mut runtime_state =
-            runtime_state_from_runtime_log(session_id, runtime_conversation_state);
+        let mut runtime_state = runtime_state_from_runtime_log(runtime_conversation_state)?;
         let _ =
             apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
         return Ok(runtime_state);
@@ -62,8 +61,8 @@ pub(super) fn load_segmented_runtime_state(
     {
         return Ok(None);
     }
-    let _ =
-        repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
+    validate_session_conversation_record_identities(&runtime_state.conversation_state.records)
+        .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
     let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
     Ok(Some(runtime_state))
 }
@@ -98,22 +97,19 @@ fn apply_session_addon_state_to_loaded_runtime_state(
 /// Rebuilds runtime state only from provider-facing runtime JSONL when available.
 /// 仅在 Provider 可见 runtime JSONL 可用时重建运行态。
 fn runtime_state_from_runtime_log(
-    session_id: SessionId,
     runtime_conversation_state: Option<SessionConversationState>,
-) -> Option<SessionRuntimeStateEntry> {
+) -> Result<Option<SessionRuntimeStateEntry>, String> {
     if let Some(conversation_state) = runtime_conversation_state {
-        let mut runtime_state = SessionRuntimeStateEntry {
+        validate_session_conversation_record_identities(&conversation_state.records)
+            .map_err(|error| format!("Invalid canonical conversation record identity: {error}"))?;
+        let runtime_state = SessionRuntimeStateEntry {
             conversation_state,
             updated_at: current_unix_millis_text(),
             ..SessionRuntimeStateEntry::default()
         };
-        let _ = repair_duplicate_conversation_record_ids(
-            session_id,
-            &mut runtime_state.conversation_state,
-        );
-        return Some(runtime_state);
+        return Ok(Some(runtime_state));
     }
-    None
+    Ok(None)
 }
 
 /// Applies a segmented current-context document onto one runtime-state entry.

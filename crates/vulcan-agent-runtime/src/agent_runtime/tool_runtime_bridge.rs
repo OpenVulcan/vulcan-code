@@ -17,7 +17,8 @@ use vulcan_core::types::{
     ToolInvocationResult as CoreToolInvocationResult,
 };
 use vulcan_tools_manager::{
-    ResolvedToolDefinition, VulcanToolInvocationResult, VulcanToolsManager,
+    ResolvedToolDefinition, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanToolInvocationResult,
+    VulcanToolsManager,
 };
 
 /// Shared host-managed tool bridge that backs the host executor and `vulcan-core` host-side tool execution.
@@ -227,6 +228,90 @@ pub fn acknowledge_runtime_event_projection_barrier_from_event(event: &RuntimeEv
     }
 }
 
+/// Builds the canonical controller-visible tool-error host result with trusted invocation identity.
+/// 使用可信调用身份构建规范的控制器可见工具错误宿主结果。
+///
+/// # Parameters
+/// 参数
+/// - `request`: Core-owned invocation identity and arguments.
+/// - `request`：Core 持有的调用身份与参数。
+/// - `error`: Human-readable error text exposed at the canonical payload root.
+/// - `error`：暴露在规范载荷根部的人类可读错误文本。
+/// - `details`: Optional tool-owned structured failure details.
+/// - `details`：可选的工具自有结构化失败详情。
+///
+/// # Returns
+/// 返回值
+/// Canonical `tool_error` host result consumed by runtime and WebUI projections.
+/// 由运行时与 WebUI 投影消费的规范 `tool_error` 宿主结果。
+fn build_canonical_tool_error_host_result(
+    request: &CoreToolInvocationRequest,
+    error: &str,
+    details: Option<Value>,
+) -> Value {
+    let mut payload = json!({
+        "tool_call_id": request.tool_call_id,
+        "tool_name": request.tool_name,
+        "status": "failed",
+        "error": error,
+        "arguments": request.arguments,
+    });
+    if let Some(details) = details {
+        payload["details"] = details;
+    }
+    json!({
+        "kind": "tool_error",
+        "payload": payload,
+    })
+}
+
+/// Canonicalizes one tool-owned structured error detail at the invocation-identity boundary.
+/// 在调用身份边界规范化一条工具自有结构化错误详情。
+///
+/// # Parameters
+/// 参数
+/// - `request`: Core-owned invocation identity and arguments.
+/// - `request`：Core 持有的调用身份与参数。
+/// - `details`: Tool-owned envelope containing failed status, non-empty error, and domain details.
+/// - `details`：包含失败状态、非空错误与领域详情的工具自有信封。
+///
+/// # Returns
+/// 返回值
+/// Canonical host result, or an explicit protocol violation.
+/// 规范宿主结果，或显式协议违规错误。
+fn canonicalize_tool_error_details(
+    request: &CoreToolInvocationRequest,
+    details: &Value,
+) -> Result<Value, String> {
+    if details.get("status").and_then(Value::as_str) != Some("failed") {
+        return Err(format!(
+            "Tool `{}` returned `{VULCAN_TOOL_ERROR_DETAIL_KIND}` without `status: failed`.",
+            request.tool_name
+        ));
+    }
+    let error = details
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|error| !error.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Tool `{}` returned `{VULCAN_TOOL_ERROR_DETAIL_KIND}` without a non-empty `error` string.",
+                request.tool_name
+            )
+        })?;
+    let domain_details = details.get("details").cloned().ok_or_else(|| {
+        format!(
+            "Tool `{}` returned `{VULCAN_TOOL_ERROR_DETAIL_KIND}` without `details`.",
+            request.tool_name
+        )
+    })?;
+    Ok(build_canonical_tool_error_host_result(
+        request,
+        error,
+        Some(domain_details),
+    ))
+}
+
 /// Builds one controller-visible error result so host-managed tool failures can be returned to the model instead of aborting the whole turn.
 /// 构建一条控制器可见的错误结果，使宿主管理工具失败能够回传给模型，而不是直接中断整轮执行。
 pub(crate) fn build_tool_failure_invocation_result(
@@ -242,16 +327,9 @@ pub(crate) fn build_tool_failure_invocation_result(
         tool_call_id: request.tool_call_id.clone(),
         tool_name: request.tool_name.clone(),
         model_output,
-        host_result: Some(json!({
-            "kind": "tool_error",
-            "payload": {
-                "tool_call_id": request.tool_call_id,
-                "tool_name": request.tool_name,
-                "status": "failed",
-                "error": message,
-                "arguments": request.arguments,
-            }
-        })),
+        host_result: Some(build_canonical_tool_error_host_result(
+            request, &message, None,
+        )),
         is_error: true,
     }
 }
@@ -311,6 +389,35 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             Err(message) => return Ok(build_tool_failure_invocation_result(request, message)),
         };
 
+        let (host_result, is_error) = match result.host_result.as_ref() {
+            Some(host_result) if host_result.kind == VULCAN_TOOL_ERROR_DETAIL_KIND => {
+                let canonical = match canonicalize_tool_error_details(request, &host_result.payload)
+                {
+                    Ok(canonical) => canonical,
+                    Err(message) => {
+                        return Ok(build_tool_failure_invocation_result(request, message));
+                    }
+                };
+                (Some(canonical), true)
+            }
+            Some(host_result) if host_result.kind == "tool_error" => {
+                return Ok(build_tool_failure_invocation_result(
+                    request,
+                    format!(
+                        "Tool `{}` returned reserved host-result kind `tool_error`; return `{VULCAN_TOOL_ERROR_DETAIL_KIND}` details instead.",
+                        request.tool_name
+                    ),
+                ));
+            }
+            Some(host_result) => (
+                Some(json!({
+                    "kind": host_result.kind.clone(),
+                    "payload": host_result.payload.clone(),
+                })),
+                false,
+            ),
+            None => (None, false),
+        };
         Ok(CoreToolInvocationResult {
             tool_call_id: request.tool_call_id.clone(),
             tool_name: request.tool_name.clone(),
@@ -318,13 +425,8 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
                 Value::String(text) => text,
                 other => serde_json::to_string(&other).unwrap_or_else(|_| other.to_string()),
             },
-            host_result: result.host_result.as_ref().map(|host_result| {
-                json!({
-                    "kind": host_result.kind.clone(),
-                    "payload": host_result.payload.clone(),
-                })
-            }),
-            is_error: false,
+            host_result,
+            is_error,
         })
     }
 }

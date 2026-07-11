@@ -569,7 +569,11 @@ fn capture_hydrated_session_projection_context(
             ai_tool_configuration,
             live_context_budgets: guard.live_context_budgets.clone(),
             agent_runtime_for_status: guard.agent_runtime.clone(),
-            live_listener_task_ids: guard.detached_subagent_task_listeners.clone(),
+            live_listener_task_ids: guard
+                .detached_subagent_task_listeners
+                .keys()
+                .copied()
+                .collect(),
         }
     };
     webui_trace_if_slow(

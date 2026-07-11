@@ -382,21 +382,24 @@ mod tests {
     /// Builds one minimal controller-backed delta state for unit tests.
     /// 为单元测试构建一份最小控制器支撑的增量状态。
     fn build_delta_state() -> RuntimeStreamDeltaState {
-        RuntimeStreamDeltaState::new(VulcanCoreController::new(
-            ControllerConfig {
-                provider_id: String::from("mock-provider"),
-                model_id: String::from("mock-model"),
-                system_prompt: String::from("system"),
-                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                    String::from("system").clone(),
-                ),
-                temperature: Some(0.1),
-                max_turns: 4,
-                additional_params: None,
-                context_injection: None,
-            },
-            ConversationSnapshot::default(),
-        ))
+        RuntimeStreamDeltaState::new(
+            VulcanCoreController::new(
+                ControllerConfig {
+                    provider_id: String::from("mock-provider"),
+                    model_id: String::from("mock-model"),
+                    system_prompt: String::from("system"),
+                    prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                        String::from("system").clone(),
+                    ),
+                    temperature: Some(0.1),
+                    max_turns: 4,
+                    additional_params: None,
+                    context_injection: None,
+                },
+                ConversationSnapshot::default(),
+            )
+            .expect("valid core conversation snapshot"),
+        )
     }
 
     /// Builds one minimal request snapshot so provider-request counting uses the real event shape.

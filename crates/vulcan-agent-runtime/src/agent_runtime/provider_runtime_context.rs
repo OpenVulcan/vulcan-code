@@ -226,7 +226,11 @@ fn build_git_commit_summary_developer_segment() -> String {
 /// Builds the optional session-goal prompt snapshot for the current request.
 /// 为当前请求构建可选的会话目标提示词快照。
 fn build_session_goal_snapshot(preparation: &ExecutionPreparation) -> Option<TaskGoalSnapshot> {
-    let text = preparation.session_goal_context.as_deref()?.trim();
+    let text = preparation
+        .session_goal_context
+        .as_ref()?
+        .prompt_context
+        .trim();
     if text.is_empty() {
         return None;
     }

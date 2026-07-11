@@ -47,90 +47,135 @@ impl TaskRuntime {
         Ok(None)
     }
 
-    /// Stops one in-flight child task by its stable task identifier when the runtime still owns a live abort handle.
-    /// 当运行时仍持有实时中止句柄时，按稳定任务标识停止一条进行中的子任务。
+    /// Stops one reserved or running child task by its stable task identifier.
+    /// 按稳定任务标识停止一条已预留或正在运行的子任务。
     pub fn stop_task(&self, task_id: SessionId) -> Result<bool, String> {
-        let handle = self
-            .active_task_runs
-            .read()
-            .map_err(|_| {
+        let handle = {
+            let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
                 String::from(
                     "The active task registry is locked and cannot stop the subagent task.",
                 )
-            })?
-            .get(&task_id)
-            .map(|entry| entry.abort_handle.clone());
+            })?;
+            let Some(entry) = active_task_runs.get_mut(&task_id) else {
+                return Ok(false);
+            };
+            entry.stop_requested = true;
+            entry.abort_handle.clone()
+        };
         if let Some(handle) = handle {
             handle.abort();
-            Ok(true)
-        } else {
-            Ok(false)
         }
+        self.mark_stopped_tasks_in_registry(&[task_id], "user_interrupt")?;
+        Ok(true)
     }
 
     /// Stops one in-flight child task and every active descendant task in its TaskSession tree.
     /// 停止一条进行中的子任务及其 TaskSession 树中所有仍活动的后代任务。
     pub fn stop_task_tree(&self, task_id: SessionId) -> Result<Vec<SessionId>, String> {
         let task_ids = self.task_subtree_ids(task_id)?;
-        let handles = {
-            let active_task_runs = self.active_task_runs.read().map_err(|_| {
+        self.stop_selected_tasks(&task_ids)
+    }
+
+    /// Stops active runs for exactly the supplied stable tasks without expanding descendants.
+    /// 仅停止精确给定稳定任务的活动运行，不扩展后代。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `task_ids`: Exact task scope selected by the owning lifecycle transaction.
+    /// - `task_ids`：由所属生命周期事务选定的精确任务范围。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Tasks that had resident active runs reserved and stopped.
+    /// 存在常驻活动运行并已被预留停止的任务。
+    pub(super) fn stop_selected_tasks(
+        &self,
+        task_ids: &[SessionId],
+    ) -> Result<Vec<SessionId>, String> {
+        let stopped_task_ids = self.reserve_and_abort_selected_task_runs(task_ids)?;
+        self.mark_stopped_tasks_in_registry(&stopped_task_ids, "user_interrupt")?;
+        Ok(stopped_task_ids)
+    }
+
+    /// Reserves stop ownership and aborts active runs for exactly the supplied stable tasks.
+    /// 为精确给定的稳定任务预留停止所有权并中止活动运行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `task_ids`: Stable task scope already protected by the caller's transaction boundary.
+    /// - `task_ids`：已由调用方事务边界保护的稳定任务范围。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Tasks that owned active reservations when this operation claimed stop ownership.
+    /// 本操作声明停止所有权时持有活动预留的任务。
+    pub(super) fn reserve_and_abort_selected_task_runs(
+        &self,
+        task_ids: &[SessionId],
+    ) -> Result<Vec<SessionId>, String> {
+        let reserved_runs = {
+            let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
                 String::from(
-                    "The active task registry is locked and cannot stop the subagent task tree.",
+                    "The active task registry is locked and cannot stop the selected subagent tasks.",
                 )
             })?;
             task_ids
                 .iter()
                 .copied()
                 .filter_map(|candidate_task_id| {
-                    active_task_runs
-                        .get(&candidate_task_id)
-                        .map(|entry| entry.abort_handle.clone())
-                        .map(|handle| (candidate_task_id, handle))
+                    active_task_runs.get_mut(&candidate_task_id).map(|entry| {
+                        entry.stop_requested = true;
+                        (candidate_task_id, entry.abort_handle.clone())
+                    })
                 })
                 .collect::<Vec<_>>()
         };
-        for (_, handle) in &handles {
-            handle.abort();
+        for (_, handle) in &reserved_runs {
+            if let Some(handle) = handle {
+                handle.abort();
+            }
         }
-        let stopped_task_ids = handles
+        let stopped_task_ids = reserved_runs
             .into_iter()
             .map(|(stopped_task_id, _)| stopped_task_id)
             .collect::<Vec<_>>();
-        self.mark_stopped_tasks_in_registry(&stopped_task_ids)?;
-        self.set_subagent_stop_reason_for_tasks(&stopped_task_ids, "user_interrupt")?;
         Ok(stopped_task_ids)
     }
 
     /// Stops every active child-agent run during application shutdown and persists stopped metadata.
     /// 在应用关闭期间停止所有活动子代理运行，并持久化停止元数据。
     pub fn stop_active_tasks_for_app_shutdown(&self) -> Result<Vec<SessionId>, String> {
-        let handles = {
-            let active_task_runs = self.active_task_runs.read().map_err(|_| {
+        let reserved_runs = {
+            let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
                 String::from(
                     "The active task registry is locked and cannot stop active subagent tasks.",
                 )
             })?;
             active_task_runs
-                .iter()
-                .map(|(task_id, entry)| (*task_id, entry.abort_handle.clone()))
+                .iter_mut()
+                .map(|(task_id, entry)| {
+                    entry.stop_requested = true;
+                    (*task_id, entry.abort_handle.clone())
+                })
                 .collect::<Vec<_>>()
         };
-        for (_, handle) in &handles {
-            handle.abort();
+        for (_, handle) in &reserved_runs {
+            if let Some(handle) = handle {
+                handle.abort();
+            }
         }
-        let stopped_task_ids = handles
+        let stopped_task_ids = reserved_runs
             .into_iter()
             .map(|(stopped_task_id, _)| stopped_task_id)
             .collect::<Vec<_>>();
-        self.mark_stopped_tasks_in_registry(&stopped_task_ids)?;
-        self.set_subagent_stop_reason_for_tasks(&stopped_task_ids, "app_shutdown")?;
+        self.mark_stopped_tasks_in_registry(&stopped_task_ids, "app_shutdown")?;
         self.persist_app_shutdown_stopped_task_records(&stopped_task_ids)?;
         Ok(stopped_task_ids)
     }
 
-    /// Sets one stop reason on registry entries matching task session ids.
-    /// 为匹配任务会话标识的注册表条目设置停止原因。
-    fn set_subagent_stop_reason_for_tasks(
+    /// Marks stopped tasks in the in-memory record and Vulcan registry before background joins settle.
+    /// 在后台 Join 落定前，将已停止任务同步标记到内存记录与 Vulcan 注册表。
+    pub(super) fn mark_stopped_tasks_in_registry(
         &self,
         task_ids: &[SessionId],
         reason: &str,
@@ -138,91 +183,113 @@ impl TaskRuntime {
         if task_ids.is_empty() {
             return Ok(());
         }
-        let task_ids = task_ids
-            .iter()
-            .copied()
-            .map(SessionNodeId::from)
-            .collect::<BTreeSet<_>>();
-        let mut registry = self.subagent_registry.write().map_err(|_| {
-            String::from("The subagent registry is locked and cannot set stop reasons.")
-        })?;
-        let agent_ids = registry
-            .list_all()
-            .into_iter()
-            .filter(|entry| task_ids.contains(&entry.session_id))
-            .map(|entry| entry.agent_id.clone())
-            .collect::<Vec<_>>();
-        for agent_id in agent_ids {
-            if let Some(entry) = registry.get_mut(&agent_id) {
-                entry.stop_reason = Some(reason.to_string());
-            }
+        let updated_at = current_unix_millis_text();
+        for task_id in task_ids {
+            // transaction_lock serializes the explicit stop with every execution outcome commit.
+            // transaction_lock 将显式停止与全部执行结果提交串行化。
+            let transaction_lock = self.task_execution_state_lock(*task_id)?;
+            // _transaction keeps the stopped record and registry projection in one task boundary.
+            // _transaction 将 stopped 记录与注册表投影保持在同一任务边界内。
+            let _transaction = transaction_lock.lock().map_err(|_| {
+                String::from(
+                    "The task execution transaction is locked and cannot mark the subagent stopped.",
+                )
+            })?;
+            self.mark_stopped_task_projection_with_transaction_lock_held(
+                *task_id,
+                reason,
+                &updated_at,
+            )?;
         }
         Ok(())
     }
 
-    /// Marks closed tasks as archived in the in-memory TaskSession records.
-    /// 将已关闭任务在内存 TaskSession 记录中标记为已归档。
-    pub(super) fn mark_archived_tasks_in_sessions(
+    /// Marks stopped projections while the caller holds every selected task transaction lock.
+    /// 在调用方持有全部选中任务事务锁时标记 stopped 投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `task_ids`: Stable task ids whose transaction locks are already held in sorted order.
+    /// - `task_ids`：事务锁已按排序顺序持有的稳定任务标识。
+    /// - `reason`: Explicit lifecycle reason stored in session and registry projections.
+    /// - `reason`：写入会话与注册表投影的显式生命周期原因。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after all resident records are projected as stopped, or a lock/invariant error.
+    /// 全部驻留记录投影为 stopped 后返回成功，否则返回锁或不变量错误。
+    pub(super) fn mark_stopped_tasks_with_transaction_locks_held(
         &self,
         task_ids: &[SessionId],
+        reason: &str,
     ) -> Result<(), String> {
-        if task_ids.is_empty() {
-            return Ok(());
-        }
-        let task_ids = task_ids.iter().copied().collect::<BTreeSet<_>>();
-        let archived_status = status_name_for_task_session_status(TaskSessionStatus::Archived);
         let updated_at = current_unix_millis_text();
-        let mut sessions = self.sessions.write().map_err(|_| {
-            String::from("The task-session registry is locked and cannot archive closed agents.")
-        })?;
-        for record in sessions.values_mut() {
-            if task_ids.contains(&record.task_id) {
-                record.last_status = archived_status.to_string();
-                record.updated_at = updated_at.clone();
-            }
+        for task_id in task_ids {
+            self.mark_stopped_task_projection_with_transaction_lock_held(
+                *task_id,
+                reason,
+                &updated_at,
+            )?;
         }
         Ok(())
     }
 
-    /// Marks stopped tasks in the in-memory record and Vulcan registry before background joins settle.
-    /// 在后台 Join 落定前，将已停止任务同步标记到内存记录与 Vulcan 注册表。
-    fn mark_stopped_tasks_in_registry(&self, task_ids: &[SessionId]) -> Result<(), String> {
-        if task_ids.is_empty() {
-            return Ok(());
-        }
-        let updated_at = current_unix_millis_text();
-        let mut stopped_records = Vec::new();
-        {
+    /// Projects one stopped task after its execution transaction lock has already been acquired.
+    /// 在对应执行事务锁已取得后投影单个 stopped 任务。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `task_id`: Stable task whose resident projections may be updated.
+    /// - `task_id`：可能需要更新驻留投影的稳定任务。
+    /// - `reason`: Explicit stop reason.
+    /// - `reason`：显式停止原因。
+    /// - `updated_at`: Shared transaction timestamp encoded for the resident record.
+    /// - `updated_at`：为驻留记录编码的共享事务时间戳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the task is absent/archived or both open resident projections were updated consistently.
+    /// 任务不存在、已归档，或两个开放驻留投影已一致更新时返回成功。
+    fn mark_stopped_task_projection_with_transaction_lock_held(
+        &self,
+        task_id: SessionId,
+        reason: &str,
+        updated_at: &str,
+    ) -> Result<(), String> {
+        // stopped_record is the exact stable record snapshot projected after mutation.
+        // stopped_record 是修改后用于投影的精确稳定记录快照。
+        let stopped_record = {
             let mut sessions = self.sessions.write().map_err(|_| {
                 String::from(
                     "The task-session registry is locked and cannot mark stopped subagents.",
                 )
             })?;
-            for task_id in task_ids {
-                let Some(record) = sessions.get_mut(task_id) else {
-                    continue;
-                };
-                record.last_status =
-                    status_name_for_task_session_status(TaskSessionStatus::Stopped).to_string();
-                record.updated_at = updated_at.clone();
-                if record.last_result_text.trim().is_empty()
-                    || record.last_result_text == RUNNING_TASK_RESULT_SUMMARY
-                {
-                    record.last_result_text = String::from(STOPPED_TASK_RESULT_SUMMARY);
-                }
-                stopped_records.push(record.clone());
+            let Some(record) = sessions.get_mut(&task_id) else {
+                return Ok(());
+            };
+            let current_status =
+                task_session_status_from_record_status(record.last_status.as_str())?;
+            if current_status == TaskSessionStatus::Archived {
+                return Ok(());
             }
-        }
-        for record in stopped_records {
-            let result_summary = (!record.last_result_text.trim().is_empty())
-                .then_some(record.last_result_text.as_str());
-            self.upsert_subagent_registry_entry(
-                &record,
-                TaskSessionStatus::Stopped,
-                result_summary,
-            )?;
-        }
-        Ok(())
+            record.last_status =
+                status_name_for_task_session_status(TaskSessionStatus::Stopped).to_string();
+            record.updated_at = updated_at.to_string();
+            record.stop_reason = Some(reason.to_string());
+            if record.last_result_text.trim().is_empty()
+                || record.last_result_text == RUNNING_TASK_RESULT_SUMMARY
+            {
+                record.last_result_text = String::from(STOPPED_TASK_RESULT_SUMMARY);
+            }
+            record.clone()
+        };
+        let result_summary = (!stopped_record.last_result_text.trim().is_empty())
+            .then_some(stopped_record.last_result_text.as_str());
+        self.upsert_subagent_registry_entry(
+            &stopped_record,
+            TaskSessionStatus::Stopped,
+            result_summary,
+        )
     }
 
     /// Returns whether one child task still owns an in-flight abort handle, which the WebUI can treat as the source of truth for active-running state.
@@ -273,32 +340,54 @@ impl TaskRuntime {
 
     /// Subscribes to one detached child-task event stream, replaying any buffered early events before switching to live delivery.
     /// 订阅某条分离子任务事件流，并在切换到实时投递之前先回放已经缓冲的早期事件。
+    /// Subscribes to one exact detached execution stream and replays only that execution's buffer.
+    /// 订阅一条精确的分离执行流，并且仅回放该执行的缓冲事件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` is the stable task session reused across execution attempts.
+    /// `task_id` 是跨执行尝试复用的稳定任务会话标识。
+    /// `execution_id` is the unique concrete execution attempt to observe.
+    /// `execution_id` 是要观测的唯一具体执行尝试。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A static asynchronous stream isolated from every other execution of the same task.
+    /// 返回一条与同一任务其他执行完全隔离的静态异步流。
     pub fn subscribe_detached_task_events(
         &self,
         task_id: SessionId,
+        execution_id: &str,
     ) -> impl futures_util::Stream<Item = DetachedTaskRuntimeEvent> + Send + 'static {
+        // stream_key identifies the only execution this subscriber may consume.
+        // stream_key 标识本订阅者唯一允许消费的执行。
+        let stream_key = DetachedTaskExecutionKey::new(task_id, execution_id);
+        // sender and receiver form the subscriber-local delivery channel.
+        // sender 与 receiver 组成订阅者本地投递通道。
         let (sender, mut receiver) = unbounded_channel::<DetachedTaskRuntimeEvent>();
-        let terminal_task_without_stream = self.task_has_terminal_record(task_id);
+        // buffered_events and closed are derived only from the exact execution stream state.
+        // buffered_events 与 closed 仅从精确执行流状态派生。
         let (buffered_events, closed) = {
             match self.detached_task_event_streams.write() {
                 Ok(mut streams) => {
-                    if !streams.contains_key(&task_id) && terminal_task_without_stream {
-                        (Vec::new(), true)
-                    } else {
-                        let state = streams.entry(task_id).or_default();
+                    let result = if let Some(state) = streams.get_mut(&stream_key) {
                         let buffered_events = std::mem::take(&mut state.buffered_events);
                         let closed = state.closed;
                         if !closed {
                             state.subscribers.push(sender.clone());
-                        } else {
-                            streams.remove(&task_id);
                         }
                         (buffered_events, closed)
+                    } else {
+                        (Vec::new(), true)
+                    };
+                    if result.1 {
+                        streams.remove(&stream_key);
                     }
+                    result
                 }
                 Err(_) => {
                     eprintln!(
-                        "[task-runtime] detached task stream registry is locked; returning an empty stream for task {task_id}"
+                        "[task-runtime] detached task stream registry is locked; returning an empty stream for task {task_id} execution {execution_id}"
                     );
                     (Vec::new(), true)
                 }
@@ -319,39 +408,38 @@ impl TaskRuntime {
         }
     }
 
-    /// Opens one detached child-task event stream for a fresh run before the parent announces DelegateStarted.
-    /// 在父级发布 DelegateStarted 之前，为新一轮子任务运行打开一条分离事件流。
+    /// Opens one execution-scoped detached event stream before the parent announces DelegateStarted.
+    /// 在父级发布 DelegateStarted 之前打开一条执行级分离事件流。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` is the stable child task session.
+    /// `task_id` 是稳定子任务会话。
+    /// `execution_id` is the unique execution attempt being opened.
+    /// `execution_id` 是正在打开的唯一执行尝试。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after opening only the exact execution key, or a registry-lock error.
+    /// 仅打开精确执行键后返回成功，或返回注册表锁错误。
     pub(super) fn open_detached_task_event_stream_for_run(
         &self,
         task_id: SessionId,
+        execution_id: &str,
     ) -> Result<(), String> {
         let mut streams = self.detached_task_event_streams.write().map_err(|_| {
             String::from(
                 "The detached task stream registry is locked and cannot open the subagent stream.",
             )
         })?;
-        let state = streams.entry(task_id).or_default();
+        let state = streams
+            .entry(DetachedTaskExecutionKey::new(task_id, execution_id))
+            .or_default();
         state.closed = false;
         // A resumed run reuses the same task id, so stale terminal output must not replay into the new live panel.
         // 续跑会复用同一任务标识，因此旧终态输出不能回放到新的实时面板。
         state.buffered_events.clear();
         Ok(())
-    }
-
-    /// Returns whether the task registry already knows this child task reached a terminal status.
-    /// 返回任务注册表是否已经确认该子任务到达终态。
-    fn task_has_terminal_record(&self, task_id: SessionId) -> bool {
-        self.sessions
-            .read()
-            .map(|sessions| {
-                sessions.get(&task_id).is_some_and(|record| {
-                    matches!(
-                        record.last_status.as_str(),
-                        "completed" | "failed" | "stopped"
-                    )
-                })
-            })
-            .unwrap_or(false)
     }
 
     /// Returns one backend handler for the given controller session identifier when it exists.
@@ -387,33 +475,314 @@ impl TaskRuntime {
         }
     }
 
-    /// Installs one active child-task abort handle and returns a guard that unregisters it on drop.
-    /// 安装一条活动子任务中止句柄，并返回一个在 Drop 时自动注销它的守卫。
-    pub(super) fn install_active_task_run(
+    /// Returns the transaction lock serializing mutable execution state for one stable task.
+    /// 返回用于串行化单个稳定任务可变执行状态的事务锁。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the stable task transaction domain.
+    /// `task_id` 标识稳定任务事务域。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The shared per-task lock, or an error when the lock registry is poisoned.
+    /// 返回共享的按任务锁，锁注册表污染时返回错误。
+    pub(super) fn task_execution_state_lock(
+        &self,
+        task_id: SessionId,
+    ) -> Result<Arc<Mutex<()>>, String> {
+        let mut locks = self.task_execution_state_locks.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction registry is locked and cannot coordinate state ownership.",
+            )
+        })?;
+        locks.retain(|_, transaction_lock| transaction_lock.strong_count() > 0);
+        if let Some(transaction_lock) = locks.get(&task_id).and_then(Weak::upgrade) {
+            return Ok(transaction_lock);
+        }
+        let transaction_lock = Arc::new(Mutex::new(()));
+        locks.insert(task_id, Arc::downgrade(&transaction_lock));
+        Ok(transaction_lock)
+    }
+
+    /// Resolves deduplicated task transaction locks in stable identifier order.
+    /// 按稳定标识顺序解析去重后的任务事务锁。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `task_ids`: Stable tasks that must share one multi-task transaction boundary.
+    /// - `task_ids`：必须共享同一多任务事务边界的稳定任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Lock handles ordered by task id so every caller acquires multi-task transactions consistently.
+    /// 按任务标识排序的锁句柄，使全部调用方以一致顺序取得多任务事务。
+    pub(super) fn ordered_task_execution_state_locks(
+        &self,
+        task_ids: &[SessionId],
+    ) -> Result<Vec<Arc<Mutex<()>>>, String> {
+        task_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|task_id| self.task_execution_state_lock(task_id))
+            .collect()
+    }
+
+    /// Atomically validates prepared-record ownership and reserves the active execution owner.
+    /// 原子校验准备记录所有权并预留活动执行所有者。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the stable task being claimed.
+    /// `task_id` 标识正在被认领的稳定任务。
+    /// `execution_id` identifies the prepared concrete execution.
+    /// `execution_id` 标识已准备的具体执行。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The active-run guard, or an ownership/lock error for a superseded execution.
+    /// 返回活动运行守卫；执行已被取代或锁失败时返回错误。
+    pub(super) fn claim_and_reserve_active_task_run(
         self: &Arc<Self>,
         task_id: SessionId,
-        handle: AbortHandle,
+        execution_id: &str,
+    ) -> Result<ActiveTaskRunGuard, String> {
+        let transaction_lock = self.task_execution_state_lock(task_id)?;
+        let _transaction = transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot claim the prepared run.",
+            )
+        })?;
+        self.claim_task_execution_record_owner(task_id, execution_id)?;
+        self.reserve_active_task_run(task_id, execution_id)
+    }
+
+    /// Reserves one exact child execution before DelegateStarted is published.
+    /// 在发布 DelegateStarted 前预留一个精确子执行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the stable child task.
+    /// `task_id` 标识稳定子任务。
+    /// `execution_id` identifies the concrete protocol execution being started.
+    /// `execution_id` 标识正在启动的具体协议执行。
+    ///
+    /// # Returns
+    /// 返回值
+    /// An ownership guard for the new execution, or an error when the registry is locked.
+    /// 返回新执行的所有权守卫；注册表被锁定时返回错误。
+    pub(super) fn reserve_active_task_run(
+        self: &Arc<Self>,
+        task_id: SessionId,
+        execution_id: &str,
     ) -> Result<ActiveTaskRunGuard, String> {
         let run_id = Uuid::new_v4();
-        self.active_task_runs
-            .write()
-            .map_err(|_| {
-                String::from(
-                    "The active task registry is locked and cannot register the subagent run.",
-                )
-            })?
+        let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
+            String::from("The active task registry is locked and cannot register the subagent run.")
+        })?;
+        let replaced_handle = active_task_runs
             .insert(
                 task_id,
                 ActiveTaskRunEntry {
                     run_id,
-                    abort_handle: handle,
+                    execution_id: execution_id.to_string(),
+                    abort_handle: None,
+                    stop_requested: false,
                 },
-            );
+            )
+            .and_then(|entry| entry.abort_handle);
+        drop(active_task_runs);
+        if let Some(replaced_handle) = replaced_handle {
+            replaced_handle.abort();
+        }
         Ok(ActiveTaskRunGuard {
             runtime: Arc::clone(self),
             task_id,
             run_id,
         })
+    }
+
+    /// Claims the stable task record for one concrete execution before runtime start events escape.
+    /// 在运行时启动事件逸出前，为一个具体执行认领稳定任务记录。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the stable task record.
+    /// `task_id` 标识稳定任务记录。
+    /// `execution_id` identifies the execution attempting to start.
+    /// `execution_id` 标识尝试启动的执行。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success for the current or unowned record, or a prestart cancellation for stale ownership.
+    /// 当前或无所有者记录返回成功；所有权过期时返回启动前取消错误。
+    pub(super) fn claim_task_execution_record_owner(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<(), String> {
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from(
+                "The task session registry is locked and cannot validate execution ownership.",
+            )
+        })?;
+        let Some(record) = sessions.get_mut(&task_id) else {
+            return Ok(());
+        };
+        if task_session_status_from_record_status(record.last_status.as_str())?
+            == TaskSessionStatus::Archived
+        {
+            return Err(format!(
+                "Task `{task_id}` is archived and cannot claim execution `{execution_id}`."
+            ));
+        }
+        match record.execution_id.as_deref() {
+            Some(current_execution_id) if current_execution_id != execution_id => {
+                Err(task_execution_record_owner_conflict_error(
+                    task_id,
+                    execution_id,
+                    current_execution_id,
+                ))
+            }
+            Some(_) => Ok(()),
+            None => {
+                record.execution_id = Some(execution_id.to_string());
+                Ok(())
+            }
+        }
+    }
+
+    /// Returns whether one invocation may commit a status to its stable record.
+    /// 返回某次调用是否可以向其稳定记录提交指定状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `invocation` carries the stable task and concrete execution identities.
+    /// `invocation` 携带稳定任务与具体执行身份。
+    /// `incoming_status` is the state this execution is attempting to commit.
+    /// `incoming_status` 是本执行尝试提交的状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether ownership and explicit lifecycle state allow the commit, or a registry-lock error.
+    /// 返回所有权与显式生命周期状态是否允许提交，或返回注册表锁错误。
+    pub(super) fn task_execution_can_commit_status(
+        &self,
+        invocation: &TaskExecutionRequest,
+        incoming_status: TaskSessionStatus,
+    ) -> Result<bool, String> {
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from(
+                "The task session registry is locked and cannot inspect execution ownership.",
+            )
+        })?;
+        let Some(record) = sessions.get_mut(&invocation.task_id) else {
+            return Ok(true);
+        };
+        let current_status = task_session_status_from_record_status(record.last_status.as_str())?;
+        if current_status == TaskSessionStatus::Archived {
+            return Ok(false);
+        }
+        let owns_record = match record.execution_id.as_deref() {
+            Some(execution_id) => execution_id == invocation.execution_id,
+            None => {
+                record.execution_id = Some(invocation.execution_id.clone());
+                true
+            }
+        };
+        if !owns_record {
+            return Ok(false);
+        }
+        Ok(match current_status {
+            TaskSessionStatus::Archived => false,
+            TaskSessionStatus::Stopped => incoming_status == TaskSessionStatus::Stopped,
+            TaskSessionStatus::Created
+            | TaskSessionStatus::Running
+            | TaskSessionStatus::WaitingChildren
+            | TaskSessionStatus::WaitingFollowup
+            | TaskSessionStatus::Compacting
+            | TaskSessionStatus::Completed
+            | TaskSessionStatus::Failed => true,
+        })
+    }
+
+    /// Attaches an abort handle to the exact reserved child execution.
+    /// 将中止句柄附加到精确的已预留子执行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the stable child task.
+    /// `task_id` 标识稳定子任务。
+    /// `run_id` identifies the internal reservation owner.
+    /// `run_id` 标识内部预留所有者。
+    /// `handle` aborts the concrete provider future.
+    /// `handle` 用于中止具体 Provider future。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the reservation still matches, otherwise an identity or lock error.
+    /// 预留仍匹配时返回成功，否则返回身份或锁错误。
+    pub(super) fn attach_active_task_run_abort_handle(
+        &self,
+        task_id: SessionId,
+        run_id: Uuid,
+        handle: AbortHandle,
+    ) -> Result<(), String> {
+        let should_abort = {
+            let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
+                String::from(
+                    "The active task registry is locked and cannot attach the subagent abort handle.",
+                )
+            })?;
+            let entry = active_task_runs.get_mut(&task_id).ok_or_else(|| {
+                format!("Task `{task_id}` no longer owns the reserved active execution.")
+            })?;
+            if entry.run_id != run_id {
+                return Err(format!(
+                    "Task `{task_id}` active execution reservation was replaced before its abort handle attached."
+                ));
+            }
+            let should_abort = entry.stop_requested;
+            entry.abort_handle = Some(handle.clone());
+            should_abort
+        };
+        if should_abort {
+            handle.abort();
+        }
+        Ok(())
+    }
+
+    /// Returns whether one exact execution currently owns the task active-run reservation.
+    /// 返回某个精确执行当前是否持有任务活动运行预留。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the stable child task.
+    /// `task_id` 标识稳定子任务。
+    /// `execution_id` identifies the protocol execution to compare.
+    /// `execution_id` 标识需要比较的协议执行。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Whether the exact execution owns the current reservation, or a registry-lock error.
+    /// 返回精确执行是否持有当前预留，或返回注册表锁错误。
+    pub fn is_task_execution_current(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<bool, String> {
+        Ok(self
+            .active_task_runs
+            .read()
+            .map_err(|_| {
+                String::from(
+                    "The active task registry is locked and cannot inspect the current subagent execution.",
+                )
+            })?
+            .get(&task_id)
+            .is_some_and(|entry| entry.execution_id == execution_id))
     }
 
     /// Removes one active child-task abort handle from the registry.
@@ -448,11 +817,21 @@ impl TaskRuntime {
             .any(|candidate_task_id| active_runs.contains_key(&candidate_task_id))
     }
 
-    /// Publishes one detached child-task event, buffering it when no subscriber has attached yet and replaying it later on first subscription.
-    /// 发布一条分离子任务事件；若当前尚无订阅者，则先缓冲，待首个订阅建立后再回放。
+    /// Publishes one detached event to the exact execution stream, buffering it before subscription.
+    /// 向精确执行流发布一条分离事件，并在订阅前进行缓冲。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` is the stable child task session.
+    /// `task_id` 是稳定子任务会话。
+    /// `execution_id` is the unique execution attempt that produced the event.
+    /// `execution_id` 是产出事件的唯一执行尝试。
+    /// `event` is the child or parent runtime event to deliver.
+    /// `event` 是要投递的子级或父级运行时事件。
     pub(super) fn publish_detached_task_event(
         &self,
         task_id: SessionId,
+        execution_id: &str,
         event: DetachedTaskRuntimeEvent,
     ) {
         let Ok(mut streams) = self.detached_task_event_streams.write() else {
@@ -461,7 +840,9 @@ impl TaskRuntime {
             );
             return;
         };
-        let state = streams.entry(task_id).or_default();
+        let state = streams
+            .entry(DetachedTaskExecutionKey::new(task_id, execution_id))
+            .or_default();
         if state.closed {
             return;
         }
@@ -483,23 +864,31 @@ impl TaskRuntime {
         }
     }
 
-    /// Marks one detached child-task event stream as terminal and drops active senders so WebUI listener streams can close naturally.
-    /// 将某条分离子任务事件流标记为终态，并释放活动发送端，让WebUI监听流自然关闭。
-    pub(super) fn close_detached_task_event_stream(&self, task_id: SessionId) {
+    /// Closes only one exact detached execution stream and drops its active senders.
+    /// 仅关闭一条精确分离执行流并释放其活动发送端。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` is the stable child task session.
+    /// `task_id` 是稳定子任务会话。
+    /// `execution_id` is the unique execution attempt reaching terminal state.
+    /// `execution_id` 是到达终态的唯一执行尝试。
+    pub(super) fn close_detached_task_event_stream(&self, task_id: SessionId, execution_id: &str) {
         let Ok(mut streams) = self.detached_task_event_streams.write() else {
             eprintln!(
                 "[task-runtime] detached task stream registry is locked; stream close failed for task {task_id}"
             );
             return;
         };
-        let should_remove = if let Some(state) = streams.get_mut(&task_id) {
+        let stream_key = DetachedTaskExecutionKey::new(task_id, execution_id);
+        let should_remove = if let Some(state) = streams.get_mut(&stream_key) {
             state.closed = true;
             !state.subscribers.is_empty() || state.buffered_events.is_empty()
         } else {
             false
         };
         if should_remove {
-            streams.remove(&task_id);
+            streams.remove(&stream_key);
         }
     }
 }

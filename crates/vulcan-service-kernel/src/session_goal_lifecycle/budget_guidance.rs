@@ -3,18 +3,45 @@
 
 use super::*;
 
-/// Clears the in-memory budget-limit report marker for one goal id.
-/// 清理单个目标标识对应的内存预算耗尽提示标记。
-pub(crate) fn clear_budget_limit_reported_goal_id(
+/// Clears all process and queued runtime state owned by one retired Goal budget stage.
+/// 清理一个退役 Goal 预算阶段拥有的全部进程态与队列运行态。
+///
+/// # Parameters
+/// 参数
+/// `state` owns Goal report markers and session pending queues.
+/// `state` 持有 Goal 提示标记与会话 pending 队列。
+/// `session_id` identifies the session whose internal queue must be cleaned.
+/// `session_id` 标识需要清理内部队列的会话。
+/// `goal_id` identifies the retired budget stage.
+/// `goal_id` 标识退役的预算阶段。
+///
+/// # Returns
+/// 返回值
+/// The number of removed internal guidance entries, or a state-lock error.
+/// 返回移除的内部引导条目数量，或状态锁错误。
+pub(crate) fn clear_session_goal_stage_runtime_state(
     state: &SharedServiceBridgeState,
+    session_id: SessionId,
     goal_id: &str,
-) -> Result<(), String> {
-    state
+) -> Result<usize, String> {
+    let mut guard = state
         .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .budget_limit_reported_goal_ids
-        .remove(goal_id);
-    Ok(())
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    guard.budget_limit_reported_goal_ids.remove(goal_id);
+    let removed = guard
+        .workspace_snapshot
+        .as_mut()
+        .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+        .map(|runtime_state| {
+            let before = runtime_state.ui_state.pending_prompt_queue.len();
+            runtime_state
+                .ui_state
+                .pending_prompt_queue
+                .retain(|entry| entry.task_id.as_deref() != Some(goal_id));
+            before.saturating_sub(runtime_state.ui_state.pending_prompt_queue.len())
+        })
+        .unwrap_or_default();
+    Ok(removed)
 }
 
 /// Returns whether one budget-limited goal already received a wrap-up guidance.

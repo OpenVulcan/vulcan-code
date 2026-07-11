@@ -13,7 +13,7 @@ pub(crate) fn ensure_webui_context_compaction_summary_body_for_state(
     budget_note: &str,
     trigger: &str,
     summary_body: &str,
-) {
+) -> Result<(), String> {
     let has_body = runtime_state
         .conversation_state
         .records
@@ -34,7 +34,7 @@ pub(crate) fn ensure_webui_context_compaction_summary_body_for_state(
                 && !record.body.trim().is_empty()
         });
     if has_body {
-        return;
+        return Ok(());
     }
     let entry = SessionMessageEntry {
         id: String::new(),
@@ -53,7 +53,8 @@ pub(crate) fn ensure_webui_context_compaction_summary_body_for_state(
         })),
         created_at: String::new(),
     };
-    append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
+    append_webui_session_message_entry_to_state(runtime_state, session_id, entry)?;
+    Ok(())
 }
 
 /// Appends the terminal visible boundary for a failed compaction section.
@@ -65,7 +66,7 @@ pub(crate) fn append_webui_context_compaction_failed_message_to_state(
     budget_note: &str,
     trigger: &str,
     error: &str,
-) {
+) -> Result<(), String> {
     let entry = SessionMessageEntry {
         id: String::new(),
         kind: SessionMessageKind::Assistant,
@@ -84,7 +85,8 @@ pub(crate) fn append_webui_context_compaction_failed_message_to_state(
         })),
         created_at: String::new(),
     };
-    append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
+    append_webui_session_message_entry_to_state(runtime_state, session_id, entry)?;
+    Ok(())
 }
 
 /// Appends the terminal visible boundary for one compaction section.
@@ -119,7 +121,7 @@ pub(crate) fn append_webui_context_compaction_end_message_to_state(
     trigger: &str,
     provider_request_count: usize,
     input_prune_report: Option<&CompactionInputPruneReport>,
-) -> String {
+) -> Result<String, String> {
     let mut metadata = json!({
         "context_compaction_status": true,
         "context_compaction_section_id": section_id,

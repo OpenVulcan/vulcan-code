@@ -114,7 +114,7 @@ pub(crate) fn build_runtime_bootstrap_core(
 ) -> Result<RuntimeBootstrapCore, String> {
     let runtime_prompt = build_runtime_prompt_layers_for_agent(preparation, active_agent);
     let system_preamble = runtime_prompt.fallback_text.clone();
-    let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
+    let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state)?;
     let system_update_policy = ProviderSystemUpdateLoweringPolicy::default();
     let lowering_repair_events = collect_system_update_lowering_repairs(
         preparation,
@@ -142,7 +142,8 @@ pub(crate) fn build_runtime_bootstrap_core(
             resolve_provider_additional_params(&preparation.model_blueprint),
         ),
         core_snapshot.clone(),
-    );
+    )
+    .map_err(|error| format!("Invalid core conversation snapshot: {error}"))?;
 
     Ok(RuntimeBootstrapCore {
         system_preamble,

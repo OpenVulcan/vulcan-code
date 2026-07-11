@@ -199,7 +199,7 @@ function askQuestionAnswerList(value: unknown): string[] {
 // askQuestionPresentationId 为单条 ask 展示行创建稳定展开键。
 function askQuestionPresentationId(blocks: ToolExecutionConversationBlock[], questions: AskQuestionPresentationItem[]): string {
   const identifier = blocks
-    .map((block) => block.toolCallId ?? block.toolResultId ?? block.id)
+    .map((block) => block.toolCallId ?? block.id)
     .find(Boolean);
   const questionKey = questions.map((question) => `${question.header}:${question.question}`).join("|");
   return `ask-question:${identifier ?? compactHash(questionKey)}`;

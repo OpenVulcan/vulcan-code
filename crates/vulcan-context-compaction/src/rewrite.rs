@@ -2,6 +2,9 @@
 //! 供WebUI状态与持久化流程共享的规范会话压缩改写辅助模块。
 
 use serde_json::Value;
+use vulcan_context::protocol::{
+    SessionConversationMessageIdentityError, validate_session_conversation_message_identities,
+};
 use vulcan_context::{
     ContextCompactionPolicy, SessionConversationMessage, SessionConversationPayload,
     SessionConversationRecord, SessionConversationState, SessionMessageKind,
@@ -39,6 +42,11 @@ struct CanonicalTailSegment {
 
 /// Rewrites the active canonical window using one compaction summary plus the retained recent tail.
 /// 使用一条压缩摘要与保留的最近尾部消息改写当前活动规范窗口。
+///
+/// # Returns
+/// 返回值
+/// Returns success after one validated atomic rewrite, or an identity error with messages and continuation unchanged.
+/// 完成一次经过校验的原子改写后返回成功；身份错误时消息与 continuation 保持不变。
 pub fn compact_conversation_with_summary(
     state: &mut SessionConversationState,
     summary_message_id: impl Into<String>,
@@ -46,7 +54,8 @@ pub fn compact_conversation_with_summary(
     summary_body: impl Into<String>,
     updated_at: impl Into<String>,
     policy: ContextCompactionPolicy,
-) {
+) -> Result<(), SessionConversationMessageIdentityError> {
+    validate_session_conversation_message_identities(&state.messages)?;
     let retained_tail = canonical_recent_tail_messages(&state.messages, policy);
     let mut compacted_messages = Vec::with_capacity(retained_tail.len() + 1);
     let summary_text = summary_body.into();
@@ -71,9 +80,11 @@ pub fn compact_conversation_with_summary(
     };
     compacted_messages.push(summary_message);
     compacted_messages.extend(retained_tail);
+    validate_session_conversation_message_identities(&compacted_messages)?;
     state.messages = compacted_messages;
     state.continuation.last_provider_message_id = None;
     state.continuation.updated_at = Some(updated_at.into());
+    Ok(())
 }
 
 /// Rewrites the active canonical window using the planner's exact covered-source boundary.
@@ -95,6 +106,11 @@ pub fn compact_conversation_with_summary(
 /// `source_until_message_id` 是摘要覆盖的闭区间源边界。
 /// `policy` is the fallback policy used when the boundary is absent or stale.
 /// `policy` 是边界缺失或过期时使用的回退策略。
+///
+/// # Returns
+/// 返回值
+/// Returns success after one validated atomic rewrite, or an identity error with messages and continuation unchanged.
+/// 完成一次经过校验的原子改写后返回成功；身份错误时消息与 continuation 保持不变。
 pub fn compact_conversation_with_summary_until(
     state: &mut SessionConversationState,
     summary_message_id: impl Into<String>,
@@ -103,7 +119,8 @@ pub fn compact_conversation_with_summary_until(
     updated_at: impl Into<String>,
     source_until_message_id: Option<&str>,
     policy: ContextCompactionPolicy,
-) {
+) -> Result<(), SessionConversationMessageIdentityError> {
+    validate_session_conversation_message_identities(&state.messages)?;
     let summary_text = summary_body.into();
     let summary_message = summary_conversation_message(
         summary_message_id.into(),
@@ -122,9 +139,11 @@ pub fn compact_conversation_with_summary_until(
     let mut compacted_messages = Vec::with_capacity(retained_tail.len() + 1);
     compacted_messages.push(summary_message);
     compacted_messages.extend(retained_tail);
+    validate_session_conversation_message_identities(&compacted_messages)?;
     state.messages = compacted_messages;
     state.continuation.last_provider_message_id = None;
     state.continuation.updated_at = Some(updated_at.into());
+    Ok(())
 }
 
 /// Builds the synthetic canonical summary message inserted by one compaction rewrite.
@@ -733,7 +752,8 @@ mod tests {
             "1780000000000",
             Some("old-assistant"),
             ContextCompactionPolicy::default(),
-        );
+        )
+        .expect("valid compacted message identities");
 
         let ids = state
             .messages
@@ -793,7 +813,6 @@ mod tests {
                 SessionConversationMessage {
                     id: String::from("recent-tool-result"),
                     payload: SessionConversationPayload::ToolResult {
-                        tool_result_id: String::from("tool-result"),
                         tool_call_id: Some(String::from("tool-call-provider")),
                         text: "很大的工具输出".repeat(200),
                     },
@@ -815,7 +834,8 @@ mod tests {
             "摘要",
             "2",
             policy,
-        );
+        )
+        .expect("valid compacted message identities");
 
         assert_eq!(state.messages.len(), 3);
         assert_eq!(state.messages[0].id, "summary");
@@ -843,7 +863,6 @@ mod tests {
             body: String::from("## 工具返回\n\n媒体已生成。"),
             metadata: Some(json!({
                 "tool_call_id": "call-media-1",
-                "tool_result_id": "tool-result-call-media-1",
                 "host_result": {
                     "kind": "generated_attachments",
                     "payload": {
@@ -939,7 +958,6 @@ mod tests {
             body: String::from("## 工具返回\n\n文件变更已应用。"),
             metadata: Some(json!({
                 "tool_call_id": "call-change-set-1",
-                "tool_result_id": "tool-result-call-change-set-1",
                 "host_result": {
                     "kind": "change_set",
                     "payload": {
@@ -1019,5 +1037,70 @@ mod tests {
             Some("skipped")
         );
         assert!(metadata.get("noise").is_none());
+    }
+
+    /// Verifies a summary identity collision leaves messages and continuation completely unchanged.
+    /// 验证摘要身份冲突会使消息与 continuation 完全保持不变。
+    #[test]
+    fn compaction_rewrite_is_atomic_on_summary_identity_collision() {
+        // state retains `summary-1` after the selected source boundary, creating an exact collision.
+        // state 会在所选源边界后保留 `summary-1`，从而形成准确冲突。
+        let mut state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("source-1"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("source"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("summary-1"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("retained"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+            ],
+            records: Vec::new(),
+            continuation: vulcan_context::SessionProviderContinuationState {
+                provider_id: Some(String::from("provider")),
+                model_id: Some(String::from("model")),
+                last_provider_message_id: Some(String::from("response-1")),
+                updated_at: Some(String::from("before")),
+            },
+        };
+        // original_state captures both the message window and continuation before validation.
+        // original_state 捕获校验前的消息窗口与 continuation。
+        let original_state = serde_json::to_value(&state).expect("state should serialize");
+
+        // error proves the candidate window is rejected before either canonical field is assigned.
+        // error 证明候选窗口会在任何规范字段赋值前被拒绝。
+        let error = compact_conversation_with_summary_until(
+            &mut state,
+            "summary-1",
+            SessionMessageKind::Assistant,
+            "compacted",
+            "after",
+            Some("source-1"),
+            ContextCompactionPolicy::default(),
+        )
+        .expect_err("summary identity collision must fail");
+
+        assert!(matches!(
+            error,
+            SessionConversationMessageIdentityError::Duplicate {
+                message_index: 1,
+                ..
+            }
+        ));
+        assert_eq!(
+            serde_json::to_value(&state).expect("state should serialize after failure"),
+            original_state
+        );
     }
 }

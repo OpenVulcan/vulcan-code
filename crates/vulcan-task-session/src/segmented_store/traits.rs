@@ -296,23 +296,34 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
         if normalized_public_task_id.is_empty() {
             return Ok(None);
         }
-        let mut matches = self
+        let (mut open_matches, mut archived_matches): (Vec<_>, Vec<_>) = self
             .load_task_session_metadata_for_parent(parent)?
             .into_iter()
             .filter(|metadata| metadata.public_task_id == normalized_public_task_id)
-            .collect::<Vec<_>>();
-        matches.sort_by(|left, right| {
-            // Prefer open replacements over closed history when a public id was reused.
-            // 公开标识复用时，优先选择未关闭的新记录，而不是已关闭历史记录。
-            let left_archived = left.status == TaskSessionStatus::Archived;
-            let right_archived = right.status == TaskSessionStatus::Archived;
-            left_archived
-                .cmp(&right_archived)
-                .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .partition(|metadata| metadata.status != TaskSessionStatus::Archived);
+        if open_matches.len() > 1 {
+            let duplicate_session_ids = open_matches
+                .iter()
+                .map(|metadata| metadata.task_session_id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(SessionStoreError::new(format!(
+                "Parent-scoped task id `{normalized_public_task_id}` has multiple open sessions: {duplicate_session_ids}."
+            )));
+        }
+        if let Some(open_match) = open_matches.pop() {
+            return Ok(Some(open_match));
+        }
+        archived_matches.sort_by(|left, right| {
+            // Select only the newest archived history after proving that no open owner exists.
+            // 仅在确认不存在开放所有者后，选择最新的归档历史。
+            right
+                .updated_at
+                .cmp(&left.updated_at)
                 .then_with(|| right.created_at.cmp(&left.created_at))
                 .then_with(|| right.task_session_id.cmp(&left.task_session_id))
         });
-        Ok(matches.into_iter().next())
+        Ok(archived_matches.into_iter().next())
     }
 
     /// Appends a task invocation event to the direct parent segmented stream.

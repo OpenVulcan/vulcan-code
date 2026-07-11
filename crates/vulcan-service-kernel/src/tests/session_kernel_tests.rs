@@ -37,12 +37,80 @@ fn webui_session_kernel_rejects_turn_during_lifecycle_transition() {
     // state owns both the lifecycle reservation and runtime kernel table under test.
     // state 持有测试中的生命周期预留状态与运行内核表。
     let mut state = test_service_state_with_parent_session(session_id);
-    state.session_lifecycle_transition_ids.insert(session_id);
+    state.session_turn_admission_reservations.insert(
+        session_id,
+        SessionTurnAdmissionReservation {
+            reservation_id: Uuid::new_v4(),
+            kind: SessionTurnAdmissionReservationKind::LifecycleTransition,
+        },
+    );
 
     let start_result = start_webui_session_kernel_user_turn(&mut state, session_id, "blocked-turn");
 
     assert!(start_result.is_err());
     assert!(!webui_session_kernel_has_active_turn(&state, session_id));
+}
+
+/// Verifies a Goal mutation blocks registration in-flight and permanently retires captured authority.
+/// 验证 Goal 变更会阻止进行中的注册，并永久退役已捕获的权威版本。
+#[test]
+fn goal_dispatch_authority_rejects_turns_during_and_after_mutation() {
+    // session_id identifies the Goal session whose dispatch authority changes.
+    // session_id 标识分发权威发生变化的 Goal 会话。
+    let session_id = SessionId::from_u128(0x95);
+    // state owns the exclusion reservation, authority version, and runtime kernel atomically.
+    // state 原子持有互斥预留、权威版本与运行时 kernel。
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        session_id,
+    )));
+    // captured_version represents a Goal dispatch validated before the mutation begins.
+    // captured_version 表示在变更开始前完成校验的 Goal 分发版本。
+    let captured_version = session_goal_dispatch_version(&state, session_id)
+        .expect("initial Goal dispatch version should be readable");
+    // transition_guard prevents registration while the durable Goal mutation is incomplete.
+    // transition_guard 在持久 Goal 变更尚未完成时阻止回合注册。
+    let transition_guard = begin_session_turn_start_exclusion(&state, [session_id], "更新目标状态")
+        .expect("Goal mutation should reserve turn registration");
+    {
+        // guard exposes the shared service state for the registration attempt under test.
+        // guard 为测试中的注册尝试提供共享服务状态。
+        let mut guard = state.lock().expect("service state lock");
+        let blocked = start_webui_goal_session_kernel_turn(
+            &mut guard,
+            session_id,
+            captured_version,
+            "turn-during-mutation",
+            ActiveTurnKind::UserPrompt,
+        );
+        assert!(blocked.is_err());
+        assert!(!webui_session_kernel_has_active_turn(&guard, session_id));
+    }
+    // current_version commits the in-process invalidation paired with the durable mutation.
+    // current_version 提交与持久变更配对的进程内失效版本。
+    let current_version = advance_session_goal_dispatch_version(&state, session_id)
+        .expect("Goal dispatch version should advance");
+    drop(transition_guard);
+    // guard owns the atomic version check and kernel registration after mutation completion.
+    // guard 在变更完成后持有原子版本校验与 kernel 注册。
+    let mut guard = state.lock().expect("service state lock");
+    let stale = start_webui_goal_session_kernel_turn(
+        &mut guard,
+        session_id,
+        captured_version,
+        "turn-after-mutation",
+        ActiveTurnKind::UserPrompt,
+    );
+    assert!(stale.is_err());
+    assert!(!webui_session_kernel_has_active_turn(&guard, session_id));
+    start_webui_goal_session_kernel_turn(
+        &mut guard,
+        session_id,
+        current_version,
+        "turn-current-authority",
+        ActiveTurnKind::UserPrompt,
+    )
+    .expect("current Goal authority should register exactly one turn");
+    assert!(webui_session_kernel_has_active_turn(&guard, session_id));
 }
 
 /// Verifies a new user turn clears stale wait-agent coordination from earlier turns.
@@ -211,6 +279,83 @@ fn webui_session_active_run_uses_kernel_state_without_stream_handle() {
     assert!(webui_session_has_active_run(&state, session_id));
 }
 
+/// Verifies an active stream task retains the Goal identity captured at launch.
+/// 验证活动流任务会保留启动时捕获的 Goal 身份。
+#[tokio::test]
+async fn active_stream_task_retains_launch_goal_identity() {
+    let task = ActiveStreamTask::new(
+        Uuid::new_v4(),
+        spawn_service_task(async {}),
+        Some(String::from("goal-bound-to-stream")),
+    );
+
+    assert_eq!(task.session_goal_id(), Some("goal-bound-to-stream"));
+}
+
+/// Verifies stale stream cleanup cannot remove a newer task in the same session slot.
+/// 验证过期流清理无法删除同一会话槽位中的新任务。
+#[tokio::test]
+async fn active_stream_task_cleanup_preserves_replacement_identity() {
+    let session_id = SessionId::new_v4();
+    let stale_task_id = Uuid::new_v4();
+    let replacement_task_id = Uuid::new_v4();
+    let mut state = test_service_state_with_parent_session(session_id);
+    state.active_stream_tasks.insert(
+        session_id,
+        ActiveStreamTask::new(
+            replacement_task_id,
+            spawn_service_task(async {}),
+            Some(String::from("goal-new")),
+        ),
+    );
+
+    assert!(remove_active_stream_task_if_id(&mut state, session_id, stale_task_id).is_none());
+    assert_eq!(
+        state
+            .active_stream_tasks
+            .get(&session_id)
+            .and_then(ActiveStreamTask::session_goal_id),
+        Some("goal-new")
+    );
+    assert!(remove_active_stream_task_if_id(&mut state, session_id, replacement_task_id).is_some());
+    assert!(!state.active_stream_tasks.contains_key(&session_id));
+}
+
+/// Verifies a registered stream task cannot execute before its registry entry is visible.
+/// 验证已注册流任务无法在其注册表条目可见之前执行。
+#[tokio::test]
+async fn active_stream_task_start_gate_registers_before_execution() {
+    let session_id = SessionId::new_v4();
+    let task_id = Uuid::new_v4();
+    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+        session_id,
+    )));
+    let state_for_task = state.clone();
+    let (observed_sender, observed_receiver) = tokio::sync::oneshot::channel::<bool>();
+
+    spawn_registered_active_stream_task(
+        &state,
+        session_id,
+        task_id,
+        Some(String::from("goal-gated")),
+        async move {
+            let registered = state_for_task.lock().is_ok_and(|guard| {
+                guard
+                    .active_stream_tasks
+                    .get(&session_id)
+                    .and_then(ActiveStreamTask::session_goal_id)
+                    == Some("goal-gated")
+            });
+            let _ = observed_sender.send(registered);
+        },
+    )
+    .expect("gated task should register");
+
+    assert!(observed_receiver.await.expect("task observation"));
+    let mut guard = state.lock().expect("service state lock");
+    assert!(remove_active_stream_task_if_id(&mut guard, session_id, task_id).is_some());
+}
+
 /// Verifies a stopped kernel suppresses stale legacy stream handles for active-run decisions.
 /// 验证已停止内核会在活动运行判断中抑制过期旧流任务句柄。
 #[tokio::test]
@@ -220,9 +365,10 @@ async fn webui_session_stopped_kernel_suppresses_stale_stream_handle() {
 
     start_webui_session_kernel_user_turn(&mut state, session_id, "turn-a")
         .expect("kernel turn should start");
-    state
-        .active_stream_tasks
-        .insert(session_id, spawn_service_task(async {}));
+    state.active_stream_tasks.insert(
+        session_id,
+        ActiveStreamTask::new(Uuid::new_v4(), spawn_service_task(async {}), None),
+    );
     stop_webui_session_kernel_generation(&mut state, session_id);
 
     assert!(state.active_stream_tasks.contains_key(&session_id));
@@ -236,9 +382,10 @@ async fn webui_session_active_run_ignores_stream_handle_without_kernel_turn() {
     let session_id = SessionId::new_v4();
     let mut state = test_service_state_with_parent_session(session_id);
 
-    state
-        .active_stream_tasks
-        .insert(session_id, spawn_service_task(async {}));
+    state.active_stream_tasks.insert(
+        session_id,
+        ActiveStreamTask::new(Uuid::new_v4(), spawn_service_task(async {}), None),
+    );
 
     assert!(state.active_stream_tasks.contains_key(&session_id));
     assert!(!webui_session_has_active_run(&state, session_id));

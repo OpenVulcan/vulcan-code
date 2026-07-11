@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent_runtime::RuntimePromptInterventionError;
 
 /// Verifies the task backend fails loudly when the shared runtime bridge did not register a parent execution context.
 /// 验证共享运行时桥未注册父级执行上下文时，任务后端会明确失败。
@@ -143,7 +144,8 @@ async fn build_task_execution_handler_rejects_closed_parent_live_stream_without_
             .detached_task_event_streams
             .read()
             .expect("detached stream registry should be readable")
-            .contains_key(&task_id),
+            .keys()
+            .any(|stream_key| stream_key.task_id == task_id),
         "closed parent stream must not leave a detached event stream"
     );
     assert!(
@@ -250,18 +252,30 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
     let child_join = tokio::spawn(async { std::future::pending::<()>().await });
     let grandchild_join = tokio::spawn(async { std::future::pending::<()>().await });
     let sibling_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let _parent_guard = task_runtime
-        .install_active_task_run(parent_task_id, parent_join.abort_handle())
-        .expect("parent active run should install");
-    let _child_guard = task_runtime
-        .install_active_task_run(child_task_id, child_join.abort_handle())
-        .expect("child active run should install");
-    let _grandchild_guard = task_runtime
-        .install_active_task_run(grandchild_task_id, grandchild_join.abort_handle())
-        .expect("grandchild active run should install");
-    let _sibling_guard = task_runtime
-        .install_active_task_run(sibling_task_id, sibling_join.abort_handle())
-        .expect("sibling active run should install");
+    let _parent_guard = install_test_active_task_run(
+        &task_runtime,
+        parent_task_id,
+        "parent-execution",
+        parent_join.abort_handle(),
+    );
+    let _child_guard = install_test_active_task_run(
+        &task_runtime,
+        child_task_id,
+        "child-execution",
+        child_join.abort_handle(),
+    );
+    let _grandchild_guard = install_test_active_task_run(
+        &task_runtime,
+        grandchild_task_id,
+        "grandchild-execution",
+        grandchild_join.abort_handle(),
+    );
+    let _sibling_guard = install_test_active_task_run(
+        &task_runtime,
+        sibling_task_id,
+        "sibling-execution",
+        sibling_join.abort_handle(),
+    );
 
     let stopped_task_ids = task_runtime
         .stop_task_tree(parent_task_id)
@@ -296,22 +310,30 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
         .subagent_registry_snapshot()
         .expect("subagent registry should be readable");
     assert_eq!(
-        registry.get("parent").expect("parent should mirror").status,
-        SubagentStatus::Stopped
-    );
-    assert_eq!(
-        registry.get("child").expect("child should mirror").status,
+        registry
+            .get_for_parent(root_session_id.into(), "parent")
+            .expect("parent should mirror")
+            .status,
         SubagentStatus::Stopped
     );
     assert_eq!(
         registry
-            .get("grandchild")
+            .get_for_parent(parent_task_id.into(), "child")
+            .expect("child should mirror")
+            .status,
+        SubagentStatus::Stopped
+    );
+    assert_eq!(
+        registry
+            .get_for_parent(child_task_id.into(), "grandchild")
             .expect("grandchild should mirror")
             .status,
         SubagentStatus::Stopped
     );
     assert!(
-        registry.get("sibling").is_none(),
+        registry
+            .get_for_parent(root_session_id.into(), "sibling")
+            .is_none(),
         "sibling should not be touched by the stopped subtree"
     );
     assert!(
@@ -336,27 +358,47 @@ async fn stop_task_tree_aborts_active_descendants_without_siblings() {
     sibling_join.abort();
 }
 
-/// Verifies an older active-run guard cannot unregister a newer run for the same child task.
-/// 验证旧活动运行守卫不能注销同一子任务的新运行。
+/// Verifies a stale guard cannot remove or reclaim a newer execution reservation.
+/// 验证过期守卫不能移除或夺回更新的执行预留。
 #[tokio::test]
-async fn active_task_run_guard_preserves_newer_same_task_run() {
+async fn active_task_run_reservation_preserves_newer_execution_owner() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let task_id = Uuid::new_v4();
     let first_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let second_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let first_guard = task_runtime
-        .install_active_task_run(task_id, first_join.abort_handle())
-        .expect("first active run should install");
+    let first_guard = install_test_active_task_run(
+        &task_runtime,
+        task_id,
+        "first-execution",
+        first_join.abort_handle(),
+    );
+    // second_guard replaces the task-level owner with the newer protocol execution.
+    // second_guard 使用更新的协议执行替换任务级所有者。
     let second_guard = task_runtime
-        .install_active_task_run(task_id, second_join.abort_handle())
-        .expect("second active run should install");
+        .reserve_active_task_run(task_id, "second-execution")
+        .expect("second execution should reserve");
+    assert!(
+        !task_runtime
+            .is_task_execution_current(task_id, "first-execution")
+            .expect("stale execution lookup should succeed")
+    );
+    assert!(
+        task_runtime
+            .is_task_execution_current(task_id, "second-execution")
+            .expect("current execution lookup should succeed")
+    );
+    assert!(
+        first_join
+            .await
+            .expect_err("replacement should abort the stale provider future")
+            .is_cancelled()
+    );
 
     drop(first_guard);
     assert!(
         task_runtime
             .is_task_running(task_id)
             .expect("active task lookup should succeed"),
-        "dropping the older guard must not remove the newer active run"
+        "dropping the stale guard must preserve the newer active run"
     );
 
     drop(second_guard);
@@ -364,16 +406,235 @@ async fn active_task_run_guard_preserves_newer_same_task_run() {
         !task_runtime
             .is_task_running(task_id)
             .expect("active task lookup should succeed"),
-        "dropping the current guard should remove the active run"
+        "dropping the current reservation owner should remove the active run"
     );
-    first_join.abort();
-    second_join.abort();
+}
+
+/// Verifies a stop request made during prestart aborts the provider future once its handle attaches.
+/// 验证启动前阶段发出的停止请求会在 Provider future 句柄附加后立即中止它。
+#[tokio::test]
+async fn prestart_active_task_stop_is_retained_until_abort_handle_attaches() {
+    // task_runtime owns the prestart reservation under test.
+    // task_runtime 持有待测试的启动前预留。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // task_id identifies the child stopped before provider future creation.
+    // task_id 标识在 Provider future 创建前被停止的子任务。
+    let task_id = Uuid::new_v4();
+    // active_guard retains ownership of the exact prestart execution.
+    // active_guard 保持精确启动前执行的所有权。
+    let active_guard = task_runtime
+        .reserve_active_task_run(task_id, "prestart-stop-execution")
+        .expect("prestart execution should reserve");
+
+    assert!(
+        task_runtime
+            .stop_task(task_id)
+            .expect("prestart task stop should succeed")
+    );
+
+    // pending_join simulates the provider future created after the stop request.
+    // pending_join 模拟停止请求之后才创建的 Provider future。
+    let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
+    active_guard
+        .attach_abort_handle(pending_join.abort_handle())
+        .expect("late abort handle should attach");
+
+    assert!(
+        pending_join
+            .await
+            .expect_err("retained prestart stop should abort the provider future")
+            .is_cancelled()
+    );
+}
+
+/// Verifies a superseded preparation cannot start or overwrite the newer stable-record owner.
+/// 验证被取代的准备不能启动，也不能覆盖更新的稳定记录所有者。
+#[test]
+fn superseded_task_preparation_cannot_claim_or_fail_newer_execution() {
+    // task_runtime owns the stable record and per-task execution transaction.
+    // task_runtime 持有稳定记录与按任务划分的执行事务。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // root_session_id identifies the parent session reused by both preparations.
+    // root_session_id 标识两次准备共同复用的父会话。
+    let root_session_id = Uuid::new_v4();
+    // task_id identifies the stable task whose preparation owner changes.
+    // task_id 标识准备所有者发生变化的稳定任务。
+    let task_id = Uuid::new_v4();
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(
+            task_id,
+            build_task_session_record(TaskSessionRecordInit {
+                task_id,
+                public_task_id: String::from("transaction-worker"),
+                origin_session_id: root_session_id,
+                parent_task_id: None,
+                depth: 1,
+                description: Some(String::from("transaction review")),
+                subagent: Some(String::from("reviewer")),
+                invocation_config: TaskInvocationConfig::main("initial prompt"),
+                display_title: String::from("transaction review (reviewer)"),
+                controller_config: None,
+                snapshot: CoreConversationSnapshot::default(),
+                last_prompt: String::from("initial prompt"),
+                last_status: String::from("completed"),
+            }),
+        );
+
+    // first_invocation is the preparation that will be superseded before backend claim.
+    // first_invocation 是在 backend 认领前将被取代的准备。
+    let first_invocation = prepare_task_execution_request(
+        &task_runtime,
+        root_session_id,
+        ResolvedTaskSessionIdentifier {
+            task_id,
+            public_task_id: String::from("transaction-worker"),
+            is_resumed: true,
+            persisted_metadata: None,
+        },
+        parse_task_tool_arguments(json!({
+            "task_id": "transaction-worker",
+            "prompt": "first concurrent prompt"
+        }))
+        .expect("first task arguments should parse"),
+    )
+    .expect("first preparation should succeed");
+    // second_invocation becomes the only stable-record owner.
+    // second_invocation 成为唯一的稳定记录所有者。
+    let second_invocation = prepare_task_execution_request(
+        &task_runtime,
+        root_session_id,
+        ResolvedTaskSessionIdentifier {
+            task_id,
+            public_task_id: String::from("transaction-worker"),
+            is_resumed: true,
+            persisted_metadata: None,
+        },
+        parse_task_tool_arguments(json!({
+            "task_id": "transaction-worker",
+            "prompt": "second concurrent prompt"
+        }))
+        .expect("second task arguments should parse"),
+    )
+    .expect("second preparation should succeed");
+
+    let stale_claim = task_runtime
+        .claim_and_reserve_active_task_run(task_id, first_invocation.execution_id.as_str());
+    let stale_error = match stale_claim {
+        Ok(_) => panic!("superseded preparation should not claim the backend"),
+        Err(error) => error,
+    };
+    assert!(stale_error.contains("lost its preparation record"));
+    // current_guard proves the newer preparation can claim the runtime owner.
+    // current_guard 证明更新的准备可以认领运行时所有者。
+    let current_guard = task_runtime
+        .claim_and_reserve_active_task_run(task_id, second_invocation.execution_id.as_str())
+        .expect("newer preparation should claim the backend");
+
+    task_runtime
+        .mark_task_failure(root_session_id, &first_invocation, "stale failure")
+        .expect("stale failure should be ignored");
+
+    let record = task_runtime
+        .sessions
+        .read()
+        .expect("task session registry should be readable")
+        .get(&task_id)
+        .cloned()
+        .expect("stable task record should remain");
+    assert_eq!(
+        record.execution_id.as_deref(),
+        Some(second_invocation.execution_id.as_str())
+    );
+    assert_eq!(record.last_prompt, "second concurrent prompt");
+    assert_eq!(record.last_status, "created");
+    assert!(record.last_result_text.is_empty());
+    drop(current_guard);
+}
+
+/// Verifies competing preparations for one parent-scoped public slot leave only the admitted task.
+/// 验证同一父级范围公开槽位的竞争准备只会留下获准任务。
+#[test]
+fn competing_same_parent_task_preparations_roll_back_rejected_session_record() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let root_session_id = Uuid::new_v4();
+    let first_task_id = Uuid::new_v4();
+    let second_task_id = Uuid::new_v4();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let mut workers = Vec::new();
+    for (task_id, prompt) in [
+        (first_task_id, "first competing prompt"),
+        (second_task_id, "second competing prompt"),
+    ] {
+        let task_runtime = Arc::clone(&task_runtime);
+        let barrier = Arc::clone(&barrier);
+        workers.push(std::thread::spawn(move || {
+            let args = parse_task_tool_arguments(json!({
+                "task_id": "shared-parent-slot",
+                "prompt": prompt
+            }))
+            .expect("competing task arguments should parse");
+            barrier.wait();
+            prepare_task_execution_request(
+                &task_runtime,
+                root_session_id,
+                ResolvedTaskSessionIdentifier {
+                    task_id,
+                    public_task_id: String::from("shared-parent-slot"),
+                    is_resumed: false,
+                    persisted_metadata: None,
+                },
+                args,
+            )
+        }));
+    }
+    barrier.wait();
+    let results = workers
+        .into_iter()
+        .map(|worker| {
+            worker
+                .join()
+                .expect("competing preparation should not panic")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    let admitted_task_id = results
+        .iter()
+        .find_map(|result| result.as_ref().ok().map(|request| request.task_id))
+        .expect("one competing preparation should own the public slot");
+    let rejected_task_id = if admitted_task_id == first_task_id {
+        second_task_id
+    } else {
+        first_task_id
+    };
+    let sessions = task_runtime
+        .sessions
+        .read()
+        .expect("task session registry should remain readable");
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions.contains_key(&admitted_task_id));
+    assert!(!sessions.contains_key(&rejected_task_id));
+    drop(sessions);
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("subagent registry should remain readable");
+    let admitted_entry = registry
+        .get_for_parent(SessionNodeId::from(root_session_id), "shared-parent-slot")
+        .expect("admitted task should own the exact parent-scoped slot");
+    assert_eq!(
+        admitted_entry.session_id,
+        SessionNodeId::from(admitted_task_id)
+    );
 }
 
 /// Verifies active-run registration returns a diagnostic instead of panicking on lock poisoning.
 /// 验证活动运行注册表锁污染时会返回诊断错误而不是 panic。
 #[tokio::test]
-async fn install_active_task_run_reports_poisoned_registry() {
+async fn reserve_active_task_run_reports_poisoned_registry() {
     let task_runtime = Arc::new(TaskRuntime::new());
     let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = task_runtime
@@ -385,12 +646,10 @@ async fn install_active_task_run_reports_poisoned_registry() {
     assert!(poison_result.is_err());
 
     let task_id = Uuid::new_v4();
-    let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let install_result = task_runtime.install_active_task_run(task_id, pending_join.abort_handle());
-    pending_join.abort();
+    let reserve_result = task_runtime.reserve_active_task_run(task_id, "poisoned-execution");
 
-    let error = match install_result {
-        Ok(_) => panic!("poisoned active task registry should reject installation"),
+    let error = match reserve_result {
+        Ok(_) => panic!("poisoned active task registry should reject reservation"),
         Err(error) => error,
     };
     assert!(error.contains("active task registry is locked"));
@@ -411,7 +670,7 @@ fn open_detached_task_event_stream_reports_poisoned_registry() {
     assert!(poison_result.is_err());
 
     let error = task_runtime
-        .open_detached_task_event_stream_for_run(Uuid::new_v4())
+        .open_detached_task_event_stream_for_run(Uuid::new_v4(), "poison-test-execution")
         .expect_err("poisoned detached stream registry should reject stream open");
     assert!(error.contains("detached task stream registry is locked"));
 }
@@ -454,6 +713,16 @@ fn normalize_public_task_identifier_trims_aliases_deterministically() {
         .expect("trimmed alias task id should resolve");
 
     assert_eq!(first, second);
+}
+
+/// Verifies public task identifiers cannot masquerade as multi-segment tree paths.
+/// 验证公开任务标识不能伪装成多段树路径。
+#[test]
+fn normalize_public_task_identifier_rejects_tree_path_separators() {
+    let error = normalize_public_task_identifier("branch/worker")
+        .expect_err("public task id containing a path separator should be rejected");
+
+    assert!(error.contains("one path segment"));
 }
 
 /// Verifies that distinct caller-facing task identifiers allocate distinct internal task sessions on first creation.
@@ -1058,6 +1327,101 @@ async fn invoke_spawn_agent_reuses_public_id_after_close_agent() {
     assert_eq!(resolved.task_id, fresh_task_id);
 }
 
+/// Verifies archived session state absorbs stale stop projections and execution claims.
+/// 验证归档会话状态会吸收过期停止投影与执行认领。
+#[test]
+fn archived_task_session_rejects_stale_stop_and_execution_claim() {
+    let task_runtime = TaskRuntime::new();
+    let root_session_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let mut record = build_task_session_record(TaskSessionRecordInit {
+        task_id,
+        public_task_id: String::from("archived-worker"),
+        origin_session_id: root_session_id,
+        parent_task_id: None,
+        depth: 1,
+        description: None,
+        subagent: None,
+        invocation_config: TaskInvocationConfig::main("archived work"),
+        display_title: String::from("Archived worker"),
+        controller_config: None,
+        snapshot: CoreConversationSnapshot::default(),
+        last_prompt: String::from("archived work"),
+        last_status: String::from("archived"),
+    });
+    record.stop_reason = Some(String::from("close_agent"));
+    task_runtime
+        .sessions
+        .write()
+        .expect("task session registry should be writable")
+        .insert(task_id, record);
+    let mut entry = SubagentRegistryEntry::new(
+        "archived-worker",
+        SessionNodeId::from(task_id),
+        SessionNodeId::from(root_session_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    entry.status = SubagentStatus::Archived;
+    entry.stop_reason = Some(String::from("close_agent"));
+    task_runtime
+        .subagent_registry
+        .write()
+        .expect("subagent registry should be writable")
+        .upsert(entry)
+        .expect("archived registry fixture should insert");
+
+    task_runtime
+        .mark_stopped_tasks_in_registry(&[task_id], "app_shutdown")
+        .expect("stale stopped projection should be absorbed");
+    let claim_error = task_runtime
+        .claim_task_execution_record_owner(task_id, "stale-execution")
+        .expect_err("archived session must reject a new execution claim");
+
+    let archived_record = task_runtime
+        .sessions
+        .read()
+        .expect("task session registry should remain readable")
+        .get(&task_id)
+        .cloned()
+        .expect("archived record should remain");
+    assert_eq!(archived_record.last_status, "archived");
+    assert_eq!(archived_record.stop_reason.as_deref(), Some("close_agent"));
+    assert!(claim_error.contains("is archived"));
+    let restore_error = task_runtime
+        .restore_inter_agent_messages_front_after_failure(
+            task_id,
+            vec![QueuedInterAgentMessage {
+                delivery_id: String::from("stale-archived-delivery"),
+                author_session_id: root_session_id,
+                target_task_id: task_id,
+                target_agent_id: String::from("archived-worker"),
+                content: String::from("stale message"),
+                created_at_ms: current_unix_millis_u64(),
+            }],
+            "prepare_task_execution_request",
+            String::from("archived preparation rejected"),
+        )
+        .to_string();
+    assert!(restore_error.contains("were discarded"));
+    assert_eq!(
+        task_runtime
+            .inter_agent_message_count_for_task(task_id)
+            .expect("archived inbox should remain readable"),
+        0
+    );
+    let registry = task_runtime
+        .subagent_registry_snapshot()
+        .expect("registry should remain readable");
+    assert_eq!(
+        registry
+            .get_for_parent(SessionNodeId::from(root_session_id), "archived-worker")
+            .expect("archived registry entry should remain")
+            .status,
+        SubagentStatus::Archived
+    );
+}
+
 /// Verifies send_message queues and resumes the same idle child agent.
 /// 验证 send_message 会排队并续跑同一个空闲子代理。
 #[tokio::test]
@@ -1207,7 +1571,7 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
         .subagent_registry_snapshot()
         .expect("registry should read after followup");
     let resumed_entry = resumed_registry
-        .get("worker-a")
+        .get_for_parent(parent_session_id.into(), "worker-a")
         .expect("worker entry should remain known");
     assert_eq!(resumed_entry.status, SubagentStatus::Running);
 }
@@ -1382,9 +1746,12 @@ async fn inter_agent_message_queue_resumes_after_running_agent_settles() {
         .expect("task backend should install");
 
     let pending_join = tokio::spawn(async { std::future::pending::<()>().await });
-    let active_guard = task_runtime
-        .install_active_task_run(task_id, pending_join.abort_handle())
-        .expect("active run should install");
+    let active_guard = install_test_active_task_run(
+        &task_runtime,
+        task_id,
+        "queue-running-execution",
+        pending_join.abort_handle(),
+    );
     let send_result = task_runtime
         .invoke_send_message(
             parent_session_id,
@@ -1551,9 +1918,10 @@ fn child_prompt_intervention_appends_display_record_separately_from_provider_inp
     let mut controller = vulcan_core::controller::VulcanCoreController::new(
         build_test_controller_config("Base prompt"),
         CoreConversationSnapshot::default(),
-    );
+    )
+    .expect("valid core conversation snapshot");
 
-    assert!(intervention(task_id, &mut controller));
+    assert!(intervention(task_id, &mut controller).expect("valid child prompt intervention"));
 
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.messages.len(), 1);
@@ -1594,6 +1962,160 @@ fn child_prompt_intervention_appends_display_record_separately_from_provider_inp
             .and_then(Value::as_str),
         Some("delivery-visible-1")
     );
+}
+
+/// Verifies a rejected child display identity preserves both controller state and the drained inbox.
+/// 验证子显示身份被拒绝时会同时保留控制器状态与已取出的 inbox。
+#[test]
+fn child_prompt_intervention_restores_inbox_on_display_identity_failure() {
+    let task_runtime = Arc::new(TaskRuntime::new());
+    let task_id = Uuid::new_v4();
+    let parent_session_id = Uuid::new_v4();
+    let mut registry_entry = SubagentRegistryEntry::new(
+        "worker-a",
+        SessionNodeId::from(task_id),
+        SessionNodeId::from(parent_session_id),
+        SubagentKind::Clone,
+        current_unix_millis_u64(),
+    );
+    registry_entry.status = SubagentStatus::Running;
+    task_runtime
+        .subagent_registry
+        .write()
+        .expect("subagent registry should be writable")
+        .upsert(registry_entry)
+        .expect("running intervention target should register");
+    // queued_message intentionally reuses the retained display identity to trigger the atomic boundary.
+    // queued_message 故意复用已保留显示身份，以触发原子边界。
+    let queued_message = QueuedInterAgentMessage {
+        delivery_id: String::from("delivery-conflict"),
+        author_session_id: parent_session_id,
+        target_task_id: task_id,
+        target_agent_id: String::from("worker-a"),
+        content: String::from("conflicting delivery"),
+        created_at_ms: 1_780_000_000_000,
+    };
+    task_runtime
+        .agent_inboxes
+        .write()
+        .expect("agent inbox should be writable")
+        .insert(task_id, VecDeque::from([queued_message]));
+    // retained_record is the existing owner that makes the incoming delivery invalid.
+    // retained_record 是使传入投递无效的既有身份所有者。
+    let retained_record = vulcan_core::types::ConversationRecord {
+        id: String::from("delivery-conflict"),
+        role: vulcan_core::types::TranscriptRole::Assistant,
+        record_kind: vulcan_core::types::TranscriptRecordKind::ProjectionOnly,
+        visible: true,
+        title: String::from("Retained"),
+        body: String::from("retained body"),
+        metadata: None,
+        created_at: String::from("1"),
+    };
+    let mut controller = vulcan_core::controller::VulcanCoreController::new(
+        build_test_controller_config("Base prompt"),
+        CoreConversationSnapshot {
+            records: vec![retained_record],
+            ..CoreConversationSnapshot::default()
+        },
+    )
+    .expect("valid core conversation snapshot");
+    // original_snapshot proves the failed intervention never commits its provider-visible draft.
+    // original_snapshot 证明失败的干预绝不会提交 Provider 可见草稿。
+    let original_snapshot =
+        serde_json::to_value(controller.snapshot()).expect("original snapshot should serialize");
+    let intervention = build_child_agent_prompt_intervention(Arc::clone(&task_runtime), task_id);
+
+    let error = intervention(task_id, &mut controller)
+        .expect_err("display identity conflict must propagate");
+
+    let RuntimePromptInterventionError::ProjectionConflict { message } = error else {
+        panic!("display identity conflict should remain a projection error");
+    };
+    assert!(message.contains("duplicates id \"delivery-conflict\""));
+    assert_eq!(
+        serde_json::to_value(controller.snapshot())
+            .expect("controller snapshot should serialize after rejection"),
+        original_snapshot
+    );
+    assert_eq!(
+        task_runtime
+            .inter_agent_message_count_for_task(task_id)
+            .expect("restored inbox should remain readable"),
+        1
+    );
+}
+
+/// Verifies offline resume projection rejects conflicting retained ownership without partial snapshot mutation.
+/// 验证离线续跑投影会拒绝冲突的既有所有权且不局部修改快照。
+#[test]
+fn offline_inter_agent_snapshot_projection_is_atomic_on_identity_conflict() {
+    let task_id = Uuid::new_v4();
+    // message identifies all deterministic provider, hidden-record, and display projections for one delivery.
+    // message 标识单次投递的全部确定性 Provider、隐藏记录与显示投影。
+    let message = QueuedInterAgentMessage {
+        delivery_id: String::from("offline-delivery"),
+        author_session_id: Uuid::new_v4(),
+        target_task_id: task_id,
+        target_agent_id: String::from("worker-a"),
+        content: String::from("resume offline"),
+        created_at_ms: 1_780_000_000_000,
+    };
+    // conflicting_record occupies the stable display id with unrelated retained content.
+    // conflicting_record 使用无关既有内容占用稳定显示标识。
+    let conflicting_record = vulcan_core::types::ConversationRecord {
+        id: message.delivery_id.clone(),
+        role: vulcan_core::types::TranscriptRole::Assistant,
+        record_kind: vulcan_core::types::TranscriptRecordKind::ProjectionOnly,
+        visible: true,
+        title: String::from("Unrelated"),
+        body: String::from("unrelated body"),
+        metadata: None,
+        created_at: String::from("1"),
+    };
+    let mut snapshot = CoreConversationSnapshot {
+        records: vec![conflicting_record],
+        ..CoreConversationSnapshot::default()
+    };
+    let original_snapshot =
+        serde_json::to_value(&snapshot).expect("original offline snapshot should serialize");
+
+    let error = append_inter_agent_messages_to_snapshot(&mut snapshot, &[message])
+        .expect_err("conflicting offline projection must fail");
+
+    assert!(error.contains("conflicts with retained display record"));
+    assert_eq!(
+        serde_json::to_value(&snapshot).expect("offline snapshot should serialize after rejection"),
+        original_snapshot
+    );
+}
+
+/// Verifies an exact offline delivery replay reuses all deterministic projections without duplication.
+/// 验证完全相同的离线投递重放会复用全部确定性投影且不会产生重复项。
+#[test]
+fn offline_inter_agent_snapshot_projection_reuses_identical_delivery_owner() {
+    let message = QueuedInterAgentMessage {
+        delivery_id: String::from("offline-idempotent-delivery"),
+        author_session_id: Uuid::new_v4(),
+        target_task_id: Uuid::new_v4(),
+        target_agent_id: String::from("worker-idempotent"),
+        content: String::from("resume exactly once"),
+        created_at_ms: 1_780_000_000_100,
+    };
+    let mut snapshot = CoreConversationSnapshot::default();
+
+    append_inter_agent_messages_to_snapshot(&mut snapshot, std::slice::from_ref(&message))
+        .expect("first delivery projection should append");
+    let first_messages = snapshot.messages.clone();
+    let first_records = snapshot.records.clone();
+
+    append_inter_agent_messages_to_snapshot(&mut snapshot, std::slice::from_ref(&message))
+        .expect("identical delivery replay should reuse retained owners");
+
+    assert_eq!(snapshot.messages, first_messages);
+    assert_eq!(snapshot.records, first_records);
+    assert_eq!(snapshot.messages.len(), 1);
+    assert_eq!(snapshot.records.len(), 2);
 }
 
 /// Verifies task invocation relays a terminal result when a custom backend chooses to return one.
@@ -1689,6 +2211,7 @@ async fn detached_task_event_stream_replays_buffered_terminal_and_closes() {
     let task_runtime = TaskRuntime::new();
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
+    let execution_id = "buffered-terminal-execution";
     let terminal_event = RuntimeEvent::new(
         RuntimeEventKind::DelegateFinished,
         "Subagent finished",
@@ -1696,14 +2219,15 @@ async fn detached_task_event_stream_replays_buffered_terminal_and_closes() {
     );
     task_runtime.publish_detached_task_event(
         task_id,
+        execution_id,
         DetachedTaskRuntimeEvent::ParentRuntime {
             parent_session_id,
             event: terminal_event,
         },
     );
-    task_runtime.close_detached_task_event_stream(task_id);
+    task_runtime.close_detached_task_event_stream(task_id, execution_id);
 
-    let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id));
+    let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id, execution_id));
     let first_event = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
         .await
         .expect("buffered terminal event should replay immediately")
@@ -1718,40 +2242,26 @@ async fn detached_task_event_stream_replays_buffered_terminal_and_closes() {
     assert!(next_event.is_none());
 }
 
-/// Verifies repeated subscriptions to an already completed task do not create a fresh empty stream.
-/// 验证重复订阅已完成任务时不会创建新的空开放流。
+/// Verifies a missing exact execution key cannot create an orphan detached stream.
+/// 验证缺失的精确执行键不能创建孤儿分离流。
 #[tokio::test]
-async fn detached_task_event_stream_closes_for_terminal_record_without_buffer() {
+async fn detached_task_event_stream_closes_for_missing_execution_key() {
+    // task_runtime owns no opened stream for the requested execution.
+    // task_runtime 未持有所请求执行的已打开流。
     let task_runtime = TaskRuntime::new();
-    let root_session_id = Uuid::new_v4();
+    // task_id identifies a stable child task without relying on its latest persisted status.
+    // task_id 标识一个不依赖其最近持久状态的稳定子任务。
     let task_id = Uuid::new_v4();
-    task_runtime
-        .sessions
-        .write()
-        .expect("task session registry should be writable")
-        .insert(
-            task_id,
-            build_task_session_record(TaskSessionRecordInit {
-                task_id,
-                public_task_id: String::from("image-worker-a"),
-                origin_session_id: root_session_id,
-                parent_task_id: None,
-                depth: 1,
-                description: Some(String::from("生成图片")),
-                subagent: Some(String::from("image-agent")),
-                invocation_config: TaskInvocationConfig::main("generate image"),
-                display_title: String::from("生成图片 (image-agent)"),
-                controller_config: None,
-                snapshot: CoreConversationSnapshot::default(),
-                last_prompt: String::from("generate image"),
-                last_status: String::from("completed"),
-            }),
-        );
 
-    let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id));
+    // stream targets an execution that never passed the mandatory open-before-subscribe boundary.
+    // stream 指向一个从未经过强制先打开后订阅边界的执行。
+    let mut stream =
+        Box::pin(task_runtime.subscribe_detached_task_events(task_id, "missing-execution"));
+    // event observes immediate closure instead of an open stream that can never publish.
+    // event 观测立即关闭，而不是创建一条永远无法发布事件的开放流。
     let event = tokio::time::timeout(std::time::Duration::from_millis(50), stream.next())
         .await
-        .expect("terminal record stream should close immediately");
+        .expect("missing execution stream should close immediately");
     assert!(event.is_none());
 }
 
@@ -1762,6 +2272,7 @@ async fn detached_task_event_stream_reopens_for_resumed_run_with_terminal_record
     let task_runtime = TaskRuntime::new();
     let root_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
+    let execution_id = "resumed-run-execution";
     task_runtime
         .sessions
         .write()
@@ -1786,9 +2297,9 @@ async fn detached_task_event_stream_reopens_for_resumed_run_with_terminal_record
         );
 
     task_runtime
-        .open_detached_task_event_stream_for_run(task_id)
+        .open_detached_task_event_stream_for_run(task_id, execution_id)
         .expect("detached stream should open");
-    let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id));
+    let mut stream = Box::pin(task_runtime.subscribe_detached_task_events(task_id, execution_id));
     let closed_event =
         tokio::time::timeout(std::time::Duration::from_millis(50), stream.next()).await;
     assert!(
@@ -1803,6 +2314,7 @@ async fn detached_task_event_stream_reopens_for_resumed_run_with_terminal_record
     );
     task_runtime.publish_detached_task_event(
         task_id,
+        execution_id,
         DetachedTaskRuntimeEvent::ParentRuntime {
             parent_session_id: root_session_id,
             event: started_event,
@@ -1817,4 +2329,62 @@ async fn detached_task_event_stream_reopens_for_resumed_run_with_terminal_record
         panic!("expected parent delegate-started runtime event");
     };
     assert_eq!(event.kind, RuntimeEventKind::DelegateStarted);
+}
+
+/// Verifies closing an old execution cannot close or deliver into a newer stream for the same task.
+/// 验证关闭旧执行时不能关闭同一任务的新执行流，也不能向其投递事件。
+#[tokio::test]
+async fn detached_task_event_streams_are_isolated_by_execution_id() {
+    // task_runtime owns two execution-scoped streams for one stable task identity.
+    // task_runtime 为同一个稳定任务身份持有两条执行级事件流。
+    let task_runtime = TaskRuntime::new();
+    // task_id is intentionally reused across both execution attempts.
+    // task_id 被两次执行尝试刻意复用。
+    let task_id = Uuid::new_v4();
+    // old_execution_id identifies the terminal attempt.
+    // old_execution_id 标识到达终态的旧尝试。
+    let old_execution_id = "execution-old";
+    // new_execution_id identifies the concurrently opened replacement attempt.
+    // new_execution_id 标识并发打开的替代尝试。
+    let new_execution_id = "execution-new";
+    task_runtime
+        .open_detached_task_event_stream_for_run(task_id, old_execution_id)
+        .expect("old execution stream should open");
+    // old_stream receives only events from the old execution key.
+    // old_stream 仅接收旧执行键的事件。
+    let mut old_stream =
+        Box::pin(task_runtime.subscribe_detached_task_events(task_id, old_execution_id));
+    task_runtime
+        .open_detached_task_event_stream_for_run(task_id, new_execution_id)
+        .expect("new execution stream should open independently");
+    // new_stream receives only events from the replacement execution key.
+    // new_stream 仅接收替代执行键的事件。
+    let mut new_stream =
+        Box::pin(task_runtime.subscribe_detached_task_events(task_id, new_execution_id));
+    task_runtime.publish_detached_task_event(
+        task_id,
+        new_execution_id,
+        DetachedTaskRuntimeEvent::ParentRuntime {
+            parent_session_id: Uuid::new_v4(),
+            event: RuntimeEvent::new(
+                RuntimeEventKind::DelegateStarted,
+                "Subagent started",
+                "new execution",
+            ),
+        },
+    );
+    task_runtime.close_detached_task_event_stream(task_id, old_execution_id);
+
+    let new_event = tokio::time::timeout(std::time::Duration::from_millis(50), new_stream.next())
+        .await
+        .expect("new execution event should arrive")
+        .expect("new execution stream should remain open");
+    assert!(matches!(
+        new_event,
+        DetachedTaskRuntimeEvent::ParentRuntime { .. }
+    ));
+    let old_event = tokio::time::timeout(std::time::Duration::from_millis(50), old_stream.next())
+        .await
+        .expect("old execution stream should close promptly");
+    assert!(old_event.is_none());
 }

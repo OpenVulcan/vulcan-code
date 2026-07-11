@@ -22,8 +22,8 @@ use vulcan_core::types::{
     ToolInvocationRequest,
 };
 use vulcan_tools_manager::{
-    VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
-    VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
+    VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
+    VulcanToolHostResult, VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
 
 /// Returns one demo tools manager plus the resolved tool definitions used by the bridge tests.
@@ -82,6 +82,49 @@ fn build_demo_manager() -> (
             plan_policy: VulcanPlanToolPolicy::Hidden,
             invoke: Arc::new(|_args, _session_id| {
                 Box::pin(async move { Err(String::from("LuaSkills 工具解析失败：演示错误")) })
+            }),
+        },
+        VulcanToolCandidate {
+            descriptor: VulcanToolDescriptor {
+                id: String::from("structured_failure_tool"),
+                name: String::from("structured_failure_tool"),
+                description: String::from("Structured failure demo tool"),
+                help_text: None,
+                source: VulcanToolSourceKind::Native,
+            },
+            parameters_schema: json!({ "type": "object" }),
+            ai_visible: true,
+            plan_policy: VulcanPlanToolPolicy::Visible,
+            invoke: Arc::new(|_args, _session_id| {
+                Box::pin(async move {
+                    Ok(VulcanToolInvocationResult::from_tool_error_details(
+                        "structured persistence failure",
+                        json!({ "phase": "persist" }),
+                    ))
+                })
+            }),
+        },
+        VulcanToolCandidate {
+            descriptor: VulcanToolDescriptor {
+                id: String::from("invalid_structured_failure_tool"),
+                name: String::from("invalid_structured_failure_tool"),
+                description: String::from("Invalid structured failure demo tool"),
+                help_text: None,
+                source: VulcanToolSourceKind::Native,
+            },
+            parameters_schema: json!({ "type": "object" }),
+            ai_visible: true,
+            plan_policy: VulcanPlanToolPolicy::Visible,
+            invoke: Arc::new(|_args, _session_id| {
+                Box::pin(async move {
+                    Ok(VulcanToolInvocationResult::from_model_output(json!({
+                        "status": "failed"
+                    }))
+                    .with_host_result(VulcanToolHostResult {
+                        kind: String::from(VULCAN_TOOL_ERROR_DETAIL_KIND),
+                        payload: json!({ "status": "failed" }),
+                    }))
+                })
             }),
         },
     ]);
@@ -369,6 +412,88 @@ fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
     );
 }
 
+/// Verifies a tool-owned structured error keeps its host payload and Core error semantics.
+/// 验证工具自有结构化错误会保留宿主载荷与 Core 错误语义。
+#[test]
+fn managed_tool_runtime_bridge_preserves_structured_tool_error_results() {
+    let (manager, definitions) = build_demo_manager();
+    let runtime_bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
+    let request = ToolInvocationRequest {
+        tool_call_id: String::from("call-structured-error-1"),
+        tool_name: String::from("structured_failure_tool"),
+        arguments: json!({}),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    let result = runtime
+        .block_on(runtime_bridge.execute_tool(&request))
+        .expect("structured tool failure should remain controller-visible");
+
+    assert!(result.is_error);
+    assert!(result.model_output.contains("\"status\":\"failed\""));
+    assert_eq!(
+        result.host_result,
+        Some(json!({
+            "kind": "tool_error",
+            "payload": {
+                "tool_call_id": "call-structured-error-1",
+                "tool_name": "structured_failure_tool",
+                "status": "failed",
+                "error": "structured persistence failure",
+                "arguments": {},
+                "details": {
+                    "phase": "persist"
+                }
+            }
+        }))
+    );
+}
+
+/// Verifies malformed tool-owned error details become an explicit canonical protocol failure.
+/// 验证格式错误的工具自有错误详情会转换为显式规范协议失败。
+#[test]
+fn managed_tool_runtime_bridge_rejects_structured_error_without_error_text() {
+    let (manager, definitions) = build_demo_manager();
+    let runtime_bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
+    let request = ToolInvocationRequest {
+        tool_call_id: String::from("call-invalid-structured-error-1"),
+        tool_name: String::from("invalid_structured_failure_tool"),
+        arguments: json!({}),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+
+    let result = runtime
+        .block_on(runtime_bridge.execute_tool(&request))
+        .expect("protocol failure should remain controller-visible");
+
+    assert!(result.is_error);
+    assert!(
+        result
+            .model_output
+            .contains("without a non-empty `error` string")
+    );
+    let host_result = result
+        .host_result
+        .expect("protocol failure should use canonical host metadata");
+    assert_eq!(host_result["kind"], "tool_error");
+    assert_eq!(
+        host_result["payload"]["tool_call_id"],
+        "call-invalid-structured-error-1"
+    );
+    assert_eq!(
+        host_result["payload"]["tool_name"],
+        "invalid_structured_failure_tool"
+    );
+}
+
 /// Verifies Plan mode blocks disallowed tools at the shared bridge instead of hiding them from the provider request.
 /// 验证 Plan 模式会在共享桥接层拦截不允许的工具，而不是从 Provider 请求中隐藏它们。
 #[test]
@@ -449,7 +574,8 @@ fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
             context_injection: None,
         },
         ConversationSnapshot::default(),
-    );
+    )
+    .expect("valid core conversation snapshot");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -528,7 +654,8 @@ fn managed_tool_runtime_bridge_keeps_controller_loop_alive_after_tool_failure() 
             context_injection: None,
         },
         ConversationSnapshot::default(),
-    );
+    )
+    .expect("valid core conversation snapshot");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -624,10 +751,10 @@ fn streaming_tool_executor_converts_tool_panics_into_error_results() {
     )));
 }
 
-/// Verifies a model-visible tool error still displays as completed when the host invocation returned normally.
-/// 验证宿主调用正常返回时，即使工具结果对模型可见为错误，界面仍显示为已完成。
+/// Verifies a controller-visible tool error is projected with failed display state.
+/// 验证控制器可见工具错误会投影为失败展示状态。
 #[test]
-fn streaming_tool_executor_marks_normal_error_results_completed() {
+fn streaming_tool_executor_marks_controller_error_results_failed() {
     let (manager, definitions) = build_demo_manager();
     let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
         Arc::new(manager),
@@ -666,7 +793,7 @@ fn streaming_tool_executor_marks_normal_error_results_completed() {
                     .as_ref()
                     .and_then(|metadata| metadata.get("display_state"))
                     .and_then(serde_json::Value::as_str)
-                    == Some("completed")
+                    == Some("failed")
     )));
 }
 

@@ -137,7 +137,11 @@ async fn refresh_workbench_snapshot_with_selected_session(
             ai_tool_configuration,
             live_context_budgets,
             guard.agent_runtime.clone(),
-            guard.detached_subagent_task_listeners.clone(),
+            guard
+                .detached_subagent_task_listeners
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
             captured_workbench_generation,
         )
     };

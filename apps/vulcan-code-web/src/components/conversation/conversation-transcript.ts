@@ -312,20 +312,8 @@ function toolMergeBaseKeysForBlock(block: ConversationBlock): string[] {
   const keys = [
     block.toolCallId ? `call:${block.toolCallId}` : null,
     block.commandSessionId ? `command:${block.commandSessionId}` : null,
-    block.toolResultId ? toolCallIdFromToolResultId(block.toolResultId) : null,
   ];
   return keys.filter((key): key is string => Boolean(key));
-}
-
-// toolCallIdFromToolResultId recovers conventional tool-call ids from host-generated result ids.
-// toolCallIdFromToolResultId 从宿主生成的结果标识中恢复约定形式的工具调用标识。
-function toolCallIdFromToolResultId(toolResultId: string): string | null {
-  const trimmed = toolResultId.trim();
-  if (!trimmed.startsWith("tool-result-")) {
-    return null;
-  }
-  const toolCallId = trimmed.slice("tool-result-".length).trim();
-  return toolCallId ? `call:${toolCallId}` : null;
 }
 
 // mergeToolBlocks merges one tool result into an existing tool execution row.

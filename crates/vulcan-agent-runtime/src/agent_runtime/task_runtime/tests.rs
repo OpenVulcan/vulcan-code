@@ -9,6 +9,39 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Reserves one test execution and attaches its provider abort handle.
+/// 预留一个测试执行并附加其 Provider 中止句柄。
+///
+/// # Parameters
+/// 参数
+/// `task_runtime` owns the active-run reservation table.
+/// `task_runtime` 持有活动运行预留表。
+/// `task_id` identifies the stable child task.
+/// `task_id` 标识稳定子任务。
+/// `execution_id` identifies the concrete test execution.
+/// `execution_id` 标识具体测试执行。
+/// `handle` aborts the pending provider future used by the test.
+/// `handle` 用于中止测试中的待定 Provider future。
+///
+/// # Returns
+/// 返回值
+/// The ownership guard for the exact reserved execution.
+/// 返回精确预留执行的所有权守卫。
+pub(super) fn install_test_active_task_run(
+    task_runtime: &Arc<TaskRuntime>,
+    task_id: SessionId,
+    execution_id: &str,
+    handle: AbortHandle,
+) -> ActiveTaskRunGuard {
+    let guard = task_runtime
+        .reserve_active_task_run(task_id, execution_id)
+        .expect("test active run should reserve");
+    guard
+        .attach_abort_handle(handle)
+        .expect("test active run abort handle should attach");
+    guard
+}
+
 /// Builds one minimal controller configuration for task-runtime prompt tests.
 /// 为 task-runtime 提示词测试构建一份最小控制器配置。
 fn build_test_controller_config(system_prompt: &str) -> CoreControllerConfig {

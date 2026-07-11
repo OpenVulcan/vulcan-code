@@ -138,9 +138,9 @@ pub(super) fn compaction_attempt_conversation_state(
     full_context_state: &SessionConversationState,
     source_messages: &[vulcan_context::SessionMessageEntry],
     prune_mode: CompactionInputPruneMode,
-) -> SessionConversationState {
+) -> Result<SessionConversationState, String> {
     if prune_mode == CompactionInputPruneMode::None {
-        return full_context_state.clone();
+        return Ok(full_context_state.clone());
     }
     conversation_state_from_session_messages(source_messages)
 }

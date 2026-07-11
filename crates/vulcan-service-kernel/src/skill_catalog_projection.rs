@@ -653,4 +653,26 @@ mod tests {
         assert!(capability_policy_allowed_selectors(&policy).is_empty());
         assert!(capability_policy_denied_selectors(&policy).is_empty());
     }
+
+    /// Verifies every bundled subagent sidecar satisfies the current strict catalog protocol.
+    /// 验证每个内置子代理 sidecar 都满足当前严格目录协议。
+    #[test]
+    fn bundled_subagent_sidecars_load_without_catalog_errors() {
+        // Loads the production resource directory through the same catalog entry used at runtime.
+        // 通过运行时使用的同一目录入口加载生产资源目录。
+        let catalog = vulcan_task_session::load_subagent_catalog_from_roots(
+            vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
+            std::path::PathBuf::new(),
+        );
+
+        assert!(
+            !catalog.definitions.is_empty(),
+            "bundled subagent catalog must contain definitions"
+        );
+        assert!(
+            catalog.errors.is_empty(),
+            "bundled subagent catalog must load without errors: {:#?}",
+            catalog.errors
+        );
+    }
 }

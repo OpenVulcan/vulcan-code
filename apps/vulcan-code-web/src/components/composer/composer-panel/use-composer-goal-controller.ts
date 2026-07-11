@@ -1,7 +1,7 @@
 import React from "react";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";
-import type { SessionGoalSummary } from "@/types";
+import type { SessionGoalSummary, SessionGoalUserStatusUpdate } from "@/types";
 
 // ComposerGoalDialogMode identifies whether the dialog edits the current goal or resumes a stopped goal.
 // ComposerGoalDialogMode 标识弹窗是在编辑当前目标，还是继续一个已停止目标。
@@ -33,7 +33,7 @@ export interface UseComposerGoalControllerOptions {
   onClearGoal: () => Promise<boolean>;
   // Updates the current persisted goal lifecycle status.
   // 更新当前持久化目标的生命周期状态。
-  onUpdateGoalStatus: (status: string) => Promise<boolean>;
+  onUpdateGoalStatus: (status: SessionGoalUserStatusUpdate) => Promise<boolean>;
   // Starts the first backend turn after a new goal has been persisted.
   // 在新目标持久化后启动第一个后端轮次。
   onSubmitCreatedGoal: (objective: string) => Promise<void>;
@@ -213,7 +213,7 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
     }
     // nextStatus is the explicit persisted lifecycle transition requested by the user.
     // nextStatus 是用户请求的显式持久化生命周期转换。
-    const nextStatus = options.goal.status === "paused" ? "active" : "paused";
+    const nextStatus: SessionGoalUserStatusUpdate = options.goal.status === "paused" ? "active" : "paused";
     setSaving(true);
     try {
       await options.onUpdateGoalStatus(nextStatus);

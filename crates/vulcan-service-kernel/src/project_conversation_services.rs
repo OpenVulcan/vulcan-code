@@ -18,31 +18,39 @@ pub(super) use project_services::{
     service_set_project_icon, service_toggle_project_pinned,
 };
 
-/// Owns one in-progress session lifecycle transition and clears its reservation on every exit path.
-/// 持有一次进行中的会话生命周期转换，并在所有退出路径上清理其预留状态。
-pub(super) struct SessionLifecycleTransitionGuard {
-    /// Shared service state that owns the transition reservations.
-    /// 持有生命周期转换预留状态的共享服务状态。
+/// Owns one in-progress session turn-admission transaction and clears only its reservations on exit.
+/// 持有一次进行中的会话回合准入事务，并在退出时仅清理其自身预留。
+pub(super) struct SessionTurnAdmissionGuard {
+    /// Shared service state that owns the typed admission reservations.
+    /// 持有类型化准入预留状态的共享服务状态。
     state: SharedServiceBridgeState,
-    /// Exact session identities reserved by this transition.
-    /// 本次转换预留的精确会话标识集合。
+    /// Unique owner identity shared by every session reservation in this guard.
+    /// 此守卫中所有会话预留共享的唯一所有者身份。
+    reservation_id: Uuid,
+    /// Exact session identities reserved by this admission transaction.
+    /// 本次准入事务预留的精确会话标识集合。
     session_ids: BTreeSet<SessionId>,
-    /// Exact project identities reserved by this transition.
-    /// 本次转换预留的精确项目标识集合。
+    /// Exact project identities additionally reserved by a project lifecycle transaction.
+    /// 项目生命周期事务额外预留的精确项目标识集合。
     project_ids: BTreeSet<String>,
 }
 
-impl Drop for SessionLifecycleTransitionGuard {
-    /// Clears every lifecycle reservation owned by this guard.
-    /// 清理此守卫持有的全部生命周期预留状态。
+impl Drop for SessionTurnAdmissionGuard {
+    /// Clears every session reservation still owned by this guard and its project reservations.
+    /// 清理仍由此守卫持有的全部会话预留及其项目预留。
     fn drop(&mut self) {
         if let Ok(mut guard) = self.state.lock() {
-            for session_id in &self.session_ids {
-                guard.session_lifecycle_transition_ids.remove(session_id);
-            }
-            for project_id in &self.project_ids {
-                guard.project_lifecycle_transition_ids.remove(project_id);
-            }
+            guard
+                .session_turn_admission_reservations
+                .retain(|session_id, reservation| {
+                    !self.session_ids.contains(session_id)
+                        || reservation.reservation_id != self.reservation_id
+                });
+            guard
+                .project_lifecycle_transition_reservations
+                .retain(|project_id, reservation_id| {
+                    !self.project_ids.contains(project_id) || *reservation_id != self.reservation_id
+                });
         }
     }
 }
@@ -67,8 +75,54 @@ pub(super) fn begin_session_lifecycle_transition(
     state: &SharedServiceBridgeState,
     session_ids: impl IntoIterator<Item = SessionId>,
     action_label: &str,
-) -> Result<SessionLifecycleTransitionGuard, String> {
+) -> Result<SessionTurnAdmissionGuard, String> {
     begin_lifecycle_transition(state, session_ids, std::iter::empty(), action_label)
+}
+
+/// Reserves exact sessions against new kernel turns while an in-flight mutation changes dispatch authority.
+/// 在进行中的变更修改分发权威状态时，预留精确会话以阻止新的 kernel 回合。
+///
+/// Unlike destructive lifecycle transitions, this guard allows an already-running turn to finish. It only
+/// closes the race in which a previously validated queued turn registers while Goal state is being changed.
+/// 与破坏性生命周期转换不同，此守卫允许已经运行的回合结束；它只关闭已校验排队回合在 Goal 状态变更期间注册的竞态窗口。
+///
+/// # Parameters
+/// 参数
+/// `state` owns runtime kernels and lifecycle transition reservations.
+/// `state` 持有运行时 kernel 与生命周期转换预留状态。
+/// `session_ids` are the exact sessions whose new turn registration must be excluded.
+/// `session_ids` 是必须排除新回合注册的精确会话集合。
+/// `action_label` labels diagnostics for conflicting mutations.
+/// `action_label` 标记冲突变更的诊断文案。
+///
+/// # Returns
+/// 返回值
+/// Returns a guard that blocks new turns until the authoritative mutation and queue cleanup finish.
+/// 返回一个在权威状态变更与队列清理完成前阻止新回合的守卫。
+pub(super) fn begin_session_turn_start_exclusion(
+    state: &SharedServiceBridgeState,
+    session_ids: impl IntoIterator<Item = SessionId>,
+    action_label: &str,
+) -> Result<SessionTurnAdmissionGuard, String> {
+    let reserved_session_ids = session_ids.into_iter().collect::<BTreeSet<_>>();
+    let reservation_id = Uuid::new_v4();
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    reserve_session_turn_admission(
+        &mut guard,
+        &reserved_session_ids,
+        reservation_id,
+        SessionTurnAdmissionReservationKind::GoalMutation,
+        action_label,
+    )?;
+    drop(guard);
+    Ok(SessionTurnAdmissionGuard {
+        state: state.clone(),
+        reservation_id,
+        session_ids: reserved_session_ids,
+        project_ids: BTreeSet::new(),
+    })
 }
 
 /// Atomically reserves one project and its current children for a lifecycle transition.
@@ -94,7 +148,7 @@ pub(super) fn begin_project_lifecycle_transition(
     project_id: &str,
     session_ids: impl IntoIterator<Item = SessionId>,
     action_label: &str,
-) -> Result<SessionLifecycleTransitionGuard, String> {
+) -> Result<SessionTurnAdmissionGuard, String> {
     begin_lifecycle_transition(state, session_ids, [project_id.to_string()], action_label)
 }
 
@@ -121,22 +175,18 @@ fn begin_lifecycle_transition(
     session_ids: impl IntoIterator<Item = SessionId>,
     project_ids: impl IntoIterator<Item = String>,
     action_label: &str,
-) -> Result<SessionLifecycleTransitionGuard, String> {
+) -> Result<SessionTurnAdmissionGuard, String> {
     // reserved_session_ids deduplicates project membership before validation and reservation.
     // reserved_session_ids 在校验与预留前去重项目成员关系。
     let reserved_session_ids = session_ids.into_iter().collect::<BTreeSet<_>>();
     // reserved_project_ids deduplicates project targets before validation and reservation.
     // reserved_project_ids 在校验与预留前去重项目目标。
     let reserved_project_ids = project_ids.into_iter().collect::<BTreeSet<_>>();
+    let reservation_id = Uuid::new_v4();
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     for session_id in &reserved_session_ids {
-        if guard.session_lifecycle_transition_ids.contains(session_id) {
-            return Err(format!(
-                "会话 `{session_id}` 正在执行生命周期转换，无法重复{action_label}。"
-            ));
-        }
         if webui_session_kernel_has_active_turn(&guard, *session_id)
             || webui_session_has_active_run(&guard, *session_id)
         {
@@ -146,24 +196,84 @@ fn begin_lifecycle_transition(
         }
     }
     for project_id in &reserved_project_ids {
-        if guard.project_lifecycle_transition_ids.contains(project_id) {
+        if guard
+            .project_lifecycle_transition_reservations
+            .contains_key(project_id)
+        {
             return Err(format!(
                 "项目 `{project_id}` 正在执行生命周期转换，无法重复{action_label}。"
             ));
         }
     }
-    guard
-        .session_lifecycle_transition_ids
-        .extend(reserved_session_ids.iter().copied());
-    guard
-        .project_lifecycle_transition_ids
-        .extend(reserved_project_ids.iter().cloned());
+    reserve_session_turn_admission(
+        &mut guard,
+        &reserved_session_ids,
+        reservation_id,
+        SessionTurnAdmissionReservationKind::LifecycleTransition,
+        action_label,
+    )?;
+    guard.project_lifecycle_transition_reservations.extend(
+        reserved_project_ids
+            .iter()
+            .cloned()
+            .map(|project_id| (project_id, reservation_id)),
+    );
     drop(guard);
-    Ok(SessionLifecycleTransitionGuard {
+    Ok(SessionTurnAdmissionGuard {
         state: state.clone(),
+        reservation_id,
         session_ids: reserved_session_ids,
         project_ids: reserved_project_ids,
     })
+}
+
+/// Atomically validates and inserts one owned turn-admission reservation across exact sessions.
+/// 跨精确会话原子校验并插入一个有所有权的回合准入预留。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the typed reservation table under the caller's shared-state lock.
+/// `state` 在调用方共享状态锁下持有类型化预留表。
+/// `session_ids` are the deduplicated sessions reserved as one transaction.
+/// `session_ids` 是作为单个事务预留的已去重会话集合。
+/// `reservation_id` uniquely owns every inserted row for guarded release.
+/// `reservation_id` 唯一拥有每个插入行，用于受保护释放。
+/// `kind` identifies the domain reason that blocks new turns.
+/// `kind` 标识阻止新回合的领域原因。
+/// `action_label` labels the requested operation in conflict diagnostics.
+/// `action_label` 在冲突诊断中标记请求的操作。
+///
+/// # Returns
+/// 返回值
+/// Success after inserting all rows, or a conflict before any row is inserted.
+/// 全部行插入后返回成功，或在插入任何行前返回冲突。
+fn reserve_session_turn_admission(
+    state: &mut ServiceBridgeState,
+    session_ids: &BTreeSet<SessionId>,
+    reservation_id: Uuid,
+    kind: SessionTurnAdmissionReservationKind,
+    action_label: &str,
+) -> Result<(), String> {
+    for session_id in session_ids {
+        if let Some(existing) = state.session_turn_admission_reservations.get(session_id) {
+            return Err(format!(
+                "会话 `{session_id}` 已由 {} 预留，无法执行{action_label}。",
+                existing.kind.diagnostic_label()
+            ));
+        }
+    }
+    state
+        .session_turn_admission_reservations
+        .extend(session_ids.iter().copied().map(|session_id| {
+            (
+                session_id,
+                SessionTurnAdmissionReservation {
+                    reservation_id,
+                    kind,
+                },
+            )
+        }));
+    Ok(())
 }
 
 /// Normalizes and validates a user-provided display name.
@@ -252,7 +362,21 @@ mod tests {
                 .expect("idle project should enter lifecycle transition");
         {
             let mut guard = state.lock().expect("service state should lock");
-            assert!(guard.project_lifecycle_transition_ids.contains(&project_id));
+            assert_eq!(
+                guard
+                    .project_lifecycle_transition_reservations
+                    .get(&project_id)
+                    .copied(),
+                Some(transition_guard.reservation_id)
+            );
+            assert_eq!(
+                guard
+                    .session_turn_admission_reservations
+                    .get(&session_id)
+                    .expect("session lifecycle reservation should exist")
+                    .kind,
+                SessionTurnAdmissionReservationKind::LifecycleTransition
+            );
             assert!(
                 start_webui_session_kernel_user_turn(&mut guard, session_id, "blocked-turn")
                     .is_err()
@@ -264,8 +388,150 @@ mod tests {
         let mut guard = state
             .lock()
             .expect("service state should lock after release");
-        assert!(!guard.project_lifecycle_transition_ids.contains(&project_id));
+        assert!(
+            !guard
+                .project_lifecycle_transition_reservations
+                .contains_key(&project_id)
+        );
         start_webui_session_kernel_user_turn(&mut guard, session_id, "accepted-turn")
             .expect("released lifecycle reservation should allow a turn");
+    }
+
+    /// Verifies a stale guard cannot delete a newer reservation for the same session.
+    /// 验证过期守卫不能删除同一会话的更新预留。
+    #[test]
+    fn turn_admission_guard_releases_only_its_owned_reservation() {
+        // session_id identifies the admission slot whose owner is deliberately replaced.
+        // session_id 标识被刻意替换所有者的准入槽位。
+        let session_id = SessionId::from_u128(0x96);
+        // state owns the typed reservation table under test.
+        // state 持有测试中的类型化预留表。
+        let state = create_service_bridge_state(Arc::new(LifecycleTransitionTestShellHost));
+        // stale_guard owns the first Goal-mutation reservation generation.
+        // stale_guard 持有第一代 Goal 变更预留。
+        let stale_guard = begin_session_turn_start_exclusion(&state, [session_id], "更新目标")
+            .expect("first reservation should succeed");
+        // replacement_id identifies a later reservation generation for the same session.
+        // replacement_id 标识同一会话后续一代预留。
+        let replacement_id = Uuid::new_v4();
+        {
+            // guard replaces the table entry to simulate a newer authoritative owner.
+            // guard 替换表项以模拟更新的权威所有者。
+            let mut guard = state.lock().expect("service state should lock");
+            guard.session_turn_admission_reservations.insert(
+                session_id,
+                SessionTurnAdmissionReservation {
+                    reservation_id: replacement_id,
+                    kind: SessionTurnAdmissionReservationKind::LifecycleTransition,
+                },
+            );
+        }
+
+        drop(stale_guard);
+
+        // guard verifies the stale drop retained the replacement generation exactly.
+        // guard 验证过期释放精确保留了替代代际。
+        let guard = state.lock().expect("service state should lock after drop");
+        assert_eq!(
+            guard
+                .session_turn_admission_reservations
+                .get(&session_id)
+                .copied(),
+            Some(SessionTurnAdmissionReservation {
+                reservation_id: replacement_id,
+                kind: SessionTurnAdmissionReservationKind::LifecycleTransition,
+            })
+        );
+    }
+
+    /// Verifies project conflicts leave no partial session reservation behind.
+    /// 验证项目冲突不会遗留局部会话预留。
+    #[test]
+    fn project_reservation_conflict_is_atomic_across_session_and_project_rows() {
+        // session_id identifies the child row that must remain unreserved on project conflict.
+        // session_id 标识项目冲突时必须保持未预留的子会话行。
+        let session_id = SessionId::from_u128(0x97);
+        // project_id identifies the already-reserved lifecycle target.
+        // project_id 标识已经被预留的生命周期目标。
+        let project_id = String::from("project-conflict-test");
+        // state owns both reservation tables committed as one logical transaction.
+        // state 持有作为单个逻辑事务提交的两张预留表。
+        let state = create_service_bridge_state(Arc::new(LifecycleTransitionTestShellHost));
+        {
+            // guard seeds the authoritative conflicting project owner.
+            // guard 写入权威的冲突项目所有者。
+            let mut guard = state.lock().expect("service state should lock");
+            guard
+                .project_lifecycle_transition_reservations
+                .insert(project_id.clone(), Uuid::new_v4());
+        }
+
+        let result = begin_project_lifecycle_transition(&state, &project_id, [session_id], "归档");
+
+        assert!(result.is_err());
+        let guard = state
+            .lock()
+            .expect("service state should lock after conflict");
+        assert!(
+            !guard
+                .session_turn_admission_reservations
+                .contains_key(&session_id)
+        );
+    }
+
+    /// Verifies a stale lifecycle guard preserves newer project and session reservation owners.
+    /// 验证过期生命周期守卫会保留更新的项目与会话预留所有者。
+    #[test]
+    fn lifecycle_guard_releases_only_matching_transaction_owner() {
+        // session_id identifies the replaced session reservation row.
+        // session_id 标识被替换的会话预留行。
+        let session_id = SessionId::from_u128(0x98);
+        // project_id identifies the replaced project reservation row.
+        // project_id 标识被替换的项目预留行。
+        let project_id = String::from("project-owner-test");
+        // state owns both typed transaction resources.
+        // state 持有两类带类型的事务资源。
+        let state = create_service_bridge_state(Arc::new(LifecycleTransitionTestShellHost));
+        // stale_guard owns the first cross-resource transaction generation.
+        // stale_guard 持有第一代跨资源事务。
+        let stale_guard =
+            begin_project_lifecycle_transition(&state, &project_id, [session_id], "归档")
+                .expect("first lifecycle reservation should succeed");
+        // replacement_id identifies the newer owner installed for both resources.
+        // replacement_id 标识为两类资源安装的更新所有者。
+        let replacement_id = Uuid::new_v4();
+        {
+            // guard replaces both rows before the stale guard exits.
+            // guard 在过期守卫退出前替换两行。
+            let mut guard = state.lock().expect("service state should lock");
+            guard.session_turn_admission_reservations.insert(
+                session_id,
+                SessionTurnAdmissionReservation {
+                    reservation_id: replacement_id,
+                    kind: SessionTurnAdmissionReservationKind::LifecycleTransition,
+                },
+            );
+            guard
+                .project_lifecycle_transition_reservations
+                .insert(project_id.clone(), replacement_id);
+        }
+
+        drop(stale_guard);
+
+        let guard = state.lock().expect("service state should lock after drop");
+        assert_eq!(
+            guard
+                .session_turn_admission_reservations
+                .get(&session_id)
+                .map(|reservation| reservation.reservation_id),
+            Some(replacement_id)
+        );
+        assert_eq!(
+            guard
+                .project_lifecycle_transition_reservations
+                .get(&project_id)
+                .copied(),
+            Some(replacement_id)
+        );
     }
 }

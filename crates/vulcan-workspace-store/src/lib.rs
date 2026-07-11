@@ -15,9 +15,7 @@ pub(crate) mod conversation_protocol {
     };
 
     #[cfg(test)]
-    pub use vulcan_context::{
-        SessionConversationMessage, SessionConversationRecord, SessionProviderContinuationState,
-    };
+    pub use vulcan_context::{SessionConversationMessage, SessionProviderContinuationState};
 }
 
 pub(crate) use vulcan_provider_config::config as provider_config;

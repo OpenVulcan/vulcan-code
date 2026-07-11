@@ -378,7 +378,8 @@ mod tests {
                 context_injection: None,
             },
             core_snapshot.clone(),
-        );
+        )
+        .expect("valid core conversation snapshot");
 
         RuntimeStreamBootstrap {
             preparation: build_test_preparation(),

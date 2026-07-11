@@ -5,10 +5,11 @@ pub(super) fn read_task_invocations_from_main_segments(
     parent: &ParentSessionRef,
 ) -> Result<Vec<TaskInvocationEvent>, SessionStoreError> {
     let metadata_path = root_session_dir.join(SEGMENTED_METADATA_FILE);
-    if !metadata_path.exists() {
+    // metadata is absent only when the authoritative file open reports `NotFound`.
+    // metadata 仅在权威文件打开报告 `NotFound` 时视为缺失。
+    let Some(metadata) = read_json_file::<Value>(&metadata_path)? else {
         return Ok(Vec::new());
-    }
-    let metadata = read_required_json::<Value>(&metadata_path)?;
+    };
     let segments = serde_json::from_value::<Vec<SegmentMetadata>>(
         metadata
             .get("segments")

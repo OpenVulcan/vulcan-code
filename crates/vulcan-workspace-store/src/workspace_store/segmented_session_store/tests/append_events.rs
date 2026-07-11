@@ -370,7 +370,6 @@ fn append_message_update_backfills_tool_detail_ref_sequence() {
         "tool_name": "shell_command",
         "result": {
             "status": "completed",
-            "tool_result_id": "tool-result-call-1",
             "detail_ref": {
                 "kind": "session_record",
                 "record_id": "m-detail",
@@ -388,7 +387,6 @@ fn append_message_update_backfills_tool_detail_ref_sequence() {
     detail.metadata = Some(json!({
         "tool_detail": true,
         "tool_call_id": "call-1",
-        "tool_result_id": "tool-result-call-1"
     }));
 
     let lines = append_segmented_session_message_update(&session_dir, &[user, call, detail])

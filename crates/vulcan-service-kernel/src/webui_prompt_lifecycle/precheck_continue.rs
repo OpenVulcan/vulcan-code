@@ -145,7 +145,7 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         &mut workspace_snapshot,
         session_id,
         Some(start.precheck_request.turn_id()),
-    );
+    )?;
     webui_after_precheck_trace(
         "after_precheck_03_runtime_state_ready",
         format!(
@@ -756,7 +756,7 @@ pub(crate) fn mark_webui_precheck_continuation_failed(
                 "Precheck 结果已忽略",
                 error.to_string(),
             ),
-        );
+        )?;
         runtime_state.updated_at = now.clone();
     }
     workspace_snapshot

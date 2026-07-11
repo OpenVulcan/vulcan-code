@@ -13,12 +13,6 @@ use vulcan_core::types::{
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
 
-/// Builds one synthetic host-owned tool-result identifier that stays stable within the current execution turn.
-/// 构建一个在当前执行回合内保持稳定的宿主自有合成工具结果标识。
-pub(crate) fn build_host_tool_result_id(tool_call_id: &str) -> String {
-    format!("tool-result-{tool_call_id}")
-}
-
 /// Scopes one persisted continuation cursor to the currently active provider/model pair so cross-protocol session switches do not reuse a foreign upstream cursor.
 /// 将一条已持久化 continuation 游标限制到当前激活的 provider/model 组合，避免跨协议切换时误复用外部上游游标。
 pub(crate) fn scope_continuation_to_active_provider(
@@ -106,16 +100,23 @@ pub fn attach_tool_name_to_runtime_metadata(
 
 /// Formats one host-side tool result into the full Markdown payload shown by the inline transcript and modal.
 /// 将单次宿主侧工具结果格式化为内联转录与弹窗使用的完整 Markdown 载荷。
-pub(crate) fn format_host_tool_result_runtime_detail(
-    tool_result_id: &str,
-    model_output: &str,
-) -> String {
+///
+/// # Parameters
+/// 参数
+/// - `model_output`: Exact model-visible output returned by the tool runtime.
+/// - `model_output`：工具运行时返回的精确模型可见输出。
+///
+/// # Returns
+/// 返回值
+/// A normalized Markdown detail body without any independently synthesized result identity.
+/// 返回不包含任何独立合成结果身份的规范化 Markdown 详情正文。
+pub(crate) fn format_host_tool_result_runtime_detail(model_output: &str) -> String {
     let normalized_output = if model_output.trim().is_empty() {
         String::from("(empty result)")
     } else {
         model_output.trim().to_string()
     };
-    format!("## Result ID\n\n`{tool_result_id}`\n\n## Tool Result\n\n{normalized_output}")
+    format!("## Tool Result\n\n{normalized_output}")
 }
 
 /// Converts one `vulcan-core` provider-turn delta into the workbench-facing runtime delta shape without changing the semantic payload.
@@ -191,20 +192,29 @@ pub(crate) fn format_tool_call_runtime_detail(tool_name: &str, arguments: &Value
 
 /// Builds one structured runtime-event metadata payload for a completed tool result while preserving host-side metadata fields.
 /// 在保留宿主侧元数据字段的前提下，为已完成工具结果构建一份结构化运行时事件元数据载荷。
+///
+/// # Parameters
+/// 参数
+/// - `tool_call_id`: Unique tool-call identity that owns the returned payload.
+/// - `tool_call_id`：拥有返回载荷的唯一工具调用身份。
+/// - `host_metadata`: Optional structured host result copied into the event envelope.
+/// - `host_metadata`：复制到事件信封中的可选结构化宿主结果。
+/// - `display_state`: Stable completion state consumed by transcript projection.
+/// - `display_state`：转录投影消费的稳定完成状态。
+///
+/// # Returns
+/// 返回值
+/// One metadata object keyed by the owning tool-call identity.
+/// 返回一份按所属工具调用身份建立的元数据对象。
 pub fn build_tool_result_runtime_metadata(
     tool_call_id: &str,
-    tool_result_id: &str,
     host_metadata: Option<&Value>,
     display_state: &str,
-) -> Option<Value> {
+) -> Value {
     let mut metadata = JsonMap::new();
     metadata.insert(
         String::from("tool_call_id"),
         Value::String(tool_call_id.to_string()),
-    );
-    metadata.insert(
-        String::from("tool_result_id"),
-        Value::String(tool_result_id.to_string()),
     );
     metadata.insert(
         String::from("display_state"),
@@ -218,7 +228,7 @@ pub fn build_tool_result_runtime_metadata(
         metadata.insert(String::from("host_metadata"), other.clone());
     }
 
-    Some(Value::Object(metadata))
+    Value::Object(metadata)
 }
 
 /// Flattens structured reasoning content into one readable text block for the transcript thinking section.
@@ -257,7 +267,6 @@ mod tests {
     fn tool_result_runtime_metadata_keeps_nested_host_result_snapshot() {
         let metadata = build_tool_result_runtime_metadata(
             "call-1",
-            "tool-result-call-1",
             Some(&json!({
                 "kind": "generated_attachments",
                 "payload": {
@@ -269,14 +278,18 @@ mod tests {
                 },
             })),
             "completed",
-        )
-        .expect("metadata should exist");
+        );
 
         assert_eq!(
             metadata
                 .get("tool_call_id")
                 .and_then(|value| value.as_str()),
             Some("call-1")
+        );
+        assert!(
+            !metadata
+                .as_object()
+                .is_some_and(|object| object.contains_key("tool_result_id"))
         );
         assert_eq!(
             metadata.get("kind").and_then(|value| value.as_str()),

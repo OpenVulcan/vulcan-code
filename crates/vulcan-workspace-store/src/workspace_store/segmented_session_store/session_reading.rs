@@ -139,7 +139,7 @@ pub(in crate::workspace_store) fn replay_segmented_session_context_without_repai
     if messages.is_empty() {
         return Ok(None);
     }
-    let conversation_state = conversation_state_from_session_messages(&messages);
+    let conversation_state = conversation_state_from_session_messages(&messages)?;
     let updated_at = suffix
         .last()
         .map(|line| line.timestamp.clone())

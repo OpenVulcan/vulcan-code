@@ -2,6 +2,9 @@
 //! WebUI 提示词生命周期 pending prepare 辅助逻辑。
 
 use super::*;
+use crate::{
+    ensure_webui_goal_session_kernel_turn_start_allowed, start_webui_goal_session_kernel_turn,
+};
 
 /// Prepares and dispatches the next queued WebUI pending prompt when the session is idle.
 /// 在会话空闲时准备并分发下一个排队的 WebUI 待发送提示词。
@@ -76,18 +79,20 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         );
         return Ok(false);
     }
-    let mut retried_after_stale_mailbox_cleanup = false;
-    let next_source = loop {
+    let (next_source, goal_dispatch_version) = loop {
         match pending_prompt_dispatch_readiness(
             app,
             state,
+            controller_runtime,
             &workspace_snapshot,
             agent_runtime,
             session_id,
             has_active_session_run,
             allow_from_stopped_phase,
             priority_override,
-        )? {
+        )
+        .await?
+        {
             PendingPromptDispatchReadiness::Empty => {
                 webui_trace(
                     "pending_prompt_prepare_none",
@@ -100,10 +105,36 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
                     "pending_prompt_stale_session_mailbox_cleared",
                     format!("session={session_id} removed={removed}"),
                 );
-                if retried_after_stale_mailbox_cleanup || removed == 0 {
+                if removed == 0 {
                     return Ok(false);
                 }
-                retried_after_stale_mailbox_cleanup = true;
+                workspace_snapshot = state
+                    .lock()
+                    .map_err(|error| format!("failed to lock service state: {error}"))?
+                    .workspace_snapshot
+                    .clone()
+                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            }
+            PendingPromptDispatchReadiness::StaleGoalGuidanceCleared { removed } => {
+                webui_trace(
+                    "pending_prompt_stale_goal_guidance_cleared",
+                    format!("session={session_id} removed={removed}"),
+                );
+                if removed == 0 {
+                    return Ok(false);
+                }
+                workspace_snapshot = state
+                    .lock()
+                    .map_err(|error| format!("failed to lock service state: {error}"))?
+                    .workspace_snapshot
+                    .clone()
+                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            }
+            PendingPromptDispatchReadiness::GoalAuthorityChanged => {
+                webui_trace(
+                    "pending_prompt_goal_authority_changed",
+                    format!("session={session_id}"),
+                );
                 workspace_snapshot = state
                     .lock()
                     .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -118,7 +149,10 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
                 );
                 return Ok(false);
             }
-            PendingPromptDispatchReadiness::Ready { source } => break source,
+            PendingPromptDispatchReadiness::Ready {
+                source,
+                goal_dispatch_version,
+            } => break (source, goal_dispatch_version),
         }
     };
     let Some(session_title) = workspace_snapshot
@@ -185,37 +219,60 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         )?;
     }
     let prompt_text = entry.prompt.clone();
-    let precheck_start = {
+    let prompt_turn_begin_input = SharedPromptTurnBeginInput {
+        session_id,
+        session_title: &session_title,
+        workspace_path: &workspace_path,
+        prompt_entry_id: entry.id.clone(),
+        prompt: &prompt_text,
+        hidden_model_guidance: entry.hidden_model_guidance.as_deref(),
+        provider_visible_agent_messages: Vec::new(),
+        attachments: entry.attachments,
+        append_canonical_user_message: entry.source.persists_canonical_user_message(),
+        append_visible_user_prompt_record: entry.source.appends_visible_user_prompt_record(),
+        source: entry.source,
+        execution_mode: String::from("build"),
+        reasoning_effort: Some(runtime_options.reasoning_effort),
+        disabled_ai_capability_kinds,
+        disabled_ai_capability_target_selectors: BTreeSet::new(),
+        ai_capability_target_order_overrides: BTreeMap::new(),
+    };
+    let precheck_start = if let Some(expected_goal_dispatch_version) = goal_dispatch_version {
         let mut hook_runtime = entry_agent_runtime
             .conversation_hook_runtime
             .lock()
             .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-        begin_shared_prompt_turn(
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        ensure_webui_goal_session_kernel_turn_start_allowed(
+            &guard,
+            session_id,
+            expected_goal_dispatch_version,
+        )?;
+        let precheck_start = begin_shared_prompt_turn(
             &mut workspace_snapshot,
             &mut hook_runtime,
-            SharedPromptTurnBeginInput {
-                session_id,
-                session_title: &session_title,
-                workspace_path: &workspace_path,
-                prompt_entry_id: entry.id.clone(),
-                prompt: &prompt_text,
-                hidden_model_guidance: entry.hidden_model_guidance.as_deref(),
-                provider_visible_agent_messages: Vec::new(),
-                attachments: entry.attachments,
-                append_canonical_user_message: entry.source.persists_canonical_user_message(),
-                append_visible_user_prompt_record: entry
-                    .source
-                    .appends_visible_user_prompt_record(),
-                source: entry.source,
-                execution_mode: String::from("build"),
-                reasoning_effort: Some(runtime_options.reasoning_effort),
-                disabled_ai_capability_kinds,
-                disabled_ai_capability_target_selectors: BTreeSet::new(),
-                ai_capability_target_order_overrides: BTreeMap::new(),
-            },
-        )
-    }?;
-    {
+            prompt_turn_begin_input,
+        )?;
+        start_webui_goal_session_kernel_turn(
+            &mut guard,
+            session_id,
+            expected_goal_dispatch_version,
+            precheck_start.precheck_request.turn_id(),
+            ActiveTurnKind::UserPrompt,
+        )?;
+        precheck_start
+    } else {
+        let mut hook_runtime = entry_agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        let precheck_start = begin_shared_prompt_turn(
+            &mut workspace_snapshot,
+            &mut hook_runtime,
+            prompt_turn_begin_input,
+        )?;
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -225,7 +282,8 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
             precheck_start.precheck_request.turn_id(),
             ActiveTurnKind::UserPrompt,
         )?;
-    }
+        precheck_start
+    };
     apply_webui_prompt_begin_outer_steps(
         controller_runtime,
         &mut workspace_snapshot,

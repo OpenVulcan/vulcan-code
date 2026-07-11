@@ -52,17 +52,6 @@ pub(super) fn current_unix_millis_text() -> String {
     current_unix_millis().to_string()
 }
 
-/// Returns the provided timestamp text or falls back to the current time when it is empty.
-/// 返回给定时间戳文本，若为空则回退到当前时间。
-pub(super) fn non_empty_timestamp_text(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        current_unix_millis_text()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 /// Returns a required cloned JSON value from a session boundary wrapper.
 /// 从 会话边界包装对象中返回一个必需的 JSON 值副本。
 pub(super) fn required_value(payload: &Value, key: &str) -> Result<Value, String> {

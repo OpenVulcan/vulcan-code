@@ -122,7 +122,8 @@ fn fork_session_directory_rewrites_structural_identity() {
         SessionMessageKind::User,
         SessionMessageRecordKind::Transcript,
         "runtime prompt",
-    )]);
+    )])
+    .expect("valid replayed conversation identities");
     sync_runtime_log_from_conversation_state(
         &source_dir,
         &source_runtime_conversation,
@@ -173,7 +174,8 @@ fn fork_session_directory_rewrites_structural_identity() {
             SessionMessageKind::User,
             SessionMessageRecordKind::Transcript,
             "task runtime prompt",
-        )]),
+        )])
+        .expect("valid replayed conversation identities"),
         "2026-06-06T10:00:00Z",
     )
     .expect("write source task runtime log");
@@ -338,6 +340,109 @@ fn fork_session_directory_rewrites_structural_identity() {
         task_card_metadata["subagent_mailbox_event"]["payload"]["task_id"],
         "task-alpha"
     );
+}
+
+/// Verifies a fork rejects copied runtime artifacts when their metadata is missing.
+/// 验证分叉会拒绝缺少元数据的已复制运行时产物。
+#[test]
+fn fork_session_directory_rejects_orphaned_runtime_artifacts_without_metadata() {
+    // root isolates the orphaned-runtime fork fixture.
+    // root 隔离孤儿运行时分叉夹具。
+    let root = test_root("fork_session_directory_rejects_orphaned_runtime_artifacts");
+    // source_session_id appears in the runtime event copied by the fork.
+    // source_session_id 会出现在分叉复制的运行时事件中。
+    let source_session_id = Uuid::new_v4().to_string();
+    // target_session_id identifies the target directory that must be cleaned after failure.
+    // target_session_id 标识失败后必须清理的目标目录。
+    let target_session_id = Uuid::new_v4().to_string();
+    // create_request assigns the generated source identity to the fixture session.
+    // create_request 将生成的源身份分配给夹具会话。
+    let mut create_request = test_session_request(SegmentPolicy::default());
+    create_request.session_id = source_session_id.clone();
+    // source_dir owns the runtime artifacts whose metadata will be removed.
+    // source_dir 持有元数据将被删除的运行时产物。
+    let source_dir = create_segmented_session_in_location(&root, false, create_request)
+        .expect("create source session");
+    // runtime_state embeds the source identity in one canonical provider event.
+    // runtime_state 将源身份嵌入一条规范 Provider 事件。
+    let runtime_state = conversation_state_from_session_messages(&[test_message(
+        &format!("{source_session_id}-runtime-user"),
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "runtime prompt",
+    )])
+    .expect("valid replayed conversation identities");
+    sync_runtime_log_from_conversation_state(&source_dir, &runtime_state, "t1")
+        .expect("sync source runtime log");
+    // source_metadata identifies the exact active segment retained after metadata deletion.
+    // source_metadata 标识删除元数据后保留的精确活动分段。
+    let source_metadata = read_runtime_metadata(&source_dir).expect("read runtime metadata");
+    // source_segment_path contains authoritative runtime bytes that the failed fork must preserve.
+    // source_segment_path 包含失败分叉必须保留的权威运行时字节。
+    let source_segment_path = source_dir.join(&source_metadata.active_segment);
+    // source_index_path contains the rebuildable but contradictory remaining index.
+    // source_index_path 包含可重建但形成矛盾残留的索引。
+    let source_index_path = runtime_index_path(&source_dir);
+    // original_segment captures source evidence before the failed fork attempt.
+    // original_segment 捕获失败分叉尝试前的源证据。
+    let original_segment = fs::read(&source_segment_path).expect("read source runtime segment");
+    // original_index captures the copied sidecar before the failed fork attempt.
+    // original_index 捕获失败分叉尝试前的已复制附属索引。
+    let original_index = fs::read(&source_index_path).expect("read source runtime index");
+    fs::remove_file(runtime_metadata_path(&source_dir)).expect("remove source runtime metadata");
+    // fork_request selects the no-anchor path that rewrites copied runtime identity in place.
+    // fork_request 选择原地改写已复制运行时身份的无锚点路径。
+    let fork_request = SegmentedSessionForkRequest {
+        source_archived: false,
+        source_project_tag: String::from("Project Alpha"),
+        source_session_id: source_session_id.clone(),
+        target_project_tag: String::from("Project Alpha"),
+        target_session_id: target_session_id.clone(),
+        target_created_date: String::from("2026-06-07"),
+        target_created_at: String::from("2026-06-07T10:00:00Z"),
+        target_title: String::from("Rejected Fork"),
+        target_title_source: String::from("user"),
+        source_anchor_message_id: None,
+    };
+    // target_dir is derived before execution so cleanup can be asserted after the error.
+    // target_dir 在执行前推导，以便错误后断言清理结果。
+    let target_dir = segmented_session_directory(
+        &root,
+        false,
+        &fork_request.target_project_tag,
+        &fork_request.target_created_date,
+        &fork_request.target_session_id,
+    );
+
+    // error proves orphan classification aborts before the target session is published.
+    // error 证明孤儿分类会在目标会话发布前中止。
+    let error = fork_segmented_session_directory_from_source(&source_dir, &root, &fork_request)
+        .expect_err("orphaned runtime artifacts must fail fork");
+    // target_absence distinguishes completed cleanup from target metadata inspection failure.
+    // target_absence 区分已完成清理与目标元数据检查失败。
+    let target_absence = fs::symlink_metadata(&target_dir);
+    // source_metadata_absence verifies the source interruption fixture remains unchanged.
+    // source_metadata_absence 验证源中断夹具保持不变。
+    let source_metadata_absence = fs::symlink_metadata(runtime_metadata_path(&source_dir));
+
+    assert!(error.contains("Runtime metadata is missing while persisted runtime artifacts remain"));
+    assert!(error.contains(&target_dir.display().to_string()));
+    assert!(matches!(
+        target_absence,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert_eq!(
+        fs::read(&source_segment_path).expect("read preserved source runtime segment"),
+        original_segment
+    );
+    assert_eq!(
+        fs::read(&source_index_path).expect("read preserved source runtime index"),
+        original_index
+    );
+    assert!(matches!(
+        source_metadata_absence,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ));
 }
 
 /// Verifies fork display conversion stops while streaming the source segment containing the anchor.

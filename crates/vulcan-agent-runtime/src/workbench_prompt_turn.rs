@@ -432,23 +432,68 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
     conversation_hook_runtime: &mut ConversationHookRuntime,
     input: SharedPromptTurnRuntimeBeginInput<'_>,
 ) -> Result<SharedPromptTurnStart, String> {
+    // draft_runtime_state isolates hydration, paired message/record append, and runtime flags until prompt start succeeds.
+    // draft_runtime_state 会隔离水合、成对消息/记录追加与运行态标记，直到提示词启动成功。
+    let mut draft_runtime_state = runtime_state.clone();
+    // start is produced only after every canonical mutation on the detached draft succeeds.
+    // start 仅在分离草稿上的每项规范修改成功后才会产出。
+    let start = begin_shared_prompt_turn_with_runtime_state_draft(
+        &mut draft_runtime_state,
+        conversation_hook_runtime,
+        input,
+    )?;
+    *runtime_state = draft_runtime_state;
+    Ok(start)
+}
+
+/// Begins one prompt turn against a detached runtime-state draft.
+/// 针对一份分离运行态草稿开始提示词回合。
+///
+/// # Returns
+/// 返回值
+/// Returns the started prompt turn, or the first mutation or hook-preparation failure.
+/// 返回已启动的提示词回合，或首个修改/Hook 准备失败。
+fn begin_shared_prompt_turn_with_runtime_state_draft(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    conversation_hook_runtime: &mut ConversationHookRuntime,
+    input: SharedPromptTurnRuntimeBeginInput<'_>,
+) -> Result<SharedPromptTurnStart, String> {
     let now = current_unix_millis_text();
     let (injection_ops, sanitized_prompt) =
         collect_builtin_manual_injection_ops_and_sanitized_prompt(input.prompt);
     let start_attachments = input.attachments.clone();
-    runtime_state.ui_state.unread = false;
-    if runtime_state.conversation_state.messages.is_empty()
+    // hydrated_conversation_state remains detached until the candidate prompt identity is proven valid.
+    // hydrated_conversation_state 会保持分离，直到候选提示词身份被证明有效。
+    let hydrated_conversation_state = if runtime_state.conversation_state.messages.is_empty()
         && runtime_state.conversation_state.records.is_empty()
         && let Some(messages) = input.prior_session_messages
     {
-        runtime_state.conversation_state =
-            crate::conversation_protocol::conversation_state_from_session_messages(messages);
-    }
+        Some(crate::conversation_protocol::conversation_state_from_session_messages(messages)?)
+    } else {
+        None
+    };
     let append_canonical_user_message =
         input.append_canonical_user_message && input.source.persists_canonical_user_message();
     let append_visible_user_prompt_record = input.append_visible_user_prompt_record
         && input.source.appends_visible_user_prompt_record();
     let mut visible_user_prompt_record_id = None;
+    if append_canonical_user_message
+        && let Some(hydrated_conversation_state) = hydrated_conversation_state.as_ref()
+    {
+        // validation_state proves the detached hydrated window can accept the generated prompt identity before assignment.
+        // validation_state 在赋值前证明分离的水合窗口能够接收生成的提示词身份。
+        let mut validation_state = hydrated_conversation_state.clone();
+        append_user_text_message(
+            &mut validation_state,
+            format!("session-{}-protocol-user-{now}", input.session_id),
+            sanitized_prompt.clone(),
+            input.attachments.clone(),
+        )
+        .map_err(|error| format!("Invalid canonical user message identity: {error}"))?;
+    }
+    if let Some(hydrated_conversation_state) = hydrated_conversation_state {
+        runtime_state.conversation_state = hydrated_conversation_state;
+    }
     if append_canonical_user_message && append_visible_user_prompt_record {
         visible_user_prompt_record_id = Some(append_shared_user_prompt_record_with_attachments(
             runtime_state,
@@ -457,16 +502,18 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             &sanitized_prompt,
             input.attachments.clone(),
             input.source,
-        ));
+        )?);
     } else if append_canonical_user_message {
         append_user_text_message(
             &mut runtime_state.conversation_state,
             format!("session-{}-protocol-user-{now}", input.session_id),
             sanitized_prompt.clone(),
             input.attachments.clone(),
-        );
+        )
+        .map_err(|error| format!("Invalid canonical user message identity: {error}"))?;
         runtime_state.updated_at = now.clone();
     }
+    runtime_state.ui_state.unread = false;
     let system_prompt_hook_phase = vmm_profile_placement_phase(
         runtime_state.conversation_state.messages.len(),
         runtime_state.last_compaction_id.as_deref(),
@@ -734,7 +781,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
                     "Precheck hook 执行失败",
                     detail.clone(),
                 ),
-            );
+            )?;
             precheck_failure_detail = Some(detail);
         }
     }

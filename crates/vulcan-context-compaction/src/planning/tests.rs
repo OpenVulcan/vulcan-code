@@ -54,7 +54,6 @@ fn test_tool_result_message(id: &str, body: &str) -> SessionMessageEntry {
         body: body.to_string(),
         metadata: Some(serde_json::json!({
             "tool_name": "shell_command",
-            "tool_result_id": id,
         })),
         created_at: String::new(),
     }

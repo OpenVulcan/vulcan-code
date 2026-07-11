@@ -14,11 +14,31 @@ pub(super) fn prepare_task_execution_request(
         is_resumed,
         persisted_metadata,
     } = resolved_identifier;
+    // execution_id establishes record ownership before any mutable preparation state is committed.
+    // execution_id 在提交任何可变准备状态前建立记录所有权。
+    let execution_id = Uuid::new_v4().to_string();
+    // transaction_locks serialize child admission with both its direct parent tree and its own outcomes.
+    // transaction_locks 将子节点准入与其直接父树及自身结果提交串行化。
+    let transaction_locks =
+        task_runtime.ordered_task_execution_state_locks(&[current_session_id, task_id])?;
+    // transaction_guards keep session and registry preparation inside one ordered identity boundary.
+    // transaction_guards 将会话与注册表准备保持在同一个有序身份边界内。
+    let mut transaction_guards = Vec::with_capacity(transaction_locks.len());
+    for transaction_lock in &transaction_locks {
+        transaction_guards.push(transaction_lock.lock().map_err(|_| {
+            String::from(
+                "The task execution transaction is locked and cannot prepare the execution request.",
+            )
+        })?);
+    }
     let normalized_description = normalize_optional_task_label(args.description.as_deref());
     let normalized_subagent = normalize_optional_task_label(args.subagent.as_deref())
         .or_else(|| normalize_optional_task_label(args.subagent_profile_id.as_deref()));
     let mut invocation_config = task_invocation_config_from_args(&args);
     let prompt = args.prompt;
+    // The exact prior task record is the rollback image if registry admission rejects this preparation.
+    // 如果注册表准入拒绝本次准备，精确的旧任务记录就是回滚镜像。
+    let previous_task_record;
     let (
         parent_task_id,
         root_session_id,
@@ -35,6 +55,7 @@ pub(super) fn prepare_task_execution_request(
                 "The task session registry is locked and cannot prepare the execution request.",
             )
         })?;
+        previous_task_record = sessions.get(&task_id).cloned();
         if let Some(record) = sessions.get_mut(&task_id) {
             if is_resumed {
                 record.updated_at = current_unix_millis_text();
@@ -52,6 +73,10 @@ pub(super) fn prepare_task_execution_request(
                     record.controller_config = None;
                 }
             }
+            record.last_prompt = prompt.clone();
+            record.last_status = String::from("created");
+            record.execution_id = Some(execution_id.clone());
+            record.stop_reason = None;
             let description = record
                 .description
                 .clone()
@@ -118,6 +143,9 @@ pub(super) fn prepare_task_execution_request(
             record.description = description.clone();
             record.subagent = subagent.clone();
             record.last_prompt = prompt.clone();
+            record.last_status = String::from("created");
+            record.execution_id = Some(execution_id.clone());
+            record.stop_reason = None;
             let parent_task_id = record.parent_task_id;
             let root_session_id = record.origin_session_id;
             let depth = record.depth;
@@ -196,6 +224,8 @@ pub(super) fn prepare_task_execution_request(
                     created_at: timestamp.clone(),
                     updated_at: timestamp,
                     last_status: String::from("created"),
+                    execution_id: Some(execution_id.clone()),
+                    stop_reason: None,
                 },
             );
             (
@@ -212,13 +242,25 @@ pub(super) fn prepare_task_execution_request(
         }
     };
 
-    task_runtime.upsert_prepared_task_registry_entry(task_id)?;
+    if let Err(error) = task_runtime.upsert_prepared_task_registry_entry(task_id) {
+        let mut sessions = task_runtime.sessions.write().map_err(|_| {
+            format!(
+                "{error} The task session registry is locked and cannot roll back the rejected registry preparation."
+            )
+        })?;
+        if let Some(previous_task_record) = previous_task_record {
+            sessions.insert(task_id, previous_task_record);
+        } else {
+            sessions.remove(&task_id);
+        }
+        return Err(error);
+    }
 
     Ok(TaskExecutionRequest {
         current_session_id,
         root_session_id,
         task_id,
-        execution_id: Uuid::new_v4().to_string(),
+        execution_id,
         public_task_id,
         prompt,
         description,
@@ -508,6 +550,8 @@ pub(super) fn build_task_session_record(init: TaskSessionRecordInit) -> TaskSess
         created_at: timestamp.clone(),
         updated_at: timestamp,
         last_status,
+        execution_id: None,
+        stop_reason: None,
     }
 }
 
@@ -562,6 +606,8 @@ pub(super) fn task_session_record_from_persisted_metadata(
         created_at: metadata.created_at.to_string(),
         updated_at: metadata.updated_at.to_string(),
         last_status: status_name_for_task_session_status(metadata.status).to_string(),
+        execution_id: None,
+        stop_reason: metadata.stop_reason.clone(),
     })
 }
 
@@ -615,7 +661,7 @@ pub(super) fn task_conversation_snapshot_from_context(
                 context.node_id
             )
         })?;
-    Ok(build_core_conversation_snapshot(&conversation_state))
+    build_core_conversation_snapshot(&conversation_state)
 }
 
 /// Rebuilds a minimal controller config from persisted task context and effective config.

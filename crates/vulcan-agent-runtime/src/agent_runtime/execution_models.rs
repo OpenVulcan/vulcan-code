@@ -149,6 +149,18 @@ impl ExecutionProviderVisibleAgentMessage {
     }
 }
 
+/// Request-scoped session goal binding captured before provider execution.
+/// 在 Provider 执行前捕获的请求级会话目标绑定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionSessionGoalContext {
+    /// Stable goal identifier that owns usage and lifecycle results from this execution.
+    /// 拥有本次执行用量与生命周期结果的稳定目标标识。
+    pub goal_id: String,
+    /// Rendered goal context injected through the task-goal prompt node.
+    /// 通过任务目标提示词节点注入的已渲染目标上下文。
+    pub prompt_context: String,
+}
+
 /// Minimal execution request captured from the current workbench state.
 /// 从当前工作台状态捕获的最小执行请求。
 #[derive(Debug, Clone)]
@@ -253,9 +265,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional controller runtime used by host-owned tools that need durable workspace state.
     /// 需要持久工作区状态的宿主工具使用的可选控制器运行时。
     pub controller_runtime: Option<ControllerRuntimeHandle>,
-    /// Optional rendered session-goal context injected through the task-goal prompt node.
-    /// 通过任务目标提示词节点注入的可选会话目标上下文。
-    pub session_goal_context: Option<String>,
+    /// Optional session-goal binding captured atomically for this request.
+    /// 为本次请求原子捕获的可选会话目标绑定。
+    pub session_goal_context: Option<ExecutionSessionGoalContext>,
     /// Optional Plan-mode developer guidance injected for the current session activation.
     /// 为当前会话计划模式激活注入的可选开发者引导。
     pub session_plan_context: Option<String>,
@@ -482,9 +494,9 @@ pub struct ExecutionPreparation {
     /// Chronological runtime system updates loaded from `runtime.jsonl` for provider-visible lowering.
     /// 从 `runtime.jsonl` 加载并用于 Provider 可见转换的时间顺序 runtime system update。
     pub runtime_system_updates: Vec<RuntimeSystemUpdateEvent>,
-    /// Optional rendered session-goal context injected through the task-goal prompt node.
-    /// 通过任务目标提示词节点注入的可选会话目标上下文。
-    pub session_goal_context: Option<String>,
+    /// Optional session-goal binding captured atomically for this execution.
+    /// 为本次执行原子捕获的可选会话目标绑定。
+    pub session_goal_context: Option<ExecutionSessionGoalContext>,
     /// Optional Plan-mode developer guidance injected for the current session activation.
     /// 为当前会话计划模式激活注入的可选开发者引导。
     pub session_plan_context: Option<String>,

@@ -262,7 +262,9 @@ pub(crate) fn repair_task_mirror_statuses_for_surface_messages_locked(
                     .agent_runtime
                     .as_ref()
                     .map(|runtime| &runtime.task_runtime),
-                guard.detached_subagent_task_listeners.contains(&task_id),
+                guard
+                    .detached_subagent_task_listeners
+                    .contains_key(&task_id),
                 task_id,
             )
         },

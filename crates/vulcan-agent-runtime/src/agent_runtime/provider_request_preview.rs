@@ -307,14 +307,10 @@ fn render_core_conversation_message_preview(
             }
             sections.join("\n\n")
         }
-        CoreConversationPayload::ToolResult {
-            tool_result_id,
-            tool_call_id,
-            text,
-        } => format!(
+        CoreConversationPayload::ToolResult { tool_call_id, text } => format!(
             "### {}. tool_result · `{}`{}\n{}",
             index + 1,
-            tool_result_id,
+            message.id,
             tool_call_id
                 .as_deref()
                 .map(|call_id| format!(" · call_id=`{call_id}`"))

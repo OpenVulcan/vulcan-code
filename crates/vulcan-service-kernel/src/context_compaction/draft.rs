@@ -36,12 +36,13 @@ pub(crate) fn append_webui_context_compaction_status_message_to_workspace(
     session_id: SessionId,
     budget_note: &str,
     trigger: &str,
-) -> String {
+) -> Result<String, String> {
     let now = current_unix_millis_text();
-    let runtime_state = workspace
+    let mut runtime_state = workspace
         .session_runtime_state
-        .entry(session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_else(|| SessionRuntimeStateEntry {
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
@@ -60,9 +61,10 @@ pub(crate) fn append_webui_context_compaction_status_message_to_workspace(
         })),
         created_at: String::new(),
     };
-    let message_id = append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
+    let message_id =
+        append_webui_session_message_entry_to_state(&mut runtime_state, session_id, entry)?;
     set_webui_context_compaction_section_metadata_in_state(
-        runtime_state,
+        &mut runtime_state,
         &message_id,
         &message_id,
         "start",
@@ -71,13 +73,16 @@ pub(crate) fn append_webui_context_compaction_status_message_to_workspace(
         trigger,
     );
     let runtime_state_snapshot = runtime_state.clone();
+    workspace
+        .session_runtime_state
+        .insert(session_id, runtime_state);
     merge_runtime_state_records_into_display_messages(
         workspace,
         session_id,
         &runtime_state_snapshot,
     );
     sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
-    message_id
+    Ok(message_id)
 }
 
 /// Appends model-produced summary output into the visible compaction body row.
@@ -111,7 +116,7 @@ pub(crate) fn append_webui_context_compaction_output_delta(
                 updated_at: now.clone(),
                 ..SessionRuntimeStateEntry::default()
             });
-        let message_id = output_message_id.get_or_insert_with(|| {
+        if output_message_id.is_none() {
             let entry = SessionMessageEntry {
                 id: String::new(),
                 kind: SessionMessageKind::Assistant,
@@ -129,8 +134,15 @@ pub(crate) fn append_webui_context_compaction_output_delta(
                 })),
                 created_at: String::new(),
             };
-            append_webui_session_message_entry_to_state(runtime_state, session_id, entry)
-        });
+            *output_message_id = Some(append_webui_session_message_entry_to_state(
+                runtime_state,
+                session_id,
+                entry,
+            )?);
+        }
+        let message_id = output_message_id
+            .as_deref()
+            .ok_or_else(|| String::from("context compaction output message id is missing"))?;
         append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta);
         runtime_state.updated_at = now;
         let runtime_state_snapshot = runtime_state.clone();
@@ -234,7 +246,7 @@ pub(crate) fn append_webui_context_compaction_progress(
                     created_at: String::new(),
                 };
                 let message_id =
-                    append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
+                    append_webui_session_message_entry_to_state(runtime_state, session_id, entry)?;
                 set_webui_context_compaction_section_metadata_in_state(
                     runtime_state,
                     &message_id,
@@ -272,16 +284,21 @@ pub(crate) const AUTO_COMPACTION_CONTINUATION_PREFIX: &str =
 
 /// Appends one model-visible continuation note after automatic context compaction.
 /// 在自动上下文压缩后追加一条模型可见的续接提示。
+///
+/// # Returns
+/// 返回值
+/// Returns success after an optional atomic append, or the exact synthetic-message identity failure.
+/// 可选原子追加完成后返回成功，或返回准确的合成消息身份失败。
 pub(crate) fn append_auto_context_compaction_continuation_message(
     draft_runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     created_at: &str,
     active_runtime_state: &SessionRuntimeStateEntry,
-) {
+) -> Result<(), String> {
     let Some(last_user_message) =
         last_runtime_user_message_text(&active_runtime_state.conversation_state)
     else {
-        return;
+        return Ok(());
     };
     let last_user_message = truncate_auto_compaction_last_user_message(&last_user_message);
     let message_id = build_session_record_message_id(
@@ -292,16 +309,13 @@ pub(crate) fn append_auto_context_compaction_continuation_message(
     let text = format!(
         "{AUTO_COMPACTION_CONTINUATION_PREFIX}\n\nThis is a synthetic continuation prompt for the resumed provider request, not a new user request. Continue the interrupted work from the retained context immediately. Do not greet, recap the compaction, or ask the user to restate the task. The last real user message before compaction was:\n<last_user_message>\n{last_user_message}\n</last_user_message>"
     );
-    draft_runtime_state
-        .conversation_state
-        .messages
-        .push(SessionConversationMessage {
-            id: message_id,
-            payload: SessionConversationPayload::UserText {
-                text,
-                attachments: Vec::new(),
-            },
-        });
+    vulcan_context::append_user_text_message(
+        &mut draft_runtime_state.conversation_state,
+        message_id,
+        text,
+        Vec::new(),
+    )
+    .map_err(|error| format!("Invalid automatic continuation message identity: {error}"))
 }
 
 /// Returns the latest real user-text payload from one runtime conversation state.
@@ -381,7 +395,7 @@ pub(crate) fn build_webui_context_compaction_draft(
         budget_note,
         trigger,
         summary_body,
-    );
+    )?;
     let summary_entry = SessionMessageEntry {
         id: String::new(),
         kind: execution.compaction_result.summary_record.kind,
@@ -396,7 +410,7 @@ pub(crate) fn build_webui_context_compaction_draft(
         &mut draft_runtime_state,
         session_id,
         summary_entry,
-    );
+    )?;
     let mut checkpoint = execution
         .compaction_result
         .materialize_checkpoint(summary_message_id.clone());
@@ -448,14 +462,15 @@ pub(crate) fn build_webui_context_compaction_draft(
             .source_until_message_id
             .as_deref(),
         execution.compaction_result.policy,
-    );
+    )
+    .map_err(|error| format!("Invalid compacted conversation message identity: {error}"))?;
     if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
         append_auto_context_compaction_continuation_message(
             &mut draft_runtime_state,
             session_id,
             &checkpoint.created_at,
             active_runtime_state,
-        );
+        )?;
     }
     compact_conversation_records_after_summary(
         &mut draft_runtime_state.conversation_state,
@@ -480,7 +495,7 @@ pub(crate) fn build_webui_context_compaction_draft(
         trigger,
         provider_request_count,
         execution.input_prune_report.as_ref(),
-    );
+    )?;
     if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
         draft_runtime_state.auto_compaction_consecutive_failures = 0;
     }

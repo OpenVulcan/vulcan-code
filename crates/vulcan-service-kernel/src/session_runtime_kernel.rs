@@ -201,10 +201,13 @@ pub(crate) fn webui_subagent_mailbox_input_consumed_for_execution(
 /// `parent_session_id` 标识父级 WebUI 会话。
 /// `task_id` identifies the detached child task.
 /// `task_id` 标识分离子任务。
+/// `execution_id` identifies the concrete child execution attempt.
+/// `execution_id` 标识具体子执行尝试。
 pub(crate) fn bind_webui_subagent_parent_turn(
     state: &mut ServiceBridgeState,
     parent_session_id: SessionId,
     task_id: SessionId,
+    execution_id: &str,
 ) {
     let (source_generation, parent_turn_id) = {
         let kernel = session_runtime_kernel_mut(state, parent_session_id);
@@ -215,7 +218,7 @@ pub(crate) fn bind_webui_subagent_parent_turn(
     };
     state
         .subagent_parent_turn_bindings
-        .entry(task_id)
+        .entry(SubagentExecutionKey::new(task_id, execution_id))
         .or_insert_with(|| WebuiSubagentParentTurnBinding {
             parent_session_id,
             source_generation,
@@ -224,7 +227,7 @@ pub(crate) fn bind_webui_subagent_parent_turn(
     webui_trace(
         "subagent_parent_turn_bound",
         format!(
-            "parent={parent_session_id} task={task_id} generation={source_generation} parent_turn_id={}",
+            "parent={parent_session_id} task={task_id} execution_id={execution_id} generation={source_generation} parent_turn_id={}",
             parent_turn_id.as_deref().unwrap_or("<none>")
         ),
     );
@@ -239,19 +242,43 @@ pub(crate) fn bind_webui_subagent_parent_turn(
 /// `state` 持有子代理父回合绑定。
 /// `task_id` identifies the detached child task.
 /// `task_id` 标识分离子任务。
+/// `execution_id` identifies the exact binding owner to clear.
+/// `execution_id` 标识要清理的精确绑定所有者。
 pub(crate) fn clear_webui_subagent_parent_turn_binding(
     state: &mut ServiceBridgeState,
     task_id: SessionId,
+    execution_id: &str,
 ) {
-    if let Some(binding) = state.subagent_parent_turn_bindings.remove(&task_id) {
+    if let Some(binding) = state
+        .subagent_parent_turn_bindings
+        .remove(&SubagentExecutionKey::new(task_id, execution_id))
+    {
         webui_trace(
             "subagent_parent_turn_binding_cleared",
             format!(
-                "parent={} task={task_id} generation={}",
+                "parent={} task={task_id} execution_id={execution_id} generation={}",
                 binding.parent_session_id, binding.source_generation
             ),
         );
     }
+}
+
+/// Clears every parent-turn binding for one stable child task during explicit stop or close.
+/// 在显式停止或关闭期间清理单个稳定子任务的全部父回合绑定。
+///
+/// # Parameters
+/// 参数
+/// `state` owns every execution-scoped parent-turn binding.
+/// `state` 持有全部执行级父回合绑定。
+/// `task_id` identifies the stable child task whose executions are all being retired.
+/// `task_id` 标识全部执行均被退役的稳定子任务。
+pub(crate) fn clear_all_webui_subagent_parent_turn_bindings_for_task(
+    state: &mut ServiceBridgeState,
+    task_id: SessionId,
+) {
+    state
+        .subagent_parent_turn_bindings
+        .retain(|key, _| key.task_id != task_id);
 }
 
 /// Starts one WebUI user-prompt turn in the session runtime kernel.
@@ -363,9 +390,10 @@ pub(crate) fn start_webui_session_kernel_turn(
     turn_id: &str,
     kind: ActiveTurnKind,
 ) -> Result<(), String> {
-    if state.session_lifecycle_transition_ids.contains(&session_id) {
+    if let Some(reservation) = state.session_turn_admission_reservations.get(&session_id) {
         return Err(format!(
-            "会话 `{session_id}` 正在执行归档或移除转换，无法启动新的运行内核回合。"
+            "Session `{session_id}` is reserved by {}; a new runtime kernel turn cannot start",
+            reservation.kind.diagnostic_label()
         ));
     }
     if kind == ActiveTurnKind::UserPrompt {
@@ -388,6 +416,86 @@ pub(crate) fn start_webui_session_kernel_turn(
         ),
     );
     sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
+    Ok(())
+}
+
+/// Starts one Goal-guided WebUI turn only while its captured dispatch authority is still current.
+/// 仅在捕获的分发权威仍为当前版本时启动 Goal 引导的 WebUI 回合。
+///
+/// # Parameters
+/// 参数
+/// `state` owns both Goal dispatch versions and runtime kernels under one shared lock.
+/// `state` 在同一共享锁下持有 Goal 分发版本与运行时 kernel。
+/// `session_id` identifies the Goal session.
+/// `session_id` 标识 Goal 会话。
+/// `expected_goal_dispatch_version` is the stable version captured around the authoritative Goal read.
+/// `expected_goal_dispatch_version` 是围绕权威 Goal 读取捕获的稳定版本。
+/// `turn_id` is the shared turn id produced by the prompt reducer.
+/// `turn_id` 是提示词归约器生成的共享回合标识。
+/// `kind` is the runtime kernel turn kind.
+/// `kind` 是运行时 kernel 回合类型。
+///
+/// # Returns
+/// 返回值
+/// Starts the turn atomically with the version check, or rejects retired Goal work.
+/// 与版本校验原子地启动回合，或拒绝已退役的 Goal 工作。
+pub(crate) fn start_webui_goal_session_kernel_turn(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    expected_goal_dispatch_version: u64,
+    turn_id: &str,
+    kind: ActiveTurnKind,
+) -> Result<(), String> {
+    ensure_webui_goal_session_kernel_turn_start_allowed(
+        state,
+        session_id,
+        expected_goal_dispatch_version,
+    )?;
+    start_webui_session_kernel_turn(state, session_id, turn_id, kind)
+}
+
+/// Validates Goal turn authority before any prompt reducer or hook side effect is allowed.
+/// 在允许任何提示词归约器或 Hook 副作用前校验 Goal 回合权威。
+///
+/// # Parameters
+/// 参数
+/// `state` owns Goal versions, lifecycle exclusions, and runtime kernels.
+/// `state` 持有 Goal 版本、生命周期互斥与运行时 kernel。
+/// `session_id` identifies the Goal session.
+/// `session_id` 标识 Goal 会话。
+/// `expected_goal_dispatch_version` is the version captured with the durable Goal read.
+/// `expected_goal_dispatch_version` 是随持久 Goal 读取捕获的版本。
+///
+/// # Returns
+/// 返回值
+/// Returns success only when the caller may keep the same state lock through reducer execution and registration.
+/// 仅当调用方可以持续持有同一状态锁完成归约与注册时返回成功。
+pub(crate) fn ensure_webui_goal_session_kernel_turn_start_allowed(
+    state: &ServiceBridgeState,
+    session_id: SessionId,
+    expected_goal_dispatch_version: u64,
+) -> Result<(), String> {
+    let current_goal_dispatch_version = state
+        .session_goal_dispatch_versions
+        .get(&session_id)
+        .copied()
+        .unwrap_or_default();
+    if current_goal_dispatch_version != expected_goal_dispatch_version {
+        return Err(format!(
+            "Goal dispatch authority changed for session `{session_id}` before turn registration"
+        ));
+    }
+    if let Some(reservation) = state.session_turn_admission_reservations.get(&session_id) {
+        return Err(format!(
+            "Session `{session_id}` is reserved by {}",
+            reservation.kind.diagnostic_label()
+        ));
+    }
+    if webui_session_kernel_has_active_turn(state, session_id) {
+        return Err(format!(
+            "Session `{session_id}` already owns an active runtime kernel turn"
+        ));
+    }
     Ok(())
 }
 
@@ -960,7 +1068,23 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
     metadata: &Value,
 ) -> SubagentMailboxEnqueueOutcome {
     let timestamp_ms = current_unix_millis_u64();
-    let binding = state.subagent_parent_turn_bindings.get(&task_id).cloned();
+    let execution_id = match subagent_mailbox_execution_id_for_enqueue(metadata) {
+        Ok(execution_id) => execution_id,
+        Err(rejection) => {
+            webui_trace(
+                "subagent_mailbox_input_rejected_execution_id",
+                format!(
+                    "parent={parent_session_id} task={task_id} {}",
+                    rejection.diagnostic()
+                ),
+            );
+            return SubagentMailboxEnqueueOutcome::Rejected(rejection);
+        }
+    };
+    let binding = state
+        .subagent_parent_turn_bindings
+        .get(&SubagentExecutionKey::new(task_id, &execution_id))
+        .cloned();
     if let Some(binding) = binding.as_ref()
         && binding.parent_session_id != parent_session_id
     {
@@ -1035,19 +1159,6 @@ pub(crate) fn enqueue_webui_subagent_mailbox_input(
                 return SubagentMailboxEnqueueOutcome::Rejected(rejection);
             }
         };
-    let execution_id = match subagent_mailbox_execution_id_for_enqueue(metadata) {
-        Ok(execution_id) => execution_id,
-        Err(rejection) => {
-            webui_trace(
-                "subagent_mailbox_input_rejected_execution_id",
-                format!(
-                    "parent={parent_session_id} task={task_id} {}",
-                    rejection.diagnostic()
-                ),
-            );
-            return SubagentMailboxEnqueueOutcome::Rejected(rejection);
-        }
-    };
     let parent_turn_id_for_payload = parent_turn_id.clone();
     let input_id = subagent_mailbox_input_id(parent_session_id, task_id, execution_id.as_str());
     let mut input = TurnInput::new(

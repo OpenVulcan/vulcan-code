@@ -3,6 +3,9 @@
 
 use super::*;
 use crate::notify_webui_wait_agent_parent_interruption_if_waiting;
+use crate::pending_prompts::clear_stale_session_goal_pending_prompts;
+use crate::session_goal_dispatch_version;
+use vulcan_workspace_store::workspace_store::VulcanGoalStore;
 
 /// Internal hidden prompt used only to bind mailbox-triggered turn lifecycle records.
 /// 仅用于绑定 mailbox 触发回合生命周期记录的内部隐藏提示。
@@ -298,6 +301,12 @@ pub(crate) enum PendingPromptDispatchReadiness {
     /// Stale session mailbox entries were removed instead of starting a new turn.
     /// 已清理过期会话邮箱条目，因此不启动新回合。
     StaleSessionMailboxCleared { removed: usize },
+    /// Stale Goal-stage guidance was removed instead of dispatching retired work.
+    /// 已清理过期 Goal 阶段引导，因此不分发退役工作。
+    StaleGoalGuidanceCleared { removed: usize },
+    /// Goal authority changed while the durable stage was being read; selection must restart.
+    /// 读取持久阶段期间 Goal 权威发生变化，必须重新开始选择。
+    GoalAuthorityChanged,
     /// A pending prompt source exists but the shared dispatch gate is blocking it.
     /// 存在待发送提示词来源，但共享分发闸门正在阻塞它。
     Blocked {
@@ -306,14 +315,48 @@ pub(crate) enum PendingPromptDispatchReadiness {
     },
     /// A pending prompt source can be dispatched by the caller.
     /// 调用方可以分发一个待发送提示词来源。
-    Ready { source: PendingSessionPromptSource },
+    Ready {
+        /// Selected source.
+        /// 已选择来源。
+        source: PendingSessionPromptSource,
+        /// Stable Goal authority version for Goal guidance, otherwise absent.
+        /// Goal 引导对应的稳定权威版本，其他来源为空。
+        goal_dispatch_version: Option<u64>,
+    },
 }
 
 /// Determines whether the next pending prompt source may be dispatched by the prompt lifecycle.
 /// 判断下一个待发送提示词来源是否可由提示词生命周期继续分发。
-pub(crate) fn pending_prompt_dispatch_readiness(
+///
+/// # Parameters
+/// 参数
+/// `app` emits cleanup deltas for queue mutations.
+/// `app` 为队列变更发出清理增量。
+/// `state` owns the retained queue and persistence versions.
+/// `state` 持有保留队列与持久化版本。
+/// `controller_runtime` reads the authoritative current Goal budget stage.
+/// `controller_runtime` 读取权威的当前 Goal 预算阶段。
+/// `workspace_snapshot` is the immutable dispatch candidate snapshot.
+/// `workspace_snapshot` 是不可变的分发候选快照。
+/// `agent_runtime` supplies provider-specific dispatch policy.
+/// `agent_runtime` 提供 Provider 专属分发策略。
+/// `session_id` identifies the target queue.
+/// `session_id` 标识目标队列。
+/// `has_active_run` reports whether the session currently owns Provider work.
+/// `has_active_run` 表示会话当前是否拥有 Provider 工作。
+/// `allow_from_stopped_phase` controls stopped-session dispatch eligibility.
+/// `allow_from_stopped_phase` 控制停止会话的分发资格。
+/// `priority_override` selects the queue ordering policy.
+/// `priority_override` 选择队列顺序策略。
+///
+/// # Returns
+/// 返回值
+/// A dispatch decision after mailbox and Goal-stage stale-entry validation.
+/// 返回经过 mailbox 与 Goal 阶段过期条目校验后的分发判定。
+pub(crate) async fn pending_prompt_dispatch_readiness(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
     workspace_snapshot: &WorkspaceSnapshot,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
@@ -340,6 +383,37 @@ pub(crate) fn pending_prompt_dispatch_readiness(
         let removed = clear_stale_webui_session_mailbox_pending_prompts(app, state, session_id)?;
         return Ok(PendingPromptDispatchReadiness::StaleSessionMailboxCleared { removed });
     }
+    let mut goal_dispatch_version = None;
+    if source == PendingSessionPromptSource::GoalContinuation {
+        let version_before_read = session_goal_dispatch_version(state, session_id)?;
+        let current_goal = VulcanGoalStore::new(controller_runtime.clone())
+            .get_thread_goal(session_id)
+            .await
+            .map_err(|error| format!("failed to read the Goal stage before dispatch: {error}"))?;
+        let version_after_read = session_goal_dispatch_version(state, session_id)?;
+        if version_before_read != version_after_read {
+            return Ok(PendingPromptDispatchReadiness::GoalAuthorityChanged);
+        }
+        goal_dispatch_version = Some(version_after_read);
+        let current_goal_id = current_goal.as_ref().map(|goal| goal.goal_id.as_str());
+        let removed = clear_stale_session_goal_pending_prompts(state, session_id, current_goal_id)?;
+        if removed > 0 {
+            let workspace_snapshot = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?
+                .workspace_snapshot
+                .clone()
+                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            spawn_workspace_session_runtime_state_persist_task(
+                state.clone(),
+                controller_runtime.clone(),
+                workspace_snapshot,
+                session_id,
+                Some(String::from("stale_goal_guidance_cleanup")),
+            );
+            return Ok(PendingPromptDispatchReadiness::StaleGoalGuidanceCleared { removed });
+        }
+    }
     if let Some(reason) = pending_prompt_dispatch_block_reason_for_source(
         dispatch_context,
         allow_from_stopped_phase,
@@ -347,7 +421,10 @@ pub(crate) fn pending_prompt_dispatch_readiness(
     ) {
         return Ok(PendingPromptDispatchReadiness::Blocked { source, reason });
     }
-    Ok(PendingPromptDispatchReadiness::Ready { source })
+    Ok(PendingPromptDispatchReadiness::Ready {
+        source,
+        goal_dispatch_version,
+    })
 }
 
 /// Marks the selected session as waiting for a guided prompt to reach the provider loop.

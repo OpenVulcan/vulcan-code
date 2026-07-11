@@ -47,7 +47,8 @@ use vulcan_vmm::{
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
     workspace_store::{
-        GoalAccountingMode, GoalUpdate, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
+        GoalUpdate, MAX_THREAD_GOAL_OBJECTIVE_CHARS, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
+        normalize_thread_goal_objective, validate_thread_goal_token_budget,
     },
 };
 

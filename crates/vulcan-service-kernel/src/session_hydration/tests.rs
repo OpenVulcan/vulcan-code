@@ -70,7 +70,8 @@ fn selected_session_runtime_hydration_preserves_existing_display_window() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    apply_selected_session_runtime_hydration(&mut workspace_snapshot, session_id, hydration);
+    apply_selected_session_runtime_hydration(&mut workspace_snapshot, session_id, hydration)
+        .expect("valid selected-session hydration identities");
 
     assert_eq!(
         workspace_snapshot

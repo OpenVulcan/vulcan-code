@@ -203,11 +203,15 @@ pub struct RuntimeToolCallEvent {
 /// Runtime record for one host tool result.
 /// 单个宿主工具结果的运行时记录。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeToolResultEvent {
     /// Optional logical turn identifier.
     /// 可选的逻辑回合标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    /// Stable local protocol-message identifier that owns this result payload.
+    /// 持有该结果载荷的稳定本地协议消息标识。
+    pub message_id: String,
     /// Optional runtime batch identifier resolved during migration or live execution.
     /// 在迁移或实时执行期间解析出的可选运行时批次标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,9 +224,6 @@ pub struct RuntimeToolResultEvent {
     /// 可选的 Provider 可见工具调用标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_tool_call_id: Option<String>,
-    /// Stable tool-result identifier.
-    /// 稳定的工具结果标识。
-    pub tool_result_id: String,
     /// Flattened text returned to the model.
     /// 回传给模型的扁平化文本。
     pub text: String,

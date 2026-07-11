@@ -400,7 +400,8 @@ fn build_test_config(max_turns: usize) -> ControllerConfig {
 #[test]
 fn append_agent_message_keeps_transcript_record_hidden() {
     let mut controller =
-        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
 
     controller.append_agent_message(AgentMessageAppendRequest {
         message_type: String::from("FINAL_ANSWER"),
@@ -434,7 +435,8 @@ fn append_agent_message_keeps_transcript_record_hidden() {
 #[test]
 fn preseeded_agent_message_prompt_reuses_existing_tail() {
     let mut controller =
-        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
 
     controller.append_agent_message(AgentMessageAppendRequest {
         message_type: String::from("MESSAGE"),
@@ -461,7 +463,8 @@ fn preseeded_agent_message_prompt_reuses_existing_tail() {
 #[test]
 fn append_display_record_keeps_provider_history_unchanged() {
     let mut controller =
-        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
 
     let record_id = controller
         .append_display_record(DisplayRecordAppendRequest {
@@ -471,6 +474,7 @@ fn append_display_record_keeps_provider_history_unchanged() {
             body: String::from("请用中文重新输出结论。"),
             metadata: Some(json!({ "display_note": true, "kind": "subagent_message" })),
         })
+        .expect("valid display record identity")
         .expect("display record should be appended");
 
     let snapshot = controller.snapshot();
@@ -483,6 +487,124 @@ fn append_display_record_keeps_provider_history_unchanged() {
     ));
     assert!(snapshot.records[0].visible);
     assert_eq!(snapshot.records[0].body, "请用中文重新输出结论。");
+}
+
+/// Verifies controller construction rejects duplicate canonical identities before ownership transfer.
+/// 验证控制器构造会在接管所有权前拒绝重复的规范身份。
+#[test]
+fn controller_construction_rejects_duplicate_snapshot_identities() {
+    // duplicate_message is reused verbatim to prove the message namespace rejects the later owner.
+    // duplicate_message 被逐字复用，用于证明消息命名空间会拒绝后出现的所有者。
+    let duplicate_message = ConversationMessage {
+        id: String::from("duplicate-message"),
+        payload: ConversationPayload::UserText {
+            text: String::from("hello"),
+            attachments: Vec::new(),
+        },
+    };
+    // snapshot contains one exact duplicate in the canonical message window.
+    // snapshot 在规范消息窗口中包含一个精确重复项。
+    let snapshot = ConversationSnapshot {
+        messages: vec![duplicate_message.clone(), duplicate_message],
+        ..ConversationSnapshot::default()
+    };
+
+    let error = VulcanCoreController::new(build_test_config(4), snapshot)
+        .expect_err("duplicate snapshot must be rejected");
+
+    assert!(matches!(error, CoreError::InvalidState { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("duplicates id \"duplicate-message\"")
+    );
+}
+
+/// Verifies snapshot replacement is atomic when the replacement record namespace is invalid.
+/// 验证替换记录命名空间无效时快照替换保持原子性。
+#[test]
+fn snapshot_replacement_is_atomic_on_record_identity_failure() {
+    let mut controller =
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
+    controller
+        .append_display_record(DisplayRecordAppendRequest {
+            record_id: Some(String::from("retained-record")),
+            role: TranscriptRole::Assistant,
+            title: String::from("Retained"),
+            body: String::from("retained body"),
+            metadata: None,
+        })
+        .expect("valid retained record identity")
+        .expect("nonblank record should append");
+    // original_snapshot captures the complete authoritative state before replacement.
+    // original_snapshot 捕获替换前的完整权威状态。
+    let original_snapshot =
+        serde_json::to_value(controller.snapshot()).expect("original snapshot should serialize");
+    // duplicate_record is reused to make the replacement record namespace invalid.
+    // duplicate_record 被复用以使替换记录命名空间无效。
+    let duplicate_record = controller.snapshot().records[0].clone();
+    let replacement = ConversationSnapshot {
+        records: vec![duplicate_record.clone(), duplicate_record],
+        ..ConversationSnapshot::default()
+    };
+
+    controller
+        .replace_snapshot(replacement)
+        .expect_err("duplicate replacement must fail");
+
+    assert_eq!(
+        serde_json::to_value(controller.snapshot())
+            .expect("retained snapshot should serialize after failure"),
+        original_snapshot
+    );
+}
+
+/// Verifies caller-supplied display identities reject duplicates without appending a partial row.
+/// 验证调用方提供的显示身份会拒绝重复项且不追加局部记录。
+#[test]
+fn display_record_append_is_atomic_on_duplicate_identity() {
+    let mut controller =
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
+    // first_request installs the only valid owner of the supplied durable identity.
+    // first_request 安装调用方提供持久化身份的唯一有效所有者。
+    let first_request = DisplayRecordAppendRequest {
+        record_id: Some(String::from("display-record")),
+        role: TranscriptRole::Assistant,
+        title: String::from("First"),
+        body: String::from("first body"),
+        metadata: None,
+    };
+    controller
+        .append_display_record(first_request)
+        .expect("valid first display identity")
+        .expect("nonblank record should append");
+    // original_snapshot proves the rejected duplicate does not change any canonical field.
+    // original_snapshot 证明被拒绝的重复项不会修改任何规范字段。
+    let original_snapshot =
+        serde_json::to_value(controller.snapshot()).expect("original snapshot should serialize");
+
+    let error = controller
+        .append_display_record(DisplayRecordAppendRequest {
+            record_id: Some(String::from("display-record")),
+            role: TranscriptRole::User,
+            title: String::from("Duplicate"),
+            body: String::from("duplicate body"),
+            metadata: None,
+        })
+        .expect_err("duplicate display identity must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("duplicates id \"display-record\"")
+    );
+    assert_eq!(
+        serde_json::to_value(controller.snapshot())
+            .expect("snapshot should serialize after duplicate rejection"),
+        original_snapshot
+    );
 }
 
 mod interventions;

@@ -3,8 +3,6 @@
 
 use super::*;
 
-pub(crate) const MAX_SESSION_GOAL_OBJECTIVE_CHARS: usize = 4_000;
-
 /// Resolves a session id for one user-facing goal request.
 /// 为单个面向用户的目标请求解析会话标识。
 pub(crate) fn session_goal_request_session_id(
@@ -78,42 +76,62 @@ pub(crate) fn ensure_session_not_in_plan_mode_for_goal(
     Ok(())
 }
 
-/// Validates one user-facing session goal objective.
-/// 校验单个面向用户的会话目标文本。
-pub(crate) fn validate_session_goal_objective(objective: &str) -> Result<(), String> {
-    let objective = objective.trim();
-    if objective.is_empty() {
-        return Err(String::from("目标内容不能为空。"));
-    }
-    if objective.chars().count() > MAX_SESSION_GOAL_OBJECTIVE_CHARS {
-        return Err(format!(
-            "目标内容不能超过 {MAX_SESSION_GOAL_OBJECTIVE_CHARS} 个字符。"
-        ));
-    }
-    Ok(())
+/// Normalizes one user-facing session goal objective through the shared store contract.
+/// 通过共享存储契约规范化一个面向用户的会话目标文本。
+pub(crate) fn normalize_session_goal_objective(objective: &str) -> Result<String, String> {
+    normalize_thread_goal_objective(objective)
+        .map(str::to_string)
+        .map_err(|error| match error {
+            ThreadGoalObjectiveError::EmptyObjective => String::from("目标内容不能为空。"),
+            ThreadGoalObjectiveError::ObjectiveTooLong { max_chars } => {
+                format!("目标内容不能超过 {max_chars} 个字符。")
+            }
+        })
 }
 
 /// Validates one optional user-facing session goal token budget.
 /// 校验单个面向用户的可选会话目标 token 预算。
 pub(crate) fn validate_session_goal_budget(token_budget: Option<i64>) -> Result<(), String> {
-    if let Some(value) = token_budget
-        && value <= 0
-    {
-        return Err(String::from("目标 token 预算必须是正整数。"));
-    }
-    Ok(())
+    validate_thread_goal_token_budget(token_budget)
+        .map_err(|ThreadGoalTokenBudgetError| String::from("目标 token 预算必须是正整数。"))
 }
 
-/// Parses one WebUI goal status key.
-/// 解析单个 WebUI 目标状态键。
-pub(crate) fn parse_session_goal_status(status: &str) -> Result<ThreadGoalStatus, String> {
-    match status.trim() {
-        "active" => Ok(ThreadGoalStatus::Active),
-        "paused" => Ok(ThreadGoalStatus::Paused),
-        "blocked" => Ok(ThreadGoalStatus::Blocked),
-        "usage_limited" => Ok(ThreadGoalStatus::UsageLimited),
-        "budget_limited" => Ok(ThreadGoalStatus::BudgetLimited),
-        "complete" => Ok(ThreadGoalStatus::Complete),
-        other => Err(format!("不支持的目标状态：{other}")),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulcan_workspace_store::workspace_store::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
+
+    /// Verifies the service adapter preserves localized objective errors while reusing store rules.
+    /// 验证 service 适配器在复用存储规则时仍保留本地化目标文本错误。
+    #[test]
+    fn session_goal_objective_adapter_normalizes_and_localizes() {
+        assert_eq!(
+            normalize_session_goal_objective("  继续长期目标  "),
+            Ok(String::from("继续长期目标"))
+        );
+        assert_eq!(
+            normalize_session_goal_objective(" "),
+            Err(String::from("目标内容不能为空。"))
+        );
+        assert_eq!(
+            normalize_session_goal_objective(
+                "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1).as_str()
+            ),
+            Err(format!(
+                "目标内容不能超过 {MAX_THREAD_GOAL_OBJECTIVE_CHARS} 个字符。"
+            ))
+        );
+    }
+
+    /// Verifies the service adapter preserves its localized budget error.
+    /// 验证 service 适配器保留本地化预算错误。
+    #[test]
+    fn session_goal_budget_adapter_localizes_domain_error() {
+        assert_eq!(validate_session_goal_budget(None), Ok(()));
+        assert_eq!(validate_session_goal_budget(Some(1)), Ok(()));
+        assert_eq!(
+            validate_session_goal_budget(Some(0)),
+            Err(String::from("目标 token 预算必须是正整数。"))
+        );
     }
 }

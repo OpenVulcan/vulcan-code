@@ -5,13 +5,13 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 use vulcan_agent_runtime::{
-    ExecutionPromptPurpose, ExecutionRunReport,
+    ExecutionPromptPurpose, ExecutionRunReport, ExecutionSessionGoalContext,
     agent_runtime::events::{RuntimeEvent, RuntimeEventKind},
     conversation_protocol::SessionConversationState,
     turn_stats::build_session_turn_stats_from_state_with_segments,
 };
 use vulcan_core::types::ProviderUsageSnapshot;
-use vulcan_service_api::SessionGoalSummary;
+use vulcan_service_api::{SessionGoalStatus, SessionGoalSummary};
 use vulcan_workbench_model::{
     PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource, SessionId,
     SessionRuntimeStateEntry, SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus,
@@ -20,8 +20,9 @@ use vulcan_workbench_model::{
 use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
     workspace_store::{
-        GoalAccountingMode, GoalAccountingOutcome, GoalUpdate, ThreadGoal, ThreadGoalStatus,
-        VulcanGoalStore,
+        GoalAccountingOutcome, GoalUpdate, ThreadGoal, ThreadGoalObjectiveError, ThreadGoalStatus,
+        ThreadGoalTokenBudgetError, VulcanGoalStore, normalize_thread_goal_objective,
+        validate_thread_goal_token_budget,
     },
 };
 

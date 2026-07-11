@@ -3,16 +3,31 @@ use super::*;
 impl VulcanCoreController {
     /// Creates a new controller with one configuration and one initial conversation snapshot.
     /// 使用一份配置与一份初始会话快照创建新的控制器。
-    pub fn new(config: ControllerConfig, snapshot: ConversationSnapshot) -> Self {
-        Self {
+    ///
+    /// # Parameters
+    /// 参数
+    /// `config` is the stable execution configuration owned by the new controller.
+    /// `config` 是新控制器持有的稳定执行配置。
+    /// `snapshot` is the complete canonical state whose identity namespaces must be valid.
+    /// `snapshot` 是身份命名空间必须有效的完整规范状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the initialized controller, or an invalid-state error without taking ownership of corrupt state.
+    /// 返回初始化后的控制器；状态损坏时返回无效状态错误且不接管该状态。
+    pub fn new(
+        config: ControllerConfig,
+        snapshot: ConversationSnapshot,
+    ) -> Result<Self, CoreError> {
+        validate_conversation_snapshot_identities(&snapshot)?;
+        Ok(Self {
             config,
-            local_id_counter: derive_initial_local_id_counter(&snapshot),
             snapshot,
             last_request_snapshot: None,
             events: Vec::new(),
             phase: ControllerPhase::Idle,
             last_successful_provider_usage: None,
-        }
+        })
     }
 
     /// Returns the immutable controller configuration.
@@ -27,12 +42,23 @@ impl VulcanCoreController {
         &self.snapshot
     }
 
-    /// Replaces the canonical snapshot with a newer one and re-seeds the local identifier counter.
-    /// 用一份更新后的规范快照替换当前内容，并重新播种本地标识计数器。
-    pub fn replace_snapshot(&mut self, snapshot: ConversationSnapshot) {
-        self.local_id_counter = derive_initial_local_id_counter(&snapshot);
+    /// Replaces the canonical snapshot with a newer validated snapshot.
+    /// 用一份经过校验的更新规范快照替换当前内容。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `snapshot` is the complete replacement candidate validated before commit.
+    /// `snapshot` 是提交前需要完整校验的替换候选快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after atomic replacement, or an invalid-state error with the prior snapshot retained.
+    /// 原子替换后返回成功；否则返回无效状态错误并保留原快照。
+    pub fn replace_snapshot(&mut self, snapshot: ConversationSnapshot) -> Result<(), CoreError> {
+        validate_conversation_snapshot_identities(&snapshot)?;
         self.snapshot = snapshot;
         self.last_successful_provider_usage = None;
+        Ok(())
     }
 
     /// Returns the latest captured request snapshot if one exists.

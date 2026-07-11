@@ -37,6 +37,7 @@ import type {
   ProviderModelSecondaryRouteSummary,
   ReasoningSelectionSummary,
   SessionGoalSummary,
+  SessionGoalUserStatusUpdate,
   SessionPlanModeSummary,
   SessionTodolistSummary,
   SessionVmmPolicySummary,
@@ -148,7 +149,7 @@ export function ComposerPanel(props: {
   onClearSessionGoal: () => Promise<boolean>;
   // Updates the current session goal lifecycle status.
   // 更新当前会话目标生命周期状态。
-  onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
+  onUpdateSessionGoalStatus: (status: SessionGoalUserStatusUpdate) => Promise<boolean>;
   // Persists the current session Plan-mode toggle.
   // 持久化当前会话计划模式开关。
   onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;

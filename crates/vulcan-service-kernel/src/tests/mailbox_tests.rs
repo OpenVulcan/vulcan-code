@@ -35,6 +35,7 @@ fn test_mailbox_controller() -> vulcan_core::controller::VulcanCoreController {
         },
         vulcan_core::types::ConversationSnapshot::default(),
     )
+    .expect("valid core conversation snapshot")
 }
 
 /// Verifies guided prompt intervention removes the consumed visible queue row immediately.
@@ -101,7 +102,9 @@ fn guided_prompt_intervention_emits_consumed_pending_prompt_delta() {
     );
     let mut controller = test_mailbox_controller();
 
-    assert!(intervention(parent_session_id, &mut controller));
+    assert!(
+        intervention(parent_session_id, &mut controller).expect("valid guided prompt intervention")
+    );
 
     assert_eq!(controller.snapshot().messages.len(), 1);
     match &controller.snapshot().messages[0].payload {
@@ -131,6 +134,64 @@ fn guided_prompt_intervention_emits_consumed_pending_prompt_delta() {
                         && delta.pending_prompts.is_empty()
             )
     )));
+}
+
+/// Verifies WebUI intervention conversion failures preserve both Core state and the live mailbox queue.
+/// 验证 WebUI 干预转换失败时会同时保留 Core 状态与实时 mailbox 队列。
+#[test]
+fn webui_prompt_intervention_is_atomic_on_invalid_mailbox_payload() {
+    let parent_session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
+        .expect("parent turn should start");
+    // invalid_input lacks the required mailbox event structure and must fail before the draft drains.
+    // invalid_input 缺少必需的 mailbox 事件结构，必须在草稿取出前失败。
+    let invalid_input = TurnInput::new(
+        "invalid-mailbox-input",
+        SessionNodeId::from(parent_session_id),
+        TurnInputKind::SubagentMessage,
+        false,
+        current_unix_millis_u64(),
+        serde_json::json!({ "invalid": true }),
+    );
+    session_runtime_kernel_mut(&mut service_state, parent_session_id)
+        .input_queue_mut()
+        .enqueue_current_turn_input(invalid_input);
+    let state = Arc::new(Mutex::new(service_state));
+    let intervention = build_webui_prompt_intervention(
+        ServiceEventEmitter::new(Vec::new()),
+        Arc::clone(&state),
+        ProviderConfigurationFile::default(),
+        PersistedAiToolConfiguration::default(),
+    );
+    let mut controller = test_mailbox_controller();
+    // original_controller captures every Core field before the rejected intervention.
+    // original_controller 捕获被拒绝干预前的全部 Core 字段。
+    let original_controller = serde_json::to_value(controller.snapshot())
+        .expect("original controller snapshot should serialize");
+
+    let error = intervention(parent_session_id, &mut controller)
+        .expect_err("invalid mailbox payload must propagate");
+
+    let RuntimePromptInterventionError::InvalidInput { message } = error else {
+        panic!("invalid mailbox payload should remain an input protocol error");
+    };
+    assert!(message.contains("mailbox"));
+    assert_eq!(
+        serde_json::to_value(controller.snapshot())
+            .expect("controller snapshot should serialize after rejection"),
+        original_controller
+    );
+    let guard = state.lock().expect("state lock");
+    assert_eq!(
+        guard
+            .session_runtime_kernels
+            .get(&parent_session_id)
+            .expect("kernel should remain present")
+            .input_queue()
+            .current_turn_len(),
+        1
+    );
 }
 
 /// Builds one completed subagent mailbox metadata object with the required execution identity.
@@ -181,7 +242,12 @@ fn webui_subagent_mailbox_rejects_child_result_from_stale_parent_generation() {
 
     start_webui_session_kernel_user_turn(&mut state, parent_session_id, "turn-a")
         .expect("first parent turn should start");
-    bind_webui_subagent_parent_turn(&mut state, parent_session_id, task_session_id);
+    bind_webui_subagent_parent_turn(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        "stale-generation-run",
+    );
     let old_generation =
         webui_session_kernel_generation(&state, parent_session_id).expect("generation");
     stop_webui_session_kernel_generation(&mut state, parent_session_id);
@@ -214,6 +280,107 @@ fn webui_subagent_mailbox_rejects_child_result_from_stale_parent_generation() {
     assert_eq!(kernel.input_queue().mailbox_len(), 0);
 }
 
+/// Verifies one reused task keeps independent parent bindings for old and new executions.
+/// 验证一个复用任务会为旧执行与新执行保留独立父级绑定。
+#[test]
+fn subagent_mailbox_resolves_parent_binding_by_execution_id() {
+    // parent_session_id owns two consecutive parent kernel generations.
+    // parent_session_id 持有两个连续的父级 kernel 代际。
+    let parent_session_id = SessionId::from_u128(0x1190);
+    // task_session_id is intentionally reused across both child executions.
+    // task_session_id 被两次子执行刻意复用。
+    let task_session_id = SessionId::from_u128(0x1191);
+    // state owns both execution-scoped bindings and the parent mailbox.
+    // state 持有两条执行级绑定与父级 mailbox。
+    let mut state = test_service_state_with_parent_session(parent_session_id);
+    start_webui_session_kernel_user_turn(&mut state, parent_session_id, "turn-old")
+        .expect("old parent turn should start");
+    bind_webui_subagent_parent_turn(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        "execution-old",
+    );
+    // old_generation is the delivery owner captured by the old child execution.
+    // old_generation 是旧子执行捕获的投递所有者。
+    let old_generation =
+        webui_session_kernel_generation(&state, parent_session_id).expect("old generation");
+    finish_webui_session_kernel_turn(&mut state, parent_session_id, TurnTerminalStatus::Completed);
+    start_webui_session_kernel_user_turn(&mut state, parent_session_id, "turn-new")
+        .expect("new parent turn should start");
+    bind_webui_subagent_parent_turn(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        "execution-new",
+    );
+    // new_generation is the distinct delivery owner captured by the replacement execution.
+    // new_generation 是替代执行捕获的不同投递所有者。
+    let new_generation =
+        webui_session_kernel_generation(&state, parent_session_id).expect("new generation");
+    assert_ne!(old_generation, new_generation);
+    assert_eq!(state.subagent_parent_turn_bindings.len(), 2);
+    // old_metadata identifies a terminal result from the retired execution.
+    // old_metadata 标识退役执行的终态结果。
+    let old_metadata = completed_subagent_mailbox_metadata(
+        "execution-old",
+        Some("worker"),
+        task_session_id,
+        "old result",
+    );
+    // new_metadata identifies a terminal result from the current execution.
+    // new_metadata 标识当前执行的终态结果。
+    let new_metadata = completed_subagent_mailbox_metadata(
+        "execution-new",
+        Some("worker"),
+        task_session_id,
+        "new result",
+    );
+
+    let old_outcome = enqueue_webui_subagent_mailbox_input(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        &old_metadata,
+    );
+    assert!(matches!(
+        old_outcome,
+        SubagentMailboxEnqueueOutcome::Rejected(
+            SubagentMailboxEnqueueRejection::GenerationClosed {
+                source_generation,
+                ..
+            }
+        ) if source_generation == old_generation
+    ));
+    let new_outcome = enqueue_webui_subagent_mailbox_input(
+        &mut state,
+        parent_session_id,
+        task_session_id,
+        &new_metadata,
+    );
+    assert!(new_outcome.is_queued());
+    assert_eq!(
+        state
+            .session_runtime_kernels
+            .get(&parent_session_id)
+            .expect("parent kernel")
+            .input_queue()
+            .mailbox_len(),
+        1
+    );
+    clear_webui_subagent_parent_turn_binding(&mut state, task_session_id, "execution-old");
+    assert!(
+        !state
+            .subagent_parent_turn_bindings
+            .contains_key(&SubagentExecutionKey::new(task_session_id, "execution-old"))
+    );
+    assert!(
+        state
+            .subagent_parent_turn_bindings
+            .contains_key(&SubagentExecutionKey::new(task_session_id, "execution-new"))
+    );
+}
+
 /// Verifies stale child results surface as service-level mailbox delivery errors.
 /// 验证过期子代理结果会在服务层表现为 mailbox 投递错误。
 #[test]
@@ -225,7 +392,12 @@ fn session_mailbox_errors_on_stale_parent_generation() {
 
     start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-a")
         .expect("first parent turn should start");
-    bind_webui_subagent_parent_turn(&mut service_state, parent_session_id, task_session_id);
+    bind_webui_subagent_parent_turn(
+        &mut service_state,
+        parent_session_id,
+        task_session_id,
+        "test-execution-agent-review",
+    );
     stop_webui_session_kernel_generation(&mut service_state, parent_session_id);
     start_webui_session_kernel_user_turn(&mut service_state, parent_session_id, "turn-b")
         .expect("second parent turn should start");
@@ -245,7 +417,10 @@ fn session_mailbox_errors_on_stale_parent_generation() {
     assert!(
         guard
             .subagent_parent_turn_bindings
-            .contains_key(&task_session_id)
+            .contains_key(&SubagentExecutionKey::new(
+                task_session_id,
+                "test-execution-agent-review"
+            ))
     );
     let kernel = guard
         .session_runtime_kernels
@@ -751,8 +926,18 @@ fn webui_subagent_mailbox_accepts_sibling_during_mailbox_turn() {
 
     start_webui_session_kernel_user_turn(&mut state, parent_session_id, "turn-a")
         .expect("parent user turn should start");
-    bind_webui_subagent_parent_turn(&mut state, parent_session_id, first_task_session_id);
-    bind_webui_subagent_parent_turn(&mut state, parent_session_id, second_task_session_id);
+    bind_webui_subagent_parent_turn(
+        &mut state,
+        parent_session_id,
+        first_task_session_id,
+        "sibling-first-run",
+    );
+    bind_webui_subagent_parent_turn(
+        &mut state,
+        parent_session_id,
+        second_task_session_id,
+        "sibling-second-run",
+    );
     let parent_generation =
         webui_session_kernel_generation(&state, parent_session_id).expect("generation");
     finish_webui_session_kernel_turn(&mut state, parent_session_id, TurnTerminalStatus::Completed);
@@ -930,6 +1115,77 @@ fn terminal_send_message_resume_event_parser_resolves_child_execution() {
 
     assert_eq!(resolved.0, task_session_id);
     assert_eq!(resolved.1, "send-message-terminal-run");
+}
+
+/// Verifies only a concrete running send_message resume produces a completion-gate identity.
+/// 验证只有具体且仍在运行的 send_message 续跑才会生成完成闸门身份。
+#[test]
+fn running_send_message_resume_parser_rejects_queue_only_delivery() {
+    // parent_session_id identifies the parent that sends both test messages.
+    // parent_session_id 标识发送两条测试消息的父会话。
+    let parent_session_id = SessionId::new_v4();
+    // task_session_id identifies the stable child target.
+    // task_session_id 标识稳定的子任务目标。
+    let task_session_id = SessionId::new_v4();
+    // base_payload contains the shared protocol fields for a child delivery.
+    // base_payload 包含子任务投递共享的协议字段。
+    let base_payload = serde_json::json!({
+        "tool": SEND_MESSAGE_TOOL,
+        "parent_session_id": parent_session_id.to_string(),
+        "target": "repeat-agent",
+        (SUBAGENT_TASK_ID_KEY): task_session_id.to_string(),
+        "delivery_id": "delivery-running",
+        "message": "继续检查",
+        "queued": true,
+        "delivery_mode": "queue",
+        "interrupted": false
+    });
+    // queued_event represents delivery to an execution that was already active.
+    // queued_event 表示投递给一个已经活动的执行。
+    let queued_event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · send-message-queued",
+        "queued",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "host_result": {
+            "kind": "subagent_message",
+            "payload": base_payload.clone()
+        }
+    })));
+
+    assert!(
+        running_subagent_send_message_resume_from_event(&queued_event)
+            .expect("queue-only send_message should parse")
+            .is_none()
+    );
+
+    // running_payload extends the delivery with the exact newly resumed execution.
+    // running_payload 使用精确的新续跑执行扩展投递载荷。
+    let mut running_payload = base_payload;
+    running_payload["resumed_execution_id"] = serde_json::json!("send-message-running-run");
+    running_payload["resumed_execution_status"] = serde_json::json!("running");
+    // running_event represents an idle child synchronously resumed into a new execution.
+    // running_event 表示空闲子任务被同步续跑为一个新执行。
+    let running_event = RuntimeEvent::new(
+        RuntimeEventKind::ToolFinished,
+        "工具返回 · send-message-running",
+        "running",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "host_result": {
+            "kind": "subagent_message",
+            "payload": running_payload
+        }
+    })));
+    // resolved identifies the exact execution eligible for gate suppression.
+    // resolved 标识符合完成闸门放行条件的精确执行。
+    let resolved = running_subagent_send_message_resume_from_event(&running_event)
+        .expect("running send_message should parse")
+        .expect("running send_message should expose its execution");
+
+    assert_eq!(resolved.0, task_session_id);
+    assert_eq!(resolved.1, "send-message-running-run");
 }
 
 /// Verifies wait_agent terminal feedback metadata resolves consumed child executions.

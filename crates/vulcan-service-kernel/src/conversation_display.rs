@@ -545,7 +545,7 @@ pub(crate) fn filter_legacy_goal_internal_user_messages(
 /// 移除历史 Goal 内部用户消息后重写单个运行态。
 pub(crate) fn sanitize_runtime_state_legacy_goal_internal_messages(
     runtime_state: &mut SessionRuntimeStateEntry,
-) {
+) -> Result<(), String> {
     let messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
     if messages
         .iter()
@@ -553,8 +553,9 @@ pub(crate) fn sanitize_runtime_state_legacy_goal_internal_messages(
     {
         runtime_state.conversation_state = conversation_state_from_session_messages(
             &filter_legacy_goal_internal_user_messages(messages),
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// Returns whether one message is a known legacy Goal internal prompt persisted before the hidden fix.
@@ -674,7 +675,8 @@ mod tests {
                 visible_tool,
                 hidden_detail,
                 hidden_summary,
-            ]),
+            ])
+            .expect("valid replayed conversation identities"),
             ..Default::default()
         };
 

@@ -108,7 +108,7 @@ function visibleMarkdownToolOutput(blocks: ToolExecutionConversationBlock[]): st
 // markdownToolPresentationId 基于固定工具调用身份构建稳定标识。
 function markdownToolPresentationId(blocks: ToolExecutionConversationBlock[], prefix: string): string {
   const identity = blocks
-    .map((block) => block.toolCallId ?? block.toolResultId ?? block.id)
+    .map((block) => block.toolCallId ?? block.id)
     .filter(Boolean)
     .join(":");
   return `${prefix}:${compactHash(identity || prefix)}`;

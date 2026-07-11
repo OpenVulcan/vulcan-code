@@ -22,7 +22,6 @@ use vulcan_workbench_model::{
     enqueue_pending_prompt_internal_queue_entry, pending_prompt_lane_is_busy,
     remove_internal_pending_prompt_entries_by_source, remove_pending_prompt_panel_entry,
     route_pending_prompt_panel_entry_into_internal_queue, take_next_pending_prompt_entry,
-    take_runtime_intervention_guided_pending_prompt_entries,
 };
 use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
 
@@ -425,44 +424,6 @@ pub(super) fn clear_internal_pending_prompt_queue_for_stop(
     clear_internal_pending_prompt_queue_and_restore_panel(&mut runtime_state.ui_state)
 }
 
-/// Takes guided pending prompt entries from the internal queue at a provider boundary.
-/// 在 Provider 边界从内部队列取出已引导的待发送提示词条目。
-pub(super) fn take_webui_internal_guidance_prompts(
-    _app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    provider_configuration: &ProviderConfigurationFile,
-    session_id: SessionId,
-) -> Result<Vec<PendingSessionPromptEntry>, String> {
-    let mut guided_entries = Vec::new();
-    {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        let dispatch_context = webui_pending_prompt_dispatch_context(
-            workspace,
-            provider_configuration,
-            session_id,
-            false,
-        );
-        let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
-            return Ok(guided_entries);
-        };
-        guided_entries = take_runtime_intervention_guided_pending_prompt_entries(
-            &mut runtime_state.ui_state,
-            dispatch_context,
-        );
-        if guided_entries.is_empty() {
-            return Ok(guided_entries);
-        }
-        runtime_state.updated_at = current_unix_millis_text();
-    }
-    Ok(guided_entries)
-}
-
 /// Enqueues one internal pending prompt entry and updates the runtime state timestamp.
 /// 入队一条内部待发送提示词并更新运行态时间戳。
 pub(super) fn enqueue_internal_pending_prompt_entry(
@@ -592,6 +553,49 @@ pub(super) fn clear_stale_webui_session_mailbox_pending_prompts(
         if removed > 0 {
             runtime_state.updated_at = current_unix_millis_text();
         }
+    }
+    Ok(removed)
+}
+
+/// Removes Goal-continuation guidance that does not belong to the durable current budget stage.
+/// 移除不属于持久化当前预算阶段的 Goal 续跑引导。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained session runtime queue.
+/// `state` 持有保留的会话运行态队列。
+/// `session_id` identifies the queue being validated.
+/// `session_id` 标识正在校验的队列。
+/// `current_goal_id` is the authoritative workspace-store stage identity, or `None` after clearing.
+/// `current_goal_id` 是 workspace-store 的权威阶段身份，目标已清理时为 `None`。
+///
+/// # Returns
+/// 返回值
+/// The number of stale internal guidance entries removed, or a state-lock error.
+/// 返回移除的过期内部引导数量，或状态锁错误。
+pub(super) fn clear_stale_session_goal_pending_prompts(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    current_goal_id: Option<&str>,
+) -> Result<usize, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(runtime_state) = guard
+        .workspace_snapshot
+        .as_mut()
+        .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+    else {
+        return Ok(0);
+    };
+    let before = runtime_state.ui_state.pending_prompt_queue.len();
+    runtime_state.ui_state.pending_prompt_queue.retain(|entry| {
+        entry.source != PendingSessionPromptSource::GoalContinuation
+            || entry.task_id.as_deref() == current_goal_id
+    });
+    let removed = before.saturating_sub(runtime_state.ui_state.pending_prompt_queue.len());
+    if removed > 0 {
+        runtime_state.updated_at = current_unix_millis_text();
     }
     Ok(removed)
 }

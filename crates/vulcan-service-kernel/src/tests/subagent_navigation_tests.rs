@@ -168,19 +168,20 @@ fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_r
         cached_mcp_catalog: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
+        session_goal_dispatch_versions: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
         webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,
-        detached_subagent_task_listeners: BTreeSet::new(),
+        detached_subagent_task_listeners: BTreeMap::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
-        session_lifecycle_transition_ids: BTreeSet::new(),
-        project_lifecycle_transition_ids: BTreeSet::new(),
+        session_turn_admission_reservations: BTreeMap::new(),
+        project_lifecycle_transition_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -503,19 +504,20 @@ fn unclosed_subagent_cache_without_visible_round_builds_navigation() {
         cached_mcp_catalog: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
+        session_goal_dispatch_versions: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
         webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,
-        detached_subagent_task_listeners: BTreeSet::new(),
+        detached_subagent_task_listeners: BTreeMap::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
-        session_lifecycle_transition_ids: BTreeSet::new(),
-        project_lifecycle_transition_ids: BTreeSet::new(),
+        session_turn_admission_reservations: BTreeMap::new(),
+        project_lifecycle_transition_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -1372,7 +1374,8 @@ fn hydration_preloads_unclosed_subagent_surface_from_segmented_store() {
     // Persisted child context must replay process/output/stat records, not only task metadata.
     // 持久化子任务上下文必须能复放过程、输出和统计记录，而不只是任务元数据。
     let mut conversation_state =
-        conversation_state_from_session_messages(&[child_dialogue_message]);
+        conversation_state_from_session_messages(&[child_dialogue_message])
+            .expect("valid replayed conversation identities");
     conversation_state.records = vec![
         SessionConversationRecord {
             id: String::from("restored-hidden-summary"),
@@ -1672,7 +1675,8 @@ fn opening_one_subagent_detail_preserves_full_unclosed_navigation() {
         SessionMessageEntry::new(SessionMessageKind::Assistant, "杈撳嚭", "lifecycle detail")
             .with_runtime_metadata("lifecycle-output", "1000");
     let lifecycle_conversation_state =
-        conversation_state_from_session_messages(&[lifecycle_message]);
+        conversation_state_from_session_messages(&[lifecycle_message])
+            .expect("valid replayed conversation identities");
     task_store
         .save_context(vulcan_session_core::SessionContextDocument {
             schema_version: 1,
@@ -1932,19 +1936,23 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         cached_mcp_catalog: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
+        session_goal_dispatch_versions: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
         webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
         session_subagent_navigation_rounds: BTreeSet::from([parent_session_id]),
         active_subagent_panel: None,
-        detached_subagent_task_listeners: BTreeSet::from([task_session_id]),
+        detached_subagent_task_listeners: BTreeMap::from([(
+            task_session_id,
+            String::from("registry-terminal-test-execution"),
+        )]),
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
-        session_lifecycle_transition_ids: BTreeSet::new(),
-        project_lifecycle_transition_ids: BTreeSet::new(),
+        session_turn_admission_reservations: BTreeMap::new(),
+        project_lifecycle_transition_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -2058,6 +2066,7 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
         cached_mcp_catalog: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
+        session_goal_dispatch_versions: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
         webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
@@ -2066,14 +2075,14 @@ fn inactive_same_parent_subagent_panel_falls_back_to_parent_surface() {
             parent_session_id,
             task_id: task_session_id,
         }),
-        detached_subagent_task_listeners: BTreeSet::new(),
+        detached_subagent_task_listeners: BTreeMap::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
-        session_lifecycle_transition_ids: BTreeSet::new(),
-        project_lifecycle_transition_ids: BTreeSet::new(),
+        session_turn_admission_reservations: BTreeMap::new(),
+        project_lifecycle_transition_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -2154,6 +2163,7 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
         cached_mcp_catalog: None,
         live_context_budgets: BTreeMap::new(),
         session_goal_summaries: BTreeMap::new(),
+        session_goal_dispatch_versions: BTreeMap::new(),
         budget_limit_reported_goal_ids: BTreeSet::new(),
         webui_preloaded_unclosed_subagent_roots: BTreeSet::new(),
         subagent_surface_detail_cache: BTreeMap::new(),
@@ -2162,14 +2172,14 @@ fn webui_active_subagent_panel_cannot_cross_selected_session() {
             parent_session_id: previous_session_id,
             task_id: previous_task_id,
         }),
-        detached_subagent_task_listeners: BTreeSet::new(),
+        detached_subagent_task_listeners: BTreeMap::new(),
         subagent_parent_turn_bindings: BTreeMap::new(),
         subagent_completion_gate_ignored_tasks: BTreeSet::new(),
         parent_sessions_waiting_for_subagents: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
-        session_lifecycle_transition_ids: BTreeSet::new(),
-        project_lifecycle_transition_ids: BTreeSet::new(),
+        session_turn_admission_reservations: BTreeMap::new(),
+        project_lifecycle_transition_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
@@ -2377,8 +2387,14 @@ fn cached_navigation_test_state(
         description: None,
         run_state: SubagentTaskRunState::Completed,
         result_text: String::new(),
-        conversation_state: Some(conversation_state_from_session_messages(&[
-            SessionMessageEntry::new(SessionMessageKind::Assistant, "杈撳嚭", public_task_id),
-        ])),
+        conversation_state: Some(
+            conversation_state_from_session_messages(&[SessionMessageEntry::new(
+                SessionMessageKind::Assistant,
+                "杈撳嚭",
+                public_task_id,
+            )
+            .with_runtime_metadata(format!("subagent-output-{task_id}"), "1")])
+            .expect("valid replayed conversation identities"),
+        ),
     }
 }

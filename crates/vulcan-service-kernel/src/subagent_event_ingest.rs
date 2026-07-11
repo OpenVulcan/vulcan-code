@@ -13,6 +13,26 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
     parent_session_id: SessionId,
     event: &RuntimeEvent,
 ) -> Result<bool, String> {
+    ingest_webui_subagent_runtime_event_for_listener_execution(
+        app,
+        state,
+        _agent_runtime,
+        parent_session_id,
+        event,
+        None,
+    )
+}
+
+/// Consumes one delegate event only while the optional detached listener still owns its execution.
+/// 仅当可选分离监听器仍拥有其执行时吸收委派事件。
+pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    _agent_runtime: &AgentRuntimeBridge,
+    parent_session_id: SessionId,
+    event: &RuntimeEvent,
+    listener_execution_id: Option<&str>,
+) -> Result<bool, String> {
     if !matches!(
         event.kind,
         RuntimeEventKind::DelegateStarted | RuntimeEventKind::DelegateFinished
@@ -24,6 +44,7 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         return Ok(true);
     };
     let prompt = parse_subagent_task_prompt_metadata(metadata);
+    let event_execution_id = subagent_feedback_execution_id_from_tool_metadata(metadata)?;
     let Some(panel_state) = parse_subagent_task_panel_metadata(parent_session_id, metadata, None)
     else {
         return Ok(true);
@@ -39,6 +60,14 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if listener_execution_id.is_some_and(|execution_id| {
+            guard
+                .detached_subagent_task_listeners
+                .get(&panel_state.task_id)
+                .is_none_or(|current_execution_id| current_execution_id != execution_id)
+        }) {
+            return Ok(true);
+        }
         let normalized = if is_finished {
             terminal_webui_subagent_task_state(panel_state.clone())
         } else {
@@ -47,7 +76,7 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         guard
             .session_subagent_navigation_rounds
             .insert(parent_session_id);
-        if is_finished {
+        if is_finished && listener_execution_id.is_none() {
             guard
                 .detached_subagent_task_listeners
                 .remove(&normalized.task_id);
@@ -69,6 +98,14 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if listener_execution_id.is_some_and(|execution_id| {
+            guard
+                .detached_subagent_task_listeners
+                .get(&normalized_state.task_id)
+                .is_none_or(|current_execution_id| current_execution_id != execution_id)
+        }) {
+            return Ok(true);
+        }
         let parent_conversation_id = parent_session_id.to_string();
         let before_parent_visible_messages = guard
             .workbench
@@ -97,7 +134,10 @@ pub(crate) fn ingest_webui_subagent_runtime_event(
         };
         let parent_turn_binding = guard
             .subagent_parent_turn_bindings
-            .get(&normalized_state.task_id)
+            .get(&SubagentExecutionKey::new(
+                normalized_state.task_id,
+                &event_execution_id,
+            ))
             .cloned();
         let (projected_messages, cached_messages, parent_projected_messages, parent_changed) = {
             let workspace = guard
@@ -292,10 +332,11 @@ fn append_webui_subagent_feedback_records_if_missing(
     }
     let now = current_unix_millis_text();
     let task_id_text = state.task_id.to_string();
-    let runtime_state = workspace_snapshot
+    let mut runtime_state = workspace_snapshot
         .session_runtime_state
-        .entry(parent_session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
+        .get(&parent_session_id)
+        .cloned()
+        .unwrap_or_else(|| SessionRuntimeStateEntry {
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
@@ -324,18 +365,21 @@ fn append_webui_subagent_feedback_records_if_missing(
     }
     if projection_policy == SubagentFeedbackParentProjectionPolicy::AppendFeedbackAndStats {
         append_webui_session_message_entry_to_state(
-            runtime_state,
+            &mut runtime_state,
             parent_session_id,
             display_records.feedback_entry,
-        );
+        )?;
     }
     append_webui_session_message_entry_to_state(
-        runtime_state,
+        &mut runtime_state,
         parent_session_id,
         display_records.stats_entry,
-    );
+    )?;
 
     let runtime_state_snapshot = runtime_state.clone();
+    workspace_snapshot
+        .session_runtime_state
+        .insert(parent_session_id, runtime_state);
     merge_runtime_state_records_into_display_messages(
         workspace_snapshot,
         parent_session_id,
@@ -543,10 +587,42 @@ fn build_webui_subagent_task_prompt_message(
 /// 返回值
 /// The child task id when one visible message was appended, `None` for unrelated or duplicate events.
 /// 当成功追加一条可见消息时返回子任务标识；无关事件或重复事件返回 `None`。
+#[cfg(test)]
 pub(crate) fn append_webui_subagent_send_message_from_event_if_needed(
     workspace_snapshot: &mut WorkspaceSnapshot,
     event: &RuntimeEvent,
 ) -> Result<Option<SessionId>, String> {
+    let Some((task_id, message)) = webui_subagent_send_message_from_event(event)? else {
+        return Ok(None);
+    };
+    let duplicate_message_id = message.id.clone();
+    let appended = append_webui_subagent_session_message_if_missing(
+        workspace_snapshot,
+        task_id,
+        |entry| entry.id == duplicate_message_id,
+        || message,
+    );
+    if !appended {
+        return Ok(None);
+    }
+    Ok(Some(task_id))
+}
+
+/// Parses one visible child send-message projection without mutating workspace state.
+/// 解析一条可见子会话 send-message 投影且不修改工作区状态。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime tool event whose structured host result may describe a child message.
+/// `event` 是结构化宿主结果可能描述子会话消息的运行时工具事件。
+///
+/// # Returns
+/// 返回值
+/// Returns the child task and display row, `None` for unrelated events, or the exact protocol error.
+/// 返回子任务与显示行；无关事件返回 `None`；协议无效时返回准确错误。
+pub(crate) fn webui_subagent_send_message_from_event(
+    event: &RuntimeEvent,
+) -> Result<Option<(SessionId, SessionMessageEntry)>, String> {
     if event.kind != RuntimeEventKind::ToolFinished {
         return Ok(None);
     }
@@ -558,18 +634,10 @@ pub(crate) fn append_webui_subagent_send_message_from_event_if_needed(
     else {
         return Ok(None);
     };
-    let task_id = projection.task_session_id;
-    let duplicate_message_id = projection.message_id.clone();
-    let appended = append_webui_subagent_session_message_if_missing(
-        workspace_snapshot,
-        task_id,
-        |entry| entry.id == duplicate_message_id,
-        || build_webui_subagent_send_message(projection),
-    );
-    if !appended {
-        return Ok(None);
-    }
-    Ok(Some(task_id))
+    Ok(Some((
+        projection.task_session_id,
+        build_webui_subagent_send_message(projection),
+    )))
 }
 
 /// Extracts a terminal child execution consumed by a synchronous `send_message` result.
@@ -587,6 +655,58 @@ pub(crate) fn append_webui_subagent_send_message_from_event_if_needed(
 pub(crate) fn terminal_subagent_send_message_resume_from_event(
     event: &RuntimeEvent,
 ) -> Result<Option<(SessionId, String)>, String> {
+    let Some((task_session_id, execution_id, execution_status)) =
+        subagent_send_message_resume_from_event(event)?
+    else {
+        return Ok(None);
+    };
+    if canonical_subagent_mailbox_terminal_status_label(execution_status).is_none() {
+        return Ok(None);
+    }
+    Ok(Some((task_session_id, execution_id)))
+}
+
+/// Extracts a running child execution started synchronously by `send_message`.
+/// 提取由 `send_message` 同步启动且仍在运行的子执行。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime tool-finished event being projected.
+/// `event` 是正在投影的运行时工具完成事件。
+///
+/// # Returns
+/// 返回值
+/// Child task id plus execution id only when this tool call started a running execution.
+/// 仅当本次工具调用启动了仍在运行的执行时，返回子任务标识与执行标识。
+pub(crate) fn running_subagent_send_message_resume_from_event(
+    event: &RuntimeEvent,
+) -> Result<Option<(SessionId, String)>, String> {
+    let Some((task_session_id, execution_id, execution_status)) =
+        subagent_send_message_resume_from_event(event)?
+    else {
+        return Ok(None);
+    };
+    if execution_status != "running" {
+        return Ok(None);
+    }
+    Ok(Some((task_session_id, execution_id)))
+}
+
+/// Parses the concrete execution synchronously resumed by one `send_message` result.
+/// 解析单个 `send_message` 结果同步续跑的具体执行。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime tool-finished event carrying the host result.
+/// `event` 是携带宿主结果的运行时工具完成事件。
+///
+/// # Returns
+/// 返回值
+/// The task, execution identity, and validated execution status, or `None` when no run started.
+/// 返回任务、执行身份与已校验执行状态；未启动执行时返回 `None`。
+fn subagent_send_message_resume_from_event(
+    event: &RuntimeEvent,
+) -> Result<Option<(SessionId, String, &str)>, String> {
     if event.kind != RuntimeEventKind::ToolFinished {
         return Ok(None);
     }
@@ -611,38 +731,43 @@ pub(crate) fn terminal_subagent_send_message_resume_from_event(
     if payload.get("target").and_then(Value::as_str) == Some("root") {
         return Ok(None);
     }
-    let Some(status) = payload
+    // status is present only when this tool call synchronously started a concrete child run.
+    // status 仅在本次工具调用同步启动了具体子运行时存在。
+    let status = payload
         .get("resumed_execution_status")
         .and_then(Value::as_str)
-    else {
-        return Ok(None);
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    // execution_id is paired with status by the subagent-message host protocol.
+    // execution_id 按子代理消息宿主协议与 status 成对出现。
+    let execution_id = payload
+        .get("resumed_execution_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let (Some(status), Some(execution_id)) = (status, execution_id) else {
+        if status.is_none() && execution_id.is_none() {
+            return Ok(None);
+        }
+        return Err(String::from(
+            "send_message resume payload must contain both resumed_execution_id and resumed_execution_status",
+        ));
     };
-    if canonical_subagent_mailbox_terminal_status_label(status).is_none() {
-        return Ok(None);
+    if status != "running" && canonical_subagent_mailbox_terminal_status_label(status).is_none() {
+        return Err(format!(
+            "send_message resume payload has unsupported execution status `{status}`"
+        ));
     }
     let task_id_text = payload
         .get(SUBAGENT_TASK_ID_KEY)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            String::from("terminal send_message resume payload is missing task_session_id")
-        })?;
+        .ok_or_else(|| String::from("send_message resume payload is missing task_session_id"))?;
     let task_session_id = task_id_text.parse::<SessionId>().map_err(|error| {
-        format!(
-            "terminal send_message resume payload has invalid task_session_id `{task_id_text}`: {error}"
-        )
+        format!("send_message resume payload has invalid task_session_id `{task_id_text}`: {error}")
     })?;
-    let execution_id = payload
-        .get("resumed_execution_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            String::from("terminal send_message resume payload is missing resumed_execution_id")
-        })?
-        .to_string();
-    Ok(Some((task_session_id, execution_id)))
+    Ok(Some((task_session_id, execution_id.to_string(), status)))
 }
 
 /// Extracts child executions already consumed by a synchronous `wait_agent` result.

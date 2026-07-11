@@ -16,7 +16,7 @@ use crate::{
     conversation_protocol::{
         SessionConversationMessage, SessionConversationPayload, SessionConversationRecord,
         SessionConversationState, append_record, append_record_body_delta,
-        append_user_text_message,
+        append_session_conversation_message, append_user_text_message,
     },
     skills::{SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput},
     turn_stats::{

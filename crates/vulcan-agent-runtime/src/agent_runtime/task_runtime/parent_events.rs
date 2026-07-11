@@ -11,6 +11,7 @@ pub(super) fn publish_task_finished_to_parent(
     let event = build_task_finished_parent_runtime_event(request, outcome, detail);
     task_runtime.publish_detached_task_event(
         request.task_id,
+        &request.execution_id,
         DetachedTaskRuntimeEvent::ParentRuntime {
             parent_session_id: request.current_session_id,
             event,
@@ -53,6 +54,7 @@ pub(super) fn publish_task_failure_to_parent(
     let event = build_task_failure_parent_runtime_event(request, error);
     task_runtime.publish_detached_task_event(
         request.task_id,
+        &request.execution_id,
         DetachedTaskRuntimeEvent::ParentRuntime {
             parent_session_id: request.current_session_id,
             event,
@@ -198,6 +200,32 @@ const TASK_EXECUTION_PRESTART_CANCELLED_PREFIX: &str = "[task-prestart-cancelled
 pub(super) fn task_start_parent_stream_closed_error(public_task_id: &str) -> String {
     format!(
         "{TASK_EXECUTION_PRESTART_CANCELLED_PREFIX} Task `{public_task_id}` cannot start because the parent live stream closed before DelegateStarted could be delivered."
+    )
+}
+
+/// Builds a pre-start cancellation error for an execution that lost stable-record ownership.
+/// 为失去稳定记录所有权的执行构建启动前取消错误。
+///
+/// # Parameters
+/// 参数
+/// `task_id` identifies the stable task record.
+/// `task_id` 标识稳定任务记录。
+/// `execution_id` identifies the superseded execution.
+/// `execution_id` 标识被取代的执行。
+/// `current_execution_id` identifies the execution that now owns the record.
+/// `current_execution_id` 标识当前拥有记录的执行。
+///
+/// # Returns
+/// 返回值
+/// A prestart-cancellation diagnostic consumed by invocation rollback handling.
+/// 返回由调用回滚处理消费的启动前取消诊断。
+pub(super) fn task_execution_record_owner_conflict_error(
+    task_id: SessionId,
+    execution_id: &str,
+    current_execution_id: &str,
+) -> String {
+    format!(
+        "{TASK_EXECUTION_PRESTART_CANCELLED_PREFIX} Task `{task_id}` execution `{execution_id}` lost its preparation record to execution `{current_execution_id}`."
     )
 }
 

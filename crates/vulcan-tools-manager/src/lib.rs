@@ -25,10 +25,10 @@ pub use schema_projection::{
     resolve_tool_schema_projection_profile,
 };
 pub use types::{
-    ResolvedToolDefinition, ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate,
-    VulcanToolDescriptor, VulcanToolHostResult, VulcanToolInvocationResult, VulcanToolInvokeFuture,
-    VulcanToolInvokeHandler, VulcanToolMode, VulcanToolSchemaProjectionContext,
-    VulcanToolSchemaProjectionProfile, VulcanToolSourceKind,
+    ResolvedToolDefinition, ResolvedToolSet, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy,
+    VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult, VulcanToolInvocationResult,
+    VulcanToolInvokeFuture, VulcanToolInvokeHandler, VulcanToolMode,
+    VulcanToolSchemaProjectionContext, VulcanToolSchemaProjectionProfile, VulcanToolSourceKind,
 };
 
 #[cfg(test)]

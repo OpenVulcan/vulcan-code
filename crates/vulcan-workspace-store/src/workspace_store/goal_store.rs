@@ -8,6 +8,105 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
 
+/// Maximum accepted Unicode-scalar length for one persisted thread-goal objective.
+/// 单个持久化线程目标文本允许的最大 Unicode 标量长度。
+pub const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
+
+/// Domain validation failure for a persisted thread-goal objective.
+/// 持久化线程目标文本的领域校验失败。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreadGoalObjectiveError {
+    /// The normalized objective is empty.
+    /// 规范化后的目标文本为空。
+    EmptyObjective,
+    /// The normalized objective exceeds the shared maximum length.
+    /// 规范化后的目标文本超过共享最大长度。
+    ObjectiveTooLong {
+        /// Maximum accepted Unicode-scalar count.
+        /// 允许的最大 Unicode 标量数量。
+        max_chars: usize,
+    },
+}
+
+impl std::fmt::Display for ThreadGoalObjectiveError {
+    /// Formats one domain validation failure for storage diagnostics.
+    /// 为存储诊断格式化一条领域校验失败。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyObjective => formatter.write_str("goal objective must not be empty"),
+            Self::ObjectiveTooLong { max_chars } => {
+                write!(
+                    formatter,
+                    "goal objective must be at most {max_chars} characters"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ThreadGoalObjectiveError {}
+
+/// Domain validation failure for one explicit thread-goal token budget.
+/// 单个显式线程目标 Token 预算的领域校验失败。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ThreadGoalTokenBudgetError;
+
+impl std::fmt::Display for ThreadGoalTokenBudgetError {
+    /// Formats the non-positive budget failure for storage diagnostics.
+    /// 为存储诊断格式化非正预算失败。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("goal token budget must be a positive integer")
+    }
+}
+
+impl std::error::Error for ThreadGoalTokenBudgetError {}
+
+/// Trims and validates one thread-goal objective using the persisted domain contract.
+/// 使用持久化领域契约裁剪并校验一个线程目标文本。
+///
+/// # Parameters
+/// 参数
+/// `objective` is the untrusted objective text supplied by any mutation entrypoint.
+/// `objective` 是任意变更入口提供的不可信目标文本。
+///
+/// # Returns
+/// 返回值
+/// The normalized borrowed objective, or the precise domain validation failure.
+/// 返回规范化后的借用目标文本，或准确的领域校验失败。
+pub fn normalize_thread_goal_objective(objective: &str) -> Result<&str, ThreadGoalObjectiveError> {
+    let objective = objective.trim();
+    if objective.is_empty() {
+        return Err(ThreadGoalObjectiveError::EmptyObjective);
+    }
+    if objective.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        return Err(ThreadGoalObjectiveError::ObjectiveTooLong {
+            max_chars: MAX_THREAD_GOAL_OBJECTIVE_CHARS,
+        });
+    }
+    Ok(objective)
+}
+
+/// Validates one optional explicit token budget using the persisted domain contract.
+/// 使用持久化领域契约校验一个可选的显式 Token 预算。
+///
+/// # Parameters
+/// 参数
+/// `token_budget` is absent for an unbounded goal or contains its explicit positive budget.
+/// `token_budget` 对无预算目标为空，否则包含显式正预算。
+///
+/// # Returns
+/// 返回值
+/// Success for absent or positive budgets, otherwise the precise domain validation failure.
+/// 预算缺失或为正数时成功，否则返回准确的领域校验失败。
+pub fn validate_thread_goal_token_budget(
+    token_budget: Option<i64>,
+) -> Result<(), ThreadGoalTokenBudgetError> {
+    if token_budget.is_some_and(|value| value <= 0) {
+        return Err(ThreadGoalTokenBudgetError);
+    }
+    Ok(())
+}
+
 /// Persisted lifecycle state for one long-running session goal.
 /// 单个长生命周期会话目标的持久化生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +227,27 @@ pub struct GoalUpdate {
     /// Expected goal id used to ignore stale writes.
     /// 用于忽略过期写入的预期目标标识。
     pub expected_goal_id: Option<String>,
+    /// Expected persisted status used to reject lifecycle races.
+    /// 用于拒绝生命周期竞态的预期持久化状态。
+    pub expected_status: Option<ThreadGoalStatus>,
+}
+
+/// Strict mutation payload for starting a fresh budget stage from one stopped goal.
+/// 从已停止目标启动新预算阶段的严格变更载荷。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalResume {
+    /// Objective carried into the new stage.
+    /// 带入新阶段的目标文本。
+    pub objective: String,
+    /// Explicit token budget for the new stage, or no limit.
+    /// 新阶段的显式 Token 预算，或不设限制。
+    pub token_budget: Option<i64>,
+    /// Goal identity of the stopped stage being replaced.
+    /// 被替换停止阶段的目标身份。
+    pub expected_goal_id: String,
+    /// Lifecycle status required for the stopped stage.
+    /// 停止阶段必须匹配的生命周期状态。
+    pub expected_status: ThreadGoalStatus,
 }
 
 /// Result of applying usage accounting to one goal.
@@ -140,24 +260,6 @@ pub enum GoalAccountingOutcome {
     /// The goal row was updated.
     /// 目标行已经更新。
     Updated(ThreadGoal),
-}
-
-/// Usage-accounting status filter copied from Codex goal store semantics.
-/// 从 Codex 目标存储语义复制的用量记账状态过滤器。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GoalAccountingMode {
-    /// Only active-status goals may be accounted.
-    /// 只有 active 状态目标可被记账。
-    ActiveStatusOnly,
-    /// Only active goals may be accounted.
-    /// 只有活动目标可被记账。
-    ActiveOnly,
-    /// Active or complete goals may be accounted for final completion turns.
-    /// active 或 complete 目标可用于完成回合的最终记账。
-    ActiveOrComplete,
-    /// Active or stopped resumable goals may be accounted for in-flight turns.
-    /// active 或已停止可恢复目标可用于飞行中回合的记账。
-    ActiveOrStopped,
 }
 
 /// Controller-backed implementation of the Codex-compatible goal store API.
@@ -247,6 +349,9 @@ WHERE thread_id = ?1;
         status: ThreadGoalStatus,
         token_budget: Option<i64>,
     ) -> Result<ThreadGoal, String> {
+        let objective =
+            normalize_thread_goal_objective(objective).map_err(|error| error.to_string())?;
+        validate_thread_goal_token_budget(token_budget).map_err(|error| error.to_string())?;
         let goal_id = Uuid::new_v4().to_string();
         let now_ms = current_unix_millis();
         let status = status_after_budget_limit(status, 0, token_budget);
@@ -307,6 +412,9 @@ RETURNING
         status: ThreadGoalStatus,
         token_budget: Option<i64>,
     ) -> Result<Option<ThreadGoal>, String> {
+        let objective =
+            normalize_thread_goal_objective(objective).map_err(|error| error.to_string())?;
+        validate_thread_goal_token_budget(token_budget).map_err(|error| error.to_string())?;
         let goal_id = Uuid::new_v4().to_string();
         let now_ms = current_unix_millis();
         let status = status_after_budget_limit(status, 0, token_budget);
@@ -376,11 +484,20 @@ RETURNING
         if let Some(expected_goal_id) = update.expected_goal_id.as_deref()
             && existing.goal_id != expected_goal_id
         {
-            return Ok(Some(existing));
+            return Ok(None);
+        }
+        if let Some(expected_status) = update.expected_status
+            && existing.status != expected_status
+        {
+            return Ok(None);
         }
 
         let objective = update.objective.unwrap_or(existing.objective);
+        let objective = normalize_thread_goal_objective(&objective)
+            .map_err(|error| error.to_string())?
+            .to_string();
         let token_budget = update.token_budget.unwrap_or(existing.token_budget);
+        validate_thread_goal_token_budget(token_budget).map_err(|error| error.to_string())?;
         let status = update.status.unwrap_or(existing.status);
         let status = status_after_budget_limit(status, existing.tokens_used, token_budget);
         let now_ms = current_unix_millis();
@@ -395,6 +512,7 @@ SET
     updated_at_ms = ?4
 WHERE thread_id = ?5
   AND (?6 IS NULL OR goal_id = ?6)
+  AND (?7 IS NULL OR status = ?7)
 RETURNING
     thread_id,
     goal_id,
@@ -413,6 +531,7 @@ RETURNING
                     ControllerSqliteValue::Int64(now_ms),
                     ControllerSqliteValue::String(thread_id.to_string()),
                     optional_string(update.expected_goal_id),
+                    optional_thread_goal_status(update.expected_status),
                 ],
             )
             .await?;
@@ -424,19 +543,32 @@ RETURNING
 
     /// Resumes one stopped goal as a fresh active budget stage.
     /// 将一个已停止目标作为新的活动预算阶段恢复。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `thread_id` identifies the session whose stopped stage is being replaced.
+    /// `thread_id` 标识正在替换停止阶段的会话。
+    /// `resume` carries the new stage content and strict previous-stage preconditions.
+    /// `resume` 携带新阶段内容与严格的上一阶段前置条件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A fresh active stage with a new Goal identity, or `None` when the previous stage changed.
+    /// 返回具有新 Goal 身份的活动阶段；上一阶段已变化时返回 `None`。
     pub async fn resume_thread_goal(
         &self,
         thread_id: SessionId,
-        update: GoalUpdate,
+        resume: GoalResume,
     ) -> Result<Option<ThreadGoal>, String> {
         let existing = self.get_thread_goal(thread_id).await?;
         let Some(existing) = existing else {
             return Ok(None);
         };
-        if let Some(expected_goal_id) = update.expected_goal_id.as_deref()
-            && existing.goal_id != expected_goal_id
-        {
-            return Ok(Some(existing));
+        if existing.goal_id != resume.expected_goal_id {
+            return Ok(None);
+        }
+        if existing.status != resume.expected_status {
+            return Ok(None);
         }
         if !matches!(
             existing.status,
@@ -448,24 +580,30 @@ RETURNING
             return Ok(Some(existing));
         }
 
-        let objective = update.objective.unwrap_or(existing.objective);
-        let token_budget = update.token_budget.unwrap_or(existing.token_budget);
-        let status = status_after_budget_limit(ThreadGoalStatus::Active, 0, token_budget);
+        let objective = normalize_thread_goal_objective(&resume.objective)
+            .map_err(|error| error.to_string())?
+            .to_string();
+        let token_budget = resume.token_budget;
+        validate_thread_goal_token_budget(token_budget).map_err(|error| error.to_string())?;
+        let resumed_goal_id = Uuid::new_v4().to_string();
         let now_ms = current_unix_millis();
         let rows = self
             .query_goal_rows(
                 r#"
 UPDATE thread_goals
 SET
-    objective = ?1,
-    status = ?2,
+    goal_id = ?1,
+    objective = ?2,
+    status = 'active',
     token_budget = ?3,
     tokens_used = 0,
     time_used_seconds = 0,
+    created_at_ms = ?4,
     updated_at_ms = ?4
 WHERE thread_id = ?5
   AND status IN ('paused', 'blocked', 'usage_limited', 'budget_limited')
-  AND (?6 IS NULL OR goal_id = ?6)
+  AND goal_id = ?6
+  AND status = ?7
 RETURNING
     thread_id,
     goal_id,
@@ -478,12 +616,13 @@ RETURNING
     updated_at_ms;
 "#,
                 vec![
+                    ControllerSqliteValue::String(resumed_goal_id),
                     ControllerSqliteValue::String(objective),
-                    ControllerSqliteValue::String(status.as_str().to_string()),
                     optional_i64(token_budget),
                     ControllerSqliteValue::Int64(now_ms),
                     ControllerSqliteValue::String(thread_id.to_string()),
-                    optional_string(update.expected_goal_id),
+                    ControllerSqliteValue::String(resume.expected_goal_id),
+                    ControllerSqliteValue::String(resume.expected_status.as_str().to_string()),
                 ],
             )
             .await?;
@@ -493,143 +632,34 @@ RETURNING
             .transpose()
     }
 
-    /// Marks one active goal as paused without clobbering terminal statuses.
-    /// 将一个活动目标标记为暂停，同时不覆盖终态。
-    pub async fn pause_active_thread_goal(
+    /// Pauses one exact active or budget-limited goal captured by its owning run.
+    /// 暂停由所属运行捕获的精确 active 或 budget_limited 目标。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `thread_id` identifies the session that owns the stopped run.
+    /// `thread_id` 标识拥有已停止运行的会话。
+    /// `expected_goal_id` binds the pause to the Goal captured when that run started.
+    /// `expected_goal_id` 将暂停绑定到该运行启动时捕获的目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The paused goal, or `None` when its identity or pausable status no longer matches.
+    /// 返回已暂停目标；身份或可暂停状态不再匹配时返回 `None`。
+    pub async fn pause_thread_goal(
         &self,
         thread_id: SessionId,
-    ) -> Result<Option<ThreadGoal>, String> {
-        self.update_active_thread_goal_status(thread_id, ThreadGoalStatus::Paused)
-            .await
-    }
-
-    /// Marks one active or budget-limited goal as usage-limited.
-    /// 将一个 active 或 budget_limited 目标标记为用量受限。
-    pub async fn usage_limit_active_thread_goal(
-        &self,
-        thread_id: SessionId,
-    ) -> Result<Option<ThreadGoal>, String> {
-        self.update_active_thread_goal_status(thread_id, ThreadGoalStatus::UsageLimited)
-            .await
-    }
-
-    /// Deletes the current goal for one session and returns the removed row.
-    /// 删除单个会话的当前目标并返回被删除的行。
-    pub async fn delete_thread_goal(
-        &self,
-        thread_id: SessionId,
-    ) -> Result<Option<ThreadGoal>, String> {
-        let rows = self
-            .query_goal_rows(
-                r#"
-DELETE FROM thread_goals
-WHERE thread_id = ?1
-RETURNING
-    thread_id,
-    goal_id,
-    objective,
-    status,
-    token_budget,
-    tokens_used,
-    time_used_seconds,
-    created_at_ms,
-    updated_at_ms;
-"#,
-                vec![ControllerSqliteValue::String(thread_id.to_string())],
-            )
-            .await?;
-        rows.into_iter()
-            .next()
-            .map(thread_goal_from_row)
-            .transpose()
-    }
-
-    /// Accounts token and time usage for one goal according to Codex status filters.
-    /// 按 Codex 状态过滤规则为一个目标记账 token 与时间用量。
-    pub async fn account_thread_goal_usage(
-        &self,
-        thread_id: SessionId,
-        tokens_delta: i64,
-        time_delta_seconds: i64,
-        mode: GoalAccountingMode,
-        expected_goal_id: Option<&str>,
-    ) -> Result<GoalAccountingOutcome, String> {
-        let existing = self.get_thread_goal(thread_id).await?;
-        let Some(existing) = existing else {
-            return Ok(GoalAccountingOutcome::Unchanged(None));
-        };
-        if let Some(expected_goal_id) = expected_goal_id
-            && existing.goal_id != expected_goal_id
-        {
-            return Ok(GoalAccountingOutcome::Unchanged(Some(existing)));
-        }
-        if !status_is_accountable(existing.status, mode) {
-            return Ok(GoalAccountingOutcome::Unchanged(Some(existing)));
-        }
-
-        let tokens_used = existing.tokens_used.saturating_add(tokens_delta.max(0));
-        let time_used_seconds = existing
-            .time_used_seconds
-            .saturating_add(time_delta_seconds.max(0));
-        let status = status_after_budget_limit(existing.status, tokens_used, existing.token_budget);
-        let now_ms = current_unix_millis();
-        let rows = self
-            .query_goal_rows(
-                r#"
-UPDATE thread_goals
-SET
-    tokens_used = ?1,
-    time_used_seconds = ?2,
-    status = ?3,
-    updated_at_ms = ?4
-WHERE thread_id = ?5
-  AND (?6 IS NULL OR goal_id = ?6)
-RETURNING
-    thread_id,
-    goal_id,
-    objective,
-    status,
-    token_budget,
-    tokens_used,
-    time_used_seconds,
-    created_at_ms,
-    updated_at_ms;
-"#,
-                vec![
-                    ControllerSqliteValue::Int64(tokens_used),
-                    ControllerSqliteValue::Int64(time_used_seconds),
-                    ControllerSqliteValue::String(status.as_str().to_string()),
-                    ControllerSqliteValue::Int64(now_ms),
-                    ControllerSqliteValue::String(thread_id.to_string()),
-                    expected_goal_id
-                        .map(|value| ControllerSqliteValue::String(value.to_string()))
-                        .unwrap_or(ControllerSqliteValue::Null),
-                ],
-            )
-            .await?;
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(GoalAccountingOutcome::Unchanged(
-                self.get_thread_goal(thread_id).await?,
-            ));
-        };
-        Ok(GoalAccountingOutcome::Updated(thread_goal_from_row(row)?))
-    }
-
-    /// Updates active goal status using Codex terminal-status protection.
-    /// 使用 Codex 终态保护规则更新活动目标状态。
-    async fn update_active_thread_goal_status(
-        &self,
-        thread_id: SessionId,
-        status: ThreadGoalStatus,
+        expected_goal_id: &str,
     ) -> Result<Option<ThreadGoal>, String> {
         let rows = self
             .query_goal_rows(
                 r#"
 UPDATE thread_goals
 SET
-    status = ?1,
-    updated_at_ms = ?2
-WHERE thread_id = ?3
+    status = 'paused',
+    updated_at_ms = ?1
+WHERE thread_id = ?2
+  AND goal_id = ?3
   AND status IN ('active', 'budget_limited')
 RETURNING
     thread_id,
@@ -643,9 +673,9 @@ RETURNING
     updated_at_ms;
 "#,
                 vec![
-                    ControllerSqliteValue::String(status.as_str().to_string()),
                     ControllerSqliteValue::Int64(current_unix_millis()),
                     ControllerSqliteValue::String(thread_id.to_string()),
+                    ControllerSqliteValue::String(expected_goal_id.to_string()),
                 ],
             )
             .await?;
@@ -653,6 +683,143 @@ RETURNING
             .next()
             .map(thread_goal_from_row)
             .transpose()
+    }
+
+    /// Deletes and returns one exact goal captured by its caller.
+    /// 删除并返回由调用方捕获的精确目标。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `thread_id` identifies the session that owns the goal.
+    /// `thread_id` 标识拥有目标的会话。
+    /// `expected_goal_id` prevents a stale request from deleting a replacement goal.
+    /// `expected_goal_id` 防止过期请求删除替换后的目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The deleted goal, or `None` when the captured goal no longer exists.
+    /// 返回已删除目标；捕获的目标已不存在时返回 `None`。
+    pub async fn delete_thread_goal(
+        &self,
+        thread_id: SessionId,
+        expected_goal_id: &str,
+    ) -> Result<Option<ThreadGoal>, String> {
+        let rows = self
+            .query_goal_rows(
+                r#"
+DELETE FROM thread_goals
+WHERE thread_id = ?1
+  AND goal_id = ?2
+RETURNING
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms;
+"#,
+                vec![
+                    ControllerSqliteValue::String(thread_id.to_string()),
+                    ControllerSqliteValue::String(expected_goal_id.to_string()),
+                ],
+            )
+            .await?;
+        rows.into_iter()
+            .next()
+            .map(thread_goal_from_row)
+            .transpose()
+    }
+
+    /// Accounts token and time usage for one exact budget stage without changing stopped states.
+    /// 为一个精确预算阶段记账 Token 与时间用量，同时不改变已停止状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `thread_id` identifies the session that owns the goal.
+    /// `thread_id` 标识拥有目标的会话。
+    /// `tokens_delta` is the non-negative token increment applied with saturation.
+    /// `tokens_delta` 是以饱和方式应用的非负 Token 增量。
+    /// `time_delta_seconds` is the non-negative elapsed-time increment applied with saturation.
+    /// `time_delta_seconds` 是以饱和方式应用的非负耗时增量。
+    /// `expected_goal_id` binds accounting to the goal captured when execution started.
+    /// `expected_goal_id` 将记账绑定到执行开始时捕获的目标。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The atomically updated goal, or the latest unchanged goal when the binding no longer matches.
+    /// 返回原子更新后的目标；绑定不再匹配时返回最新的未变更目标。
+    pub async fn account_thread_goal_usage(
+        &self,
+        thread_id: SessionId,
+        tokens_delta: i64,
+        time_delta_seconds: i64,
+        expected_goal_id: &str,
+    ) -> Result<GoalAccountingOutcome, String> {
+        let tokens_delta = tokens_delta.max(0);
+        let time_delta_seconds = time_delta_seconds.max(0);
+        let now_ms = current_unix_millis();
+        // SQLite evaluates every right-hand expression against the pre-update row. Keeping the
+        // SQLite 会针对更新前的行计算所有右值表达式。将增量、预算判定与状态保留放进
+        // complete mutation in one statement prevents stale reports from changing stopped states,
+        // 同一条语句，可防止过期报告改变已停止状态，
+        // charging replacement stages, losing concurrent increments, or using an obsolete budget.
+        // 误记替换后的阶段、丢失并发增量或使用过期预算。
+        let rows = self
+            .query_goal_rows(
+                r#"
+    UPDATE thread_goals
+    SET
+        tokens_used = CASE
+            WHEN tokens_used > 9223372036854775807 - ?1 THEN 9223372036854775807
+            ELSE tokens_used + ?1
+        END,
+        time_used_seconds = CASE
+            WHEN time_used_seconds > 9223372036854775807 - ?2 THEN 9223372036854775807
+            ELSE time_used_seconds + ?2
+        END,
+        status = CASE
+            WHEN status = 'active'
+             AND token_budget IS NOT NULL
+             AND CASE
+                    WHEN tokens_used > 9223372036854775807 - ?1
+                        THEN 9223372036854775807
+                    ELSE tokens_used + ?1
+                 END >= token_budget
+                THEN 'budget_limited'
+            ELSE status
+        END,
+        updated_at_ms = ?3
+WHERE thread_id = ?4
+  AND goal_id = ?5
+RETURNING
+        thread_id,
+        goal_id,
+        objective,
+        status,
+        token_budget,
+        tokens_used,
+        time_used_seconds,
+        created_at_ms,
+        updated_at_ms;
+    "#,
+                vec![
+                    ControllerSqliteValue::Int64(tokens_delta),
+                    ControllerSqliteValue::Int64(time_delta_seconds),
+                    ControllerSqliteValue::Int64(now_ms),
+                    ControllerSqliteValue::String(thread_id.to_string()),
+                    ControllerSqliteValue::String(expected_goal_id.to_string()),
+                ],
+            )
+            .await?;
+        let Some(row) = rows.into_iter().next() else {
+            return Ok(GoalAccountingOutcome::Unchanged(
+                self.get_thread_goal(thread_id).await?,
+            ));
+        };
+        Ok(GoalAccountingOutcome::Updated(thread_goal_from_row(row)?))
     }
 
     /// Executes one SQLite statement that returns thread goal rows.
@@ -719,6 +886,14 @@ fn optional_string(value: Option<String>) -> ControllerSqliteValue {
         .unwrap_or(ControllerSqliteValue::Null)
 }
 
+/// Converts an optional goal status into a controller SQLite value.
+/// 将可选目标状态转换为控制器 SQLite 值。
+fn optional_thread_goal_status(value: Option<ThreadGoalStatus>) -> ControllerSqliteValue {
+    value
+        .map(|status| ControllerSqliteValue::String(status.as_str().to_string()))
+        .unwrap_or(ControllerSqliteValue::Null)
+}
+
 /// Applies Codex immediate budget limiting to the requested status.
 /// 将 Codex 即时预算限制规则应用到请求状态。
 fn status_after_budget_limit(
@@ -737,31 +912,47 @@ fn status_after_budget_limit(
 
 /// Returns whether one status can be accounted for the requested mode.
 /// 返回某个状态是否可按请求模式进行记账。
-fn status_is_accountable(status: ThreadGoalStatus, mode: GoalAccountingMode) -> bool {
-    match mode {
-        GoalAccountingMode::ActiveStatusOnly | GoalAccountingMode::ActiveOnly => {
-            status == ThreadGoalStatus::Active
-        }
-        GoalAccountingMode::ActiveOrComplete => {
-            matches!(
-                status,
-                ThreadGoalStatus::Active | ThreadGoalStatus::Complete
-            )
-        }
-        GoalAccountingMode::ActiveOrStopped => matches!(
-            status,
-            ThreadGoalStatus::Active
-                | ThreadGoalStatus::Paused
-                | ThreadGoalStatus::Blocked
-                | ThreadGoalStatus::UsageLimited
-                | ThreadGoalStatus::BudgetLimited
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the shared objective contract trims valid text and rejects empty or oversized input.
+    /// 验证共享目标文本契约会裁剪有效文本并拒绝空文本或超长输入。
+    #[test]
+    fn thread_goal_objective_contract_normalizes_and_validates() {
+        assert_eq!(
+            normalize_thread_goal_objective("  pursue the goal  "),
+            Ok("pursue the goal")
+        );
+        assert_eq!(
+            normalize_thread_goal_objective("  "),
+            Err(ThreadGoalObjectiveError::EmptyObjective)
+        );
+        assert_eq!(
+            normalize_thread_goal_objective(
+                "x".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS + 1).as_str()
+            ),
+            Err(ThreadGoalObjectiveError::ObjectiveTooLong {
+                max_chars: MAX_THREAD_GOAL_OBJECTIVE_CHARS,
+            })
+        );
+    }
+
+    /// Verifies the shared budget contract accepts absent or positive values and rejects non-positive input.
+    /// 验证共享预算契约接受缺失或正数预算，并拒绝非正输入。
+    #[test]
+    fn thread_goal_budget_contract_rejects_non_positive_values() {
+        assert_eq!(validate_thread_goal_token_budget(None), Ok(()));
+        assert_eq!(validate_thread_goal_token_budget(Some(1)), Ok(()));
+        assert_eq!(
+            validate_thread_goal_token_budget(Some(0)),
+            Err(ThreadGoalTokenBudgetError)
+        );
+        assert_eq!(
+            validate_thread_goal_token_budget(Some(-1)),
+            Err(ThreadGoalTokenBudgetError)
+        );
+    }
 
     /// Verifies active goals are immediately budget-limited when already over budget.
     /// 验证 active 目标在已经超出预算时会立即转为 budget_limited。
@@ -779,27 +970,5 @@ mod tests {
             status_after_budget_limit(ThreadGoalStatus::Paused, 10, Some(10)),
             ThreadGoalStatus::Paused
         );
-    }
-
-    /// Verifies accounting modes preserve Codex status filters.
-    /// 验证记账模式保留 Codex 的状态过滤规则。
-    #[test]
-    fn accounting_mode_filters_statuses() {
-        assert!(status_is_accountable(
-            ThreadGoalStatus::Active,
-            GoalAccountingMode::ActiveOnly
-        ));
-        assert!(!status_is_accountable(
-            ThreadGoalStatus::Paused,
-            GoalAccountingMode::ActiveOnly
-        ));
-        assert!(status_is_accountable(
-            ThreadGoalStatus::Paused,
-            GoalAccountingMode::ActiveOrStopped
-        ));
-        assert!(status_is_accountable(
-            ThreadGoalStatus::Complete,
-            GoalAccountingMode::ActiveOrComplete
-        ));
     }
 }

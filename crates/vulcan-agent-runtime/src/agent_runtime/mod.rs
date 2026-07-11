@@ -106,11 +106,11 @@ pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::ExecutionStreamEvent;
 pub use execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
-    ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
+    ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionSessionGoalContext,
 };
 pub use runtime::RuntimeFoundation;
 pub use runtime_stream::{stream_runtime_run, stream_runtime_run_with_intervention};
-pub use runtime_stream_intervention::RuntimePromptIntervention;
+pub use runtime_stream_intervention::{RuntimePromptIntervention, RuntimePromptInterventionError};
 
 #[cfg(test)]
 mod runtime_boundary_guard;

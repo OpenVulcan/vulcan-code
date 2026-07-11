@@ -1,4 +1,7 @@
 use super::*;
+#[cfg(unix)]
+use crate::atomic_file::synchronize_parent_directory;
+use crate::atomic_file::write_file_atomically;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,10 +11,6 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 /// 为 JSON 读改写事务保留按文档划分的弱引用锁。
 static JSON_FILE_TRANSACTION_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Allocates process-local file staging suffixes while create_new enforces cross-process uniqueness.
-/// 分配进程内文件暂存后缀，同时由 create_new 强制跨进程唯一性。
-static FILE_STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Allocates process-local suffixes for complete task-directory staging layouts.
 /// 为完整子任务目录暂存布局分配进程内后缀。
@@ -194,6 +193,52 @@ pub(super) fn create_dir_all(path: &Path) -> Result<(), SessionStoreError> {
     fs::create_dir_all(path).map_err(to_store_error)
 }
 
+/// Opens one optional file without a separate existence preflight.
+/// 在不执行独立存在性预检的情况下打开一个可选文件。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact file path whose open result is authoritative.
+/// `path` 是以打开结果为权威事实的精确文件路径。
+///
+/// # Returns
+/// 返回值
+/// The opened file, `None` only for `NotFound`, or a path-aware open failure.
+/// 返回已打开文件；仅在 `NotFound` 时返回 `None`，否则返回包含路径的打开错误。
+fn open_optional_file(path: &Path) -> Result<Option<File>, SessionStoreError> {
+    match File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(SessionStoreError::new(format!(
+            "Failed to open optional file `{}`: {error}",
+            path.display()
+        ))),
+    }
+}
+
+/// Removes one optional file without a separate existence preflight.
+/// 在不执行独立存在性预检的情况下删除一个可选文件。
+///
+/// # Parameters
+/// 参数
+/// `path` is the exact file path whose removal result is authoritative.
+/// `path` 是以删除结果为权威事实的精确文件路径。
+///
+/// # Returns
+/// 返回值
+/// `true` when a file was removed, `false` only for `NotFound`, or a path-aware removal failure.
+/// 删除文件时返回 `true`；仅在 `NotFound` 时返回 `false`，否则返回包含路径的删除错误。
+fn remove_optional_file(path: &Path) -> Result<bool, SessionStoreError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(SessionStoreError::new(format!(
+            "Failed to remove optional file `{}`: {error}",
+            path.display()
+        ))),
+    }
+}
+
 /// Appends one JSON object as a JSONL line and returns the bytes written.
 /// 将一个 JSON 对象作为 JSONL 行追加并返回写入字节数。
 pub(super) fn append_json_line<T: Serialize>(
@@ -276,10 +321,11 @@ fn ensure_jsonl_append_boundary(file: &mut File) -> Result<u64, SessionStoreErro
 pub(super) fn read_json_file<T: for<'de> Deserialize<'de>>(
     path: &Path,
 ) -> Result<Option<T>, SessionStoreError> {
-    if !path.exists() {
+    // file comes from the authoritative open result so inspection failures cannot look absent.
+    // file 来自权威打开结果，因此检查失败不会伪装成缺失。
+    let Some(file) = open_optional_file(path)? else {
         return Ok(None);
-    }
-    let file = File::open(path).map_err(to_store_error)?;
+    };
     let reader = BufReader::new(file);
     serde_json::from_reader(reader)
         .map(Some)
@@ -308,154 +354,7 @@ pub(super) fn write_json_file<T: Serialize>(
     // encoded is complete before any filesystem path is created or replaced.
     // encoded 在创建或替换任何文件系统路径前已经完整生成。
     let encoded = serde_json::to_vec_pretty(value).map_err(to_store_error)?;
-    write_file_bytes_atomic(path, &encoded, "JSON document")
-}
-
-/// Publishes complete bytes through one synchronized unique sibling staging file.
-/// 通过同步且唯一的同级暂存文件发布完整字节。
-///
-/// # Parameters
-/// 参数
-/// `path` is the final file path replaced by the complete staged bytes.
-/// `path` 是由完整暂存字节替换的最终文件路径。
-/// `encoded` is the fully materialized file content.
-/// `encoded` 是已经完整生成的文件内容。
-/// `artifact_kind` is the stable English artifact label used in diagnostics.
-/// `artifact_kind` 是诊断信息使用的稳定英文产物标签。
-///
-/// # Returns
-/// 返回值
-/// Returns success after file bytes and the renamed directory entry are synchronized where supported.
-/// 文件字节以及受支持平台上的重命名目录项完成同步后返回成功。
-fn write_file_bytes_atomic(
-    path: &Path,
-    encoded: &[u8],
-    artifact_kind: &str,
-) -> Result<(), SessionStoreError> {
-    if let Some(parent) = path.parent() {
-        create_dir_all(parent)?;
-    }
-    // existing_permissions preserves the current file access policy across replacement.
-    // existing_permissions 在替换期间保留当前文件访问策略。
-    let existing_permissions = match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(SessionStoreError::new(format!(
-                "Refusing to replace symbolic-link {artifact_kind}: {}",
-                path.display()
-            )));
-        }
-        Ok(metadata) => Some(metadata.permissions()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(to_store_error(error)),
-    };
-    // staged_path and staged_file are exclusively owned by this save attempt.
-    // staged_path 与 staged_file 由当前保存尝试独占。
-    let (staged_path, mut staged_file) = create_unique_staging_file(path)?;
-    // staging_result makes complete bytes and inherited permissions durable before publication.
-    // staging_result 在发布前使完整字节与继承权限持久化。
-    let staging_result = (|| -> std::io::Result<()> {
-        staged_file.write_all(encoded)?;
-        if let Some(permissions) = existing_permissions {
-            staged_file.set_permissions(permissions)?;
-        }
-        staged_file.sync_all()
-    })();
-    if let Err(error) = staging_result {
-        drop(staged_file);
-        remove_staging_file(&staged_path);
-        return Err(SessionStoreError::new(format!(
-            "Failed to stage {artifact_kind} `{}` for `{}`: {error}",
-            staged_path.display(),
-            path.display()
-        )));
-    }
-    drop(staged_file);
-
-    if let Err(error) = fs::rename(&staged_path, path) {
-        remove_staging_file(&staged_path);
-        return Err(SessionStoreError::new(format!(
-            "Failed to replace {artifact_kind} `{}` from `{}`: {error}",
-            path.display(),
-            staged_path.display()
-        )));
-    }
-
-    // POSIX durability requires synchronizing the parent directory entry after rename.
-    // POSIX 持久性要求在重命名后同步父目录项。
-    #[cfg(unix)]
-    synchronize_parent_directory(path)?;
-
-    Ok(())
-}
-
-/// Creates one unique sibling staging file for an atomic file publication.
-/// 为一次原子文件发布创建一个唯一的同级暂存文件。
-///
-/// # Parameters
-/// 参数
-/// `path` is the final file path.
-/// `path` 是最终文件路径。
-///
-/// # Returns
-/// 返回值
-/// The unique staged path and its exclusively created writable handle.
-/// 返回唯一暂存路径及其独占创建的可写句柄。
-fn create_unique_staging_file(path: &Path) -> Result<(PathBuf, File), SessionStoreError> {
-    // parent remains shared with the target so rename cannot cross filesystems.
-    // parent 与目标共享，使重命名不会跨越文件系统。
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    // file_name preserves non-Unicode identity while building diagnostic staging names.
-    // file_name 在构建可诊断暂存名称时保留非 Unicode 身份。
-    let file_name = path.file_name().ok_or_else(|| {
-        SessionStoreError::new(format!(
-            "Atomic file path has no file name: {}",
-            path.display()
-        ))
-    })?;
-
-    // create_new is the authoritative collision check across threads and processes.
-    // create_new 是跨线程与进程的权威碰撞检查。
-    loop {
-        // sequence distinguishes process-local attempts without introducing another dependency.
-        // sequence 无需引入另一依赖即可区分进程内尝试。
-        let sequence = FILE_STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        // staged_name combines the exact target name, process id, and monotonic sequence.
-        // staged_name 组合精确目标名称、进程标识与单调序号。
-        let mut staged_name = OsString::from(".");
-        staged_name.push(file_name);
-        staged_name.push(format!(".vulcan-stage-{}-{sequence}", std::process::id()));
-        // staged_path is always a sibling of the final file.
-        // staged_path 始终是最终文件的同级文件。
-        let staged_path = parent.join(staged_name);
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staged_path)
-        {
-            Ok(file) => return Ok((staged_path, file)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(to_store_error(error)),
-        }
-    }
-}
-
-/// Removes one exclusively owned staging file after a failed publication.
-/// 在发布失败后删除一个独占暂存文件。
-///
-/// # Parameters
-/// 参数
-/// `staged_path` is the staging file owned by the failed attempt.
-/// `staged_path` 是失败尝试独占的暂存文件。
-///
-/// # Returns
-/// 返回值
-/// Best-effort cleanup intentionally has no return value because the primary publication error is authoritative.
-/// 尽力清理刻意不返回值，因为首要发布错误保持权威性。
-fn remove_staging_file(staged_path: &Path) {
-    let _ = fs::remove_file(staged_path);
+    write_file_atomically(path, &encoded, "JSON document").map_err(SessionStoreError::new)
 }
 
 /// Creates one unique sibling staging directory for a complete task layout.
@@ -539,7 +438,7 @@ pub(super) fn publish_task_directory(
     // POSIX durability requires synchronizing the parent directory entry after rename.
     // POSIX 持久性要求在重命名后同步父目录项。
     #[cfg(unix)]
-    synchronize_parent_directory(final_task_dir)?;
+    synchronize_parent_directory(final_task_dir).map_err(SessionStoreError::new)?;
     Ok(())
 }
 
@@ -559,42 +458,17 @@ pub(super) fn remove_task_directory_staging(staged_task_dir: &Path) {
     let _ = fs::remove_dir_all(staged_task_dir);
 }
 
-/// Synchronizes the parent directory containing a newly renamed entry on POSIX.
-/// 在 POSIX 上同步包含新重命名目录项的父目录。
-///
-/// # Parameters
-/// 参数
-/// `path` is the final file or directory whose parent entry was replaced.
-/// `path` 是父目录项已被替换的最终文件或目录。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` after the parent directory metadata reaches durable storage.
-/// 父目录元数据到达持久存储后返回 `Ok(())`。
-#[cfg(unix)]
-fn synchronize_parent_directory(path: &Path) -> Result<(), SessionStoreError> {
-    // parent resolves to the directory containing the newly published entry.
-    // parent 解析为包含新发布目录项的目录。
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    // directory remains open only for the post-rename sync operation.
-    // directory 仅在重命名后的同步操作期间保持打开。
-    let directory = File::open(parent).map_err(to_store_error)?;
-    directory.sync_all().map_err(to_store_error)
-}
-
 /// Reads JSONL records from one path.
 /// 从指定路径读取 JSONL 记录。
 #[cfg(test)]
 pub(super) fn read_json_lines<T: for<'de> Deserialize<'de>>(
     path: &Path,
 ) -> Result<Vec<T>, SessionStoreError> {
-    if !path.exists() {
+    // file distinguishes a genuinely absent fixture from every other open failure.
+    // file 区分真正缺失的测试文件与其他所有打开失败。
+    let Some(file) = open_optional_file(path)? else {
         return Ok(Vec::new());
-    }
-    let file = File::open(path).map_err(to_store_error)?;
+    };
     let reader = BufReader::new(file);
     let mut values = Vec::new();
     for line in reader.lines() {
@@ -633,8 +507,7 @@ pub(super) fn repair_task_segment_jsonl_files_if_needed_locked(
     for segment in &original_segments {
         let segment_path = dir.join(&segment.file);
         if discard_remaining_segments {
-            if segment_path.exists() {
-                fs::remove_file(&segment_path).map_err(to_store_error)?;
+            if remove_optional_file(&segment_path)? {
                 changed = true;
             }
             continue;
@@ -646,8 +519,7 @@ pub(super) fn repair_task_segment_jsonl_files_if_needed_locked(
             discard_remaining_segments = true;
         }
         if repair_read.lines.is_empty() {
-            if segment_path.exists() {
-                fs::remove_file(&segment_path).map_err(to_store_error)?;
+            if remove_optional_file(&segment_path)? {
                 changed = true;
             }
             continue;
@@ -723,7 +595,7 @@ pub(super) fn read_segment_lines_repairing_locked(
     for segment in segments {
         let segment_path = dir.join(&segment.file);
         let repair_read = read_segment_event_lines_for_repair(&segment_path)?;
-        if repair_read.changed && segment_path.exists() {
+        if repair_read.changed && repair_read.source_file_was_opened {
             write_json_lines_file_atomic(&segment_path, &repair_read.lines)?;
         }
         lines.extend(repair_read.lines);
@@ -747,6 +619,9 @@ struct TaskSegmentJsonlRepairRead {
     /// Whether a malformed line forced truncating this segment suffix.
     /// 是否存在格式错误行导致当前分段后缀被截断。
     truncated_at_corrupt_line: bool,
+    /// Whether the authoritative read opened a physical source file at its observation point.
+    /// 权威读取是否在观察时点打开了物理源文件。
+    source_file_was_opened: bool,
 }
 
 /// Reads one TaskSession segment file and marks the first malformed line as the cutoff.
@@ -764,14 +639,16 @@ struct TaskSegmentJsonlRepairRead {
 fn read_segment_event_lines_for_repair(
     segment_path: &Path,
 ) -> Result<TaskSegmentJsonlRepairRead, SessionStoreError> {
-    if !segment_path.exists() {
+    // file makes the open operation the only source of physical segment existence.
+    // file 让打开操作成为物理分段存在性的唯一事实来源。
+    let Some(file) = open_optional_file(segment_path)? else {
         return Ok(TaskSegmentJsonlRepairRead {
             lines: Vec::new(),
             changed: true,
             truncated_at_corrupt_line: true,
+            source_file_was_opened: false,
         });
-    }
-    let file = File::open(segment_path).map_err(to_store_error)?;
+    };
     let reader = BufReader::new(file);
     let mut lines = Vec::new();
     let mut changed = false;
@@ -795,6 +672,7 @@ fn read_segment_event_lines_for_repair(
         lines,
         changed,
         truncated_at_corrupt_line,
+        source_file_was_opened: true,
     })
 }
 
@@ -906,7 +784,7 @@ pub(super) fn write_json_lines_file_atomic<T: Serialize>(
         serde_json::to_writer(&mut encoded, value).map_err(to_store_error)?;
         encoded.write_all(b"\n").map_err(to_store_error)?;
     }
-    write_file_bytes_atomic(path, &encoded, "JSONL segment")
+    write_file_atomically(path, &encoded, "JSONL segment").map_err(SessionStoreError::new)
 }
 
 /// Converts any displayable error into a session store error.

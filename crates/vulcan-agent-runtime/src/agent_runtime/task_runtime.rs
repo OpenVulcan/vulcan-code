@@ -44,7 +44,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::{
@@ -282,6 +282,30 @@ struct TaskSessionRecord {
     /// Last observed execution status for the task.
     /// 任务最近一次观测到的执行状态。
     last_status: String,
+    /// Concrete execution that currently owns mutable state for this stable task record.
+    /// 当前拥有该稳定任务记录可变状态的具体执行。
+    execution_id: Option<String>,
+    /// Reason attached to the latest explicit stopped or archived lifecycle state.
+    /// 最近一次显式停止或归档生命周期状态对应的原因。
+    stop_reason: Option<String>,
+}
+
+/// Fully materialized persisted subagent restore projection with no remaining fallible reads.
+/// 已完整物化且不再包含可失败读取的持久化子代理恢复投影。
+#[derive(Debug, Clone)]
+struct PreparedPersistedSubagentRestore {
+    /// Enriched registry projection derived from one normalized persisted lifecycle state.
+    /// 从单个规范化持久化生命周期状态派生的增强注册表投影。
+    entry: SubagentRegistryEntry,
+    /// In-memory task-session record derived from the same normalized metadata and context.
+    /// 从同一规范化元数据与上下文派生的内存任务会话记录。
+    record: TaskSessionRecord,
+    /// Original metadata snapshot used for exact persistence rollback.
+    /// 用于精确持久化回滚的原始元数据快照。
+    original_metadata: TaskSessionMetadata,
+    /// Runtime-lost stopped metadata persisted only when no live registry owner already exists.
+    /// 仅在不存在实时注册表所有者时持久化的 runtime-lost stopped 元数据。
+    normalized_active_metadata: Option<TaskSessionMetadata>,
 }
 
 /// Task execution request handed to the backend runner for one concrete task session.
@@ -447,8 +471,31 @@ impl TaskExecutionStatus {
     }
 }
 
-/// Buffered detached task-event stream state kept per child task so late subscribers can still replay early background output safely.
-/// 按子任务维度保留的分离事件流状态，用于让稍后接入的订阅者也能安全回放早期后台输出。
+/// Exact identity of one detached execution stream under a stable reusable task.
+/// 稳定可复用任务下单次分离执行流的精确身份。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DetachedTaskExecutionKey {
+    /// Stable child task session reused by resumed executions.
+    /// 被续跑执行复用的稳定子任务会话。
+    task_id: SessionId,
+    /// Unique concrete execution attempt.
+    /// 唯一具体执行尝试。
+    execution_id: String,
+}
+
+impl DetachedTaskExecutionKey {
+    /// Builds one owned execution key from the stable task and concrete execution identities.
+    /// 从稳定任务与具体执行身份构建一个有所有权的执行键。
+    fn new(task_id: SessionId, execution_id: &str) -> Self {
+        Self {
+            task_id,
+            execution_id: execution_id.to_string(),
+        }
+    }
+}
+
+/// Buffered detached event state kept per execution so resumed runs never share output or subscribers.
+/// 按执行维度保留的分离事件状态，确保续跑不会共享输出或订阅者。
 #[derive(Default)]
 struct DetachedTaskEventStreamState {
     /// Buffered detached events accumulated before any subscriber has attached successfully.
@@ -469,9 +516,15 @@ struct ActiveTaskRunEntry {
     /// Unique generation for one concrete provider run.
     /// 单次具体 Provider 运行的唯一世代标识。
     run_id: Uuid,
-    /// Abort handle owned by this concrete provider run.
-    /// 该次具体 Provider 运行持有的中止句柄。
-    abort_handle: AbortHandle,
+    /// Protocol execution identity shared with runtime events and detached streams.
+    /// 与运行时事件及分离流共享的协议执行身份。
+    execution_id: String,
+    /// Abort handle attached after the child provider future is created.
+    /// 创建子 Provider future 后附加的中止句柄。
+    abort_handle: Option<AbortHandle>,
+    /// Stop request retained while the run is still inside prestart preparation.
+    /// 运行仍处于启动前准备阶段时保留的停止请求。
+    stop_requested: bool,
 }
 
 /// One queued inter-agent message waiting for a child-agent safe boundary.
@@ -537,6 +590,25 @@ impl Drop for ActiveTaskRunGuard {
     fn drop(&mut self) {
         self.runtime
             .remove_active_task_run(self.task_id, self.run_id);
+    }
+}
+
+impl ActiveTaskRunGuard {
+    /// Attaches the provider abort handle to this exact reserved run.
+    /// 将 Provider 中止句柄附加到本守卫对应的精确预留运行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `handle` is the abort handle created with the child provider future.
+    /// `handle` 是随子 Provider future 创建的中止句柄。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when this guard still owns the active reservation, or an identity/lock error.
+    /// 当本守卫仍持有活动预留时返回成功，否则返回身份或锁错误。
+    pub(crate) fn attach_abort_handle(&self, handle: AbortHandle) -> Result<(), String> {
+        self.runtime
+            .attach_active_task_run_abort_handle(self.task_id, self.run_id, handle)
     }
 }
 
@@ -669,6 +741,222 @@ impl Drop for AbortChildRunOnDrop {
     }
 }
 
+/// Stable failing stage for one close-agent archive transaction.
+/// 单次 close-agent 归档事务的稳定失败阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseAgentArchiveFailurePhase {
+    /// Persisting archive metadata failed.
+    /// 持久化归档元数据失败。
+    PersistArchive,
+    /// Committing archive state to runtime projections failed.
+    /// 向运行时投影提交归档状态失败。
+    CommitRuntimeArchive,
+}
+
+impl CloseAgentArchiveFailurePhase {
+    /// Returns the stable protocol value for this failure stage.
+    /// 返回本失败阶段的稳定协议值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Stable snake-case phase value.
+    /// 稳定的蛇形命名阶段值。
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PersistArchive => "persist_archive",
+            Self::CommitRuntimeArchive => "commit_runtime_archive",
+        }
+    }
+}
+
+/// Proven rollback outcome for the persisted half of one close-agent archive transaction.
+/// 单次 close-agent 归档事务持久化半段的已证实回滚结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CloseAgentArchiveRollbackOutcome {
+    /// No archive metadata write completed before the failure.
+    /// 失败前没有完成任何归档元数据写入。
+    NotRequired,
+    /// Every touched metadata snapshot was restored.
+    /// 全部已触碰元数据快照均已恢复。
+    Completed,
+    /// At least one touched metadata snapshot could not be restored.
+    /// 至少一个已触碰元数据快照无法恢复。
+    Incomplete {
+        /// Aggregated errors from every metadata snapshot that could not be restored.
+        /// 无法恢复的每个元数据快照产生的聚合错误。
+        error: String,
+    },
+}
+
+impl CloseAgentArchiveRollbackOutcome {
+    /// Returns the stable protocol value exposed in close-agent failure metadata.
+    /// 返回 close-agent 失败元数据中暴露的稳定协议值。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Stable snake-case rollback status.
+    /// 稳定的蛇形命名回滚状态。
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotRequired => "not_required",
+            Self::Completed => "completed",
+            Self::Incomplete { .. } => "incomplete",
+        }
+    }
+
+    /// Returns the aggregated rollback error only for an incomplete outcome.
+    /// 仅在回滚不完整结果下返回聚合回滚错误。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Aggregated rollback error when incomplete, otherwise none.
+    /// 回滚不完整时返回聚合错误，否则返回空。
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::Incomplete { error } => Some(error.as_str()),
+            Self::NotRequired | Self::Completed => None,
+        }
+    }
+}
+
+/// Unified typed failure for every post-stop stage of close_agent archive processing.
+/// close_agent 停止后全部归档处理阶段的统一类型化失败。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CloseAgentArchiveFailure {
+    /// Exact post-stop archive phase that failed.
+    /// 发生失败的精确停止后归档阶段。
+    phase: CloseAgentArchiveFailurePhase,
+    /// Primary phase failure retained separately from rollback errors.
+    /// 与回滚错误分开保留的阶段主错误。
+    error: String,
+    /// Proven persistence rollback outcome for this failure.
+    /// 本次失败已证实的持久化回滚结果。
+    rollback: CloseAgentArchiveRollbackOutcome,
+}
+
+/// Stable archive scope and lifecycle projections prepared for one close-agent transaction.
+/// 为一次 close-agent 事务准备的稳定归档范围与生命周期投影。
+#[derive(Debug)]
+struct PreparedCloseAgentArchive {
+    /// Authoritative archived registry projections committed by persistence and runtime stages.
+    /// 由持久化与运行时阶段提交的权威归档注册表投影。
+    entries: Vec<SubagentRegistryEntry>,
+    /// Stable task ids derived exactly once from the prepared registry projections.
+    /// 从已准备注册表投影中仅派生一次的稳定任务标识。
+    task_ids: Vec<SessionId>,
+}
+
+impl PreparedCloseAgentArchive {
+    /// Builds one prepared archive and derives its task-id projection from the same entries.
+    /// 构建一份已准备归档，并从同一批条目派生任务标识投影。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `entries`: Archived registry projections selected by cascade semantics.
+    /// - `entries`：按级联语义选中的归档注册表投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Prepared archive whose entries and task ids cannot drift independently.
+    /// 条目与任务标识无法独立漂移的已准备归档。
+    fn new(entries: Vec<SubagentRegistryEntry>) -> Self {
+        let task_ids = entries
+            .iter()
+            .map(|entry| SessionId::from(entry.session_id))
+            .collect();
+        Self { entries, task_ids }
+    }
+
+    /// Moves the archive transition timestamp after task-stop side effects without changing scope.
+    /// 将归档转换时间戳移动到任务停止副作用之后，同时保持事务范围不变。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `archived_at_ms`: Timestamp captured after every selected active run was marked stopped.
+    /// - `archived_at_ms`：全部选中活动运行被标记停止后采集的时间戳。
+    fn restamp_after_task_stop(&mut self, archived_at_ms: u64) {
+        for entry in &mut self.entries {
+            entry.set_status(SubagentStatus::Archived, archived_at_ms);
+            entry.stop_reason = Some(String::from("close_agent"));
+        }
+    }
+}
+
+/// Runtime archive commit derived from the latest registry state under transaction locks.
+/// 在事务锁内根据最新注册表状态派生的运行时归档提交结果。
+#[derive(Debug)]
+struct CommittedCloseAgentRuntimeArchive {
+    /// Latest registry entries after applying only the prepared archive lifecycle transition.
+    /// 仅应用已准备归档生命周期转换后的最新注册表条目。
+    entries: Vec<SubagentRegistryEntry>,
+    /// Number of queued control messages removed by the commit.
+    /// 本次提交移除的排队控制消息数量。
+    cleared_message_count: usize,
+}
+
+/// Complete prepared close-agent transaction shared by persistence, runtime, and result projections.
+/// 由持久化、运行时与结果投影共享的完整已准备 close-agent 事务。
+#[derive(Debug)]
+struct CloseAgentTransaction {
+    /// Parent session that invoked close_agent.
+    /// 调用 close_agent 的父会话。
+    parent_session_id: SessionId,
+    /// Normalized public id of the selected child agent.
+    /// 选中子代理的规范化公开标识。
+    target: String,
+    /// Registry status observed before the close transaction.
+    /// 关闭事务前观察到的注册表状态。
+    previous_status: SubagentStatus,
+    /// Tasks with active runs actually stopped by this transaction.
+    /// 本事务实际停止活动运行的任务。
+    stopped_task_ids: Vec<SessionId>,
+    /// Stable archive scope selected before task stop and restamped after those side effects.
+    /// 在任务停止前选定、并在停止副作用后更新时间戳的稳定归档范围。
+    prepared_archive: PreparedCloseAgentArchive,
+}
+
+impl CloseAgentArchiveFailure {
+    /// Builds one unified post-stop archive failure.
+    /// 构建一条统一的停止后归档失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// - `phase`: Exact archive stage that failed.
+    /// - `phase`：发生失败的精确归档阶段。
+    /// - `error`: Primary human-readable stage error.
+    /// - `error`：人类可读的阶段主错误。
+    /// - `rollback`: Proven persistence rollback outcome.
+    /// - `rollback`：已证实的持久化回滚结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Unified failure value ready for protocol projection.
+    /// 可供协议投影的统一失败值。
+    fn new(
+        phase: CloseAgentArchiveFailurePhase,
+        error: String,
+        rollback: CloseAgentArchiveRollbackOutcome,
+    ) -> Self {
+        Self {
+            phase,
+            error,
+            rollback,
+        }
+    }
+}
+
+/// Successfully persisted close-agent archive transaction retained for exact runtime-failure rollback.
+/// 为运行时失败精确回滚而保留的已成功持久化 close-agent 归档事务。
+#[derive(Debug)]
+struct CloseAgentArchivePersistenceCommit {
+    /// Exact store instance used by the successful archive persistence transaction.
+    /// 成功归档持久化事务实际使用的精确存储实例。
+    store: Option<SegmentedTaskSessionStore>,
+    /// Original metadata snapshots restored if the runtime archive cannot commit.
+    /// 运行时归档无法提交时恢复的原始元数据快照。
+    rollback_metadata_snapshots: Vec<TaskSessionMetadata>,
+}
+
 /// Host-managed registry for resumable task sessions and per-session task execution backends.
 /// 宿主管理的可恢复任务会话与按会话划分任务执行后端的注册表。
 pub struct TaskRuntime {
@@ -684,9 +972,13 @@ pub struct TaskRuntime {
     /// Active child-task abort handles keyed by stable task identifier.
     /// 按稳定任务标识索引存储的活动子任务中止句柄。
     active_task_runs: RwLock<HashMap<SessionId, ActiveTaskRunEntry>>,
-    /// Detached child-task event streams keyed by stable task identifier for non-blocking WebUI mirroring.
-    /// 为无阻塞WebUI镜像保留的按稳定任务标识索引的分离子任务事件流。
-    detached_task_event_streams: RwLock<HashMap<SessionId, DetachedTaskEventStreamState>>,
+    /// Per-task transaction locks serializing preparation ownership and execution state commits.
+    /// 按任务串行化准备所有权与执行状态提交的事务锁。
+    task_execution_state_locks: Mutex<HashMap<SessionId, Weak<Mutex<()>>>>,
+    /// Detached event streams keyed by stable task plus unique execution identity.
+    /// 按稳定任务与唯一执行身份联合索引的分离事件流。
+    detached_task_event_streams:
+        RwLock<HashMap<DetachedTaskExecutionKey, DetachedTaskEventStreamState>>,
     /// session-boundary mailbox used for child-agent lifecycle association events.
     /// 用于子代理生命周期关联事件的 会话边界 mailbox。
     subagent_mailbox: InMemorySubagentMailbox,
