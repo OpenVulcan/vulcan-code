@@ -8,6 +8,8 @@ import {
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
 import { AgentsArea, type AgentActionProps } from "@/components/features/agents/AgentsArea";
+import { AgentSkillsArea } from "@/components/features/agent-skills/AgentSkillsArea";
+import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import {
   MemoryArea,
   type MemoryActionProps,
@@ -41,7 +43,12 @@ export function FeatureContent(props: {
   editingProvider: ProviderSummary | null;
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
-  skillActions: SkillActionProps;
+  // Independent LuaSkills lifecycle actions.
+  // 独立 LuaSkills 生命周期动作。
+  luaSkillActions: SkillActionProps;
+  // Independent prompt-based Agent Skills actions.
+  // 独立提示词 Agent Skills 动作。
+  agentSkillActions: AgentSkillActionProps;
   // Service-backed independent agent page actions.
   // 服务端支持的独立智能体页面动作。
   agentActions: AgentActionProps;
@@ -79,12 +86,19 @@ export function FeatureContent(props: {
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot;
 }) {
+  if (props.activeArea === "agent-skills") {
+    return (
+      <div className="feature-content">
+      <AgentSkillsArea actions={props.agentSkillActions} workbench={props.workbench} />
+      </div>
+    );
+  }
   if (props.activeArea === "skills") {
     return (
       <div className="feature-content">
         <SkillsArea
           activeTab={props.activeSkillSubArea}
-          skillActions={props.skillActions}
+        skillActions={props.luaSkillActions}
           workbench={props.workbench}
         />
       </div>

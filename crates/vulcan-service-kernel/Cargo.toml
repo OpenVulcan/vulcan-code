@@ -26,6 +26,7 @@ vulcan-agent-runtime.workspace = true
 vulcan-context.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true
+vulcan-file-watcher.workspace = true
 vulcan-core.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-provider-config.workspace = true

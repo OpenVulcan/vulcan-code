@@ -768,6 +768,11 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
         ...workbench,
         conversationHydration: envelope.delta.payload.progress,
       };
+    case "agentSkillsCatalogChanged":
+      return {
+        ...workbench,
+        agentSkills: envelope.delta.payload.agentSkills,
+      };
   }
 }
 

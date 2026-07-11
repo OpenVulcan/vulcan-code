@@ -12,6 +12,11 @@ static SUBAGENT_CATALOG_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::
 static LUASKILLS_MANAGEMENT_MUTATION_LOCK: tokio::sync::Mutex<()> =
     tokio::sync::Mutex::const_new(());
 
+/// Serializes Agent Skills package, catalog, configuration, and projection mutations.
+/// 串行化 Agent Skills 技能包、目录、配置与投影变更。
+static AGENT_SKILLS_CATALOG_MUTATION_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 /// Acquires the process-wide user-agent catalog mutation guard.
 /// 获取进程级用户智能体目录变更守卫。
 ///
@@ -34,6 +39,12 @@ fn lock_subagent_catalog_mutation() -> Result<std::sync::MutexGuard<'static, ()>
 /// 返回一个异步守卫，并保持到运行时变更、目录存储与投影全部结束。
 async fn lock_luaskills_management_mutation() -> tokio::sync::MutexGuard<'static, ()> {
     LUASKILLS_MANAGEMENT_MUTATION_LOCK.lock().await
+}
+
+/// Acquires the complete Agent Skills catalog transaction guard.
+/// 获取完整 Agent Skills 目录事务守卫。
+pub(crate) async fn lock_agent_skills_catalog_mutation() -> tokio::sync::MutexGuard<'static, ()> {
+    AGENT_SKILLS_CATALOG_MUTATION_LOCK.lock().await
 }
 
 pub(crate) async fn run_luaskills_management_blocking<T, F>(
@@ -178,7 +189,383 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
 pub(crate) async fn service_refresh_agent_skills_catalog(
     state: SharedServiceBridgeState,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
     refresh_agent_skills_local_state(&state).await
+}
+
+/// Opens the configured user Agent Skills directory and returns the refreshed catalog.
+/// 打开配置后的用户 Agent Skills 目录并返回刷新后的目录。
+pub(crate) async fn service_open_agent_skills_user_directory(
+    state: SharedServiceBridgeState,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let (user_root, _) = configured_agent_skill_roots(&state)?;
+    std::fs::create_dir_all(&user_root)
+        .map_err(|error| format!("创建 Agent Skills 用户目录失败：{error}"))?;
+    let update = refresh_agent_skills_local_state(&state).await?;
+    shell_host_from_state(&state)?.open_path(&user_root.to_string_lossy())?;
+    Ok(update)
+}
+
+/// Saves one canonical user Agent Skill package and its per-skill state.
+/// 保存一个规范用户 Agent Skill 技能包及其单技能状态。
+pub(crate) async fn service_save_agent_skill(
+    state: SharedServiceBridgeState,
+    request: AgentSkillSaveRequest,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let (user_root, system_root) = configured_agent_skill_roots(&state)?;
+    let name = require_canonical_agent_skill_name(&request.name)?.to_string();
+    let original_name = request
+        .original_name
+        .as_deref()
+        .map(require_canonical_agent_skill_name)
+        .transpose()?
+        .map(str::to_string);
+    let source_skill_key = request.source_skill_key.as_deref();
+    // catalog captures the exact existing source record used to preserve or derive provenance.
+    // catalog 捕获用于保留或推导来源的精确现有来源记录。
+    let catalog =
+        vulcan_prompt_skills::load_prompt_skills_from_roots(system_root.clone(), user_root.clone());
+    // origin is host-assigned and cannot be forged by the WebUI payload.
+    // origin 由宿主分配，WebUI 载荷无法伪造。
+    let origin = managed_agent_skill_origin(&catalog, original_name.as_deref(), &name);
+    // resource_source_dir is resolved from the exact source-aware catalog record selected by the user.
+    // resource_source_dir 从用户选中的精确来源感知目录记录解析。
+    let resource_source_dir = source_skill_key
+        .map(|skill_key| {
+            exact_agent_skill_source_record(&catalog, skill_key).map(|skill| skill.base_dir.clone())
+        })
+        .transpose()?;
+    // enabled is captured before request fields move into the package document.
+    // enabled 在请求字段移入技能包文档前被捕获。
+    let enabled = request.enabled;
+    let input = vulcan_prompt_skills::PromptSkillPackageInput {
+        original_name: original_name.clone(),
+        resource_source_dir,
+        name: name.clone(),
+        description: request.description,
+        license: request.license,
+        compatibility: request.compatibility,
+        metadata: request.metadata,
+        body: request.body,
+        interface: vulcan_prompt_skills::PromptSkillInterfaceMetadata {
+            display_name: request.interface.display_name,
+            short_description: request.interface.short_description,
+            emoji: request.interface.emoji,
+            color: request.interface.color,
+            locales: request
+                .interface
+                .locales
+                .into_iter()
+                .map(|(locale, value)| {
+                    (
+                        locale,
+                        vulcan_prompt_skills::PromptSkillLocaleMetadata {
+                            display_name: value.display_name,
+                            short_description: value.short_description,
+                        },
+                    )
+                })
+                .collect(),
+        },
+        catalog: vulcan_prompt_skills::PromptSkillCatalogMetadata {
+            category_id: request.category_id,
+            tags: request.tags,
+        },
+        origin,
+    };
+    // configuration_before captures exact states required for transactional rollback.
+    // configuration_before 捕获事务回滚所需的精确状态。
+    let configuration_before = provider_configuration_from_state(&state)?;
+    // previous_target_state is the original target-name override.
+    // previous_target_state 是原目标名称覆盖状态。
+    let previous_target_state = configuration_before
+        .prompt_skills
+        .skill_overrides
+        .get(&name)
+        .copied();
+    // previous_original_state is the original renamed-source override.
+    // previous_original_state 是原重命名来源覆盖状态。
+    let previous_original_state = original_name.as_deref().and_then(|value| {
+        configuration_before
+            .prompt_skills
+            .skill_overrides
+            .get(value)
+            .copied()
+    });
+    let state_override = if enabled {
+        PersistedPromptSkillState::Enabled
+    } else {
+        PersistedPromptSkillState::Disabled
+    };
+    let configuration_original_name = original_name.clone();
+    let configuration_target_name = name.clone();
+    mutate_provider_configuration(
+        &state,
+        "保存 Agent Skill 状态失败",
+        move |configuration| {
+            if let Some(original_name) = configuration_original_name
+                .as_deref()
+                .filter(|value| *value != configuration_target_name)
+            {
+                configuration
+                    .prompt_skills
+                    .set_skill_state(original_name, None);
+            }
+            configuration
+                .prompt_skills
+                .set_skill_state(&configuration_target_name, Some(state_override));
+            Ok(())
+        },
+        |_guard, _configuration| (),
+    )
+    .await?;
+    if let Err(file_error) = vulcan_prompt_skills::save_user_prompt_skill_package(&user_root, input)
+    {
+        // rollback_original_name retains the exact source key restored after a file failure.
+        // rollback_original_name 保留文件失败后恢复的精确来源键。
+        let rollback_original_name = original_name.clone();
+        // rollback_target_name retains the exact target key restored after a file failure.
+        // rollback_target_name 保留文件失败后恢复的精确目标键。
+        let rollback_target_name = name.clone();
+        let rollback_result = mutate_provider_configuration(
+            &state,
+            "回滚 Agent Skill 状态失败",
+            move |configuration| {
+                configuration
+                    .prompt_skills
+                    .set_skill_state(&rollback_target_name, previous_target_state);
+                if let Some(original_name) = rollback_original_name
+                    .as_deref()
+                    .filter(|value| *value != rollback_target_name)
+                {
+                    configuration
+                        .prompt_skills
+                        .set_skill_state(original_name, previous_original_state);
+                }
+                Ok(())
+            },
+            |_guard, _configuration| (),
+        )
+        .await;
+        return match rollback_result {
+            Ok(()) => Err(file_error),
+            Err(rollback_error) => Err(format!(
+                "{file_error}; Agent Skill configuration rollback also failed: {rollback_error}"
+            )),
+        };
+    }
+    refresh_agent_skills_local_state(&state).await
+}
+
+/// Deletes one user Agent Skill package and removes its obsolete per-skill state.
+/// 删除一个用户 Agent Skill 技能包并移除其过期单技能状态。
+pub(crate) async fn service_delete_agent_skill(
+    state: SharedServiceBridgeState,
+    name: String,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let name = require_canonical_agent_skill_name(&name)?.to_string();
+    let (user_root, _) = configured_agent_skill_roots(&state)?;
+    // previous_state captures the exact override restored when filesystem deletion fails.
+    // previous_state 捕获文件系统删除失败时恢复的精确覆盖状态。
+    let previous_state = provider_configuration_from_state(&state)?
+        .prompt_skills
+        .skill_overrides
+        .get(&name)
+        .copied();
+    let state_name = name.clone();
+    mutate_provider_configuration(
+        &state,
+        "删除 Agent Skill 状态失败",
+        move |configuration| {
+            configuration
+                .prompt_skills
+                .set_skill_state(&state_name, None);
+            Ok(())
+        },
+        |_guard, _configuration| (),
+    )
+    .await?;
+    if let Err(file_error) =
+        vulcan_prompt_skills::delete_user_prompt_skill_package(&user_root, &name)
+    {
+        let rollback_name = name.clone();
+        let rollback_result = mutate_provider_configuration(
+            &state,
+            "回滚 Agent Skill 删除状态失败",
+            move |configuration| {
+                configuration
+                    .prompt_skills
+                    .set_skill_state(&rollback_name, previous_state);
+                Ok(())
+            },
+            |_guard, _configuration| (),
+        )
+        .await;
+        return match rollback_result {
+            Ok(()) => Err(file_error),
+            Err(rollback_error) => Err(format!(
+                "{file_error}; Agent Skill deletion rollback also failed: {rollback_error}"
+            )),
+        };
+    }
+    refresh_agent_skills_local_state(&state).await
+}
+
+/// Restores a system Agent Skill by deleting its exact user override package.
+/// 通过删除精确用户覆盖技能包恢复系统 Agent Skill。
+pub(crate) async fn service_restore_agent_skill_default(
+    state: SharedServiceBridgeState,
+    name: String,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let name = require_canonical_agent_skill_name(&name)?.to_string();
+    let (user_root, system_root) = configured_agent_skill_roots(&state)?;
+    if !system_root
+        .join(&name)
+        .join(vulcan_prompt_skills::SKILL_FILE_NAME)
+        .is_file()
+    {
+        return Err(format!("Agent Skill `{name}` 没有可恢复的系统版本。"));
+    }
+    vulcan_prompt_skills::delete_user_prompt_skill_package(&user_root, &name)?;
+    refresh_agent_skills_local_state(&state).await
+}
+
+/// Saves one user-defined logical Agent Skills category.
+/// 保存一个用户定义逻辑 Agent Skills 分类。
+pub(crate) async fn service_save_agent_skill_category(
+    state: SharedServiceBridgeState,
+    request: AgentSkillCategorySaveRequest,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let (user_root, _) = configured_agent_skill_roots(&state)?;
+    vulcan_prompt_skills::save_user_prompt_skill_category(
+        &user_root,
+        vulcan_prompt_skills::PromptSkillCategory {
+            category_id: request.category_id,
+            name: request.name,
+            description: request.description,
+            emoji: request.emoji,
+            color: request.color,
+            order: request.order,
+            builtin: false,
+            locales: request
+                .locales
+                .into_iter()
+                .map(|(locale, value)| {
+                    (
+                        locale,
+                        vulcan_prompt_skills::PromptSkillCategoryLocale {
+                            name: value.name,
+                            description: value.description,
+                        },
+                    )
+                })
+                .collect(),
+        },
+    )?;
+    refresh_agent_skills_local_state(&state).await
+}
+
+/// Deletes one user-defined Agent Skills category and unassigns its skills.
+/// 删除一个用户定义 Agent Skills 分类并解除其技能归属。
+pub(crate) async fn service_delete_agent_skill_category(
+    state: SharedServiceBridgeState,
+    category_id: String,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let (user_root, system_root) = configured_agent_skill_roots(&state)?;
+    vulcan_prompt_skills::delete_user_prompt_skill_category(
+        &system_root,
+        &user_root,
+        &category_id,
+    )?;
+    refresh_agent_skills_local_state(&state).await
+}
+
+/// Assigns one effective Agent Skill to one exact logical category.
+/// 将一个有效 Agent Skill 归入一个精确逻辑分类。
+pub(crate) async fn service_set_agent_skill_category(
+    state: SharedServiceBridgeState,
+    name: String,
+    category_id: String,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let (user_root, system_root) = configured_agent_skill_roots(&state)?;
+    vulcan_prompt_skills::set_user_prompt_skill_category(
+        &system_root,
+        &user_root,
+        &name,
+        &category_id,
+    )?;
+    refresh_agent_skills_local_state(&state).await
+}
+
+/// Resolves the exact configured user and system Agent Skills roots.
+/// 解析精确配置的用户与系统 Agent Skills 根目录。
+fn configured_agent_skill_roots(
+    state: &SharedServiceBridgeState,
+) -> Result<(PathBuf, PathBuf), String> {
+    let configuration = provider_configuration_from_state(state)?;
+    let runtime_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
+        &configuration.prompt_skills,
+    );
+    Ok((
+        vulcan_prompt_skills::configured_user_skill_root(&runtime_config),
+        vulcan_prompt_skills::configured_system_skill_root(&runtime_config),
+    ))
+}
+
+/// Resolves auditable provenance for one managed user package save.
+/// 为一次受管用户技能包保存解析可审计来源信息。
+fn managed_agent_skill_origin(
+    catalog: &vulcan_prompt_skills::PromptSkillCatalog,
+    original_name: Option<&str>,
+    target_name: &str,
+) -> vulcan_prompt_skills::PromptSkillOriginMetadata {
+    // timestamp is the canonical UTC audit time for this exact save.
+    // timestamp 是本次精确保存的规范 UTC 审计时间。
+    let timestamp = OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("current UTC time must format as RFC 3339");
+    // existing_user is the only source whose provenance survives an edit or rename.
+    // existing_user 是编辑或重命名时唯一保留来源信息的来源。
+    let existing_user = original_name.and_then(|name| {
+        catalog.records.iter().find(|skill| {
+            skill.scope == vulcan_prompt_skills::PromptSkillScope::User && skill.name == name
+        })
+    });
+    if let Some(existing_user) = existing_user {
+        let mut origin = existing_user.origin.clone();
+        origin.updated_at = Some(timestamp);
+        return origin;
+    }
+    // system_source identifies an explicit same-name user override creation.
+    // system_source 标识一次明确的同名用户覆盖创建。
+    let system_source = catalog.records.iter().any(|skill| {
+        skill.scope == vulcan_prompt_skills::PromptSkillScope::System && skill.name == target_name
+    });
+    if system_source {
+        return vulcan_prompt_skills::PromptSkillOriginMetadata {
+            kind: String::from("local-override"),
+            label: Some(String::from("User override")),
+            managed: false,
+            installed_at: Some(timestamp.clone()),
+            updated_at: Some(timestamp),
+            ..vulcan_prompt_skills::PromptSkillOriginMetadata::default()
+        };
+    }
+    vulcan_prompt_skills::PromptSkillOriginMetadata {
+        kind: String::from("local-created"),
+        label: Some(String::from("User-created")),
+        managed: false,
+        installed_at: Some(timestamp.clone()),
+        updated_at: Some(timestamp),
+        ..vulcan_prompt_skills::PromptSkillOriginMetadata::default()
+    }
 }
 
 /// Refreshes the agent catalog and updates the shared task runtime snapshot.
@@ -564,32 +951,15 @@ pub(crate) async fn service_restore_subagent_definition_default(
     refresh_subagent_catalog_local_state(&state)
 }
 
-/// Persists the Agent Skills global switch and refreshes only the Agent Skills catalog.
-/// 持久化 Agent Skills 全局开关并仅刷新 Agent Skills 目录。
-pub(crate) async fn service_set_agent_skills_enabled(
-    state: SharedServiceBridgeState,
-    enabled: bool,
-) -> Result<AgentSkillsCatalogUpdate, String> {
-    mutate_provider_configuration(
-        &state,
-        "保存 Agent Skills 全局状态失败",
-        |configuration| {
-            configuration.prompt_skills.enabled = enabled;
-            Ok(())
-        },
-        |_guard, _configuration| (),
-    )
-    .await?;
-    refresh_agent_skills_local_state(&state).await
-}
-
-/// Persists one global Agent Skill state and refreshes only the Agent Skills catalog.
-/// 持久化单个全局 Agent Skill 状态并仅刷新 Agent Skills 目录。
+/// Persists one Agent Skill state and refreshes only the Agent Skills catalog.
+/// 持久化单个 Agent Skill 状态并仅刷新 Agent Skills 目录。
 pub(crate) async fn service_set_agent_skill_enabled(
     state: SharedServiceBridgeState,
     name: String,
     enabled: bool,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
+    let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    let name = require_existing_agent_skill_name(&state, &name)?;
     let state_override = if enabled {
         PersistedPromptSkillState::Enabled
     } else {
@@ -608,6 +978,48 @@ pub(crate) async fn service_set_agent_skill_enabled(
     )
     .await?;
     refresh_agent_skills_local_state(&state).await
+}
+
+/// Requires one exact canonical Agent Skills identity without rewriting caller input.
+/// 要求一个精确的 Agent Skills 规范身份，不改写调用方输入。
+fn require_canonical_agent_skill_name(name: &str) -> Result<&str, String> {
+    if name.is_empty() || name != name.trim() {
+        return Err(String::from(
+            "Agent Skill name must already be canonical and cannot be empty or contain surrounding whitespace.",
+        ));
+    }
+    Ok(name)
+}
+
+/// Resolves one exact source-aware Agent Skill record without effective-source substitution.
+/// 解析一条精确的来源感知 Agent Skill 记录且不替换为有效来源。
+fn exact_agent_skill_source_record<'catalog>(
+    catalog: &'catalog vulcan_prompt_skills::PromptSkillCatalog,
+    skill_key: &str,
+) -> Result<&'catalog vulcan_prompt_skills::PromptSkill, String> {
+    if skill_key.is_empty() || skill_key != skill_key.trim() {
+        return Err(String::from(
+            "Agent Skill source key must be exact and cannot be empty or contain surrounding whitespace.",
+        ));
+    }
+    catalog
+        .source_record(skill_key)
+        .ok_or_else(|| format!("Agent Skill source record `{skill_key}` does not exist."))
+}
+
+/// Resolves one canonical name only when the current effective catalog contains it.
+/// 仅当当前有效目录包含技能时解析其规范名称。
+fn require_existing_agent_skill_name(
+    state: &SharedServiceBridgeState,
+    name: &str,
+) -> Result<String, String> {
+    let name = require_canonical_agent_skill_name(name)?;
+    let (user_root, system_root) = configured_agent_skill_roots(state)?;
+    let catalog = vulcan_prompt_skills::load_prompt_skills_from_roots(system_root, user_root);
+    if catalog.skill(name).is_none() {
+        return Err(format!("Agent Skill `{name}` does not exist."));
+    }
+    Ok(name.to_string())
 }
 
 /// Loads project-level Agent Skill overrides for the WebUI project settings modal.

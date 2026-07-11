@@ -22,6 +22,7 @@ import {
   type SkillHeaderBusyActionId,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea"
+import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import {
   type MemoryActionProps,
   type MemorySubAreaId,
@@ -73,7 +74,12 @@ function FeatureShell(props: {
   onSelectArea: (area: MainAreaId) => void
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
-  skillActions: SkillActionProps
+  // Independent LuaSkills lifecycle actions.
+  // 独立 LuaSkills 生命周期动作。
+  luaSkillActions: SkillActionProps
+  // Independent prompt-based Agent Skills actions.
+  // 独立提示词 Agent Skills 动作。
+  agentSkillActions: AgentSkillActionProps
   // Service-backed independent agent page actions.
   // 服务端支持的独立智能体页面动作。
   agentActions: AgentActionProps
@@ -102,7 +108,7 @@ function FeatureShell(props: {
   const { locale, t } = useI18n()
   // activeSkillSubArea keeps the left menu and right skill tabs synchronized.
   // activeSkillSubArea 保持左侧菜单与右侧技能页签同步。
-  const [activeSkillSubArea, setActiveSkillSubArea] = React.useState<SkillSubAreaId>("lua")
+  const [activeSkillSubArea, setActiveSkillSubArea] = React.useState<SkillSubAreaId>("catalog")
   // activeMemorySubArea keeps VMM left navigation and content synchronized.
   // activeMemorySubArea 保持 VMM 左侧导航与内容区域同步。
   const [activeMemorySubArea, setActiveMemorySubArea] = React.useState<MemorySubAreaId>("status")
@@ -159,12 +165,12 @@ function FeatureShell(props: {
   }, [])
   // skillHeaderAction renders the active skill page actions in the shared title bar.
   // skillHeaderAction 在共享标题栏中渲染当前技能页面操作。
-  const skillHeaderAction = props.activeArea === "skills" && activeSkillSubArea === "lua" ? (
+  const skillHeaderAction = props.activeArea === "skills" && activeSkillSubArea === "catalog" ? (
     <div className="feature-header-actions">
       <button
         className="skill-action-button secondary"
         disabled={skillHeaderBusyAction !== null}
-        onClick={() => void runSkillHeaderAction("lua-refresh", props.skillActions.onRefreshLuaSkills)}
+    onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
         type="button"
       >
         <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
@@ -173,18 +179,6 @@ function FeatureShell(props: {
       <button className="skill-action-button" onClick={() => setLuaInstallDialogOpen(true)} type="button">
         <PackagePlus size={15} />
         <span>{t("skills.action.installLua")}</span>
-      </button>
-    </div>
-  ) : props.activeArea === "skills" && activeSkillSubArea === "agent" ? (
-    <div className="feature-header-actions">
-      <button
-        className="skill-action-button secondary"
-        disabled={skillHeaderBusyAction !== null}
-        onClick={() => void runSkillHeaderAction("agent-refresh", props.skillActions.onRefreshAgentSkills)}
-        type="button"
-      >
-        <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
-        <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
       </button>
     </div>
   ) : null
@@ -268,7 +262,8 @@ function FeatureShell(props: {
         providerPickerOpen={providerPickerOpen}
         settingsActions={props.settingsActions}
         agentActions={props.agentActions}
-        skillActions={props.skillActions}
+          luaSkillActions={props.luaSkillActions}
+          agentSkillActions={props.agentSkillActions}
         startup={props.startup}
         workbench={props.workbench}
       />
@@ -308,7 +303,7 @@ function FeatureShell(props: {
           {pageDescriptor.content}
         </div>
         <LuaSkillInstallDialog
-          actions={props.skillActions}
+      actions={props.luaSkillActions}
           open={luaInstallDialogOpen}
           onOpenChange={setLuaInstallDialogOpen}
         />

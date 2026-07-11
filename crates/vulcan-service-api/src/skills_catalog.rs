@@ -114,9 +114,6 @@ pub struct LuaSkillToolSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSkillsCatalogSummary {
-    /// Whether Agent Skills are globally enabled.
-    /// Agent Skills 是否已全局启用。
-    pub global_enabled: bool,
     /// System skill root used by host-managed Agent Skills.
     /// 宿主管理 Agent Skills 使用的系统技能根目录。
     pub system_root: String,
@@ -126,9 +123,12 @@ pub struct AgentSkillsCatalogSummary {
     /// Human-readable notice for the current catalog state.
     /// 当前目录状态的人类可读提示。
     pub notice: String,
-    /// Parsed Agent Skill rows.
-    /// 已解析的 Agent Skill 行。
-    pub skills: Vec<AgentSkillSummary>,
+    /// Complete source-aware Agent Skill records.
+    /// 完整且包含来源关系的 Agent Skill 记录。
+    pub records: Vec<AgentSkillRecordSummary>,
+    /// Logical category rows synchronized with the current records.
+    /// 与当前记录同步的逻辑分类行。
+    pub categories: Vec<AgentSkillCategorySummary>,
     /// Non-fatal loading issues.
     /// 非致命加载问题。
     pub errors: Vec<AgentSkillLoadIssueSummary>,
@@ -585,13 +585,16 @@ pub struct SubagentCatalogIssueSummary {
     pub message: String,
 }
 
-/// One prompt-based Agent Skill row projected for the WebUI.
-/// 投影给 WebUI 的单个提示词 Agent Skill 行。
+/// One source-aware prompt Agent Skill record projected for the WebUI.
+/// 投影给 WebUI 的单个来源感知提示词 Agent Skill 记录。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentSkillSummary {
-    /// Stable skill name from frontmatter.
-    /// 来自 frontmatter 的稳定技能名称。
+pub struct AgentSkillRecordSummary {
+    /// Stable internal key composed from scope and standard name.
+    /// 由作用域与标准名称组成的稳定内部键。
+    pub skill_key: String,
+    /// Standard canonical skill name from frontmatter.
+    /// 来自 frontmatter 的标准规范技能名称。
     pub name: String,
     /// Human-facing display name.
     /// 面向用户的显示名称。
@@ -599,24 +602,270 @@ pub struct AgentSkillSummary {
     /// Human-facing short description.
     /// 面向用户的简短说明。
     pub description: String,
-    /// Source scope label.
-    /// 来源作用域标签。
-    pub scope: String,
-    /// Whether this Agent Skill is enabled after global configuration is applied.
-    /// 应用全局配置后该 Agent Skill 是否启用。
+    /// Localized display metadata keyed by locale tag.
+    /// 按语言标签索引的本地化展示元数据。
+    pub locales: std::collections::BTreeMap<String, AgentSkillLocaleSummary>,
+    /// Stable source scope key.
+    /// 稳定来源作用域键。
+    pub scope_key: String,
+    /// Whether this source record is effective after same-name resolution.
+    /// 同名解析后当前来源记录是否生效。
+    pub effective: bool,
+    /// Optional system record key overridden by this user record.
+    /// 当前用户记录覆盖的可选系统记录键。
+    pub override_of: Option<String>,
+    /// Whether this effective Agent Skill is enabled.
+    /// 当前有效 Agent Skill 是否启用。
     pub enabled: bool,
+    /// Stable primary logical category identifier.
+    /// 稳定主逻辑分类标识。
+    pub category_id: String,
+    /// Stable searchable tags.
+    /// 稳定可搜索标签。
+    pub tags: Vec<String>,
+    /// Complete standard frontmatter metadata.
+    /// 完整标准 frontmatter 元数据。
+    pub standard: AgentSkillStandardMetadataSummary,
+    /// Auditable source provenance.
+    /// 可审计来源信息。
+    pub origin: AgentSkillOriginSummary,
+    /// Standard optional resource counts.
+    /// 标准可选资源数量。
+    pub resources: AgentSkillResourceSummary,
     /// Filesystem path to the SKILL.md file.
     /// 指向 SKILL.md 文件的文件系统路径。
     pub skill_file: String,
     /// Directory that owns this Agent Skill and bundled resources.
     /// 拥有该 Agent Skill 与附带资源的目录。
     pub base_dir: String,
-    /// Optional resolved icon path that the WebUI can render.
-    /// WebUI 可渲染的可选解析图标路径。
-    pub icon_path: Option<String>,
+    /// Optional emoji rendered by the agent-style marker.
+    /// 由智能体同款标记渲染的可选表情图标。
+    pub emoji: Option<String>,
+    /// Optional hexadecimal marker color.
+    /// 可选十六进制标记颜色。
+    pub color: Option<String>,
     /// Markdown body without YAML frontmatter.
     /// 去除 YAML frontmatter 后的 Markdown 正文。
     pub body: String,
+}
+
+/// Localized display metadata for one Agent Skill record.
+/// 单个 Agent Skill 记录的本地化展示元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillLocaleSummary {
+    /// Optional localized display name.
+    /// 可选本地化显示名称。
+    pub display_name: Option<String>,
+    /// Optional localized compact description.
+    /// 可选本地化紧凑说明。
+    pub short_description: Option<String>,
+}
+
+/// Standard Agent Skills frontmatter metadata projected for details and diagnostics.
+/// 为详情与诊断投影的标准 Agent Skills frontmatter 元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillStandardMetadataSummary {
+    /// Model-facing trigger description.
+    /// 面向模型的触发说明。
+    pub description: String,
+    /// Optional license identifier or bundled file reference.
+    /// 可选协议标识或包内文件引用。
+    pub license: Option<String>,
+    /// Optional environment compatibility statement.
+    /// 可选环境兼容性说明。
+    pub compatibility: Option<String>,
+    /// Standard string extension metadata.
+    /// 标准字符串扩展元数据。
+    pub metadata: std::collections::BTreeMap<String, String>,
+}
+
+/// Auditable origin metadata for one Agent Skill record.
+/// 单个 Agent Skill 记录的可审计来源元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillOriginSummary {
+    /// Stable origin kind.
+    /// 稳定来源类型。
+    pub kind: String,
+    /// Optional source label.
+    /// 可选来源标签。
+    pub label: Option<String>,
+    /// Optional source URL.
+    /// 可选来源链接。
+    pub url: Option<String>,
+    /// Optional source version.
+    /// 可选来源版本。
+    pub version: Option<String>,
+    /// Optional immutable revision.
+    /// 可选不可变修订号。
+    pub revision: Option<String>,
+    /// Whether the source lifecycle is host-managed.
+    /// 来源生命周期是否由宿主管理。
+    pub managed: bool,
+    /// Optional integrity digest.
+    /// 可选完整性摘要。
+    pub integrity: Option<String>,
+    /// Optional installation timestamp.
+    /// 可选安装时间戳。
+    pub installed_at: Option<String>,
+    /// Optional last synchronization timestamp.
+    /// 可选最近同步时间戳。
+    pub updated_at: Option<String>,
+}
+
+/// Standard optional resource counts for one Agent Skill record.
+/// 单个 Agent Skill 记录的标准可选资源数量。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillResourceSummary {
+    /// Number of script files.
+    /// 脚本文件数量。
+    pub scripts: usize,
+    /// Number of reference files.
+    /// 引用文件数量。
+    pub references: usize,
+    /// Number of asset files.
+    /// 资产文件数量。
+    pub assets: usize,
+}
+
+/// One logical Agent Skills category projected for the WebUI.
+/// 投影给 WebUI 的单个逻辑 Agent Skills 分类。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillCategorySummary {
+    /// Stable category identifier.
+    /// 稳定分类标识。
+    pub category_id: String,
+    /// Default category name.
+    /// 默认分类名称。
+    pub name: String,
+    /// Optional default category description.
+    /// 可选默认分类说明。
+    pub description: Option<String>,
+    /// Category emoji.
+    /// 分类图标。
+    pub emoji: String,
+    /// Category color.
+    /// 分类颜色。
+    pub color: String,
+    /// Stable display order.
+    /// 稳定展示顺序。
+    pub order: i32,
+    /// Whether the category ships with the host.
+    /// 当前分类是否由宿主内置。
+    pub builtin: bool,
+    /// Localized category metadata keyed by locale tag.
+    /// 按语言标签索引的本地化分类元数据。
+    pub locales: std::collections::BTreeMap<String, AgentSkillCategoryLocaleSummary>,
+}
+
+/// Localized metadata for one logical Agent Skills category.
+/// 单个逻辑 Agent Skills 分类的本地化元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillCategoryLocaleSummary {
+    /// Localized category name.
+    /// 本地化分类名称。
+    pub name: String,
+    /// Optional localized category description.
+    /// 可选本地化分类说明。
+    pub description: Option<String>,
+}
+
+/// Complete user-authored Agent Skill save request.
+/// 完整的用户创作 Agent Skill 保存请求。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSkillSaveRequest {
+    /// Optional original standard name when renaming one existing user skill.
+    /// 重命名现有用户技能时使用的可选原标准名称。
+    pub original_name: Option<String>,
+    /// Optional exact source-aware record key used to preserve or copy bundled resources.
+    /// 用于保留或复制附带资源的可选精确来源记录键。
+    pub source_skill_key: Option<String>,
+    /// Standard canonical skill name.
+    /// 标准规范技能名称。
+    pub name: String,
+    /// Model-facing trigger description.
+    /// 面向模型的触发说明。
+    pub description: String,
+    /// Optional license identifier or bundled file reference.
+    /// 可选协议标识或包内文件引用。
+    pub license: Option<String>,
+    /// Optional environment compatibility statement.
+    /// 可选环境兼容性说明。
+    pub compatibility: Option<String>,
+    /// Standard string extension metadata.
+    /// 标准字符串扩展元数据。
+    pub metadata: std::collections::BTreeMap<String, String>,
+    /// Markdown instruction body without frontmatter.
+    /// 不含 frontmatter 的 Markdown 说明正文。
+    pub body: String,
+    /// Complete UI-facing metadata.
+    /// 完整界面展示元数据。
+    pub interface: AgentSkillInterfaceSaveRequest,
+    /// Stable primary logical category identifier.
+    /// 稳定主逻辑分类标识。
+    pub category_id: String,
+    /// Stable searchable tags.
+    /// 稳定可搜索标签。
+    pub tags: Vec<String>,
+    /// Whether the saved skill is enabled.
+    /// 保存后的技能是否启用。
+    pub enabled: bool,
+}
+
+/// UI-facing metadata included in one Agent Skill save request.
+/// 单次 Agent Skill 保存请求包含的界面展示元数据。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSkillInterfaceSaveRequest {
+    /// Optional default display name.
+    /// 可选默认显示名称。
+    pub display_name: Option<String>,
+    /// Optional default compact description.
+    /// 可选默认紧凑说明。
+    pub short_description: Option<String>,
+    /// Optional emoji rendered by the skill marker.
+    /// 由技能标记渲染的可选表情图标。
+    pub emoji: Option<String>,
+    /// Optional hexadecimal marker color.
+    /// 可选十六进制标记颜色。
+    pub color: Option<String>,
+    /// Localized display metadata keyed by locale tag.
+    /// 按语言标签索引的本地化展示元数据。
+    pub locales: std::collections::BTreeMap<String, AgentSkillLocaleSummary>,
+}
+
+/// User-defined logical Agent Skills category save request.
+/// 用户定义逻辑 Agent Skills 分类保存请求。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSkillCategorySaveRequest {
+    /// Stable category identifier.
+    /// 稳定分类标识。
+    pub category_id: String,
+    /// Default category name.
+    /// 默认分类名称。
+    pub name: String,
+    /// Optional default category description.
+    /// 可选默认分类说明。
+    pub description: Option<String>,
+    /// Category emoji.
+    /// 分类图标。
+    pub emoji: String,
+    /// Category color.
+    /// 分类颜色。
+    pub color: String,
+    /// Stable display order.
+    /// 稳定展示顺序。
+    pub order: i32,
+    /// Localized category metadata keyed by locale tag.
+    /// 按语言标签索引的本地化分类元数据。
+    pub locales: std::collections::BTreeMap<String, AgentSkillCategoryLocaleSummary>,
 }
 
 /// One Agent Skill loading issue projected for diagnostics.

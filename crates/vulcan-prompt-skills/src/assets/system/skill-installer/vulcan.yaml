@@ -1,5 +1,17 @@
+schema_version: 3
 interface:
   display_name: "Skill Installer"
   short_description: "Install VulcanCode prompt skills"
-  icon_small: "./assets/skill-installer-small.svg"
-  icon_large: "./assets/skill-installer.png"
+  emoji: "📦"
+  color: "#2563EB"
+  locales:
+    zh-CN:
+      display_name: "技能安装器"
+      short_description: "安装 VulcanCode 提示词技能"
+catalog:
+  category_id: "integrations"
+  tags: ["skills", "installation"]
+origin:
+  kind: "builtin"
+  label: "VulcanCode"
+  managed: true

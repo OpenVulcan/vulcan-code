@@ -92,16 +92,16 @@ use vulcan_provider_config::config::{
 #[cfg(test)]
 use vulcan_service_api::SessionGoalStatus;
 use vulcan_service_api::{
-    AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary,
-    AgentSkillsCatalogUpdate, AppendMessageBodyDelta, CommandSessionSummary,
-    CommandSessionsChangedDelta, ComposerAttachmentSummary, ContextInjectionCardSummary,
-    ContextInjectionChangedDelta, ContextInjectionItemSummary, ContextInjectionSnapshot,
-    ContextUsageChangedDelta, ContextUsageSnapshot, ConversationArchivedDelta,
-    ConversationForkSourceSummary, ConversationMessage, ConversationSummary,
-    ConversationsArchivedDelta, FeatureAreaSummary, HydratedConversationWindowSummary,
-    KeyValueSummary, LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary,
-    LuaSkillsCatalogSummary, LuaSkillsCatalogUpdate, McpServerSummary, McpToolSummary,
-    MemorySummary, MessageRole, OptionalTextPatch, PendingQuestionChangedDelta,
+    AgentSkillCategorySaveRequest, AgentSkillLoadIssueSummary, AgentSkillSaveRequest,
+    AgentSkillsCatalogChangedDelta, AgentSkillsCatalogSummary, AgentSkillsCatalogUpdate,
+    AppendMessageBodyDelta, CommandSessionSummary, CommandSessionsChangedDelta,
+    ComposerAttachmentSummary, ContextInjectionCardSummary, ContextInjectionChangedDelta,
+    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageChangedDelta,
+    ContextUsageSnapshot, ConversationArchivedDelta, ConversationForkSourceSummary,
+    ConversationMessage, ConversationSummary, ConversationsArchivedDelta, FeatureAreaSummary,
+    HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary, LuaSkillSummary,
+    LuaSkillToolSummary, LuaSkillsCatalogSummary, LuaSkillsCatalogUpdate, McpServerSummary,
+    McpToolSummary, MemorySummary, MessageRole, OptionalTextPatch, PendingQuestionChangedDelta,
     PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
     PluginSummary, ProjectRemovedDelta, ProjectSummary, ProviderFieldSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
@@ -173,6 +173,7 @@ use vulcan_workspace_store::{
     },
 };
 
+mod agent_skills_watcher;
 mod agent_stream;
 mod ai_capabilities;
 mod attachments;

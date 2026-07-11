@@ -131,7 +131,6 @@ pub(crate) async fn execute_prompt_skill_detail_tool(
         )));
     }
     let config = PromptSkillsGlobalConfig {
-        enabled: true,
         user_skill_root: request.prompt_skill_user_root.clone(),
         system_skill_root: Some(
             vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory(),

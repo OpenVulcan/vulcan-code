@@ -80,7 +80,7 @@
 .adaptive-tool-panel-slot {
   position: absolute;
   top: 14px;
-  z-index: 12;
+  z-index: 30;
   display: flex;
   align-items: flex-start;
   overflow: hidden;

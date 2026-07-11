@@ -124,6 +124,34 @@ pub(super) async fn dispatch_service_rpc(
         "service_refresh_agent_skills_catalog" => {
             rpc_json_result(service_refresh_agent_skills_catalog(state).await)
         }
+        "service_open_agent_skills_user_directory" => {
+            rpc_json_result(service_open_agent_skills_user_directory(state).await)
+        }
+        "service_save_agent_skill" => rpc_json_result(
+            service_save_agent_skill(state, rpc_required_param(&params, "skill")?).await,
+        ),
+        "service_delete_agent_skill" => rpc_json_result(
+            service_delete_agent_skill(state, rpc_required_param(&params, "name")?).await,
+        ),
+        "service_restore_agent_skill_default" => rpc_json_result(
+            service_restore_agent_skill_default(state, rpc_required_param(&params, "name")?).await,
+        ),
+        "service_save_agent_skill_category" => rpc_json_result(
+            service_save_agent_skill_category(state, rpc_required_param(&params, "category")?)
+                .await,
+        ),
+        "service_delete_agent_skill_category" => rpc_json_result(
+            service_delete_agent_skill_category(state, rpc_required_param(&params, "categoryId")?)
+                .await,
+        ),
+        "service_set_agent_skill_category" => rpc_json_result(
+            service_set_agent_skill_category(
+                state,
+                rpc_required_param(&params, "name")?,
+                rpc_required_param(&params, "categoryId")?,
+            )
+            .await,
+        ),
         "service_refresh_subagent_catalog" => {
             rpc_json_result(service_refresh_subagent_catalog(state).await)
         }
@@ -152,9 +180,6 @@ pub(super) async fn dispatch_service_rpc(
                 rpc_required_param(&params, "agentId")?,
             )
             .await,
-        ),
-        "service_set_agent_skills_enabled" => rpc_json_result(
-            service_set_agent_skills_enabled(state, rpc_required_param(&params, "enabled")?).await,
         ),
         "service_set_agent_skill_enabled" => rpc_json_result(
             service_set_agent_skill_enabled(

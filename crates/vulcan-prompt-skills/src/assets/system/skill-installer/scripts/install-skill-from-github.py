@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Install a skill from a GitHub repo path into $VULCAN_HOME/skills."""
+"""Install a skill from a GitHub repo path into $VULCAN_HOME/code/skills.
+从 GitHub 仓库路径安装技能到 $VULCAN_HOME/code/skills。
+"""
 
 from __future__ import annotations
 
@@ -241,7 +243,10 @@ def _resolve_source(args: Args) -> Source:
 
 
 def _default_dest() -> str:
-    return os.path.join(_vulcan_home(), "skills")
+    """Resolve the canonical VulcanCode Agent Skills root.
+    解析规范的 VulcanCode Agent Skills 根目录。
+    """
+    return os.path.join(_vulcan_home(), "code", "skills")
 
 
 def _parse_args(argv: list[str]) -> Args:

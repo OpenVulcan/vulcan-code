@@ -209,11 +209,14 @@ export interface LuaSkillsCatalogUpdate {
   plugins: PluginSummary[];
 }
 
-// AgentSkillSummary describes one prompt-based Agent Skill.
-// AgentSkillSummary 描述单个基于提示词的 Agent Skill。
-export interface AgentSkillSummary {
-  // Stable skill name from frontmatter.
-  // 来自 frontmatter 的稳定技能名称。
+// AgentSkillRecordSummary describes one source-aware prompt Agent Skill record.
+// AgentSkillRecordSummary 描述单个来源感知提示词 Agent Skill 记录。
+export interface AgentSkillRecordSummary {
+  // Stable internal key composed from scope and standard name.
+  // 由作用域与标准名称组成的稳定内部键。
+  skillKey: string;
+  // Standard canonical skill name from frontmatter.
+  // 来自 frontmatter 的标准规范技能名称。
   name: string;
   // Human-facing display name.
   // 面向用户的显示名称。
@@ -221,24 +224,252 @@ export interface AgentSkillSummary {
   // Human-facing short description.
   // 面向用户的简短说明。
   description: string;
-  // Source scope label.
-  // 来源作用域标签。
-  scope: string;
-  // Whether this Agent Skill is enabled.
-  // 该 Agent Skill 是否已启用。
+  // Localized display metadata keyed by locale tag.
+  // 按语言标签索引的本地化展示元数据。
+  locales: Record<string, AgentSkillLocaleSummary>;
+  // Stable source scope key.
+  // 稳定来源作用域键。
+  scopeKey: "system" | "user";
+  // Whether this source record is effective after same-name resolution.
+  // 同名解析后当前来源记录是否生效。
+  effective: boolean;
+  // Optional system record key overridden by this user record.
+  // 当前用户记录覆盖的可选系统记录键。
+  overrideOf?: string | null;
+  // Whether this effective Agent Skill is enabled.
+  // 当前有效 Agent Skill 是否已启用。
   enabled: boolean;
+  // Stable primary logical category identifier.
+  // 稳定主逻辑分类标识。
+  categoryId: string;
+  // Stable searchable tags.
+  // 稳定可搜索标签。
+  tags: string[];
+  // Complete standard frontmatter metadata.
+  // 完整标准 frontmatter 元数据。
+  standard: AgentSkillStandardMetadataSummary;
+  // Auditable source provenance.
+  // 可审计来源信息。
+  origin: AgentSkillOriginSummary;
+  // Standard optional resource counts.
+  // 标准可选资源数量。
+  resources: AgentSkillResourceSummary;
   // Filesystem path to the SKILL.md file.
   // 指向 SKILL.md 文件的文件系统路径。
   skillFile: string;
   // Directory that owns this Agent Skill and bundled resources.
   // 拥有该 Agent Skill 与附带资源的目录。
   baseDir: string;
-  // Optional resolved icon path.
-  // 可选解析图标路径。
-  iconPath?: string | null;
+  // Optional emoji rendered by the agent-style marker.
+  // 由智能体同款标记渲染的可选表情图标。
+  emoji?: string | null;
+  // Optional hexadecimal marker color.
+  // 可选十六进制标记颜色。
+  color?: string | null;
   // Markdown body without YAML frontmatter.
   // 去除 YAML frontmatter 后的 Markdown 正文。
   body: string;
+}
+
+// AgentSkillLocaleSummary describes localized display metadata for one Agent Skill.
+// AgentSkillLocaleSummary 描述单个 Agent Skill 的本地化展示元数据。
+export interface AgentSkillLocaleSummary {
+  // Optional localized display name.
+  // 可选本地化显示名称。
+  displayName?: string | null;
+  // Optional localized compact description.
+  // 可选本地化紧凑说明。
+  shortDescription?: string | null;
+}
+
+// AgentSkillStandardMetadataSummary describes standard Agent Skills frontmatter.
+// AgentSkillStandardMetadataSummary 描述标准 Agent Skills frontmatter。
+export interface AgentSkillStandardMetadataSummary {
+  // Model-facing trigger description.
+  // 面向模型的触发说明。
+  description: string;
+  // Optional license identifier or bundled file reference.
+  // 可选协议标识或包内文件引用。
+  license?: string | null;
+  // Optional environment compatibility statement.
+  // 可选环境兼容性说明。
+  compatibility?: string | null;
+  // Standard string extension metadata.
+  // 标准字符串扩展元数据。
+  metadata: Record<string, string>;
+}
+
+// AgentSkillOriginSummary describes auditable Agent Skill provenance.
+// AgentSkillOriginSummary 描述可审计 Agent Skill 来源。
+export interface AgentSkillOriginSummary {
+  // Stable origin kind.
+  // 稳定来源类型。
+  kind: string;
+  // Optional source label.
+  // 可选来源标签。
+  label?: string | null;
+  // Optional source URL.
+  // 可选来源链接。
+  url?: string | null;
+  // Optional source version.
+  // 可选来源版本。
+  version?: string | null;
+  // Optional immutable revision.
+  // 可选不可变修订号。
+  revision?: string | null;
+  // Whether the source lifecycle is host-managed.
+  // 来源生命周期是否由宿主管理。
+  managed: boolean;
+  // Optional integrity digest.
+  // 可选完整性摘要。
+  integrity?: string | null;
+  // Optional installation timestamp.
+  // 可选安装时间戳。
+  installedAt?: string | null;
+  // Optional last synchronization timestamp.
+  // 可选最近同步时间戳。
+  updatedAt?: string | null;
+}
+
+// AgentSkillResourceSummary describes standard optional resource counts.
+// AgentSkillResourceSummary 描述标准可选资源数量。
+export interface AgentSkillResourceSummary {
+  // Number of script files.
+  // 脚本文件数量。
+  scripts: number;
+  // Number of reference files.
+  // 引用文件数量。
+  references: number;
+  // Number of asset files.
+  // 资产文件数量。
+  assets: number;
+}
+
+// AgentSkillCategorySummary describes one logical Agent Skills category.
+// AgentSkillCategorySummary 描述单个逻辑 Agent Skills 分类。
+export interface AgentSkillCategorySummary {
+  // Stable category identifier.
+  // 稳定分类标识。
+  categoryId: string;
+  // Default category name.
+  // 默认分类名称。
+  name: string;
+  // Optional default category description.
+  // 可选默认分类说明。
+  description?: string | null;
+  // Category emoji.
+  // 分类图标。
+  emoji: string;
+  // Category color.
+  // 分类颜色。
+  color: string;
+  // Stable display order.
+  // 稳定展示顺序。
+  order: number;
+  // Whether the category ships with the host.
+  // 当前分类是否由宿主内置。
+  builtin: boolean;
+  // Localized category metadata keyed by locale tag.
+  // 按语言标签索引的本地化分类元数据。
+  locales: Record<string, AgentSkillCategoryLocaleSummary>;
+}
+
+// AgentSkillInterfaceSaveRequest contains complete user-authored display metadata.
+// AgentSkillInterfaceSaveRequest 包含完整用户创作展示元数据。
+export interface AgentSkillInterfaceSaveRequest {
+  // Optional default human-facing name independent from the model trigger name.
+  // 可选默认用户显示名称，独立于模型触发名称。
+  displayName: string | null;
+  // Optional default compact description for management surfaces.
+  // 可选默认管理界面简短说明。
+  shortDescription: string | null;
+  // Optional emoji rendered by the skill marker.
+  // 由技能标记渲染的可选表情图标。
+  emoji: string | null;
+  // Optional hexadecimal marker color.
+  // 可选十六进制标记颜色。
+  color: string | null;
+  // Authored localized display metadata keyed by BCP 47 locale.
+  // 按 BCP 47 语言标签索引的已创作本地化展示元数据。
+  locales: Record<string, AgentSkillLocaleSummary>;
+}
+
+// AgentSkillSaveRequest is the strict complete package editor payload.
+// AgentSkillSaveRequest 是严格完整技能包编辑器载荷。
+export interface AgentSkillSaveRequest {
+  // Exact existing user package identity for edit or rename operations.
+  // 编辑或重命名操作对应的精确现有用户技能包身份。
+  originalName: string | null;
+  // Exact source-aware record key whose optional resources should be copied.
+  // 需要复制可选资源的精确来源记录键。
+  sourceSkillKey: string | null;
+  // Canonical Agent Skills package name written to frontmatter and directory identity.
+  // 写入 frontmatter 与目录身份的 Agent Skills 规范名称。
+  name: string;
+  // Model-visible trigger description from standard frontmatter.
+  // 来自标准 frontmatter 的模型可见触发说明。
+  description: string;
+  // Optional standard license declaration.
+  // 可选标准许可证声明。
+  license: string | null;
+  // Optional standard environment compatibility declaration.
+  // 可选标准环境兼容性声明。
+  compatibility: string | null;
+  // Standard string-valued extension metadata.
+  // 标准字符串值扩展元数据。
+  metadata: Record<string, string>;
+  // Model-facing SKILL.md instruction body without frontmatter.
+  // 不含 frontmatter 的面向模型 SKILL.md 指令正文。
+  body: string;
+  // Complete user-authored display metadata.
+  // 完整用户创作展示元数据。
+  interface: AgentSkillInterfaceSaveRequest;
+  // Exact logical catalog category identifier.
+  // 精确逻辑目录分类标识。
+  categoryId: string;
+  // Stable normalized catalog search tags.
+  // 稳定规范化目录搜索标签。
+  tags: string[];
+  // Desired per-skill enabled state committed with the package save.
+  // 与技能包保存一并提交的目标单技能启用状态。
+  enabled: boolean;
+}
+
+// AgentSkillCategorySaveRequest is one complete user-defined category payload.
+// AgentSkillCategorySaveRequest 是一个完整用户定义分类载荷。
+export interface AgentSkillCategorySaveRequest {
+  // Stable canonical category identity.
+  // 稳定规范分类身份。
+  categoryId: string;
+  // Default human-facing category name.
+  // 默认用户显示分类名称。
+  name: string;
+  // Optional default category description.
+  // 可选默认分类说明。
+  description: string | null;
+  // Required category emoji.
+  // 必填分类图标。
+  emoji: string;
+  // Required hexadecimal category color.
+  // 必填十六进制分类颜色。
+  color: string;
+  // Stable integer ordering key.
+  // 稳定整数排序键。
+  order: number;
+  // Authored localized category metadata keyed by BCP 47 locale.
+  // 按 BCP 47 语言标签索引的已创作本地化分类元数据。
+  locales: Record<string, AgentSkillCategoryLocaleSummary>;
+}
+
+// AgentSkillCategoryLocaleSummary describes localized category metadata.
+// AgentSkillCategoryLocaleSummary 描述本地化分类元数据。
+export interface AgentSkillCategoryLocaleSummary {
+  // Localized category name.
+  // 本地化分类名称。
+  name: string;
+  // Optional localized category description.
+  // 可选本地化分类说明。
+  description?: string | null;
 }
 
 // AgentSkillLoadIssueSummary describes one non-fatal Agent Skill loading issue.
@@ -255,9 +486,6 @@ export interface AgentSkillLoadIssueSummary {
 // AgentSkillsCatalogSummary describes the full Agent Skills catalog.
 // AgentSkillsCatalogSummary 描述完整 Agent Skills 目录。
 export interface AgentSkillsCatalogSummary {
-  // Whether Agent Skills are globally enabled.
-  // Agent Skills 是否已全局启用。
-  globalEnabled: boolean;
   // System skill root used by host-managed Agent Skills.
   // 宿主管理 Agent Skills 使用的系统技能根目录。
   systemRoot: string;
@@ -267,9 +495,12 @@ export interface AgentSkillsCatalogSummary {
   // Human-readable notice for the current catalog state.
   // 当前目录状态的人类可读提示。
   notice: string;
-  // Parsed Agent Skill rows.
-  // 已解析的 Agent Skill 行。
-  skills: AgentSkillSummary[];
+  // Complete source-aware Agent Skill records.
+  // 完整且包含来源关系的 Agent Skill 记录。
+  records: AgentSkillRecordSummary[];
+  // Logical category rows synchronized with current records.
+  // 与当前记录同步的逻辑分类行。
+  categories: AgentSkillCategorySummary[];
   // Non-fatal loading issues.
   // 非致命加载问题。
   errors: AgentSkillLoadIssueSummary[];

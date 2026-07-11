@@ -1701,7 +1701,7 @@ function buildAgentPromptSkillPolicyOptions(workbench: WorkbenchSnapshot, draft:
   // optionMap keeps one row per persisted prompt skill name.
   // optionMap 确保每个持久化提示词技能名称只保留一行。
   const optionMap = new Map<string, AgentCapabilityPolicyOption>()
-  workbench.agentSkills.skills.forEach((skill) => {
+  workbench.agentSkills.records.filter((skill) => skill.effective).forEach((skill) => {
     const skillName = skill.name.trim()
     if (skillName.length === 0) {
       return
@@ -1709,7 +1709,7 @@ function buildAgentPromptSkillPolicyOptions(workbench: WorkbenchSnapshot, draft:
     appendAgentCapabilityPolicyOption(optionMap, {
       id: skillName,
       label: skill.displayName || skillName,
-      family: skill.scope || "Agent Skills",
+      family: skill.scopeKey || "Agent Skills",
       description: skill.description,
       detail: skill.enabled
         ? localizedAgentLiteral(locale, "当前启用", "Currently enabled")

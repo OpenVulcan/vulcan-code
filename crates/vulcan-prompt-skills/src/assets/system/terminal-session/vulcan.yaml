@@ -1,4 +1,17 @@
+schema_version: 3
 interface:
   display_name: "Terminal Session"
   short_description: "Use persistent terminals, shortcuts, TUI screens, and incremental output safely"
-  icon_small: "./assets/terminal-session-small.svg"
+  emoji: "💻"
+  color: "#0F766E"
+  locales:
+    zh-CN:
+      display_name: "终端会话"
+      short_description: "安全使用持久终端、快捷命令、TUI 与增量输出"
+catalog:
+  category_id: "operations"
+  tags: ["terminal", "shell"]
+origin:
+  kind: "builtin"
+  label: "VulcanCode"
+  managed: true

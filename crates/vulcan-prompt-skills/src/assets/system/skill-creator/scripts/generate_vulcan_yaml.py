@@ -41,9 +41,8 @@ SMALL_WORDS = {"and", "or", "to", "up", "with"}
 ALLOWED_INTERFACE_KEYS = {
     "display_name",
     "short_description",
-    "icon_small",
-    "icon_large",
-    "brand_color",
+    "emoji",
+    "color",
 }
 
 
@@ -153,6 +152,7 @@ def write_vulcan_yaml(skill_dir, skill_name, raw_overrides):
         return None
 
     interface_lines = [
+        "schema_version: 3",
         "interface:",
         f"  display_name: {yaml_quote(display_name)}",
         f"  short_description: {yaml_quote(short_description)}",
@@ -162,6 +162,17 @@ def write_vulcan_yaml(skill_dir, skill_name, raw_overrides):
         value = overrides.get(key)
         if value is not None:
             interface_lines.append(f"  {key}: {yaml_quote(value)}")
+
+    interface_lines.extend(
+        [
+            "catalog:",
+            '  category_id: "uncategorized"',
+            "  tags: []",
+            "origin:",
+            '  kind: "local-created"',
+            "  managed: true",
+        ]
+    )
 
     output_path = Path(skill_dir) / "vulcan.yaml"
     output_path.write_text("\n".join(interface_lines) + "\n", encoding="utf-8")

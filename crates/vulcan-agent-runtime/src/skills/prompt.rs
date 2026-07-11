@@ -13,8 +13,7 @@ pub fn global_config_from_persisted(
         .collect();
 
     vulcan_prompt_skills::PromptSkillsGlobalConfig {
-        enabled: config.enabled,
-        user_skill_root: config.user_skill_root.clone(),
+        user_skill_root: None,
         system_skill_root: Some(
             vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory(),
         ),

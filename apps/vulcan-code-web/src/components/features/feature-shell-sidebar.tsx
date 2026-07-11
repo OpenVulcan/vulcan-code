@@ -412,6 +412,7 @@ function CollapsedSettingsGroupMenu(props: {
 // areaIconMap 将功能区域标识映射到 lucide 图标。
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   chat: <PanelTopOpen size={17} />,
+  "agent-skills": <Bot size={17} />,
   skills: <Hammer size={17} />,
   agents: <Network size={17} />,
   memory: <BrainCircuit size={17} />,
@@ -423,6 +424,7 @@ const areaIconMap: Record<MainAreaId, React.ReactNode> = {
 function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSummary[] {
   return [
     { id: "chat", label: t("area.chat"), description: t("area.chat.description"), status: t("feature.status.available") },
+    { id: "agent-skills", label: t("area.agentSkills"), description: t("area.agentSkills.description"), status: t("feature.status.available") },
     { id: "skills", label: t("area.skills"), description: t("area.skills.description"), status: t("feature.status.preview") },
     { id: "agents", label: t("area.agents"), description: t("area.agents.description"), status: t("feature.status.preview") },
     { id: "memory", label: t("area.memory"), description: t("area.memory.description"), status: t("feature.status.preview") },
@@ -437,8 +439,14 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
 function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
   if (activeArea === "skills") {
     return [
-      { id: "skills-lua", label: "Lua Skills", detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
-      { id: "skills-agent", label: "Agent Skills", detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: workbench.agentSkills.skills.length }), icon: <Bot size={16} /> },
+      { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
+      { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
+    ]
+  }
+  if (activeArea === "agent-skills") {
+    const effectiveRecords = workbench.agentSkills.records.filter((record) => record.effective)
+    return [
+      { id: "agent-skills-catalog", label: t("area.agentSkills"), detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: effectiveRecords.length }), icon: <Bot size={16} /> },
     ]
   }
   if (activeArea === "agents") {
@@ -464,11 +472,11 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
 // skillSidebarRowToSubArea maps a skills sidebar row id to its content page id.
 // skillSidebarRowToSubArea 将技能侧栏行标识映射到对应内容页面标识。
 function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
-  if (rowId === "skills-lua") {
-    return "lua"
+  if (rowId === "luaskills-catalog") {
+    return "catalog"
   }
-  if (rowId === "skills-agent") {
-    return "agent"
+  if (rowId === "luaskills-settings") {
+    return "settings"
   }
   return null
 }

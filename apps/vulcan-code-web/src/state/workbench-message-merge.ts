@@ -50,6 +50,8 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
       return envelope.delta.payload.conversationId;
     case "conversationHydrationChanged":
       return envelope.delta.payload.progress.sessionId;
+    case "agentSkillsCatalogChanged":
+      return null;
   }
 }
 

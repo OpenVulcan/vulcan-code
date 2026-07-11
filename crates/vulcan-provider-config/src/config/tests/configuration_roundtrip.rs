@@ -10,7 +10,6 @@ use super::super::{
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 use vulcan_vmm::VmmConfigLayer;
 
 /// Verifies the remembered workbench reasoning preference keeps the stable camelCase field name and round-trips through the shared provider configuration file.
@@ -340,8 +339,6 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
 fn provider_configuration_round_trips_prompt_skills_configuration() {
     let config = ProviderConfigurationFile {
         prompt_skills: PersistedPromptSkillsConfiguration {
-            enabled: true,
-            user_skill_root: Some(PathBuf::from("C:/Users/example/.vulcan/skills")),
             default_skill_state: PersistedPromptSkillState::Enabled,
             skill_overrides: BTreeMap::from([(
                 String::from("demo-skill"),

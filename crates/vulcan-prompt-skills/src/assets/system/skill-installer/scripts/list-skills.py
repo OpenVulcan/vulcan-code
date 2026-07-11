@@ -36,7 +36,10 @@ def _vulcan_home() -> str:
 
 
 def _installed_skills() -> set[str]:
-    root = os.path.join(_vulcan_home(), "skills")
+    """Collect installed skills from the canonical VulcanCode Agent Skills root.
+    从规范的 VulcanCode Agent Skills 根目录收集已安装技能。
+    """
+    root = os.path.join(_vulcan_home(), "code", "skills")
     if not os.path.isdir(root):
         return set()
     entries = set()

@@ -1,6 +1,7 @@
 import React from "react";
 import type { AgentActionProps } from "@/components/features/agents/AgentsArea";
 import type { SkillActionProps } from "@/components/features/skills/SkillsArea";
+import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
 import { type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
@@ -20,15 +21,21 @@ import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
   deleteSubagentDefinition,
   installLuaSkill,
+  deleteAgentSkill,
+  deleteAgentSkillCategory,
+  openAgentSkillsUserDirectory,
   openSubagentUserDirectory,
   refreshAgentSkillsCatalog,
   refreshLuaSkillsCatalog,
   refreshSubagentCatalog,
   restoreSubagentDefinitionDefault,
+  restoreAgentSkillDefault,
+  saveAgentSkill,
+  saveAgentSkillCategory,
   saveSubagentDefinition,
   setAgentSkillEnabled,
+  setAgentSkillCategory,
   setAgentSkillProjectState,
-  setAgentSkillsEnabled,
   setSubagentDefinitionEnabled,
   setLuaSkillEnabled,
   setLuaSkillToolRegistrationState,
@@ -260,12 +267,6 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     applySubagentCatalogUpdate(await action());
   }, [applySubagentCatalogUpdate]);
 
-  // handleSetAgentSkillsEnabled persists the global Agent Skills switch with a lightweight catalog refresh.
-  // handleSetAgentSkillsEnabled 使用轻量目录刷新持久化 Agent Skills 全局开关。
-  const handleSetAgentSkillsEnabled = React.useCallback(async (enabled: boolean) => {
-    await runAgentSkillsCatalogAction(() => setAgentSkillsEnabled(enabled));
-  }, [runAgentSkillsCatalogAction]);
-
   // handleSetAgentSkillEnabled persists one Agent Skill state with a lightweight catalog refresh.
   // handleSetAgentSkillEnabled 使用轻量目录刷新持久化单个 Agent Skill 状态。
   const handleSetAgentSkillEnabled = React.useCallback(async (name: string, enabled: boolean) => {
@@ -278,9 +279,9 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     await runSubagentCatalogAction(() => setSubagentDefinitionEnabled(agentId, enabled));
   }, [runSubagentCatalogAction]);
 
-  // skillActions groups service-backed skill management actions for every skills surface.
-  // skillActions 为所有技能界面归组服务端技能管理动作。
-  const skillActions = React.useMemo<SkillActionProps>(() => ({
+  // luaSkillActions groups the independent LuaSkills lifecycle boundary.
+  // luaSkillActions 归组独立 LuaSkills 生命周期边界。
+  const luaSkillActions = React.useMemo<SkillActionProps>(() => ({
     onRefreshLuaSkills: () => runLuaSkillsCatalogAction(refreshLuaSkillsCatalog),
     onInstallLuaSkill: (skillId, source, sourceType) => runLuaSkillsCatalogAction(() => installLuaSkill(skillId, source, sourceType)),
     onUpdateLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId)),
@@ -289,10 +290,21 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
       runLuaSkillsCatalogAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))
     ),
+  }), [runLuaSkillsCatalogAction]);
+
+  // agentSkillActions groups the independent prompt-based Agent Skills boundary.
+  // agentSkillActions 归组独立提示词 Agent Skills 边界。
+  const agentSkillActions = React.useMemo<AgentSkillActionProps>(() => ({
     onRefreshAgentSkills: () => runAgentSkillsCatalogAction(refreshAgentSkillsCatalog),
-    onSetAgentSkillsEnabled: handleSetAgentSkillsEnabled,
+    onOpenAgentSkillsUserDirectory: () => runAgentSkillsCatalogAction(openAgentSkillsUserDirectory),
     onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
-  }), [handleSetAgentSkillEnabled, handleSetAgentSkillsEnabled, runAgentSkillsCatalogAction, runLuaSkillsCatalogAction]);
+    onSaveAgentSkill: (skill) => runAgentSkillsCatalogAction(() => saveAgentSkill(skill)),
+    onDeleteAgentSkill: (name) => runAgentSkillsCatalogAction(() => deleteAgentSkill(name)),
+    onRestoreAgentSkillDefault: (name) => runAgentSkillsCatalogAction(() => restoreAgentSkillDefault(name)),
+    onSaveAgentSkillCategory: (category) => runAgentSkillsCatalogAction(() => saveAgentSkillCategory(category)),
+    onDeleteAgentSkillCategory: (categoryId) => runAgentSkillsCatalogAction(() => deleteAgentSkillCategory(categoryId)),
+    onSetAgentSkillCategory: (name, categoryId) => runAgentSkillsCatalogAction(() => setAgentSkillCategory(name, categoryId)),
+  }), [handleSetAgentSkillEnabled, runAgentSkillsCatalogAction]);
 
   // agentActions groups service-backed independent agent management actions.
   // agentActions 归组独立智能体管理使用的服务端动作。
@@ -397,9 +409,9 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     handleProjectMenuAction,
     handleProjectSettingsVmmSave,
     handleProjectSettingsAgentSkillSave,
-    handleSetAgentSkillsEnabled,
     handleSetAgentSkillEnabled,
-    skillActions,
+    luaSkillActions,
+    agentSkillActions,
     agentActions,
     handleProjectIconConfirm,
     handleProjectIconReset,

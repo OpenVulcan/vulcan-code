@@ -1,6 +1,6 @@
 ---
 name: skill-installer
-description: Install VulcanCode prompt skills into $VULCAN_HOME/skills from a GitHub repo path or local skill directory. Use when a user asks to list installable skills, install a skill from another repo (including private repos), or install/import a local skill directory.
+description: Install VulcanCode prompt skills into $VULCAN_HOME/code/skills from a GitHub repo path or local skill directory. Use when a user asks to list installable skills, install a skill from another repo (including private repos), or install/import a local skill directory.
 ---
 
 # Skill Installer
@@ -42,7 +42,7 @@ GitHub scripts use network. Local installation does not use network.
 - Defaults to direct download for public GitHub repos.
 - If download fails with auth/permission errors, falls back to git sparse checkout.
 - Aborts if the destination skill directory already exists.
-- Installs into `$VULCAN_HOME/skills/<skill-name>` (defaults to `~/.vulcan/skills`).
+- Installs into `$VULCAN_HOME/code/skills/<skill-name>` (defaults to `~/.vulcan/code/skills`).
 - Multiple `--path` values install multiple skills in one run, each named from the path basename unless `--name` is supplied.
 - Options: `--ref <ref>` (default `main`), `--dest <path>`, `--method auto|download|git`.
 - Local install validates that the source is a directory with `SKILL.md`, normalizes the destination name, and refuses to write into the managed `.system` directory.
@@ -51,5 +51,5 @@ GitHub scripts use network. Local installation does not use network.
 
 - Private GitHub repos can be accessed via existing git credentials or optional `GITHUB_TOKEN`/`GH_TOKEN` for download.
 - Git fallback tries HTTPS first, then SSH.
-- Installed annotations come from `$VULCAN_HOME/skills`.
-- System skills live under `$VULCAN_HOME/skills/.system` and are managed by VulcanCode. Do not overwrite `.system` from this skill.
+- Installed annotations come from `$VULCAN_HOME/code/skills`.
+- System skills live under `$VULCAN_HOME/code/skills/.system` and are managed by VulcanCode. Do not overwrite `.system` from this skill.

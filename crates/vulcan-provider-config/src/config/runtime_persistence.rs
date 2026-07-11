@@ -5,7 +5,6 @@ use super::default_true;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
 use vulcan_vmm::VmmConfigLayer;
 /// Persisted skill family used by the runtime foundation.
 /// 运行时基础架构使用的持久化技能类型。
@@ -353,14 +352,6 @@ impl PersistedPromptSkillState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedPromptSkillsConfiguration {
-    /// Whether the prompt skills system is globally enabled.
-    /// 是否全局启用提示词技能系统。
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// Optional user-level prompt skill root directory.
-    /// 可选的用户级提示词技能根目录。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_skill_root: Option<PathBuf>,
     /// Default state used when no per-skill override exists.
     /// 不存在单技能覆盖时使用的默认状态。
     #[serde(default = "default_prompt_skill_state")]
@@ -376,8 +367,6 @@ impl Default for PersistedPromptSkillsConfiguration {
     /// 构建默认提示词技能配置。
     fn default() -> Self {
         Self {
-            enabled: true,
-            user_skill_root: None,
             default_skill_state: PersistedPromptSkillState::Enabled,
             skill_overrides: BTreeMap::new(),
         }

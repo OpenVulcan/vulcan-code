@@ -19,6 +19,7 @@ import {
   activeAgentsHeaderSummary,
   FloatingAgentCategoryMenu,
 } from "@/components/features/agents/AgentsArea";
+import { AgentSkillsArea, FloatingAgentSkillCategoryMenu } from "@/components/features/agent-skills/AgentSkillsArea";
 import {
   ProjectSidebar,
 } from "@/components/project/ProjectSidebar";
@@ -169,9 +170,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // agentsMenuExpanded stores the shared adaptive menu state for the agents page.
   // agentsMenuExpanded 保存智能体页共享自适应菜单展开状态。
   const [agentsMenuExpanded, setAgentsMenuExpanded] = React.useState(true);
+  // agentSkillsMenuExpanded stores the shared adaptive directory state for the Agent Skills page.
+  // agentSkillsMenuExpanded 保存提示词技能页共享自适应目录展开状态。
+  const [agentSkillsMenuExpanded, setAgentSkillsMenuExpanded] = React.useState(true);
   // selectedAgentCategoryId stores the active agents page category filter.
   // selectedAgentCategoryId 保存智能体页当前分类筛选。
   const [selectedAgentCategoryId, setSelectedAgentCategoryId] = React.useState("");
+  // selectedAgentSkillCategoryId stores the active Agent Skills category filter.
+  // selectedAgentSkillCategoryId 保存提示词技能页当前分类筛选。
+  const [selectedAgentSkillCategoryId, setSelectedAgentSkillCategoryId] = React.useState("");
   // sessionToolExpanded stores the shared adaptive menu state for the chat tool panel.
   // sessionToolExpanded 保存会话工具共享自适应面板展开状态。
   const [sessionToolExpanded, setSessionToolExpanded] = React.useState(false);
@@ -684,13 +691,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // skillHeaderActions stores the registered actions for the active skills sub page.
   // skillHeaderActions 保存当前技能子页面注册的标题栏动作。
   const skillHeaderActions = React.useMemo(() => {
-    if (props.activeSkillSubArea === "lua") {
+    if (props.activeSkillSubArea === "catalog") {
       return (
         <div className="feature-header-actions workspace-skills-header-actions">
           <button
             className="skill-action-button secondary"
             disabled={skillHeaderBusyAction !== null}
-            onClick={() => void runSkillHeaderAction("lua-refresh", props.skillActions.onRefreshLuaSkills)}
+    onClick={() => void runSkillHeaderAction("lua-refresh", props.luaSkillActions.onRefreshLuaSkills)}
             type="button"
           >
             <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
@@ -703,20 +710,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         </div>
       );
     }
-    return (
-      <div className="feature-header-actions workspace-skills-header-actions">
-        <button
-          className="skill-action-button secondary"
-          disabled={skillHeaderBusyAction !== null}
-          onClick={() => void runSkillHeaderAction("agent-refresh", props.skillActions.onRefreshAgentSkills)}
-          type="button"
-        >
-          <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
-          <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
-        </button>
-      </div>
-    );
-  }, [props.activeSkillSubArea, props.skillActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
+    return null;
+  }, [props.activeSkillSubArea, props.luaSkillActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
   // agentsHeaderActions stays empty because the agents page owns a sticky action bar.
   // agentsHeaderActions 保持为空，因为智能体页面自行持有锁顶操作栏。
   const agentsHeaderActions = null;
@@ -783,11 +778,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         activeSubArea={props.activeSkillSubArea}
         luaInstallDialogOpen={luaInstallDialogOpen}
         onLuaInstallDialogOpenChange={setLuaInstallDialogOpen}
-        skillActions={props.skillActions}
+          skillActions={props.luaSkillActions}
         workbench={props.workbench}
       />
     ),
-    detail: `${skillSubAreaLabel(props.activeSkillSubArea)} · ${skillHeaderSummary.detail}`,
+    detail: `${skillSubAreaLabel(props.activeSkillSubArea, t)} · ${skillHeaderSummary.detail}`,
     headerActions: skillHeaderActions,
     title: t("workspaceShell.skillsTitle"),
     toolPanels: [{
@@ -802,6 +797,35 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           expanded={skillsMenuExpanded}
           onExpandedChange={setSkillsMenuExpanded}
           onSelectSubArea={props.onSelectSkillSubArea}
+        />
+      ),
+      side: "left",
+    }],
+  } : props.mainView === "agent-skills" ? {
+    content: (
+      <AgentSkillsArea
+        actions={props.agentSkillActions}
+        selectedCategoryId={selectedAgentSkillCategoryId}
+        onSelectCategory={setSelectedAgentSkillCategoryId}
+        workbench={props.workbench}
+      />
+    ),
+    detail: props.workbench.agentSkills.notice,
+    headerActions: null,
+    title: t("area.agentSkills"),
+    toolPanels: [{
+      className: "workspace-tool-panel-page workspace-skills-settings workspace-agent-settings",
+      contentClassName: "workspace-skills-content workspace-agent-content",
+      contentShellClassName: "workspace-skills-content-shell",
+      expanded: agentSkillsMenuExpanded,
+      onLayoutModeWillChange: notifyConversationLayoutWillChange,
+      panel: (
+        <FloatingAgentSkillCategoryMenu
+          expanded={agentSkillsMenuExpanded}
+          selectedCategoryId={selectedAgentSkillCategoryId}
+          onExpandedChange={setAgentSkillsMenuExpanded}
+          onSelectCategory={setSelectedAgentSkillCategoryId}
+          workbench={props.workbench}
         />
       ),
       side: "left",
@@ -966,6 +990,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
         onOpenSkills={props.onOpenSkills}
+        onOpenAgentSkills={props.onOpenAgentSkills}
         onOpenAgents={props.onOpenAgents}
         onOpenMemory={props.onOpenMemory}
         onSelectArea={props.onSelectArea}
@@ -974,6 +999,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         memoryActive={props.mainView === "memory"}
         agentsActive={props.mainView === "agents"}
         skillsActive={props.mainView === "skills"}
+        agentSkillsActive={props.mainView === "agent-skills"}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
         onReorderProjects={props.onReorderProjects}

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 mod install;
 
@@ -22,7 +23,7 @@ pub const SKILL_FILE_NAME: &str = "SKILL.md";
 
 /// Default directory name used below the user's home directory.
 /// 用户主目录下使用的默认目录名。
-pub const DEFAULT_USER_SKILL_DIR: &str = ".vulcan/skills";
+pub const DEFAULT_USER_SKILL_DIR: &str = ".vulcan/code/skills";
 
 /// Directory name that stores host-managed system prompt skills.
 /// 存放宿主管理系统提示词技能的目录名。
@@ -31,6 +32,26 @@ pub const SYSTEM_SKILL_DIR_NAME: &str = ".system";
 /// VulcanCode-specific skill interface metadata file name in one skill root.
 /// 单个技能根目录下的 VulcanCode 专用技能界面元数据文件名。
 pub const VULCAN_SKILL_METADATA_FILE_NAME: &str = "vulcan.yaml";
+
+/// Host-managed catalog metadata directory below the user skill root.
+/// 用户技能根目录下由宿主管理的目录元数据目录。
+pub const VULCAN_SKILL_CATALOG_DIR_NAME: &str = ".vulcan";
+
+/// Host-managed logical catalog file name.
+/// 宿主管理的逻辑目录文件名。
+pub const VULCAN_SKILL_CATALOG_FILE_NAME: &str = "catalog.yaml";
+
+/// Required schema version for package-local Vulcan metadata.
+/// 技能包内 Vulcan 元数据要求的结构版本。
+pub const VULCAN_SKILL_METADATA_SCHEMA_VERSION: u32 = 3;
+
+/// Required schema version for the host-managed logical catalog.
+/// 宿主管理逻辑目录要求的结构版本。
+pub const VULCAN_SKILL_CATALOG_SCHEMA_VERSION: u32 = 1;
+
+/// Monotonic suffix used to isolate concurrent filesystem transactions.
+/// 用于隔离并发文件系统事务的单调递增后缀。
+static PROMPT_SKILL_TRANSACTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Origin scope of one prompt skill.
 /// 单个提示词技能的来源作用域。
@@ -75,6 +96,15 @@ pub struct PromptSkill {
     /// Model-facing trigger description from frontmatter.
     /// 来自 frontmatter 的面向模型触发描述。
     pub description: String,
+    /// Optional license identifier or bundled license reference from the standard frontmatter.
+    /// 来自标准 frontmatter 的可选协议标识或包内协议文件引用。
+    pub license: Option<String>,
+    /// Optional environment compatibility statement from the standard frontmatter.
+    /// 来自标准 frontmatter 的可选环境兼容性说明。
+    pub compatibility: Option<String>,
+    /// Standard extension metadata preserved as string key-value pairs.
+    /// 以字符串键值对保留的标准扩展元数据。
+    pub metadata: BTreeMap<String, String>,
     /// Absolute or caller-provided path to the skill markdown file.
     /// 指向技能 Markdown 文件的绝对路径或调用方提供路径。
     pub skill_file: PathBuf,
@@ -86,7 +116,16 @@ pub struct PromptSkill {
     pub scope: PromptSkillScope,
     /// Optional UI-facing metadata loaded from root-level `vulcan.yaml`.
     /// 从根目录 `vulcan.yaml` 载入的可选界面展示元数据。
-    pub interface: Option<PromptSkillInterfaceMetadata>,
+    pub interface: PromptSkillInterfaceMetadata,
+    /// Logical catalog metadata resolved for this skill.
+    /// 为当前技能解析得到的逻辑目录元数据。
+    pub catalog: PromptSkillCatalogMetadata,
+    /// Auditable origin metadata resolved for this skill.
+    /// 为当前技能解析得到的可审计来源元数据。
+    pub origin: PromptSkillOriginMetadata,
+    /// Resource counts discovered below the standard optional resource directories.
+    /// 在标准可选资源目录下发现的资源数量。
+    pub resources: PromptSkillResourceSummary,
     /// Markdown body without YAML frontmatter.
     /// 去除 YAML frontmatter 后的 Markdown 正文。
     pub body: String,
@@ -103,6 +142,7 @@ impl PromptSkill {
 /// Optional UI-facing metadata for one prompt skill.
 /// 单个提示词技能的可选界面展示元数据。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PromptSkillInterfaceMetadata {
     /// Human-facing display name shown in skill lists.
     /// 技能列表中显示的人类可读名称。
@@ -110,15 +150,173 @@ pub struct PromptSkillInterfaceMetadata {
     /// Short human-facing description shown in compact cards.
     /// 紧凑卡片中显示的人类可读短描述。
     pub short_description: Option<String>,
-    /// Optional small icon path relative to the skill directory.
-    /// 相对于技能目录的可选小图标路径。
-    pub icon_small: Option<PathBuf>,
-    /// Optional large icon path relative to the skill directory.
-    /// 相对于技能目录的可选大图标路径。
-    pub icon_large: Option<PathBuf>,
-    /// Optional brand color string for future UI styling.
-    /// 供后续界面样式使用的可选品牌色字符串。
-    pub brand_color: Option<String>,
+    /// Optional emoji rendered by the same marker logic as agents.
+    /// 由智能体同款标记逻辑渲染的可选表情图标。
+    pub emoji: Option<String>,
+    /// Optional hexadecimal marker color rendered by the skill list.
+    /// 由技能列表渲染的可选十六进制标记颜色。
+    pub color: Option<String>,
+    /// Localized display metadata keyed by canonical BCP 47 locale tags.
+    /// 按规范 BCP 47 语言标签索引的本地化展示元数据。
+    pub locales: BTreeMap<String, PromptSkillLocaleMetadata>,
+}
+
+/// Localized human-facing metadata for one prompt skill.
+/// 单个提示词技能的本地化人类可读元数据。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PromptSkillLocaleMetadata {
+    /// Optional localized display name.
+    /// 可选本地化显示名称。
+    pub display_name: Option<String>,
+    /// Optional localized compact description.
+    /// 可选本地化紧凑说明。
+    pub short_description: Option<String>,
+}
+
+/// Logical catalog metadata for one prompt skill.
+/// 单个提示词技能的逻辑目录元数据。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PromptSkillCatalogMetadata {
+    /// Stable primary category identifier.
+    /// 稳定的主分类标识。
+    pub category_id: String,
+    /// Stable searchable tags.
+    /// 稳定的可搜索标签。
+    pub tags: Vec<String>,
+}
+
+/// Auditable origin metadata for one prompt skill.
+/// 单个提示词技能的可审计来源元数据。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PromptSkillOriginMetadata {
+    /// Stable origin kind.
+    /// 稳定来源类型。
+    pub kind: String,
+    /// Optional human-facing source label.
+    /// 可选人类可读来源标签。
+    pub label: Option<String>,
+    /// Optional source URL.
+    /// 可选来源链接。
+    pub url: Option<String>,
+    /// Optional source version.
+    /// 可选来源版本。
+    pub version: Option<String>,
+    /// Optional immutable source revision.
+    /// 可选不可变来源修订号。
+    pub revision: Option<String>,
+    /// Whether lifecycle updates are managed by the host.
+    /// 生命周期更新是否由宿主管理。
+    pub managed: bool,
+    /// Optional content integrity digest.
+    /// 可选内容完整性摘要。
+    pub integrity: Option<String>,
+    /// Optional installation timestamp.
+    /// 可选安装时间戳。
+    pub installed_at: Option<String>,
+    /// Optional last synchronization timestamp.
+    /// 可选最近同步时间戳。
+    pub updated_at: Option<String>,
+}
+
+/// Resource counts for one standard Agent Skills package.
+/// 单个标准 Agent Skills 技能包的资源数量。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptSkillResourceSummary {
+    /// Number of files below `scripts`.
+    /// `scripts` 目录下的文件数量。
+    pub scripts: usize,
+    /// Number of files below `references`.
+    /// `references` 目录下的文件数量。
+    pub references: usize,
+    /// Number of files below `assets`.
+    /// `assets` 目录下的文件数量。
+    pub assets: usize,
+}
+
+/// One logical Agent Skills category.
+/// 一个逻辑 Agent Skills 分类。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PromptSkillCategory {
+    /// Stable category identifier.
+    /// 稳定分类标识。
+    pub category_id: String,
+    /// Default human-facing category name.
+    /// 默认人类可读分类名称。
+    pub name: String,
+    /// Optional default category description.
+    /// 可选默认分类说明。
+    pub description: Option<String>,
+    /// Human-facing category emoji.
+    /// 人类可读分类图标。
+    pub emoji: String,
+    /// Human-facing category color.
+    /// 人类可读分类颜色。
+    pub color: String,
+    /// Stable display order.
+    /// 稳定展示顺序。
+    pub order: i32,
+    /// Whether the category ships with the host.
+    /// 当前分类是否由宿主内置。
+    pub builtin: bool,
+    /// Localized category metadata keyed by locale tag.
+    /// 按语言标签索引的本地化分类元数据。
+    pub locales: BTreeMap<String, PromptSkillCategoryLocale>,
+}
+
+/// Localized human-facing category metadata.
+/// 本地化人类可读分类元数据。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PromptSkillCategoryLocale {
+    /// Localized category name.
+    /// 本地化分类名称。
+    pub name: String,
+    /// Optional localized category description.
+    /// 可选本地化分类说明。
+    pub description: Option<String>,
+}
+
+/// Complete canonical package content accepted by the user-skill writer.
+/// 用户技能写入器接受的完整规范技能包内容。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptSkillPackageInput {
+    /// Optional original name when renaming an existing user package.
+    /// 重命名现有用户技能包时使用的可选原名称。
+    pub original_name: Option<String>,
+    /// Optional host-resolved source directory whose bundled resources seed the staged package.
+    /// 其附带资源用于初始化暂存技能包的可选宿主解析来源目录。
+    pub resource_source_dir: Option<PathBuf>,
+    /// Standard canonical skill name.
+    /// 标准规范技能名称。
+    pub name: String,
+    /// Model-facing trigger description.
+    /// 面向模型的触发说明。
+    pub description: String,
+    /// Optional license identifier or bundled file reference.
+    /// 可选协议标识或包内文件引用。
+    pub license: Option<String>,
+    /// Optional environment compatibility statement.
+    /// 可选环境兼容性说明。
+    pub compatibility: Option<String>,
+    /// Standard string extension metadata.
+    /// 标准字符串扩展元数据。
+    pub metadata: BTreeMap<String, String>,
+    /// Markdown instructions without YAML frontmatter.
+    /// 不含 YAML frontmatter 的 Markdown 指令正文。
+    pub body: String,
+    /// Complete UI-facing metadata.
+    /// 完整界面展示元数据。
+    pub interface: PromptSkillInterfaceMetadata,
+    /// Logical catalog metadata.
+    /// 逻辑目录元数据。
+    pub catalog: PromptSkillCatalogMetadata,
+    /// Auditable provenance assigned by the host management boundary.
+    /// 由宿主管理边界分配的可审计来源信息。
+    pub origin: PromptSkillOriginMetadata,
 }
 
 /// One non-fatal loading issue captured while scanning prompt skills.
@@ -146,6 +344,12 @@ pub struct PromptSkillCatalog {
     /// Parsed skills sorted by stable name.
     /// 按稳定名称排序的已解析技能集合。
     pub skills: Vec<PromptSkill>,
+    /// All parsed source records before same-name scope resolution.
+    /// 同名作用域解析前的全部已解析来源记录。
+    pub records: Vec<PromptSkill>,
+    /// Logical categories available to the Agent Skills page.
+    /// Agent Skills 页面可用的逻辑分类。
+    pub categories: Vec<PromptSkillCategory>,
     /// Non-fatal loading errors.
     /// 非致命加载错误集合。
     pub errors: Vec<PromptSkillLoadError>,
@@ -157,15 +361,30 @@ impl PromptSkillCatalog {
     pub fn skill(&self, name: &str) -> Option<&PromptSkill> {
         self.skills.iter().find(|skill| skill.name == name)
     }
+
+    /// Returns one exact source record by its canonical `scope:name` key.
+    /// 按规范 `scope:name` 键返回一条精确来源记录。
+    pub fn source_record(&self, skill_key: &str) -> Option<&PromptSkill> {
+        // scope_and_name decomposes the only accepted source-key structure.
+        // scope_and_name 分解唯一允许的来源键结构。
+        let (scope, name) = skill_key.split_once(':')?;
+        // scope is resolved only from the two real package roots.
+        // scope 仅从两个真实技能包根目录解析。
+        let scope = match scope {
+            "system" => PromptSkillScope::System,
+            "user" => PromptSkillScope::User,
+            _ => return None,
+        };
+        self.records
+            .iter()
+            .find(|skill| skill.scope == scope && skill.name == name)
+    }
 }
 
-/// Global prompt skills configuration.
-/// 全局提示词技能配置。
+/// Prompt skills roots and default per-skill configuration.
+/// 提示词技能根目录与默认单技能配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptSkillsGlobalConfig {
-    /// Whether prompt skills are globally enabled.
-    /// 是否全局启用提示词技能。
-    pub enabled: bool,
     /// Optional user skill root override.
     /// 可选用户技能根目录覆盖值。
     pub user_skill_root: Option<PathBuf>,
@@ -175,17 +394,16 @@ pub struct PromptSkillsGlobalConfig {
     /// Default state used when no per-skill override exists.
     /// 不存在单技能覆盖时使用的默认状态。
     pub default_skill_state: PromptSkillState,
-    /// Global per-skill state overrides.
-    /// 全局单技能状态覆盖。
+    /// Persisted per-skill state overrides.
+    /// 持久化单技能状态覆盖。
     pub skill_overrides: BTreeMap<String, PromptSkillState>,
 }
 
 impl Default for PromptSkillsGlobalConfig {
-    /// Builds the default globally enabled prompt skills configuration.
-    /// 构建默认全局启用的提示词技能配置。
+    /// Builds the default prompt skills roots and per-skill configuration.
+    /// 构建默认提示词技能根目录与单技能配置。
     fn default() -> Self {
         Self {
-            enabled: true,
             user_skill_root: None,
             system_skill_root: None,
             default_skill_state: PromptSkillState::Enabled,
@@ -279,9 +497,6 @@ impl ResolvedPromptSkill {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PromptSkillStateSource {
-    /// The global total switch disabled every skill.
-    /// 全局总开关关闭了所有技能。
-    GlobalDisabled,
     /// The session-level override decided the state.
     /// 会话级覆盖决定了该状态。
     Session,
@@ -354,29 +569,901 @@ pub fn load_prompt_skills_from_roots(
     system_root: PathBuf,
     user_root: PathBuf,
 ) -> PromptSkillCatalog {
+    // Initialize one complete catalog transaction for both source scopes.
+    // 为两个来源作用域初始化一次完整目录事务。
     let mut catalog = PromptSkillCatalog {
         user_root: user_root.clone(),
         system_root: system_root.clone(),
         skills: Vec::new(),
+        records: Vec::new(),
+        categories: default_prompt_skill_categories(),
         errors: Vec::new(),
     };
-
-    let mut by_name = BTreeMap::<String, PromptSkill>::new();
+    // Preserve system records independently so user overrides never erase provenance.
+    // 独立保留系统记录，确保用户覆盖不会抹除来源。
+    let mut system_by_name = BTreeMap::<String, PromptSkill>::new();
+    // Preserve user records independently for explicit effective-resolution behavior.
+    // 独立保留用户记录，以实现显式生效解析行为。
+    let mut user_by_name = BTreeMap::<String, PromptSkill>::new();
     scan_prompt_skill_root(
         &system_root,
         PromptSkillScope::System,
-        &mut by_name,
+        &mut system_by_name,
         &mut catalog.errors,
     );
     scan_prompt_skill_root(
         &user_root,
         PromptSkillScope::User,
-        &mut by_name,
+        &mut user_by_name,
         &mut catalog.errors,
     );
-
-    catalog.skills = by_name.into_values().collect();
+    // Load the host-managed logical catalog without mutating third-party packages.
+    // 加载宿主管理逻辑目录，不修改第三方技能包。
+    let host_catalog = load_host_prompt_skill_catalog(&user_root, &mut catalog.errors);
+    merge_user_prompt_skill_categories(
+        &mut catalog.categories,
+        host_catalog.categories,
+        &user_root,
+        &mut catalog.errors,
+    );
+    apply_host_prompt_skill_overrides(
+        &host_catalog.skills,
+        &mut system_by_name,
+        &mut user_by_name,
+        &mut catalog.errors,
+    );
+    // Build the category lookup used to reject orphan assignments deterministically.
+    // 构建用于确定性拒绝孤立归属的分类查找表。
+    let category_ids = catalog
+        .categories
+        .iter()
+        .map(|category| category.category_id.clone())
+        .collect::<BTreeSet<_>>();
+    normalize_prompt_skill_categories(
+        system_by_name.values_mut(),
+        &category_ids,
+        &mut catalog.errors,
+    );
+    normalize_prompt_skill_categories(
+        user_by_name.values_mut(),
+        &category_ids,
+        &mut catalog.errors,
+    );
+    // Retain every parsed source record in stable scope then name order.
+    // 按稳定的作用域和名称顺序保留每条已解析来源记录。
+    catalog.records.extend(system_by_name.values().cloned());
+    catalog.records.extend(user_by_name.values().cloned());
+    // Resolve one effective runtime record per standard name with the user scope winning.
+    // 按用户作用域优先规则为每个标准名称解析一条运行时有效记录。
+    let mut effective_by_name = system_by_name;
+    effective_by_name.extend(user_by_name);
+    catalog.skills = effective_by_name.into_values().collect();
     catalog
+}
+
+/// Returns the immutable default logical Agent Skills categories.
+/// 返回不可变的默认逻辑 Agent Skills 分类。
+pub fn default_prompt_skill_categories() -> Vec<PromptSkillCategory> {
+    vec![
+        builtin_prompt_skill_category("general", "General", "通用", "✨", "#64748B", 10),
+        builtin_prompt_skill_category(
+            "engineering",
+            "Engineering",
+            "工程开发",
+            "💻",
+            "#2563EB",
+            20,
+        ),
+        builtin_prompt_skill_category(
+            "quality",
+            "Testing & Quality",
+            "测试与质量",
+            "✅",
+            "#16A34A",
+            30,
+        ),
+        builtin_prompt_skill_category(
+            "operations",
+            "Operations & Automation",
+            "运维与自动化",
+            "⚙️",
+            "#EA580C",
+            40,
+        ),
+        builtin_prompt_skill_category("data", "Data", "数据", "📊", "#0891B2", 50),
+        builtin_prompt_skill_category(
+            "documents",
+            "Documents & Content",
+            "文档与内容",
+            "📄",
+            "#7C3AED",
+            60,
+        ),
+        builtin_prompt_skill_category(
+            "design",
+            "Design & Media",
+            "设计与媒体",
+            "🎨",
+            "#DB2777",
+            70,
+        ),
+        builtin_prompt_skill_category("research", "Research", "研究与检索", "🔎", "#4F46E5", 80),
+        builtin_prompt_skill_category("security", "Security", "安全", "🛡️", "#DC2626", 90),
+        builtin_prompt_skill_category("integrations", "Integrations", "集成", "🔌", "#0D9488", 100),
+        builtin_prompt_skill_category(
+            "uncategorized",
+            "Uncategorized",
+            "未分配",
+            "📦",
+            "#78716C",
+            1000,
+        ),
+    ]
+}
+
+/// Builds one immutable bilingual default category.
+/// 构建一个不可变的双语默认分类。
+fn builtin_prompt_skill_category(
+    category_id: &str,
+    english_name: &str,
+    chinese_name: &str,
+    emoji: &str,
+    color: &str,
+    order: i32,
+) -> PromptSkillCategory {
+    // Build the localized display map for both first-class interface languages.
+    // 为两种一级界面语言构建本地化展示映射。
+    let locales = BTreeMap::from([
+        (
+            String::from("en-US"),
+            PromptSkillCategoryLocale {
+                name: english_name.to_string(),
+                description: None,
+            },
+        ),
+        (
+            String::from("zh-CN"),
+            PromptSkillCategoryLocale {
+                name: chinese_name.to_string(),
+                description: None,
+            },
+        ),
+    ]);
+    PromptSkillCategory {
+        category_id: category_id.to_string(),
+        name: english_name.to_string(),
+        description: None,
+        emoji: emoji.to_string(),
+        color: color.to_string(),
+        order,
+        builtin: true,
+        locales,
+    }
+}
+
+/// Saves one user-owned Agent Skills package through a validated directory transaction.
+/// 通过经过校验的目录事务保存一个用户拥有的 Agent Skills 技能包。
+///
+/// # Parameters
+/// 参数
+/// - `user_root`: User-owned Agent Skills root directory.
+/// - `user_root`：用户拥有的 Agent Skills 根目录。
+/// - `input`: Complete canonical package content.
+/// - `input`：完整规范技能包内容。
+///
+/// # Returns
+/// 返回值
+/// The parsed committed package, or a deterministic validation or filesystem error.
+/// 返回解析后的已提交技能包，或确定性的校验/文件系统错误。
+pub fn save_user_prompt_skill_package(
+    user_root: &Path,
+    input: PromptSkillPackageInput,
+) -> Result<PromptSkill, String> {
+    if input.name != input.name.trim() {
+        return Err(String::from(
+            "Managed Agent Skill names must already be canonical and cannot contain surrounding whitespace.",
+        ));
+    }
+    let target_name = input.name.clone();
+    validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), &target_name)
+        .map_err(|error| error.message)?;
+    let submitted_original_name = input.original_name.as_deref();
+    if submitted_original_name.is_some_and(|value| value.is_empty() || value != value.trim()) {
+        return Err(String::from(
+            "Original Agent Skill names must already be canonical and cannot be empty or contain surrounding whitespace.",
+        ));
+    }
+    let original_name = submitted_original_name
+        .unwrap_or(target_name.as_str())
+        .to_string();
+    validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), &original_name)
+        .map_err(|error| error.message)?;
+    validate_prompt_skill_package_input(&input)?;
+    fs::create_dir_all(user_root).map_err(|error| {
+        format!(
+            "Failed to create Agent Skills user root `{}`: {error}",
+            user_root.display()
+        )
+    })?;
+    let target_dir = user_root.join(&target_name);
+    let original_dir = user_root.join(&original_name);
+    if submitted_original_name.is_none() && target_dir.exists() {
+        return Err(format!(
+            "Agent Skill `{target_name}` already exists in the user catalog."
+        ));
+    }
+    if submitted_original_name.is_some() && !original_dir.is_dir() {
+        return Err(format!(
+            "Original user Agent Skill `{original_name}` does not exist."
+        ));
+    }
+    if target_name != original_name && target_dir.exists() {
+        return Err(format!(
+            "Agent Skill `{target_name}` already exists in the user catalog."
+        ));
+    }
+    // host_catalog is the authoritative logical category and tag assignment table.
+    // host_catalog 是权威逻辑分类与标签归属表。
+    let mut host_catalog = read_host_prompt_skill_catalog_strict(user_root)?;
+    // category_exists validates against immutable defaults and user-added category rows.
+    // category_exists 同时针对不可变默认分类与用户附加分类校验。
+    let category_exists = default_prompt_skill_categories()
+        .iter()
+        .any(|category| category.category_id == input.catalog.category_id)
+        || host_catalog
+            .categories
+            .iter()
+            .any(|category| category.category_id == input.catalog.category_id);
+    if !category_exists {
+        return Err(format!(
+            "Agent Skills category `{}` does not exist.",
+            input.catalog.category_id
+        ));
+    }
+    if original_name != target_name {
+        host_catalog.skills.remove(&original_name);
+    }
+    // assignment is the unique host row synchronized with the package transaction.
+    // assignment 是与技能包事务同步的唯一宿主归属记录。
+    let assignment = host_catalog.skills.entry(target_name.clone()).or_default();
+    assignment.category_id = Some(input.catalog.category_id.clone());
+    assignment.tags = Some(normalized_unique_strings(input.catalog.tags.clone()));
+    let transaction_dir = prompt_skill_transaction_dir(user_root);
+    let staged_dir = transaction_dir.join(&target_name);
+    let backup_dir = transaction_dir.join(".backup");
+    fs::create_dir_all(&transaction_dir)
+        .map_err(|error| format!("Failed to create Agent Skills transaction directory: {error}"))?;
+    let transaction_result = (|| {
+        if original_dir.is_dir() {
+            copy_prompt_skill_directory(&original_dir, &staged_dir)?;
+        } else if let Some(source_dir) = input.resource_source_dir.as_deref() {
+            copy_prompt_skill_directory(source_dir, &staged_dir)?;
+        } else {
+            fs::create_dir_all(&staged_dir)
+                .map_err(|error| format!("Failed to create staged Agent Skill: {error}"))?;
+        }
+        write_prompt_skill_package_files(&staged_dir, &input, &target_name)?;
+        parse_prompt_skill_file_with_scope(
+            &staged_dir.join(SKILL_FILE_NAME),
+            PromptSkillScope::User,
+        )
+        .map_err(|error| error.message)?;
+        if original_dir.exists() {
+            fs::rename(&original_dir, &backup_dir)
+                .map_err(|error| format!("Failed to stage existing Agent Skill backup: {error}"))?;
+        }
+        if let Err(error) = fs::rename(&staged_dir, &target_dir) {
+            if backup_dir.exists() {
+                let _ = fs::rename(&backup_dir, &original_dir);
+            }
+            return Err(format!(
+                "Failed to commit Agent Skill `{target_name}`: {error}"
+            ));
+        }
+        if let Err(error) = write_host_prompt_skill_catalog(user_root, &host_catalog) {
+            let _ = fs::remove_dir_all(&target_dir);
+            if backup_dir.exists() {
+                let _ = fs::rename(&backup_dir, &original_dir);
+            }
+            return Err(error);
+        }
+        if backup_dir.exists() {
+            let _ = fs::remove_dir_all(&backup_dir);
+        }
+        parse_prompt_skill_file_with_scope(
+            &target_dir.join(SKILL_FILE_NAME),
+            PromptSkillScope::User,
+        )
+        .map_err(|error| error.message)
+    })();
+    let _ = fs::remove_dir_all(&transaction_dir);
+    transaction_result
+}
+
+/// Deletes one exact user-owned Agent Skills package without touching system packages.
+/// 删除一个精确的用户 Agent Skills 技能包且不触碰系统技能包。
+pub fn delete_user_prompt_skill_package(user_root: &Path, name: &str) -> Result<(), String> {
+    if name != name.trim() {
+        return Err(String::from(
+            "Managed Agent Skill names must already be canonical and cannot contain surrounding whitespace.",
+        ));
+    }
+    validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), name).map_err(|error| error.message)?;
+    let target_dir = user_root.join(name);
+    if !target_dir.is_dir() {
+        return Err(format!("User Agent Skill `{name}` does not exist."));
+    }
+    // catalog is the strict assignment table synchronized with package deletion.
+    // catalog 是与技能包删除同步的严格归属表。
+    let mut catalog = read_host_prompt_skill_catalog_strict(user_root)?;
+    catalog.skills.remove(name);
+    // transaction_dir retains the package until catalog persistence succeeds.
+    // transaction_dir 在目录持久化成功前保留技能包。
+    let transaction_dir = prompt_skill_transaction_dir(user_root);
+    let removed_dir = transaction_dir.join("removed");
+    fs::create_dir_all(&transaction_dir)
+        .map_err(|error| format!("Failed to create Agent Skills transaction directory: {error}"))?;
+    fs::rename(&target_dir, &removed_dir)
+        .map_err(|error| format!("Failed to remove user Agent Skill `{name}`: {error}"))?;
+    if let Err(error) = write_host_prompt_skill_catalog(user_root, &catalog) {
+        let _ = fs::rename(&removed_dir, &target_dir);
+        let _ = fs::remove_dir_all(&transaction_dir);
+        return Err(error);
+    }
+    let _ = fs::remove_dir_all(&transaction_dir);
+    Ok(())
+}
+
+/// Saves or replaces one user-defined logical category in the host catalog.
+/// 在宿主目录中保存或替换一个用户定义逻辑分类。
+pub fn save_user_prompt_skill_category(
+    user_root: &Path,
+    mut category: PromptSkillCategory,
+) -> Result<(), String> {
+    validate_prompt_skill_category(&category)?;
+    if default_prompt_skill_categories()
+        .iter()
+        .any(|builtin| builtin.category_id == category.category_id)
+    {
+        return Err(format!(
+            "Built-in category `{}` is immutable.",
+            category.category_id
+        ));
+    }
+    category.builtin = false;
+    let mut catalog = read_host_prompt_skill_catalog_strict(user_root)?;
+    catalog
+        .categories
+        .retain(|item| item.category_id != category.category_id);
+    catalog.categories.push(category);
+    catalog
+        .categories
+        .sort_by_key(|item| (item.order, item.category_id.clone()));
+    write_host_prompt_skill_catalog(user_root, &catalog)
+}
+
+/// Deletes one user-defined category and moves its assigned skills to `uncategorized`.
+/// 删除一个用户定义分类，并将其已归属技能迁移到 `uncategorized`。
+pub fn delete_user_prompt_skill_category(
+    system_root: &Path,
+    user_root: &Path,
+    category_id: &str,
+) -> Result<(), String> {
+    validate_prompt_skill_name(Path::new(VULCAN_SKILL_CATALOG_FILE_NAME), category_id)
+        .map_err(|error| error.message)?;
+    if default_prompt_skill_categories()
+        .iter()
+        .any(|category| category.category_id == category_id)
+    {
+        return Err(format!("Built-in category `{category_id}` is immutable."));
+    }
+    // loaded is the exact merged catalog used to validate assignment identity.
+    // loaded 是用于校验归属身份的精确合并目录。
+    let loaded = load_prompt_skills_from_roots(system_root.to_path_buf(), user_root.to_path_buf());
+    if !loaded
+        .categories
+        .iter()
+        .any(|category| category.category_id == category_id && !category.builtin)
+    {
+        return Err(format!(
+            "User Agent Skills category `{category_id}` does not exist."
+        ));
+    }
+    let assigned_names = loaded
+        .skills
+        .iter()
+        .filter(|skill| skill.catalog.category_id == category_id)
+        .map(|skill| skill.name.clone())
+        .collect::<Vec<_>>();
+    // catalog is the strict user-root assignment table committed atomically below.
+    // catalog 是下方原子提交的严格用户根目录归属表。
+    let mut catalog = read_host_prompt_skill_catalog_strict(user_root)?;
+    catalog
+        .categories
+        .retain(|category| category.category_id != category_id);
+    for name in assigned_names {
+        catalog.skills.entry(name).or_default().category_id = Some(String::from("uncategorized"));
+    }
+    write_host_prompt_skill_catalog(user_root, &catalog)
+}
+
+/// Assigns one effective skill to an exact logical category through host metadata.
+/// 通过宿主元数据将一个有效技能归入精确逻辑分类。
+pub fn set_user_prompt_skill_category(
+    system_root: &Path,
+    user_root: &Path,
+    name: &str,
+    category_id: &str,
+) -> Result<(), String> {
+    validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), name).map_err(|error| error.message)?;
+    let available =
+        load_prompt_skills_from_roots(system_root.to_path_buf(), user_root.to_path_buf());
+    if available.skill(name).is_none() {
+        return Err(format!("Agent Skill `{name}` does not exist."));
+    }
+    if !available
+        .categories
+        .iter()
+        .any(|category| category.category_id == category_id)
+    {
+        return Err(format!(
+            "Agent Skills category `{category_id}` does not exist."
+        ));
+    }
+    let mut catalog = read_host_prompt_skill_catalog_strict(user_root)?;
+    catalog
+        .skills
+        .entry(name.to_string())
+        .or_default()
+        .category_id = Some(category_id.to_string());
+    write_host_prompt_skill_catalog(user_root, &catalog)
+}
+
+/// Persists one managed skill assignment in the user-root logical catalog table.
+/// 在用户技能根目录的逻辑目录表中持久化一个受管技能归属。
+///
+/// Parameters: system and user roots, optional renamed source name, target name, category, and tags.
+/// 参数：系统与用户根目录、可选重命名来源名称、目标名称、分类与标签。
+/// Returns: success after the strict catalog file is atomically replaced.
+/// 返回值：严格目录文件完成原子替换后返回成功。
+pub fn save_user_prompt_skill_catalog_assignment(
+    system_root: &Path,
+    user_root: &Path,
+    original_name: Option<&str>,
+    name: &str,
+    category_id: &str,
+    tags: Vec<String>,
+) -> Result<(), String> {
+    validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), name).map_err(|error| error.message)?;
+    if let Some(original_name) = original_name {
+        validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), original_name)
+            .map_err(|error| error.message)?;
+    }
+    let loaded = load_prompt_skills_from_roots(system_root.to_path_buf(), user_root.to_path_buf());
+    if !loaded.skills.iter().any(|skill| skill.name == name) {
+        return Err(format!("Agent Skill `{name}` does not exist."));
+    }
+    if !loaded
+        .categories
+        .iter()
+        .any(|category| category.category_id == category_id)
+    {
+        return Err(format!(
+            "Agent Skills category `{category_id}` does not exist."
+        ));
+    }
+    let mut catalog = read_host_prompt_skill_catalog_strict(user_root)?;
+    if let Some(original_name) = original_name.filter(|original_name| *original_name != name) {
+        catalog.skills.remove(original_name);
+    }
+    // metadata is the unique assignment row keyed by the canonical package name.
+    // metadata 是以规范技能包名称为键的唯一归属记录。
+    let metadata = catalog.skills.entry(name.to_string()).or_default();
+    metadata.category_id = Some(category_id.to_string());
+    metadata.tags = Some(normalized_unique_strings(tags));
+    write_host_prompt_skill_catalog(user_root, &catalog)
+}
+
+/// Validates all package input fields that are not covered by the standard parser.
+/// 校验标准解析器未覆盖的全部技能包输入字段。
+fn validate_prompt_skill_package_input(input: &PromptSkillPackageInput) -> Result<(), String> {
+    if input.description.trim().is_empty() || input.description.chars().count() > 1024 {
+        return Err(String::from(
+            "Agent Skill description must contain 1 to 1024 characters.",
+        ));
+    }
+    if input
+        .compatibility
+        .as_deref()
+        .is_some_and(|value| value.chars().count() > 500)
+    {
+        return Err(String::from(
+            "Agent Skill compatibility must not exceed 500 characters.",
+        ));
+    }
+    if input.origin.kind.trim().is_empty() {
+        return Err(String::from(
+            "Managed Agent Skill origin kind cannot be empty.",
+        ));
+    }
+    if input
+        .interface
+        .emoji
+        .as_deref()
+        .is_some_and(|emoji| emoji.trim().is_empty())
+    {
+        return Err(String::from("Agent Skill emoji cannot be empty."));
+    }
+    if input
+        .interface
+        .color
+        .as_deref()
+        .is_some_and(|color| !valid_hex_color(color.trim()))
+    {
+        return Err(String::from(
+            "Agent Skill color must be a hexadecimal RGB or RGBA color.",
+        ));
+    }
+    Ok(())
+}
+
+/// Writes canonical SKILL.md and vulcan.yaml files into one staged directory.
+/// 将规范 SKILL.md 与 vulcan.yaml 写入一个暂存目录。
+fn write_prompt_skill_package_files(
+    directory: &Path,
+    input: &PromptSkillPackageInput,
+    target_name: &str,
+) -> Result<(), String> {
+    let frontmatter = PromptSkillFrontmatter {
+        name: target_name.to_string(),
+        description: input.description.trim().to_string(),
+        license: normalize_optional_string(input.license.clone()),
+        compatibility: normalize_optional_string(input.compatibility.clone()),
+        metadata: input.metadata.clone(),
+    };
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|error| format!("Failed to serialize Agent Skill frontmatter: {error}"))?;
+    let skill_text = format!("---\n{yaml}---\n{}", input.body.trim_start());
+    fs::write(directory.join(SKILL_FILE_NAME), skill_text)
+        .map_err(|error| format!("Failed to write staged SKILL.md: {error}"))?;
+    let metadata = PromptSkillAgentMetadata {
+        schema_version: VULCAN_SKILL_METADATA_SCHEMA_VERSION,
+        interface: PromptSkillInterfaceMetadataRaw {
+            display_name: input.interface.display_name.clone(),
+            short_description: input.interface.short_description.clone(),
+            emoji: input.interface.emoji.clone(),
+            color: input.interface.color.clone(),
+            locales: input.interface.locales.clone(),
+        },
+        catalog: input.catalog.clone(),
+        origin: input.origin.clone(),
+    };
+    let yaml = serde_yaml::to_string(&metadata)
+        .map_err(|error| format!("Failed to serialize Agent Skill metadata: {error}"))?;
+    fs::write(directory.join(VULCAN_SKILL_METADATA_FILE_NAME), yaml)
+        .map_err(|error| format!("Failed to write staged vulcan.yaml: {error}"))
+}
+
+/// Recursively copies one package while rejecting symbolic links.
+/// 递归复制一个技能包并拒绝符号链接。
+fn copy_prompt_skill_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("Failed to create staged package directory: {error}"))?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("Failed to read existing Agent Skill: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Failed to inspect existing Agent Skill: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Failed to inspect package entry: {error}"))?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "Symbolic links are not permitted in managed Agent Skill packages: {}",
+                entry.path().display()
+            ));
+        }
+        let next_destination = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_prompt_skill_directory(&entry.path(), &next_destination)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), next_destination)
+                .map_err(|error| format!("Failed to copy Agent Skill resource: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Builds one isolated transaction directory below the host-only metadata root.
+/// 在仅宿主使用的元数据根目录下构建一个隔离事务目录。
+fn prompt_skill_transaction_dir(user_root: &Path) -> PathBuf {
+    let sequence = PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    user_root
+        .join(VULCAN_SKILL_CATALOG_DIR_NAME)
+        .join("transactions")
+        .join(format!("{}-{sequence}", std::process::id()))
+}
+
+/// Reads the strict host catalog or creates an empty current-schema document.
+/// 读取严格宿主目录或创建空的当前结构文档。
+fn read_host_prompt_skill_catalog_strict(
+    user_root: &Path,
+) -> Result<HostPromptSkillCatalog, String> {
+    let path = user_root
+        .join(VULCAN_SKILL_CATALOG_DIR_NAME)
+        .join(VULCAN_SKILL_CATALOG_FILE_NAME);
+    if !path.exists() {
+        return Ok(HostPromptSkillCatalog {
+            schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
+            ..HostPromptSkillCatalog::default()
+        });
+    }
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Failed to read Agent Skills catalog `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let catalog: HostPromptSkillCatalog = serde_yaml::from_str(&raw).map_err(|error| {
+        format!(
+            "Failed to parse Agent Skills catalog `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if catalog.schema_version != VULCAN_SKILL_CATALOG_SCHEMA_VERSION {
+        return Err(format!(
+            "Unsupported Agent Skills catalog schema version {}.",
+            catalog.schema_version
+        ));
+    }
+    Ok(catalog)
+}
+
+/// Atomically replaces the strict host catalog file.
+/// 原子替换严格宿主目录文件。
+fn write_host_prompt_skill_catalog(
+    user_root: &Path,
+    catalog: &HostPromptSkillCatalog,
+) -> Result<(), String> {
+    let directory = user_root.join(VULCAN_SKILL_CATALOG_DIR_NAME);
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Failed to create Agent Skills metadata directory: {error}"))?;
+    let target = directory.join(VULCAN_SKILL_CATALOG_FILE_NAME);
+    let temporary = directory.join(format!(
+        "catalog-{}.yaml.tmp",
+        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let yaml = serde_yaml::to_string(catalog)
+        .map_err(|error| format!("Failed to serialize Agent Skills catalog: {error}"))?;
+    fs::write(&temporary, yaml)
+        .map_err(|error| format!("Failed to write Agent Skills catalog transaction: {error}"))?;
+    let backup = directory.join(format!(
+        "catalog-{}.yaml.backup",
+        PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    if target.exists() {
+        fs::rename(&target, &backup)
+            .map_err(|error| format!("Failed to stage Agent Skills catalog backup: {error}"))?;
+    }
+    if let Err(error) = fs::rename(&temporary, &target) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &target);
+        }
+        return Err(format!("Failed to commit Agent Skills catalog: {error}"));
+    }
+    if backup.exists() {
+        let _ = fs::remove_file(backup);
+    }
+    Ok(())
+}
+
+/// Validates one user-defined category against the strict catalog contract.
+/// 按严格目录契约校验一个用户定义分类。
+fn validate_prompt_skill_category(category: &PromptSkillCategory) -> Result<(), String> {
+    validate_prompt_skill_name(
+        Path::new(VULCAN_SKILL_CATALOG_FILE_NAME),
+        category.category_id.as_str(),
+    )
+    .map_err(|error| error.message)?;
+    if category.name.trim().is_empty() {
+        return Err(String::from("Agent Skills category name cannot be empty."));
+    }
+    if category.emoji.trim().is_empty() || category.color.trim().is_empty() {
+        return Err(String::from(
+            "Agent Skills category emoji and color are required.",
+        ));
+    }
+    if !valid_hex_color(category.color.trim()) {
+        return Err(String::from(
+            "Agent Skills category color must be a hexadecimal RGB or RGBA color.",
+        ));
+    }
+    if let Some(locale) = category
+        .locales
+        .keys()
+        .find(|locale| !valid_bcp47_locale_tag(locale))
+    {
+        return Err(format!(
+            "Agent Skills category locale `{locale}` is not a valid BCP 47 language tag."
+        ));
+    }
+    if category
+        .locales
+        .values()
+        .any(|metadata| metadata.name.trim().is_empty())
+    {
+        return Err(String::from(
+            "Every localized Agent Skills category name must be non-empty.",
+        ));
+    }
+    Ok(())
+}
+
+/// Loads the strict host-managed logical catalog or records one explicit diagnostic.
+/// 加载严格的宿主管理逻辑目录，失败时记录一条明确诊断。
+fn load_host_prompt_skill_catalog(
+    user_root: &Path,
+    errors: &mut Vec<PromptSkillLoadError>,
+) -> HostPromptSkillCatalog {
+    // Resolve the unique host catalog path below the user skill root.
+    // 解析用户技能根目录下唯一的宿主目录路径。
+    let catalog_path = user_root
+        .join(VULCAN_SKILL_CATALOG_DIR_NAME)
+        .join(VULCAN_SKILL_CATALOG_FILE_NAME);
+    if !catalog_path.is_file() {
+        return HostPromptSkillCatalog {
+            schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
+            ..HostPromptSkillCatalog::default()
+        };
+    }
+    // Read the host catalog as UTF-8 YAML.
+    // 以 UTF-8 YAML 读取宿主目录。
+    let raw = match fs::read_to_string(&catalog_path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            errors.push(PromptSkillLoadError {
+                path: catalog_path,
+                message: format!("Failed to read Agent Skills catalog metadata: {error}"),
+            });
+            return HostPromptSkillCatalog::default();
+        }
+    };
+    // Parse only the current strict host catalog schema.
+    // 仅解析当前严格宿主目录结构。
+    let parsed = match serde_yaml::from_str::<HostPromptSkillCatalog>(&raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            errors.push(PromptSkillLoadError {
+                path: catalog_path,
+                message: format!("Failed to parse Agent Skills catalog metadata: {error}"),
+            });
+            return HostPromptSkillCatalog::default();
+        }
+    };
+    if parsed.schema_version != VULCAN_SKILL_CATALOG_SCHEMA_VERSION {
+        errors.push(PromptSkillLoadError {
+            path: catalog_path,
+            message: format!(
+                "Agent Skills catalog schema_version must equal {}.",
+                VULCAN_SKILL_CATALOG_SCHEMA_VERSION
+            ),
+        });
+        return HostPromptSkillCatalog::default();
+    }
+    parsed
+}
+
+/// Merges strict user categories after immutable built-in categories.
+/// 在不可变内置分类之后合并严格用户分类。
+fn merge_user_prompt_skill_categories(
+    categories: &mut Vec<PromptSkillCategory>,
+    user_categories: Vec<PromptSkillCategory>,
+    user_root: &Path,
+    errors: &mut Vec<PromptSkillLoadError>,
+) {
+    // Track every stable category identifier already admitted.
+    // 跟踪每个已经接纳的稳定分类标识。
+    let mut category_ids = categories
+        .iter()
+        .map(|category| category.category_id.clone())
+        .collect::<BTreeSet<_>>();
+    for mut category in user_categories {
+        category.category_id = category.category_id.trim().to_string();
+        let validation_error = validate_prompt_skill_category(&category).err();
+        if validation_error.is_some() || !category_ids.insert(category.category_id.clone()) {
+            errors.push(PromptSkillLoadError {
+                path: user_root
+                    .join(VULCAN_SKILL_CATALOG_DIR_NAME)
+                    .join(VULCAN_SKILL_CATALOG_FILE_NAME),
+                message: validation_error.unwrap_or_else(|| {
+                    format!(
+                        "User Agent Skills category id `{}` duplicates an existing category.",
+                        category.category_id
+                    )
+                }),
+            });
+            continue;
+        }
+        category.builtin = false;
+        categories.push(category);
+    }
+    categories.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then_with(|| left.category_id.cmp(&right.category_id))
+    });
+}
+
+/// Applies host-managed overrides to the effective source record for each standard name.
+/// 将宿主管理覆盖应用到每个标准名称的有效来源记录。
+fn apply_host_prompt_skill_overrides(
+    overrides: &BTreeMap<String, HostPromptSkillOverride>,
+    system_by_name: &mut BTreeMap<String, PromptSkill>,
+    user_by_name: &mut BTreeMap<String, PromptSkill>,
+    errors: &mut Vec<PromptSkillLoadError>,
+) {
+    for (name, metadata_override) in overrides {
+        // Select the same deterministic effective source used by runtime resolution.
+        // 选择与运行时解析一致的确定性有效来源。
+        let skill = user_by_name
+            .get_mut(name)
+            .or_else(|| system_by_name.get_mut(name));
+        let Some(skill) = skill else {
+            errors.push(PromptSkillLoadError {
+                path: PathBuf::from(name),
+                message: format!(
+                    "Agent Skills catalog override references missing skill `{name}`."
+                ),
+            });
+            continue;
+        };
+        if let Some(interface) = metadata_override.interface.clone() {
+            skill.interface = interface;
+        }
+        if let Some(category_id) = metadata_override.category_id.as_deref() {
+            skill.catalog.category_id = category_id.trim().to_string();
+        }
+        if let Some(tags) = metadata_override.tags.clone() {
+            skill.catalog.tags = normalized_unique_strings(tags);
+        }
+        if let Some(origin) = metadata_override.origin.clone() {
+            skill.origin = origin;
+        }
+    }
+}
+
+/// Reassigns invalid logical categories to the deterministic uncategorized category.
+/// 将无效逻辑分类重新归入确定性的未分配目录。
+fn normalize_prompt_skill_categories<'a>(
+    skills: impl Iterator<Item = &'a mut PromptSkill>,
+    category_ids: &BTreeSet<String>,
+    errors: &mut Vec<PromptSkillLoadError>,
+) {
+    for skill in skills {
+        if category_ids.contains(&skill.catalog.category_id) {
+            continue;
+        }
+        errors.push(PromptSkillLoadError {
+            path: skill.base_dir.clone(),
+            message: format!(
+                "Skill `{}` references missing category `{}` and was assigned to `uncategorized`.",
+                skill.name, skill.catalog.category_id
+            ),
+        });
+        skill.catalog.category_id = String::from("uncategorized");
+    }
+}
+
+/// Returns whether one logical category identifier follows the stable id contract.
+/// 返回一个逻辑分类标识是否符合稳定标识契约。
+fn valid_category_id(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// Scans one direct-child prompt skill root and records non-fatal load errors.
@@ -470,72 +1557,253 @@ pub fn parse_prompt_skill_text_with_scope(
     raw: &str,
     scope: PromptSkillScope,
 ) -> Result<PromptSkill, PromptSkillLoadError> {
+    // Split the standard frontmatter from the model-facing instruction body.
+    // 从面向模型的说明正文中拆分标准 frontmatter。
     let (frontmatter, body) = split_frontmatter(raw).ok_or_else(|| PromptSkillLoadError {
         path: skill_file.to_path_buf(),
         message: String::from("SKILL.md must start with YAML frontmatter."),
     })?;
+    // Parse the complete standard metadata contract without private top-level fields.
+    // 按完整标准元数据契约解析，禁止私有顶层字段。
     let parsed: PromptSkillFrontmatter =
         serde_yaml::from_str(frontmatter).map_err(|error| PromptSkillLoadError {
             path: skill_file.to_path_buf(),
             message: format!("Failed to parse skill frontmatter: {error}"),
         })?;
-    let name = parsed.name.trim().to_string();
-    if name.is_empty() {
+    // Reject non-canonical whitespace instead of silently rewriting package identity.
+    // 拒绝非规范空白，不静默改写技能包身份。
+    if parsed.name != parsed.name.trim() {
         return Err(PromptSkillLoadError {
             path: skill_file.to_path_buf(),
-            message: String::from("Skill frontmatter field `name` must not be empty."),
+            message: String::from(
+                "Skill frontmatter field `name` must already be canonical and cannot contain surrounding whitespace.",
+            ),
         });
     }
-    let description = parsed.description.unwrap_or_default().trim().to_string();
-    if description.is_empty() {
+    // Validate the exact canonical model-facing skill name.
+    // 校验精确的面向模型规范技能名称。
+    let name = parsed.name;
+    validate_prompt_skill_name(skill_file, &name)?;
+    // Resolve the owning directory required by the Agent Skills standard.
+    // 解析 Agent Skills 标准要求的所属目录。
+    let base_dir =
+        skill_file
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| PromptSkillLoadError {
+                path: skill_file.to_path_buf(),
+                message: String::from("SKILL.md must belong to a named skill directory."),
+            })?;
+    // Read the exact parent directory name for the standard identity check.
+    // 读取用于标准身份校验的精确父目录名称。
+    let directory_name = base_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| PromptSkillLoadError {
+            path: base_dir.clone(),
+            message: String::from("Skill directory name must be valid UTF-8."),
+        })?;
+    if directory_name != name {
+        return Err(PromptSkillLoadError {
+            path: base_dir.clone(),
+            message: format!(
+                "Skill frontmatter field `name` must match parent directory `{directory_name}`."
+            ),
+        });
+    }
+    // Normalize and validate the model-facing trigger description.
+    // 规范化并校验面向模型的触发说明。
+    let description = parsed.description.trim().to_string();
+    if description.is_empty() || description.chars().count() > 1024 {
         return Err(PromptSkillLoadError {
             path: skill_file.to_path_buf(),
-            message: String::from("Skill frontmatter field `description` must not be empty."),
+            message: String::from(
+                "Skill frontmatter field `description` must contain 1 to 1024 characters.",
+            ),
         });
     }
-    let base_dir = skill_file
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let interface = load_prompt_skill_interface_metadata(&base_dir)?;
+    // Normalize the optional standard compatibility statement.
+    // 规范化可选标准兼容性说明。
+    let compatibility = normalize_optional_string(parsed.compatibility);
+    if compatibility
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 500)
+    {
+        return Err(PromptSkillLoadError {
+            path: skill_file.to_path_buf(),
+            message: String::from(
+                "Skill frontmatter field `compatibility` must not exceed 500 characters.",
+            ),
+        });
+    }
+    // Load the single strict Vulcan metadata schema when the package declares it.
+    // 在技能包声明时加载唯一严格的 Vulcan 元数据结构。
+    let package_metadata = load_prompt_skill_metadata(&base_dir)?;
+    // Resolve the interface metadata without retaining an optional legacy shape.
+    // 解析界面元数据，不保留可选旧结构。
+    let interface = package_metadata
+        .as_ref()
+        .map(|metadata| metadata.interface.clone().into_metadata())
+        .unwrap_or_default();
+    // Resolve explicit logical catalog metadata or the deterministic fallback category.
+    // 解析显式逻辑目录元数据或确定性回退分类。
+    let mut catalog = package_metadata
+        .as_ref()
+        .map(|metadata| metadata.catalog.clone())
+        .unwrap_or_default();
+    if catalog.category_id.trim().is_empty() {
+        catalog.category_id = String::from("uncategorized");
+    }
+    catalog.tags = normalized_unique_strings(catalog.tags);
+    // Resolve package origin or a deterministic scope-derived origin.
+    // 解析技能包来源或由作用域确定的默认来源。
+    let mut origin = package_metadata
+        .map(|metadata| metadata.origin)
+        .unwrap_or_default();
+    if origin.kind.trim().is_empty() {
+        origin.kind = match scope {
+            PromptSkillScope::System => String::from("builtin"),
+            PromptSkillScope::User => String::from("unknown"),
+        };
+    }
+    // Count standard optional package resources for catalog presentation.
+    // 统计用于目录展示的标准可选技能包资源。
+    let resources = prompt_skill_resource_summary(&base_dir);
     Ok(PromptSkill {
         name,
         description,
+        license: normalize_optional_string(parsed.license),
+        compatibility,
+        metadata: parsed.metadata,
         skill_file: skill_file.to_path_buf(),
         base_dir,
         scope,
         interface,
+        catalog,
+        origin,
+        resources,
         body: body.trim().to_string(),
     })
 }
 
-/// Loads optional skill interface metadata from root-level `vulcan.yaml`.
-/// 从根目录 `vulcan.yaml` 载入可选技能界面信息。
-fn load_prompt_skill_interface_metadata(
+/// Loads optional strict Vulcan metadata from root-level `vulcan.yaml`.
+/// 从根目录 `vulcan.yaml` 载入可选严格 Vulcan 元数据。
+fn load_prompt_skill_metadata(
     base_dir: &Path,
-) -> Result<Option<PromptSkillInterfaceMetadata>, PromptSkillLoadError> {
+) -> Result<Option<PromptSkillAgentMetadata>, PromptSkillLoadError> {
+    // Build the only supported package-local Vulcan metadata path.
+    // 构建唯一支持的技能包内 Vulcan 元数据路径。
     let metadata_path = base_dir.join(VULCAN_SKILL_METADATA_FILE_NAME);
-    if metadata_path.is_file() {
-        return parse_prompt_skill_interface_metadata_file(&metadata_path).map(Some);
+    if !metadata_path.is_file() {
+        return Ok(None);
     }
-    Ok(None)
+    parse_prompt_skill_metadata_file(&metadata_path).map(Some)
 }
 
-/// Parses one skill interface metadata file into UI-facing fields.
-/// 将单个技能界面元数据文件解析为面向界面的字段。
-fn parse_prompt_skill_interface_metadata_file(
+/// Parses one strict package-local Vulcan metadata file.
+/// 解析单个严格的技能包内 Vulcan 元数据文件。
+fn parse_prompt_skill_metadata_file(
     metadata_path: &Path,
-) -> Result<PromptSkillInterfaceMetadata, PromptSkillLoadError> {
+) -> Result<PromptSkillAgentMetadata, PromptSkillLoadError> {
+    // Read the package-local metadata as UTF-8 YAML.
+    // 以 UTF-8 YAML 读取技能包内元数据。
     let raw = fs::read_to_string(metadata_path).map_err(|error| PromptSkillLoadError {
         path: metadata_path.to_path_buf(),
-        message: format!("Failed to read skill interface metadata: {error}"),
+        message: format!("Failed to read Vulcan skill metadata: {error}"),
     })?;
+    // Parse only the current strict metadata schema.
+    // 仅解析当前严格元数据结构。
     let parsed: PromptSkillAgentMetadata =
         serde_yaml::from_str(&raw).map_err(|error| PromptSkillLoadError {
             path: metadata_path.to_path_buf(),
-            message: format!("Failed to parse skill interface metadata: {error}"),
+            message: format!("Failed to parse Vulcan skill metadata: {error}"),
         })?;
-    Ok(parsed.interface.into_metadata())
+    if parsed.schema_version != VULCAN_SKILL_METADATA_SCHEMA_VERSION {
+        return Err(PromptSkillLoadError {
+            path: metadata_path.to_path_buf(),
+            message: format!(
+                "Vulcan skill metadata schema_version must equal {}.",
+                VULCAN_SKILL_METADATA_SCHEMA_VERSION
+            ),
+        });
+    }
+    validate_prompt_skill_interface_metadata(&parsed.interface, metadata_path)?;
+    if !parsed.catalog.category_id.trim().is_empty()
+        && !valid_category_id(parsed.catalog.category_id.trim())
+    {
+        return Err(PromptSkillLoadError {
+            path: metadata_path.to_path_buf(),
+            message: String::from(
+                "Vulcan skill metadata catalog.category_id must be a canonical lowercase identifier.",
+            ),
+        });
+    }
+    Ok(parsed)
+}
+
+/// Validates strict interface localization and marker fields.
+/// 校验严格界面本地化与标记字段。
+fn validate_prompt_skill_interface_metadata(
+    interface: &PromptSkillInterfaceMetadataRaw,
+    metadata_path: &Path,
+) -> Result<(), PromptSkillLoadError> {
+    for locale in interface.locales.keys() {
+        if !valid_bcp47_locale_tag(locale) {
+            return Err(PromptSkillLoadError {
+                path: metadata_path.to_path_buf(),
+                message: format!(
+                    "Vulcan skill metadata locale `{locale}` is not a valid BCP 47 language tag."
+                ),
+            });
+        }
+    }
+    if interface
+        .emoji
+        .as_deref()
+        .is_some_and(|emoji| emoji.trim().is_empty())
+    {
+        return Err(PromptSkillLoadError {
+            path: metadata_path.to_path_buf(),
+            message: String::from("Vulcan skill metadata interface.emoji cannot be empty."),
+        });
+    }
+    if let Some(color) = interface.color.as_deref()
+        && !valid_hex_color(color)
+    {
+        return Err(PromptSkillLoadError {
+            path: metadata_path.to_path_buf(),
+            message: String::from(
+                "Vulcan skill metadata interface.color must be a hexadecimal RGB or RGBA color.",
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Returns whether one locale tag follows the structural BCP 47 subtag grammar.
+/// 返回一个语言标签是否遵循 BCP 47 子标签结构语法。
+fn valid_bcp47_locale_tag(value: &str) -> bool {
+    let mut subtags = value.split('-');
+    let Some(language) = subtags.next() else {
+        return false;
+    };
+    if !(2..=8).contains(&language.len())
+        || !language.bytes().all(|byte| byte.is_ascii_alphabetic())
+    {
+        return false;
+    }
+    subtags.all(|subtag| {
+        (1..=8).contains(&subtag.len()) && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+/// Returns whether one color uses the supported hexadecimal RGB or RGBA notation.
+/// 返回一个颜色是否使用受支持的十六进制 RGB 或 RGBA 表示法。
+fn valid_hex_color(value: &str) -> bool {
+    let Some(digits) = value.strip_prefix('#') else {
+        return false;
+    };
+    matches!(digits.len(), 3 | 4 | 6 | 8) && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Resolves prompt skills through global, project, and session state.
@@ -569,12 +1837,6 @@ pub fn resolve_prompt_skill_state(
     project: &PromptSkillsProjectConfig,
     session: &PromptSkillsSessionConfig,
 ) -> (PromptSkillState, PromptSkillStateSource) {
-    if !global.enabled {
-        return (
-            PromptSkillState::Disabled,
-            PromptSkillStateSource::GlobalDisabled,
-        );
-    }
     if let Some(state) = session.skill_overrides.get(name).copied() {
         return (state, PromptSkillStateSource::Session);
     }
@@ -671,31 +1933,92 @@ pub fn enabled_skill_names(skills: &[ResolvedPromptSkill]) -> Vec<String> {
         .collect()
 }
 
+/// Host-managed logical Agent Skills catalog persisted outside skill packages.
+/// 持久化在技能包之外的宿主管理逻辑 Agent Skills 目录。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostPromptSkillCatalog {
+    /// Required host catalog schema version.
+    /// 必填宿主目录结构版本。
+    schema_version: u32,
+    /// User-defined logical categories.
+    /// 用户定义的逻辑分类。
+    #[serde(default)]
+    categories: Vec<PromptSkillCategory>,
+    /// Per-skill display, catalog, and provenance overrides keyed by standard name.
+    /// 按标准名称索引的单技能展示、目录与来源覆盖。
+    #[serde(default)]
+    skills: BTreeMap<String, HostPromptSkillOverride>,
+}
+
+/// Host-managed metadata override for one effective skill.
+/// 单个有效技能的宿主管理元数据覆盖。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostPromptSkillOverride {
+    /// Optional complete interface metadata replacement.
+    /// 可选完整界面元数据替换。
+    interface: Option<PromptSkillInterfaceMetadata>,
+    /// Optional primary category replacement.
+    /// 可选主分类替换。
+    category_id: Option<String>,
+    /// Optional complete searchable tag replacement.
+    /// 可选完整搜索标签替换。
+    tags: Option<Vec<String>>,
+    /// Optional complete auditable origin replacement.
+    /// 可选完整可审计来源替换。
+    origin: Option<PromptSkillOriginMetadata>,
+}
+
 /// YAML frontmatter shape supported by prompt skills.
 /// 提示词技能支持的 YAML frontmatter 结构。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PromptSkillFrontmatter {
     /// Stable skill name.
     /// 稳定技能名称。
     name: String,
     /// Model-facing skill description.
     /// 面向模型的技能描述。
-    description: Option<String>,
+    description: String,
+    /// Optional license identifier or bundled file reference.
+    /// 可选协议标识或包内文件引用。
+    license: Option<String>,
+    /// Optional environment compatibility statement.
+    /// 可选环境兼容性说明。
+    compatibility: Option<String>,
+    /// Standard string extension metadata.
+    /// 标准字符串扩展元数据。
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
 }
 
 /// YAML shape for one skill agent metadata file.
 /// 单个技能 agent 元数据文件的 YAML 结构。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PromptSkillAgentMetadata {
+    /// Required Vulcan metadata schema version.
+    /// 必填 Vulcan 元数据结构版本。
+    schema_version: u32,
     /// UI-facing interface metadata block.
     /// 面向界面的展示元数据块。
     #[serde(default)]
     interface: PromptSkillInterfaceMetadataRaw,
+    /// Logical catalog metadata block.
+    /// 逻辑目录元数据块。
+    #[serde(default)]
+    catalog: PromptSkillCatalogMetadata,
+    /// Auditable origin metadata block.
+    /// 可审计来源元数据块。
+    #[serde(default)]
+    origin: PromptSkillOriginMetadata,
 }
 
 /// Raw optional interface metadata fields from YAML.
 /// 从 YAML 读取的原始可选界面元数据字段。
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PromptSkillInterfaceMetadataRaw {
     /// Optional human-facing display name.
     /// 可选人类可读展示名称。
@@ -703,15 +2026,16 @@ struct PromptSkillInterfaceMetadataRaw {
     /// Optional short human-facing description.
     /// 可选人类可读短描述。
     short_description: Option<String>,
-    /// Optional small icon path.
-    /// 可选小图标路径。
-    icon_small: Option<String>,
-    /// Optional large icon path.
-    /// 可选大图标路径。
-    icon_large: Option<String>,
-    /// Optional brand color string.
-    /// 可选品牌色字符串。
-    brand_color: Option<String>,
+    /// Optional emoji rendered by the skill marker.
+    /// 由技能标记渲染的可选表情图标。
+    emoji: Option<String>,
+    /// Optional hexadecimal marker color.
+    /// 可选十六进制标记颜色。
+    color: Option<String>,
+    /// Localized display metadata.
+    /// 本地化展示元数据。
+    #[serde(default)]
+    locales: BTreeMap<String, PromptSkillLocaleMetadata>,
 }
 
 impl PromptSkillInterfaceMetadataRaw {
@@ -721,11 +2045,94 @@ impl PromptSkillInterfaceMetadataRaw {
         PromptSkillInterfaceMetadata {
             display_name: normalize_optional_string(self.display_name),
             short_description: normalize_optional_string(self.short_description),
-            icon_small: normalize_optional_string(self.icon_small).map(PathBuf::from),
-            icon_large: normalize_optional_string(self.icon_large).map(PathBuf::from),
-            brand_color: normalize_optional_string(self.brand_color),
+            emoji: normalize_optional_string(self.emoji),
+            color: normalize_optional_string(self.color),
+            locales: self.locales,
         }
     }
+}
+
+/// Validates one canonical Agent Skills name against the open specification.
+/// 按开放规范校验一个 Agent Skills 规范名称。
+fn validate_prompt_skill_name(skill_file: &Path, name: &str) -> Result<(), PromptSkillLoadError> {
+    // Count Unicode scalar values even though the accepted character set is ASCII.
+    // 即使允许字符集为 ASCII，仍按 Unicode 标量值统计长度。
+    let length = name.chars().count();
+    // Check the complete canonical name contract in one deterministic predicate.
+    // 使用单个确定性断言检查完整规范名称契约。
+    let valid = (1..=64).contains(&length)
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+        && name
+            .bytes()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == b'-');
+    if valid {
+        return Ok(());
+    }
+    Err(PromptSkillLoadError {
+        path: skill_file.to_path_buf(),
+        message: String::from(
+            "Skill frontmatter field `name` must contain 1 to 64 lowercase ASCII letters, digits, or single hyphens and must not start or end with a hyphen.",
+        ),
+    })
+}
+
+/// Returns stable trimmed unique strings while preserving first occurrence order.
+/// 返回保持首次出现顺序的稳定裁剪去重字符串。
+fn normalized_unique_strings(values: Vec<String>) -> Vec<String> {
+    // Track normalized values already emitted by this pass.
+    // 跟踪本次处理中已经输出的规范值。
+    let mut seen = BTreeSet::<String>::new();
+    // Retain meaningful normalized values only once.
+    // 仅保留一次有意义的规范值。
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && seen.insert(value.clone()))
+        .collect()
+}
+
+/// Counts standard optional package resources without following symbolic links.
+/// 在不跟随符号链接的前提下统计标准可选技能包资源。
+fn prompt_skill_resource_summary(base_dir: &Path) -> PromptSkillResourceSummary {
+    PromptSkillResourceSummary {
+        scripts: count_regular_files(&base_dir.join("scripts")),
+        references: count_regular_files(&base_dir.join("references")),
+        assets: count_regular_files(&base_dir.join("assets")),
+    }
+}
+
+/// Counts regular files recursively below one directory without following symbolic links.
+/// 在不跟随符号链接的前提下递归统计一个目录下的普通文件。
+fn count_regular_files(root: &Path) -> usize {
+    if !root.is_dir() {
+        return 0;
+    }
+    // Read the current directory or return zero for an unreadable optional resource directory.
+    // 读取当前目录；可选资源目录无法读取时返回零。
+    let Ok(entries) = fs::read_dir(root) else {
+        return 0;
+    };
+    // Accumulate regular files from safe non-symlink descendants.
+    // 累加安全且非符号链接后代中的普通文件。
+    entries
+        .flatten()
+        .map(|entry| {
+            // Inspect the directory entry type without following symbolic links.
+            // 在不跟随符号链接的情况下检查目录项类型。
+            let Ok(file_type) = entry.file_type() else {
+                return 0;
+            };
+            if file_type.is_file() {
+                1
+            } else if file_type.is_dir() {
+                count_regular_files(&entry.path())
+            } else {
+                0
+            }
+        })
+        .sum()
 }
 
 /// Splits YAML frontmatter from a markdown file.

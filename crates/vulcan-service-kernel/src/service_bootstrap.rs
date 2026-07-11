@@ -532,7 +532,7 @@ fn run_service_bootstrap(
         emitted_workbench = workbench;
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);
-        guard.service_runtime = Some(runtime);
+        guard.service_runtime = Some(runtime.clone());
         guard.controller_runtime = Some(controller_runtime);
         guard.luaskills_runtime = Some(luaskills_runtime);
         guard.cached_luaskills_catalog = Some(luaskills_catalog);
@@ -540,6 +540,21 @@ fn run_service_bootstrap(
         guard.mcp_runtime = Some(mcp_runtime);
         guard.cached_mcp_catalog = Some(mcp_catalog);
     }
+    // prompt_skill_config resolves the exact roots watched by the independent Agent Skills domain.
+    // prompt_skill_config 解析独立 Agent Skills 领域监听的精确根目录。
+    let prompt_skill_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
+        &provider_configuration.prompt_skills,
+    );
+    // runtime_guard makes the retained service runtime current while the notify loop is spawned.
+    // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
+    let _runtime_guard = runtime.enter();
+    crate::agent_skills_watcher::start_agent_skills_catalog_watcher(
+        state.clone(),
+        event_emitter.clone(),
+        vulcan_prompt_skills::configured_system_skill_root(&prompt_skill_config),
+        vulcan_prompt_skills::configured_user_skill_root(&prompt_skill_config),
+    )
+    .map_err(|error| ServiceBootstrapError::new("workspace", "Agent Skills", error))?;
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
     Ok(())

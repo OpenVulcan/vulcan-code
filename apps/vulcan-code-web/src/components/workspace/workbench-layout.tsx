@@ -125,7 +125,6 @@ import {
   refreshLuaSkillsCatalog,
   setAgentSkillEnabled,
   setAgentSkillProjectState,
-  setAgentSkillsEnabled,
   setLuaSkillEnabled,
   setLuaSkillToolRegistrationState,
   uninstallLuaSkill,
@@ -256,7 +255,7 @@ export function WorkbenchLayout(props: {
   const [workspaceMainView, setWorkspaceMainView] = React.useState<WorkspaceMainView>("chat");
   // activeWorkbenchSkillSubArea stores the embedded skills settings sub page.
   // activeWorkbenchSkillSubArea 保存内嵌技能设置的子页面。
-  const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("lua");
+  const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("catalog");
   // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
   // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
   const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("status");
@@ -705,6 +704,11 @@ export function WorkbenchLayout(props: {
   // handleSelectTopFeatureArea routes top navigation away from the embedded skills view.
   // handleSelectTopFeatureArea 将顶部导航路由出内嵌技能视图。
   const handleSelectTopFeatureArea = React.useCallback((area: MainAreaId) => {
+    if (area === "agent-skills") {
+      setActiveArea("chat");
+      setWorkspaceMainView("agent-skills");
+      return;
+    }
     if (area === "skills") {
       setActiveArea("chat");
       setWorkspaceMainView("skills");
@@ -728,6 +732,12 @@ export function WorkbenchLayout(props: {
   const handleOpenWorkspaceSkills = React.useCallback(() => {
     setActiveArea("chat");
     setWorkspaceMainView("skills");
+  }, []);
+  // handleOpenWorkspaceAgentSkills opens prompt skill management inside the workbench main panel.
+  // handleOpenWorkspaceAgentSkills 在工作台主面板内部打开提示词技能管理。
+  const handleOpenWorkspaceAgentSkills = React.useCallback(() => {
+    setActiveArea("chat");
+    setWorkspaceMainView("agent-skills");
   }, []);
   // handleOpenWorkspaceAgents opens agent management inside the workbench main panel.
   // handleOpenWorkspaceAgents 在工作台主面板内部打开智能体管理。
@@ -827,7 +837,8 @@ export function WorkbenchLayout(props: {
     handleProjectMenuAction,
     handleProjectSettingsVmmSave,
     handleProjectSettingsAgentSkillSave,
-    skillActions,
+    luaSkillActions,
+    agentSkillActions,
     agentActions,
     handleProjectIconConfirm,
     handleProjectIconReset,
@@ -1408,6 +1419,7 @@ export function WorkbenchLayout(props: {
             onCreateConversation={handleCreateConversation}
             onCreateProject={handleCreateProject}
             onOpenSkills={handleOpenWorkspaceSkills}
+            onOpenAgentSkills={handleOpenWorkspaceAgentSkills}
             onOpenAgents={handleOpenWorkspaceAgents}
             onOpenMemory={handleOpenWorkspaceMemory}
             onSelectArea={handleSelectTopFeatureArea}
@@ -1423,7 +1435,8 @@ export function WorkbenchLayout(props: {
             onSelectWorkbenchModelSecondaryRoute={handleSelectWorkbenchModelSecondaryRoute}
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
             onSelectWorkbenchThinkingDisplayMode={handleSelectWorkbenchThinkingDisplayMode}
-            skillActions={skillActions}
+            luaSkillActions={luaSkillActions}
+            agentSkillActions={agentSkillActions}
             agentActions={agentActions}
             memoryActions={{
               onLoadProjectVmmConfig: loadProjectVmmConfig,
@@ -1478,7 +1491,8 @@ export function WorkbenchLayout(props: {
             activeSettingsSubArea={activeSettingsSubArea}
             onSelectSettingsSubArea={setActiveSettingsSubArea}
             onSelectArea={handleSelectTopFeatureArea}
-            skillActions={skillActions}
+            luaSkillActions={luaSkillActions}
+            agentSkillActions={agentSkillActions}
             agentActions={agentActions}
             memoryActions={{
               onLoadProjectVmmConfig: loadProjectVmmConfig,

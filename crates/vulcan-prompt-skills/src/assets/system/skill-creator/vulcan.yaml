@@ -1,5 +1,17 @@
+schema_version: 3
 interface:
   display_name: "Skill Creator"
   short_description: "Create or update a skill"
-  icon_small: "./assets/skill-creator-small.svg"
-  icon_large: "./assets/skill-creator.png"
+  emoji: "🛠️"
+  color: "#7C3AED"
+  locales:
+    zh-CN:
+      display_name: "技能创建器"
+      short_description: "创建或更新提示词技能"
+catalog:
+  category_id: "engineering"
+  tags: ["skills", "authoring"]
+origin:
+  kind: "builtin"
+  label: "VulcanCode"
+  managed: true

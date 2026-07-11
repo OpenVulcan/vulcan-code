@@ -197,6 +197,19 @@ pub enum WorkbenchDelta {
     /// Conversation hydration progress replacement for one lazy-loaded transcript.
     /// 单个懒加载转录的会话水合进度替换增量。
     ConversationHydrationChanged(ConversationHydrationChangedDelta),
+    /// Complete Agent Skills catalog replacement after one effective filesystem change.
+    /// Agent Skills 文件系统发生一次有效变化后的完整目录替换增量。
+    AgentSkillsCatalogChanged(AgentSkillsCatalogChangedDelta),
+}
+
+/// Replaces the Agent Skills domain without resending the full workbench snapshot.
+/// 在不重发完整工作台快照的情况下替换 Agent Skills 领域。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillsCatalogChangedDelta {
+    /// Complete Agent Skills catalog committed at the envelope generation.
+    /// 在信封版本提交的完整 Agent Skills 目录。
+    pub agent_skills: AgentSkillsCatalogSummary,
 }
 
 /// Replaces the current conversation hydration progress without resending a full workbench.

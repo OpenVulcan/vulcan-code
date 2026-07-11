@@ -11,11 +11,13 @@ export type TranslationKey =
   | "app.serviceCheckingRecovery"
   | "area.chat"
   | "area.skills"
+  | "area.agentSkills"
   | "area.agents"
   | "area.memory"
   | "area.settings"
   | "area.chat.description"
   | "area.skills.description"
+  | "area.agentSkills.description"
   | "area.agents.description"
   | "area.memory.description"
   | "area.settings.description"
@@ -1136,11 +1138,12 @@ export type TranslationKey =
   | "skills.label.iconPath"
   | "skills.source.unknown"
   | "skills.sidebar.luaDetail"
+  | "skills.navigation.list"
+  | "skills.navigation.luaSettings"
+  | "skills.luaSettings.runtimeRoot"
+  | "skills.luaSettings.systemLuaLib"
   | "skills.sidebar.agentDetail"
-  | "skills.sidebar.subagentDetail"
   | "skills.header.luaDetail"
-  | "skills.header.agentDetail"
-  | "skills.header.subagentDetail"
   | "agents.header.detail"
   | "skills.lua.emptyTitle"
   | "skills.lua.emptyDetail"
@@ -1174,12 +1177,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.serviceReconnecting": "本地服务连接已断开，正在重连...",
     "app.serviceCheckingRecovery": "本地服务连接已断开，正在检测恢复...",
     "area.chat": "工作台",
-    "area.skills": "技能",
+    "area.skills": "LuaSkills",
+    "area.agentSkills": "提示词技能",
     "area.agents": "智能体",
     "area.memory": "记忆",
     "area.settings": "设置",
     "area.chat.description": "项目会话、消息流与模型输入区",
-    "area.skills.description": "LuaSkills、工具能力与技能包",
+    "area.skills.description": "LuaSkills 工具能力、技能包与运行时设置",
+    "area.agentSkills.description": "标准 Agent Skills 提示词技能目录",
     "area.agents.description": "智能体、专家画像与调度提示词",
     "area.memory.description": "VMM 用户、项目与会话记忆",
     "area.settings.description": "项目、模型、工具、诊断与系统设置",
@@ -2300,11 +2305,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.label.iconPath": "图标路径",
     "skills.source.unknown": "未记录来源",
     "skills.sidebar.luaDetail": "{count} 个技能包",
+    "skills.navigation.list": "技能列表",
+    "skills.navigation.luaSettings": "LuaSkills 设置",
+    "skills.luaSettings.runtimeRoot": "运行时目录",
+    "skills.luaSettings.systemLuaLib": "系统 Lua 库：{path}",
     "skills.sidebar.agentDetail": "{count} 个提示词技能",
-    "skills.sidebar.subagentDetail": "{count} 个智能体定义",
     "skills.header.luaDetail": "总技能数 {total} · 显示工具数 {visible} · 隐式工具数 {implicit}",
-    "skills.header.agentDetail": "总技能数 {total} · 已启用 {enabled} · 加载警告 {warnings}",
-    "skills.header.subagentDetail": "总定义数 {total} · 已启用 {enabled} · 加载警告 {warnings}",
     "agents.header.detail": "总智能体 {total} · 已启用 {enabled} · 加载警告 {warnings}",
     "skills.lua.emptyTitle": "等待 LuaSkills 目录",
     "skills.lua.emptyDetail": "启动完成或刷新后会显示真实技能包。",
@@ -2335,12 +2341,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.serviceReconnecting": "Local service connection lost. Reconnecting...",
     "app.serviceCheckingRecovery": "Local service connection lost. Checking recovery...",
     "area.chat": "Workspace",
-    "area.skills": "Skills",
+    "area.skills": "LuaSkills",
+    "area.agentSkills": "Agent Skills",
     "area.agents": "Agents",
     "area.memory": "Memory",
     "area.settings": "Settings",
     "area.chat.description": "Project sessions, message stream, and model input",
-    "area.skills.description": "LuaSkills, tool capability, and skill packages",
+    "area.skills.description": "LuaSkills tools, packages, and runtime settings",
+    "area.agentSkills.description": "Standard prompt-based Agent Skills catalog",
     "area.agents.description": "Agents, expert profiles, and delegation prompts",
     "area.memory.description": "VMM user, project, and conversation memory",
     "area.settings.description": "Projects, models, tools, diagnostics, and system settings",
@@ -3461,11 +3469,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.label.iconPath": "Icon Path",
     "skills.source.unknown": "No source recorded",
     "skills.sidebar.luaDetail": "{count} skill packages",
+    "skills.navigation.list": "Skill List",
+    "skills.navigation.luaSettings": "LuaSkills Settings",
+    "skills.luaSettings.runtimeRoot": "Runtime Directory",
+    "skills.luaSettings.systemLuaLib": "System Lua library: {path}",
     "skills.sidebar.agentDetail": "{count} prompt skills",
-    "skills.sidebar.subagentDetail": "{count} agent definitions",
     "skills.header.luaDetail": "Total skills {total} · Visible tools {visible} · Implicit tools {implicit}",
-    "skills.header.agentDetail": "Total skills {total} · Enabled {enabled} · Load warnings {warnings}",
-    "skills.header.subagentDetail": "Total definitions {total} · Enabled {enabled} · Load warnings {warnings}",
     "agents.header.detail": "Total agents {total} · Enabled {enabled} · Load warnings {warnings}",
     "skills.lua.emptyTitle": "Waiting for LuaSkills catalog",
     "skills.lua.emptyDetail": "Real skill packages appear after startup completes or refresh runs.",

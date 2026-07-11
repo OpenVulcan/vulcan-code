@@ -1,9 +1,9 @@
 import * as React from "react";
 import {
-  Bot,
   Hammer,
   Maximize2,
   Minimize2,
+  Settings,
 } from "lucide-react";
 import {
   LuaSkillInstallDialog,
@@ -77,12 +77,12 @@ export function FloatingSkillMenu(props: {
   // rows stores the static embedded skills menu rows.
   // rows 保存静态内嵌技能菜单行。
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
-    { icon: <Hammer size={15} />, id: "lua", label: "LuaSkills" },
-    { icon: <Bot size={15} />, id: "agent", label: "AgentSkills" },
+    { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
+    { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
   ];
   // activeLabel stores the selected menu label for the collapsed pill.
   // activeLabel 保存收起胶囊展示的当前菜单标签。
-  const activeLabel = skillSubAreaLabel(props.activeSubArea);
+  const activeLabel = skillSubAreaLabel(props.activeSubArea, t);
 
   if (!props.expanded) {
     return (
@@ -130,9 +130,9 @@ export function FloatingSkillMenu(props: {
 
 // skillSubAreaLabel returns the compact label for one embedded skills sub page.
 // skillSubAreaLabel 返回单个内嵌技能子页面的紧凑标签。
-export function skillSubAreaLabel(subArea: SkillSubAreaId): string {
-  if (subArea === "agent") {
-    return "AgentSkills";
+export function skillSubAreaLabel(subArea: SkillSubAreaId, t: ReturnType<typeof useI18n>["t"]): string {
+  if (subArea === "settings") {
+    return t("skills.navigation.luaSettings");
   }
-  return "LuaSkills";
+  return t("skills.navigation.list");
 }

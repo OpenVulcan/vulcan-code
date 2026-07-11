@@ -250,7 +250,7 @@ For example, when building an image-editor skill, relevant questions include:
 - "Can you give some examples of how this skill would be used?"
 - "I can imagine users asking for things like 'Remove the red-eye from this image' or 'Rotate this image'. Are there other ways you imagine this skill being used?"
 - "What would a user say that should trigger this skill?"
-- "Where should I create this skill? If you do not have a preference, I will place it in `$VULCAN_HOME/skills` (or `~/.vulcan/skills` when `VULCAN_HOME` is unset) so VulcanCode can discover it automatically."
+- "Where should I create this skill? If you do not have a preference, I will place it in `$VULCAN_HOME/code/skills` (or `~/.vulcan/code/skills` when `VULCAN_HOME` is unset) so VulcanCode can discover it automatically."
 
 To avoid overwhelming users, avoid asking too many questions in a single message. Start with the most important questions and follow up as needed for better effectiveness.
 
@@ -286,7 +286,7 @@ At this point, it is time to actually create the skill.
 
 Skip this step only if the skill being developed already exists. In this case, continue to the next step.
 
-Before running `init_skill.py`, ask where the user wants the skill created. If they do not specify a location, default to `$VULCAN_HOME/skills`; when `VULCAN_HOME` is unset, fall back to `~/.vulcan/skills` so the skill is auto-discovered.
+Before running `init_skill.py`, ask where the user wants the skill created. If they do not specify a location, default to `$VULCAN_HOME/code/skills`; when `VULCAN_HOME` is unset, fall back to `~/.vulcan/code/skills` so the skill is auto-discovered.
 
 When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
 

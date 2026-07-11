@@ -198,16 +198,16 @@ export function ProjectAgentSkillsSection(props: {
         </div>
       </header>
       <div className="project-settings-panel compact">
-        <StatusPill status={props.workbench.agentSkills.globalEnabled ? "ready" : "pending"} label={props.workbench.agentSkills.globalEnabled ? t("projectSettings.agent.globalEnabled") : t("projectSettings.agent.globalDisabled")} />
+        <StatusPill status="ready" label={`${props.workbench.agentSkills.records.filter((record) => record.effective && record.enabled).length} ${t("projectSettings.agentTitle")}`} />
         <p>{props.workbench.agentSkills.notice}</p>
       </div>
       {props.agentLoading ? (
         <p className="project-settings-muted">{t("projectSettings.agentLoading")}</p>
-      ) : props.workbench.agentSkills.skills.length === 0 ? (
+        ) : props.workbench.agentSkills.records.filter((skill) => skill.effective).length === 0 ? (
         <p className="project-settings-muted">{t("projectSettings.agentEmpty")}</p>
       ) : (
         <div className="project-settings-skill-list">
-          {props.workbench.agentSkills.skills.map((skill) => {
+            {props.workbench.agentSkills.records.filter((skill) => skill.effective).map((skill) => {
             const projectState = projectAgentSkillCurrentState(props.agentOverrides[skill.name]);
             return (
               <article className="project-settings-skill-row" key={skill.name}>

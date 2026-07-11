@@ -6153,6 +6153,7 @@ dependencies = [
  "vulcan-context-compaction",
  "vulcan-context-injection",
  "vulcan-core",
+ "vulcan-file-watcher",
  "vulcan-host-tools",
  "vulcan-prompt-skills",
  "vulcan-provider-config",

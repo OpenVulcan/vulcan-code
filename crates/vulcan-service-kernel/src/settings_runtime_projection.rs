@@ -13,6 +13,27 @@ pub(crate) fn emit_workbench_event(app: &ServiceEventEmitter, workbench: &Workbe
     );
 }
 
+/// Emits one ordered Agent Skills domain delta to connected WebUI clients.
+/// 向已连接 WebUI 客户端发送一条有序的 Agent Skills 领域增量。
+pub(crate) fn emit_agent_skills_catalog_delta(
+    app: &ServiceEventEmitter,
+    update: AgentSkillsCatalogUpdate,
+) {
+    // envelope preserves the global workbench generation while replacing only the Agent Skills domain.
+    // envelope 在仅替换 Agent Skills 领域时保留全局工作台版本顺序。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation: update.revision,
+        delta: WorkbenchDelta::AgentSkillsCatalogChanged(AgentSkillsCatalogChangedDelta {
+            agent_skills: update.agent_skills,
+        }),
+    };
+    emit_service_event_with_trace(
+        app,
+        "agent_skills_catalog_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+}
+
 /// Emits one session-addon namespace change event to connected UI clients.
 /// 向已连接 UI 客户端发送一条会话附属状态命名空间变更事件。
 ///
@@ -444,6 +465,50 @@ pub(crate) async fn refresh_agent_skills_local_state(
     })
 }
 
+/// Reprojects Agent Skills only when the complete domain summary changed.
+/// 仅在完整领域摘要发生变化时重新投影 Agent Skills。
+///
+/// # Parameters
+/// 参数
+/// - `state`: Shared service state containing the committed Agent Skills projection.
+/// - `state`：包含已提交 Agent Skills 投影的共享服务状态。
+///
+/// # Returns
+/// 返回值
+/// The committed revisioned update, or `None` when the filesystem event produced no effective change.
+/// 已提交的带版本更新；文件系统事件未产生有效变化时返回 `None`。
+pub(crate) async fn refresh_agent_skills_local_state_if_changed(
+    state: &SharedServiceBridgeState,
+) -> Result<Option<AgentSkillsCatalogUpdate>, String> {
+    // Keep configuration capture and projection ordered with concurrent settings mutations.
+    // 使配置捕获和投影与并发设置变更保持有序。
+    let _configuration_transaction = begin_provider_configuration_transaction().await;
+    let provider_configuration = provider_configuration_from_state(state)?;
+    let summary = agent_skills_catalog_summary(&provider_configuration);
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if !agent_skills_catalog_summary_changed(&guard.workbench.agent_skills, &summary) {
+        return Ok(None);
+    }
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
+    guard.workbench.agent_skills = summary.clone();
+    Ok(Some(AgentSkillsCatalogUpdate {
+        revision: guard.workbench_generation,
+        agent_skills: summary,
+    }))
+}
+
+/// Returns whether two complete Agent Skills domain summaries differ.
+/// 返回两份完整 Agent Skills 领域摘要是否不同。
+fn agent_skills_catalog_summary_changed(
+    current: &AgentSkillsCatalogSummary,
+    next: &AgentSkillsCatalogSummary,
+) -> bool {
+    current != next
+}
+
 /// Reprojects LuaSkills after a focused tool-registration configuration change.
 /// 在聚焦的工具注册配置变更后重新投影 LuaSkills。
 pub(crate) async fn refresh_luaskills_local_state(
@@ -495,5 +560,87 @@ pub(crate) fn parse_luaskill_tool_registration_state(
         "implicit" => Ok(PersistedLuaSkillToolRegistrationState::Implicit),
         "disabled" => Ok(PersistedLuaSkillToolRegistrationState::Disabled),
         other => Err(format!("不支持的 LuaSkills 工具注册状态：{other}")),
+    }
+}
+
+#[cfg(test)]
+mod agent_skills_catalog_delta_tests {
+    use super::*;
+    use vulcan_service_api::ServiceEventSink;
+
+    /// Captures service events emitted by one focused unit test.
+    /// 捕获单个聚焦单元测试发出的服务事件。
+    struct CapturingServiceEventSink {
+        /// Ordered captured service events.
+        /// 按顺序捕获的服务事件。
+        events: Arc<Mutex<Vec<ServiceEvent>>>,
+    }
+
+    impl ServiceEventSink for CapturingServiceEventSink {
+        /// Records one emitted service event.
+        /// 记录一条已发送服务事件。
+        fn emit_service_event(&self, event: ServiceEvent) {
+            self.events
+                .lock()
+                .expect("captured service events should remain lockable")
+                .push(event);
+        }
+    }
+
+    /// Verifies equal summaries do not request a new domain generation.
+    /// 验证相同摘要不会请求新的领域版本。
+    #[test]
+    fn equal_agent_skills_summaries_do_not_change() {
+        let summary = AgentSkillsCatalogSummary::default();
+        assert!(!agent_skills_catalog_summary_changed(&summary, &summary));
+    }
+
+    /// Verifies one effective catalog field change requests a new domain generation.
+    /// 验证任一有效目录字段变化都会请求新的领域版本。
+    #[test]
+    fn changed_agent_skills_summary_is_detected() {
+        let current = AgentSkillsCatalogSummary::default();
+        let next = AgentSkillsCatalogSummary {
+            notice: String::from("changed"),
+            ..current.clone()
+        };
+        assert!(agent_skills_catalog_summary_changed(&current, &next));
+    }
+
+    /// Verifies Agent Skills live updates use the ordered delta channel instead of a full snapshot.
+    /// 验证 Agent Skills 实时更新使用有序增量通道而不是完整快照。
+    #[test]
+    fn agent_skills_catalog_update_emits_only_domain_delta() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let emitter = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
+            events: Arc::clone(&events),
+        })]);
+        let summary = AgentSkillsCatalogSummary {
+            notice: String::from("updated"),
+            ..AgentSkillsCatalogSummary::default()
+        };
+
+        emit_agent_skills_catalog_delta(
+            &emitter,
+            AgentSkillsCatalogUpdate {
+                revision: 7,
+                agent_skills: summary.clone(),
+            },
+        );
+
+        let captured = events
+            .lock()
+            .expect("captured service events should remain lockable");
+        assert_eq!(captured.len(), 1);
+        let ServiceEvent::WorkbenchDelta(envelope) = &captured[0] else {
+            panic!("Agent Skills update must not emit a full workbench snapshot");
+        };
+        assert_eq!(envelope.generation, 7);
+        assert_eq!(
+            envelope.delta,
+            WorkbenchDelta::AgentSkillsCatalogChanged(AgentSkillsCatalogChangedDelta {
+                agent_skills: summary,
+            })
+        );
     }
 }

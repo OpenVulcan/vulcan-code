@@ -29,7 +29,7 @@ export function projectSettingsSections(project: ProjectSummary, workbench: Work
       id: "agent-skills",
       icon: <Bot size={16} />,
       label: "Agent Skills",
-      detail: t("projectSettings.promptSkillCount").replace("{count}", String(workbench.agentSkills.skills.length)),
+      detail: t("projectSettings.promptSkillCount").replace("{count}", String(workbench.agentSkills.records.filter((skill) => skill.effective).length)),
     },
     {
       id: "attachments",

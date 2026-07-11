@@ -3,8 +3,10 @@
 
 use super::*;
 use vulcan_service_api::{
-    SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary, SubagentOriginSummary,
-    SubagentProviderModelSummary,
+    AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
+    AgentSkillOriginSummary, AgentSkillRecordSummary, AgentSkillResourceSummary,
+    AgentSkillStandardMetadataSummary, SubagentCategoryLocaleSummary,
+    SubagentDefinitionLocaleSummary, SubagentOriginSummary, SubagentProviderModelSummary,
 };
 
 /// Converts LuaSkills catalog rows into plugin summaries.
@@ -92,33 +94,112 @@ pub(crate) fn lua_skills_catalog_summary(
 pub(crate) fn agent_skills_catalog_summary(
     provider_configuration: &ProviderConfigurationFile,
 ) -> AgentSkillsCatalogSummary {
+    // Resolve runtime roots and per-skill states from persisted configuration.
+    // 从持久化配置解析运行时根目录与单技能状态。
     let runtime_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
         &provider_configuration.prompt_skills,
     );
+    // Load one complete source-aware Agent Skills catalog transaction.
+    // 加载一次完整的来源感知 Agent Skills 目录事务。
     let catalog = vulcan_prompt_skills::load_prompt_skills(&runtime_config);
-    let global_enabled = provider_configuration.prompt_skills.enabled;
+    // Build the effective path set without inferring identity from display metadata.
+    // 在不从展示元数据推测身份的情况下构建有效路径集合。
+    let effective_paths = catalog
+        .skills
+        .iter()
+        .map(|skill| skill.skill_file.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    // Build the system name set used to expose explicit user override relationships.
+    // 构建用于暴露显式用户覆盖关系的系统名称集合。
+    let system_names = catalog
+        .records
+        .iter()
+        .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::System)
+        .map(|skill| skill.name.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    // chinese determines the user-facing catalog notice language from persisted UI locale.
+    // chinese 根据持久化界面语言决定面向用户的目录摘要语言。
+    let chinese = provider_configuration
+        .ui_locale
+        .as_deref()
+        .unwrap_or("zh-CN")
+        .starts_with("zh");
     AgentSkillsCatalogSummary {
-        global_enabled,
         system_root: normalized_workspace_path_text_from_path(&catalog.system_root),
         user_root: normalized_workspace_path_text_from_path(&catalog.user_root),
-        notice: format!(
-            "系统技能 {}，用户技能 {}，加载警告 {}。",
-            catalog
-                .skills
-                .iter()
-                .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::System)
-                .count(),
-            catalog
-                .skills
-                .iter()
-                .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::User)
-                .count(),
-            catalog.errors.len()
-        ),
-        skills: catalog
-            .skills
+        notice: if chinese {
+            format!(
+                "系统记录 {}，用户记录 {}，有效技能 {}，目录问题 {}。",
+                catalog
+                    .records
+                    .iter()
+                    .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::System)
+                    .count(),
+                catalog
+                    .records
+                    .iter()
+                    .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::User)
+                    .count(),
+                catalog.skills.len(),
+                catalog.errors.len()
+            )
+        } else {
+            format!(
+                "System records {}, user records {}, effective skills {}, catalog issues {}.",
+                catalog
+                    .records
+                    .iter()
+                    .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::System)
+                    .count(),
+                catalog
+                    .records
+                    .iter()
+                    .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::User)
+                    .count(),
+                catalog.skills.len(),
+                catalog.errors.len()
+            )
+        },
+        records: catalog
+            .records
             .iter()
-            .map(|skill| agent_skill_summary(skill, provider_configuration, global_enabled))
+            .map(|skill| {
+                // Determine effective state by the exact parsed file identity.
+                // 通过精确解析文件身份确定生效状态。
+                let effective = effective_paths.contains(&skill.skill_file);
+                // Link a user record to the exact system key it overrides.
+                // 将用户记录链接到其覆盖的精确系统键。
+                let override_of = (skill.scope == vulcan_prompt_skills::PromptSkillScope::User
+                    && system_names.contains(&skill.name))
+                .then(|| format!("system:{}", skill.name));
+                agent_skill_record_summary(skill, provider_configuration, effective, override_of)
+            })
+            .collect(),
+        categories: catalog
+            .categories
+            .iter()
+            .map(|category| AgentSkillCategorySummary {
+                category_id: category.category_id.clone(),
+                name: category.name.clone(),
+                description: category.description.clone(),
+                emoji: category.emoji.clone(),
+                color: category.color.clone(),
+                order: category.order,
+                builtin: category.builtin,
+                locales: category
+                    .locales
+                    .iter()
+                    .map(|(locale, metadata)| {
+                        (
+                            locale.clone(),
+                            AgentSkillCategoryLocaleSummary {
+                                name: metadata.name.clone(),
+                                description: metadata.description.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            })
             .collect(),
         errors: catalog
             .errors
@@ -482,7 +563,7 @@ fn subagent_capability_diagnostics(
     }
     if !enabled_prompt_skills.is_empty() {
         diagnostics.push(format!(
-            "配置启用 Prompt Skills {} 个；不存在或被全局禁用的技能不会进入最终提示词组合。",
+            "配置启用 Prompt Skills {} 个；不存在或已停用的技能不会进入最终提示词组合。",
             enabled_prompt_skills.len()
         ));
     }
@@ -513,13 +594,16 @@ fn subagent_definition_scope_key(
     }
 }
 
-/// Projects one prompt skill into a compact WebUI card row.
-/// 将单个提示词技能投影为紧凑 WebUI 卡片行。
-pub(crate) fn agent_skill_summary(
+/// Projects one source-aware prompt skill record into the WebUI domain.
+/// 将一条来源感知提示词技能记录投影到 WebUI 领域。
+pub(crate) fn agent_skill_record_summary(
     skill: &vulcan_prompt_skills::PromptSkill,
     provider_configuration: &ProviderConfigurationFile,
-    global_enabled: bool,
-) -> AgentSkillSummary {
+    effective: bool,
+    override_of: Option<String>,
+) -> AgentSkillRecordSummary {
+    // Resolve the persisted per-skill state for the standard skill name.
+    // 为标准技能名称解析持久化单技能状态。
     let local_enabled = provider_configuration
         .prompt_skills
         .skill_overrides
@@ -527,15 +611,57 @@ pub(crate) fn agent_skill_summary(
         .copied()
         .unwrap_or(provider_configuration.prompt_skills.default_skill_state)
         .is_enabled();
-    AgentSkillSummary {
+    AgentSkillRecordSummary {
+        skill_key: format!("{}:{}", skill.scope.en_label(), skill.name),
         name: skill.name.clone(),
         display_name: prompt_skill_display_name(skill).to_string(),
         description: prompt_skill_short_description(skill).to_string(),
-        scope: skill.scope.zh_label().to_string(),
-        enabled: global_enabled && local_enabled,
+        locales: skill
+            .interface
+            .locales
+            .iter()
+            .map(|(locale, metadata)| {
+                (
+                    locale.clone(),
+                    AgentSkillLocaleSummary {
+                        display_name: metadata.display_name.clone(),
+                        short_description: metadata.short_description.clone(),
+                    },
+                )
+            })
+            .collect(),
+        scope_key: skill.scope.en_label().to_string(),
+        effective,
+        override_of,
+        enabled: effective && local_enabled,
+        category_id: skill.catalog.category_id.clone(),
+        tags: skill.catalog.tags.clone(),
+        standard: AgentSkillStandardMetadataSummary {
+            description: skill.description.clone(),
+            license: skill.license.clone(),
+            compatibility: skill.compatibility.clone(),
+            metadata: skill.metadata.clone(),
+        },
+        origin: AgentSkillOriginSummary {
+            kind: skill.origin.kind.clone(),
+            label: skill.origin.label.clone(),
+            url: skill.origin.url.clone(),
+            version: skill.origin.version.clone(),
+            revision: skill.origin.revision.clone(),
+            managed: skill.origin.managed,
+            integrity: skill.origin.integrity.clone(),
+            installed_at: skill.origin.installed_at.clone(),
+            updated_at: skill.origin.updated_at.clone(),
+        },
+        resources: AgentSkillResourceSummary {
+            scripts: skill.resources.scripts,
+            references: skill.resources.references,
+            assets: skill.resources.assets,
+        },
         skill_file: normalized_workspace_path_text_from_path(&skill.skill_file),
         base_dir: normalized_workspace_path_text_from_path(&skill.base_dir),
-        icon_path: prompt_skill_icon_path(skill),
+        emoji: skill.interface.emoji.clone(),
+        color: skill.interface.color.clone(),
         body: skill.body.trim().to_string(),
     }
 }
@@ -545,8 +671,8 @@ pub(crate) fn agent_skill_summary(
 pub(crate) fn prompt_skill_display_name(skill: &vulcan_prompt_skills::PromptSkill) -> &str {
     skill
         .interface
-        .as_ref()
-        .and_then(|interface| interface.display_name.as_deref())
+        .display_name
+        .as_deref()
         .unwrap_or(skill.name.as_str())
 }
 
@@ -555,23 +681,11 @@ pub(crate) fn prompt_skill_display_name(skill: &vulcan_prompt_skills::PromptSkil
 pub(crate) fn prompt_skill_short_description(skill: &vulcan_prompt_skills::PromptSkill) -> &str {
     skill
         .interface
-        .as_ref()
-        .and_then(|interface| interface.short_description.as_deref())
+        .short_description
+        .as_deref()
         .filter(|description| !description.trim().is_empty())
         .or_else(|| (!skill.description.trim().is_empty()).then_some(skill.description.as_str()))
         .unwrap_or("该技能没有提供描述。")
-}
-
-/// Resolves an optional prompt skill icon path when it exists on disk.
-/// 在图标文件存在时解析可选提示词技能图标路径。
-pub(crate) fn prompt_skill_icon_path(skill: &vulcan_prompt_skills::PromptSkill) -> Option<String> {
-    skill
-        .interface
-        .as_ref()
-        .and_then(|interface| interface.icon_small.as_ref())
-        .map(|path| skill.base_dir.join(path))
-        .filter(|path| path.is_file())
-        .map(|path| normalized_workspace_path_text_from_path(&path))
 }
 
 /// Returns a stable key for one persisted LuaSkills tool registration state.

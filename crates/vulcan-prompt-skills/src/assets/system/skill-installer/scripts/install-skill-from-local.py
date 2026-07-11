@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Install a local VulcanCode prompt skill directory into $VULCAN_HOME/skills."""
+"""Install a local VulcanCode prompt skill directory into $VULCAN_HOME/code/skills.
+从本地目录安装 VulcanCode 提示词技能到 $VULCAN_HOME/code/skills。
+"""
 
 from __future__ import annotations
 
@@ -20,7 +22,10 @@ def _vulcan_home() -> Path:
 
 
 def _default_dest() -> Path:
-    return _vulcan_home() / "skills"
+    """Resolve the canonical VulcanCode Agent Skills root.
+    解析规范的 VulcanCode Agent Skills 根目录。
+    """
+    return _vulcan_home() / "code" / "skills"
 
 
 def _normalize_skill_name(name: str) -> str:
@@ -59,7 +64,7 @@ def _copy_skill(source: Path, dest: Path, overwrite: bool) -> None:
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install a local VulcanCode prompt skill.")
     parser.add_argument("source", help="Local skill directory containing SKILL.md")
-    parser.add_argument("--dest", help="Destination skills root, defaults to $VULCAN_HOME/skills")
+    parser.add_argument("--dest", help="Destination skills root, defaults to $VULCAN_HOME/code/skills")
     parser.add_argument("--name", help="Destination skill name, defaults to source directory name")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing skill")
     return parser.parse_args(argv)

@@ -5,12 +5,22 @@
 ## Full example
 
 ```yaml
+schema_version: 3
 interface:
   display_name: "Optional user-facing name"
   short_description: "Optional user-facing description"
-  icon_small: "./assets/small-400px.png"
-  icon_large: "./assets/large-logo.svg"
-  brand_color: "#3B82F6"
+  emoji: "🧭"
+  color: "#3B82F6"
+  locales:
+    zh-CN:
+      display_name: "可选显示名称"
+      short_description: "可选显示说明"
+catalog:
+  category_id: "uncategorized"
+  tags: []
+origin:
+  kind: "local-created"
+  managed: true
 ```
 
 ## Field descriptions and constraints
@@ -23,6 +33,5 @@ Top-level constraints:
 
 - `interface.display_name`: Human-facing title shown in UI skill lists and chips.
 - `interface.short_description`: Human-facing short UI blurb for quick scanning. Keep it concise; 80 characters or fewer is recommended.
-- `interface.icon_small`: Path to a small icon asset (relative to skill dir). Default to `./assets/` and place icons in the skill's `assets/` folder.
-- `interface.icon_large`: Path to a larger logo asset (relative to skill dir). Default to `./assets/` and place icons in the skill's `assets/` folder.
-- `interface.brand_color`: Hex color used for UI accents (e.g., badges).
+- `interface.emoji`: Optional user-maintainable emoji rendered by the agent-style marker.
+- `interface.color`: Optional hexadecimal RGB or RGBA marker color.

@@ -9,6 +9,7 @@ import type {
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import type { AgentActionProps } from "@/components/features/agents/AgentsArea";
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/SkillsArea";
+import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { MemoryActionProps, MemorySubAreaId } from "@/components/features/memory/MemoryArea";
 import type { ConversationMenuAction, ProjectMenuAction } from "@/components/project/ProjectSidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
@@ -44,7 +45,7 @@ import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-sna
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
-export type WorkspaceMainView = "chat" | "skills" | "agents" | "memory";
+export type WorkspaceMainView = "chat" | "agent-skills" | "skills" | "agents" | "memory";
 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
@@ -112,6 +113,9 @@ export interface WorkspaceShellProps {
   // Opens the skills feature area from the workbench sidebar.
   // 从工作台侧栏打开技能功能区。
   onOpenSkills: () => void;
+  // Opens the prompt skills feature area from the workbench sidebar.
+  // 从工作台侧栏打开提示词技能功能区。
+  onOpenAgentSkills: () => void;
   // Opens the agents feature area from the workbench sidebar.
   // 从工作台侧栏打开智能体功能区。
   onOpenAgents: () => void;
@@ -166,7 +170,12 @@ export interface WorkspaceShellProps {
   onSelectWorkbenchThinkingDisplayMode: (mode: ThinkingDisplayMode) => Promise<boolean>;
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
-  skillActions: SkillActionProps;
+  // Independent LuaSkills lifecycle actions.
+  // 独立 LuaSkills 生命周期动作。
+  luaSkillActions: SkillActionProps;
+  // Independent prompt-based Agent Skills actions.
+  // 独立提示词 Agent Skills 动作。
+  agentSkillActions: AgentSkillActionProps;
   // Service-backed independent agent page actions.
   // 服务端支持的独立智能体页面动作。
   agentActions: AgentActionProps;

@@ -1,5 +1,7 @@
 import type {
   AgentSkillsCatalogUpdate,
+  AgentSkillCategorySaveRequest,
+  AgentSkillSaveRequest,
   LuaSkillsCatalogUpdate,
   SubagentCatalogUpdate,
   SubagentDefinitionSaveRequest,
@@ -178,6 +180,73 @@ export async function refreshAgentSkillsCatalog(): Promise<AgentSkillsCatalogUpd
     return agentSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench(() => undefined));
   }
   return serviceClient.request<AgentSkillsCatalogUpdate>("service_refresh_agent_skills_catalog");
+}
+
+// openAgentSkillsUserDirectory opens the configured user package root.
+// openAgentSkillsUserDirectory 打开配置后的用户技能包根目录。
+export async function openAgentSkillsUserDirectory(): Promise<AgentSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    return agentSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
+      snapshot.agentSkills.notice = snapshot.uiLocale?.startsWith("zh") !== false
+        ? `浏览器预览用户技能目录：${snapshot.agentSkills.userRoot}`
+        : `Browser preview user skill directory: ${snapshot.agentSkills.userRoot}`
+    }))
+  }
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_open_agent_skills_user_directory")
+}
+
+// saveAgentSkill saves one complete strict user Agent Skill package.
+// saveAgentSkill 保存一个完整严格用户 Agent Skill 技能包。
+export async function saveAgentSkill(skill: AgentSkillSaveRequest): Promise<AgentSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Agent Skill package editing requires the desktop service runtime.")
+  }
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_save_agent_skill", { skill })
+}
+
+// deleteAgentSkill deletes one exact user-owned Agent Skill package.
+// deleteAgentSkill 删除一个精确用户 Agent Skill 技能包。
+export async function deleteAgentSkill(name: string): Promise<AgentSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Agent Skill package deletion requires the desktop service runtime.")
+  }
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_delete_agent_skill", { name })
+}
+
+// restoreAgentSkillDefault removes one user override and restores its system source.
+// restoreAgentSkillDefault 移除一个用户覆盖并恢复其系统来源。
+export async function restoreAgentSkillDefault(name: string): Promise<AgentSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Agent Skill restoration requires the desktop service runtime.")
+  }
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_restore_agent_skill_default", { name })
+}
+
+// saveAgentSkillCategory saves one complete user-defined logical category.
+// saveAgentSkillCategory 保存一个完整用户定义逻辑分类。
+export async function saveAgentSkillCategory(category: AgentSkillCategorySaveRequest): Promise<AgentSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Agent Skill category editing requires the desktop service runtime.")
+  }
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_save_agent_skill_category", { category })
+}
+
+// deleteAgentSkillCategory deletes one unused user-defined logical category.
+// deleteAgentSkillCategory 删除一个未使用的用户定义逻辑分类。
+export async function deleteAgentSkillCategory(categoryId: string): Promise<AgentSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Agent Skill category deletion requires the desktop service runtime.")
+  }
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_delete_agent_skill_category", { categoryId })
+}
+
+// setAgentSkillCategory assigns one effective skill to one exact logical category.
+// setAgentSkillCategory 将一个有效技能归入一个精确逻辑分类。
+export async function setAgentSkillCategory(name: string, categoryId: string): Promise<AgentSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Agent Skill category assignment requires the desktop service runtime.")
+  }
+  return serviceClient.request<AgentSkillsCatalogUpdate>("service_set_agent_skill_category", { name, categoryId })
 }
 
 // refreshSubagentCatalog refreshes subagent and expert definitions through the local service.
@@ -365,26 +434,14 @@ export async function restoreSubagentDefinitionDefault(agentId: string): Promise
   return serviceClient.request<SubagentCatalogUpdate>("service_restore_subagent_definition_default", { agentId });
 }
 
-// setAgentSkillsEnabled persists the global Agent Skills switch.
-// setAgentSkillsEnabled 持久化 Agent Skills 全局开关。
-export async function setAgentSkillsEnabled(enabled: boolean): Promise<AgentSkillsCatalogUpdate> {
-  if (!hasServiceRuntime()) {
-    return agentSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
-      snapshot.agentSkills.globalEnabled = enabled;
-      snapshot.agentSkills.skills = snapshot.agentSkills.skills.map((skill) => ({ ...skill, enabled }));
-    }));
-  }
-  return serviceClient.request<AgentSkillsCatalogUpdate>("service_set_agent_skills_enabled", { enabled });
-}
-
-// setAgentSkillEnabled persists one global Agent Skill state.
-// setAgentSkillEnabled 持久化单个全局 Agent Skill 状态。
+// setAgentSkillEnabled persists one Agent Skill state.
+// setAgentSkillEnabled 持久化单个 Agent Skill 状态。
 export async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<AgentSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
     return agentSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
-      const skill = snapshot.agentSkills.skills.find((item) => item.name === name);
+    const skill = snapshot.agentSkills.records.find((item) => item.name === name && item.effective);
       if (skill) {
-        skill.enabled = enabled && snapshot.agentSkills.globalEnabled;
+        skill.enabled = enabled;
       }
     }));
   }

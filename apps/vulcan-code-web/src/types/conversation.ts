@@ -1,4 +1,5 @@
 import type {
+  AgentSkillsCatalogSummary,
   ComposerAttachmentSummary,
   PendingPromptSummary,
 } from "./composer-skills";
@@ -422,7 +423,16 @@ export type WorkbenchDelta =
   | { kind: "conversationMessagesChanged"; payload: ConversationMessagesChangedDelta }
   | { kind: "conversationMessagesPatched"; payload: ConversationMessagesPatchedDelta }
   | { kind: "sessionAddonsChanged"; payload: SessionAddonsChangedDelta }
-  | { kind: "conversationHydrationChanged"; payload: ConversationHydrationChangedDelta };
+  | { kind: "conversationHydrationChanged"; payload: ConversationHydrationChangedDelta }
+  | { kind: "agentSkillsCatalogChanged"; payload: AgentSkillsCatalogChangedDelta };
+
+// AgentSkillsCatalogChangedDelta replaces only the Agent Skills workbench domain.
+// AgentSkillsCatalogChangedDelta 仅替换工作台中的 Agent Skills 领域。
+export interface AgentSkillsCatalogChangedDelta {
+  // Complete Agent Skills catalog committed at the envelope generation.
+  // 在信封版本提交的完整 Agent Skills 目录。
+  agentSkills: AgentSkillsCatalogSummary;
+}
 
 // ConversationHydrationChangedDelta replaces conversation hydration progress without a full snapshot.
 // ConversationHydrationChangedDelta 在不发送完整快照的情况下替换会话水合进度。
