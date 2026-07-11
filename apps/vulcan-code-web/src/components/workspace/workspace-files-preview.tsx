@@ -1,6 +1,10 @@
 import React from "react";
 import { FileText } from "lucide-react";
 import {
+  MarkdownImageWorkspacePathProvider,
+  MarkdownMessage,
+} from "@/components/conversation/conversation-markdown";
+import {
   diffLanguageForFile,
   highlightedDiffLineSpansForDiffLine,
   useHighlightedDiffFileRevision,
@@ -104,6 +108,18 @@ export function WorkspaceFilePreview(props: {
       <div className="workspace-file-preview media">
         <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
         <video controls preload="metadata" src={props.resolveMediaSourceUrl(props.preview.path)} />
+      </div>
+    );
+  }
+  if (props.entry.extension === "md") {
+    return (
+      <div className="workspace-file-preview markdown">
+        <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
+        <div className="workspace-file-preview-markdown">
+          <MarkdownImageWorkspacePathProvider value={props.preview.workspacePath}>
+            <MarkdownMessage content={props.preview.content ?? ""} eager />
+          </MarkdownImageWorkspacePathProvider>
+        </div>
       </div>
     );
   }
