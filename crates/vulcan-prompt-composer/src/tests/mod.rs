@@ -319,6 +319,60 @@ fn per_tool_help_segments_hit_bundle_cache_on_second_run() {
     );
 }
 
+/// Verifies every model-visible child-agent tool receives coordinated single-level orchestration guidance.
+/// 验证每个模型可见子代理工具都会获得一致的单层调度指导。
+#[test]
+fn child_agent_tools_receive_single_level_orchestration_help() {
+    let engine = PromptComposerEngine::with_builtins();
+    let tool_ids = [
+        "spawn_agent",
+        "agent_orchestration_info",
+        "send_message",
+        "wait_agent",
+        "interrupt_agent",
+        "close_agent",
+        "list_agents",
+    ];
+    let mut input = prompt_input_with_tool_ids(&tool_ids);
+    for tool in &mut input.tool_catalog.tools {
+        tool.help_text = None;
+    }
+
+    let output = engine.compose(&input).expect("compose should succeed");
+    let rendered_help = output.render_tool_metadata_text();
+
+    for tool_id in tool_ids {
+        assert!(
+            output
+                .tool_metadata_segments
+                .iter()
+                .any(|segment| segment.node_id == format!("tool_help_{tool_id}")),
+            "missing built-in help for {tool_id}"
+        );
+    }
+    assert!(rendered_help.contains("Only the root conversation may delegate"));
+    assert!(rendered_help.contains("child agents cannot create another orchestration level"));
+    assert!(rendered_help.contains("Use this whenever the parent task depends on child feedback"));
+    assert!(rendered_help.contains("Use this for diagnostics and status inspection"));
+    assert!(rendered_help.contains("Closing is cleanup, not result collection"));
+    for description_fragment in [
+        "Create an open child agent",
+        "Return enabled child-agent profiles",
+        "Deliver a message to an open child agent",
+        "Wait for child-agent mailbox activity",
+        "Return current status snapshots",
+        "Stop an open child agent's current turn",
+        "Close an open child agent",
+    ] {
+        assert!(
+            !rendered_help.contains(description_fragment),
+            "tool help should not repeat descriptor contract: {description_fragment}"
+        );
+    }
+    assert!(!rendered_help.contains("subtree"));
+    assert!(!rendered_help.contains("descendant"));
+}
+
 /// Verifies overlapping tool catalogs reuse per-tool cached segments across different bundles.
 /// 验证不同工具组合之间的重叠工具会复用逐工具缓存片段。
 #[test]

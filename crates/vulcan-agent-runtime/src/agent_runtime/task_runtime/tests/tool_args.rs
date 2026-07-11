@@ -100,10 +100,10 @@ fn interrupt_agent_arguments_reject_task_name_alias() {
     assert!(error.contains("task_name"));
 }
 
-/// Verifies close_agent exposes only a subtree target and rejects the removed cascade switch.
-/// 验证 close_agent 只暴露子树目标，并拒绝已移除的级联开关。
+/// Verifies close_agent exposes only one target and rejects the removed cascade switch.
+/// 验证 close_agent 只暴露单个目标，并拒绝已移除的级联开关。
 #[test]
-fn close_agent_schema_exposes_only_subtree_target() {
+fn close_agent_schema_exposes_only_target() {
     let schema = close_agent_args_schema();
     let properties = schema["properties"]
         .as_object()
@@ -118,6 +118,20 @@ fn close_agent_schema_exposes_only_subtree_target() {
     }))
     .expect_err("removed cascade argument should be rejected");
     assert!(error.contains("unsupported keys: cascade"));
+}
+
+/// Verifies the model-facing close description matches the non-nesting child-agent policy.
+/// 验证模型可见的关闭说明符合子代理不可嵌套的策略。
+#[test]
+fn close_agent_description_does_not_advertise_agent_subtrees() {
+    let candidate = build_close_agent_tool_candidate(Arc::new(TaskRuntime::new()));
+
+    assert_eq!(
+        candidate.descriptor.description,
+        "Close an open child agent and stop its active run, if any."
+    );
+    assert!(!candidate.descriptor.description.contains("subtree"));
+    assert!(!candidate.descriptor.description.contains("descendant"));
 }
 
 /// Verifies agent_orchestration_info exposes only read-only query fields.

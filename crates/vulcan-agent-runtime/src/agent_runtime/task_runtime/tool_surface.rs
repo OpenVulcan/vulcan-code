@@ -76,9 +76,7 @@ pub(super) fn build_spawn_agent_tool_candidate(
 /// Builds the stable spawn_agent description.
 /// 构建稳定的 spawn_agent 描述。
 fn spawn_agent_tool_description() -> String {
-    String::from(
-        "Create an open child agent for one concrete bounded subtask. Use creation_mode `agent` with an agent_id returned by agent_orchestration_info, `mirror` only when the child must inherit the current conversation context, `custom` with a one-off system_prompt, or `default` for a plain child agent. Do not guess agent_id or model selectors; query agent_orchestration_info first when you need them.",
-    )
+    String::from("Create an open child agent and start its delegated task.")
 }
 
 /// Builds the model-visible child-agent orchestration information tool.
@@ -91,7 +89,7 @@ pub(super) fn build_agent_orchestration_info_tool_candidate(
             id: String::from(AGENT_ORCHESTRATION_INFO_TOOL),
             name: String::from(AGENT_ORCHESTRATION_INFO_TOOL),
             description: String::from(
-                "Return read-only child-agent orchestration information: enabled agent ids, creation modes, model selectors when available, and runtime counts. This tool never changes agents, models, or runtime state.",
+                "Return enabled child-agent profiles, supported creation modes, available model selectors, and runtime counts without changing runtime state.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -124,7 +122,7 @@ pub(super) fn build_send_message_tool_candidate(
             id: String::from(SEND_MESSAGE_TOOL),
             name: String::from(SEND_MESSAGE_TOOL),
             description: String::from(
-                "Send a message to an open child agent. Use delivery_mode `queue` to run after the current task, or `interrupt` to stop the current task and make this message the next task immediately. If the target is idle, either mode starts a new turn.",
+                "Deliver a message to an open child agent using queue or interrupt mode.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -153,7 +151,7 @@ pub(super) fn build_wait_agent_tool_candidate(
             id: String::from(WAIT_AGENT_TOOL),
             name: String::from(WAIT_AGENT_TOOL),
             description: String::from(
-                "Wait for one or more child-agent results or messages. Use target/targets when the surrounding task expects specific agents; omit them to wait for currently running open child agents only. The wait also ends early when interrupting user input is steered into the active turn. Returns the claimed child-agent feedback, an interruption summary, or a timeout summary.",
+                "Wait for child-agent mailbox activity and return claimed feedback, an interruption summary, or a timeout summary.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -182,7 +180,7 @@ pub(super) fn build_list_agents_tool_candidate(
             id: String::from(LIST_AGENTS_TOOL),
             name: String::from(LIST_AGENTS_TOOL),
             description: String::from(
-                "List known open child agents and their current status, including completed agents that have not been closed. This tool does not collect child-agent results and does not consume mailbox updates; use wait_agent to wait for activity, then continue normally so pending inter-agent messages can enter the next model request.",
+                "Return current status snapshots for known open child agents, including completed agents that have not been closed.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -211,7 +209,7 @@ pub(super) fn build_interrupt_agent_tool_candidate(
             id: String::from(INTERRUPT_AGENT_TOOL),
             name: String::from(INTERRUPT_AGENT_TOOL),
             description: String::from(
-                "Interrupt an open child agent's current turn, if any, and return its previous status. The agent remains open and available for future send_message calls.",
+                "Stop an open child agent's current turn, return its previous status, and keep the agent open.",
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -239,9 +237,7 @@ pub(super) fn build_close_agent_tool_candidate(
         descriptor: VulcanToolDescriptor {
             id: String::from(CLOSE_AGENT_TOOL),
             name: String::from(CLOSE_AGENT_TOOL),
-            description: String::from(
-                "Close an open child-agent subtree and stop every active run in that subtree. Closed agents are no longer returned by default list_agents and cannot receive send_message calls.",
-            ),
+            description: String::from("Close an open child agent and stop its active run, if any."),
             help_text: None,
             source: VulcanToolSourceKind::Native,
         },
