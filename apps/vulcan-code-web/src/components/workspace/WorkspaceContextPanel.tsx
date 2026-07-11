@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  ArrowDown,
   Bot,
   Brain,
   ChevronsDown,
@@ -11,6 +12,10 @@ import {
   X,
 } from "lucide-react";
 import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
+import {
+  conversationDistanceFromBottom,
+  type ConversationTimelineUserScrollDirection,
+} from "@/components/conversation/chat-area-scroll";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -78,6 +83,10 @@ const LazyWorkspaceFilesPanelHost = React.lazy(async () => {
   const module = await import("@/components/workspace/WorkspaceFilesPanelHost");
   return { default: module.WorkspaceFilesPanelHost };
 });
+
+// SUBAGENT_TAIL_LOCK_THRESHOLD_PX defines when a manually scrolled transcript has reached its tail again.
+// SUBAGENT_TAIL_LOCK_THRESHOLD_PX 定义手动滚动的子代理转录何时重新到达尾部。
+const SUBAGENT_TAIL_LOCK_THRESHOLD_PX = 24;
 
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
@@ -781,6 +790,12 @@ function WorkspaceSubagentPanel(args: {
   // scrollRef owns the read-only transcript viewport inside this tab.
   // scrollRef 持有该页签内只读转录视口。
   const scrollRef = React.useRef<HTMLElement | null>(null);
+  // tailLocked controls whether new subagent transcript content follows the viewport tail.
+  // tailLocked 控制新增子代理转录内容是否持续跟随视口尾部。
+  const [tailLocked, setTailLocked] = React.useState(true);
+  // tailLockedRef exposes the latest lock state to resize callbacks without rebuilding the observer.
+  // tailLockedRef 向尺寸变化回调暴露最新锁定状态，避免重复创建观察器。
+  const tailLockedRef = React.useRef(true);
   // hiddenThinkingBlockIds leaves subagent thinking rows in the inline transcript.
   // hiddenThinkingBlockIds 让子代理思考行保留在内联转录中。
   const hiddenThinkingBlockIds = React.useMemo(() => new Set<string>(), []);
@@ -862,12 +877,66 @@ function WorkspaceSubagentPanel(args: {
       setCloseSubmitting(false);
     }
   }, [args.props, args.tab.id, closeSubmitting, parentConversationId, taskId]);
-  // handleNoopScrollStateChange satisfies the read-only transcript contract without persisting layout state.
-  // handleNoopScrollStateChange 满足只读转录契约，但不持久化布局状态。
-  const handleNoopScrollStateChange = React.useCallback(() => undefined, []);
-  // handleNoopUserScrollStart satisfies the read-only transcript contract without tail-follow side effects.
-  // handleNoopUserScrollStart 满足只读转录契约，但不产生尾随副作用。
-  const handleNoopUserScrollStart = React.useCallback(() => undefined, []);
+  // updateTailLock synchronizes the rendered lock state with callbacks that run outside React rendering.
+  // updateTailLock 同步渲染使用的锁定状态与 React 渲染之外执行的回调状态。
+  // Parameters: locked indicates whether subsequent content growth must remain pinned to the bottom.
+  // 参数：locked 表示后续内容增长是否必须继续固定在底部。
+  // Returns: nothing.
+  // 返回值：无。
+  const updateTailLock = React.useCallback((locked: boolean) => {
+    tailLockedRef.current = locked;
+    setTailLocked(locked);
+  }, []);
+  // scrollSubagentToBottom moves the child transcript to its latest content immediately.
+  // scrollSubagentToBottom 立即将子会话转录移动到最新内容。
+  // Parameters: none.
+  // 参数：无。
+  // Returns: nothing.
+  // 返回值：无。
+  const scrollSubagentToBottom = React.useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+  }, []);
+  // handleSubagentScrollStateChange derives tail locking from the actual viewport after every scroll path.
+  // handleSubagentScrollStateChange 在任意滚动路径后根据实际视口推导尾部锁定状态。
+  // Parameters: none; the current viewport is read through scrollRef.
+  // 参数：无；当前视口通过 scrollRef 读取。
+  // Returns: nothing.
+  // 返回值：无。
+  const handleSubagentScrollStateChange = React.useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    const nextTailLocked = conversationDistanceFromBottom(element) <= SUBAGENT_TAIL_LOCK_THRESHOLD_PX;
+    if (nextTailLocked !== tailLockedRef.current) {
+      updateTailLock(nextTailLocked);
+    }
+  }, [updateTailLock]);
+  // handleSubagentUserScrollStart unlocks tail following before upward or indeterminate manual scrolling.
+  // handleSubagentUserScrollStart 在向上或方向未定的手动滚动前解除尾部跟随。
+  // Parameters: direction reports the user scroll direction captured before viewport mutation.
+  // 参数：direction 表示视口变化前捕获的用户滚动方向。
+  // Returns: nothing.
+  // 返回值：无。
+  const handleSubagentUserScrollStart = React.useCallback((direction: ConversationTimelineUserScrollDirection = "unknown") => {
+    if (direction !== "down") {
+      updateTailLock(false);
+    }
+  }, [updateTailLock]);
+  // handleScrollToBottom restores the default tail lock and moves the viewport to the latest row.
+  // handleScrollToBottom 恢复默认尾部锁定并将视口移动到最新一行。
+  // Parameters: none.
+  // 参数：无。
+  // Returns: nothing.
+  // 返回值：无。
+  const handleScrollToBottom = React.useCallback(() => {
+    updateTailLock(true);
+    scrollSubagentToBottom();
+  }, [scrollSubagentToBottom, updateTailLock]);
   // handleNoopExpandedStateChange avoids sharing main-chat expansion memory with side tabs.
   // handleNoopExpandedStateChange 避免侧栏页签共享主会话展开记忆。
   const handleNoopExpandedStateChange = React.useCallback((_surfaceId: string, _state: ConversationSurfaceExpandedState) => undefined, []);
@@ -880,6 +949,33 @@ function WorkspaceSubagentPanel(args: {
   // onOpenSubagentPanel loads a focused persisted child transcript when this tab was restored without message cache.
   // onOpenSubagentPanel 在页签恢复但消息缓存缺失时加载聚焦的持久化子会话转录。
   const onOpenSubagentPanel = args.props.onOpenSubagentPanel;
+
+  React.useLayoutEffect(() => {
+    updateTailLock(true);
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    // followTail preserves the lock invariant after streaming text or measured row heights grow.
+    // followTail 在流式文本或实测行高增长后维持锁底不变量。
+    // Parameters: none.
+    // 参数：无。
+    // Returns: nothing.
+    // 返回值：无。
+    const followTail = () => {
+      if (tailLockedRef.current) {
+        element.scrollTop = element.scrollHeight;
+      }
+    };
+    const content = element.querySelector<HTMLElement>(".conversation-scroll-content");
+    followTail();
+    if (!content) {
+      return;
+    }
+    const observer = new ResizeObserver(followTail);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [taskId, updateTailLock]);
 
   React.useEffect(() => {
     if (!parentConversationId || !taskId) {
@@ -944,14 +1040,27 @@ function WorkspaceSubagentPanel(args: {
         onLoadMoreHistory={handleLoadMoreHistory}
         onLoadToolDetail={args.props.onLoadToolDetail}
         onOpenSubagentPanel={args.props.onOpenSubagentPanel}
-        onScrollStateChange={handleNoopScrollStateChange}
-        onUserScrollStart={handleNoopUserScrollStart}
+        onScrollStateChange={handleSubagentScrollStateChange}
+        onUserScrollStart={handleSubagentUserScrollStart}
       />
       {transcriptLoading && messages.length === 0 ? (
         <div className="workspace-subagent-loading" role="status" aria-live="polite">
           <Bot size={18} />
           <span>{t("conversation.subagent.loadingTranscript")}</span>
         </div>
+      ) : null}
+      {!tailLocked ? (
+        <Button
+          aria-label={t("composer.scrollToBottom")}
+          className={cn("workspace-subagent-scroll-bottom", taskRunning || taskOpen ? "workspace-subagent-scroll-bottom-with-footer" : null)}
+          onClick={handleScrollToBottom}
+          size="icon"
+          title={t("composer.scrollToBottom")}
+          type="button"
+          variant="outline"
+        >
+          <ArrowDown size={18} />
+        </Button>
       ) : null}
       {taskRunning || taskOpen ? (
         <div className="workspace-subagent-footer">

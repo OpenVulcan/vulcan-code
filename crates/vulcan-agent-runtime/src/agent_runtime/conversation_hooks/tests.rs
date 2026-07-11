@@ -53,6 +53,63 @@ fn orphan_tool_runtime_event_does_not_create_user_turn() {
     assert!(!runtime.active_turns.contains_key(&session_id));
 }
 
+/// Verifies an explicit child execution dispatches tool hooks without creating memory lifecycle turns.
+/// 验证显式子代理执行会派发工具 hook，但不会创建记忆生命周期回合。
+#[test]
+fn explicit_execution_tool_event_dispatches_without_creating_user_turn() {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+    use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
+
+    let mut runtime = ConversationHookRuntime::new();
+    let (sender, receiver) = mpsc::channel();
+    let sender = Arc::new(sender);
+    runtime
+        .dispatcher_mut()
+        .register(
+            HookRegistration::new(
+                "child-tool-listener",
+                HOOK_CONVERSATION_TOOL_STARTED,
+                HookMode::Effect,
+            ),
+            Arc::new(FnHookHandler::new(move |invocation: HookInvocation| {
+                let sender = Arc::clone(&sender);
+                async move {
+                    let payload = invocation.payload.value;
+                    let _ = sender.send((
+                        payload
+                            .get("session_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        payload
+                            .get("turn_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    ));
+                    Ok(HookResult::default())
+                }
+            })),
+        )
+        .expect("child tool hook registration should succeed");
+    let session_id = SessionId::from_u128(147);
+
+    runtime.record_tool_runtime_event_for_execution(
+        session_id,
+        "child-execution-7",
+        &RuntimeEvent::new(RuntimeEventKind::ToolStarted, "shell_command", "started"),
+    );
+
+    assert!(!runtime.active_turns.contains_key(&session_id));
+    assert_eq!(
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("child tool hook should run"),
+        (session_id.to_string(), String::from("child-execution-7"))
+    );
+}
+
 /// Verifies tool events remain hook notifications instead of completed-turn timeline rows.
 /// 验证工具事件只保留为 hook 通知，不进入完成回合 timeline。
 #[test]

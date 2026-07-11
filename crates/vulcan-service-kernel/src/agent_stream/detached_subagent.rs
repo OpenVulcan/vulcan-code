@@ -134,6 +134,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 state,
                 controller_runtime,
                 agent_runtime,
+                execution_id,
                 record_ids,
                 event,
             )
@@ -563,6 +564,7 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
+    execution_id: &str,
     record_ids: &mut SessionStreamingRecordIds,
     event: ExecutionStreamEvent,
 ) -> Result<(), String> {
@@ -604,6 +606,13 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             false,
         ),
         ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+            if let Ok(hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
+                hook_runtime.record_tool_runtime_event_for_execution(
+                    session_id,
+                    execution_id,
+                    &event,
+                );
+            }
             if is_provider_tool_boundary_runtime_event(&event) {
                 record_ids.thinking_record_id = None;
                 record_ids.output_record_id = None;

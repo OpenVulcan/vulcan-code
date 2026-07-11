@@ -274,17 +274,42 @@ impl ConversationHookRuntime {
     /// Records a tool runtime event when it belongs to a conversation turn.
     /// 当工具运行时事件属于会话回合时记录该事件。
     pub fn record_tool_runtime_event(&mut self, session_id: SessionId, event: &RuntimeEvent) {
-        let (hook_point, timeline_kind) = match event.kind {
-            RuntimeEventKind::ToolStarted => (HOOK_CONVERSATION_TOOL_STARTED, "tool_started"),
-            RuntimeEventKind::ToolFinished => (HOOK_CONVERSATION_TOOL_FINISHED, "tool_finished"),
-            _ => return,
-        };
         let Some(turn_id) = self
             .active_turns
             .get(&session_id)
             .map(|turn| turn.turn_id.clone())
         else {
             return;
+        };
+        self.record_tool_runtime_event_for_execution(session_id, &turn_id, event);
+    }
+
+    /// Dispatches a tool hook for an explicit execution without creating a conversation turn.
+    /// 为显式执行派发工具 hook，且不创建会话回合。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the child or standalone execution session that emitted the event.
+    /// `session_id` 标识发出事件的子代理或独立执行会话。
+    /// `execution_id` identifies the exact execution generation used as the hook turn correlation id.
+    /// `execution_id` 标识作为 hook 回合关联标识的精确执行代次。
+    /// `event` is the runtime event; non-tool boundaries are ignored.
+    /// `event` 是运行时事件；非工具边界事件会被忽略。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This method returns no value and never mutates active conversation turns.
+    /// 该方法无返回值，且绝不修改活跃会话回合。
+    pub fn record_tool_runtime_event_for_execution(
+        &self,
+        session_id: SessionId,
+        execution_id: &str,
+        event: &RuntimeEvent,
+    ) {
+        let (hook_point, timeline_kind) = match event.kind {
+            RuntimeEventKind::ToolStarted => (HOOK_CONVERSATION_TOOL_STARTED, "tool_started"),
+            RuntimeEventKind::ToolFinished => (HOOK_CONVERSATION_TOOL_FINISHED, "tool_finished"),
+            _ => return,
         };
         let source_id = event
             .metadata
@@ -299,7 +324,7 @@ impl ConversationHookRuntime {
             session_id,
             json!({
                 "session_id": session_id.to_string(),
-                "turn_id": turn_id,
+                "turn_id": execution_id,
                 "kind": timeline_kind,
                 "title": event.title,
                 "detail": event.detail,
