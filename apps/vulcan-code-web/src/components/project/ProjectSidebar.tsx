@@ -14,13 +14,13 @@ import {
 } from "@dnd-kit/sortable";
 import {
   Boxes,
-  BookOpenText,
   Bot,
   BrainCircuit,
   Folder,
   FolderPlus,
   Hammer,
   Pin,
+  Puzzle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -317,7 +317,7 @@ export function ProjectSidebar(props: {
               onClick={props.onOpenSkills}
               tooltip={t("area.skills")}
             >
-              <Hammer size={16} />
+              <Puzzle size={16} />
               <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.skills")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -328,7 +328,7 @@ export function ProjectSidebar(props: {
               onClick={props.onOpenAgentSkills}
               tooltip={t("area.agentSkills")}
             >
-              <BookOpenText size={16} />
+              <Hammer size={16} />
               <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.agentSkills")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>

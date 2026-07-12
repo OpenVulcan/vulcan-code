@@ -1,6 +1,5 @@
 import * as React from "react"
 import {
-  Bot,
   BrainCircuit,
   ChevronDown,
   Hammer,
@@ -413,8 +412,8 @@ function CollapsedSettingsGroupMenu(props: {
 // areaIconMap 将功能区域标识映射到 lucide 图标。
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   chat: <PanelTopOpen size={17} />,
-  "agent-skills": <Bot size={17} />,
-  skills: <Hammer size={17} />,
+  "agent-skills": <Hammer size={17} />,
+  skills: <Puzzle size={17} />,
   agents: <Network size={17} />,
   memory: <BrainCircuit size={17} />,
   settings: <Settings size={17} />,
@@ -441,14 +440,14 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
   if (activeArea === "skills") {
     return [
       { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
-      { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "systemPlugin").length }), icon: <Puzzle size={16} /> },
       { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
+      { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "systemPlugin").length }), icon: <Puzzle size={16} /> },
     ]
   }
   if (activeArea === "agent-skills") {
     const effectiveRecords = workbench.agentSkills.records.filter((record) => record.effective)
     return [
-      { id: "agent-skills-catalog", label: t("area.agentSkills"), detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: effectiveRecords.length }), icon: <Bot size={16} /> },
+      { id: "agent-skills-catalog", label: t("area.agentSkills"), detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: effectiveRecords.length }), icon: <Hammer size={16} /> },
     ]
   }
   if (activeArea === "agents") {

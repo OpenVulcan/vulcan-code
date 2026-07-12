@@ -175,7 +175,7 @@
 }
 
 .workspace-skills-content .lua-skill-page-body .skill-card-list {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .workspace-skills-content .agent-skill-card-list {

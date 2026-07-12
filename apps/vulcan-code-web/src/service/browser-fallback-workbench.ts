@@ -50,13 +50,13 @@ const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
   {
     id: "skill",
     command: "/skill",
-    descriptionZh: "插入提示词技能加载指令",
+    descriptionZh: "插入技能加载指令",
     descriptionEn: "Insert the prompt-skill loading instruction",
   },
   {
     id: "skills",
     command: "/skills",
-    descriptionZh: "打开提示词技能面板",
+    descriptionZh: "打开技能面板",
     descriptionEn: "Open the prompt skills panel",
   },
 ];
@@ -186,7 +186,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   agentSkills: {
     systemRoot: "C:/Users/20000/.vulcan/code/skills/.system",
     userRoot: "C:/Users/20000/.vulcan/code/skills",
-    notice: "浏览器预览模式正在显示提示词技能示例目录。",
+    notice: "浏览器预览模式正在显示技能示例目录。",
     errors: [],
     categories: [
       {

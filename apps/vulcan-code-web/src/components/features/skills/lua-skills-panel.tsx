@@ -1,5 +1,5 @@
 import * as React from "react";
-import { PackagePlus } from "lucide-react";
+import { PackagePlus, Search } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { StatusPill } from "@/components/shared/status";
 import {
   LuaSkillCard,
   LuaSkillDetailDialog,
@@ -17,6 +16,38 @@ import {
 import { useI18n } from "@/i18n";
 import type { LuaSkillSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
+
+// LuaSkillStatusFilter identifies the enabled-state subset shown in the LuaSkills list.
+// LuaSkillStatusFilter 标识 LuaSkills 列表中显示的启停状态子集。
+type LuaSkillStatusFilter = "all" | "enabled" | "disabled";
+
+// LuaSkillSourceFilter identifies the host ownership subset shown in the LuaSkills list.
+// LuaSkillSourceFilter 标识 LuaSkills 列表中显示的宿主归属子集。
+type LuaSkillSourceFilter = "all" | "system" | "user";
+
+// luaSkillMatchesSearch checks one Lua Skill against the exact user-visible searchable fields.
+// luaSkillMatchesSearch 使用明确的用户可见字段检查单个 Lua Skill 是否匹配搜索词。
+//
+// Parameters: skill is the projected Lua Skill row and query is the current free-text filter.
+// 参数：skill 是投影后的 Lua Skill 行，query 是当前自由文本筛选词。
+// Returns: true when the normalized query is empty or appears in a visible identifier, name, source, root, or directory.
+// 返回值：规范化查询为空，或出现在可见标识、名称、来源、层级或目录中时返回 true。
+function luaSkillMatchesSearch(skill: LuaSkillSummary, query: string): boolean {
+  // normalizedQuery provides case-insensitive matching without altering source values.
+  // normalizedQuery 在不改动来源值的情况下提供不区分大小写的匹配。
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+  return [
+    skill.skillId,
+    skill.displayName,
+    skill.sourceType ?? "",
+    skill.sourceLocator ?? "",
+    skill.rootName,
+    skill.skillDir,
+  ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
+}
 
 // LuaSkillsPanel renders package lifecycle controls and runtime tool registration controls.
 // LuaSkillsPanel 渲染包生命周期控件与运行时工具注册控件。
@@ -29,6 +60,17 @@ export function LuaSkillsPanel(props: {
   skills: LuaSkillSummary[];
 }) {
   const { t } = useI18n();
+  // searchQuery stores the free-text LuaSkills filter.
+  // searchQuery 保存 LuaSkills 自由文本筛选词。
+  const [searchQuery, setSearchQuery] = React.useState("");
+  // statusFilter stores the selected LuaSkills enabled-state filter.
+  // statusFilter 保存选中的 LuaSkills 启停状态筛选。
+  const [statusFilter, setStatusFilter] = React.useState<LuaSkillStatusFilter>("all");
+  // sourceFilter stores the selected system or user ownership filter.
+  // sourceFilter 保存选中的系统或用户归属筛选。
+  const [sourceFilter, setSourceFilter] = React.useState<LuaSkillSourceFilter>("all");
+  // busyAction identifies the page-exclusive LuaSkills mutation currently in flight.
+  // busyAction 标识当前正在执行的页面互斥 LuaSkills 变更。
   const [busyAction, setBusyAction] = React.useState<string | null>(null);
   // actionRunningRef closes the synchronous repeat-click window before React commits busy state.
   // actionRunningRef 在 React 提交忙碌状态前关闭同步重复点击窗口。
@@ -51,6 +93,23 @@ export function LuaSkillsPanel(props: {
     () => props.skills.find((skill) => skill.skillId === toolsSkillId) ?? null,
     [props.skills, toolsSkillId],
   );
+  // visibleSkills applies text, enabled-state, and ownership filters to the current snapshot.
+  // visibleSkills 对当前快照应用文本、启停状态与归属筛选。
+  const visibleSkills = React.useMemo(() => props.skills.filter((skill) => {
+    if (statusFilter === "enabled" && !skill.enabled) {
+      return false;
+    }
+    if (statusFilter === "disabled" && skill.enabled) {
+      return false;
+    }
+    if (sourceFilter === "system" && !skill.systemOwned) {
+      return false;
+    }
+    if (sourceFilter === "user" && skill.systemOwned) {
+      return false;
+    }
+    return luaSkillMatchesSearch(skill, searchQuery);
+  }), [props.skills, searchQuery, sourceFilter, statusFilter]);
 
   // runAction executes one page-exclusive LuaSkills mutation.
   // runAction 执行单个页面互斥的 LuaSkills 变更。
@@ -75,14 +134,43 @@ export function LuaSkillsPanel(props: {
 
   return (
     <div className="skill-page-body lua-skill-page-body">
-      <div className="skill-card-list">
-        {props.skills.length === 0 ? (
-          <article className="skill-empty-card">
-            <StatusPill status="pending" label="pending" />
-            <strong>{t("skills.lua.emptyTitle")}</strong>
-            <span>{t("skills.lua.emptyDetail")}</span>
-          </article>
-        ) : props.skills.map((skill) => (
+      <div className="agent-catalog-filter-row skill-list-filter-row">
+        <label className="agent-catalog-search-input skill-list-search-input">
+          <Search size={15} />
+          <input
+            aria-label={t("skills.filter.searchLabel")}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder={t("skills.filter.searchPlaceholder")}
+            value={searchQuery}
+          />
+        </label>
+        <select
+          aria-label={t("skills.filter.statusLabel")}
+          className="agent-catalog-status-select"
+          onChange={(event) => setStatusFilter(event.target.value as LuaSkillStatusFilter)}
+          value={statusFilter}
+        >
+          <option value="all">{t("skills.filter.allStatuses")}</option>
+          <option value="enabled">{t("skills.status.enabled")}</option>
+          <option value="disabled">{t("skills.status.stopped")}</option>
+        </select>
+        <select
+          aria-label={t("skills.filter.sourceLabel")}
+          className="agent-catalog-status-select"
+          onChange={(event) => setSourceFilter(event.target.value as LuaSkillSourceFilter)}
+          value={sourceFilter}
+        >
+          <option value="all">{t("skills.filter.allSources")}</option>
+          <option value="system">{t("skills.label.system")}</option>
+          <option value="user">{t("skills.label.user")}</option>
+        </select>
+      </div>
+      <div className="skill-card-list agent-skill-card-list">
+        {visibleSkills.length === 0 ? (
+          <div className="skill-empty-state">
+            {props.skills.length === 0 ? t("skills.lua.emptyDetail") : t("skills.filter.empty")}
+          </div>
+        ) : visibleSkills.map((skill) => (
           <LuaSkillCard
             actions={props.actions}
             busy={busyAction !== null}

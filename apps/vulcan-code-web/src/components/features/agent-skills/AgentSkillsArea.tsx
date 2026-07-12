@@ -222,7 +222,7 @@ export function AgentSkillsArea(props: {
         <div className="agent-catalog-toolbar">
           <div className="agent-catalog-toolbar-main">
             <div className="agent-catalog-toolbar-heading">
-              <h2>{locale.startsWith("zh") ? "提示词技能" : "Agent Skills"}</h2>
+              <h2>{locale.startsWith("zh") ? "技能" : "Skills"}</h2>
               <p>{props.workbench.agentSkills.notice}</p>
             </div>
             <div className="agent-catalog-toolbar-actions">
@@ -262,19 +262,19 @@ export function AgentSkillsArea(props: {
             <label className="agent-catalog-search-input">
               <Search size={15} />
               <input
-                aria-label={locale.startsWith("zh") ? "搜索提示词技能" : "Search prompt skills"}
+                aria-label={locale.startsWith("zh") ? "搜索技能" : "Search skills"}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder={locale.startsWith("zh") ? "搜索名称、描述、标签或来源" : "Search names, descriptions, tags, or sources"}
                 value={searchQuery}
               />
             </label>
-            <select aria-label={locale.startsWith("zh") ? "按状态筛选提示词技能" : "Filter prompt skills by state"} onChange={(event) => setStatusFilter(event.target.value as AgentSkillStatusFilter)} value={statusFilter}>
+            <select aria-label={locale.startsWith("zh") ? "按状态筛选技能" : "Filter skills by state"} onChange={(event) => setStatusFilter(event.target.value as AgentSkillStatusFilter)} value={statusFilter}>
               <option value="all">{locale.startsWith("zh") ? "全部状态" : "All states"}</option>
               <option value="enabled">{locale.startsWith("zh") ? "已启用" : "Enabled"}</option>
               <option value="disabled">{locale.startsWith("zh") ? "已停用" : "Disabled"}</option>
               <option value="issues">{locale.startsWith("zh") ? "存在问题" : "Has issues"}</option>
             </select>
-            <select aria-label={locale.startsWith("zh") ? "按来源筛选提示词技能" : "Filter prompt skills by source"} onChange={(event) => setSourceFilter(event.target.value as AgentSkillSourceFilter)} value={sourceFilter}>
+            <select aria-label={locale.startsWith("zh") ? "按来源筛选技能" : "Filter skills by source"} onChange={(event) => setSourceFilter(event.target.value as AgentSkillSourceFilter)} value={sourceFilter}>
               <option value="all">{locale.startsWith("zh") ? "全部来源" : "All sources"}</option>
               <option value="system">{locale.startsWith("zh") ? "系统技能" : "System"}</option>
               <option value="user">{locale.startsWith("zh") ? "用户技能" : "User"}</option>
@@ -428,7 +428,7 @@ export function FloatingAgentSkillCategoryMenu(props: {
   }
 
   return (
-      <aside className="workspace-tool-panel-menu agent-category-floating-menu" aria-label={locale.startsWith("zh") ? "提示词技能分类" : "Agent Skill categories"}>
+      <aside className="workspace-tool-panel-menu agent-category-floating-menu" aria-label={locale.startsWith("zh") ? "技能分类" : "Skill categories"}>
         <div className="workspace-tool-panel-menu-header">
           <span>{locale.startsWith("zh") ? "分类" : "Categories"}</span>
           <button aria-label={t("workspaceToolPanel.collapseToPill")} className="workspace-tool-panel-menu-icon-button" onClick={() => props.onExpandedChange(false)} type="button">

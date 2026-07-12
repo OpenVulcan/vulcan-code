@@ -666,8 +666,31 @@
 }
 
 .lua-skill-page-body .skill-card-list {
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+}
+
+.skill-list-filter-row {
+  grid-template-columns: minmax(240px, 1fr) 144px 144px;
+}
+
+.skill-list-filter-row.plugin-skill-filter-row {
+  grid-template-columns: minmax(240px, 1fr) 144px;
+}
+
+.skill-list-search-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-list-search-input input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
 }
 
 .agent-skill-card-list {
@@ -701,17 +724,12 @@
   gap: 10px;
 }
 
-.lua-skill-card,
 .agent-skill-card {
   height: 196px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   align-content: stretch;
   overflow: hidden;
-}
-
-.lua-skill-card {
-  height: 164px;
 }
 
 .agent-skill-card {
@@ -790,13 +808,11 @@
   flex-wrap: wrap;
 }
 
-.agent-definition-title-button {
+.agent-definition-title-button,
+.agent-definition-row-title-text {
   min-width: 0;
   max-width: min(360px, 100%);
-  border: 0;
-  background: transparent;
   color: var(--foreground);
-  padding: 0;
   overflow: hidden;
   font-size: 14px;
   font-weight: 700;
@@ -806,8 +822,17 @@
   white-space: nowrap;
 }
 
+.agent-definition-title-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+
 .agent-definition-title-button:hover {
   color: var(--primary);
+  text-decoration: none;
 }
 
 .agent-definition-row-badges {
@@ -837,6 +862,10 @@
 
 .agent-definition-row-main p {
   color: var(--foreground);
+}
+
+.system-plugin-definition-row .agent-definition-row-path.warning {
+  color: var(--destructive);
 }
 
 .agent-definition-row-actions {
@@ -1386,7 +1415,6 @@
   overflow-wrap: anywhere;
 }
 
-.lua-skill-card .skill-actions-row,
 .agent-skill-card .skill-actions-row {
   align-self: end;
 }
@@ -1586,4 +1614,21 @@
   font-family: "JetBrains Mono", "Cascadia Code", monospace;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .skill-list-filter-row,
+  .skill-list-filter-row.plugin-skill-filter-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lua-skill-page-body .agent-definition-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .lua-skill-page-body .agent-definition-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
 }

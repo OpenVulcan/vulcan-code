@@ -1,8 +1,7 @@
 import * as React from "react";
 import {
   ChevronDown,
-  FileText,
-  Power,
+  Package,
   RotateCw,
   Trash2,
   Wrench,
@@ -49,78 +48,101 @@ export function LuaSkillCard(props: {
   skill: LuaSkillSummary;
 }) {
   const { t } = useI18n();
+  // source is the compact source description shown below the unified label line.
+  // source 是统一标签行下方显示的紧凑来源说明。
   const source = props.skill.sourceLocator ?? t("skills.source.unknown");
+  // sourceTypeLabel is the normalized installation source badge.
+  // sourceTypeLabel 是规范化后的安装来源标签。
   const sourceTypeLabel = (props.skill.sourceType ?? "source").toUpperCase();
+  // explicitToolCount counts tools registered directly with the provider.
+  // explicitToolCount 统计直接注册到 Provider 的工具。
   const explicitToolCount = props.skill.tools.filter((tool) => tool.registrationState === "explicit").length;
+  // implicitToolCount counts tools available through the aggregate LuaSkills entry.
+  // implicitToolCount 统计通过 LuaSkills 聚合入口提供的工具。
   const implicitToolCount = props.skill.tools.filter((tool) => tool.registrationState === "implicit").length;
+  // disabledToolCount counts tools explicitly hidden from the model.
+  // disabledToolCount 统计被明确隐藏于模型的工具。
   const disabledToolCount = props.skill.tools.filter((tool) => tool.registrationState === "disabled").length;
 
   return (
-    <article className="skill-card lua-skill-card">
-      <header className="skill-card-header">
-        <div className="skill-card-title">
-          <div className="skill-card-title-line">
-            <strong>{props.skill.displayName}</strong>
-            <div className="skill-card-title-meta">
-              {props.skill.enabled ? (
-                <Badge className="skill-card-enabled-badge">{t("skills.status.enabled")}</Badge>
-              ) : (
-                <Badge variant="destructive">{t("skills.status.stopped")}</Badge>
-              )}
-              <Badge variant="outline">{sourceTypeLabel}</Badge>
-              <Badge variant="secondary">v{props.skill.version}</Badge>
-            </div>
+    <article className="agent-definition-row lua-skill-definition-row">
+      <button
+        className="agent-definition-row-icon"
+        onClick={() => props.onOpenDetail(props.skill)}
+        title={t("skills.action.details")}
+        type="button"
+      >
+        <span className="agent-definition-row-glyph"><Package size={17} /></span>
+      </button>
+      <div className="agent-definition-row-main">
+        <div className="agent-definition-row-title-line">
+          <button
+            className="agent-definition-title-button"
+            onClick={() => props.onOpenDetail(props.skill)}
+            title={t("skills.action.details")}
+            type="button"
+          >
+            {props.skill.displayName}
+          </button>
+          <div className="agent-definition-row-badges">
+            <Badge variant="outline">{sourceTypeLabel}</Badge>
+            <Badge variant="secondary">v{props.skill.version}</Badge>
+            <Badge variant="outline">{props.skill.rootName === "ROOT" ? t("skills.label.system") : props.skill.rootName}</Badge>
+            <Badge variant="outline">{t("skills.label.explicit")} {explicitToolCount}</Badge>
+            <Badge variant="outline">{t("skills.label.implicit")} {implicitToolCount}</Badge>
+            {disabledToolCount > 0 ? <Badge variant="outline">{t("skills.label.closed")} {disabledToolCount}</Badge> : null}
           </div>
         </div>
-      </header>
-      <div className="skill-card-summary">
-        <span>{source}</span>
+        <p>{source}</p>
+        <span className="agent-definition-row-path">{props.skill.skillDir}</span>
       </div>
-      <div className="skill-card-metrics">
-        <span>{props.skill.rootName === "ROOT" ? t("skills.label.system") : props.skill.rootName}</span>
-        {props.skill.enabled ? (
-          <>
-            <span>{t("skills.label.explicit")} {explicitToolCount}</span>
-            <span>{t("skills.label.implicit")} {implicitToolCount}</span>
-            {disabledToolCount > 0 ? <span>{t("skills.label.closed")} {disabledToolCount}</span> : null}
-          </>
+      <div className="agent-definition-row-actions">
+        <button
+          aria-checked={props.skill.enabled}
+          aria-label={props.skill.enabled ? t("skills.action.disable") : t("skills.action.enable")}
+          className={`agent-definition-switch ${props.skill.enabled ? "on" : ""}`}
+          disabled={props.busy}
+          onClick={() => void props.onRunAction("toggle", () => props.actions.onSetLuaSkillEnabled(props.skill.skillId, !props.skill.enabled))}
+          role="switch"
+          title={props.skill.enabled ? t("skills.action.disable") : t("skills.action.enable")}
+          type="button"
+        >
+          <span />
+        </button>
+        <button
+          className="agent-definition-icon-button"
+          onClick={() => props.onOpenTools(props.skill)}
+          title={`${t("skills.action.tools")} (${props.skill.tools.length})`}
+          type="button"
+        >
+          <Wrench size={14} />
+        </button>
+        {props.skill.managed ? (
+          <button
+            className="agent-definition-icon-button"
+            disabled={props.busy}
+            onClick={() => void props.onRunAction("update", () => props.actions.onUpdateLuaSkill(props.skill.skillId))}
+            title={t("skills.action.update")}
+            type="button"
+          >
+            <RotateCw size={14} />
+          </button>
         ) : null}
-      </div>
-      <div className="skill-actions-row">
-        <button className="skill-action-button secondary" onClick={() => props.onOpenDetail(props.skill)} type="button">
-          <FileText size={15} />
-          <span>{t("skills.action.details")}</span>
-        </button>
-        <button className="skill-action-button secondary" onClick={() => props.onOpenTools(props.skill)} type="button">
-          <Wrench size={15} />
-          <span>{t("skills.action.tools")} {props.skill.tools.length}</span>
-        </button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="skill-action-button secondary" disabled={props.busy} type="button">
-              <span>{t("skills.action.action")}</span>
-              <ChevronDown size={14} />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="lua-skill-action-menu">
-            <DropdownMenuItem onSelect={() => void props.onRunAction("toggle", () => props.actions.onSetLuaSkillEnabled(props.skill.skillId, !props.skill.enabled))}>
-              <Power size={15} />
-              <span>{props.skill.enabled ? t("skills.action.disable") : t("skills.action.enable")}</span>
-            </DropdownMenuItem>
-            {props.skill.managed ? (
-              <DropdownMenuItem onSelect={() => void props.onRunAction("update", () => props.actions.onUpdateLuaSkill(props.skill.skillId))}>
-                <RotateCw size={15} />
-                <span>{t("skills.action.update")}</span>
-              </DropdownMenuItem>
-            ) : null}
-            {!props.skill.systemOwned ? (
+        {!props.skill.systemOwned ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="agent-definition-icon-button" disabled={props.busy} title={t("skills.action.action")} type="button">
+                <ChevronDown size={14} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="lua-skill-action-menu">
               <DropdownMenuItem variant="destructive" onSelect={() => void props.onRunAction("uninstall", () => props.actions.onUninstallLuaSkill(props.skill.skillId))}>
                 <Trash2 size={15} />
                 <span>{t("skills.action.delete")}</span>
               </DropdownMenuItem>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </div>
     </article>
   );

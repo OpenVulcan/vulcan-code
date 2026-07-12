@@ -134,7 +134,7 @@ export function AgentSkillEditorDialog(props: {
               ? (chinese ? `复制 ${recordDisplayName}` : `Copy ${recordDisplayName}`)
               : props.record
                 ? (chinese ? `编辑 ${recordDisplayName}` : `Edit ${recordDisplayName}`)
-                : (chinese ? "新建提示词技能" : "Create Agent Skill")}
+                : (chinese ? "新建技能" : "Create Skill")}
           </DialogTitle>
           <DialogDescription>
             {chinese

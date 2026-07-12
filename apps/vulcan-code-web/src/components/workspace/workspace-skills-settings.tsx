@@ -79,8 +79,8 @@ export function FloatingSkillMenu(props: {
   // rows 保存静态内嵌技能菜单行。
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
-    { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
+    { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
   ];
   // activeLabel stores the selected menu label for the collapsed pill.
   // activeLabel 保存收起胶囊展示的当前菜单标签。
