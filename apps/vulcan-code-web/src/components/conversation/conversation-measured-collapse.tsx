@@ -194,6 +194,9 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
   const previousExpandedRef = React.useRef(props.expanded);
   const frameRef = React.useRef<number | null>(null);
   const fallbackTimerRef = React.useRef<number | null>(null);
+  // collapsingRef prevents stable collapsed-state synchronization from unmounting content before the closing height transition finishes.
+  // collapsingRef 防止稳定折叠状态同步在收起高度动画完成前卸载内容。
+  const collapsingRef = React.useRef(false);
 
   React.useEffect(() => {
     expandedRef.current = props.expanded;
@@ -230,6 +233,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
 
   const finishTransition = React.useCallback(() => {
     fallbackTimerRef.current = null;
+    collapsingRef.current = false;
     if (expandedRef.current) {
       const expandedHeight = measureExpandedHeight();
       rememberMetrics({
@@ -262,6 +266,11 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
 
   React.useLayoutEffect(() => {
     const previousExpanded = previousExpandedRef.current;
+    // State updates made during a closing transition must not restart and cancel its scheduled animation frame or completion timer.
+    // 收起过渡中的状态更新不得重启并取消其已调度的动画帧或完成计时器。
+    if (collapsingRef.current && !props.expanded) {
+      return;
+    }
     if (previousExpanded === props.expanded && rendered === (props.expanded || collapsedHeight > 0)) {
       return;
     }
@@ -269,6 +278,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     clearScheduledWork();
 
     if (prefersReducedMotion) {
+      collapsingRef.current = false;
       const stableHeight = props.expanded ? measureExpandedHeight() : collapsedHeight;
       rememberMetrics({
         collapsedHeight: props.expanded ? undefined : collapsedHeight,
@@ -284,6 +294,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     }
 
     if (props.expanded) {
+      collapsingRef.current = false;
       setRendered(true);
       setVisualOpen(false);
       setTargetHeight(collapsedHeight);
@@ -309,6 +320,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
     }
 
     const currentHeight = measureExpandedHeight();
+    collapsingRef.current = true;
     setTargetHeight(collapsedHeight);
     rememberMetrics({
       collapsedHeight,
@@ -326,7 +338,9 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
   }, [clearScheduledWork, collapsedHeight, measureExpandedHeight, prefersReducedMotion, props.expanded, rendered, rememberMetrics, scheduleTransitionFinish]);
 
   React.useLayoutEffect(() => {
-    if (props.expanded) {
+    // The primary transition effect owns the closing phase; this effect only synchronizes a stable collapsed height.
+    // 主过渡 effect 负责收起阶段；此 effect 仅同步稳定折叠高度。
+    if (props.expanded || collapsingRef.current) {
       return;
     }
     rememberMetrics({

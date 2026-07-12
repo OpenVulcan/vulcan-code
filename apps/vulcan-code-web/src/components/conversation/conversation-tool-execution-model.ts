@@ -719,6 +719,11 @@ function subagentTaskExecutionDisplayState(blocks: ToolExecutionConversationBloc
   if (states.includes("completed")) {
     return "completed";
   }
+  // A returned orchestration result completes the tool invocation even when its payload reports that the spawned child task is still running.
+  // 编排工具结果一旦返回即代表本次工具调用完成，即使其载荷仍报告新建子任务处于运行状态。
+  if (taskBlocks.some((block) => block.kind === "tool-result")) {
+    return "completed";
+  }
   if (states.includes("running")) {
     return "running";
   }
@@ -922,3 +927,4 @@ function compactTextPreview(source: string): string {
   }
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
 }
+
