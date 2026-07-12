@@ -297,6 +297,7 @@ function SpecialConversationBlock(props: {
     return (
       <ThinkingBlock
         autoExpanded={props.block.id === props.autoExpandThinkingBlockId}
+        autoExpandWhileStreaming={props.block.id === props.autoExpandThinkingBlockId}
         block={props.block}
         sessionRunning={props.sessionRunning}
         streaming={props.itemStreaming}

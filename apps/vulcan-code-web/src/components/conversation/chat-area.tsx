@@ -817,6 +817,7 @@ export function ChatArea(props: ChatAreaProps) {
         />
       ) : null}
       <ConversationWorkspace
+        autoExpandStreamingThinking={thinkingDisplayMode !== "first_inline_with_popup"}
         conversation={surfaceConversation}
         sessionRunning={conversationIsRunning(surfaceConversation)}
         hiddenThinkingBlockIds={hiddenThinkingBlockIds}

@@ -109,6 +109,9 @@ export function ConversationWorkspace(props: {
   // Whether the owning conversation is currently running.
   // 所属会话当前是否正在运行。
   sessionRunning: boolean;
+  // Whether the latest streaming thinking block may automatically expand in the inline transcript.
+  // 最新流式思考块是否允许在内联会话中自动展开。
+  autoExpandStreamingThinking?: boolean;
   // Thinking blocks filtered from the main transcript by the display mode.
   // 被展示模式从主会话面板过滤的思考块。
   hiddenThinkingBlockIds: ReadonlySet<string>;
@@ -351,7 +354,9 @@ export function ConversationWorkspace(props: {
     runRestoreFrame(CONVERSATION_TURN_RESTORE_FRAME_COUNT);
     return clearTurnSurfaceRestoreFrames;
   }, [clearTurnSurfaceRestoreFrames, props.restoreInitialScrollDistance, restoreTurnSurfaceBottomDistance, timelineCacheScopeKey]);
-  const autoExpandThinkingBlockId = props.sessionRunning && props.hiddenThinkingBlockIds.size === 0
+  const autoExpandThinkingBlockId = (props.autoExpandStreamingThinking ?? true)
+    && props.sessionRunning
+    && props.hiddenThinkingBlockIds.size === 0
     ? latestThinkingBlockIdAfterLastUser(props.renderItems)
     : null;
   const processCollapseKey = React.useCallback((process: ConversationProcessRenderItem) => {

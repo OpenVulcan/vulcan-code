@@ -79,9 +79,6 @@ export function hiddenThinkingBlockIdsForDisplayMode(
     return visibleOverlayBlockId ? new Set([visibleOverlayBlockId]) : new Set();
   }
   const hidden = new Set(thinkingBlocks.all.filter((id) => !thinkingBlocks.firstByProcess.has(id)));
-  if (mode === "first_inline_with_popup" && visibleOverlayBlockId && thinkingBlocks.firstByProcess.has(visibleOverlayBlockId)) {
-    hidden.add(visibleOverlayBlockId);
-  }
   return hidden;
 }
 
