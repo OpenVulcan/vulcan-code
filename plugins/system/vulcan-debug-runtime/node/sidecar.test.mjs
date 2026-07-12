@@ -54,6 +54,177 @@ function startSidecar() {
   return { child, command, stop };
 }
 
+// Start one real Node inspector target and resolve its emitted WebSocket endpoint.
+// 启动一个真实 Node inspector 目标并解析其输出的 WebSocket 端点。
+async function startNodeInspector(mode) {
+  const inspectorFlag = mode === "inspect-brk" ? "--inspect-brk=0" : "--inspect=0";
+  const child = spawn(process.execPath, [
+    inspectorFlag,
+    "-e",
+    "let value = 0; function tick() { value += 1; setTimeout(tick, 25); } tick();",
+  ], {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const stderr = readline.createInterface({ input: child.stderr, crlfDelay: Infinity });
+  const endpoint = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Node ${mode} target did not publish a debugger endpoint`));
+    }, 10_000);
+    const onExit = (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Node ${mode} target exited before publishing its endpoint: ${code}`));
+    };
+    const onLine = (line) => {
+      const match = line.match(/Debugger listening on (ws:\/\/\S+)/);
+      if (!match) return;
+      clearTimeout(timeout);
+      child.off("exit", onExit);
+      stderr.off("line", onLine);
+      resolve(match[1]);
+    };
+    child.once("exit", onExit);
+    stderr.on("line", onLine);
+  });
+
+  // Stop the inspector target even when it is waiting for debugger detachment.
+  // 即使 inspector 目标正在等待调试器断开，也要停止该目标。
+  async function stop() {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    stderr.close();
+  }
+
+  return { endpoint, stop };
+}
+
+// Poll retained CDP events until one exact method is observed or the deadline expires.
+// 轮询保留的 CDP 事件，直到观察到精确方法或截止时间到期。
+async function waitForCdpEvent(sidecar, method, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    const response = await sidecar.command({
+      op: "events",
+      max_events: 32,
+      timeout_ms: Math.min(1_000, remaining),
+    });
+    assert.equal(response.ok, true);
+    const event = response.result.events.find((candidate) => candidate.method === method);
+    if (event) return event;
+  }
+  throw new Error(`Timed out waiting for CDP event ${method}`);
+}
+
+// Run one complete real Node inspector state-machine round through the production sidecar.
+// 通过生产 sidecar 运行一轮完整的真实 Node inspector 状态机。
+async function runRealNodeInspectorRound(mode) {
+  const target = await startNodeInspector(mode);
+  const sidecar = startSidecar();
+  let opened = false;
+  try {
+    const openResponse = await sidecar.command({
+      op: "open",
+      protocol: "cdp",
+      target: { websocket_url: target.endpoint },
+    });
+    assert.equal(openResponse.ok, true);
+    opened = true;
+
+    const enabled = await sidecar.command({
+      op: "request",
+      method: "Debugger.enable",
+      params: {},
+      timeout_ms: 5_000,
+    });
+    assert.equal(enabled.ok, true);
+    assert.equal(typeof enabled.result.debuggerId, "string");
+
+    const evaluated = await sidecar.command({
+      op: "request",
+      method: "Runtime.evaluate",
+      params: { expression: "1+2", returnByValue: true },
+      timeout_ms: 5_000,
+    });
+    assert.equal(evaluated.result.result.value, 3);
+
+    if (mode === "inspect-brk") {
+      const started = await sidecar.command({
+        op: "request",
+        method: "Runtime.runIfWaitingForDebugger",
+        params: {},
+        timeout_ms: 5_000,
+      });
+      assert.equal(started.ok, true);
+    } else {
+      const paused = await sidecar.command({
+        op: "request",
+        method: "Debugger.pause",
+        params: {},
+        timeout_ms: 5_000,
+      });
+      assert.equal(paused.ok, true);
+    }
+
+    let pausedEvent = await waitForCdpEvent(sidecar, "Debugger.paused");
+    assert.ok(pausedEvent.params.callFrames.length > 0);
+    const frameEvaluation = await sidecar.command({
+      op: "request",
+      method: "Debugger.evaluateOnCallFrame",
+      params: {
+        callFrameId: pausedEvent.params.callFrames[0].callFrameId,
+        expression: "1+2",
+        returnByValue: true,
+      },
+      timeout_ms: 5_000,
+    });
+    assert.equal(frameEvaluation.result.result.value, 3);
+
+    const steppedOver = await sidecar.command({
+      op: "request",
+      method: "Debugger.stepOver",
+      params: {},
+      timeout_ms: 5_000,
+    });
+    assert.equal(steppedOver.ok, true);
+    pausedEvent = await waitForCdpEvent(sidecar, "Debugger.paused");
+    assert.ok(pausedEvent.params.callFrames.length > 0);
+
+    const steppedInto = await sidecar.command({
+      op: "request",
+      method: "Debugger.stepInto",
+      params: {},
+      timeout_ms: 5_000,
+    });
+    assert.equal(steppedInto.ok, true);
+    pausedEvent = await waitForCdpEvent(sidecar, "Debugger.paused");
+    assert.ok(pausedEvent.params.callFrames.length > 0);
+
+    const resumed = await sidecar.command({
+      op: "request",
+      method: "Debugger.resume",
+      params: {},
+      timeout_ms: 5_000,
+    });
+    assert.equal(resumed.ok, true);
+    await waitForCdpEvent(sidecar, "Debugger.resumed");
+
+    const repeatedResume = await sidecar.command({
+      op: "request",
+      method: "Debugger.resume",
+      params: {},
+      timeout_ms: 5_000,
+    });
+    assert.equal(repeatedResume.ok, false);
+    assert.match(repeatedResume.error, /while paused/i);
+  } finally {
+    if (opened) await sidecar.command({ op: "close" }).catch(() => undefined);
+    await sidecar.stop();
+    await target.stop();
+  }
+}
+
 // Encode one unmasked server-to-client WebSocket text frame.
 // 编码一个未掩码的服务端到客户端 WebSocket 文本帧。
 function encodeServerTextFrame(text) {
@@ -264,6 +435,13 @@ test("CDP sidecar lifecycle", async () => {
   assert.equal(closed.result.closed, true);
   await sidecar.stop();
   await peer.close();
+});
+
+// Verify real Node inspect-brk and inspect targets preserve the complete CDP pause state machine.
+// 验证真实 Node inspect-brk 与 inspect 目标会保持完整 CDP 暂停状态机。
+test("real Node inspector CDP state machine", async () => {
+  await runRealNodeInspectorRound("inspect-brk");
+  await runRealNodeInspectorRound("inspect");
 });
 
 // Verify DAP framing, request correlation, retained events, and deterministic closure.

@@ -285,6 +285,93 @@ pub(crate) fn service_luaskills_handle(
         .ok_or_else(|| String::from("service is still starting; LuaSkills runtime is not ready"))
 }
 
+/// Returns the long-lived generic System Plugin runtime retained by the Agent bridge.
+/// 返回 Agent 桥接保留的长生命周期通用系统插件运行时。
+pub(crate) fn service_system_plugin_runtime(
+    state: &SharedServiceBridgeState,
+) -> Result<vulcan_plugin_runtime::SystemPluginRuntimeManager, String> {
+    state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.luaskills_runtime.as_ref())
+        .map(|runtime| runtime.system_plugin_runtime.clone())
+        .ok_or_else(|| String::from("System Plugin runtime is not initialized."))
+}
+
+/// Atomically synchronizes the current System Plugin hook surface into the retained dispatcher.
+/// 将当前系统插件 hook 面原子同步到保留的调度器。
+pub(crate) fn synchronize_service_system_plugin_hooks(
+    state: &SharedServiceBridgeState,
+    runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager,
+    catalog: &vulcan_plugin_runtime::SystemPluginCatalogSnapshot,
+) -> Result<(), String> {
+    let conversation_hook_runtime = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| Arc::clone(&runtime.conversation_hook_runtime))
+        .ok_or_else(|| String::from("Agent conversation hook runtime is not initialized."))?;
+    let mut hook_runtime = conversation_hook_runtime
+        .lock()
+        .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+    vulcan_agent_runtime::agent_runtime::system_plugin_hooks::synchronize_system_plugin_hooks(
+        hook_runtime.dispatcher_mut(),
+        runtime,
+        catalog,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Validates one plugin's hook declarations against the retained host point registry.
+/// 依据保留的宿主点位注册表校验单个插件的 hook 声明。
+pub(crate) fn validate_service_system_plugin_hooks(
+    state: &SharedServiceBridgeState,
+    hooks: &[vulcan_plugin_runtime::SystemPluginHookDescriptor],
+) -> Result<(), String> {
+    let conversation_hook_runtime = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| Arc::clone(&runtime.conversation_hook_runtime))
+        .ok_or_else(|| String::from("Agent conversation hook runtime is not initialized."))?;
+    let mut hook_runtime = conversation_hook_runtime
+        .lock()
+        .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+    vulcan_agent_runtime::agent_runtime::system_plugin_hooks::validate_system_plugin_hooks(
+        hook_runtime.dispatcher_mut(),
+        hooks,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Drains every System Plugin session owned by the supplied archived conversations.
+/// 排空由给定已归档会话拥有的全部系统插件会话。
+pub(crate) async fn drain_system_plugin_sessions_for_owners(
+    state: &SharedServiceBridgeState,
+    owner_session_ids: &[SessionId],
+) -> Vec<String> {
+    let Ok(runtime) = service_system_plugin_runtime(state) else {
+        return Vec::new();
+    };
+    let mut failures = Vec::new();
+    for owner_session_id in owner_session_ids {
+        match runtime
+            .drain_owner_sessions(&owner_session_id.to_string())
+            .await
+        {
+            Ok(report) => failures.extend(report.failures),
+            Err(error) => failures.push(format!(
+                "Failed to drain System Plugin sessions for owner `{owner_session_id}`: {error}"
+            )),
+        }
+    }
+    failures
+}
+
 /// Stores a refreshed LuaSkills catalog in the shared service state.
 /// 在共享服务状态中存储刷新后的 LuaSkills 目录。
 pub(crate) fn store_luaskills_catalog(

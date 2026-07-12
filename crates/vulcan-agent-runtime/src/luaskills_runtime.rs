@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use vulcan_plugin_runtime::SystemPluginRuntimeManager;
 
 mod schema;
 mod types;
@@ -86,15 +87,19 @@ fn bootstrap_luaskills_runtime_blocking(
     let operation_progress_events = Arc::new(Mutex::new(VecDeque::new()));
     install_luaskills_operation_progress_callback(operation_progress_events.clone());
 
+    let engine = Arc::new(Mutex::new(engine));
+    let system_plugin_runtime =
+        SystemPluginRuntimeManager::new(Arc::clone(&engine), system_lua_lib_dir.clone());
     Ok(LuaSkillsBootstrapReport {
         handle: LuaSkillsRuntimeHandle {
-            engine: Arc::new(Mutex::new(engine)),
+            engine,
             runtime_root,
             system_lua_lib_dir,
             skill_roots,
             entry_count,
             tool_entries: Arc::new(Mutex::new(tool_entries)),
             operation_progress_events,
+            system_plugin_runtime,
         },
     })
 }

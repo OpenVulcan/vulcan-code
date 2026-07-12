@@ -526,10 +526,19 @@ pub(crate) async fn refresh_luaskills_local_state(
         .map(|runtime| runtime.provider_configuration.clone())
         .unwrap_or_default();
     let catalog = cached_luaskills_catalog_from_state(&guard);
+    let system_plugin_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.luaskills_runtime.as_ref())
+        .map(|runtime| runtime.system_plugin_runtime.snapshot());
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
-    guard.workbench.plugins = plugins_from_luaskills(&catalog, &provider_configuration);
+    guard.workbench.plugins = plugins_from_luaskills(
+        &catalog,
+        &provider_configuration,
+        system_plugin_catalog.as_deref(),
+    );
     Ok(LuaSkillsCatalogUpdate {
         revision: guard.workbench_generation,
         lua_skills: guard.workbench.lua_skills.clone(),

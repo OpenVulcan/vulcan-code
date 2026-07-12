@@ -39,13 +39,16 @@ use crate::web_search_compat::{
 use crate::workspace_path::native_workspace_path_text_from_path;
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_luaskills_prompt::{
     LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry, render_luaskill_help_output,
+};
+use vulcan_plugin_runtime::{
+    SystemPluginInvocationRequest, SystemPluginRuntimeManager, SystemPluginToolDescriptor,
 };
 use vulcan_tools_luaskills_call::{
     CALL_LUASKILL_TOOL_NAME, LuaSkillCallEntryView, call_luaskill_args_schema,
@@ -122,6 +125,8 @@ pub fn build_vulcan_tools_manager(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
     native_catalog: NativeToolCatalog,
+    system_plugin_runtime: Option<SystemPluginRuntimeManager>,
+    candidate_system_plugin_tools: Vec<SystemPluginToolDescriptor>,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
     controller_runtime: Option<ControllerRuntimeHandle>,
@@ -212,6 +217,72 @@ pub fn build_vulcan_tools_manager(
                 })
             }),
         });
+    }
+
+    let mut plugin_groups = BTreeMap::<(String, String), Vec<SystemPluginToolDescriptor>>::new();
+    for tool in candidate_system_plugin_tools {
+        plugin_groups
+            .entry((tool.plugin_id.clone(), tool.group.clone()))
+            .or_default()
+            .push(tool);
+    }
+    for ((_plugin_id, _group_id), mut tools) in plugin_groups {
+        tools.sort_by(|left, right| left.id.cmp(&right.id));
+        if tools
+            .iter()
+            .any(|tool| occupied_public_tool_ids.contains(&tool.id))
+        {
+            continue;
+        }
+        for tool in tools {
+            let descriptor = VulcanToolDescriptor {
+                id: tool.id.clone(),
+                name: tool.id.clone(),
+                description: tool.description.clone(),
+                help_text: None,
+                source: VulcanToolSourceKind::SystemPlugin,
+            };
+            occupied_public_tool_ids.insert(tool.id.clone());
+            let runtime = system_plugin_runtime.clone();
+            let tool_id = tool.id.clone();
+            let workspace_root = workspace_root.clone();
+            candidates.push(VulcanToolCandidate {
+                descriptor,
+                parameters_schema: tool.parameters_schema,
+                ai_visible: true,
+                plan_policy: if tool.available_in_plan {
+                    VulcanPlanToolPolicy::Visible
+                } else {
+                    VulcanPlanToolPolicy::Hidden
+                },
+                invoke: Arc::new(move |arguments, owner_session_id| {
+                    let runtime = runtime.clone();
+                    let tool_id = tool_id.clone();
+                    let workspace_root = workspace_root.clone();
+                    Box::pin(async move {
+                        let runtime = runtime.ok_or_else(|| {
+                            format!("System Plugin runtime is unavailable for tool `{tool_id}`.")
+                        })?;
+                        let owner_session_id = owner_session_id.ok_or_else(|| {
+                            format!("System Plugin tool `{tool_id}` requires a conversation owner.")
+                        })?;
+                        let workspace_root = workspace_root.ok_or_else(|| {
+                            format!("System Plugin tool `{tool_id}` requires a workspace root.")
+                        })?;
+                        let output = runtime
+                            .invoke(SystemPluginInvocationRequest {
+                                tool_id,
+                                arguments,
+                                owner_session_id,
+                                workspace_root,
+                            })
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        Ok(VulcanToolInvocationResult::from_model_output(output))
+                    })
+                }),
+            });
+        }
     }
 
     if !candidate_luaskills_dispatch_tools.is_empty() {

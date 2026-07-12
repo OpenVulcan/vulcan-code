@@ -459,6 +459,14 @@ pub(crate) async fn service_archive_project_conversations(
     // workbench is the authoritative retained projection committed by the batch refresh.
     // workbench 是批量刷新提交的权威保留投影。
     let workbench = refresh_result?;
+    let plugin_cleanup_failures =
+        drain_system_plugin_sessions_for_owners(&state, &archived_session_ids).await;
+    if !plugin_cleanup_failures.is_empty() {
+        eprintln!(
+            "[system-plugin] archived project cleanup warnings: {}",
+            plugin_cleanup_failures.join("; ")
+        );
+    }
     // lifecycle_event carries every child transition in one transport-safe generation.
     // lifecycle_event 在单个传输安全 generation 中携带全部子转换。
     let lifecycle_event = conversations_archived_delta_envelope(&workbench, &archived_session_ids);
@@ -538,6 +546,14 @@ pub(crate) async fn service_remove_project(
     // workbench is the authoritative retained projection after child archival and project removal.
     // workbench 是子会话归档与项目移除后的权威保留投影。
     let workbench = refresh_result?;
+    let plugin_cleanup_failures =
+        drain_system_plugin_sessions_for_owners(&state, &archived_session_ids).await;
+    if !plugin_cleanup_failures.is_empty() {
+        eprintln!(
+            "[system-plugin] removed project cleanup warnings: {}",
+            plugin_cleanup_failures.join("; ")
+        );
+    }
     // lifecycle_event combines project and child transitions because the transport owns one envelope per generation.
     // lifecycle_event 合并项目与子转换，因为传输层每个 generation 只持有一个信封。
     let lifecycle_event =

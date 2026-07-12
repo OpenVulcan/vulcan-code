@@ -12,6 +12,7 @@ use vulcan_agent_runtime::{
     agent_runtime::{
         conversation_hooks::ConversationHookRuntime,
         question_runtime::QuestionRuntime,
+        system_plugin_hooks::synchronize_system_plugin_hooks,
         task_runtime::TaskRuntime,
         token_budget_runtime::TokenBudgetRuntime,
         vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks},
@@ -341,6 +342,28 @@ fn run_service_bootstrap(
                 )
             })?
     };
+    let system_plugin_runtime = vulcan_plugin_runtime::SystemPluginRuntimeManager::new(
+        Arc::clone(&luaskills_runtime.engine),
+        luaskills_runtime.runtime_root.join("system_lua_lib"),
+    );
+    let system_plugin_catalog = system_plugin_runtime
+        .refresh_catalog(
+            &provider_configuration.luaskills.disabled_system_plugins,
+            &provider_configuration.luaskills.enabled_system_plugins,
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "luaskills",
+                "System Plugins",
+                format!("加载系统插件目录失败：{error}"),
+            )
+        })?;
+    logs.push(format!(
+        "[webui-service] system plugins ready: plugins={} tools={} revision={}",
+        system_plugin_catalog.plugins.len(),
+        system_plugin_catalog.enabled_tools.len(),
+        system_plugin_catalog.revision
+    ));
     let agent_luaskills_runtime = LuaSkillsRuntimeHandle {
         engine: Arc::clone(&luaskills_runtime.engine),
         runtime_root: luaskills_runtime.runtime_root.clone(),
@@ -349,6 +372,7 @@ fn run_service_bootstrap(
         entry_count: luaskills_catalog.entry_count,
         tool_entries: Arc::new(Mutex::new(agent_luaskills_tool_entries)),
         operation_progress_events: Arc::new(Mutex::new(VecDeque::new())),
+        system_plugin_runtime: system_plugin_runtime.clone(),
     };
     let agent_mcp_runtime = runtime
         .block_on(bootstrap_mcp_runtime_access(provider_configuration.clone()))
@@ -376,6 +400,18 @@ fn run_service_bootstrap(
             "workspace",
             "Workspace",
             format!("VMM hook 注册失败：{error}"),
+        )
+    })?;
+    synchronize_system_plugin_hooks(
+        conversation_hook_runtime.dispatcher_mut(),
+        system_plugin_runtime,
+        &system_plugin_catalog,
+    )
+    .map_err(|error| {
+        ServiceBootstrapError::new(
+            "workspace",
+            "Workspace",
+            format!("System Plugin hook 注册失败：{error}"),
         )
     })?;
     let agent_runtime = AgentRuntimeBridge {
@@ -520,6 +556,7 @@ fn run_service_bootstrap(
             controller: &controller_runtime,
             command_session_runtime: Some(agent_runtime.command_session_runtime.as_ref()),
             luaskills_catalog: &luaskills_catalog,
+            system_plugin_catalog: Some(system_plugin_catalog.as_ref()),
             token_budget_runtime: &token_budget_runtime,
             mcp_catalog: &mcp_catalog,
             provider_configuration: &provider_configuration,

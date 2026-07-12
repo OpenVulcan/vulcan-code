@@ -30,6 +30,7 @@ vulcan-file-watcher.workspace = true
 vulcan-core.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-provider-config.workspace = true
+vulcan-plugin-runtime.workspace = true
 vulcan-prompt-skills.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-service-api.workspace = true

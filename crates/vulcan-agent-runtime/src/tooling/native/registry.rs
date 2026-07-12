@@ -59,6 +59,7 @@ pub(crate) fn build_agent_list_tool(
                 "systemPrompt": agent.system_prompt,
                 "skills": agent.skill_ids,
                 "nativeTools": agent.native_tools,
+                "pluginTools": agent.plugin_tools,
                 "mcpTools": agent.mcp_tools,
                 "delegates": agent.delegates,
                 "toolPolicy": agent.tool_policy,

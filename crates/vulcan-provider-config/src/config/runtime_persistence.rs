@@ -58,8 +58,8 @@ pub struct PersistedSkillEntry {
     pub confidence_delta: Option<f32>,
 }
 
-/// One persisted tool-policy entry that scopes native and MCP tools.
-/// 用于限定原生工具与 MCP 工具的单个持久化工具策略条目。
+/// One persisted tool-policy entry that scopes native, System Plugin, and MCP tools.
+/// 用于限定原生工具、系统插件工具与 MCP 工具的单个持久化工具策略条目。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedToolPolicyEntry {
@@ -75,6 +75,14 @@ pub struct PersistedToolPolicyEntry {
     /// 显式允许的原生工具标识集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub native_tools: Vec<String>,
+    /// Whether every enabled System Plugin tool group should be exposed to the bound agent.
+    /// 是否向绑定代理暴露全部已启用系统插件工具组。
+    #[serde(default)]
+    pub allow_all_plugin_tools: bool,
+    /// Explicitly allowed System Plugin tool identifiers.
+    /// 显式允许的系统插件工具标识集合。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_tools: Vec<String>,
     /// Explicitly allowed MCP server identifiers.
     /// 显式允许的 MCP 服务器标识集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -145,6 +153,10 @@ pub struct PersistedLuaSkillsConfiguration {
     /// 用户显式停用的宿主自有 System Plugin 标识集合。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub disabled_system_plugins: BTreeSet<String>,
+    /// Host-owned System Plugin identifiers explicitly enabled over a disabled manifest default.
+    /// 在清单默认停用基础上由用户显式启用的宿主自有 System Plugin 标识集合。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub enabled_system_plugins: BTreeSet<String>,
 }
 
 impl PersistedLuaSkillsConfiguration {
@@ -231,55 +243,71 @@ impl PersistedLuaSkillsConfiguration {
             .filter(|plugin_id| !plugin_id.is_empty())
             .map(String::from)
             .collect::<BTreeSet<_>>();
+        let normalized_enabled_system_plugins = self
+            .enabled_system_plugins
+            .iter()
+            .map(|plugin_id| plugin_id.trim())
+            .filter(|plugin_id| !plugin_id.is_empty())
+            .map(String::from)
+            .collect::<BTreeSet<_>>();
+        let normalized_disabled_system_plugins = normalized_disabled_system_plugins
+            .difference(&normalized_enabled_system_plugins)
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let changed = normalized_registration != self.tool_registration_by_skill
             || !self.disabled_tools_by_skill.is_empty()
-            || normalized_disabled_system_plugins != self.disabled_system_plugins;
+            || normalized_disabled_system_plugins != self.disabled_system_plugins
+            || normalized_enabled_system_plugins != self.enabled_system_plugins;
         self.tool_registration_by_skill = normalized_registration;
         self.disabled_tools_by_skill.clear();
         self.disabled_system_plugins = normalized_disabled_system_plugins;
+        self.enabled_system_plugins = normalized_enabled_system_plugins;
         changed
     }
 
-    /// Returns whether one host-owned LuaSkills System Plugin is enabled.
-    /// 返回单个宿主自有 LuaSkills System Plugin 是否已启用。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` is the stable System Plugin identifier.
-    /// `plugin_id` 是稳定的 System Plugin 标识。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the plugin has not been explicitly disabled.
-    /// 当插件未被显式停用时返回 `true`。
-    pub fn system_plugin_enabled(&self, plugin_id: &str) -> bool {
-        let stable_plugin_id = plugin_id.trim();
-        !stable_plugin_id.is_empty() && !self.disabled_system_plugins.contains(stable_plugin_id)
-    }
-
-    /// Updates the persisted enabled state of one host-owned LuaSkills System Plugin.
-    /// 更新单个宿主自有 LuaSkills System Plugin 的持久化启用状态。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` is the stable System Plugin identifier and `enabled` is the requested state.
-    /// `plugin_id` 是稳定的 System Plugin 标识，`enabled` 是请求状态。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the persisted state changed.
-    /// 当持久化状态发生变化时返回 `true`。
-    pub fn set_system_plugin_enabled(&mut self, plugin_id: &str, enabled: bool) -> bool {
+    /// Resolves one plugin state from explicit overrides and its manifest default.
+    /// 根据显式覆盖与清单默认值解析单个插件状态。
+    pub fn system_plugin_enabled_or_default(&self, plugin_id: &str, default_enabled: bool) -> bool {
         let stable_plugin_id = plugin_id.trim();
         if stable_plugin_id.is_empty() {
             return false;
         }
-        if enabled {
-            self.disabled_system_plugins.remove(stable_plugin_id)
+        if self.enabled_system_plugins.contains(stable_plugin_id) {
+            true
+        } else if self.disabled_system_plugins.contains(stable_plugin_id) {
+            false
         } else {
-            self.disabled_system_plugins
-                .insert(stable_plugin_id.to_string())
+            default_enabled
         }
+    }
+
+    /// Stores a plugin override relative to the package manifest default.
+    /// 保存相对于插件包清单默认值的插件覆盖。
+    pub fn set_system_plugin_enabled_with_default(
+        &mut self,
+        plugin_id: &str,
+        enabled: bool,
+        default_enabled: bool,
+    ) -> bool {
+        let stable_plugin_id = plugin_id.trim();
+        if stable_plugin_id.is_empty() {
+            return false;
+        }
+        let before_enabled = self.enabled_system_plugins.clone();
+        let before_disabled = self.disabled_system_plugins.clone();
+        self.enabled_system_plugins.remove(stable_plugin_id);
+        self.disabled_system_plugins.remove(stable_plugin_id);
+        if enabled != default_enabled {
+            if enabled {
+                self.enabled_system_plugins
+                    .insert(stable_plugin_id.to_string());
+            } else {
+                self.disabled_system_plugins
+                    .insert(stable_plugin_id.to_string());
+            }
+        }
+        before_enabled != self.enabled_system_plugins
+            || before_disabled != self.disabled_system_plugins
     }
 
     /// Returns the effective registration state for one LuaSkills local tool.
@@ -781,6 +809,43 @@ impl Default for PersistedPromptConfiguration {
             project_prompt_enabled: true,
             project_prompt_path: default_project_prompt_path(),
         }
+    }
+}
+
+#[cfg(test)]
+mod system_plugin_policy_tests {
+    use super::*;
+
+    /// Verifies the dedicated System Plugin policy dimension survives serialization round trips.
+    /// 验证专用系统插件策略维度可在序列化往返后保持不变。
+    #[test]
+    fn system_plugin_policy_fields_round_trip_without_native_tool_fallback() {
+        let policy = PersistedToolPolicyEntry {
+            name: Some(String::from("Plugin policy")),
+            allow_all_native: false,
+            native_tools: vec![String::from("shell_command")],
+            allow_all_plugin_tools: true,
+            plugin_tools: vec![String::from("plugin_tool_a")],
+            mcp_servers: Vec::new(),
+            mcp_tools: Vec::new(),
+        };
+        let encoded = serde_json::to_string(&policy).expect("encode policy");
+        let decoded: PersistedToolPolicyEntry =
+            serde_json::from_str(&encoded).expect("decode policy");
+        assert!(decoded.allow_all_plugin_tools);
+        assert_eq!(decoded.plugin_tools, vec![String::from("plugin_tool_a")]);
+        assert_eq!(decoded.native_tools, vec![String::from("shell_command")]);
+    }
+
+    /// Verifies legacy policy documents default the new plugin dimension to closed.
+    /// 验证旧版策略文档会将新的插件维度默认设为关闭。
+    #[test]
+    fn legacy_policy_document_defaults_plugin_dimension_to_closed() {
+        let decoded: PersistedToolPolicyEntry =
+            serde_json::from_str(r#"{"allowAllNative":true,"nativeTools":["shell_command"]}"#)
+                .expect("decode legacy policy");
+        assert!(!decoded.allow_all_plugin_tools);
+        assert!(decoded.plugin_tools.is_empty());
     }
 }
 

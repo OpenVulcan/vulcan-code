@@ -16,6 +16,10 @@ pub(crate) struct WorkbenchRuntimeProjection<'a> {
     /// LuaSkills catalog snapshot already cached by the service state.
     /// 服务状态中已缓存的 LuaSkills 目录快照。
     pub(crate) luaskills_catalog: &'a TauriLuaSkillsCatalog,
+    /// Optional live System Plugin catalog from the shared Agent runtime.
+    /// 来自共享 Agent 运行时的可选实时系统插件目录。
+    pub(crate) system_plugin_catalog:
+        Option<&'a vulcan_plugin_runtime::SystemPluginCatalogSnapshot>,
     /// Token budget runtime used by module and context usage summaries.
     /// 模块与上下文用量摘要使用的 Token 预算运行时。
     pub(crate) token_budget_runtime: &'a TauriTokenBudgetRuntime,
@@ -219,12 +223,17 @@ async fn refresh_workbench_snapshot_with_selected_session(
             ),
         )
     };
+    let system_plugin_catalog = agent_runtime_for_status
+        .as_ref()
+        .and_then(|agent_runtime| agent_runtime.luaskills_runtime.as_ref())
+        .map(|runtime| runtime.system_plugin_runtime.snapshot());
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
         command_session_runtime: agent_runtime_for_status
             .as_ref()
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         luaskills_catalog: &luaskills_catalog,
+        system_plugin_catalog: system_plugin_catalog.as_deref(),
         token_budget_runtime: &token_budget_runtime,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,
@@ -484,7 +493,6 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
             .as_deref(),
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
         agent_runtime.provider_configuration.vmm.clone(),
-        agent_runtime.luaskills_runtime.clone(),
     );
     native_catalog
         .descriptors
@@ -681,6 +689,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         controller,
         command_session_runtime,
         luaskills_catalog,
+        system_plugin_catalog,
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
@@ -899,7 +908,11 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         subagent_navigation,
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
-        plugins: plugins_from_luaskills(luaskills_catalog, provider_configuration),
+        plugins: plugins_from_luaskills(
+            luaskills_catalog,
+            provider_configuration,
+            system_plugin_catalog,
+        ),
         lua_skills: lua_skills_catalog_summary(luaskills_catalog, provider_configuration),
         agent_skills: agent_skills_catalog_summary(provider_configuration),
         subagent_catalog: subagent_catalog_summary(provider_configuration),
@@ -1036,12 +1049,22 @@ mod tests {
         retained_workbench.subagent_catalog.notice = String::from("current agents");
         retained_workbench.plugins = vec![PluginSummary {
             id: String::from("current-plugin"),
+            version: Some(String::from("1.0.0")),
             name: String::from("Current Plugin"),
             kind: String::from("LuaSkill / USER"),
             status: String::from("已启用"),
+            runtime_state: String::from("enabled"),
             capability: String::from("1 个入口"),
+            name_by_locale: BTreeMap::new(),
+            capability_by_locale: BTreeMap::new(),
             enabled: true,
+            desired_enabled: true,
             available: true,
+            tool_count: 1,
+            tools: Vec::new(),
+            hook_count: 0,
+            active_session_count: 0,
+            diagnostics: Vec::new(),
             management_kind: String::from("luaSkill"),
         }];
 

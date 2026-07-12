@@ -38,6 +38,7 @@ vulcan-host-tools.workspace = true
 vulcan-hooks.workspace = true
 vulcan-luaskills-prompt.workspace = true
 vulcan-mcp-runtime.workspace = true
+vulcan-plugin-runtime.workspace = true
 vulcan-prompt-composer.workspace = true
 vulcan-prompt-skills.workspace = true
 vulcan-provider-config.workspace = true

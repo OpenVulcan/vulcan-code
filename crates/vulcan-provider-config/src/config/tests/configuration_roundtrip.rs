@@ -306,7 +306,8 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
                 ]),
             )]),
             disabled_tools_by_skill: BTreeMap::new(),
-            disabled_system_plugins: BTreeSet::from([String::from("vulcan-debug-runtime")]),
+            disabled_system_plugins: BTreeSet::from([String::from("test-system-plugin")]),
+            enabled_system_plugins: BTreeSet::from([String::from("opt-in-system-plugin")]),
         },
         ..ProviderConfigurationFile::default()
     };
@@ -322,7 +323,11 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
     );
     assert_eq!(
         value["luaskills"]["disabledSystemPlugins"],
-        json!(["vulcan-debug-runtime"])
+        json!(["test-system-plugin"])
+    );
+    assert_eq!(
+        value["luaskills"]["enabledSystemPlugins"],
+        json!(["opt-in-system-plugin"])
     );
 
     let restored: ProviderConfigurationFile =
@@ -339,7 +344,12 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
     assert!(
         !restored
             .luaskills
-            .system_plugin_enabled("vulcan-debug-runtime")
+            .system_plugin_enabled_or_default("test-system-plugin", true)
+    );
+    assert!(
+        restored
+            .luaskills
+            .system_plugin_enabled_or_default("opt-in-system-plugin", false)
     );
 }
 
@@ -401,8 +411,9 @@ fn luaskills_registration_configuration_only_persists_non_default_tools() {
         ]),
         disabled_system_plugins: BTreeSet::from([
             String::new(),
-            String::from(" vulcan-debug-runtime "),
+            String::from(" test-system-plugin "),
         ]),
+        enabled_system_plugins: BTreeSet::new(),
     };
 
     assert!(configuration.normalize());
@@ -444,9 +455,15 @@ fn luaskills_registration_configuration_only_persists_non_default_tools() {
     assert!(configuration.disabled_tools_by_skill.is_empty());
     assert_eq!(
         configuration.disabled_system_plugins,
-        BTreeSet::from([String::from("vulcan-debug-runtime")])
+        BTreeSet::from([String::from("test-system-plugin")])
     );
-    assert!(!configuration.system_plugin_enabled("vulcan-debug-runtime"));
-    assert!(configuration.set_system_plugin_enabled("vulcan-debug-runtime", true));
-    assert!(configuration.system_plugin_enabled("vulcan-debug-runtime"));
+    assert!(!configuration.system_plugin_enabled_or_default("test-system-plugin", true));
+    assert!(configuration.set_system_plugin_enabled_with_default("test-system-plugin", true, true));
+    assert!(configuration.system_plugin_enabled_or_default("test-system-plugin", true));
+    assert!(configuration.set_system_plugin_enabled_with_default(
+        "opt-in-system-plugin",
+        true,
+        false
+    ));
+    assert!(configuration.system_plugin_enabled_or_default("opt-in-system-plugin", false));
 }

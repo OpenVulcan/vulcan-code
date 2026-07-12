@@ -10,8 +10,9 @@ use crate::tooling::native::{
 };
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
+use vulcan_plugin_runtime::SystemPluginToolDescriptor;
 use vulcan_session_core::{
     CapabilityPolicyMode, ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
 };
@@ -507,6 +508,36 @@ fn filter_mcp_tool_bindings(
         .collect()
 }
 
+/// Filters System Plugin tools by request selectors while preserving each declared atomic group.
+/// 按请求选择器过滤系统插件工具，同时保留每个声明的原子工具组。
+pub(crate) fn filter_system_plugin_tool_groups(
+    tools: Vec<SystemPluginToolDescriptor>,
+    tool_exposure: &ExecutionToolExposureSelection,
+) -> Vec<SystemPluginToolDescriptor> {
+    let mut groups = BTreeMap::<(String, String), Vec<SystemPluginToolDescriptor>>::new();
+    for tool in tools {
+        groups
+            .entry((tool.plugin_id.clone(), tool.group.clone()))
+            .or_default()
+            .push(tool);
+    }
+    groups
+        .into_values()
+        .filter(|group| {
+            group.iter().all(|tool| {
+                vulcan_tool_descriptor_is_visible(
+                    &tool.id,
+                    &tool.id,
+                    &tool.description,
+                    VulcanToolSourceKind::SystemPlugin,
+                    tool_exposure,
+                )
+            })
+        })
+        .flatten()
+        .collect()
+}
+
 /// Returns whether one LuaSkills runtime entry matches a normalized selector set.
 /// 返回单个 LuaSkills 运行时入口是否命中规范化选择器集合。
 fn luaskills_entry_matches_any(
@@ -596,6 +627,7 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
     }
     match source {
         VulcanToolSourceKind::AiFallback => true,
+        VulcanToolSourceKind::SystemPlugin => false,
         VulcanToolSourceKind::LuaSkills => selectors.has_luaskills_allow(),
         VulcanToolSourceKind::Mcp => selectors.has_mcp_allow(),
         VulcanToolSourceKind::Native => {

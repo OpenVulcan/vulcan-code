@@ -2,11 +2,14 @@
 //! skill catalog projection 辅助逻辑。
 
 use super::*;
-use vulcan_runtime_assets::VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID;
+use vulcan_plugin_runtime::{
+    SystemPluginAvailability, SystemPluginCatalogSnapshot, SystemPluginRuntimeState,
+    load_system_plugin_catalog,
+};
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
     AgentSkillOriginSummary, AgentSkillRecordSummary, AgentSkillResourceSummary,
-    AgentSkillStandardMetadataSummary, SubagentCategoryLocaleSummary,
+    AgentSkillStandardMetadataSummary, PluginToolSummary, SubagentCategoryLocaleSummary,
     SubagentDefinitionLocaleSummary, SubagentOriginSummary, SubagentProviderModelSummary,
 };
 
@@ -15,14 +18,16 @@ use vulcan_service_api::{
 pub(crate) fn plugins_from_luaskills(
     catalog: &TauriLuaSkillsCatalog,
     provider_configuration: &ProviderConfigurationFile,
+    system_plugin_catalog: Option<&SystemPluginCatalogSnapshot>,
 ) -> Vec<PluginSummary> {
-    // plugins starts with ordinary Lua Skill rows before the host-owned System Plugin is appended.
-    // plugins 先保存普通 Lua Skill 行，随后追加宿主自有 System Plugin。
+    // plugins starts with ordinary Lua Skill rows before discovered System Plugins are appended.
+    // plugins 先保存普通 Lua Skill 行，随后追加已发现的 System Plugin。
     let mut plugins = catalog
         .skills
         .iter()
         .map(|skill| PluginSummary {
             id: skill.skill_id.clone(),
+            version: Some(skill.version.clone()),
             name: skill.display_name.clone(),
             kind: format!("LuaSkill / {}", skill.root_name),
             status: if skill.enabled {
@@ -31,50 +36,110 @@ pub(crate) fn plugins_from_luaskills(
                 "已停用"
             }
             .to_string(),
+            runtime_state: if skill.enabled {
+                String::from("enabled")
+            } else {
+                String::from("disabled")
+            },
             capability: format!("{} 个入口：{}", skill.entry_count, skill.capability),
+            name_by_locale: BTreeMap::new(),
+            capability_by_locale: BTreeMap::new(),
             enabled: skill.enabled,
+            desired_enabled: skill.enabled,
             available: true,
+            tool_count: skill.entry_count,
+            tools: skill
+                .tools
+                .iter()
+                .map(|tool| PluginToolSummary {
+                    id: tool.canonical_name.clone(),
+                    group: skill.skill_id.clone(),
+                    description: tool.description.clone(),
+                })
+                .collect(),
+            hook_count: 0,
+            active_session_count: 0,
+            diagnostics: skill.disabled_reason.iter().cloned().collect(),
             management_kind: String::from("luaSkill"),
         })
         .collect::<Vec<_>>();
-    // package_root is the single fixed directory owned by the bundled debug System Plugin.
-    // package_root 是随包调试 System Plugin 拥有的唯一固定目录。
-    let package_root = catalog
-        .system_lua_lib_dir
-        .join(VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID);
-    // available reflects the exact asset set required by the host and Node sidecar.
-    // available 反映宿主与 Node sidecar 所需的精确资产集合是否完整。
-    let available = [
-        "dependencies.yaml",
-        "runtime/plugin.lua",
-        "node/sidecar.mjs",
-        "node/package.json",
-        "node/pnpm-lock.yaml",
-    ]
-    .into_iter()
-    .all(|relative_path| package_root.join(relative_path).is_file());
-    // enabled comes only from the persisted LuaSkills System Plugin switch.
-    // enabled 仅来自持久化 LuaSkills System Plugin 开关。
-    let enabled = provider_configuration
-        .luaskills
-        .system_plugin_enabled(VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID);
-    plugins.push(PluginSummary {
-        id: String::from(VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID),
-        name: String::from("Vulcan Debug Runtime"),
-        kind: String::from("LuaSkills System Plugin"),
-        status: if !available {
-            "不可用"
-        } else if enabled {
-            "已启用"
-        } else {
-            "已停用"
+    let fallback_plugin_catalog;
+    let plugin_catalog = match system_plugin_catalog {
+        Some(catalog) => catalog,
+        None => {
+            fallback_plugin_catalog = load_system_plugin_catalog(
+                &catalog.system_lua_lib_dir,
+                &provider_configuration.luaskills.disabled_system_plugins,
+                &provider_configuration.luaskills.enabled_system_plugins,
+                0,
+            );
+            &fallback_plugin_catalog
         }
-        .to_string(),
-        capability: String::from("本机 CDP 与 DAP 调试会话"),
-        enabled,
-        available,
-        management_kind: String::from("systemPlugin"),
-    });
+    };
+    for plugin in plugin_catalog.plugins.values() {
+        let enabled = plugin.runtime_state == SystemPluginRuntimeState::Enabled;
+        let available = matches!(
+            plugin.availability,
+            SystemPluginAvailability::Enabled | SystemPluginAvailability::Disabled
+        );
+        let (runtime_state, status) = match plugin.runtime_state {
+            SystemPluginRuntimeState::Enabled => ("enabled", "已启用"),
+            SystemPluginRuntimeState::Disabled => ("disabled", "已停用"),
+            SystemPluginRuntimeState::Enabling => ("enabling", "正在启用"),
+            SystemPluginRuntimeState::Draining => ("draining", "正在排空会话"),
+            SystemPluginRuntimeState::DisabledWithCleanupWarning => {
+                ("disabledWithCleanupWarning", "已停用（清理警告）")
+            }
+            SystemPluginRuntimeState::UnsupportedPlatform => {
+                ("unsupportedPlatform", "当前平台不支持")
+            }
+            SystemPluginRuntimeState::Unavailable => ("unavailable", "不可用"),
+        };
+        let (name, capability) = plugin.localized_display(
+            provider_configuration
+                .ui_locale
+                .as_deref()
+                .unwrap_or_default(),
+        );
+        let name_by_locale = plugin
+            .locales
+            .iter()
+            .map(|(locale, localized)| (locale.clone(), localized.name.clone()))
+            .collect();
+        let capability_by_locale = plugin
+            .locales
+            .iter()
+            .map(|(locale, localized)| (locale.clone(), localized.capability.clone()))
+            .collect();
+        plugins.push(PluginSummary {
+            id: plugin.id.clone(),
+            version: plugin.version.clone(),
+            name: name.to_owned(),
+            kind: String::from("LuaSkills System Plugin"),
+            status: status.to_owned(),
+            runtime_state: runtime_state.to_owned(),
+            capability: capability.to_owned(),
+            name_by_locale,
+            capability_by_locale,
+            enabled,
+            desired_enabled: plugin.desired_enabled,
+            available,
+            tool_count: plugin.tools.len(),
+            tools: plugin
+                .tools
+                .iter()
+                .map(|tool| PluginToolSummary {
+                    id: tool.id.clone(),
+                    group: tool.group.clone(),
+                    description: tool.description.clone(),
+                })
+                .collect(),
+            hook_count: plugin.hooks.len(),
+            active_session_count: plugin.active_session_count,
+            diagnostics: plugin.diagnostics.clone(),
+            management_kind: String::from("systemPlugin"),
+        });
+    }
     plugins
 }
 

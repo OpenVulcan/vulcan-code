@@ -1,6 +1,6 @@
 use super::{
     filter_luaskills_entries_by_explicit_registration, filter_luaskills_entries_by_host_dispatch,
-    resolve_agent_native_tools,
+    move_matching_tool_ids, resolve_agent_native_tools, resolve_agent_system_plugin_tool_ids,
 };
 use crate::agent_runtime::config::{
     RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
@@ -25,6 +25,7 @@ fn missing_tool_policy_keeps_only_universal_native_tool_resolution() {
         system_prompt: String::new(),
         skill_ids: Vec::new(),
         native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
         tool_policy: Some(String::from("missing-policy")),
@@ -65,6 +66,120 @@ fn missing_tool_policy_keeps_only_universal_native_tool_resolution() {
     assert!(warnings[0].contains("仅保留通用原生工具"));
 }
 
+/// Verifies direct agent plugin tools override policy defaults and unknown identifiers are removed.
+/// 验证代理直接声明的插件工具会覆盖策略默认值，且未知标识会被移除。
+#[test]
+fn direct_plugin_tool_selection_overrides_policy_and_filters_unknown_tools() {
+    let definition = RuntimeAgentDefinition {
+        id: String::from("agent-a"),
+        name: String::from("Agent A"),
+        kind: RuntimeAgentKind::Worker,
+        description: String::from("worker"),
+        system_prompt: String::new(),
+        skill_ids: Vec::new(),
+        native_tools: Vec::new(),
+        plugin_tools: vec![
+            String::from("plugin-b"),
+            String::from("missing"),
+            String::from("plugin-b"),
+        ],
+        mcp_tools: Vec::new(),
+        delegates: Vec::new(),
+        tool_policy: Some(String::from("policy-a")),
+        routes: Vec::new(),
+        fallback_delegate: None,
+        model: None,
+        temperature: None,
+        max_turns: None,
+        runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
+    };
+    let policies = BTreeMap::from([(
+        String::from("policy-a"),
+        RuntimeToolPolicyDefinition {
+            id: String::from("policy-a"),
+            name: String::from("Policy A"),
+            allow_all_native: false,
+            native_tools: Vec::new(),
+            allow_all_plugin_tools: true,
+            plugin_tools: Vec::new(),
+            mcp_servers: Vec::new(),
+            mcp_tools: Vec::new(),
+        },
+    )]);
+    let available = BTreeSet::from([String::from("plugin-a"), String::from("plugin-b")]);
+    assert_eq!(
+        resolve_agent_system_plugin_tool_ids(&definition, &policies, &available),
+        vec![String::from("plugin-b")]
+    );
+}
+
+/// Verifies an allow-all plugin policy resolves the complete enabled plugin tool set.
+/// 验证允许全部插件工具的策略会解析完整的已启用插件工具集合。
+#[test]
+fn allow_all_plugin_policy_resolves_every_available_tool() {
+    let mut definition = RuntimeAgentDefinition {
+        id: String::from("agent-a"),
+        name: String::from("Agent A"),
+        kind: RuntimeAgentKind::Worker,
+        description: String::from("worker"),
+        system_prompt: String::new(),
+        skill_ids: Vec::new(),
+        native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
+        mcp_tools: Vec::new(),
+        delegates: Vec::new(),
+        tool_policy: Some(String::from("policy-a")),
+        routes: Vec::new(),
+        fallback_delegate: None,
+        model: None,
+        temperature: None,
+        max_turns: None,
+        runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
+    };
+    let policy = RuntimeToolPolicyDefinition {
+        id: String::from("policy-a"),
+        name: String::from("Policy A"),
+        allow_all_native: false,
+        native_tools: Vec::new(),
+        allow_all_plugin_tools: true,
+        plugin_tools: Vec::new(),
+        mcp_servers: Vec::new(),
+        mcp_tools: Vec::new(),
+    };
+    let available = BTreeSet::from([String::from("plugin-a"), String::from("plugin-b")]);
+    assert_eq!(
+        resolve_agent_system_plugin_tool_ids(
+            &definition,
+            &BTreeMap::from([(String::from("policy-a"), policy.clone())]),
+            &available,
+        ),
+        vec![String::from("plugin-a"), String::from("plugin-b")]
+    );
+    definition.tool_policy = Some(String::from("missing"));
+    assert!(
+        resolve_agent_system_plugin_tool_ids(&definition, &BTreeMap::new(), &available).is_empty()
+    );
+}
+
+/// Verifies in-memory legacy migration moves exact plugin ids without duplicating existing targets.
+/// 验证内存旧版迁移会移动精确插件标识，且不会重复已有目标。
+#[test]
+fn legacy_plugin_tool_migration_moves_only_exact_discovered_ids() {
+    let mut native = vec![
+        String::from("shell_command"),
+        String::from("plugin-a"),
+        String::from("plugin-a"),
+    ];
+    let mut plugins = vec![String::from("plugin-a")];
+    move_matching_tool_ids(
+        &mut native,
+        &mut plugins,
+        &BTreeSet::from([String::from("plugin-a")]),
+    );
+    assert_eq!(native, vec![String::from("shell_command")]);
+    assert_eq!(plugins, vec![String::from("plugin-a")]);
+}
+
 /// Verifies universal native tools are appended even when an agent uses an explicit restricted tool list.
 /// 验证代理使用显式受限工具列表时仍会追加通用原生工具。
 #[test]
@@ -77,6 +192,7 @@ fn explicit_native_tool_list_keeps_universal_goal_and_todolist_tools() {
         system_prompt: String::new(),
         skill_ids: Vec::new(),
         native_tools: vec![String::from("shell_command")],
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
         tool_policy: None,

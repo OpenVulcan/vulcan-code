@@ -596,6 +596,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         command_session_runtime,
         native_tools,
         hydrated_window_summaries,
+        system_plugin_catalog,
     ) = {
         let mut guard = state
             .lock()
@@ -670,6 +671,11 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
             .as_ref()
             .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
         let native_tools = native_tool_summaries_from_agent_runtime(guard.agent_runtime.as_ref());
+        let system_plugin_catalog = guard
+            .agent_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.luaskills_runtime.as_ref())
+            .map(|runtime| runtime.system_plugin_runtime.snapshot());
         (
             live_context_budgets,
             surface_messages,
@@ -682,6 +688,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
                 &guard.hydrated_conversation_windows,
                 &guard.webui_preloaded_unclosed_subagent_roots,
             ),
+            system_plugin_catalog,
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
@@ -689,6 +696,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         controller: controller_runtime,
         command_session_runtime: command_session_runtime.as_deref(),
         luaskills_catalog,
+        system_plugin_catalog: system_plugin_catalog.as_deref(),
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,

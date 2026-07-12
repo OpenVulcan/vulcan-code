@@ -69,9 +69,9 @@ $SourceLuaRuntimeDir = Join-Path $ProjectDir "third_party\luaskills_runtime"
 # SourceManagedRuntimeScriptsDir 指向按标签固定的受管运行时初始化资产。
 $SourceManagedRuntimeScriptsDir = Join-Path $ProjectDir "scripts\deps"
 
-# SourceLuaDebugPluginDir points at the host-owned debug System Plugin bundled with Vulcan Code.
-# SourceLuaDebugPluginDir 指向随 Vulcan Code 打包的宿主自有调试 System Plugin。
-$SourceLuaDebugPluginDir = Join-Path $ProjectDir "crates\vulcan-runtime-assets\luaskills-system-plugins\vulcan-debug-runtime"
+# SourceSystemPluginsDir contains every manifest-driven System Plugin bundled with Vulcan Code.
+# SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动系统插件。
+$SourceSystemPluginsDir = Join-Path $ProjectDir "plugins\system"
 
 Set-Location $ProjectDir
 
@@ -205,9 +205,13 @@ $OutputLuaRuntimeDir = Join-Path $ProjectDir "output\lua_runtime"
 # OutputManagedRuntimeScriptsDir 保存服务启动期间执行的初始化脚本。
 $OutputManagedRuntimeScriptsDir = Join-Path $OutputLuaRuntimeDir "scripts\deps"
 
-# OutputLuaDebugPluginDir is the exact host-owned System Plugin package discovered by LuaSkills.
-# OutputLuaDebugPluginDir 是 LuaSkills 发现的精确宿主自有 System Plugin 包。
-$OutputLuaDebugPluginDir = Join-Path $OutputLuaRuntimeDir "system_lua_lib\vulcan-debug-runtime"
+# OutputSystemPluginsDir is the runtime directory scanned by the generic System Plugin host.
+# OutputSystemPluginsDir 是通用系统插件宿主扫描的运行时目录。
+$OutputSystemPluginsDir = Join-Path $OutputLuaRuntimeDir "system_lua_lib"
+
+# ManagedSystemPluginIndexPath records only packages owned by this build script for safe stale cleanup.
+# ManagedSystemPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
+$ManagedSystemPluginIndexPath = Join-Path $OutputSystemPluginsDir ".vulcan-code-managed-plugins"
 
 if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
     throw "Built Tauri binary was not found: $BuiltBinaryPath"
@@ -238,7 +242,68 @@ Write-Host "==> Syncing managed runtime bootstrap assets..."
 Copy-DirectoryContents -SourceDirectory $SourceManagedRuntimeScriptsDir -DestinationDirectory $OutputManagedRuntimeScriptsDir -Clean
 
 Write-Host "==> Syncing host System Plugin packages..."
-Copy-DirectoryContents -SourceDirectory $SourceLuaDebugPluginDir -DestinationDirectory $OutputLuaDebugPluginDir -Clean
+New-Item -ItemType Directory -Path $OutputSystemPluginsDir -Force | Out-Null
+$ResolvedOutputSystemPluginsDir = [System.IO.Path]::GetFullPath($OutputSystemPluginsDir).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+$SourceSystemPluginNames = @(
+    Get-ChildItem -LiteralPath $SourceSystemPluginsDir -Directory -Force |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "plugin.yaml") -PathType Leaf } |
+        Select-Object -ExpandProperty Name
+)
+if ($SourceSystemPluginNames.Count -eq 0) {
+    throw "No manifest-driven System Plugin packages were found in: $SourceSystemPluginsDir"
+}
+foreach ($SystemPluginName in $SourceSystemPluginNames) {
+    if ($SystemPluginName -notmatch '^[a-z][a-z0-9_-]*$') {
+        throw "Invalid System Plugin source directory name: $SystemPluginName"
+    }
+}
+$PreviouslyManagedSystemPluginNames = @()
+if (Test-Path -LiteralPath $ManagedSystemPluginIndexPath -PathType Leaf) {
+    $PreviouslyManagedSystemPluginNames = @(
+        Get-Content -LiteralPath $ManagedSystemPluginIndexPath |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+}
+foreach ($SystemPluginName in $PreviouslyManagedSystemPluginNames) {
+    if ($SystemPluginName -notmatch '^[a-z][a-z0-9_-]*$') {
+        throw "Invalid managed System Plugin index entry: $SystemPluginName"
+    }
+    if ($SourceSystemPluginNames -notcontains $SystemPluginName) {
+        $DeployedPluginDir = Join-Path $OutputSystemPluginsDir $SystemPluginName
+        $ResolvedDeployedPluginDir = [System.IO.Path]::GetFullPath($DeployedPluginDir)
+        if (-not $ResolvedDeployedPluginDir.StartsWith($ResolvedOutputSystemPluginsDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean System Plugin path outside runtime root: $ResolvedDeployedPluginDir"
+        }
+        if (Test-Path -LiteralPath $ResolvedDeployedPluginDir) {
+            Remove-Item -LiteralPath $ResolvedDeployedPluginDir -Recurse -Force
+        }
+    }
+}
+foreach ($SystemPluginName in $SourceSystemPluginNames) {
+    # DestinationSystemPluginDir is removed immediately if a package copy fails before ownership is committed.
+    # DestinationSystemPluginDir 会在所有权提交前复制失败时立即删除。
+    $DestinationSystemPluginDir = Join-Path $OutputSystemPluginsDir $SystemPluginName
+    # ResolvedDestinationSystemPluginDir proves the cleanup target remains below the runtime plugin root.
+    # ResolvedDestinationSystemPluginDir 用于证明清理目标仍位于运行时插件根目录下。
+    $ResolvedDestinationSystemPluginDir = [System.IO.Path]::GetFullPath($DestinationSystemPluginDir)
+    if (-not $ResolvedDestinationSystemPluginDir.StartsWith($ResolvedOutputSystemPluginsDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to deploy System Plugin outside runtime root: $ResolvedDestinationSystemPluginDir"
+    }
+    try {
+        Copy-DirectoryContents `
+            -SourceDirectory (Join-Path $SourceSystemPluginsDir $SystemPluginName) `
+            -DestinationDirectory $DestinationSystemPluginDir `
+            -Clean
+    }
+    catch {
+        if (Test-Path -LiteralPath $ResolvedDestinationSystemPluginDir) {
+            Remove-Item -LiteralPath $ResolvedDestinationSystemPluginDir -Recurse -Force
+        }
+        throw
+    }
+}
+Set-Content -LiteralPath $ManagedSystemPluginIndexPath -Value ($SourceSystemPluginNames | Sort-Object) -Encoding utf8
 
 if (Test-Path -LiteralPath $SourceRtkBinDir -PathType Container) {
     Write-Host "==> Syncing packaged RTK host tool..."

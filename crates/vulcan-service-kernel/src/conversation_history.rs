@@ -910,6 +910,11 @@ pub(super) async fn load_hydrated_session_workbench(
     };
     let hydrated_window_summaries =
         hydrated_conversation_window_summaries(&hydrated_windows, &preloaded_subagent_roots);
+    let system_plugin_catalog = projection_context
+        .agent_runtime_for_status
+        .as_ref()
+        .and_then(|agent_runtime| agent_runtime.luaskills_runtime.as_ref())
+        .map(|runtime| runtime.system_plugin_runtime.snapshot());
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &read_context.controller_runtime,
         command_session_runtime: projection_context
@@ -917,6 +922,7 @@ pub(super) async fn load_hydrated_session_workbench(
             .as_ref()
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         luaskills_catalog: &projection_context.luaskills_catalog,
+        system_plugin_catalog: system_plugin_catalog.as_deref(),
         token_budget_runtime: &projection_context.token_budget_runtime,
         mcp_catalog: &projection_context.mcp_catalog,
         provider_configuration: &projection_context.provider_configuration,

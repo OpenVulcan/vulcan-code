@@ -1169,9 +1169,16 @@ export type TranslationKey =
   | "skills.plugins.emptyTitle"
   | "skills.plugins.emptyDetail"
   | "skills.plugins.unavailable"
+  | "skills.plugins.enabling"
+  | "skills.plugins.draining"
+  | "skills.plugins.cleanupWarning"
+  | "skills.plugins.unsupportedPlatform"
+  | "skills.plugins.retryCleanup"
   | "skills.plugins.systemKind"
-  | "skills.plugins.debugRuntimeName"
-  | "skills.plugins.debugRuntimeCapability"
+  | "skills.plugins.tools"
+  | "skills.plugins.hooks"
+  | "skills.plugins.sessions"
+  | "skills.plugins.diagnostics"
   | "skills.agent.emptyTitle"
   | "skills.agent.emptyDetail"
   | "skills.agent.detailsTitle"
@@ -2345,9 +2352,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.plugins.emptyTitle": "暂无系统插件",
     "skills.plugins.emptyDetail": "随包的 LuaSkills System Plugin 会显示在这里。",
     "skills.plugins.unavailable": "不可用",
+    "skills.plugins.enabling": "正在启用",
+    "skills.plugins.draining": "正在排空会话",
+    "skills.plugins.cleanupWarning": "已停用（清理警告）",
+    "skills.plugins.unsupportedPlatform": "当前平台不支持",
+    "skills.plugins.retryCleanup": "重试清理",
     "skills.plugins.systemKind": "系统插件",
-    "skills.plugins.debugRuntimeName": "Vulcan 调试运行时",
-    "skills.plugins.debugRuntimeCapability": "为智能体提供本机 CDP 与 DAP 调试会话。",
+    "skills.plugins.tools": "工具",
+    "skills.plugins.hooks": "Hook",
+    "skills.plugins.sessions": "活动会话",
+    "skills.plugins.diagnostics": "诊断",
     "skills.agent.emptyTitle": "提示词技能目录尚未载入",
     "skills.agent.emptyDetail": "点击刷新或同步系统技能后会扫描系统目录与用户目录下的 SKILL.md。",
     "skills.agent.detailsTitle": "Agent Skill 详情",
@@ -3518,9 +3532,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.plugins.emptyTitle": "No system plugins",
     "skills.plugins.emptyDetail": "Bundled LuaSkills System Plugins appear here.",
     "skills.plugins.unavailable": "Unavailable",
+    "skills.plugins.enabling": "Enabling",
+    "skills.plugins.draining": "Draining sessions",
+    "skills.plugins.cleanupWarning": "Disabled (cleanup warning)",
+    "skills.plugins.unsupportedPlatform": "Unsupported on this platform",
+    "skills.plugins.retryCleanup": "Retry cleanup",
     "skills.plugins.systemKind": "System Plugin",
-    "skills.plugins.debugRuntimeName": "Vulcan Debug Runtime",
-    "skills.plugins.debugRuntimeCapability": "Provides local CDP and DAP debug sessions to agents.",
+    "skills.plugins.tools": "Tools",
+    "skills.plugins.hooks": "Hooks",
+    "skills.plugins.sessions": "Active sessions",
+    "skills.plugins.diagnostics": "Diagnostics",
     "skills.agent.emptyTitle": "Prompt skill catalog is not loaded",
     "skills.agent.emptyDetail": "Refresh or sync system skills to scan SKILL.md files under system and user directories.",
     "skills.agent.detailsTitle": "Agent Skill Details",

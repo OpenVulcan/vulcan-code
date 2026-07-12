@@ -25,7 +25,10 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 #[path = "execution_preparation/tool_exposure.rs"]
 mod tool_exposure;
 
-use tool_exposure::{filter_resolved_tool_set_by_tool_exposure, resolve_execution_tool_exposure};
+use tool_exposure::{
+    filter_resolved_tool_set_by_tool_exposure, filter_system_plugin_tool_groups,
+    resolve_execution_tool_exposure,
+};
 
 /// Prepared execution plus execution-only tool registration objects resolved from the same snapshot.
 /// 从同一份快照解析得到的执行准备结果与仅执行期使用的工具注册对象。
@@ -104,7 +107,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     );
     let implicit_luaskills = tool_exposure.luaskills_dispatch_tools.clone();
     let implicit_luaskill_prompt_entries = tool_exposure.luaskill_prompt_entries.clone();
-    let prompt_skill_developer_segment = build_skill_developer_segment(
+    let mut prompt_skill_developer_segment = build_skill_developer_segment(
         request.prompt_purpose,
         &prompt_skills,
         &implicit_luaskill_prompt_entries,
@@ -130,6 +133,11 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         foundation.task_runtime(),
         foundation.question_runtime(),
         foundation.native_tool_catalog().clone(),
+        foundation.system_plugin_runtime(),
+        filter_system_plugin_tool_groups(
+            foundation.resolved_system_plugin_tools_for_agent(&active_agent.id),
+            &tool_exposure,
+        ),
         luaskills_runtime,
         (!workspace_path.is_empty()).then(|| PathBuf::from(workspace_path.clone())),
         request.controller_runtime.clone(),
@@ -168,6 +176,11 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         resolved_tools.descriptors.clear();
         resolved_tools.definitions.clear();
     }
+    append_system_plugin_prompt_contributions(
+        &mut prompt_skill_developer_segment,
+        foundation.system_plugin_catalog().as_deref(),
+        &resolved_tools.descriptors,
+    );
 
     if workspace_path.is_empty() {
         warnings.push(String::from(
@@ -283,6 +296,46 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         preparation,
         tool_snapshot,
     })
+}
+
+/// Appends plugin-level instructions only when every declared tool dependency remains visible.
+/// 仅在所有声明的工具依赖仍然可见时追加插件级说明。
+fn append_system_plugin_prompt_contributions(
+    developer_segment: &mut Option<String>,
+    catalog: Option<&vulcan_plugin_runtime::SystemPluginCatalogSnapshot>,
+    visible_tools: &[vulcan_tools_manager::VulcanToolDescriptor],
+) {
+    let Some(catalog) = catalog else {
+        return;
+    };
+    let visible_ids = visible_tools
+        .iter()
+        .map(|descriptor| descriptor.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let plugin_instructions = catalog
+        .prompt_contributions
+        .iter()
+        .filter(|contribution| {
+            contribution
+                .required_tools
+                .iter()
+                .all(|tool_id| visible_ids.contains(tool_id.as_str()))
+        })
+        .map(|contribution| contribution.body.trim())
+        .filter(|body| !body.is_empty())
+        .collect::<Vec<_>>();
+    if plugin_instructions.is_empty() {
+        return;
+    }
+    let plugin_segment = plugin_instructions.join("\n\n");
+    match developer_segment {
+        Some(segment) if !segment.trim().is_empty() => {
+            segment.push_str("\n\n");
+            segment.push_str(&plugin_segment);
+        }
+        Some(segment) => *segment = plugin_segment,
+        None => *developer_segment = Some(plugin_segment),
+    }
 }
 
 /// Builds the AI-visible skill developer segment only for user-turn-like requests.

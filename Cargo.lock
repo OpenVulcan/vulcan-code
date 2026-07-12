@@ -5939,6 +5939,7 @@ dependencies = [
  "vulcan-host-tools",
  "vulcan-luaskills-prompt",
  "vulcan-mcp-runtime",
+ "vulcan-plugin-runtime",
  "vulcan-prompt-composer",
  "vulcan-prompt-skills",
  "vulcan-provider-config",
@@ -6088,6 +6089,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-plugin-runtime"
+version = "0.1.0"
+dependencies = [
+ "luaskills",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "vulcan-hooks",
+]
+
+[[package]]
 name = "vulcan-prompt-composer"
 version = "0.1.0"
 
@@ -6165,6 +6180,7 @@ dependencies = [
  "vulcan-core",
  "vulcan-file-watcher",
  "vulcan-host-tools",
+ "vulcan-plugin-runtime",
  "vulcan-prompt-skills",
  "vulcan-provider-config",
  "vulcan-runtime-assets",

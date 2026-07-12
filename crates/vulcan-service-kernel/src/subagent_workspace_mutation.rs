@@ -148,6 +148,9 @@ struct WorkspaceMutationWorkbenchRebuildInputs {
     /// Cached LuaSkills catalog snapshot used by the workbench projector.
     /// 工作台投影器使用的 LuaSkills 缓存目录快照。
     luaskills_catalog: TauriLuaSkillsCatalog,
+    /// Live System Plugin catalog snapshot used by lifecycle-aware UI projection.
+    /// 生命周期感知界面投影使用的实时系统插件目录快照。
+    system_plugin_catalog: Option<Arc<vulcan_plugin_runtime::SystemPluginCatalogSnapshot>>,
     /// Shared token budget runtime used by workbench context usage summaries.
     /// 工作台上下文用量摘要使用的共享 Token 预算运行时。
     token_budget_runtime: Arc<TauriTokenBudgetRuntime>,
@@ -256,6 +259,11 @@ where
             String::from("service is still starting; controller runtime is not ready")
         })?;
         let luaskills_catalog = cached_luaskills_catalog_from_state(&guard);
+        let system_plugin_catalog = guard
+            .agent_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.luaskills_runtime.as_ref())
+            .map(|runtime| runtime.system_plugin_runtime.snapshot());
         let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; token budget runtime is not ready")
         })?;
@@ -345,6 +353,7 @@ where
             rebuild_generation,
             controller_runtime,
             luaskills_catalog,
+            system_plugin_catalog,
             token_budget_runtime,
             mcp_catalog,
             provider_configuration,
@@ -367,6 +376,7 @@ where
         rebuild_generation,
         controller_runtime,
         luaskills_catalog,
+        system_plugin_catalog,
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
@@ -386,6 +396,7 @@ where
         controller: &controller_runtime,
         command_session_runtime: command_session_runtime.as_deref(),
         luaskills_catalog: &luaskills_catalog,
+        system_plugin_catalog: system_plugin_catalog.as_deref(),
         token_budget_runtime: &token_budget_runtime,
         mcp_catalog: &mcp_catalog,
         provider_configuration: &provider_configuration,

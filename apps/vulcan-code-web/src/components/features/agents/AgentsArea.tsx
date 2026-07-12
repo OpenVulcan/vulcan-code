@@ -1637,6 +1637,23 @@ function buildAgentToolPolicyOptions(workbench: WorkbenchSnapshot, draft: AgentE
         : localizedAgentLiteral(locale, "运行时注册，但默认不直接对 AI 可见", "Runtime-registered, but not directly AI-visible by default"),
     })
   })
+  workbench.plugins
+    .filter((plugin) => plugin.managementKind === "systemPlugin" && plugin.enabled)
+    .forEach((plugin) => {
+      plugin.tools.forEach((tool) => {
+        const toolId = tool.id.trim()
+        if (toolId.length === 0 || isAgentToolForbidden(toolId, forbiddenToolSelectors)) {
+          return
+        }
+        appendAgentCapabilityPolicyOption(optionMap, {
+          id: toolId,
+          label: toolId,
+          family: localizedAgentLiteral(locale, "系统插件", "System Plugin"),
+          description: tool.description,
+          detail: [plugin.name || plugin.id, tool.group].filter(Boolean).join(" · "),
+        })
+      })
+    })
   workbench.luaSkills.skills.forEach((skill) => {
     skill.tools.forEach((tool) => {
       const toolId = tool.canonicalName.trim()

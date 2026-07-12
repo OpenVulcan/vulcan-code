@@ -6,6 +6,35 @@ import { useI18n } from "@/i18n";
 import type { PluginSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
+// pluginRuntimeStatusLabel resolves one stable runtime state through the active UI locale.
+// pluginRuntimeStatusLabel 通过当前界面语言解析单个稳定运行时状态。
+//
+// Parameters: plugin is the projected plugin row and t is the active translation resolver.
+// 参数：plugin 是投影插件行，t 是当前翻译解析器。
+// Returns: a localized lifecycle label.
+// 返回值：本地化生命周期标签。
+function pluginRuntimeStatusLabel(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (plugin.runtimeState) {
+    case "enabled":
+      return t("skills.status.enabled");
+    case "disabled":
+      return t("skills.status.stopped");
+    case "enabling":
+      return t("skills.plugins.enabling");
+    case "draining":
+      return t("skills.plugins.draining");
+    case "disabledWithCleanupWarning":
+      return t("skills.plugins.cleanupWarning");
+    case "unsupportedPlatform":
+      return t("skills.plugins.unsupportedPlatform");
+    default:
+      return t("skills.plugins.unavailable");
+  }
+}
+
 // SystemPluginsPanel renders host-owned LuaSkills System Plugins and lifecycle controls.
 // SystemPluginsPanel 渲染宿主自有 LuaSkills System Plugin 及其生命周期控件。
 export function SystemPluginsPanel(props: {
@@ -46,7 +75,12 @@ export function SystemPluginsPanel(props: {
     actionRunningRef.current = true;
     setBusyPluginId(plugin.id);
     try {
-      await props.actions.onSetSystemPluginEnabled(plugin.id, !plugin.enabled);
+      // requestedEnabled retries cleanup without accidentally re-enabling a warning-state plugin.
+      // requestedEnabled 会重试清理，避免意外重新启用处于警告状态的插件。
+      const requestedEnabled = plugin.runtimeState === "disabledWithCleanupWarning"
+        ? false
+        : !plugin.desiredEnabled;
+      await props.actions.onSetSystemPluginEnabled(plugin.id, requestedEnabled);
     } finally {
       actionRunningRef.current = false;
       setBusyPluginId(null);
@@ -67,11 +101,11 @@ export function SystemPluginsPanel(props: {
             <header className="skill-card-header">
               <div className="skill-card-title">
                 <div className="skill-card-title-line">
-                  <strong>{plugin.id === "vulcan-debug-runtime" ? t("skills.plugins.debugRuntimeName") : plugin.name}</strong>
+                  <strong>{plugin.name}</strong>
                   <div className="skill-card-title-meta">
                     <StatusPill
-                      label={!plugin.available ? t("skills.plugins.unavailable") : plugin.enabled ? t("skills.status.enabled") : t("skills.status.stopped")}
-                      status={!plugin.available ? "warning" : plugin.enabled ? "ready" : "pending"}
+                      label={pluginRuntimeStatusLabel(plugin, t)}
+                      status={!plugin.available || plugin.diagnostics.length > 0 ? "warning" : plugin.enabled ? "ready" : "pending"}
                     />
                     <Badge variant="outline">{t("skills.plugins.systemKind")}</Badge>
                   </div>
@@ -79,20 +113,30 @@ export function SystemPluginsPanel(props: {
               </div>
             </header>
             <div className="skill-card-summary">
-              <span>{plugin.id === "vulcan-debug-runtime" ? t("skills.plugins.debugRuntimeCapability") : plugin.capability}</span>
+              <span>{plugin.capability}</span>
             </div>
             <div className="skill-card-metrics">
               <span>{plugin.id}</span>
+              {plugin.version ? <span>v{plugin.version}</span> : null}
+              <span>{t("skills.plugins.tools")}: {plugin.toolCount}</span>
+              <span>{t("skills.plugins.hooks")}: {plugin.hookCount}</span>
+              <span>{t("skills.plugins.sessions")}: {plugin.activeSessionCount}</span>
             </div>
+            {plugin.diagnostics.length > 0 ? (
+              <div className="skill-card-summary warning" role="status">
+                <strong>{t("skills.plugins.diagnostics")}</strong>
+                <span>{plugin.diagnostics.join("；")}</span>
+              </div>
+            ) : null}
             <div className="skill-actions-row">
               <button
                 className="skill-action-button secondary"
-                disabled={!plugin.available || busyPluginId !== null}
+                disabled={!plugin.available || busyPluginId !== null || plugin.runtimeState === "enabling" || plugin.runtimeState === "draining"}
                 onClick={() => void togglePlugin(plugin)}
                 type="button"
               >
                 <Power size={15} />
-                <span>{busyPluginId === plugin.id ? t("skills.lua.syncing") : plugin.enabled ? t("skills.action.disable") : t("skills.action.enable")}</span>
+                <span>{busyPluginId === plugin.id || plugin.runtimeState === "enabling" || plugin.runtimeState === "draining" ? t("skills.lua.syncing") : plugin.runtimeState === "disabledWithCleanupWarning" ? t("skills.plugins.retryCleanup") : plugin.desiredEnabled ? t("skills.action.disable") : t("skills.action.enable")}</span>
               </button>
             </div>
           </article>

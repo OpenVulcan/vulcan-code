@@ -1,0 +1,22 @@
+[package]
+name = "vulcan-plugin-runtime"
+description = "Manifest-driven bundled System Plugin host runtime for Vulcan Code."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+luaskills.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+tokio = { workspace = true, features = ["rt", "time"] }
+uuid.workspace = true
+vulcan-hooks = { path = "../vulcan-hooks" }
+
+[dev-dependencies]
+tempfile = "3.23.0"

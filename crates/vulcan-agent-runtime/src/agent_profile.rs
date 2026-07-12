@@ -46,6 +46,9 @@ pub struct UserAgentProfile {
     /// Native tool identifiers directly exposed by this profile.
     /// 该配置直接暴露的原生工具标识集合。
     pub native_tools: Vec<String>,
+    /// System Plugin tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的系统插件工具标识集合。
+    pub plugin_tools: Vec<String>,
     /// MCP tool identifiers directly exposed by this profile.
     /// 该配置直接暴露的 MCP 工具标识集合。
     pub mcp_tools: Vec<String>,
@@ -97,6 +100,10 @@ struct UserAgentFrontmatter {
     /// 该配置直接暴露的原生工具标识集合。
     #[serde(default, alias = "tools")]
     pub native_tools: Vec<String>,
+    /// System Plugin tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的系统插件工具标识集合。
+    #[serde(default)]
+    pub plugin_tools: Vec<String>,
     /// MCP tool identifiers directly exposed by this profile.
     /// 该配置直接暴露的 MCP 工具标识集合。
     #[serde(default, alias = "mcp")]
@@ -330,6 +337,7 @@ fn load_user_agent_profile(path: &Path) -> Result<UserAgentProfile, String> {
         max_turns: frontmatter.max_turns,
         skill_ids: normalize_string_list(frontmatter.skill_ids),
         native_tools: normalize_string_list(frontmatter.native_tools),
+        plugin_tools: normalize_string_list(frontmatter.plugin_tools),
         mcp_tools: normalize_string_list(frontmatter.mcp_tools),
         tool_policy: trim_to_option(frontmatter.tool_policy.as_deref()),
         runtime_policy: frontmatter.runtime_policy,

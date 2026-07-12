@@ -47,10 +47,6 @@ const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
 /// 打包在 output 根目录下的 LuaSkills 运行时根目录名称。
 const LUASKILLS_RUNTIME_ROOT_DIR_NAME: &str = "lua_runtime";
 
-/// Stable identifier of the host-owned LuaSkills debug System Plugin.
-/// 宿主自有 LuaSkills 调试 System Plugin 的稳定标识。
-pub const VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID: &str = "vulcan-debug-runtime";
-
 /// Relative host tools directory name bundled below the output root.
 /// 打包在 output 根目录下的宿主工具目录名称。
 const TOOLS_DIR_NAME: &str = "tools";

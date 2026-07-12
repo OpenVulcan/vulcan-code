@@ -28,6 +28,9 @@ pub struct LuaSkillsRuntimeHandle {
     /// Shared FIFO queue holding fine-grained LuaSkills operation progress events for host polling.
     /// 保存细粒度 LuaSkills 操作进度事件并供宿主轮询的共享 FIFO 队列。
     pub operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
+    /// Long-lived generic System Plugin manager sharing this LuaSkills engine.
+    /// 共享当前 LuaSkills 引擎的长生命周期通用系统插件管理器。
+    pub system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager,
 }
 
 impl std::fmt::Debug for LuaSkillsRuntimeHandle {
@@ -56,6 +59,7 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .len(),
             )
+            .field("system_plugin_runtime", &self.system_plugin_runtime)
             .finish()
     }
 }

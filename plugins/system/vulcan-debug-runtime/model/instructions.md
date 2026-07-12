@@ -1,0 +1,5 @@
+## Managed debug sessions
+
+Use the debug session tools only for local CDP or DAP endpoints. Open one session first, retain only the returned `session_id`, and use that identifier for every later request, event poll, status read, and close operation. Poll `debug_session_events` after pause, resume, step, breakpoint, or adapter-driven state changes instead of assuming that a successful request means the target reached the expected state. Always call `debug_session_close` when debugging is complete, including after a failed protocol request.
+
+For CDP, enable the required domains before using domain methods and wait for the corresponding events before issuing pause-state-only commands such as `Debugger.resume`, `Debugger.stepOver`, `Debugger.stepInto`, or `Debugger.evaluateOnCallFrame`. For DAP, complete the initialize/launch-or-attach/configurationDone sequence required by the selected adapter and answer reverse requests with `request_seq`, `command`, `success`, and an optional response body.

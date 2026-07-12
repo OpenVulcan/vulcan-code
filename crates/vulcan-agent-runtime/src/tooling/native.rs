@@ -2,7 +2,6 @@
 //! 暴露给宿主运行时基础架构的内建原生工具。
 
 use crate::agent_runtime::config::{AgentRuntimeConfig, RuntimeAgentKind, RuntimeSkillKind};
-use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::model::SessionId;
 use crate::project_temp_maintenance;
 use crate::tool_result_format::{
@@ -94,12 +93,10 @@ pub(crate) use registry::*;
 pub(crate) use shell_command::*;
 #[cfg(test)]
 pub(crate) use shell_session::*;
-mod debug_runtime;
 mod goal;
 mod submit_plan;
 mod todolist;
 
-pub(crate) use debug_runtime::*;
 pub(crate) use goal::*;
 pub(crate) use submit_plan::*;
 pub(crate) use todolist::*;
@@ -306,7 +303,6 @@ pub fn build_native_tool_catalog(
     configured_default_command_shell_id: Option<&str>,
     command_session_runtime: Arc<CommandSessionRuntime>,
     vmm_global: VmmConfigLayer,
-    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
 ) -> NativeToolCatalog {
     let snapshot = NativeToolRuntimeSnapshot {
         workspace_directory: std::env::current_dir()
@@ -324,7 +320,7 @@ pub fn build_native_tool_catalog(
         HostCommandShellSupport::from_configured_default_id(configured_default_command_shell_id);
     let rtk_support = RtkRoutingSupport::from_configuration(&config.host_tools.rtk);
 
-    let mut definitions = vec![
+    let definitions = vec![
         build_workspace_describe_tool(snapshot.clone()),
         build_agent_list_tool(snapshot.clone(), config),
         build_skill_list_tool(snapshot.clone(), config),
@@ -342,12 +338,6 @@ pub fn build_native_tool_catalog(
         build_vmm_memory_write_tool(snapshot.clone()),
         build_vmm_memory_delete_tool(snapshot),
     ];
-    if config.debug_runtime_enabled
-        && let Some(luaskills_runtime) = luaskills_runtime
-    {
-        definitions.extend(build_debug_runtime_tools(luaskills_runtime));
-    }
-
     let mut definition_map = BTreeMap::new();
     let mut descriptors = Vec::new();
     for definition in definitions {

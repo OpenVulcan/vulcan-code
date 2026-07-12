@@ -157,16 +157,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
   }],
   pendingQuestion: null,
-  plugins: [{
-    id: "vulcan-debug-runtime",
-    name: "Vulcan Debug Runtime",
-    kind: "LuaSkills System Plugin",
-    status: "已启用",
-    capability: "本机 CDP 与 DAP 调试会话",
-    enabled: true,
-    available: true,
-    managementKind: "systemPlugin",
-  }],
+  plugins: [],
   luaSkills: {
     runtimeRoot: "D:/openvulcan/vulcan-code/output/lua_runtime",
     systemLuaLib: "D:/openvulcan/vulcan-code/output/lua_runtime/system_lua_lib",
@@ -548,12 +539,26 @@ export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnap
   // luaSkillPlugins 在浏览器预览模式中镜像普通 Lua Skill 生命周期行。
   const luaSkillPlugins = browserFallbackWorkbenchState.luaSkills.skills.map((skill) => ({
     id: skill.skillId,
+    version: skill.version,
     name: skill.displayName,
     kind: `LuaSkill / ${skill.rootName}`,
     status: skill.enabled ? "已启用" : "已停用",
+    runtimeState: skill.enabled ? "enabled" : "disabled",
     capability: `${skill.entryCount} 个入口`,
+    nameByLocale: {},
+    capabilityByLocale: {},
     enabled: skill.enabled,
+    desiredEnabled: skill.enabled,
     available: true,
+    toolCount: skill.entryCount,
+    tools: skill.tools.map((tool) => ({
+      id: tool.canonicalName,
+      group: skill.skillId,
+      description: tool.description,
+    })),
+    hookCount: 0,
+    activeSessionCount: 0,
+    diagnostics: skill.disabledReason ? [skill.disabledReason] : [],
     managementKind: "luaSkill" as const,
   }));
   browserFallbackWorkbenchState.plugins = [...luaSkillPlugins, ...systemPlugins];

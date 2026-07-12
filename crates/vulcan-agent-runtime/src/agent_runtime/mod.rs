@@ -97,6 +97,7 @@ pub mod runtime_stream_preparation;
 pub mod runtime_stream_preparation_failure;
 pub mod runtime_stream_preparation_resources;
 pub mod runtime_stream_setup;
+pub mod system_plugin_hooks;
 pub mod task_runtime;
 pub mod token_budget_runtime;
 pub mod tool_runtime_bridge;

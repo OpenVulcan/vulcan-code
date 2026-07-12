@@ -105,6 +105,14 @@ pub(crate) async fn service_archive_conversation(
     // workbench is the authoritative retained projection committed by the refresh inside the persistence gate.
     // workbench 是持久化闸门内刷新所提交的权威保留投影。
     let workbench = refresh_result?;
+    let plugin_cleanup_failures =
+        drain_system_plugin_sessions_for_owners(&state, &[session_id]).await;
+    if !plugin_cleanup_failures.is_empty() {
+        eprintln!(
+            "[system-plugin] archived conversation cleanup warnings: {}",
+            plugin_cleanup_failures.join("; ")
+        );
+    }
     // lifecycle_event carries only the archive-owned sidebar transition at the same committed generation.
     // lifecycle_event 仅携带同一已提交 generation 下归档领域拥有的侧栏转换。
     let lifecycle_event = conversation_archived_delta_envelope(&workbench, session_id);

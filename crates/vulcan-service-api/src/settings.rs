@@ -1,4 +1,21 @@
 use super::*;
+use std::collections::BTreeMap;
+
+/// Summarizes one model-visible tool declared by a plugin package.
+/// 汇总插件包声明的单个模型可见工具。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginToolSummary {
+    /// Stable provider-visible tool identifier.
+    /// 稳定的 Provider 可见工具标识。
+    pub id: String,
+    /// Atomic plugin-local tool group identifier.
+    /// 插件内部原子工具组标识。
+    pub group: String,
+    /// English model-facing tool description.
+    /// 面向模型的英文工具说明。
+    pub description: String,
+}
 
 /// Summarizes one plugin or LuaSkill package.
 /// 汇总单个插件或 LuaSkill 包。
@@ -8,6 +25,10 @@ pub struct PluginSummary {
     /// Stable plugin identifier.
     /// 稳定插件标识。
     pub id: String,
+    /// Optional package version for manifest-driven plugins.
+    /// 清单驱动插件的可选包版本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Plugin display name.
     /// 插件显示名称。
     pub name: String,
@@ -17,15 +38,51 @@ pub struct PluginSummary {
     /// Plugin lifecycle status.
     /// 插件生命周期状态。
     pub status: String,
+    /// Stable machine-readable runtime lifecycle state.
+    /// 稳定的机器可读运行时生命周期状态。
+    #[serde(default)]
+    pub runtime_state: String,
     /// Plugin capability summary.
     /// 插件能力摘要。
     pub capability: String,
-    /// Whether the plugin is enabled in persisted host configuration.
-    /// 插件在宿主持久化配置中是否已启用。
+    /// Localized names keyed by locale identifier.
+    /// 以语言标识为键的本地化名称。
+    #[serde(default)]
+    pub name_by_locale: BTreeMap<String, String>,
+    /// Localized capability summaries keyed by locale identifier.
+    /// 以语言标识为键的本地化能力摘要。
+    #[serde(default)]
+    pub capability_by_locale: BTreeMap<String, String>,
+    /// Whether the plugin is currently active in the runtime catalog.
+    /// 插件当前是否在运行时目录中处于活动状态。
     pub enabled: bool,
+    /// Desired persisted enabled state independent from transient lifecycle state.
+    /// 与临时生命周期状态独立的持久化期望启用状态。
+    #[serde(default)]
+    pub desired_enabled: bool,
     /// Whether the plugin assets required by the current runtime are available.
     /// 当前运行时所需插件资产是否可用。
     pub available: bool,
+    /// Number of provider-visible tools declared by the plugin package.
+    /// 插件包声明的 Provider 可见工具数量。
+    #[serde(default)]
+    pub tool_count: usize,
+    /// Provider-visible tool metadata used by agent policy editors.
+    /// 智能体策略编辑器使用的 Provider 可见工具元数据。
+    #[serde(default)]
+    pub tools: Vec<PluginToolSummary>,
+    /// Number of host hook handlers declared by the plugin package.
+    /// 插件包声明的宿主 hook 处理器数量。
+    #[serde(default)]
+    pub hook_count: usize,
+    /// Number of currently retained managed sessions.
+    /// 当前保留的受管会话数量。
+    #[serde(default)]
+    pub active_session_count: usize,
+    /// Package, dependency, lifecycle, and cleanup diagnostics.
+    /// 插件包、依赖、生命周期与清理诊断。
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
     /// Stable lifecycle manager kind used by the WebUI action router.
     /// WebUI 动作路由使用的稳定生命周期管理类型。
     pub management_kind: String,
@@ -385,4 +442,40 @@ pub struct ReasoningSelectionOptionSummary {
     /// User-facing option label resolved from provider configuration.
     /// 从 Provider 配置解析出的面向用户选项标签。
     pub label: String,
+}
+
+#[cfg(test)]
+mod plugin_summary_tests {
+    use super::*;
+
+    /// Verifies frontend-required plugin collections remain present when they are empty.
+    /// 验证前端必需的插件集合在为空时仍会保留在序列化结果中。
+    #[test]
+    fn empty_plugin_collections_are_serialized() {
+        let summary = PluginSummary {
+            id: String::from("hook-only-plugin"),
+            version: Some(String::from("1.0.0")),
+            name: String::from("Hook-only Plugin"),
+            kind: String::from("LuaSkills System Plugin"),
+            status: String::from("已启用"),
+            runtime_state: String::from("enabled"),
+            capability: String::from("Host hook integration"),
+            name_by_locale: BTreeMap::new(),
+            capability_by_locale: BTreeMap::new(),
+            enabled: true,
+            desired_enabled: true,
+            available: true,
+            tool_count: 0,
+            tools: Vec::new(),
+            hook_count: 1,
+            active_session_count: 0,
+            diagnostics: Vec::new(),
+            management_kind: String::from("systemPlugin"),
+        };
+        let value = serde_json::to_value(summary).expect("serialize plugin summary");
+        assert_eq!(value["tools"], serde_json::json!([]));
+        assert_eq!(value["diagnostics"], serde_json::json!([]));
+        assert_eq!(value["nameByLocale"], serde_json::json!({}));
+        assert_eq!(value["capabilityByLocale"], serde_json::json!({}));
+    }
 }

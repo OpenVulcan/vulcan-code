@@ -51,9 +51,9 @@ SourceLuaRuntimeDir="$ProjectDir/third_party/luaskills_runtime"
 # SourceManagedRuntimeScriptsDir 指向按标签固定的受管运行时初始化资产。
 SourceManagedRuntimeScriptsDir="$ProjectDir/scripts/deps"
 
-# SourceLuaDebugPluginDir points at the host-owned debug System Plugin bundled with Vulcan Code.
-# SourceLuaDebugPluginDir 指向随 Vulcan Code 打包的宿主自有调试 System Plugin。
-SourceLuaDebugPluginDir="$ProjectDir/crates/vulcan-runtime-assets/luaskills-system-plugins/vulcan-debug-runtime"
+# SourceSystemPluginsDir contains every manifest-driven System Plugin bundled with Vulcan Code.
+# SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动系统插件。
+SourceSystemPluginsDir="$ProjectDir/plugins/system"
 
 # IsWindowsPlatform records whether the current shell host is Windows-like.
 # IsWindowsPlatform 记录当前 shell 宿主是否类似 Windows。
@@ -194,9 +194,13 @@ OutputLuaRuntimeDir="$ProjectDir/output/lua_runtime"
 # OutputManagedRuntimeScriptsDir 保存服务启动期间执行的初始化脚本。
 OutputManagedRuntimeScriptsDir="$OutputLuaRuntimeDir/scripts/deps"
 
-# OutputLuaDebugPluginDir is the exact host-owned System Plugin package discovered by LuaSkills.
-# OutputLuaDebugPluginDir 是 LuaSkills 发现的精确宿主自有 System Plugin 包。
-OutputLuaDebugPluginDir="$OutputLuaRuntimeDir/system_lua_lib/vulcan-debug-runtime"
+# OutputSystemPluginsDir is the runtime directory scanned by the generic System Plugin host.
+# OutputSystemPluginsDir 是通用系统插件宿主扫描的运行时目录。
+OutputSystemPluginsDir="$OutputLuaRuntimeDir/system_lua_lib"
+
+# ManagedSystemPluginIndexPath records only packages owned by this build script for safe stale cleanup.
+# ManagedSystemPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
+ManagedSystemPluginIndexPath="$OutputSystemPluginsDir/.vulcan-code-managed-plugins"
 
 if [ ! -f "$BuiltBinaryPath" ]; then
     echo "Built Tauri binary was not found: $BuiltBinaryPath" >&2
@@ -229,7 +233,83 @@ echo "==> Syncing managed runtime bootstrap assets..."
 copy_directory_contents "$SourceManagedRuntimeScriptsDir" "$OutputManagedRuntimeScriptsDir" 1
 
 echo "==> Syncing host System Plugin packages..."
-copy_directory_contents "$SourceLuaDebugPluginDir" "$OutputLuaDebugPluginDir" 1
+if [ ! -d "$SourceSystemPluginsDir" ]; then
+    echo "Missing System Plugin source directory: $SourceSystemPluginsDir" >&2
+    exit 1
+fi
+# FoundSystemPlugin records whether the repository contains at least one deployable manifest package.
+# FoundSystemPlugin 记录仓库是否至少包含一个可部署的清单插件包。
+FoundSystemPlugin=0
+for SourceSystemPluginDir in "$SourceSystemPluginsDir"/*; do
+    [ -d "$SourceSystemPluginDir" ] || continue
+    [ -f "$SourceSystemPluginDir/plugin.yaml" ] || continue
+    FoundSystemPlugin=1
+    break
+done
+if [ "$FoundSystemPlugin" -ne 1 ]; then
+    echo "No manifest-driven System Plugin packages were found in: $SourceSystemPluginsDir" >&2
+    exit 1
+fi
+mkdir -p "$OutputSystemPluginsDir"
+if [ -f "$ManagedSystemPluginIndexPath" ]; then
+    while IFS= read -r PluginName || [ -n "$PluginName" ]; do
+        [ -n "$PluginName" ] || continue
+        case "$PluginName" in
+            [a-z]* ) ;;
+            * )
+                echo "Invalid managed System Plugin index entry: $PluginName" >&2
+                exit 1
+                ;;
+        esac
+        case "$PluginName" in
+            *[!a-z0-9_-]* )
+                echo "Invalid managed System Plugin index entry: $PluginName" >&2
+                exit 1
+                ;;
+        esac
+        DeployedPluginDir="$OutputSystemPluginsDir/$PluginName"
+        if [ -f "$SourceSystemPluginsDir/$PluginName/plugin.yaml" ]; then
+            continue
+        fi
+        case "$DeployedPluginDir" in
+            "$OutputSystemPluginsDir"/*)
+                rm -rf "$DeployedPluginDir"
+                ;;
+            *)
+                echo "Refusing to clean System Plugin path outside runtime root: $DeployedPluginDir" >&2
+                exit 1
+                ;;
+        esac
+    done < "$ManagedSystemPluginIndexPath"
+fi
+: > "$ManagedSystemPluginIndexPath"
+for SourceSystemPluginDir in "$SourceSystemPluginsDir"/*; do
+    [ -d "$SourceSystemPluginDir" ] || continue
+    [ -f "$SourceSystemPluginDir/plugin.yaml" ] || continue
+    PluginName="$(basename "$SourceSystemPluginDir")"
+    case "$PluginName" in
+        [a-z]* ) ;;
+        * )
+            echo "Invalid System Plugin source directory name: $PluginName" >&2
+            exit 1
+            ;;
+    esac
+    case "$PluginName" in
+        *[!a-z0-9_-]* )
+            echo "Invalid System Plugin source directory name: $PluginName" >&2
+            exit 1
+            ;;
+    esac
+    # DestinationSystemPluginDir is removed immediately if a package copy fails before ownership is committed.
+    # DestinationSystemPluginDir 会在所有权提交前复制失败时立即删除。
+    DestinationSystemPluginDir="$OutputSystemPluginsDir/$PluginName"
+    if ! copy_directory_contents "$SourceSystemPluginDir" "$DestinationSystemPluginDir" 1; then
+        rm -rf -- "$DestinationSystemPluginDir"
+        echo "Failed to deploy System Plugin package: $PluginName" >&2
+        exit 1
+    fi
+    printf '%s\n' "$PluginName" >> "$ManagedSystemPluginIndexPath"
+done
 
 if [ -d "$SourceRtkBinDir" ]; then
     echo "==> Syncing packaged RTK host tool..."

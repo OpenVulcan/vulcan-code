@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": { "type": "string" },
+    "method": { "type": "string" },
+    "params": { "type": "object" },
+    "command": { "type": "string" },
+    "arguments": { "type": "object" },
+    "request_seq": { "type": "integer", "minimum": 1 },
+    "success": { "type": "boolean" },
+    "body": { "type": "object" },
+    "message": { "type": "string" },
+    "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 60000 }
+  },
+  "required": ["session_id"],
+  "additionalProperties": false
+}

@@ -181,6 +181,9 @@ export interface PluginSummary {
   // Stable plugin identifier.
   // 稳定插件标识。
   id: string;
+  // Optional package version for manifest-driven plugins.
+  // 清单驱动插件的可选包版本。
+  version?: string | null;
   // Human-facing plugin name.
   // 面向用户的插件名称。
   name: string;
@@ -190,15 +193,52 @@ export interface PluginSummary {
   // Current plugin lifecycle status.
   // 当前插件生命周期状态。
   status: string;
+  // Stable machine-readable runtime lifecycle state.
+  // 稳定的机器可读运行时生命周期状态。
+  runtimeState: string;
   // Human-readable plugin capability summary.
   // 人类可读的插件能力摘要。
   capability: string;
-  // Whether the plugin is enabled in persisted host configuration.
-  // 插件在宿主持久化配置中是否已启用。
+  // Localized names keyed by locale identifier.
+  // 以语言标识为键的本地化名称。
+  nameByLocale: Record<string, string>;
+  // Localized capability summaries keyed by locale identifier.
+  // 以语言标识为键的本地化能力摘要。
+  capabilityByLocale: Record<string, string>;
+  // Whether the plugin is currently active in the runtime catalog.
+  // 插件当前是否在运行时目录中处于活动状态。
   enabled: boolean;
+  // Desired persisted enabled state independent from transient lifecycle state.
+  // 与临时生命周期状态独立的持久化期望启用状态。
+  desiredEnabled: boolean;
   // Whether required plugin assets are available in the active runtime.
   // 活动运行时中是否存在所需插件资产。
   available: boolean;
+  // Number of provider-visible tools declared by the plugin package.
+  // 插件包声明的 Provider 可见工具数量。
+  toolCount: number;
+  // Provider-visible tool metadata used by agent policy editors.
+  // 智能体策略编辑器使用的 Provider 可见工具元数据。
+  tools: Array<{
+    // Stable provider-visible tool identifier.
+    // 稳定的 Provider 可见工具标识。
+    id: string;
+    // Atomic plugin-local tool group identifier.
+    // 插件内部原子工具组标识。
+    group: string;
+    // English model-facing tool description.
+    // 面向模型的英文工具说明。
+    description: string;
+  }>;
+  // Number of host hook handlers declared by the plugin package.
+  // 插件包声明的宿主 hook 处理器数量。
+  hookCount: number;
+  // Number of currently retained managed sessions.
+  // 当前保留的受管会话数量。
+  activeSessionCount: number;
+  // Package, dependency, lifecycle, and cleanup diagnostics.
+  // 插件包、依赖、生命周期与清理诊断。
+  diagnostics: string[];
   // Stable lifecycle manager kind used by the action router.
   // 动作路由使用的稳定生命周期管理类型。
   managementKind: "luaSkill" | "systemPlugin";

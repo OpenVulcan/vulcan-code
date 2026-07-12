@@ -285,6 +285,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
             system_prompt: String::from("system prompt"),
             skill_ids: vec![String::from("skill-a")],
             native_tools: vec![String::from("native-a")],
+            plugin_tools: vec![String::from("plugin-tool-a")],
             mcp_tools: vec![String::from("mcp-tool-a")],
             delegates: vec![String::from("agent-b")],
             tool_policy: Some(String::from("policy-a")),
@@ -311,7 +312,6 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![String::from("server-a")],
         enabled_mcp_server_ids: vec![String::from("server-a")],
-        debug_runtime_enabled: true,
         host_tools: PersistedHostToolsConfiguration::default(),
     };
 
@@ -342,6 +342,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
         .expect("temperature should serialize as f64");
     assert!((temperature - 0.2).abs() < 1e-6);
     assert_eq!(agent["maxTurns"], 9);
+    assert_eq!(agent["pluginTools"][0], "plugin-tool-a");
     assert_eq!(agent["routes"][0]["signal"], "needs-lua");
     assert_eq!(agent["routes"][0]["delegate"], "lua-agent");
 }
@@ -367,7 +368,6 @@ fn host_diagnostic_tools_are_hidden_from_ai() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![String::from("server-a")],
         enabled_mcp_server_ids: vec![String::from("server-a")],
-        debug_runtime_enabled: true,
         host_tools: PersistedHostToolsConfiguration::default(),
     };
 
@@ -413,7 +413,6 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![],
         enabled_mcp_server_ids: vec![],
-        debug_runtime_enabled: true,
         host_tools: PersistedHostToolsConfiguration::default(),
     };
 

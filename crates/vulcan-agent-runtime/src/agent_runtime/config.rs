@@ -186,6 +186,12 @@ pub struct RuntimeToolPolicyDefinition {
     /// Explicit native tool whitelist.
     /// 显式原生工具白名单。
     pub native_tools: Vec<String>,
+    /// Whether every enabled System Plugin tool group should be visible.
+    /// 是否让全部已启用系统插件工具组都可见。
+    pub allow_all_plugin_tools: bool,
+    /// Explicit System Plugin tool whitelist.
+    /// 显式系统插件工具白名单。
+    pub plugin_tools: Vec<String>,
     /// Explicit MCP server whitelist.
     /// 显式 MCP 服务器白名单。
     pub mcp_servers: Vec<String>,
@@ -249,6 +255,9 @@ pub struct RuntimeAgentDefinition {
     /// Direct native tool attachments.
     /// 直接附着的原生工具集合。
     pub native_tools: Vec<String>,
+    /// Direct System Plugin tool attachments.
+    /// 直接附着的系统插件工具集合。
+    pub plugin_tools: Vec<String>,
     /// Direct MCP tool attachments.
     /// 直接附着的 MCP 工具集合。
     pub mcp_tools: Vec<String>,
@@ -303,9 +312,6 @@ pub struct AgentRuntimeConfig {
     /// Enabled MCP server identifiers.
     /// 已启用的 MCP 服务器标识集合。
     pub enabled_mcp_server_ids: Vec<String>,
-    /// Whether the host-owned LuaSkills debug System Plugin should register native tools.
-    /// 宿主自有 LuaSkills 调试 System Plugin 是否应注册原生工具。
-    pub debug_runtime_enabled: bool,
     /// Host-owned tool configuration captured for native runtime tools.
     /// 为原生运行时工具捕获的宿主自有工具配置。
     pub host_tools: PersistedHostToolsConfiguration,
@@ -373,9 +379,6 @@ impl AgentRuntimeConfig {
             tool_policies,
             configured_mcp_server_ids,
             enabled_mcp_server_ids,
-            debug_runtime_enabled: config.luaskills.system_plugin_enabled(
-                vulcan_runtime_assets::VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID,
-            ),
             host_tools: config.host_tools.clone(),
         }
     }
@@ -409,6 +412,8 @@ fn runtime_tool_policy_from_persisted(
         name: entry.name.clone().unwrap_or_else(|| id.to_string()),
         allow_all_native: entry.allow_all_native,
         native_tools: entry.native_tools.clone(),
+        allow_all_plugin_tools: entry.allow_all_plugin_tools,
+        plugin_tools: entry.plugin_tools.clone(),
         mcp_servers: entry.mcp_servers.clone(),
         mcp_tools: entry.mcp_tools.clone(),
     }
@@ -452,6 +457,8 @@ fn default_safe_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
         name: String::from("默认安全策略"),
         allow_all_native: true,
         native_tools: Vec::new(),
+        allow_all_plugin_tools: true,
+        plugin_tools: Vec::new(),
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
     }
@@ -470,6 +477,8 @@ fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
             String::from("vmm_memory_search"),
             String::from("vmm_turn_details"),
         ],
+        allow_all_plugin_tools: false,
+        plugin_tools: Vec::new(),
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
     }
@@ -488,6 +497,8 @@ fn default_lua_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
             String::from("vmm_memory_search"),
             String::from("vmm_turn_details"),
         ],
+        allow_all_plugin_tools: false,
+        plugin_tools: Vec::new(),
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
     }
@@ -565,6 +576,7 @@ fn default_worker_agent() -> RuntimeAgentDefinition {
         ),
         skill_ids: vec![String::from("regular.workspace-triage")],
         native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: vec![
             String::from(LUA_SPECIALIST_AGENT_ID),
@@ -591,6 +603,7 @@ fn default_plan_agent() -> RuntimeAgentDefinition {
         system_prompt: load_default_agent_prompt(PLAN_PROMPT_FILE_NAME, LEGACY_PLAN_PROMPT),
         skill_ids: Vec::new(),
         native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
         tool_policy: Some(String::from(ANALYSIS_SAFE_TOOL_POLICY_ID)),
@@ -614,6 +627,7 @@ fn default_explore_agent() -> RuntimeAgentDefinition {
         system_prompt: load_default_agent_prompt(EXPLORE_PROMPT_FILE_NAME, LEGACY_EXPLORE_PROMPT),
         skill_ids: Vec::new(),
         native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
         tool_policy: Some(String::from(ANALYSIS_SAFE_TOOL_POLICY_ID)),
@@ -640,6 +654,7 @@ fn default_lua_agent() -> RuntimeAgentDefinition {
         ),
         skill_ids: vec![String::from("luaskills.bridge")],
         native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
         tool_policy: Some(String::from(LUA_SAFE_TOOL_POLICY_ID)),
@@ -666,6 +681,7 @@ fn default_memory_agent() -> RuntimeAgentDefinition {
         ),
         skill_ids: vec![String::from("memorymesh.recall")],
         native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: Vec::new(),
         tool_policy: Some(String::from(DEFAULT_SAFE_TOOL_POLICY_ID)),
@@ -689,6 +705,7 @@ fn default_coordinator_agent() -> RuntimeAgentDefinition {
         system_prompt: String::new(),
         skill_ids: Vec::new(),
         native_tools: Vec::new(),
+        plugin_tools: Vec::new(),
         mcp_tools: Vec::new(),
         delegates: vec![
             String::from(DEFAULT_WORKER_AGENT_ID),
@@ -731,6 +748,7 @@ fn runtime_agent_from_user_profile(profile: &UserAgentProfile) -> RuntimeAgentDe
     definition.max_turns = profile.max_turns.or(definition.max_turns);
     definition.skill_ids = profile.skill_ids.clone();
     definition.native_tools = profile.native_tools.clone();
+    definition.plugin_tools = profile.plugin_tools.clone();
     definition.mcp_tools = profile.mcp_tools.clone();
     if profile.tool_policy.is_some() {
         definition.tool_policy = profile.tool_policy.clone();
@@ -818,30 +836,6 @@ mod tests {
         assert_eq!(runtime_config.active_agent_id, DEFAULT_WORKER_AGENT_ID);
     }
 
-    /// Verifies the persisted System Plugin switch controls debug native-tool registration input.
-    /// 验证持久化 System Plugin 开关会控制调试原生工具注册输入。
-    #[test]
-    fn runtime_config_projects_debug_system_plugin_enabled_state() {
-        // configuration starts with the backwards-compatible enabled default.
-        // configuration 从向后兼容的默认启用状态开始。
-        let mut configuration = ProviderConfigurationFile::default();
-        // default_runtime captures the first execution-facing projection.
-        // default_runtime 捕获首次面向执行的配置投影。
-        let default_runtime =
-            AgentRuntimeConfig::from_sources(&configuration, &AgentProfileCatalog::default());
-        assert!(default_runtime.debug_runtime_enabled);
-
-        assert!(configuration.luaskills.set_system_plugin_enabled(
-            vulcan_runtime_assets::VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID,
-            false,
-        ));
-        // disabled_runtime must reflect the persisted switch used by native tool registration.
-        // disabled_runtime 必须反映原生工具注册使用的持久化开关。
-        let disabled_runtime =
-            AgentRuntimeConfig::from_sources(&configuration, &AgentProfileCatalog::default());
-        assert!(!disabled_runtime.debug_runtime_enabled);
-    }
-
     /// Verifies user-authored profiles project advanced tool and runtime-policy fields into runtime agents.
     /// 验证用户自定义配置会将高级工具与运行时策略字段投影到运行时代理。
     #[test]
@@ -859,6 +853,7 @@ mod tests {
                 max_turns: Some(8),
                 skill_ids: vec![String::from("regular.review")],
                 native_tools: vec![String::from("shell_command")],
+                plugin_tools: vec![String::from("plugin_tool")],
                 mcp_tools: vec![String::from("server.tool")],
                 tool_policy: Some(String::from("analysis-safe")),
                 runtime_policy: ExecutionRuntimePolicyRequest {
@@ -943,6 +938,8 @@ mod tests {
                 name: Some(String::from("用户默认策略")),
                 allow_all_native: false,
                 native_tools: vec![String::from("shell_command")],
+                allow_all_plugin_tools: false,
+                plugin_tools: Vec::new(),
                 mcp_servers: Vec::new(),
                 mcp_tools: Vec::new(),
             },
@@ -984,6 +981,8 @@ mod tests {
                 name: Some(String::from("自定义策略")),
                 allow_all_native: false,
                 native_tools: vec![String::from("shell_command")],
+                allow_all_plugin_tools: false,
+                plugin_tools: Vec::new(),
                 mcp_servers: vec![String::from("server-a")],
                 mcp_tools: vec![String::from("tool-a")],
             },

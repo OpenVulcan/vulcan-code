@@ -28,6 +28,9 @@ use std::sync::Arc;
 use vulcan_luaskills_prompt::{
     LuaSkillPromptEntry, render_luaskill_argument_summary, render_luaskill_schema_markdown,
 };
+use vulcan_plugin_runtime::{
+    SystemPluginCatalogSnapshot, SystemPluginRuntimeManager, SystemPluginToolDescriptor,
+};
 
 /// High-level runtime summary exposed to UI placeholder surfaces.
 /// 暴露给 UI 占位面板的高层运行时摘要。
@@ -57,6 +60,9 @@ pub struct RuntimeFoundationSummary {
     /// Registered native tool count.
     /// 已注册原生工具数量。
     pub native_tool_count: usize,
+    /// Registered System Plugin tool count.
+    /// 已注册系统插件工具数量。
+    pub system_plugin_tool_count: usize,
     /// Prepared delegate tool count.
     /// 已准备好的委派工具数量。
     pub delegate_tool_count: usize,
@@ -83,6 +89,12 @@ pub struct RuntimeFoundation {
     /// Registered native tool catalog.
     /// 已注册的原生工具目录。
     native_tools: NativeToolCatalog,
+    /// Long-lived generic System Plugin runtime shared across foundation refreshes.
+    /// 跨基础架构刷新共享的长生命周期通用系统插件运行时。
+    system_plugin_runtime: Option<SystemPluginRuntimeManager>,
+    /// Immutable System Plugin catalog revision captured for this foundation.
+    /// 当前基础架构捕获的不可变系统插件目录修订版。
+    system_plugin_catalog: Option<Arc<SystemPluginCatalogSnapshot>>,
     /// LuaSkills-backed runtime tool descriptors exposed to the host-controlled provider execution flows.
     /// 暴露给宿主控制 Provider 执行链的 LuaSkills 运行时工具描述集合。
     luaskills_tools: Vec<RuntimeEntryDescriptor>,
@@ -185,7 +197,7 @@ impl RuntimeFoundation {
         command_session_runtime: Arc<CommandSessionRuntime>,
         token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
-        let runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
+        let mut runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
         let subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
             vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
             crate::data_plane::application_data_root().join("agents"),
@@ -195,7 +207,6 @@ impl RuntimeFoundation {
             config.default_command_shell.as_deref(),
             Arc::clone(&command_session_runtime),
             config.vmm.clone(),
-            luaskills_runtime.clone(),
         );
         let mut warnings = subagent_catalog
             .errors
@@ -210,6 +221,32 @@ impl RuntimeFoundation {
             .collect::<Vec<_>>();
         if let Err(error) = task_runtime.replace_subagent_catalog(subagent_catalog) {
             warnings.push(error);
+        }
+        let system_plugin_runtime = luaskills_runtime
+            .as_ref()
+            .map(|handle| handle.system_plugin_runtime.clone());
+        let system_plugin_catalog = match system_plugin_runtime.as_ref() {
+            Some(runtime) => {
+                match runtime.refresh_catalog(
+                    &config.luaskills.disabled_system_plugins,
+                    &config.luaskills.enabled_system_plugins,
+                ) {
+                    Ok(snapshot) => Some(snapshot),
+                    Err(error) => {
+                        warnings.push(format!("加载系统插件目录失败：{error}"));
+                        Some(runtime.snapshot())
+                    }
+                }
+            }
+            None => None,
+        };
+        if let Some(catalog) = system_plugin_catalog.as_ref() {
+            let plugin_tool_ids = catalog
+                .plugins
+                .values()
+                .flat_map(|plugin| plugin.tools.iter().map(|tool| tool.id.clone()))
+                .collect::<BTreeSet<_>>();
+            migrate_legacy_plugin_tool_sources(&mut runtime_config, &plugin_tool_ids);
         }
         let (luaskills_tools, luaskills_dispatch_tools, implicit_luaskill_prompt_entries) =
             match luaskills_runtime.as_ref() {
@@ -235,6 +272,8 @@ impl RuntimeFoundation {
         Self {
             config: runtime_config,
             native_tools,
+            system_plugin_runtime,
+            system_plugin_catalog,
             luaskills_tools,
             luaskills_dispatch_tools,
             implicit_luaskill_prompt_entries,
@@ -279,6 +318,10 @@ impl RuntimeFoundation {
             coordinator_count,
             skill_count: self.config.skills.len(),
             native_tool_count: self.native_tools.descriptors.len(),
+            system_plugin_tool_count: self
+                .system_plugin_catalog
+                .as_ref()
+                .map_or(0, |catalog| catalog.enabled_tools.len()),
             delegate_tool_count: self
                 .config
                 .agents
@@ -341,6 +384,18 @@ impl RuntimeFoundation {
         &self.native_tools
     }
 
+    /// Returns the long-lived generic System Plugin runtime when LuaSkills is available.
+    /// 在 LuaSkills 可用时返回长生命周期通用系统插件运行时。
+    pub fn system_plugin_runtime(&self) -> Option<SystemPluginRuntimeManager> {
+        self.system_plugin_runtime.clone()
+    }
+
+    /// Returns the immutable System Plugin catalog captured by this foundation.
+    /// 返回当前基础架构捕获的不可变系统插件目录。
+    pub fn system_plugin_catalog(&self) -> Option<Arc<SystemPluginCatalogSnapshot>> {
+        self.system_plugin_catalog.clone()
+    }
+
     /// Returns the shared resumable task runtime used by the current foundation.
     /// 返回当前基础架构使用的共享可恢复任务运行时。
     pub fn task_runtime(&self) -> Arc<TaskRuntime> {
@@ -373,10 +428,11 @@ impl RuntimeFoundation {
             .values()
             .map(|policy| {
                 format!(
-                    "{} · {} · 原生 {} · MCP 服务器 {} · MCP 工具 {}",
+                    "{} · {} · 原生 {} · 系统插件 {} · MCP 服务器 {} · MCP 工具 {}",
                     policy.id,
                     policy.name,
                     policy.native_tools.len(),
+                    policy.plugin_tools.len(),
                     policy.mcp_servers.len(),
                     policy.mcp_tools.len()
                 )
@@ -458,6 +514,53 @@ impl RuntimeFoundation {
             &available_native_tool_ids,
             &mut warnings,
         )
+    }
+
+    /// Resolves complete System Plugin tool groups currently visible to one agent.
+    /// 解析当前对某个代理完整可见的系统插件工具组。
+    pub fn resolved_system_plugin_tools_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Vec<SystemPluginToolDescriptor> {
+        let Some(definition) = self
+            .config
+            .agents
+            .iter()
+            .find(|definition| definition.id == agent_id)
+        else {
+            return Vec::new();
+        };
+        let Some(catalog) = self.system_plugin_catalog.as_ref() else {
+            return Vec::new();
+        };
+        let available_tool_ids = catalog
+            .enabled_tools
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let selected_tool_ids = resolve_agent_system_plugin_tool_ids(
+            definition,
+            &self.config.tool_policies,
+            &available_tool_ids,
+        )
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        let mut groups = BTreeMap::<(String, String), Vec<SystemPluginToolDescriptor>>::new();
+        for tool in catalog.enabled_tools.values() {
+            groups
+                .entry((tool.plugin_id.clone(), tool.group.clone()))
+                .or_default()
+                .push(tool.clone());
+        }
+        groups
+            .into_values()
+            .filter(|group| {
+                group
+                    .iter()
+                    .all(|tool| selected_tool_ids.contains(&tool.id))
+            })
+            .flatten()
+            .collect()
     }
 
     /// Resolves the LuaSkills runtime tools currently visible to one agent.
@@ -586,6 +689,74 @@ fn resolve_agent_native_tools(
     });
     append_universal_native_tools(&mut names, available_native_tool_ids);
     names
+}
+
+/// Resolves the System Plugin tool whitelist for one agent definition.
+/// 为单个代理定义解析系统插件工具白名单。
+fn resolve_agent_system_plugin_tool_ids(
+    definition: &RuntimeAgentDefinition,
+    tool_policies: &BTreeMap<String, RuntimeToolPolicyDefinition>,
+    available_tool_ids: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut names = if !definition.plugin_tools.is_empty() {
+        definition.plugin_tools.clone()
+    } else if let Some(policy_id) = &definition.tool_policy {
+        match tool_policies.get(policy_id) {
+            Some(policy) if policy.allow_all_plugin_tools => {
+                available_tool_ids.iter().cloned().collect()
+            }
+            Some(policy) => policy.plugin_tools.clone(),
+            None => Vec::new(),
+        }
+    } else {
+        available_tool_ids.iter().cloned().collect()
+    };
+    names.retain(|name| available_tool_ids.contains(name));
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Migrates legacy native-tool references into the dedicated System Plugin dimension in memory.
+/// 在内存中将旧版原生工具引用迁移到专用系统插件维度。
+fn migrate_legacy_plugin_tool_sources(
+    runtime_config: &mut AgentRuntimeConfig,
+    plugin_tool_ids: &BTreeSet<String>,
+) {
+    for policy in runtime_config.tool_policies.values_mut() {
+        move_matching_tool_ids(
+            &mut policy.native_tools,
+            &mut policy.plugin_tools,
+            plugin_tool_ids,
+        );
+    }
+    for agent in &mut runtime_config.agents {
+        move_matching_tool_ids(
+            &mut agent.native_tools,
+            &mut agent.plugin_tools,
+            plugin_tool_ids,
+        );
+    }
+}
+
+/// Moves exact matching tool identifiers between two policy dimensions without duplication.
+/// 在两个策略维度之间移动精确匹配的工具标识，同时避免重复。
+fn move_matching_tool_ids(
+    source: &mut Vec<String>,
+    destination: &mut Vec<String>,
+    matching_ids: &BTreeSet<String>,
+) {
+    let mut destination_ids = destination.iter().cloned().collect::<BTreeSet<_>>();
+    let mut retained = Vec::with_capacity(source.len());
+    for tool_id in std::mem::take(source) {
+        if matching_ids.contains(&tool_id) {
+            destination_ids.insert(tool_id);
+        } else {
+            retained.push(tool_id);
+        }
+    }
+    *source = retained;
+    *destination = destination_ids.into_iter().collect();
 }
 
 /// Appends native tools that must remain globally available outside regular policy limits.

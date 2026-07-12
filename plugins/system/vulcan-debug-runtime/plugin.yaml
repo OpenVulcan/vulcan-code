@@ -1,0 +1,87 @@
+schema_version: 1
+id: vulcan-debug-runtime
+version: 0.1.0
+kind: bundled_system
+default_enabled: true
+display:
+  name: Vulcan Debug Runtime
+  capability: Managed local CDP and DAP debugging
+platforms:
+  excluded_targets:
+    - aarch64-pc-windows-msvc
+    - arm64ec-pc-windows-msvc
+runtime:
+  dependencies_file: dependencies.yaml
+  required_files:
+    - node/sidecar.mjs
+    - node/package.json
+    - node/pnpm-lock.yaml
+  module: runtime.plugin
+  invoke_function: dispatch
+  shutdown_function: shutdown
+  max_active_sessions: 8
+  session_idle_timeout_sec: 1800
+tools:
+  - id: debug_session_open
+    group: debug_session_tools
+    description: Open a managed local CDP or DAP debug session.
+    parameters_file: schemas/debug_session_open.json
+    available_in_plan: false
+    execution:
+      kind: session_open
+      operation: open
+      timeout_ms: 30000
+  - id: debug_session_request
+    group: debug_session_tools
+    description: Send one CDP method, DAP command, or DAP reverse-request response through an owned debug session.
+    parameters_file: schemas/debug_session_request.json
+    available_in_plan: false
+    execution:
+      kind: session_call
+      operation: request
+      timeout_ms: 30000
+      timeout_argument: timeout_ms
+      max_timeout_ms: 60000
+      timeout_grace_ms: 5000
+  - id: debug_session_events
+    group: debug_session_tools
+    description: Read a bounded page of retained events from an owned debug session.
+    parameters_file: schemas/debug_session_events.json
+    available_in_plan: false
+    execution:
+      kind: session_call
+      operation: events
+      timeout_ms: 0
+      timeout_argument: timeout_ms
+      max_timeout_ms: 10000
+      timeout_grace_ms: 5000
+  - id: debug_session_status
+    group: debug_session_tools
+    description: Read transport and buffered-event status for an owned debug session.
+    parameters_file: schemas/debug_session_status.json
+    available_in_plan: false
+    execution:
+      kind: session_call
+      operation: status
+      timeout_ms: 5000
+  - id: debug_session_close
+    group: debug_session_tools
+    description: Close an owned debug session and retire its managed runtime process.
+    parameters_file: schemas/debug_session_close.json
+    available_in_plan: false
+    execution:
+      kind: session_close
+      operation: close
+      timeout_ms: 5000
+prompt_contributions:
+  - id: debug-session-workflow
+    file: model/instructions.md
+    required_tools:
+      - debug_session_open
+      - debug_session_request
+      - debug_session_events
+      - debug_session_status
+      - debug_session_close
+locales:
+  en: locales/en.yaml
+  zh-CN: locales/zh-CN.yaml

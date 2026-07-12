@@ -665,6 +665,7 @@ mod tests {
             system_prompt: String::new(),
             skill_ids: Vec::new(),
             native_tools: Vec::new(),
+            plugin_tools: Vec::new(),
             mcp_tools: Vec::new(),
             delegates: Vec::new(),
             tool_policy: None,
