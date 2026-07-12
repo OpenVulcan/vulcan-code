@@ -61,6 +61,18 @@ $SourceSystemPromptSkillsDir = Join-Path $ProjectDir "crates\vulcan-prompt-skill
 # SourceRtkBinDir 指向 make deps 安装的 RTK 可执行文件目录。
 $SourceRtkBinDir = Join-Path $ProjectDir "third_party\rtk\bin"
 
+# SourceLuaRuntimeDir points at the official LuaSkills runtime payload installed by make deps-lua.
+# SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
+$SourceLuaRuntimeDir = Join-Path $ProjectDir "third_party\luaskills_runtime"
+
+# SourceManagedRuntimeScriptsDir points at the tag-pinned managed runtime bootstrap assets.
+# SourceManagedRuntimeScriptsDir 指向按标签固定的受管运行时初始化资产。
+$SourceManagedRuntimeScriptsDir = Join-Path $ProjectDir "scripts\deps"
+
+# SourceLuaDebugPluginDir points at the host-owned debug System Plugin bundled with Vulcan Code.
+# SourceLuaDebugPluginDir 指向随 Vulcan Code 打包的宿主自有调试 System Plugin。
+$SourceLuaDebugPluginDir = Join-Path $ProjectDir "crates\vulcan-runtime-assets\luaskills-system-plugins\vulcan-debug-runtime"
+
 Set-Location $ProjectDir
 
 # Copy-DirectoryContents overlays one source directory onto one output directory.
@@ -185,6 +197,18 @@ $OutputToolsDir = Join-Path $ProjectDir "output\tools"
 # LegacyOutputRtkToolDir 保存旧版嵌套 RTK 输出目录，用于清理。
 $LegacyOutputRtkToolDir = Join-Path $OutputToolsDir "rtk"
 
+# OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
+# OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
+$OutputLuaRuntimeDir = Join-Path $ProjectDir "output\lua_runtime"
+
+# OutputManagedRuntimeScriptsDir stores bootstrap scripts executed during service startup.
+# OutputManagedRuntimeScriptsDir 保存服务启动期间执行的初始化脚本。
+$OutputManagedRuntimeScriptsDir = Join-Path $OutputLuaRuntimeDir "scripts\deps"
+
+# OutputLuaDebugPluginDir is the exact host-owned System Plugin package discovered by LuaSkills.
+# OutputLuaDebugPluginDir 是 LuaSkills 发现的精确宿主自有 System Plugin 包。
+$OutputLuaDebugPluginDir = Join-Path $OutputLuaRuntimeDir "system_lua_lib\vulcan-debug-runtime"
+
 if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
     throw "Built Tauri binary was not found: $BuiltBinaryPath"
 }
@@ -206,6 +230,15 @@ Copy-DirectoryContents -SourceDirectory $SourceResourcesDir -DestinationDirector
 
 Write-Host "==> Syncing packaged system Agent Skills..."
 Copy-DirectoryContents -SourceDirectory $SourceSystemPromptSkillsDir -DestinationDirectory $OutputSystemPromptSkillsDir -Clean
+
+Write-Host "==> Syncing LuaSkills runtime payload..."
+Copy-DirectoryContents -SourceDirectory $SourceLuaRuntimeDir -DestinationDirectory $OutputLuaRuntimeDir
+
+Write-Host "==> Syncing managed runtime bootstrap assets..."
+Copy-DirectoryContents -SourceDirectory $SourceManagedRuntimeScriptsDir -DestinationDirectory $OutputManagedRuntimeScriptsDir -Clean
+
+Write-Host "==> Syncing host System Plugin packages..."
+Copy-DirectoryContents -SourceDirectory $SourceLuaDebugPluginDir -DestinationDirectory $OutputLuaDebugPluginDir -Clean
 
 if (Test-Path -LiteralPath $SourceRtkBinDir -PathType Container) {
     Write-Host "==> Syncing packaged RTK host tool..."

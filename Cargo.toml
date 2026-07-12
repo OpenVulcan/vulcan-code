@@ -76,11 +76,13 @@ vulcan-token-counter = { path = "crates/vulcan-token-counter" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vldb-controller-client = "0.2.1"
-luaskills = "=0.4.6"
+luaskills = "=0.5.0"
 async-trait = "0.1.89"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+fs2 = "0.4"
+libc = "0.2"
 dirs = "6.0.0"
 ignore = "0.4.24"
 notify = "8.2.0"

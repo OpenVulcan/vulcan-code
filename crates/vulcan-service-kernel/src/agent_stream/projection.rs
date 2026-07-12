@@ -838,6 +838,12 @@ pub(crate) fn append_runtime_event_projection(
     let subagent_wait_consumed_executions =
         terminal_subagent_wait_consumed_executions_from_event(event)?;
     let closed_subagent_task_ids = close_agent_closed_subagent_task_ids_from_event(event)?;
+    // refreshesCommandSessions identifies terminal tool completions that may create, stop, or otherwise mutate a live session.
+    // refreshesCommandSessions 标识可能创建、停止或以其他方式变更实时会话的终端工具完成事件。
+    let refreshes_command_sessions = runtime_event_changes_command_sessions(event);
+    // refreshesSubagentNavigation identifies a completed spawn whose new task must immediately reach the floating panel.
+    // refreshesSubagentNavigation 标识已完成的子代理创建，其新任务必须立即进入浮动面板。
+    let refreshes_subagent_navigation = runtime_event_changes_subagent_navigation(event);
     let child_send_message = webui_subagent_send_message_from_event(event)?;
     let goal_update = goal_summary_from_tool_finished_event(event)?;
     if let Some(Some(summary)) = goal_update.as_ref() {
@@ -1053,6 +1059,21 @@ pub(crate) fn append_runtime_event_projection(
             ServiceEvent::WorkbenchDelta(Box::new(event)),
         );
     }
+    if refreshes_command_sessions
+        && let Err(error) = emit_live_command_sessions_changed_delta(app, state)
+    {
+        eprintln!(
+            "[webui-service] runtime terminal event command-session delta emit failed after commit: {error}"
+        );
+    }
+    if refreshes_subagent_navigation
+        && let Err(error) =
+            emit_webui_subagent_navigation_changed_delta_for_parent(app, state, session_id)
+    {
+        eprintln!(
+            "[webui-service] runtime spawn-agent navigation delta emit failed after commit: {error}"
+        );
+    }
     if subagent_navigation_changed
         && let Err(error) =
             emit_webui_subagent_navigation_changed_delta_for_parent(app, state, session_id)
@@ -1132,6 +1153,43 @@ pub(crate) fn append_runtime_event_projection(
         );
     }
     Ok(())
+}
+
+/// Reports whether one runtime event completed a tool that owns command-session lifecycle state.
+/// 判断单个运行时事件是否完成了持有命令会话生命周期状态的工具。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime event currently being projected into WebUI state.
+/// `event` 是当前正投影到 WebUI 状态的运行时事件。
+///
+/// # Returns
+/// 返回值
+/// `true` only after a terminal-session tool has finished mutating the shared runtime.
+/// 仅当终端会话工具已经完成共享运行时变更后返回 `true`。
+fn runtime_event_changes_command_sessions(event: &RuntimeEvent) -> bool {
+    event.kind == RuntimeEventKind::ToolFinished
+        && matches!(
+            runtime_event_tool_name(event),
+            Some("terminal_session" | "shell_session")
+        )
+}
+
+/// Reports whether one runtime event created a subagent that must enter parent-session navigation.
+/// 判断单个运行时事件是否创建了必须进入父会话导航的子代理。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime event currently being projected into WebUI state.
+/// `event` 是当前正投影到 WebUI 状态的运行时事件。
+///
+/// # Returns
+/// 返回值
+/// `true` only after `spawn_agent` has registered its new child task successfully.
+/// 仅当 `spawn_agent` 已成功注册新子任务后返回 `true`。
+fn runtime_event_changes_subagent_navigation(event: &RuntimeEvent) -> bool {
+    event.kind == RuntimeEventKind::ToolFinished
+        && runtime_event_tool_name(event) == Some("spawn_agent")
 }
 
 /// Returns whether one runtime-event transcript patch should be emitted to the WebUI message window.
@@ -1775,5 +1833,59 @@ mod tests {
             patch.upsert_messages[0].record_kind.as_deref(),
             Some("tool-call-output")
         );
+    }
+
+    /// Verifies terminal lifecycle synchronization runs only after supported terminal tools finish.
+    /// 验证终端生命周期同步仅在受支持的终端工具完成后运行。
+    #[test]
+    fn runtime_event_command_session_refresh_matches_finished_terminal_tools() {
+        // terminal_finished represents the current terminal tool contract after it has mutated runtime state.
+        // terminal_finished 表示当前终端工具已完成运行时状态变更后的事件。
+        let terminal_finished =
+            RuntimeEvent::new(RuntimeEventKind::ToolFinished, "terminal finished", "")
+                .with_metadata(Some(json!({ "tool_name": "terminal_session" })));
+        // shell_finished preserves synchronization for the retained legacy shell-session tool.
+        // shell_finished 为保留的旧版 shell-session 工具维持同步能力。
+        let shell_finished =
+            RuntimeEvent::new(RuntimeEventKind::ToolFinished, "shell finished", "")
+                .with_metadata(Some(json!({ "tool_name": "shell_session" })));
+        // terminal_started must not refresh before the start action has inserted its live runtime record.
+        // terminal_started 不得在启动动作写入实时运行时记录前提前刷新。
+        let terminal_started =
+            RuntimeEvent::new(RuntimeEventKind::ToolStarted, "terminal started", "")
+                .with_metadata(Some(json!({ "tool_name": "terminal_session" })));
+        // unrelated_finished proves ordinary tools do not cause command-session workbench churn.
+        // unrelated_finished 证明普通工具不会引发命令会话工作台抖动。
+        let unrelated_finished =
+            RuntimeEvent::new(RuntimeEventKind::ToolFinished, "file read finished", "")
+                .with_metadata(Some(json!({ "tool_name": "vulcan_file_read" })));
+
+        assert!(runtime_event_changes_command_sessions(&terminal_finished));
+        assert!(runtime_event_changes_command_sessions(&shell_finished));
+        assert!(!runtime_event_changes_command_sessions(&terminal_started));
+        assert!(!runtime_event_changes_command_sessions(&unrelated_finished));
+    }
+
+    /// Verifies subagent navigation synchronization runs only after a spawn tool finishes.
+    /// 验证子代理导航同步仅在创建工具完成后运行。
+    #[test]
+    fn runtime_event_subagent_navigation_refresh_matches_finished_spawn() {
+        // spawn_finished represents a child task already registered by the orchestration runtime.
+        // spawn_finished 表示编排运行时已经注册完成的子任务。
+        let spawn_finished =
+            RuntimeEvent::new(RuntimeEventKind::ToolFinished, "spawn finished", "")
+                .with_metadata(Some(json!({ "tool_name": "spawn_agent" })));
+        // spawn_started must not project navigation before the child task registration commits.
+        // spawn_started 不得在子任务注册提交前投影导航。
+        let spawn_started = RuntimeEvent::new(RuntimeEventKind::ToolStarted, "spawn started", "")
+            .with_metadata(Some(json!({ "tool_name": "spawn_agent" })));
+        // send_finished updates an existing child and must rely on its dedicated event-ingest path.
+        // send_finished 更新既有子任务，必须继续使用其专用事件摄取路径。
+        let send_finished = RuntimeEvent::new(RuntimeEventKind::ToolFinished, "send finished", "")
+            .with_metadata(Some(json!({ "tool_name": "send_message" })));
+
+        assert!(runtime_event_changes_subagent_navigation(&spawn_finished));
+        assert!(!runtime_event_changes_subagent_navigation(&spawn_started));
+        assert!(!runtime_event_changes_subagent_navigation(&send_finished));
     }
 }

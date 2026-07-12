@@ -329,9 +329,17 @@ fn run_service_bootstrap(
                 "LuaSkills 引擎锁已损坏，无法构建工具入口缓存。",
             )
         })?;
-        engine.list_entries_for_authority(
-            vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
-        )
+        engine
+            .list_entries_for_authority(
+                vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
+            )
+            .map_err(|error| {
+                ServiceBootstrapError::new(
+                    "luaskills",
+                    "LuaSkills",
+                    format!("读取 Agent Runtime 工具入口失败：{error}"),
+                )
+            })?
     };
     let agent_luaskills_runtime = LuaSkillsRuntimeHandle {
         engine: Arc::clone(&luaskills_runtime.engine),

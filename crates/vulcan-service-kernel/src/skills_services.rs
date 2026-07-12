@@ -139,6 +139,49 @@ pub(crate) async fn service_set_luaskill_enabled(
     refresh_luaskills_local_state(&state).await
 }
 
+/// Enables or disables one known host-owned LuaSkills System Plugin.
+/// 启用或停用单个已知的宿主自有 LuaSkills System Plugin。
+///
+/// # Parameters
+/// 参数
+/// `state` retains service configuration, `plugin_id` identifies the plugin, and `enabled` is the requested state.
+/// `state` 保留服务配置，`plugin_id` 标识插件，`enabled` 是请求状态。
+///
+/// # Returns
+/// 返回值
+/// A revisioned LuaSkills domain projection after persistence succeeds.
+/// 持久化成功后的带版本 LuaSkills 领域投影。
+pub(crate) async fn service_set_luaskills_system_plugin_enabled(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    enabled: bool,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // stable_plugin_id is the exact persisted and projected System Plugin identifier.
+    // stable_plugin_id 是持久化与投影使用的精确 System Plugin 标识。
+    let stable_plugin_id = plugin_id.trim();
+    if stable_plugin_id != vulcan_runtime_assets::VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID {
+        return Err(format!(
+            "不支持的 LuaSkills System Plugin：{stable_plugin_id}"
+        ));
+    }
+    // management_guard serializes this switch with package lifecycle and tool registration mutations.
+    // management_guard 使该开关与包生命周期及工具注册变更保持串行。
+    let _management_guard = lock_luaskills_management_mutation().await;
+    mutate_provider_configuration(
+        &state,
+        "保存 LuaSkills System Plugin 状态失败",
+        |configuration| {
+            configuration
+                .luaskills
+                .set_system_plugin_enabled(stable_plugin_id, enabled);
+            Ok(())
+        },
+        |_, _| (),
+    )
+    .await?;
+    refresh_luaskills_local_state(&state).await
+}
+
 /// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
 /// 卸载单个普通 LuaSkill 包并刷新 WebUI 快照。
 pub(crate) async fn service_uninstall_luaskill(

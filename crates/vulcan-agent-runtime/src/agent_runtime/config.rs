@@ -303,6 +303,9 @@ pub struct AgentRuntimeConfig {
     /// Enabled MCP server identifiers.
     /// 已启用的 MCP 服务器标识集合。
     pub enabled_mcp_server_ids: Vec<String>,
+    /// Whether the host-owned LuaSkills debug System Plugin should register native tools.
+    /// 宿主自有 LuaSkills 调试 System Plugin 是否应注册原生工具。
+    pub debug_runtime_enabled: bool,
     /// Host-owned tool configuration captured for native runtime tools.
     /// 为原生运行时工具捕获的宿主自有工具配置。
     pub host_tools: PersistedHostToolsConfiguration,
@@ -370,6 +373,9 @@ impl AgentRuntimeConfig {
             tool_policies,
             configured_mcp_server_ids,
             enabled_mcp_server_ids,
+            debug_runtime_enabled: config.luaskills.system_plugin_enabled(
+                vulcan_runtime_assets::VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID,
+            ),
             host_tools: config.host_tools.clone(),
         }
     }
@@ -810,6 +816,30 @@ mod tests {
         );
 
         assert_eq!(runtime_config.active_agent_id, DEFAULT_WORKER_AGENT_ID);
+    }
+
+    /// Verifies the persisted System Plugin switch controls debug native-tool registration input.
+    /// 验证持久化 System Plugin 开关会控制调试原生工具注册输入。
+    #[test]
+    fn runtime_config_projects_debug_system_plugin_enabled_state() {
+        // configuration starts with the backwards-compatible enabled default.
+        // configuration 从向后兼容的默认启用状态开始。
+        let mut configuration = ProviderConfigurationFile::default();
+        // default_runtime captures the first execution-facing projection.
+        // default_runtime 捕获首次面向执行的配置投影。
+        let default_runtime =
+            AgentRuntimeConfig::from_sources(&configuration, &AgentProfileCatalog::default());
+        assert!(default_runtime.debug_runtime_enabled);
+
+        assert!(configuration.luaskills.set_system_plugin_enabled(
+            vulcan_runtime_assets::VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID,
+            false,
+        ));
+        // disabled_runtime must reflect the persisted switch used by native tool registration.
+        // disabled_runtime 必须反映原生工具注册使用的持久化开关。
+        let disabled_runtime =
+            AgentRuntimeConfig::from_sources(&configuration, &AgentProfileCatalog::default());
+        assert!(!disabled_runtime.debug_runtime_enabled);
     }
 
     /// Verifies user-authored profiles project advanced tool and runtime-policy fields into runtime agents.

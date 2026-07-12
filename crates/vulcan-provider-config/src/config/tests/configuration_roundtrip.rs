@@ -306,6 +306,7 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
                 ]),
             )]),
             disabled_tools_by_skill: BTreeMap::new(),
+            disabled_system_plugins: BTreeSet::from([String::from("vulcan-debug-runtime")]),
         },
         ..ProviderConfigurationFile::default()
     };
@@ -319,6 +320,10 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
         value["luaskills"]["toolRegistrationBySkill"]["skill-a"]["tool-b"],
         json!("disabled")
     );
+    assert_eq!(
+        value["luaskills"]["disabledSystemPlugins"],
+        json!(["vulcan-debug-runtime"])
+    );
 
     let restored: ProviderConfigurationFile =
         serde_json::from_value(value).expect("provider configuration must deserialize");
@@ -330,6 +335,11 @@ fn provider_configuration_round_trips_luaskills_registration_configuration() {
             .and_then(|tools| tools.get("tool-a"))
             .copied(),
         Some(PersistedLuaSkillToolRegistrationState::Implicit)
+    );
+    assert!(
+        !restored
+            .luaskills
+            .system_plugin_enabled("vulcan-debug-runtime")
     );
 }
 
@@ -389,6 +399,10 @@ fn luaskills_registration_configuration_only_persists_non_default_tools() {
             ),
             (String::new(), vec![String::from("tool-x")]),
         ]),
+        disabled_system_plugins: BTreeSet::from([
+            String::new(),
+            String::from(" vulcan-debug-runtime "),
+        ]),
     };
 
     assert!(configuration.normalize());
@@ -428,4 +442,11 @@ fn luaskills_registration_configuration_only_persists_non_default_tools() {
         ])
     );
     assert!(configuration.disabled_tools_by_skill.is_empty());
+    assert_eq!(
+        configuration.disabled_system_plugins,
+        BTreeSet::from([String::from("vulcan-debug-runtime")])
+    );
+    assert!(!configuration.system_plugin_enabled("vulcan-debug-runtime"));
+    assert!(configuration.set_system_plugin_enabled("vulcan-debug-runtime", true));
+    assert!(configuration.system_plugin_enabled("vulcan-debug-runtime"));
 }

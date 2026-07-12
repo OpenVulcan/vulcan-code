@@ -195,6 +195,7 @@ impl RuntimeFoundation {
             config.default_command_shell.as_deref(),
             Arc::clone(&command_session_runtime),
             config.vmm.clone(),
+            luaskills_runtime.clone(),
         );
         let mut warnings = subagent_catalog
             .errors

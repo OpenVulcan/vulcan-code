@@ -146,6 +146,23 @@ export async function setLuaSkillEnabled(skillId: string, enabled: boolean): Pro
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskill_enabled", { skillId, enabled });
 }
 
+// setLuaSkillsSystemPluginEnabled toggles one host-owned LuaSkills System Plugin.
+// setLuaSkillsSystemPluginEnabled 切换单个宿主自有 LuaSkills System Plugin。
+export async function setLuaSkillsSystemPluginEnabled(pluginId: string, enabled: boolean): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
+      // plugin resolves only a host-owned System Plugin row in browser preview mode.
+      // plugin 在浏览器预览模式中仅解析宿主自有 System Plugin 行。
+      const plugin = snapshot.plugins.find((item) => item.id === pluginId && item.managementKind === "systemPlugin");
+      if (plugin) {
+        plugin.enabled = enabled;
+        plugin.status = enabled ? "已启用" : "已停用";
+      }
+    }));
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskills_system_plugin_enabled", { pluginId, enabled });
+}
+
 // uninstallLuaSkill removes one ordinary Lua Skill package.
 // uninstallLuaSkill 移除单个普通 Lua Skill 包。
 export async function uninstallLuaSkill(skillId: string): Promise<LuaSkillsCatalogUpdate> {

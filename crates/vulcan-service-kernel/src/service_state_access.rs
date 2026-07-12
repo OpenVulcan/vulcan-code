@@ -338,9 +338,11 @@ pub(crate) fn sync_agent_luaskills_tool_cache(
         let engine = tauri_handle.engine.lock().map_err(|_| {
             String::from("LuaSkills 引擎锁已损坏，无法同步 Agent Runtime 工具缓存。")
         })?;
-        engine.list_entries_for_authority(
-            vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
-        )
+        engine
+            .list_entries_for_authority(
+                vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
+            )
+            .map_err(|error| format!("读取 Agent Runtime 工具入口失败：{error}"))?
     };
     let entry_count = entries.len();
     let mut tool_entries = runtime_handle.tool_entries.lock().map_err(|_| {

@@ -141,6 +141,10 @@ pub struct PersistedLuaSkillsConfiguration {
     /// 按稳定技能标识分组保存的旧版隐藏 LuaSkills 本地工具名称集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub disabled_tools_by_skill: BTreeMap<String, Vec<String>>,
+    /// Host-owned System Plugin identifiers explicitly disabled by the user.
+    /// 用户显式停用的宿主自有 System Plugin 标识集合。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub disabled_system_plugins: BTreeSet<String>,
 }
 
 impl PersistedLuaSkillsConfiguration {
@@ -220,11 +224,62 @@ impl PersistedLuaSkillsConfiguration {
         }
 
         normalized_registration.retain(|_, local_states| !local_states.is_empty());
+        let normalized_disabled_system_plugins = self
+            .disabled_system_plugins
+            .iter()
+            .map(|plugin_id| plugin_id.trim())
+            .filter(|plugin_id| !plugin_id.is_empty())
+            .map(String::from)
+            .collect::<BTreeSet<_>>();
         let changed = normalized_registration != self.tool_registration_by_skill
-            || !self.disabled_tools_by_skill.is_empty();
+            || !self.disabled_tools_by_skill.is_empty()
+            || normalized_disabled_system_plugins != self.disabled_system_plugins;
         self.tool_registration_by_skill = normalized_registration;
         self.disabled_tools_by_skill.clear();
+        self.disabled_system_plugins = normalized_disabled_system_plugins;
         changed
+    }
+
+    /// Returns whether one host-owned LuaSkills System Plugin is enabled.
+    /// 返回单个宿主自有 LuaSkills System Plugin 是否已启用。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` is the stable System Plugin identifier.
+    /// `plugin_id` 是稳定的 System Plugin 标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the plugin has not been explicitly disabled.
+    /// 当插件未被显式停用时返回 `true`。
+    pub fn system_plugin_enabled(&self, plugin_id: &str) -> bool {
+        let stable_plugin_id = plugin_id.trim();
+        !stable_plugin_id.is_empty() && !self.disabled_system_plugins.contains(stable_plugin_id)
+    }
+
+    /// Updates the persisted enabled state of one host-owned LuaSkills System Plugin.
+    /// 更新单个宿主自有 LuaSkills System Plugin 的持久化启用状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` is the stable System Plugin identifier and `enabled` is the requested state.
+    /// `plugin_id` 是稳定的 System Plugin 标识，`enabled` 是请求状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the persisted state changed.
+    /// 当持久化状态发生变化时返回 `true`。
+    pub fn set_system_plugin_enabled(&mut self, plugin_id: &str, enabled: bool) -> bool {
+        let stable_plugin_id = plugin_id.trim();
+        if stable_plugin_id.is_empty() {
+            return false;
+        }
+        if enabled {
+            self.disabled_system_plugins.remove(stable_plugin_id)
+        } else {
+            self.disabled_system_plugins
+                .insert(stable_plugin_id.to_string())
+        }
     }
 
     /// Returns the effective registration state for one LuaSkills local tool.

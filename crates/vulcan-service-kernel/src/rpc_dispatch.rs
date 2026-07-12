@@ -109,6 +109,14 @@ pub(super) async fn dispatch_service_rpc(
             )
             .await,
         ),
+        "service_set_luaskills_system_plugin_enabled" => rpc_json_result(
+            service_set_luaskills_system_plugin_enabled(
+                state,
+                rpc_required_param(&params, "pluginId")?,
+                rpc_required_param(&params, "enabled")?,
+            )
+            .await,
+        ),
         "service_uninstall_luaskill" => rpc_json_result(
             service_uninstall_luaskill(state, rpc_required_param(&params, "skillId")?).await,
         ),

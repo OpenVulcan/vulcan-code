@@ -20,6 +20,15 @@ pub struct PluginSummary {
     /// Plugin capability summary.
     /// 插件能力摘要。
     pub capability: String,
+    /// Whether the plugin is enabled in persisted host configuration.
+    /// 插件在宿主持久化配置中是否已启用。
+    pub enabled: bool,
+    /// Whether the plugin assets required by the current runtime are available.
+    /// 当前运行时所需插件资产是否可用。
+    pub available: bool,
+    /// Stable lifecycle manager kind used by the WebUI action router.
+    /// WebUI 动作路由使用的稳定生命周期管理类型。
+    pub management_kind: String,
 }
 
 /// Summarizes one settings section.

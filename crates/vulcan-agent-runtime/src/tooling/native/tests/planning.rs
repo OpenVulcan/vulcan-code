@@ -311,6 +311,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![String::from("server-a")],
         enabled_mcp_server_ids: vec![String::from("server-a")],
+        debug_runtime_enabled: true,
         host_tools: PersistedHostToolsConfiguration::default(),
     };
 
@@ -366,6 +367,7 @@ fn host_diagnostic_tools_are_hidden_from_ai() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![String::from("server-a")],
         enabled_mcp_server_ids: vec![String::from("server-a")],
+        debug_runtime_enabled: true,
         host_tools: PersistedHostToolsConfiguration::default(),
     };
 
@@ -411,6 +413,7 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
         tool_policies: BTreeMap::new(),
         configured_mcp_server_ids: vec![],
         enabled_mcp_server_ids: vec![],
+        debug_runtime_enabled: true,
         host_tools: PersistedHostToolsConfiguration::default(),
     };
 

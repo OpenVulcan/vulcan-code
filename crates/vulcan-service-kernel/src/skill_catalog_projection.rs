@@ -2,6 +2,7 @@
 //! skill catalog projection 辅助逻辑。
 
 use super::*;
+use vulcan_runtime_assets::VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID;
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
     AgentSkillOriginSummary, AgentSkillRecordSummary, AgentSkillResourceSummary,
@@ -11,8 +12,13 @@ use vulcan_service_api::{
 
 /// Converts LuaSkills catalog rows into plugin summaries.
 /// 将 LuaSkills 目录行转换为插件摘要。
-pub(crate) fn plugins_from_luaskills(catalog: &TauriLuaSkillsCatalog) -> Vec<PluginSummary> {
-    catalog
+pub(crate) fn plugins_from_luaskills(
+    catalog: &TauriLuaSkillsCatalog,
+    provider_configuration: &ProviderConfigurationFile,
+) -> Vec<PluginSummary> {
+    // plugins starts with ordinary Lua Skill rows before the host-owned System Plugin is appended.
+    // plugins 先保存普通 Lua Skill 行，随后追加宿主自有 System Plugin。
+    let mut plugins = catalog
         .skills
         .iter()
         .map(|skill| PluginSummary {
@@ -26,8 +32,50 @@ pub(crate) fn plugins_from_luaskills(catalog: &TauriLuaSkillsCatalog) -> Vec<Plu
             }
             .to_string(),
             capability: format!("{} 个入口：{}", skill.entry_count, skill.capability),
+            enabled: skill.enabled,
+            available: true,
+            management_kind: String::from("luaSkill"),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    // package_root is the single fixed directory owned by the bundled debug System Plugin.
+    // package_root 是随包调试 System Plugin 拥有的唯一固定目录。
+    let package_root = catalog
+        .system_lua_lib_dir
+        .join(VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID);
+    // available reflects the exact asset set required by the host and Node sidecar.
+    // available 反映宿主与 Node sidecar 所需的精确资产集合是否完整。
+    let available = [
+        "dependencies.yaml",
+        "runtime/plugin.lua",
+        "node/sidecar.mjs",
+        "node/package.json",
+        "node/pnpm-lock.yaml",
+    ]
+    .into_iter()
+    .all(|relative_path| package_root.join(relative_path).is_file());
+    // enabled comes only from the persisted LuaSkills System Plugin switch.
+    // enabled 仅来自持久化 LuaSkills System Plugin 开关。
+    let enabled = provider_configuration
+        .luaskills
+        .system_plugin_enabled(VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID);
+    plugins.push(PluginSummary {
+        id: String::from(VULCAN_DEBUG_RUNTIME_SYSTEM_PLUGIN_ID),
+        name: String::from("Vulcan Debug Runtime"),
+        kind: String::from("LuaSkills System Plugin"),
+        status: if !available {
+            "不可用"
+        } else if enabled {
+            "已启用"
+        } else {
+            "已停用"
+        }
+        .to_string(),
+        capability: String::from("本机 CDP 与 DAP 调试会话"),
+        enabled,
+        available,
+        management_kind: String::from("systemPlugin"),
+    });
+    plugins
 }
 
 /// Projects the retained LuaSkills catalog into the WebUI service API shape.

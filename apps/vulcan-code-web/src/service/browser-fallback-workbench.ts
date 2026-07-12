@@ -157,7 +157,16 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
   }],
   pendingQuestion: null,
-  plugins: [],
+  plugins: [{
+    id: "vulcan-debug-runtime",
+    name: "Vulcan Debug Runtime",
+    kind: "LuaSkills System Plugin",
+    status: "已启用",
+    capability: "本机 CDP 与 DAP 调试会话",
+    enabled: true,
+    available: true,
+    managementKind: "systemPlugin",
+  }],
   luaSkills: {
     runtimeRoot: "D:/openvulcan/vulcan-code/output/lua_runtime",
     systemLuaLib: "D:/openvulcan/vulcan-code/output/lua_runtime/system_lua_lib",
@@ -532,12 +541,21 @@ export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnap
     .reduce((total, skill) => total + (skill.enabled ? skill.entryCount : 0), 0);
   // Plugin rows are a projection of the same LuaSkills catalog and must advance atomically with it.
   // 插件行是同一份 LuaSkills 目录的投影，必须与其原子推进。
-  browserFallbackWorkbenchState.plugins = browserFallbackWorkbenchState.luaSkills.skills.map((skill) => ({
+  // systemPlugins retains host-owned plugin state while ordinary Lua Skill rows are regenerated.
+  // systemPlugins 在重新生成普通 Lua Skill 行时保留宿主自有插件状态。
+  const systemPlugins = browserFallbackWorkbenchState.plugins.filter((plugin) => plugin.managementKind === "systemPlugin");
+  // luaSkillPlugins mirrors ordinary Lua Skill lifecycle rows for browser preview mode.
+  // luaSkillPlugins 在浏览器预览模式中镜像普通 Lua Skill 生命周期行。
+  const luaSkillPlugins = browserFallbackWorkbenchState.luaSkills.skills.map((skill) => ({
     id: skill.skillId,
     name: skill.displayName,
     kind: `LuaSkill / ${skill.rootName}`,
     status: skill.enabled ? "已启用" : "已停用",
     capability: `${skill.entryCount} 个入口`,
+    enabled: skill.enabled,
+    available: true,
+    managementKind: "luaSkill" as const,
   }));
+  browserFallbackWorkbenchState.plugins = [...luaSkillPlugins, ...systemPlugins];
   return browserFallbackSnapshot();
 }

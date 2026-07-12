@@ -3,6 +3,7 @@ import {
   Hammer,
   Maximize2,
   Minimize2,
+  Puzzle,
   Settings,
 } from "lucide-react";
 import {
@@ -57,8 +58,8 @@ export function WorkspaceSkillsSettings(props: {
   );
 }
 
-// FloatingSkillMenu renders the floating two-row embedded skills selector.
-// FloatingSkillMenu 渲染两行浮动内嵌技能选择器。
+// FloatingSkillMenu renders the floating embedded skills selector.
+// FloatingSkillMenu 渲染浮动内嵌技能选择器。
 export function FloatingSkillMenu(props: {
   // Selected embedded skills sub page.
   // 当前选中的内嵌技能子页面。
@@ -78,6 +79,7 @@ export function FloatingSkillMenu(props: {
   // rows 保存静态内嵌技能菜单行。
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
+    { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
   ];
   // activeLabel stores the selected menu label for the collapsed pill.
@@ -133,6 +135,9 @@ export function FloatingSkillMenu(props: {
 export function skillSubAreaLabel(subArea: SkillSubAreaId, t: ReturnType<typeof useI18n>["t"]): string {
   if (subArea === "settings") {
     return t("skills.navigation.luaSettings");
+  }
+  if (subArea === "plugins") {
+    return t("skills.navigation.plugins");
   }
   return t("skills.navigation.list");
 }

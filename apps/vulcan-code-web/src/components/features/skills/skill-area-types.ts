@@ -15,6 +15,9 @@ export interface SkillActionProps {
   // Toggles one Lua Skill package lifecycle state.
   // 切换单个 Lua Skill 包生命周期状态。
   onSetLuaSkillEnabled: (skillId: string, enabled: boolean) => Promise<void>
+  // Persists one host-owned LuaSkills System Plugin enabled state.
+  // 持久化单个宿主自有 LuaSkills System Plugin 的启用状态。
+  onSetSystemPluginEnabled: (pluginId: string, enabled: boolean) => Promise<void>
   // Uninstalls one ordinary Lua Skill package.
   // 卸载单个普通 Lua Skill 包。
   onUninstallLuaSkill: (skillId: string) => Promise<void>
@@ -25,7 +28,7 @@ export interface SkillActionProps {
 
 // SkillSubAreaId identifies the selected skill management category.
 // SkillSubAreaId 标识当前选中的技能管理分类。
-export type SkillSubAreaId = "catalog" | "settings"
+export type SkillSubAreaId = "catalog" | "plugins" | "settings"
 
 // SkillHeaderBusyActionId identifies one title-bar skill action currently showing feedback.
 // SkillHeaderBusyActionId 标识当前正在标题栏展示反馈的技能动作。

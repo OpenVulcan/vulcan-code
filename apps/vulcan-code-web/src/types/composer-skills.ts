@@ -193,6 +193,15 @@ export interface PluginSummary {
   // Human-readable plugin capability summary.
   // 人类可读的插件能力摘要。
   capability: string;
+  // Whether the plugin is enabled in persisted host configuration.
+  // 插件在宿主持久化配置中是否已启用。
+  enabled: boolean;
+  // Whether required plugin assets are available in the active runtime.
+  // 活动运行时中是否存在所需插件资产。
+  available: boolean;
+  // Stable lifecycle manager kind used by the action router.
+  // 动作路由使用的稳定生命周期管理类型。
+  managementKind: "luaSkill" | "systemPlugin";
 }
 
 // LuaSkillsCatalogUpdate carries one revisioned full LuaSkills domain projection.

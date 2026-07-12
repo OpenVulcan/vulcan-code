@@ -529,7 +529,7 @@ pub(crate) async fn refresh_luaskills_local_state(
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
-    guard.workbench.plugins = plugins_from_luaskills(&catalog);
+    guard.workbench.plugins = plugins_from_luaskills(&catalog, &provider_configuration);
     Ok(LuaSkillsCatalogUpdate {
         revision: guard.workbench_generation,
         lua_skills: guard.workbench.lua_skills.clone(),

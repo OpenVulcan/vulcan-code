@@ -1,0 +1,12 @@
+{
+  "name": "vulcan-debug-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test sidecar.test.mjs"
+  },
+  "engines": {
+    "node": "24.18.0"
+  }
+}

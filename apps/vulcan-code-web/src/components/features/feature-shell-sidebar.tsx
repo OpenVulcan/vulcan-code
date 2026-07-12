@@ -6,6 +6,7 @@ import {
   Hammer,
   Network,
   PanelTopOpen,
+  Puzzle,
   Undo2,
   Settings,
 } from "lucide-react"
@@ -440,6 +441,7 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
   if (activeArea === "skills") {
     return [
       { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
+      { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "systemPlugin").length }), icon: <Puzzle size={16} /> },
       { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
     ]
   }
@@ -477,6 +479,9 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   }
   if (rowId === "luaskills-settings") {
     return "settings"
+  }
+  if (rowId === "luaskills-plugins") {
+    return "plugins"
   }
   return null
 }

@@ -484,6 +484,7 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
             .as_deref(),
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
         agent_runtime.provider_configuration.vmm.clone(),
+        agent_runtime.luaskills_runtime.clone(),
     );
     native_catalog
         .descriptors
@@ -898,7 +899,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         subagent_navigation,
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
-        plugins: plugins_from_luaskills(luaskills_catalog),
+        plugins: plugins_from_luaskills(luaskills_catalog, provider_configuration),
         lua_skills: lua_skills_catalog_summary(luaskills_catalog, provider_configuration),
         agent_skills: agent_skills_catalog_summary(provider_configuration),
         subagent_catalog: subagent_catalog_summary(provider_configuration),
@@ -1039,6 +1040,9 @@ mod tests {
             kind: String::from("LuaSkill / USER"),
             status: String::from("已启用"),
             capability: String::from("1 个入口"),
+            enabled: true,
+            available: true,
+            management_kind: String::from("luaSkill"),
         }];
 
         preserve_focused_catalog_domains_after_concurrent_refresh(

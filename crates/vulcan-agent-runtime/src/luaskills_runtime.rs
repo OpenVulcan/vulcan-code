@@ -81,7 +81,7 @@ fn bootstrap_luaskills_runtime_blocking(
         .load_from_roots(&skill_roots)
         .map_err(|error| format!("加载 LuaSkills 技能根失败：{error}"))?;
 
-    let tool_entries = list_host_visible_luaskills_entries(&engine);
+    let tool_entries = list_host_visible_luaskills_entries(&engine)?;
     let entry_count = tool_entries.len();
     let operation_progress_events = Arc::new(Mutex::new(VecDeque::new()));
     install_luaskills_operation_progress_callback(operation_progress_events.clone());
@@ -798,7 +798,7 @@ fn build_luaskills_catalog(
     handle: &LuaSkillsRuntimeHandle,
     engine: &LuaEngine,
 ) -> Result<LuaSkillsCatalog, String> {
-    let visible_entries = list_host_visible_luaskills_entries(engine);
+    let visible_entries = list_host_visible_luaskills_entries(engine)?;
     refresh_luaskills_tool_entry_cache(handle, &visible_entries)?;
     let mut tools_by_skill = visible_entries.into_iter().fold(
         BTreeMap::<String, Vec<LuaSkillsCatalogTool>>::new(),
@@ -896,8 +896,14 @@ fn refresh_luaskills_tool_entry_cache(
 
 /// Lists the LuaSkills runtime entries currently visible to the host-controlled System authority.
 /// 列出当前对宿主控制 System authority 可见的 LuaSkills 运行时入口。
-fn list_host_visible_luaskills_entries(engine: &LuaEngine) -> Vec<RuntimeEntryDescriptor> {
-    engine.list_entries_for_authority(SkillManagementAuthority::System)
+/// List entries visible to the trusted host authority.
+/// 列出可信宿主权限可见的入口。
+fn list_host_visible_luaskills_entries(
+    engine: &LuaEngine,
+) -> Result<Vec<RuntimeEntryDescriptor>, String> {
+    engine
+        .list_entries_for_authority(SkillManagementAuthority::System)
+        .map_err(|error| format!("读取 LuaSkills 宿主可见工具失败：{error}"))
 }
 
 /// Resolves the ordinary USER root used by the desktop panel for managed install actions.

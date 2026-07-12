@@ -315,6 +315,28 @@ fn emit_command_sessions_changed_delta(
     Ok(command_sessions)
 }
 
+/// Reloads live command-session summaries from the retained runtime and emits their workbench delta.
+/// 从保留的运行时重新加载实时命令会话摘要，并发送对应的工作台增量。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the resulting workbench delta to connected WebUI clients.
+/// `app` 将生成的工作台增量发送给已连接的 WebUI 客户端。
+/// `state` owns the retained controller and agent runtime handles.
+/// `state` 持有保留的控制器与 Agent 运行时句柄。
+///
+/// # Returns
+/// 返回值
+/// The latest command-session summaries, or an explicit runtime/state projection error.
+/// 返回最新命令会话摘要，或明确的运行时/状态投影错误。
+pub(crate) fn emit_live_command_sessions_changed_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+) -> Result<Vec<CommandSessionSummary>, String> {
+    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(state)?;
+    emit_command_sessions_changed_delta(app, state, &controller_runtime, &agent_runtime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

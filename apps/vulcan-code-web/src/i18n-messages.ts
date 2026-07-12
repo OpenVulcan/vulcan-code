@@ -1139,11 +1139,14 @@ export type TranslationKey =
   | "skills.source.unknown"
   | "skills.sidebar.luaDetail"
   | "skills.navigation.list"
+  | "skills.navigation.plugins"
   | "skills.navigation.luaSettings"
   | "skills.luaSettings.runtimeRoot"
   | "skills.luaSettings.systemLuaLib"
   | "skills.sidebar.agentDetail"
+  | "skills.sidebar.pluginDetail"
   | "skills.header.luaDetail"
+  | "skills.header.pluginDetail"
   | "agents.header.detail"
   | "skills.lua.emptyTitle"
   | "skills.lua.emptyDetail"
@@ -1163,6 +1166,12 @@ export type TranslationKey =
   | "skills.lua.toolImplicit"
   | "skills.lua.toolDisabled"
   | "skills.lua.syncing"
+  | "skills.plugins.emptyTitle"
+  | "skills.plugins.emptyDetail"
+  | "skills.plugins.unavailable"
+  | "skills.plugins.systemKind"
+  | "skills.plugins.debugRuntimeName"
+  | "skills.plugins.debugRuntimeCapability"
   | "skills.agent.emptyTitle"
   | "skills.agent.emptyDetail"
   | "skills.agent.detailsTitle"
@@ -2306,11 +2315,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.source.unknown": "未记录来源",
     "skills.sidebar.luaDetail": "{count} 个技能包",
     "skills.navigation.list": "技能列表",
+    "skills.navigation.plugins": "插件",
     "skills.navigation.luaSettings": "LuaSkills 设置",
     "skills.luaSettings.runtimeRoot": "运行时目录",
     "skills.luaSettings.systemLuaLib": "系统 Lua 库：{path}",
     "skills.sidebar.agentDetail": "{count} 个提示词技能",
+    "skills.sidebar.pluginDetail": "{count} 个系统插件",
     "skills.header.luaDetail": "总技能数 {total} · 显示工具数 {visible} · 隐式工具数 {implicit}",
+    "skills.header.pluginDetail": "系统插件 {total} · 已启用 {enabled}",
     "agents.header.detail": "总智能体 {total} · 已启用 {enabled} · 加载警告 {warnings}",
     "skills.lua.emptyTitle": "等待 LuaSkills 目录",
     "skills.lua.emptyDetail": "启动完成或刷新后会显示真实技能包。",
@@ -2330,6 +2342,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.toolImplicit": "隐式启用",
     "skills.lua.toolDisabled": "关闭工具",
     "skills.lua.syncing": "同步中",
+    "skills.plugins.emptyTitle": "暂无系统插件",
+    "skills.plugins.emptyDetail": "随包的 LuaSkills System Plugin 会显示在这里。",
+    "skills.plugins.unavailable": "不可用",
+    "skills.plugins.systemKind": "系统插件",
+    "skills.plugins.debugRuntimeName": "Vulcan 调试运行时",
+    "skills.plugins.debugRuntimeCapability": "为智能体提供本机 CDP 与 DAP 调试会话。",
     "skills.agent.emptyTitle": "提示词技能目录尚未载入",
     "skills.agent.emptyDetail": "点击刷新或同步系统技能后会扫描系统目录与用户目录下的 SKILL.md。",
     "skills.agent.detailsTitle": "Agent Skill 详情",
@@ -3470,11 +3488,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.source.unknown": "No source recorded",
     "skills.sidebar.luaDetail": "{count} skill packages",
     "skills.navigation.list": "Skill List",
+    "skills.navigation.plugins": "Plugins",
     "skills.navigation.luaSettings": "LuaSkills Settings",
     "skills.luaSettings.runtimeRoot": "Runtime Directory",
     "skills.luaSettings.systemLuaLib": "System Lua library: {path}",
     "skills.sidebar.agentDetail": "{count} prompt skills",
+    "skills.sidebar.pluginDetail": "{count} system plugins",
     "skills.header.luaDetail": "Total skills {total} · Visible tools {visible} · Implicit tools {implicit}",
+    "skills.header.pluginDetail": "System plugins {total} · Enabled {enabled}",
     "agents.header.detail": "Total agents {total} · Enabled {enabled} · Load warnings {warnings}",
     "skills.lua.emptyTitle": "Waiting for LuaSkills catalog",
     "skills.lua.emptyDetail": "Real skill packages appear after startup completes or refresh runs.",
@@ -3494,6 +3515,12 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.toolImplicit": "Implicit",
     "skills.lua.toolDisabled": "Disable",
     "skills.lua.syncing": "Syncing",
+    "skills.plugins.emptyTitle": "No system plugins",
+    "skills.plugins.emptyDetail": "Bundled LuaSkills System Plugins appear here.",
+    "skills.plugins.unavailable": "Unavailable",
+    "skills.plugins.systemKind": "System Plugin",
+    "skills.plugins.debugRuntimeName": "Vulcan Debug Runtime",
+    "skills.plugins.debugRuntimeCapability": "Provides local CDP and DAP debug sessions to agents.",
     "skills.agent.emptyTitle": "Prompt skill catalog is not loaded",
     "skills.agent.emptyDetail": "Refresh or sync system skills to scan SKILL.md files under system and user directories.",
     "skills.agent.detailsTitle": "Agent Skill Details",

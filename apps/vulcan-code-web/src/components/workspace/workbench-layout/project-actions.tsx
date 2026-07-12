@@ -38,6 +38,7 @@ import {
   setAgentSkillProjectState,
   setSubagentDefinitionEnabled,
   setLuaSkillEnabled,
+  setLuaSkillsSystemPluginEnabled,
   setLuaSkillToolRegistrationState,
   uninstallLuaSkill,
   updateLuaSkill,
@@ -286,6 +287,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onInstallLuaSkill: (skillId, source, sourceType) => runLuaSkillsCatalogAction(() => installLuaSkill(skillId, source, sourceType)),
     onUpdateLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId)),
     onSetLuaSkillEnabled: (skillId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillEnabled(skillId, enabled)),
+    onSetSystemPluginEnabled: (pluginId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillsSystemPluginEnabled(pluginId, enabled)),
     onUninstallLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => uninstallLuaSkill(skillId)),
     onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
       runLuaSkillsCatalogAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))

@@ -3,6 +3,7 @@ import { useI18n } from "@/i18n"
 import type { WorkbenchSnapshot } from "@/types"
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
+import { SystemPluginsPanel } from "./system-plugins-panel"
 import type { SkillActionProps, SkillHeaderSummary, SkillSubAreaId } from "./skill-area-types"
 
 export { LuaSkillInstallDialog }
@@ -15,6 +16,18 @@ export function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: W
     return {
       title: t("skills.navigation.luaSettings"),
       detail: workbench.luaSkills.notice,
+    }
+  }
+  if (activeTab === "plugins") {
+    // systemPlugins excludes ordinary Lua Skill projection rows from the plugin menu page.
+    // systemPlugins 从插件菜单页面排除普通 Lua Skill 投影行。
+    const systemPlugins = workbench.plugins.filter((plugin) => plugin.managementKind === "systemPlugin")
+    return {
+      title: t("skills.navigation.plugins"),
+      detail: formatSkillText(t("skills.header.pluginDetail"), {
+        total: systemPlugins.length,
+        enabled: systemPlugins.filter((plugin) => plugin.enabled && plugin.available).length,
+      }),
     }
   }
   const visibleToolCount = workbench.luaSkills.skills.reduce((count, skill) => count + skill.entryCount, 0)
@@ -53,6 +66,11 @@ export function SkillsArea(props: {
         <LuaSkillsPanel
           actions={props.skillActions}
           skills={props.workbench.luaSkills.skills}
+        />
+      ) : props.activeTab === "plugins" ? (
+        <SystemPluginsPanel
+          actions={props.skillActions}
+          plugins={props.workbench.plugins}
         />
       ) : props.activeTab === "settings" ? (
         <section className="skill-page-shell">

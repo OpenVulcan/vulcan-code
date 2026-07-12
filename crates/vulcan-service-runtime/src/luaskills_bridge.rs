@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::managed_runtime_bootstrap::{ManagedRuntimeBootstrapReport, bootstrap_managed_runtimes};
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions,
@@ -83,6 +84,9 @@ pub struct TauriLuaSkillsHandle {
     /// Mounted ROOT and USER skill roots.
     /// 已挂载的 ROOT 与 USER 技能根目录。
     pub skill_roots: Vec<RuntimeSkillRoot>,
+    /// Result of the application-start managed Python and Node bootstrap.
+    /// 应用启动阶段受管 Python 与 Node 初始化结果。
+    pub managed_runtime_report: ManagedRuntimeBootstrapReport,
 }
 
 impl std::fmt::Debug for TauriLuaSkillsHandle {
@@ -93,6 +97,7 @@ impl std::fmt::Debug for TauriLuaSkillsHandle {
             .debug_struct("TauriLuaSkillsHandle")
             .field("runtime_root", &self.runtime_root)
             .field("skill_roots", &self.skill_roots)
+            .field("managed_runtime_report", &self.managed_runtime_report)
             .finish()
     }
 }
@@ -195,6 +200,12 @@ where
         })?;
     progress("正在准备 LuaSkills 运行时目录");
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
+    let managed_runtime_report =
+        bootstrap_managed_runtimes(&runtime_root, |message| progress(message));
+    progress(&format!(
+        "受管 Python/Node 运行时：{}",
+        managed_runtime_report.diagnostic
+    ));
     let host_options = build_host_options(&runtime_root, controller);
     let pool_config = LuaVmPoolConfig {
         min_size: 1,
@@ -218,6 +229,7 @@ where
         engine: Arc::new(Mutex::new(engine)),
         runtime_root,
         skill_roots,
+        managed_runtime_report,
     })
 }
 
@@ -389,7 +401,9 @@ fn build_luaskills_catalog(
     handle: &TauriLuaSkillsHandle,
     engine: &LuaEngine,
 ) -> Result<TauriLuaSkillsCatalog, String> {
-    let visible_entries = engine.list_entries_for_authority(SkillManagementAuthority::System);
+    let visible_entries = engine
+        .list_entries_for_authority(SkillManagementAuthority::System)
+        .map_err(|error| format!("读取 LuaSkills 宿主可见工具失败：{error}"))?;
     let mut tools_by_skill = visible_entries.into_iter().fold(
         std::collections::BTreeMap::<String, Vec<TauriLuaSkillToolSummary>>::new(),
         |mut grouped_tools, entry: RuntimeEntryDescriptor| {

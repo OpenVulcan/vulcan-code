@@ -43,6 +43,18 @@ SourceSystemPromptSkillsDir="$ProjectDir/crates/vulcan-prompt-skills/src/assets/
 # SourceRtkBinDir 指向 make deps 安装的 RTK 可执行文件目录。
 SourceRtkBinDir="$ProjectDir/third_party/rtk/bin"
 
+# SourceLuaRuntimeDir points at the official LuaSkills runtime payload installed by make deps-lua.
+# SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
+SourceLuaRuntimeDir="$ProjectDir/third_party/luaskills_runtime"
+
+# SourceManagedRuntimeScriptsDir points at the tag-pinned managed runtime bootstrap assets.
+# SourceManagedRuntimeScriptsDir 指向按标签固定的受管运行时初始化资产。
+SourceManagedRuntimeScriptsDir="$ProjectDir/scripts/deps"
+
+# SourceLuaDebugPluginDir points at the host-owned debug System Plugin bundled with Vulcan Code.
+# SourceLuaDebugPluginDir 指向随 Vulcan Code 打包的宿主自有调试 System Plugin。
+SourceLuaDebugPluginDir="$ProjectDir/crates/vulcan-runtime-assets/luaskills-system-plugins/vulcan-debug-runtime"
+
 # IsWindowsPlatform records whether the current shell host is Windows-like.
 # IsWindowsPlatform 记录当前 shell 宿主是否类似 Windows。
 IsWindowsPlatform=0
@@ -174,6 +186,18 @@ OutputToolsDir="$ProjectDir/output/tools"
 # LegacyOutputRtkToolDir 保存旧版嵌套 RTK 输出目录，用于清理。
 LegacyOutputRtkToolDir="$OutputToolsDir/rtk"
 
+# OutputLuaRuntimeDir stores the application-owned LuaSkills runtime root.
+# OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
+OutputLuaRuntimeDir="$ProjectDir/output/lua_runtime"
+
+# OutputManagedRuntimeScriptsDir stores bootstrap scripts executed during service startup.
+# OutputManagedRuntimeScriptsDir 保存服务启动期间执行的初始化脚本。
+OutputManagedRuntimeScriptsDir="$OutputLuaRuntimeDir/scripts/deps"
+
+# OutputLuaDebugPluginDir is the exact host-owned System Plugin package discovered by LuaSkills.
+# OutputLuaDebugPluginDir 是 LuaSkills 发现的精确宿主自有 System Plugin 包。
+OutputLuaDebugPluginDir="$OutputLuaRuntimeDir/system_lua_lib/vulcan-debug-runtime"
+
 if [ ! -f "$BuiltBinaryPath" ]; then
     echo "Built Tauri binary was not found: $BuiltBinaryPath" >&2
     exit 1
@@ -197,6 +221,15 @@ copy_directory_contents "$SourceResourcesDir" "$OutputResourcesDir" 0
 
 echo "==> Syncing packaged system Agent Skills..."
 copy_directory_contents "$SourceSystemPromptSkillsDir" "$OutputSystemPromptSkillsDir" 1
+
+echo "==> Syncing LuaSkills runtime payload..."
+copy_directory_contents "$SourceLuaRuntimeDir" "$OutputLuaRuntimeDir" 0
+
+echo "==> Syncing managed runtime bootstrap assets..."
+copy_directory_contents "$SourceManagedRuntimeScriptsDir" "$OutputManagedRuntimeScriptsDir" 1
+
+echo "==> Syncing host System Plugin packages..."
+copy_directory_contents "$SourceLuaDebugPluginDir" "$OutputLuaDebugPluginDir" 1
 
 if [ -d "$SourceRtkBinDir" ]; then
     echo "==> Syncing packaged RTK host tool..."
