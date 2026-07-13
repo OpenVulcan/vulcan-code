@@ -3,8 +3,7 @@
 
 use crate::agent_profile::{AgentProfileCatalog, UserAgentProfile, is_reserved_agent_identifier};
 use crate::provider_config::{
-    PersistedHostToolsConfiguration, PersistedSkillEntry, PersistedSkillKind,
-    PersistedToolPolicyEntry, ProviderConfigurationFile,
+    PersistedSkillEntry, PersistedSkillKind, PersistedToolPolicyEntry, ProviderConfigurationFile,
 };
 use crate::runtime_assets;
 use std::collections::BTreeMap;
@@ -312,9 +311,6 @@ pub struct AgentRuntimeConfig {
     /// Enabled MCP server identifiers.
     /// 已启用的 MCP 服务器标识集合。
     pub enabled_mcp_server_ids: Vec<String>,
-    /// Host-owned tool configuration captured for native runtime tools.
-    /// 为原生运行时工具捕获的宿主自有工具配置。
-    pub host_tools: PersistedHostToolsConfiguration,
 }
 
 impl AgentRuntimeConfig {
@@ -379,7 +375,6 @@ impl AgentRuntimeConfig {
             tool_policies,
             configured_mcp_server_ids,
             enabled_mcp_server_ids,
-            host_tools: config.host_tools.clone(),
         }
     }
 }

@@ -53,6 +53,7 @@ import type {
   SkillActionProps,
   SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
+import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types";
 import type {
   MemorySubAreaId,
 } from "@/components/features/memory/MemoryArea";
@@ -106,7 +107,6 @@ import {
   removeAiCapabilityVendor,
   removeMcpServerConfiguration,
   removeProviderConfiguration,
-  getRtkGainStats,
   saveAiCapabilityTargets,
   saveAiCapabilityVendor,
   saveGitCommitSettings,
@@ -114,7 +114,6 @@ import {
   saveProviderConfiguration,
   saveProviderEnabledModels,
   saveProviderModelOverride,
-  saveRtkRoutingSettings,
   selectWebuiLocale,
   setAiCapabilityTargetEnabled,
 } from "@/service/settings-actions-service";
@@ -256,6 +255,11 @@ export function WorkbenchLayout(props: {
   // activeWorkbenchSkillSubArea stores the embedded skills settings sub page.
   // activeWorkbenchSkillSubArea 保存内嵌技能设置的子页面。
   const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("catalog");
+  React.useEffect(() => {
+    if (activeWorkbenchSkillSubArea === "rtk" && !hasEnabledPluginDetailMount(props.workbench.plugins, "vulcan-rtk")) {
+      setActiveWorkbenchSkillSubArea("plugins");
+    }
+  }, [activeWorkbenchSkillSubArea, props.workbench.plugins]);
   // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
   // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
   const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("status");
@@ -1505,8 +1509,6 @@ export function WorkbenchLayout(props: {
               onSaveProviderEnabledModels: (request) => applySkillWorkbenchAction(async () => (await saveProviderEnabledModels(request)) ?? workbenchStateRef.current),
               onSaveProviderModelOverride: (request) => applySkillWorkbenchAction(async () => (await saveProviderModelOverride(request)) ?? workbenchStateRef.current),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
-              onSaveRtkRoutingSettings: (request) => applySkillWorkbenchAction(async () => (await saveRtkRoutingSettings(request)) ?? workbenchStateRef.current),
-              onGetRtkGainStats: () => getRtkGainStats(),
               onSaveAiCapabilityVendor: (request) => applySkillWorkbenchAction(async () => (await saveAiCapabilityVendor(request)) ?? workbenchStateRef.current),
               onRemoveAiCapabilityVendor: (vendorId) => applySkillWorkbenchAction(async () => (await removeAiCapabilityVendor(vendorId)) ?? workbenchStateRef.current),
               onSetAiCapabilityTargetEnabled: (request) => applySkillWorkbenchAction(async () => (await setAiCapabilityTargetEnabled(request)) ?? workbenchStateRef.current),

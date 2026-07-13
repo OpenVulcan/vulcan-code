@@ -202,11 +202,15 @@ impl RuntimeFoundation {
             vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
             crate::data_plane::application_data_root().join("agents"),
         );
+        let system_plugin_runtime = luaskills_runtime
+            .as_ref()
+            .map(|handle| handle.system_plugin_runtime.clone());
         let native_tools = build_native_tool_catalog(
             &runtime_config,
             config.default_command_shell.as_deref(),
             Arc::clone(&command_session_runtime),
             config.vmm.clone(),
+            system_plugin_runtime.clone(),
         );
         let mut warnings = subagent_catalog
             .errors
@@ -222,9 +226,6 @@ impl RuntimeFoundation {
         if let Err(error) = task_runtime.replace_subagent_catalog(subagent_catalog) {
             warnings.push(error);
         }
-        let system_plugin_runtime = luaskills_runtime
-            .as_ref()
-            .map(|handle| handle.system_plugin_runtime.clone());
         let system_plugin_catalog = match system_plugin_runtime.as_ref() {
             Some(runtime) => {
                 match runtime.refresh_catalog(

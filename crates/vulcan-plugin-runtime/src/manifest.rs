@@ -20,12 +20,15 @@ pub const SYSTEM_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS: [&str; 3] =
 
 /// Exact trusted plugin kind supported by the first host implementation.
 /// 第一版宿主实现支持的精确信任插件类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SystemPluginKind {
     /// Plugin bundled and installed by the Vulcan Code distribution.
     /// 由 Vulcan Code 发行包内建并安装的插件。
     BundledSystem,
+    /// Plugin installed into the current user's Vulcan plugin root.
+    /// 安装到当前用户 Vulcan 插件根目录的插件。
+    UserInstalled,
 }
 
 /// One complete System Plugin package manifest.
@@ -58,6 +61,42 @@ pub struct SystemPluginManifest {
     /// Managed Lua runtime declaration.
     /// 受管 Lua 运行时声明。
     pub runtime: SystemPluginRuntimeManifest,
+    /// Dependency installation policy owned by the Vulcan host.
+    /// 由 Vulcan 宿主持有的依赖安装策略。
+    #[serde(default)]
+    pub dependency_policy: SystemPluginDependencyPolicyManifest,
+    /// Optional lifecycle callbacks exported by the Lua bundle.
+    /// Lua bundle 导出的可选生命周期回调。
+    #[serde(default)]
+    pub lifecycle: SystemPluginLifecycleManifest,
+    /// Explicit host capabilities requested by this plugin.
+    /// 当前插件请求的显式宿主能力集合。
+    #[serde(default)]
+    pub capabilities: Vec<SystemPluginCapability>,
+    /// Host-callable plugin business actions.
+    /// 可由宿主调用的插件业务 action 集合。
+    #[serde(default)]
+    pub actions: Vec<SystemPluginActionManifest>,
+    /// Dynamic WebUI mount declarations.
+    /// 动态 WebUI 挂载声明。
+    #[serde(default)]
+    pub ui: SystemPluginUiManifest,
+    /// Optional plugin configuration contract.
+    /// 可选插件配置契约。
+    #[serde(default)]
+    pub config: Option<SystemPluginConfigManifest>,
+    /// Logical executable resources resolved by the Vulcan host.
+    /// 由 Vulcan 宿主解析的逻辑可执行资源。
+    #[serde(default)]
+    pub binaries: Vec<SystemPluginBinaryManifest>,
+    /// Logical Node.js entries resolved through the shared managed runtime distribution.
+    /// 通过共享受管运行时发行版解析的逻辑 Node.js 入口。
+    #[serde(default)]
+    pub node_entries: Vec<SystemPluginNodeEntryManifest>,
+    /// Logical Python entries resolved through the shared managed runtime distribution.
+    /// 通过共享受管运行时发行版解析的逻辑 Python 入口。
+    #[serde(default)]
+    pub python_entries: Vec<SystemPluginPythonEntryManifest>,
     /// Atomic provider-visible tool group.
     /// 原子化的 Provider 可见工具组。
     #[serde(default)]
@@ -74,6 +113,243 @@ pub struct SystemPluginManifest {
     /// 以语言标识为键的本地化文件路径。
     #[serde(default)]
     pub locales: BTreeMap<String, String>,
+}
+
+/// Dependency installation source policy for one plugin package.
+/// 单个插件包的依赖安装来源策略。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginDependencyPolicyManifest {
+    /// Whether dependencies must be installed from bundled assets or an approved registry.
+    /// 依赖必须从随包资产还是经授权的注册表安装。
+    #[serde(default)]
+    pub install_mode: SystemPluginDependencyInstallMode,
+}
+
+/// Supported dependency acquisition modes.
+/// 支持的依赖获取模式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemPluginDependencyInstallMode {
+    /// Install exclusively from artifacts shipped inside the plugin package.
+    /// 仅从插件包内随附的制品安装。
+    #[default]
+    Bundled,
+    /// Install from a registry after explicit network authorization.
+    /// 在获得明确网络授权后从注册表安装。
+    Registry,
+}
+
+/// Optional Lua lifecycle function declarations.
+/// 可选 Lua 生命周期函数声明。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginLifecycleManifest {
+    /// Function invoked after a user plugin package is installed.
+    /// 用户插件包安装完成后调用的函数。
+    #[serde(default)]
+    pub install: Option<String>,
+    /// Function invoked before a plugin becomes enabled.
+    /// 插件进入启用状态前调用的函数。
+    #[serde(default)]
+    pub enable: Option<String>,
+    /// Function invoked while a plugin is being disabled.
+    /// 插件停用过程中调用的函数。
+    #[serde(default)]
+    pub disable: Option<String>,
+    /// Function invoked before a user plugin package is removed.
+    /// 用户插件包移除前调用的函数。
+    #[serde(default)]
+    pub uninstall: Option<String>,
+}
+
+/// Host capability that must be declared and authorized before use.
+/// 使用前必须声明并授权的宿主能力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemPluginCapability {
+    /// Execute manifest-declared native binaries.
+    /// 执行清单声明的原生二进制文件。
+    ProcessBinary,
+    /// Execute manifest-declared Node.js entries.
+    /// 执行清单声明的 Node.js 入口。
+    ProcessNode,
+    /// Execute manifest-declared Python entries.
+    /// 执行清单声明的 Python 入口。
+    ProcessPython,
+    /// Open long-lived process sessions.
+    /// 打开长生命周期进程会话。
+    ProcessSession,
+    /// Read and update the current plugin configuration.
+    /// 读取并更新当前插件配置。
+    Config,
+    /// Render dynamic UI with the stable host UI context.
+    /// 使用稳定宿主 UI 上下文渲染动态界面。
+    UiHostContext,
+    /// Read the host model catalog for future workflow binding.
+    /// 读取宿主模型目录以供后续工作流绑定。
+    ModelCatalogRead,
+    /// Invoke one user-authorized model binding.
+    /// 调用一个经用户授权的模型绑定。
+    ModelInvoke,
+    /// Install dependencies from a remote registry.
+    /// 从远程注册表安装依赖。
+    DependencyRegistryNetwork,
+}
+
+/// One plugin business action callable through the generic service boundary.
+/// 一个可通过通用服务边界调用的插件业务 action。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginActionManifest {
+    /// Stable plugin-local action identifier.
+    /// 稳定的插件内 action 标识。
+    pub id: String,
+    /// Exact Lua bundle function invoked for this action.
+    /// 当前 action 调用的精确 Lua bundle 函数。
+    pub function: String,
+    /// Optional package-relative JSON Schema for action input.
+    /// 可选的插件包相对 action 输入 JSON Schema。
+    #[serde(default)]
+    pub input_schema_file: Option<String>,
+    /// Optional package-relative JSON Schema for action output.
+    /// 可选的插件包相对 action 输出 JSON Schema。
+    #[serde(default)]
+    pub output_schema_file: Option<String>,
+    /// Hard action execution timeout in milliseconds.
+    /// action 执行硬超时毫秒数。
+    pub timeout_ms: u64,
+    /// Explicit caller classes allowed to invoke this action.
+    /// 允许调用当前 action 的显式调用方类别。
+    pub callers: Vec<SystemPluginActionCaller>,
+}
+
+/// Authorized caller class for one plugin action.
+/// 单个插件 action 的授权调用方类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemPluginActionCaller {
+    /// The plugin's own Lua bundle may invoke the action.
+    /// 插件自身 Lua bundle 可以调用 action。
+    PluginRuntime,
+    /// The plugin's mounted WebUI component may invoke the action.
+    /// 插件挂载的 WebUI 组件可以调用 action。
+    PluginUi,
+    /// The host lifecycle state machine may invoke the action.
+    /// 宿主生命周期状态机可以调用 action。
+    Lifecycle,
+}
+
+/// Dynamic UI declarations for one plugin.
+/// 单个插件的动态 UI 声明。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginUiManifest {
+    /// Ordered UI mounts contributed by the plugin.
+    /// 插件贡献的有序 UI 挂载集合。
+    #[serde(default)]
+    pub mounts: Vec<SystemPluginUiMountManifest>,
+}
+
+/// One uncompressed ESM module mounted into a host-owned UI location.
+/// 一个挂载到宿主持有界面位置的未压缩 ESM 模块。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginUiMountManifest {
+    /// Stable plugin-local mount identifier.
+    /// 稳定的插件内挂载标识。
+    pub id: String,
+    /// Host-owned mount point.
+    /// 宿主持有的挂载点。
+    pub point: SystemPluginUiMountPoint,
+    /// Package-relative uncompressed ESM file.
+    /// 插件包相对未压缩 ESM 文件。
+    pub entry: String,
+    /// Named ESM export containing the mount factory.
+    /// 包含挂载工厂的 ESM 命名导出。
+    pub export: String,
+}
+
+/// Stable host-owned dynamic UI mount points.
+/// 稳定的宿主持有动态 UI 挂载点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemPluginUiMountPoint {
+    /// Plugin detail page below the LuaSkills/Plugins area.
+    /// LuaSkills/插件区域下的插件详情页。
+    SkillsPluginDetail,
+    /// Main workspace page used by future workflows.
+    /// 供后续工作流使用的主工作区页面。
+    WorkspaceMain,
+    /// Conversation right-side auxiliary panel.
+    /// 会话右侧辅助面板。
+    ConversationRightPanel,
+}
+
+/// Plugin-owned configuration schema and defaults.
+/// 插件持有的配置 Schema 与默认值。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginConfigManifest {
+    /// Package-relative JSON Schema for the complete configuration object.
+    /// 完整配置对象使用的插件包相对 JSON Schema。
+    pub schema_file: String,
+    /// Package-relative JSON file containing default configuration.
+    /// 包含默认配置的插件包相对 JSON 文件。
+    pub defaults_file: String,
+}
+
+/// One logical native executable with package-relative target mappings.
+/// 一个带有插件包相对目标映射的逻辑原生可执行文件。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginBinaryManifest {
+    /// Stable plugin-local executable identifier.
+    /// 稳定的插件内可执行文件标识。
+    pub id: String,
+    /// Package-relative executable paths keyed by exact Rust target triple.
+    /// 以精确 Rust 目标三元组为键的插件包相对可执行文件路径。
+    pub targets: BTreeMap<String, String>,
+    /// Environment variable names that plugin calls may set for this executable.
+    /// 插件调用此可执行文件时允许设置的环境变量名。
+    #[serde(default)]
+    pub allowed_env: Vec<String>,
+    /// Whether this binary may run in a caller workspace directory captured by the trusted bridge.
+    /// 此二进制是否可以在可信桥接层捕获的调用方工作区目录内运行。
+    #[serde(default)]
+    pub allow_workspace_cwd: bool,
+}
+
+/// One logical Node.js script entry owned by a plugin package.
+/// 单个由插件包持有的逻辑 Node.js 脚本入口。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginNodeEntryManifest {
+    /// Stable plugin-local Node entry identifier.
+    /// 稳定的插件内 Node 入口标识。
+    pub id: String,
+    /// Package-relative JavaScript module file.
+    /// 插件包相对 JavaScript 模块文件。
+    pub file: String,
+    /// Package-relative working directory.
+    /// 插件包相对工作目录。
+    pub cwd: String,
+}
+
+/// One logical Python script entry owned by a plugin package.
+/// 单个由插件包持有的逻辑 Python 脚本入口。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemPluginPythonEntryManifest {
+    /// Stable plugin-local Python entry identifier.
+    /// 稳定的插件内 Python 入口标识。
+    pub id: String,
+    /// Package-relative Python script file.
+    /// 插件包相对 Python 脚本文件。
+    pub file: String,
+    /// Package-relative working directory.
+    /// 插件包相对工作目录。
+    pub cwd: String,
 }
 
 /// Default user-facing plugin metadata.
@@ -108,13 +384,13 @@ pub struct SystemPluginRuntimeManifest {
     /// Dependency manifest relative to the package root.
     /// 相对于插件包根目录的依赖清单。
     pub dependencies_file: String,
+    /// Package-relative bundled Lua source loaded through the fixed Vulcan bridge package.
+    /// 通过固定 Vulcan 桥接包加载的插件包相对 Lua bundle 源文件。
+    pub bundle: String,
     /// Additional package-relative regular files required before the plugin can be enabled.
     /// 插件可启用前必须存在的其他包相对普通文件集合。
     #[serde(default)]
     pub required_files: Vec<String>,
-    /// Lua module loaded inside each managed System lease.
-    /// 每个受管系统租约中加载的 Lua 模块。
-    pub module: String,
     /// Lua function used for normal operations.
     /// 常规操作使用的 Lua 函数。
     pub invoke_function: String,
@@ -281,4 +557,8 @@ pub struct SystemPluginLocaleManifest {
     /// Localized concise capability description.
     /// 本地化简洁能力描述。
     pub capability: String,
+    /// Plugin-owned UI messages keyed by stable message identifier.
+    /// 由插件持有并按稳定消息标识组织的界面文案。
+    #[serde(default)]
+    pub messages: BTreeMap<String, String>,
 }

@@ -42,11 +42,11 @@ pub use git_commit::*;
 
 mod helpers;
 
-mod host_tools;
-pub use host_tools::*;
-
 mod model_catalog;
 pub use model_catalog::*;
+
+mod rtk_plugin_migration;
+pub use rtk_plugin_migration::*;
 
 mod persisted_provider;
 pub use persisted_provider::*;

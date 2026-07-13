@@ -1037,7 +1037,6 @@ export type TranslationKey =
   | "settings.mcpServers"
   | "settings.runtimeDiagnostics"
   | "settings.gitCommit"
-  | "settings.rtkRouting"
   | "settings.promptComposer"
   | "settings.aboutLicenses"
   | "settings.archivedRestore"
@@ -1060,7 +1059,6 @@ export type TranslationKey =
   | "settings.diagnostics.waitingStatus"
   | "settings.diagnostics.runtimeModules"
   | "settings.gitCommit.description"
-  | "settings.rtkRouting.description"
   | "settings.gitCommit.active"
   | "settings.gitCommit.autoSummary"
   | "settings.gitCommit.summaryModel"
@@ -1149,6 +1147,7 @@ export type TranslationKey =
   | "skills.sidebar.luaDetail"
   | "skills.navigation.list"
   | "skills.navigation.plugins"
+  | "skills.navigation.rtkSettings"
   | "skills.navigation.luaSettings"
   | "skills.luaSettings.description"
   | "skills.luaSettings.restartRequired"
@@ -1207,6 +1206,7 @@ export type TranslationKey =
   | "skills.sidebar.pluginDetail"
   | "skills.header.luaDetail"
   | "skills.header.pluginDetail"
+  | "skills.header.rtkDetail"
   | "agents.header.detail"
   | "skills.lua.emptyTitle"
   | "skills.lua.emptyDetail"
@@ -1228,6 +1228,7 @@ export type TranslationKey =
   | "skills.lua.syncing"
   | "skills.plugins.emptyTitle"
   | "skills.plugins.emptyDetail"
+  | "skills.plugins.loadingPage"
   | "skills.plugins.unavailable"
   | "skills.plugins.enabling"
   | "skills.plugins.draining"
@@ -2280,7 +2281,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers": "MCP 服务器",
     "settings.runtimeDiagnostics": "运行诊断",
     "settings.gitCommit": "Git 提交",
-    "settings.rtkRouting": "RTK 路由",
     "settings.promptComposer": "提示词组合",
     "settings.aboutLicenses": "关于与许可证",
     "settings.archivedRestore": "归档恢复",
@@ -2302,8 +2302,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.startupStatus": "启动状态",
     "settings.diagnostics.waitingStatus": "等待状态更新",
     "settings.diagnostics.runtimeModules": "运行时模块",
-    "settings.gitCommit.description": "提交弹窗的新分支命名、自动总结模型与 RTK 压缩上下文。",
-    "settings.rtkRouting.description": "shell_command 的 RTK rewrite、路由选择与上下文密度统计。",
+    "settings.gitCommit.description": "提交弹窗的新分支命名、自动总结模型与额外提示词。",
     "settings.gitCommit.active": "已生效",
     "settings.gitCommit.autoSummary": "自动总结",
     "settings.gitCommit.summaryModel": "提交总结模型",
@@ -2392,6 +2391,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.sidebar.luaDetail": "{count} 个技能包",
     "skills.navigation.list": "LuaSkills 技能",
     "skills.navigation.plugins": "插件管理",
+    "skills.navigation.rtkSettings": "RTK 设置",
     "skills.navigation.luaSettings": "LuaSkills 设置",
     "skills.luaSettings.description": "这些设置归 Vulcan 所有，并同时用于会话与服务两个 LuaSkills 引擎。",
     "skills.luaSettings.restartRequired": "已保存，等待重启生效",
@@ -2450,6 +2450,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.sidebar.pluginDetail": "{count} 个系统插件",
     "skills.header.luaDetail": "总技能数 {total} · 显示工具数 {visible} · 隐式工具数 {implicit}",
     "skills.header.pluginDetail": "系统插件 {total} · 已启用 {enabled}",
+    "skills.header.rtkDetail": "命令路由、Git 上下文压缩与 Token 节省统计",
     "agents.header.detail": "总智能体 {total} · 已启用 {enabled} · 加载警告 {warnings}",
     "skills.lua.emptyTitle": "等待 LuaSkills 目录",
     "skills.lua.emptyDetail": "启动完成或刷新后会显示真实技能包。",
@@ -2471,6 +2472,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.syncing": "同步中",
     "skills.plugins.emptyTitle": "暂无系统插件",
     "skills.plugins.emptyDetail": "随包的 LuaSkills System Plugin 会显示在这里。",
+    "skills.plugins.loadingPage": "正在加载插件页面…",
     "skills.plugins.unavailable": "不可用",
     "skills.plugins.enabling": "正在启用",
     "skills.plugins.draining": "正在排空会话",
@@ -3520,7 +3522,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers": "MCP servers",
     "settings.runtimeDiagnostics": "Runtime diagnostics",
     "settings.gitCommit": "Git commit",
-    "settings.rtkRouting": "RTK routing",
     "settings.promptComposer": "Prompt composer",
     "settings.aboutLicenses": "About and licenses",
     "settings.archivedRestore": "Archived restore",
@@ -3542,8 +3543,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.diagnostics.startupStatus": "Startup status",
     "settings.diagnostics.waitingStatus": "Waiting for status update",
     "settings.diagnostics.runtimeModules": "Runtime modules",
-    "settings.gitCommit.description": "New-branch naming, automatic summary model, and RTK-compressed context for the commit dialog.",
-    "settings.rtkRouting.description": "RTK rewrite, route selection, and context-density statistics for shell_command.",
+    "settings.gitCommit.description": "New-branch naming, automatic summary model, and extra prompt text for the commit dialog.",
     "settings.gitCommit.active": "Active",
     "settings.gitCommit.autoSummary": "Auto summary",
     "settings.gitCommit.summaryModel": "Commit summary model",
@@ -3632,6 +3632,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.sidebar.luaDetail": "{count} skill packages",
     "skills.navigation.list": "LuaSkills Skills",
     "skills.navigation.plugins": "Plugin Management",
+    "skills.navigation.rtkSettings": "RTK Settings",
     "skills.navigation.luaSettings": "LuaSkills Settings",
     "skills.luaSettings.description": "These settings are owned by Vulcan and configure both the conversation and service LuaSkills engines.",
     "skills.luaSettings.restartRequired": "Saved; restart required",
@@ -3690,6 +3691,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.sidebar.pluginDetail": "{count} system plugins",
     "skills.header.luaDetail": "Total skills {total} · Visible tools {visible} · Implicit tools {implicit}",
     "skills.header.pluginDetail": "System plugins {total} · Enabled {enabled}",
+    "skills.header.rtkDetail": "Command routing, Git context compression, and token-saving statistics",
     "agents.header.detail": "Total agents {total} · Enabled {enabled} · Load warnings {warnings}",
     "skills.lua.emptyTitle": "Waiting for LuaSkills catalog",
     "skills.lua.emptyDetail": "Real skill packages appear after startup completes or refresh runs.",
@@ -3711,6 +3713,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.syncing": "Syncing",
     "skills.plugins.emptyTitle": "No system plugins",
     "skills.plugins.emptyDetail": "Bundled LuaSkills System Plugins appear here.",
+    "skills.plugins.loadingPage": "Loading plugin page…",
     "skills.plugins.unavailable": "Unavailable",
     "skills.plugins.enabling": "Enabling",
     "skills.plugins.draining": "Draining sessions",

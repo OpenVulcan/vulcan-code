@@ -2,14 +2,17 @@
 //! skill catalog projection 辅助逻辑。
 
 use super::*;
+use vulcan_agent_runtime::runtime_assets;
 use vulcan_plugin_runtime::{
-    SystemPluginAvailability, SystemPluginCatalogSnapshot, SystemPluginRuntimeState,
-    load_system_plugin_catalog,
+    SystemPluginAvailability, SystemPluginCatalogSnapshot, SystemPluginPackageOrigin,
+    SystemPluginRuntimeState, SystemPluginUiMountPoint, load_vulcan_plugin_catalog,
+    plugin_capability_key,
 };
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
     AgentSkillOriginSummary, AgentSkillRecordSummary, AgentSkillResourceSummary,
-    AgentSkillStandardMetadataSummary, LuaSkillsManagedRuntimeProgressSummary, PluginToolSummary,
+    AgentSkillStandardMetadataSummary, LuaSkillsManagedRuntimeProgressSummary,
+    PluginExtensionSummary, PluginHookSummary, PluginToolSummary, PluginUiMountSummary,
     SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary, SubagentOriginSummary,
     SubagentProviderModelSummary,
 };
@@ -62,18 +65,23 @@ pub(crate) fn plugins_from_luaskills(
             active_session_count: 0,
             diagnostics: skill.disabled_reason.iter().cloned().collect(),
             management_kind: String::from("luaSkill"),
+            extension: None,
         })
         .collect::<Vec<_>>();
     let fallback_plugin_catalog;
     let plugin_catalog = match system_plugin_catalog {
         Some(catalog) => catalog,
         None => {
-            fallback_plugin_catalog = load_system_plugin_catalog(
-                &catalog.system_lua_lib_dir,
-                &provider_configuration.luaskills.disabled_system_plugins,
-                &provider_configuration.luaskills.enabled_system_plugins,
-                0,
-            );
+            fallback_plugin_catalog = match runtime_assets::resolve_bundled_plugin_root() {
+                Some(system_root) => load_vulcan_plugin_catalog(
+                    &system_root,
+                    runtime_assets::resolve_user_plugin_root().as_deref(),
+                    &provider_configuration.luaskills.disabled_system_plugins,
+                    &provider_configuration.luaskills.enabled_system_plugins,
+                    0,
+                ),
+                None => SystemPluginCatalogSnapshot::empty(PathBuf::new()),
+            };
             &fallback_plugin_catalog
         }
     };
@@ -139,6 +147,53 @@ pub(crate) fn plugins_from_luaskills(
             active_session_count: plugin.active_session_count,
             diagnostics: plugin.diagnostics.clone(),
             management_kind: String::from("systemPlugin"),
+            extension: plugin
+                .manifest
+                .as_ref()
+                .map(|manifest| PluginExtensionSummary {
+                    origin: match plugin.origin {
+                        SystemPluginPackageOrigin::BundledSystem => String::from("bundledSystem"),
+                        SystemPluginPackageOrigin::UserInstalled => String::from("userInstalled"),
+                    },
+                    capabilities: manifest
+                        .capabilities
+                        .iter()
+                        .map(|capability| plugin_capability_key(*capability).to_string())
+                        .collect(),
+                    hooks: manifest
+                        .hooks
+                        .iter()
+                        .map(|hook| PluginHookSummary {
+                            id: hook.id.clone(),
+                            point: hook.point.clone(),
+                        })
+                        .collect(),
+                    actions: manifest
+                        .actions
+                        .iter()
+                        .map(|action| action.id.clone())
+                        .collect(),
+                    ui_mounts: manifest
+                        .ui
+                        .mounts
+                        .iter()
+                        .map(|mount| PluginUiMountSummary {
+                            id: mount.id.clone(),
+                            point: match mount.point {
+                                SystemPluginUiMountPoint::SkillsPluginDetail => {
+                                    String::from("skillsPluginDetail")
+                                }
+                                SystemPluginUiMountPoint::WorkspaceMain => {
+                                    String::from("workspaceMain")
+                                }
+                                SystemPluginUiMountPoint::ConversationRightPanel => {
+                                    String::from("conversationRightPanel")
+                                }
+                            },
+                            export_name: mount.export.clone(),
+                        })
+                        .collect(),
+                }),
         });
     }
     plugins

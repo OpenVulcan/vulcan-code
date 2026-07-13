@@ -16,10 +16,8 @@ local function ensure_sidecar()
         error("debug sidecar process exited; the protocol session cannot be resumed")
     end
 
-    sidecar = vulcan.runtime.node.session.open({
-        file = "node/sidecar.mjs",
+    sidecar = vulcan.process.session.open("debug-sidecar", {
         args = { "--stdio" },
-        cwd = "node",
         stdout_encoding = "utf-8",
         stderr_encoding = "utf-8",
         stdin_encoding = "utf-8",

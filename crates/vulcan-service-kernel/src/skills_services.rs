@@ -43,6 +43,73 @@ async fn lock_luaskills_management_mutation() -> tokio::sync::MutexGuard<'static
     LUASKILLS_MANAGEMENT_MUTATION_LOCK.lock().await
 }
 
+/// Drains transient work and invokes the declared disable callback to compensate a failed enable.
+/// 排空临时任务并调用声明的停用回调，以补偿失败的启用操作。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the active transition and `plugin_id` selects the exact enabling plugin.
+/// `runtime` 持有活动转换，`plugin_id` 选择精确的启用中插件。
+///
+/// # Returns
+/// 返回值
+/// Returns every cleanup failure that prevents the rollback from being considered complete.
+/// 返回所有导致回滚无法视为完整的清理失败。
+async fn compensate_failed_system_plugin_enable(
+    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
+    plugin_id: &str,
+) -> Vec<String> {
+    // failures accumulates both lease-drain and lifecycle compensation diagnostics.
+    // failures 同时累积租约排空与生命周期补偿诊断。
+    let mut failures = match runtime.drain_plugin_sessions(plugin_id).await {
+        Ok(report) => report.failures,
+        Err(error) => vec![error.to_string()],
+    };
+    if let Err(error) = runtime
+        .invoke_lifecycle(
+            plugin_id,
+            vulcan_plugin_runtime::SystemPluginLifecycleEvent::EnableRollback,
+        )
+        .await
+    {
+        failures.push(format!("插件启用补偿回调失败：{error}"));
+    }
+    failures
+}
+
+/// Finishes one transient plugin state and synchronizes its exact final hook surface.
+/// 完成一个临时插件状态并同步其精确最终 Hook 能力面。
+///
+/// # Parameters
+/// 参数
+/// Runtime and service state own publication; policy sets and failures define the final projection.
+/// 运行时与服务状态持有发布过程；策略集合与失败信息定义最终投影。
+///
+/// # Returns
+/// 返回值
+/// Returns success only when both catalog publication and hook replacement complete.
+/// 仅当目录发布与 Hook 替换均完成时返回成功。
+fn finish_system_plugin_transition_and_sync(
+    state: &SharedServiceBridgeState,
+    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
+    plugin_id: &str,
+    disabled_plugin_ids: &BTreeSet<String>,
+    enabled_plugin_ids: &BTreeSet<String>,
+    cleanup_failures: Vec<String>,
+) -> Result<(), String> {
+    // catalog is the exact immutable post-transition surface supplied to hook replacement.
+    // catalog 是提供给 Hook 替换的精确不可变转换后能力面。
+    let catalog = runtime
+        .finish_lifecycle_transition(
+            plugin_id,
+            disabled_plugin_ids,
+            enabled_plugin_ids,
+            cleanup_failures,
+        )
+        .map_err(|error| error.to_string())?;
+    synchronize_service_system_plugin_hooks(state, runtime.clone(), &catalog)
+}
+
 /// Acquires the complete Agent Skills catalog transaction guard.
 /// 获取完整 Agent Skills 目录事务守卫。
 pub(crate) async fn lock_agent_skills_catalog_mutation() -> tokio::sync::MutexGuard<'static, ()> {
@@ -73,8 +140,9 @@ pub(crate) async fn service_refresh_luaskills_catalog(
     let handle = service_luaskills_handle(&state)?;
     let provider_configuration = provider_configuration_from_state(&state)?;
     let system_plugin_runtime = service_system_plugin_runtime(&state)?;
-    let preview_catalog = vulcan_plugin_runtime::load_system_plugin_catalog(
+    let preview_catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
         system_plugin_runtime.system_plugin_root(),
+        Some(system_plugin_runtime.user_plugin_root()),
         &provider_configuration.luaskills.disabled_system_plugins,
         &provider_configuration.luaskills.enabled_system_plugins,
         0,
@@ -98,6 +166,300 @@ pub(crate) async fn service_refresh_luaskills_catalog(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, system_plugin_runtime, &system_plugin_catalog)?;
+    refresh_luaskills_local_state(&state).await
+}
+
+/// Inspects one local user plugin package and returns its complete authorization preview.
+/// 检查一个本地用户插件包并返回其完整授权预览。
+pub(crate) async fn service_inspect_local_plugin(
+    state: SharedServiceBridgeState,
+    source_path: String,
+) -> Result<vulcan_plugin_runtime::SystemPluginPermissionPreview, String> {
+    // source_path is the exact directory selected by the user and is canonicalized by the runtime.
+    // source_path 是用户选择的精确目录，并由运行时执行规范化。
+    let source_path = PathBuf::from(source_path);
+    let runtime = service_system_plugin_runtime(&state)?;
+    run_luaskills_management_blocking("inspect local plugin", move || {
+        runtime
+            .inspect_local_user_plugin(&source_path)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+/// Installs one explicitly authorized local user plugin and leaves it disabled for review.
+/// 安装一个经过明确授权的本地用户插件，并使其保持停用以供复核。
+pub(crate) async fn service_install_local_plugin(
+    state: SharedServiceBridgeState,
+    source_path: String,
+    approved_capabilities: Vec<String>,
+    allow_registry_dependencies: bool,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // management_guard makes package publication, state persistence, lifecycle, and projection one transaction.
+    // management_guard 使插件包发布、状态持久化、生命周期与投影成为同一事务。
+    let _management_guard = lock_luaskills_management_mutation().await;
+    let runtime = service_system_plugin_runtime(&state)?;
+    let install_runtime = runtime.clone();
+    let source_path = PathBuf::from(source_path);
+    let installation = run_luaskills_management_blocking("install local plugin", move || {
+        install_runtime
+            .install_local_user_plugin(
+                &source_path,
+                approved_capabilities,
+                allow_registry_dependencies,
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await?;
+    let plugin_id = installation.plugin_id.clone();
+    let configuration = provider_configuration_from_state(&state)?;
+    let mut disabled_plugins = configuration.luaskills.disabled_system_plugins.clone();
+    disabled_plugins.insert(plugin_id.clone());
+    let preview_catalog = runtime
+        .refresh_catalog(
+            &disabled_plugins,
+            &configuration.luaskills.enabled_system_plugins,
+        )
+        .map_err(|error| error.to_string())?;
+    let plugin_default_enabled = preview_catalog
+        .plugins
+        .get(&plugin_id)
+        .and_then(|plugin| plugin.manifest.as_ref())
+        .map(|manifest| manifest.default_enabled)
+        .ok_or_else(|| format!("新安装插件 `{plugin_id}` 未进入有效目录。"))?;
+    let persistence_result = mutate_provider_configuration(
+        &state,
+        "保存用户插件初始停用状态失败",
+        |provider_configuration| {
+            provider_configuration
+                .luaskills
+                .set_system_plugin_enabled_with_default(&plugin_id, false, plugin_default_enabled);
+            Ok(())
+        },
+        |_, _| (),
+    )
+    .await;
+    if let Err(error) = persistence_result {
+        // rollbackResult must be surfaced because a failed removal leaves an installed package.
+        // rollbackResult 必须显式上报，因为删除失败会留下已安装插件包。
+        let rollback_result = runtime.uninstall_user_plugin(&installation.plugin_id);
+        return match rollback_result {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!(
+                "{error}；回滚用户插件 `{}` 失败：{rollback_error}",
+                installation.plugin_id
+            )),
+        };
+    }
+    let prepare_runtime = runtime.clone();
+    let prepare_plugin_id = installation.plugin_id.clone();
+    let preparation_result = run_luaskills_management_blocking("prepare local plugin", move || {
+        prepare_runtime
+            .prepare_plugin_environment(&prepare_plugin_id)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    // installCallbackStarted distinguishes dependency preparation failure from partial lifecycle work.
+    // installCallbackStarted 区分依赖准备失败与已经开始的部分生命周期工作。
+    let install_callback_started = preparation_result.is_ok();
+    // lifecycleResult retains the exact preparation or install callback failure.
+    // lifecycleResult 保留精确的准备或安装回调失败。
+    let lifecycle_result = match preparation_result {
+        Ok(()) => runtime
+            .invoke_lifecycle(
+                &installation.plugin_id,
+                vulcan_plugin_runtime::SystemPluginLifecycleEvent::Install,
+            )
+            .await
+            .map_err(|error| error.to_string()),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = lifecycle_result {
+        // compensationError reports incomplete cleanup after a partially executed install callback.
+        // compensationError 报告部分执行安装回调后的不完整清理。
+        let compensation_error = if install_callback_started {
+            runtime
+                .invoke_lifecycle(
+                    &installation.plugin_id,
+                    vulcan_plugin_runtime::SystemPluginLifecycleEvent::Uninstall,
+                )
+                .await
+                .err()
+                .map(|compensation_error| compensation_error.to_string())
+        } else {
+            None
+        };
+        if let Some(compensation_error) = compensation_error {
+            return Err(format!(
+                "用户插件 `{}` 安装生命周期失败：{error}；安装补偿失败：{compensation_error}；插件已保留为停用状态以便重试清理",
+                installation.plugin_id
+            ));
+        }
+        // rollbackResult records whether the package and runtime environment were removed.
+        // rollbackResult 记录插件包与运行时环境是否已移除。
+        let rollback_result = runtime.uninstall_user_plugin(&installation.plugin_id);
+        // configurationRollbackResult records whether the initial disabled override was removed.
+        // configurationRollbackResult 记录初始停用覆盖是否已移除。
+        let configuration_rollback_result = mutate_provider_configuration(
+            &state,
+            "回滚用户插件初始状态失败",
+            |provider_configuration| {
+                provider_configuration
+                    .luaskills
+                    .disabled_system_plugins
+                    .remove(&installation.plugin_id);
+                provider_configuration
+                    .luaskills
+                    .enabled_system_plugins
+                    .remove(&installation.plugin_id);
+                Ok(())
+            },
+            |_, _| (),
+        )
+        .await;
+        return match (rollback_result, configuration_rollback_result) {
+            (Ok(()), Ok(())) => Err(format!(
+                "用户插件 `{}` 安装生命周期失败：{error}",
+                installation.plugin_id
+            )),
+            (Err(rollback_error), Ok(())) => Err(format!(
+                "用户插件 `{}` 安装生命周期失败：{error}；回滚失败：{rollback_error}",
+                installation.plugin_id
+            )),
+            (Ok(()), Err(configuration_error)) => Err(format!(
+                "用户插件 `{}` 安装生命周期失败：{error}；配置回滚失败：{configuration_error}",
+                installation.plugin_id
+            )),
+            (Err(rollback_error), Err(configuration_error)) => Err(format!(
+                "用户插件 `{}` 安装生命周期失败：{error}；插件回滚失败：{rollback_error}；配置回滚失败：{configuration_error}",
+                installation.plugin_id
+            )),
+        };
+    }
+    let effective_configuration = provider_configuration_from_state(&state)?;
+    let catalog = runtime
+        .refresh_catalog(
+            &effective_configuration.luaskills.disabled_system_plugins,
+            &effective_configuration.luaskills.enabled_system_plugins,
+        )
+        .map_err(|error| error.to_string())?;
+    synchronize_service_system_plugin_hooks(&state, runtime, &catalog)?;
+    refresh_luaskills_local_state(&state).await
+}
+
+/// Uninstalls one disabled user plugin after its declared lifecycle callback completes.
+/// 在声明的生命周期回调完成后卸载一个已停用的用户插件。
+pub(crate) async fn service_uninstall_user_plugin(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    let _management_guard = lock_luaskills_management_mutation().await;
+    let runtime = service_system_plugin_runtime(&state)?;
+    let snapshot = runtime.snapshot();
+    let plugin = snapshot
+        .plugins
+        .get(&plugin_id)
+        .ok_or_else(|| format!("用户插件 `{plugin_id}` 未安装。"))?;
+    if plugin.origin != vulcan_plugin_runtime::SystemPluginPackageOrigin::UserInstalled {
+        return Err(format!("内建插件 `{plugin_id}` 不允许卸载。"));
+    }
+    if plugin.runtime_state != vulcan_plugin_runtime::SystemPluginRuntimeState::Disabled
+        || plugin.active_session_count != 0
+    {
+        return Err(format!("用户插件 `{plugin_id}` 必须先停用并完全排空。"));
+    }
+    runtime
+        .invoke_lifecycle(
+            &plugin_id,
+            vulcan_plugin_runtime::SystemPluginLifecycleEvent::Uninstall,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    // previousConfiguration preserves exact override membership for uninstall rollback.
+    // previousConfiguration 保留精确覆盖成员关系，用于卸载回滚。
+    let previous_configuration = provider_configuration_from_state(&state)?;
+    // hadDisabledOverride records whether the plugin id was explicitly disabled before cleanup.
+    // hadDisabledOverride 记录清理前插件标识是否被显式停用。
+    let had_disabled_override = previous_configuration
+        .luaskills
+        .disabled_system_plugins
+        .contains(&plugin_id);
+    // hadEnabledOverride records whether the plugin id was explicitly enabled before cleanup.
+    // hadEnabledOverride 记录清理前插件标识是否被显式启用。
+    let had_enabled_override = previous_configuration
+        .luaskills
+        .enabled_system_plugins
+        .contains(&plugin_id);
+    mutate_provider_configuration(
+        &state,
+        "清理用户插件状态覆盖失败",
+        |provider_configuration| {
+            provider_configuration
+                .luaskills
+                .disabled_system_plugins
+                .remove(&plugin_id);
+            provider_configuration
+                .luaskills
+                .enabled_system_plugins
+                .remove(&plugin_id);
+            Ok(())
+        },
+        |_, _| (),
+    )
+    .await?;
+    // rollbackPluginId remains available to the persistence rollback closure if removal fails.
+    // rollbackPluginId 在删除失败时供持久化回滚闭包使用。
+    let rollback_plugin_id = plugin_id.clone();
+    let uninstall_runtime = runtime.clone();
+    let uninstall_plugin_id = plugin_id.clone();
+    // uninstallResult is handled explicitly so provider overrides can be restored transactionally.
+    // uninstallResult 被显式处理，以便事务化恢复 Provider 覆盖。
+    let uninstall_result = run_luaskills_management_blocking("uninstall user plugin", move || {
+        uninstall_runtime
+            .uninstall_user_plugin(&uninstall_plugin_id)
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    if let Err(uninstall_error) = uninstall_result {
+        // restoreResult republishes the exact prior override membership after package rollback.
+        // restoreResult 在插件包回滚后重新发布精确的先前覆盖成员关系。
+        let restore_result = mutate_provider_configuration(
+            &state,
+            "恢复用户插件状态覆盖失败",
+            move |provider_configuration| {
+                if had_disabled_override {
+                    provider_configuration
+                        .luaskills
+                        .disabled_system_plugins
+                        .insert(rollback_plugin_id.clone());
+                }
+                if had_enabled_override {
+                    provider_configuration
+                        .luaskills
+                        .enabled_system_plugins
+                        .insert(rollback_plugin_id.clone());
+                }
+                Ok(())
+            },
+            |_, _| (),
+        )
+        .await;
+        return match restore_result {
+            Ok(()) => Err(uninstall_error),
+            Err(restore_error) => Err(format!(
+                "{uninstall_error}；恢复用户插件状态覆盖失败：{restore_error}"
+            )),
+        };
+    }
+    let configuration = provider_configuration_from_state(&state)?;
+    let catalog = runtime
+        .refresh_catalog(
+            &configuration.luaskills.disabled_system_plugins,
+            &configuration.luaskills.enabled_system_plugins,
+        )
+        .map_err(|error| error.to_string())?;
+    synchronize_service_system_plugin_hooks(&state, runtime, &catalog)?;
     refresh_luaskills_local_state(&state).await
 }
 
@@ -356,8 +718,9 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
     );
     // prospective_catalog validates global identifiers, package assets, schemas, hooks, and target state before persistence.
     // prospective_catalog 在持久化前校验全局标识、包资产、Schema、Hook 与目标状态。
-    let prospective_catalog = vulcan_plugin_runtime::load_system_plugin_catalog(
+    let prospective_catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
         system_plugin_runtime.system_plugin_root(),
+        Some(system_plugin_runtime.user_plugin_root()),
         &prospective_luaskills.disabled_system_plugins,
         &prospective_luaskills.enabled_system_plugins,
         0,
@@ -388,19 +751,14 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
                     )
                 })?;
             if !cleanup_report.failures.is_empty() {
-                let warning_catalog = system_plugin_runtime
-                    .finish_lifecycle_transition(
-                        stable_plugin_id,
-                        &provider_configuration.luaskills.disabled_system_plugins,
-                        &provider_configuration.luaskills.enabled_system_plugins,
-                        cleanup_report.failures.clone(),
-                    )
-                    .map_err(|error| error.to_string())?;
-                let _ = synchronize_service_system_plugin_hooks(
+                finish_system_plugin_transition_and_sync(
                     &state,
-                    system_plugin_runtime.clone(),
-                    &warning_catalog,
-                );
+                    &system_plugin_runtime,
+                    stable_plugin_id,
+                    &provider_configuration.luaskills.disabled_system_plugins,
+                    &provider_configuration.luaskills.enabled_system_plugins,
+                    cleanup_report.failures.clone(),
+                )?;
                 return Err(format!(
                     "LuaSkills System Plugin `{stable_plugin_id}` 仍有未清理资源：{}",
                     cleanup_report.failures.join("；")
@@ -418,46 +776,106 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
             system_plugin_runtime.clone(),
             &system_plugin_runtime.snapshot(),
         ) {
-            let rollback_catalog = system_plugin_runtime
-                .finish_lifecycle_transition(
-                    stable_plugin_id,
-                    &provider_configuration.luaskills.disabled_system_plugins,
-                    &provider_configuration.luaskills.enabled_system_plugins,
-                    Vec::new(),
-                )
-                .map_err(|rollback_error| {
-                    format!("{error}; System Plugin hook 回滚失败：{rollback_error}")
-                })?;
-            let _ = synchronize_service_system_plugin_hooks(
+            finish_system_plugin_transition_and_sync(
                 &state,
-                system_plugin_runtime.clone(),
-                &rollback_catalog,
-            );
+                &system_plugin_runtime,
+                stable_plugin_id,
+                &provider_configuration.luaskills.disabled_system_plugins,
+                &provider_configuration.luaskills.enabled_system_plugins,
+                Vec::new(),
+            )
+            .map_err(|rollback_error| {
+                format!("{error}; System Plugin hook 回滚失败：{rollback_error}")
+            })?;
             return Err(format!("System Plugin hook 同步失败：{error}"));
         }
-        if let Err(error) = system_plugin_runtime.probe_plugin(stable_plugin_id).await {
-            let cleanup_failures = match system_plugin_runtime
-                .drain_plugin_sessions(stable_plugin_id)
-                .await
-            {
-                Ok(report) => report.failures,
-                Err(cleanup_error) => vec![cleanup_error.to_string()],
+        let prepare_runtime = system_plugin_runtime.clone();
+        let prepare_plugin_id = stable_plugin_id.to_string();
+        let environment_preparation =
+            run_luaskills_management_blocking("prepare plugin environment", move || {
+                prepare_runtime
+                    .prepare_plugin_environment(&prepare_plugin_id)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .await;
+        if let Err(error) = environment_preparation {
+            // rollbackResult must report both lifecycle publication and hook restoration failures.
+            // rollbackResult 必须同时上报生命周期发布与 Hook 恢复失败。
+            let rollback_result = finish_system_plugin_transition_and_sync(
+                &state,
+                &system_plugin_runtime,
+                stable_plugin_id,
+                &provider_configuration.luaskills.disabled_system_plugins,
+                &provider_configuration.luaskills.enabled_system_plugins,
+                Vec::new(),
+            );
+            return match rollback_result {
+                Ok(()) => Err(format!(
+                    "LuaSkills System Plugin `{stable_plugin_id}` 环境准备失败：{error}"
+                )),
+                Err(rollback_error) => Err(format!(
+                    "LuaSkills System Plugin `{stable_plugin_id}` 环境准备失败：{error}；回滚失败：{rollback_error}"
+                )),
             };
-            if let Ok(rollback_catalog) = system_plugin_runtime.finish_lifecycle_transition(
+        }
+        // enableCallbackResult is separated so any partial lifecycle side effect is compensated.
+        // enableCallbackResult 被单独处理，以便补偿任何部分生命周期副作用。
+        let enable_callback_result = system_plugin_runtime
+            .invoke_lifecycle(
+                stable_plugin_id,
+                vulcan_plugin_runtime::SystemPluginLifecycleEvent::Enable,
+            )
+            .await;
+        if let Err(error) = enable_callback_result {
+            // cleanupFailures records whether the declared disable compensation was complete.
+            // cleanupFailures 记录声明的停用补偿是否完整。
+            let cleanup_failures =
+                compensate_failed_system_plugin_enable(&system_plugin_runtime, stable_plugin_id)
+                    .await;
+            // rollbackResult preserves compensation and hook restoration diagnostics.
+            // rollbackResult 保留补偿与 Hook 恢复诊断。
+            let rollback_result = finish_system_plugin_transition_and_sync(
+                &state,
+                &system_plugin_runtime,
                 stable_plugin_id,
                 &provider_configuration.luaskills.disabled_system_plugins,
                 &provider_configuration.luaskills.enabled_system_plugins,
                 cleanup_failures,
-            ) {
-                let _ = synchronize_service_system_plugin_hooks(
-                    &state,
-                    system_plugin_runtime.clone(),
-                    &rollback_catalog,
-                );
-            }
-            return Err(format!(
-                "LuaSkills System Plugin `{stable_plugin_id}` 启用探测失败：{error}"
-            ));
+            );
+            return match rollback_result {
+                Ok(()) => Err(format!(
+                    "LuaSkills System Plugin `{stable_plugin_id}` 启用回调失败：{error}"
+                )),
+                Err(rollback_error) => Err(format!(
+                    "LuaSkills System Plugin `{stable_plugin_id}` 启用回调失败：{error}；回滚失败：{rollback_error}"
+                )),
+            };
+        }
+        if let Err(error) = system_plugin_runtime.probe_plugin(stable_plugin_id).await {
+            // cleanupFailures records compensation after a successful callback but failed probe.
+            // cleanupFailures 记录启用回调成功但探测失败后的补偿结果。
+            let cleanup_failures =
+                compensate_failed_system_plugin_enable(&system_plugin_runtime, stable_plugin_id)
+                    .await;
+            // rollbackResult preserves compensation and hook restoration diagnostics.
+            // rollbackResult 保留补偿与 Hook 恢复诊断。
+            let rollback_result = finish_system_plugin_transition_and_sync(
+                &state,
+                &system_plugin_runtime,
+                stable_plugin_id,
+                &provider_configuration.luaskills.disabled_system_plugins,
+                &provider_configuration.luaskills.enabled_system_plugins,
+                cleanup_failures,
+            );
+            return match rollback_result {
+                Ok(()) => Err(format!(
+                    "LuaSkills System Plugin `{stable_plugin_id}` 启用探测失败：{error}"
+                )),
+                Err(rollback_error) => Err(format!(
+                    "LuaSkills System Plugin `{stable_plugin_id}` 启用探测失败：{error}；回滚失败：{rollback_error}"
+                )),
+            };
         }
     } else {
         system_plugin_runtime
@@ -468,21 +886,17 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
             system_plugin_runtime.clone(),
             &system_plugin_runtime.snapshot(),
         ) {
-            let rollback_catalog = system_plugin_runtime
-                .finish_lifecycle_transition(
-                    stable_plugin_id,
-                    &provider_configuration.luaskills.disabled_system_plugins,
-                    &provider_configuration.luaskills.enabled_system_plugins,
-                    Vec::new(),
-                )
-                .map_err(|rollback_error| {
-                    format!("{error}; System Plugin hook 回滚失败：{rollback_error}")
-                })?;
-            let _ = synchronize_service_system_plugin_hooks(
+            finish_system_plugin_transition_and_sync(
                 &state,
-                system_plugin_runtime.clone(),
-                &rollback_catalog,
-            );
+                &system_plugin_runtime,
+                stable_plugin_id,
+                &provider_configuration.luaskills.disabled_system_plugins,
+                &provider_configuration.luaskills.enabled_system_plugins,
+                Vec::new(),
+            )
+            .map_err(|rollback_error| {
+                format!("{error}; System Plugin hook 回滚失败：{rollback_error}")
+            })?;
             return Err(format!("System Plugin hook 同步失败：{error}"));
         }
     }
@@ -503,21 +917,29 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
     )
     .await;
     if let Err(error) = persistence_result {
-        if let Ok(rollback_catalog) = system_plugin_runtime.finish_lifecycle_transition(
+        // cleanupFailures captures lifecycle compensation only for a prepared enable transition.
+        // cleanupFailures 仅针对已准备的启用转换捕获生命周期补偿结果。
+        let cleanup_failures = if enabled {
+            compensate_failed_system_plugin_enable(&system_plugin_runtime, stable_plugin_id).await
+        } else {
+            Vec::new()
+        };
+        // rollbackResult must not hide a failed catalog or hook restoration.
+        // rollbackResult 不得隐藏目录或 Hook 恢复失败。
+        let rollback_result = finish_system_plugin_transition_and_sync(
+            &state,
+            &system_plugin_runtime,
             stable_plugin_id,
             &provider_configuration.luaskills.disabled_system_plugins,
             &provider_configuration.luaskills.enabled_system_plugins,
-            Vec::new(),
-        ) {
-            let _ = synchronize_service_system_plugin_hooks(
-                &state,
-                system_plugin_runtime.clone(),
-                &rollback_catalog,
-            );
-        }
-        return Err(error);
+            cleanup_failures,
+        );
+        return match rollback_result {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!("{error}；运行时回滚失败：{rollback_error}")),
+        };
     }
-    let cleanup_failures = if enabled {
+    let mut cleanup_failures = if enabled {
         Vec::new()
     } else {
         match system_plugin_runtime
@@ -528,6 +950,17 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
             Err(error) => vec![error.to_string()],
         }
     };
+    if !enabled {
+        if let Err(error) = system_plugin_runtime
+            .invoke_lifecycle(
+                stable_plugin_id,
+                vulcan_plugin_runtime::SystemPluginLifecycleEvent::Disable,
+            )
+            .await
+        {
+            cleanup_failures.push(format!("插件停用生命周期回调失败：{error}"));
+        }
+    }
     let effective_configuration = provider_configuration_from_state(&state)?;
     let final_catalog = system_plugin_runtime
         .finish_lifecycle_transition(
@@ -537,11 +970,25 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
             cleanup_failures,
         )
         .map_err(|error| error.to_string())?;
-    if let Err(sync_error) = synchronize_service_system_plugin_hooks(
+    let hook_activation_error = synchronize_service_system_plugin_hooks(
         &state,
         system_plugin_runtime.clone(),
         &final_catalog,
-    ) {
+    )
+    .err()
+    .map(|error| error.to_string());
+    // A newly enabled plugin is not reported as ready until its persistent hook runtime has completed cold initialization.
+    // 新启用插件只有在持久 Hook 运行时完成冷初始化后才会被报告为就绪。
+    let hook_activation_error = if hook_activation_error.is_none() && enabled {
+        system_plugin_runtime
+            .prewarm_plugin_runtime(stable_plugin_id)
+            .await
+            .err()
+            .map(|error| format!("插件 Hook 运行时预热失败：{error}"))
+    } else {
+        hook_activation_error
+    };
+    if let Some(sync_error) = hook_activation_error {
         let rollback_persistence = mutate_provider_configuration(
             &state,
             "回滚 LuaSkills System Plugin 状态失败",

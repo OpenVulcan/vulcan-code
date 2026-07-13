@@ -21,6 +21,8 @@ import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
   deleteSubagentDefinition,
   installLuaSkill,
+  installLocalPlugin,
+  inspectLocalPlugin,
   deleteAgentSkill,
   deleteAgentSkillCategory,
   openAgentSkillsUserDirectory,
@@ -43,6 +45,7 @@ import {
   setLuaSkillsSystemPluginEnabled,
   setLuaSkillToolRegistrationState,
   uninstallLuaSkill,
+  uninstallUserPlugin,
   updateLuaSkill,
 } from "@/service/skills-actions-service";
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
@@ -296,6 +299,11 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onUpdateLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId)),
     onSetLuaSkillEnabled: (skillId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillEnabled(skillId, enabled)),
     onSetSystemPluginEnabled: (pluginId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillsSystemPluginEnabled(pluginId, enabled)),
+    onInspectLocalPlugin: inspectLocalPlugin,
+    onInstallLocalPlugin: (sourcePath, approvedCapabilities, allowRegistryDependencies) => runLuaSkillsCatalogAction(
+      () => installLocalPlugin(sourcePath, approvedCapabilities, allowRegistryDependencies),
+    ),
+    onUninstallUserPlugin: (pluginId) => runLuaSkillsCatalogAction(() => uninstallUserPlugin(pluginId)),
     onUninstallLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => uninstallLuaSkill(skillId)),
     onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
       runLuaSkillsCatalogAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))

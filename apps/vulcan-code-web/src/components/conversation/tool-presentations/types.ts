@@ -9,6 +9,20 @@ import type { CommandSessionSummary } from "@/types";
 // ToolPresentationDisplayState 为紧凑工具展示卡片规范化工具执行状态。
 export type ToolPresentationDisplayState = "running" | "completed" | "failed" | "stopped" | "unknown";
 
+// CommandPluginContribution describes one generic plugin badge and its human-readable detail.
+// CommandPluginContribution 描述一个通用插件徽标及其可读详情。
+export interface CommandPluginContribution {
+  // Optional compact badge shown beside the command.
+  // 显示在命令旁的可选紧凑徽标。
+  badge?: string | null;
+  // Stable contribution label.
+  // 稳定的贡献标签。
+  label: string;
+  // Human-readable contribution value.
+  // 人类可读的贡献值。
+  value: string;
+}
+
 // ToolPresentationResolveOptions carries display-only context used while projecting tool results.
 // ToolPresentationResolveOptions 承载投影工具结果时使用的纯展示上下文。
 export interface ToolPresentationResolveOptions {
@@ -38,9 +52,9 @@ export interface CommandExecutionPresentation {
   // Effective command text actually executed after host-side rewrites.
   // 宿主侧改写后实际执行的有效命令文本。
   effectiveCommand?: string | null;
-  // Whether the command was routed through RTK.
-  // 命令是否已通过 RTK 路由。
-  rtkRouted?: boolean;
+  // Ordered generic contributions returned by every completed plugin hook.
+  // 每个已完成插件 Hook 返回的有序通用贡献集合。
+  pluginContributions?: CommandPluginContribution[];
   // Optional live command-session id for session-backed terminal rows.
   // 会话型终端行使用的可选实时命令会话标识。
   commandSessionId?: string | null;

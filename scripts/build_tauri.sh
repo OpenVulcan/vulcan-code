@@ -39,17 +39,17 @@ SourceResourcesDir="$ProjectDir/crates/vulcan-runtime-assets/resources"
 # SourceSystemPromptSkillsDir 指向仓库持有的系统 Agent Skills 目录。
 SourceSystemPromptSkillsDir="$ProjectDir/crates/vulcan-prompt-skills/src/assets/system"
 
-# SourceRtkBinDir points at the RTK executable installed by make deps.
-# SourceRtkBinDir 指向 make deps 安装的 RTK 可执行文件目录。
-SourceRtkBinDir="$ProjectDir/third_party/rtk/bin"
-
 # SourceLuaRuntimeDir points at the official LuaSkills runtime payload installed by make deps-lua.
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 SourceLuaRuntimeDir="$ProjectDir/third_party/luaskills_runtime"
 
 # SourceSystemPluginsDir contains every manifest-driven System Plugin bundled with Vulcan Code.
 # SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动系统插件。
-SourceSystemPluginsDir="$ProjectDir/plugins/system"
+SourceSystemPluginsDir="$ProjectDir/plugins"
+
+# SourcePluginBridgeDir contains the only LuaSkills System package used by Vulcan plugins.
+# SourcePluginBridgeDir 包含 Vulcan 插件使用的唯一 LuaSkills System package。
+SourcePluginBridgeDir="$ProjectDir/plugin-bridge/vulcan-plugin-bridge"
 
 # IsWindowsPlatform records whether the current shell host is Windows-like.
 # IsWindowsPlatform 记录当前 shell 宿主是否类似 Windows。
@@ -194,9 +194,13 @@ LegacyManagedRuntimeDistributionDir="$OutputLuaRuntimeDir/dependencies/runtimes"
 # LegacyManagedRuntimeScriptsDir 保存由 Rust 原生初始化取代的废弃下载脚本。
 LegacyManagedRuntimeScriptsDir="$OutputLuaRuntimeDir/scripts/deps"
 
-# OutputSystemPluginsDir is the runtime directory scanned by the generic System Plugin host.
-# OutputSystemPluginsDir 是通用系统插件宿主扫描的运行时目录。
-OutputSystemPluginsDir="$OutputLuaRuntimeDir/system_lua_lib"
+# OutputSystemPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
+# OutputSystemPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
+OutputSystemPluginsDir="$ProjectDir/output/plugins"
+
+# OutputPluginBridgeDir is the only plugin-related package deployed below system_lua_lib.
+# OutputPluginBridgeDir 是部署到 system_lua_lib 下的唯一插件相关 package。
+OutputPluginBridgeDir="$OutputLuaRuntimeDir/system_lua_lib/vulcan-plugin-bridge"
 
 # ManagedSystemPluginIndexPath records only packages owned by this build script for safe stale cleanup.
 # ManagedSystemPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
@@ -209,12 +213,6 @@ fi
 if [ "$IsWindowsPlatform" = "1" ] && [ ! -f "$BuiltHelperPath" ]; then
     echo "Built Windows console helper was not found: $BuiltHelperPath" >&2
     exit 1
-fi
-
-mkdir -p "$OutputBinDir"
-cp "$BuiltBinaryPath" "$OutputBinaryPath"
-if [ "$IsWindowsPlatform" = "1" ]; then
-    cp "$BuiltHelperPath" "$OutputHelperPath"
 fi
 
 echo "==> Syncing packaged config..."
@@ -307,34 +305,61 @@ for SourceSystemPluginDir in "$SourceSystemPluginsDir"/*; do
             exit 1
             ;;
     esac
-    # DestinationSystemPluginDir is removed immediately if a package copy fails before ownership is committed.
-    # DestinationSystemPluginDir 会在所有权提交前复制失败时立即删除。
+    # DestinationSystemPluginDir receives an incremental overlay so debug builds preserve existing plugin files.
+    # DestinationSystemPluginDir 接收增量覆盖，确保调试构建保留已有插件文件。
     DestinationSystemPluginDir="$OutputSystemPluginsDir/$PluginName"
-    if ! copy_directory_contents "$SourceSystemPluginDir" "$DestinationSystemPluginDir" 1; then
-        rm -rf -- "$DestinationSystemPluginDir"
+    if ! copy_directory_contents "$SourceSystemPluginDir" "$DestinationSystemPluginDir" 0; then
         echo "Failed to deploy System Plugin package: $PluginName" >&2
         exit 1
     fi
     printf '%s\n' "$PluginName" >> "$ManagedSystemPluginIndexPath"
 done
 
-if [ -d "$SourceRtkBinDir" ]; then
-    echo "==> Syncing packaged RTK host tool..."
-    if [ -e "$LegacyOutputRtkToolDir" ]; then
-        case "$LegacyOutputRtkToolDir" in
-            "$ProjectDir"/output/*)
-                rm -rf "$LegacyOutputRtkToolDir"
-                ;;
-            *)
-                echo "Refusing to clean path outside output: $LegacyOutputRtkToolDir" >&2
-                exit 1
-                ;;
-        esac
-    fi
-    mkdir -p "$OutputToolsDir"
-    find "$SourceRtkBinDir" -maxdepth 1 -type f -exec cp {} "$OutputToolsDir"/ \;
-else
-    echo "==> RTK host tool not installed; run make deps-host to package it."
+echo "==> Syncing fixed LuaSkills plugin bridge package..."
+copy_directory_contents "$SourcePluginBridgeDir" "$OutputPluginBridgeDir" 0
+
+# LegacyOutputRtkToolDir is removed because RTK is now distributed only inside its plugin package.
+# LegacyOutputRtkToolDir 会被移除，因为 RTK 现在只通过其插件包分发。
+if [ -e "$LegacyOutputRtkToolDir" ]; then
+    case "$LegacyOutputRtkToolDir" in
+        "$ProjectDir"/output/*)
+            rm -rf "$LegacyOutputRtkToolDir"
+            ;;
+        *)
+            echo "Refusing to clean path outside output: $LegacyOutputRtkToolDir" >&2
+            exit 1
+            ;;
+    esac
+fi
+find "$OutputToolsDir" -maxdepth 1 -type f \( -name rtk -o -name rtk.exe \) -delete 2>/dev/null || true
+# RtkHostIdentity selects the exact target artifact already copied with the plugin package.
+# RtkHostIdentity 选择随插件包一并复制的当前宿主精确目标制品。
+RtkHostIdentity="$(uname -s 2>/dev/null || printf unknown):$(uname -m 2>/dev/null || printf unknown)"
+case "$RtkHostIdentity" in
+    MINGW*:*|MSYS*:*|CYGWIN*:*) RtkTargetTriple="x86_64-pc-windows-msvc"; RtkBinaryName="rtk.exe" ;;
+    Darwin:arm64|Darwin:aarch64) RtkTargetTriple="aarch64-apple-darwin"; RtkBinaryName="rtk" ;;
+    Darwin:*) RtkTargetTriple="x86_64-apple-darwin"; RtkBinaryName="rtk" ;;
+    Linux:aarch64|Linux:arm64) RtkTargetTriple="aarch64-unknown-linux-gnu"; RtkBinaryName="rtk" ;;
+    Linux:*) RtkTargetTriple="x86_64-unknown-linux-gnu"; RtkBinaryName="rtk" ;;
+    *)
+        echo "Unsupported RTK plugin packaging target." >&2
+        exit 1
+        ;;
+esac
+# OutputRtkPluginBinary is the exact manifest-owned executable required for this package.
+# OutputRtkPluginBinary 是当前插件包要求的精确清单自有可执行文件。
+OutputRtkPluginBinary="$OutputSystemPluginsDir/vulcan-rtk/bin/$RtkTargetTriple/$RtkBinaryName"
+if [ ! -f "$OutputRtkPluginBinary" ]; then
+    echo "RTK plugin binary is missing; run make deps-rtk before packaging." >&2
+    exit 1
+fi
+
+# Copy the executable only after runtime payload synchronization so a locked debug binary cannot suppress plugin updates.
+# 仅在运行时载荷同步完成后复制可执行文件，避免被占用的调试二进制阻断插件更新。
+mkdir -p "$OutputBinDir"
+cp "$BuiltBinaryPath" "$OutputBinaryPath"
+if [ "$IsWindowsPlatform" = "1" ]; then
+    cp "$BuiltHelperPath" "$OutputHelperPath"
 fi
 
 echo "==> Done. Binary: $OutputBinaryPath"

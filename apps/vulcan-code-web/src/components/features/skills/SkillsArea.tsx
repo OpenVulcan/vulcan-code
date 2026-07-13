@@ -1,6 +1,7 @@
 import { formatSkillText } from "@/components/features/featureText"
 import { useI18n } from "@/i18n"
 import type { WorkbenchSnapshot } from "@/types"
+import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel"
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
@@ -31,6 +32,12 @@ export function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: W
       }),
     }
   }
+  if (activeTab === "rtk") {
+    return {
+      title: t("skills.navigation.rtkSettings"),
+      detail: t("skills.header.rtkDetail"),
+    }
+  }
   const visibleToolCount = workbench.luaSkills.skills.reduce((count, skill) => count + skill.entryCount, 0)
   const implicitToolCount = workbench.luaSkills.skills.reduce((count, skill) => (
     count + skill.tools.filter((tool) => tool.registrationState === "implicit").length
@@ -58,6 +65,17 @@ export function SkillsArea(props: {
   // 包含 LuaSkills 目录与运行时设置的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
+  // rtkPlugin is the exact enabled built-in plugin that owns the dedicated RTK settings entry.
+  // rtkPlugin 是拥有独立 RTK 设置入口的精确已启用内建插件。
+  const rtkPlugin = props.workbench.plugins.find((plugin) => (
+    plugin.id === "vulcan-rtk"
+    && plugin.available
+    && plugin.enabled
+    && plugin.runtimeState === "enabled"
+  )) ?? null
+  // rtkMount is the plugin-declared integrated detail mount rendered by the dedicated menu entry.
+  // rtkMount 是由独立菜单入口渲染的插件声明式集成详情挂载点。
+  const rtkMount = rtkPlugin?.extension?.uiMounts.find((mount) => mount.point === "skillsPluginDetail") ?? null
   return (
     <section className="skill-management-surface">
       {props.activeTab === "catalog" ? (
@@ -75,6 +93,11 @@ export function SkillsArea(props: {
           actions={props.skillActions}
           catalog={props.workbench.luaSkills}
         />
+      ) : null}
+      {rtkPlugin && rtkMount ? (
+        <div hidden={props.activeTab !== "rtk"} key="vulcan-rtk-settings">
+          <DynamicPluginMountPanel mount={rtkMount} plugin={rtkPlugin} />
+        </div>
       ) : null}
     </section>
   )

@@ -4,6 +4,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use time::OffsetDateTime;
@@ -19,6 +20,7 @@ use vulcan_agent_runtime::{
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::bootstrap_mcp_runtime_access,
+    runtime_assets,
     tooling::CommandSessionRuntime,
 };
 use vulcan_provider_config::config::ProviderConfigurationFile;
@@ -119,6 +121,7 @@ fn run_service_bootstrap(
                     "等待 LuaSkills 就绪",
                 ),
                 ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                ("plugins", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
                 (
                     "workspace",
                     StartupStepStatus::Pending,
@@ -186,6 +189,7 @@ fn run_service_bootstrap(
                         "等待 LuaSkills 就绪",
                     ),
                     ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    ("plugins", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
@@ -241,6 +245,20 @@ fn run_service_bootstrap(
         luaskills_catalog.skills.len(),
         luaskills_catalog.entry_count
     ));
+    let (system_plugin_runtime, system_plugin_catalog) =
+        prepare_system_plugin_runtime(&luaskills_runtime, &provider_configuration, &mut logs)?;
+    // pluginPrewarmTask overlaps the cold System VM creation cost with independent token-budget and MCP initialization.
+    // pluginPrewarmTask 将冷启动 System VM 的创建成本与独立的 Token 预算及 MCP 初始化并行重叠。
+    let plugin_prewarm_runtime = system_plugin_runtime.clone();
+    let plugin_prewarm_task = runtime.spawn(async move {
+        // prewarmStarted measures only plugin work and excludes later MCP join delay.
+        // prewarmStarted 仅测量插件工作，不包含后续等待 MCP 完成的时间。
+        let prewarm_started = Instant::now();
+        let result = plugin_prewarm_runtime
+            .prewarm_enabled_plugin_runtimes()
+            .await;
+        (result, prewarm_started.elapsed())
+    });
 
     update_startup(
         state,
@@ -272,6 +290,11 @@ fn run_service_bootstrap(
                         "正在初始化 Token 预算运行时",
                     ),
                     ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    (
+                        "plugins",
+                        StartupStepStatus::Running,
+                        "正在后台预热已启用插件 Hook 运行时",
+                    ),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
@@ -313,7 +336,16 @@ fn run_service_bootstrap(
                     token_budget_status(&token_budget_runtime),
                     token_budget_runtime.status_row().as_str(),
                 ),
-                ("mcp", StartupStepStatus::Running, "正在初始化 MCP Runtime"),
+                (
+                    "mcp",
+                    StartupStepStatus::Running,
+                    "正在并行初始化服务 MCP Runtime 与插件 Hook 运行时",
+                ),
+                (
+                    "plugins",
+                    StartupStepStatus::Running,
+                    "正在后台预热已启用插件 Hook 运行时",
+                ),
                 (
                     "workspace",
                     StartupStepStatus::Pending,
@@ -344,6 +376,73 @@ fn run_service_bootstrap(
         mcp_catalog.prompt_count,
         mcp_catalog.resource_count
     ));
+    update_startup(
+        state,
+        event_emitter,
+        "bootstrapping-plugins",
+        &logs,
+        |now| {
+            startup_steps_with_status(
+                now,
+                &[
+                    (
+                        "service-process",
+                        StartupStepStatus::Ready,
+                        "Tauri 本地服务桥接已启动",
+                    ),
+                    (
+                        "vldb",
+                        StartupStepStatus::Ready,
+                        "VLDB/controller 数据平面已就绪",
+                    ),
+                    (
+                        "luaskills",
+                        StartupStepStatus::Ready,
+                        "LuaSkills 引擎与技能目录已就绪",
+                    ),
+                    (
+                        "token-budget",
+                        token_budget_status(&token_budget_runtime),
+                        token_budget_runtime.status_row().as_str(),
+                    ),
+                    ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
+                    (
+                        "plugins",
+                        StartupStepStatus::Running,
+                        "正在等待后台插件 Hook 运行时预热完成",
+                    ),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "等待插件运行时初始化",
+                    ),
+                ],
+            )
+        },
+    );
+    let (prewarmed_plugin_ids, plugin_prewarm_elapsed) =
+        runtime.block_on(plugin_prewarm_task).map_err(|error| {
+            ServiceBootstrapError::new(
+                "plugins",
+                "Plugin Hook Runtime",
+                format!("插件 Hook 运行时预热线程失败：{error}"),
+            )
+        })?;
+    let prewarmed_plugin_ids = prewarmed_plugin_ids.map_err(|error| {
+        ServiceBootstrapError::new(
+            "plugins",
+            "Plugin Hook Runtime",
+            format!("预热已启用插件 Hook 运行时失败：{error}"),
+        )
+    })?;
+    logs.push(format!(
+        "[webui-service] system plugins ready: plugins={} tools={} prewarmed_runtimes={} revision={} elapsed_ms={}",
+        system_plugin_catalog.plugins.len(),
+        system_plugin_catalog.enabled_tools.len(),
+        prewarmed_plugin_ids.len(),
+        system_plugin_catalog.revision,
+        plugin_prewarm_elapsed.as_millis()
+    ));
     let agent_profile_catalog = load_agent_profile_catalog()
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
     // Cache LuaSkills tool entries once during startup so provider-run preparation never enumerates the engine on the submit hot path.
@@ -368,28 +467,6 @@ fn run_service_bootstrap(
                 )
             })?
     };
-    let system_plugin_runtime = vulcan_plugin_runtime::SystemPluginRuntimeManager::new(
-        Arc::clone(&luaskills_runtime.engine),
-        luaskills_runtime.runtime_root.join("system_lua_lib"),
-    );
-    let system_plugin_catalog = system_plugin_runtime
-        .refresh_catalog(
-            &provider_configuration.luaskills.disabled_system_plugins,
-            &provider_configuration.luaskills.enabled_system_plugins,
-        )
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "luaskills",
-                "System Plugins",
-                format!("加载系统插件目录失败：{error}"),
-            )
-        })?;
-    logs.push(format!(
-        "[webui-service] system plugins ready: plugins={} tools={} revision={}",
-        system_plugin_catalog.plugins.len(),
-        system_plugin_catalog.enabled_tools.len(),
-        system_plugin_catalog.revision
-    ));
     let agent_luaskills_runtime = LuaSkillsRuntimeHandle {
         engine: Arc::clone(&luaskills_runtime.engine),
         runtime_root: luaskills_runtime.runtime_root.clone(),
@@ -400,6 +477,54 @@ fn run_service_bootstrap(
         operation_progress_events: Arc::new(Mutex::new(VecDeque::new())),
         system_plugin_runtime: system_plugin_runtime.clone(),
     };
+    update_startup(
+        state,
+        event_emitter,
+        "bootstrapping-agent-mcp",
+        &logs,
+        |now| {
+            startup_steps_with_status(
+                now,
+                &[
+                    (
+                        "service-process",
+                        StartupStepStatus::Ready,
+                        "Tauri 本地服务桥接已启动",
+                    ),
+                    (
+                        "vldb",
+                        StartupStepStatus::Ready,
+                        "VLDB/controller 数据平面已就绪",
+                    ),
+                    (
+                        "luaskills",
+                        StartupStepStatus::Ready,
+                        "LuaSkills 引擎与技能目录已就绪",
+                    ),
+                    (
+                        "token-budget",
+                        token_budget_status(&token_budget_runtime),
+                        token_budget_runtime.status_row().as_str(),
+                    ),
+                    (
+                        "mcp",
+                        StartupStepStatus::Running,
+                        "正在初始化 Agent MCP Runtime",
+                    ),
+                    (
+                        "plugins",
+                        StartupStepStatus::Ready,
+                        "插件目录与已启用 Hook 运行时已就绪",
+                    ),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "等待 Agent MCP Runtime 就绪",
+                    ),
+                ],
+            )
+        },
+    );
     let agent_mcp_runtime = runtime
         .block_on(bootstrap_mcp_runtime_access(provider_configuration.clone()))
         .map_err(|error| {
@@ -496,6 +621,11 @@ fn run_service_bootstrap(
                 ),
                 ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
                 (
+                    "plugins",
+                    StartupStepStatus::Ready,
+                    "插件目录与已启用运行时已就绪",
+                ),
+                (
                     "workspace",
                     StartupStepStatus::Running,
                     "正在载入项目与会话索引",
@@ -555,6 +685,11 @@ fn run_service_bootstrap(
                     token_budget_runtime.status_row().as_str(),
                 ),
                 ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
+                (
+                    "plugins",
+                    StartupStepStatus::Ready,
+                    "插件目录与已启用运行时已就绪",
+                ),
                 (
                     "workspace",
                     StartupStepStatus::Ready,
@@ -629,4 +764,117 @@ fn run_service_bootstrap(
     mark_webui_service_discovery_ready(state);
     emit_service_snapshots(event_emitter, &startup, &emitted_workbench);
     Ok(())
+}
+
+/// Builds the host-owned plugin manager and validated catalog immediately after LuaSkills becomes available.
+/// 在 LuaSkills 就绪后立即构建宿主持有的插件管理器与已校验目录。
+///
+/// # Parameters
+/// 参数
+/// `luaskills_runtime` supplies the shared engine, `provider_configuration` supplies enable overrides, and `logs` records migration outcomes.
+/// `luaskills_runtime` 提供共享引擎，`provider_configuration` 提供启用覆盖，`logs` 记录迁移结果。
+///
+/// # Returns
+/// 返回值
+/// Returns the long-lived manager and immutable catalog used by background Hook prewarming and later runtime projection.
+/// 返回供后台 Hook 预热及后续运行时投影使用的长生命周期管理器与不可变目录。
+fn prepare_system_plugin_runtime(
+    luaskills_runtime: &vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle,
+    provider_configuration: &ProviderConfigurationFile,
+    logs: &mut Vec<String>,
+) -> Result<
+    (
+        vulcan_plugin_runtime::SystemPluginRuntimeManager,
+        Arc<vulcan_plugin_runtime::SystemPluginCatalogSnapshot>,
+    ),
+    ServiceBootstrapError,
+> {
+    // bundledPluginRoot and userPluginRoot are managed by Vulcan instead of LuaSkills.
+    // bundledPluginRoot 与 userPluginRoot 由 Vulcan 管理，而不是由 LuaSkills 管理。
+    let bundled_plugin_root = runtime_assets::resolve_bundled_plugin_root().ok_or_else(|| {
+        ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 内建插件根目录。")
+    })?;
+    let user_plugin_root = runtime_assets::resolve_user_plugin_root().ok_or_else(|| {
+        ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件根目录。")
+    })?;
+    std::fs::create_dir_all(&bundled_plugin_root).map_err(|error| {
+        ServiceBootstrapError::new(
+            "plugins",
+            "Plugins",
+            format!(
+                "创建内建插件根 `{}` 失败：{error}",
+                bundled_plugin_root.display()
+            ),
+        )
+    })?;
+    std::fs::create_dir_all(&user_plugin_root).map_err(|error| {
+        ServiceBootstrapError::new(
+            "plugins",
+            "Plugins",
+            format!(
+                "创建用户插件根 `{}` 失败：{error}",
+                user_plugin_root.display()
+            ),
+        )
+    })?;
+    let system_plugin_runtime = vulcan_plugin_runtime::SystemPluginRuntimeManager::new(
+        Arc::clone(&luaskills_runtime.engine),
+        bundled_plugin_root,
+        user_plugin_root,
+        luaskills_runtime
+            .runtime_root
+            .join("system_lua_lib")
+            .join("vulcan-plugin-bridge"),
+        runtime_assets::resolve_managed_runtime_distribution_root().ok_or_else(|| {
+            ServiceBootstrapError::new(
+                "plugins",
+                "Plugins",
+                "未找到 Vulcan 共享 Python/Node 发行根目录。",
+            )
+        })?,
+        runtime_assets::resolve_user_plugin_state_root().ok_or_else(|| {
+            ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件状态根目录。")
+        })?,
+        runtime_assets::resolve_user_plugin_runtime_root().ok_or_else(|| {
+            ServiceBootstrapError::new(
+                "plugins",
+                "Plugins",
+                "未找到 Vulcan 用户插件运行环境根目录。",
+            )
+        })?,
+    );
+    let system_plugin_catalog = system_plugin_runtime
+        .refresh_catalog(
+            &provider_configuration.luaskills.disabled_system_plugins,
+            &provider_configuration.luaskills.enabled_system_plugins,
+        )
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "plugins",
+                "System Plugins",
+                format!("加载系统插件目录失败：{error}"),
+            )
+        })?;
+    // The legacy document is removed only after the plugin-owned replacement is durable, so an interrupted startup can safely resume.
+    // 仅在插件持有的替代配置持久化后移除旧文档，因此启动中断后可以安全续做。
+    if let Some(legacy_rtk) = vulcan_provider_config::config::load_legacy_rtk_plugin_configuration()
+        .map_err(|error| ServiceBootstrapError::new("plugins", "RTK Plugin Migration", error))?
+    {
+        let initialized = system_plugin_runtime
+            .initialize_plugin_config_if_absent("vulcan-rtk", legacy_rtk.plugin_config)
+            .map_err(|error| {
+                ServiceBootstrapError::new(
+                    "plugins",
+                    "RTK Plugin Migration",
+                    format!("迁移 RTK 插件配置失败：{error}"),
+                )
+            })?;
+        vulcan_provider_config::config::remove_legacy_rtk_configuration_fields().map_err(
+            |error| ServiceBootstrapError::new("plugins", "RTK Plugin Migration", error),
+        )?;
+        logs.push(format!(
+            "[webui-service] migrated retired RTK settings: initialized_plugin_state={initialized}"
+        ));
+    }
+    Ok((system_plugin_runtime, system_plugin_catalog))
 }

@@ -54,6 +54,12 @@ pub const HOOK_CONVERSATION_TURN_TERMINATED: &str = "conversation.turn.terminate
 /// Hook point fired when a session context compaction finishes.
 /// 会话上下文压缩完成时触发的 hook 点位。
 pub const HOOK_CONVERSATION_COMPACTED: &str = "conversation.compacted";
+/// Transform hook fired before one shell_command invocation launches its process.
+/// 在单次 shell_command 调用启动进程前触发的 Transform Hook。
+pub const HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE: &str = "tool.shell_command.before_execute";
+/// Transform hook fired while assembling Git commit-summary context.
+/// 在组装 Git 提交摘要上下文时触发的 Transform Hook。
+pub const HOOK_GIT_COMMIT_SUMMARY_CONTEXT: &str = "git.commit_summary.context";
 /// Host-side safety ceiling for waiting on precheck hook results.
 /// 等待 precheck hook 结果的宿主侧安全兜底上限。
 const PRECHECK_DISPATCH_TIMEOUT_MS: u64 = 120_000;
@@ -70,6 +76,7 @@ mod tests;
 mod types;
 
 pub use completion::{ConversationCompletionOutcome, ConversationCompletionRequest};
+pub(crate) use helpers::host_hook_point_descriptors;
 pub use precheck::{ConversationPrecheckOutcome, ConversationPrecheckRequest};
 pub use runtime::ConversationHookRuntime;
 pub use types::{

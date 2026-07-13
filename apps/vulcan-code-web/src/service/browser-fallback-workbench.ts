@@ -393,13 +393,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   thinkingDisplayMode: "first_inline_with_popup",
   hostTools: {
     nativeTools: [],
-    rtk: {
-      enabled: true,
-      routeMode: "selected",
-      enabledRoutes: ["cargo", "find", "git", "go", "grep", "jest", "ls", "mypy", "npm", "npx", "pnpm", "pytest", "read", "ruff", "tree", "tsc", "vitest", "wc"],
-      disabledRoutes: [],
-      telemetryDisabled: true,
-    },
   },
   aiCapabilities: [
     {

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn conversation_hook_point_descriptors() -> Vec<HookPointDescriptor> {
+pub(crate) fn host_hook_point_descriptors() -> Vec<HookPointDescriptor> {
     vec![
         HookPointDescriptor::new(
             HOOK_CONVERSATION_TURN_PRECHECK,
@@ -62,6 +62,18 @@ pub(super) fn conversation_hook_point_descriptors() -> Vec<HookPointDescriptor> 
             "Runs after session context compaction finishes.",
         )
         .with_default_scope(HookScope::Session),
+        HookPointDescriptor::new(
+            HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE,
+            [HookMode::Transform],
+            "Transforms one shell command before the host launches its process.",
+        )
+        .with_default_scope(HookScope::Workspace),
+        HookPointDescriptor::new(
+            HOOK_GIT_COMMIT_SUMMARY_CONTEXT,
+            [HookMode::Transform],
+            "Transforms structured Git context before commit-message generation.",
+        )
+        .with_default_scope(HookScope::Workspace),
     ]
 }
 

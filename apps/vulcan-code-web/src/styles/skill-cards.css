@@ -1102,6 +1102,201 @@
   color: var(--destructive);
 }
 
+/* Local plugin installation remains visually integrated with the current skill management surface. */
+/* 本地插件安装区域在视觉上保持与当前技能管理界面一致。 */
+.system-plugin-install-panel,
+.system-plugin-detail-mount {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.system-plugin-install-heading,
+.system-plugin-install-input-row,
+.system-plugin-permission-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.system-plugin-install-heading > div {
+  min-width: 0;
+}
+
+.system-plugin-install-heading p {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.system-plugin-install-input-row input {
+  min-width: 0;
+  flex: 1;
+}
+
+.system-plugin-permission-preview {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+}
+
+.system-plugin-permission-preview dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.system-plugin-permission-preview dl > div {
+  display: grid;
+  grid-template-columns: minmax(92px, 130px) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.system-plugin-permission-preview dt {
+  color: var(--muted-foreground);
+}
+
+.system-plugin-permission-preview dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.system-plugin-permission-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.system-plugin-permission-consent input {
+  margin-top: 2px;
+}
+
+.system-plugin-permission-consent.warning {
+  color: var(--destructive);
+}
+
+/* Dynamic plugin panels consume host theme tokens without shipping a separate stylesheet. */
+/* 动态插件面板直接使用宿主主题变量，不携带独立样式表。 */
+.plugin-panel,
+.plugin-panel-controls,
+.plugin-panel-statistics {
+  display: grid;
+  gap: 12px;
+}
+
+.plugin-panel h3,
+.plugin-panel h4,
+.plugin-panel p {
+  margin: 0;
+}
+
+.plugin-panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plugin-panel-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.plugin-panel-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.plugin-panel-controls label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+}
+
+.plugin-panel-controls button {
+  justify-self: start;
+}
+
+.plugin-stat-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.plugin-stat-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.plugin-stat-card span,
+.plugin-stat-chart small,
+.plugin-stat-period-list span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.plugin-stat-chart {
+  height: 150px;
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+  padding: 12px 8px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.plugin-stat-chart-column {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+}
+
+.plugin-stat-chart-column > span {
+  width: min(100%, 20px);
+  min-height: 3px;
+  border-radius: 4px 4px 1px 1px;
+  background: var(--primary);
+}
+
+.plugin-stat-period-list {
+  display: grid;
+  gap: 6px;
+}
+
+.plugin-stat-period-list > div {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.7fr) repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.plugin-panel-error {
+  color: var(--destructive);
+}
+
+@media (max-width: 860px) {
+  .plugin-panel-controls,
+  .plugin-stat-card-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .agent-definition-row-actions {
   display: inline-flex;
   align-items: center;

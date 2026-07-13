@@ -1,5 +1,3 @@
-import type { RtkGainStatsResponse } from "@/types"
-
 // ProviderConfigurationSaveRequest describes one provider configuration submission.
 // ProviderConfigurationSaveRequest 描述单次 Provider 配置提交。
 export interface ProviderConfigurationSaveRequest {
@@ -69,29 +67,6 @@ export interface GitCommitSettingsSaveRequest {
   // User-authored extra prompt appended to commit-message generation.
   // 追加到提交信息生成中的用户额外提示词。
   summaryExtraPrompt: string
-  // Whether commit-message generation should prefer RTK-compressed Git input.
-  // 提交信息生成是否优先使用 RTK 压缩后的 Git 输入。
-  useRtkSummary: boolean
-}
-
-// RtkRoutingSettingsSaveRequest describes one RTK routing settings submission.
-// RtkRoutingSettingsSaveRequest 描述一次 RTK 路由设置提交。
-export interface RtkRoutingSettingsSaveRequest {
-  // Whether RTK routing should be enabled when the bundled executable is present.
-  // 当随包 RTK 可执行文件存在时是否启用路由。
-  enabled: boolean
-  // Route mode requested by the WebUI.
-  // WebUI 请求的路由模式。
-  routeMode: "disabled" | "selected" | "all"
-  // Selected RTK route names.
-  // 已选择的 RTK 路由名称。
-  enabledRoutes: string[]
-  // Explicitly disabled RTK route names.
-  // 显式禁用的 RTK 路由名称。
-  disabledRoutes: string[]
-  // Whether RTK telemetry should be disabled for routed invocations.
-  // 路由调用中是否禁用 RTK 遥测。
-  telemetryDisabled: boolean
 }
 
 // GitCommitSummaryModelSelectionSaveRequest describes the saved commit-summary model mode.
@@ -256,12 +231,6 @@ export interface SettingsActionProps {
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>
-  // Saves RTK routing settings.
-  // 保存 RTK 路由设置。
-  onSaveRtkRoutingSettings: (request: RtkRoutingSettingsSaveRequest) => Promise<void>
-  // Loads RTK gain statistics for the settings page.
-  // 加载设置页使用的 RTK gain 统计。
-  onGetRtkGainStats: () => Promise<RtkGainStatsResponse | null>
   // Saves one shared AI capability vendor.
   // 保存单个共享 AI 能力供应商。
   onSaveAiCapabilityVendor: (request: AiCapabilityVendorSaveRequest) => Promise<void>

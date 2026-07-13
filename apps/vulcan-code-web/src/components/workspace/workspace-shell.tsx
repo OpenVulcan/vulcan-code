@@ -797,6 +797,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           expanded={skillsMenuExpanded}
           onExpandedChange={setSkillsMenuExpanded}
           onSelectSubArea={props.onSelectSkillSubArea}
+          workbench={props.workbench}
         />
       ),
       side: "left",

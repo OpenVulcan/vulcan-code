@@ -1,5 +1,7 @@
-# install_host_deps.ps1 - Install host-side third-party tool binaries into third_party.
+﻿# install_host_deps.ps1 - Install host dependencies and bundled plugin artifacts.
+# install_host_deps.ps1 - 安装宿主依赖与内建插件制品。
 # Developer/build use only. End users do not need to invoke this manually.
+# 仅供开发与构建使用，最终用户无需手动调用。
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/install_host_deps.ps1
 
 param(
@@ -21,11 +23,13 @@ $VldbControllerBinDir = Join-Path $VldbControllerDir "bin"
 $VldbControllerRepo = "OpenVulcan/vldb-controller"
 $VldbControllerTag = "v0.2.1"
 
-# RtkDir stores the RTK host tool payload and metadata downloaded from its release tag.
-$RtkDir = Join-Path $ThirdParty "rtk"
+# RtkPluginDir is the real RTK plugin package owned and distributed by Vulcan Code.
+# RtkPluginDir 是由 Vulcan Code 持有并分发的真实 RTK 插件包。
+$RtkPluginDir = Join-Path $ProjectDir "plugins\vulcan-rtk"
 
-# RtkBinDir stores the extracted RTK executable only.
-$RtkBinDir = Join-Path $RtkDir "bin"
+# RtkBinRoot stores target-specific executables directly inside the RTK plugin package.
+# RtkBinRoot 直接在 RTK 插件包内保存按目标平台划分的可执行文件。
+$RtkBinRoot = Join-Path $RtkPluginDir "bin"
 
 # RtkRepo identifies the upstream RTK GitHub repository.
 $RtkRepo = "rtk-ai/rtk"
@@ -36,8 +40,9 @@ $RtkTag = "v0.42.4"
 # RtkLicenseUrl points at the tag-pinned source license because RTK binary assets do not include it.
 $RtkLicenseUrl = "https://raw.githubusercontent.com/rtk-ai/rtk/$RtkTag/LICENSE"
 
-# RtkLicenseFile stores the license for future application-side license aggregation, not packaging.
-$RtkLicenseFile = Join-Path $RtkDir "LICENSE"
+# RtkLicenseFile stores the pinned license as part of the bundled plugin package.
+# RtkLicenseFile 把固定版本许可证保存为内建插件包的一部分。
+$RtkLicenseFile = Join-Path $RtkPluginDir "LICENSE"
 
 function Ensure-Dir {
     param([string]$Path)
@@ -76,7 +81,28 @@ function Test-ExpectedSha256 {
         return
     }
 
-    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    # hashStream opens the exact artifact for a PowerShell-version-independent SHA-256 calculation.
+    # hashStream 打开精确制品，以执行不依赖 PowerShell 版本的 SHA-256 计算。
+    $hashStream = [System.IO.File]::OpenRead($Path)
+    try {
+        # sha256 owns the managed hash implementation and is disposed deterministically.
+        # sha256 持有托管哈希实现，并会被确定性释放。
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            # hashBytes contains the exact digest produced from the downloaded artifact.
+            # hashBytes 保存从下载制品计算得到的精确摘要。
+            $hashBytes = $sha256.ComputeHash($hashStream)
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $hashStream.Dispose()
+    }
+    # actualHash uses the same lowercase hexadecimal representation as the pinned manifest value.
+    # actualHash 使用与固定清单值一致的小写十六进制表示。
+    $actualHash = [System.BitConverter]::ToString($hashBytes).Replace("-", "").ToLowerInvariant()
     $expectedHashLower = $ExpectedHash.ToLowerInvariant()
     if ($actualHash -ne $expectedHashLower) {
         throw ("Checksum mismatch for {0}. Expected {1}, got {2}" -f $Label, $expectedHashLower, $actualHash)
@@ -178,6 +204,7 @@ function Get-RtkAssetInfo {
         }
         return @{
             target = "x86_64-pc-windows-msvc"
+            plugin_target = "x86_64-pc-windows-msvc"
             archive_ext = ".zip"
             binary_name = "rtk.exe"
             sha256 = "f0ec18963581657173bd6a51f5ba012b093823f844db749fec218581af30a568"
@@ -188,6 +215,7 @@ function Get-RtkAssetInfo {
         if ($archKey -eq "x86_64") {
             return @{
                 target = "x86_64-unknown-linux-musl"
+                plugin_target = "x86_64-unknown-linux-gnu"
                 archive_ext = ".tar.gz"
                 binary_name = "rtk"
                 sha256 = "34975116da11e09e502501daf758143e0b22ed3a42a10eb67fb693a6270d9e36"
@@ -196,6 +224,7 @@ function Get-RtkAssetInfo {
 
         return @{
             target = "aarch64-unknown-linux-gnu"
+            plugin_target = "aarch64-unknown-linux-gnu"
             archive_ext = ".tar.gz"
             binary_name = "rtk"
             sha256 = "cc2b91c064eb670c097c184913c8fbcb1a943d53d7fe505375e96ba0c5b6459f"
@@ -206,6 +235,7 @@ function Get-RtkAssetInfo {
         if ($archKey -eq "x86_64") {
             return @{
                 target = "x86_64-apple-darwin"
+                plugin_target = "x86_64-apple-darwin"
                 archive_ext = ".tar.gz"
                 binary_name = "rtk"
                 sha256 = "84121316867613e61925c209607f033b2113bb0ce312c267a79d3e3e8f221e49"
@@ -214,6 +244,7 @@ function Get-RtkAssetInfo {
 
         return @{
             target = "aarch64-apple-darwin"
+            plugin_target = "aarch64-apple-darwin"
             archive_ext = ".tar.gz"
             binary_name = "rtk"
             sha256 = "f223ca074a0215af002679bc1d34ca92b93e25b3e8ae16aace6e84c06e586802"
@@ -321,18 +352,27 @@ function Install-VldbControllerBinary {
     }
 }
 
-# Install-RtkBinary installs the pinned RTK executable into third_party/rtk/bin.
+# Install-RtkBinary installs the pinned RTK executable into the target-specific plugin bin directory.
+# Install-RtkBinary 把固定版本 RTK 可执行文件安装到插件的目标平台专属 bin 目录。
 function Install-RtkBinary {
-    Ensure-Dir $RtkDir
-    Ensure-Dir $RtkBinDir
+    Ensure-Dir $RtkPluginDir
+    Ensure-Dir $RtkBinRoot
 
     $assetInfo = Get-RtkAssetInfo
     $tarPath = Get-AvailableTarPath
     $tagName = $RtkTag
     $assetName = "rtk-$($assetInfo.target)$($assetInfo.archive_ext)"
-    $markerFile = Join-Path $RtkDir ".installed-$tagName-$($assetInfo.target)"
+    # targetBinDir is the exact directory declared for this target in the plugin manifest.
+    # targetBinDir 是插件清单为当前目标声明的精确目录。
+    $targetBinDir = Join-Path $RtkBinRoot $assetInfo.plugin_target
+    Ensure-Dir $targetBinDir
+    # markerFile records the pinned artifact version beside its target-specific executable.
+    # markerFile 在目标专属可执行文件旁记录固定制品版本。
+    $markerFile = Join-Path $targetBinDir ".installed-$tagName"
     $localArchivePath = Find-LocalArchive -AssetName $assetName
-    $binaryDest = Join-Path $RtkBinDir $assetInfo.binary_name
+    # binaryDest is the real plugin-owned executable path consumed at runtime.
+    # binaryDest 是运行时使用的真实插件自有可执行文件路径。
+    $binaryDest = Join-Path $targetBinDir $assetInfo.binary_name
 
     if ((Test-Path -LiteralPath $markerFile) -and (Test-Path -LiteralPath $binaryDest)) {
         Write-Host "==> RTK host binary already installed ($assetName)."
@@ -385,7 +425,7 @@ function Install-RtkBinary {
 
         Copy-Item -LiteralPath $binarySource.FullName -Destination $binaryDest -Force
 
-        Get-ChildItem -Path $RtkDir -Filter ".installed-*" -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -Path $targetBinDir -Filter ".installed-*" -File -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
         New-Item -ItemType File -Path $markerFile -Force | Out-Null
         Write-Host "==> RTK host binary installed successfully."
@@ -394,11 +434,15 @@ function Install-RtkBinary {
     }
 }
 
-# Install-RtkLicense downloads the RTK license beside the third_party payload for future license aggregation.
+# Install-RtkLicense downloads the pinned RTK license into the real plugin package.
+# Install-RtkLicense 把固定版本 RTK 许可证下载到真实插件包中。
 function Install-RtkLicense {
-    Ensure-Dir $RtkDir
+    Ensure-Dir $RtkPluginDir
+    Ensure-Dir $RtkBinRoot
 
-    $licenseMarker = Join-Path $RtkDir ".license-$RtkTag"
+    # licenseMarker records the exact tag represented by the packaged license.
+    # licenseMarker 记录已打包许可证对应的精确标签。
+    $licenseMarker = Join-Path $RtkBinRoot ".license-$RtkTag"
     if ((Test-Path -LiteralPath $licenseMarker) -and (Test-Path -LiteralPath $RtkLicenseFile)) {
         Write-Host "==> RTK license already installed ($RtkTag)."
         return
@@ -410,7 +454,7 @@ function Install-RtkLicense {
         Invoke-WebRequest -Uri $RtkLicenseUrl -OutFile $tempLicenseFile -UseBasicParsing
         Copy-Item -LiteralPath $tempLicenseFile -Destination $RtkLicenseFile -Force
 
-        Get-ChildItem -Path $RtkDir -Filter ".license-*" -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -Path $RtkBinRoot -Filter ".license-*" -File -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
         New-Item -ItemType File -Path $licenseMarker -Force | Out-Null
         Write-Host "==> RTK license installed successfully."

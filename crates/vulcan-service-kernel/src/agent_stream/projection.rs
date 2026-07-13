@@ -1468,7 +1468,7 @@ mod tests {
         let finished = RuntimeEvent::new(
             RuntimeEventKind::ToolFinished,
             "工具返回 · call-shell",
-            "## Result ID\n\n`tool-result-call-shell`\n\n## Tool Result\n\nCommand: rtk git diff --stat\n\n[stdout]\nfiles changed",
+            "## Result ID\n\n`tool-result-call-shell`\n\n## Tool Result\n\nCommand: git diff --stat\n\n[stdout]\nfiles changed",
         )
         .with_metadata(Some(json!({
             "tool_call_id": "call-shell",
@@ -1477,7 +1477,7 @@ mod tests {
             "host_result": {
                 "kind": "command_run",
                 "payload": {
-                    "command": "rtk git diff --stat",
+                    "command": "git diff --stat",
                     "status": "completed"
                 }
             }

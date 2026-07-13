@@ -1,7 +1,7 @@
 import type { ConversationDetailRef, ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import { shortenTerminalSessionId, terminalSummaryById, terminalVisualState } from "@/components/conversation/conversation-terminal-model";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
-import type { CommandExecutionPresentation, ToolPresentationDisplayState, ToolPresentationResolveOptions } from "./types";
+import type { CommandExecutionPresentation, CommandPluginContribution, ToolPresentationDisplayState, ToolPresentationResolveOptions } from "./types";
 import { argumentsFromMetadata, arrayValue, compactHash, fixedHostKind, fixedHostPayload, fixedToolName, metadataString, metadataValue, normalizeToolName, numberValue, objectValue, stringValue, textValue } from "./presentation-value-readers";
 
 // hydrateCommandExecutionPresentation merges one hidden tool detail payload into an existing command presentation.
@@ -370,10 +370,10 @@ export function resolveCommandExecutionPresentation(
     command,
     detailRef,
     effectiveCommand: display?.effectiveCommand ?? null,
+    pluginContributions: display?.pluginContributions ?? [],
     exitCode: display?.exitCode ?? null,
     id: commandPresentationId(blocks, command),
     kind: "command_execution",
-    rtkRouted: display?.rtkRouted ?? false,
     state: displayState,
     stderr: display?.stderr ?? "",
     stdout: display?.stdout ?? "",
@@ -449,14 +449,16 @@ function mergeCommandExecutionDisplay(
   presentation: CommandExecutionPresentation,
   display: ShellCommandDisplay,
 ): CommandExecutionPresentation {
-  const rtkRouted = display.rtkRouted || presentation.rtkRouted;
   const effectiveCommand = display.effectiveCommand ?? presentation.effectiveCommand;
+  const pluginContributions = display.pluginContributions.length > 0
+    ? display.pluginContributions
+    : presentation.pluginContributions;
   return {
     ...presentation,
     command: display.command || presentation.command,
     effectiveCommand,
+    pluginContributions,
     exitCode: display.exitCode ?? presentation.exitCode,
-    rtkRouted,
     stderr: display.stderr || presentation.stderr,
     stdout: display.stdout || presentation.stdout,
   };
@@ -506,9 +508,9 @@ interface ShellCommandDisplay {
   // Effective command line after host routing.
   // 宿主路由后的有效命令行。
   effectiveCommand: string | null;
-  // Whether this display was routed through RTK.
-  // 此展示是否经过 RTK 路由。
-  rtkRouted: boolean;
+  // Ordered generic plugin contributions attached by the host hook dispatcher.
+  // 宿主 Hook 调度器附加的有序通用插件贡献。
+  pluginContributions: CommandPluginContribution[];
   // Parsed stdout text.
   // 解析出的 stdout 文本。
   stdout: string;
@@ -523,14 +525,20 @@ interface ShellCommandDisplay {
 // shellCommandDisplayFromPayload reads shell command display data from host_result.payload.
 // shellCommandDisplayFromPayload 从 host_result.payload 读取 shell 命令展示数据。
 function shellCommandDisplayFromPayload(payload: Record<string, unknown>): ShellCommandDisplay | null {
-  const rtk = rtkRoutingInfoFromPayload(payload);
-  const command = rtk?.originalCommand ?? stringValue(payload.command) ?? "";
-  const effectiveCommand = rtk?.rewrittenCommand ?? null;
+  const hookTransform = objectValue(payload.hook_transform ?? payload.hookTransform);
+  const command = stringValue(hookTransform?.original_command ?? hookTransform?.originalCommand)
+    ?? stringValue(payload.command)
+    ?? "";
+  const effectiveCommand = stringValue(payload.effective_command ?? payload.effectiveCommand)
+    ?? stringValue(hookTransform?.effective_command ?? hookTransform?.effectiveCommand);
+  const pluginContributions = commandPluginContributions(
+    payload.plugin_contributions ?? payload.pluginContributions ?? hookTransform?.contributions,
+  );
   const exitCode = numberValue(payload.exit_code ?? payload.exitCode);
   if (!command && exitCode === null) {
     return null;
   }
-  return { command, effectiveCommand, exitCode, rtkRouted: Boolean(rtk), stderr: "", stdout: "" };
+  return { command, effectiveCommand, exitCode, pluginContributions, stderr: "", stdout: "" };
 }
 
 // shellCommandDisplayFromMetadata reads a structured shell_command display from metadata.
@@ -538,54 +546,21 @@ function shellCommandDisplayFromPayload(payload: Record<string, unknown>): Shell
 function shellCommandDisplayFromMetadata(metadata: unknown): ShellCommandDisplay | null {
   const display = objectValue(metadataValue(metadata, ["display"]));
   const payload = objectValue(metadataValue(metadata, ["host_result.payload", "hostResult.payload", "payload"]));
-  const rtk = rtkRoutingInfoFromPayload(payload) ?? rtkRoutingInfoFromDisplay(display);
-  if ((!display || stringValue(display.kind) !== "shell_command") && !rtk) {
+  if (!display || stringValue(display.kind) !== "shell_command") {
     return null;
   }
-  const command = rtk?.originalCommand ?? stringValue(display?.command) ?? "";
-  const effectiveCommand = rtk?.rewrittenCommand ?? stringValue(display?.effective_command ?? display?.effectiveCommand);
+  const command = stringValue(display.command) ?? stringValue(payload?.command) ?? "";
+  const effectiveCommand = stringValue(display.effective_command ?? display.effectiveCommand);
+  const pluginContributions = commandPluginContributions(
+    display.plugin_contributions ?? display.pluginContributions,
+  );
   const stdout = stringValue(display?.stdout) ?? "";
   const stderr = stringValue(display?.stderr) ?? "";
   const exitCode = numberValue(display?.exit_code ?? display?.exitCode);
   if (!command && !stdout && !stderr && exitCode === null) {
     return null;
   }
-  return { command, effectiveCommand, exitCode, rtkRouted: Boolean(rtk), stderr, stdout };
-}
-
-// RtkRoutingDisplayInfo stores original and rewritten commands for routed displays.
-// RtkRoutingDisplayInfo 存储路由展示使用的原始命令和改写命令。
-interface RtkRoutingDisplayInfo {
-  // Original command requested by the AI.
-  // AI 请求的原始命令。
-  originalCommand: string;
-  // Effective RTK command executed by the host.
-  // 宿主实际执行的 RTK 有效命令。
-  rewrittenCommand: string;
-}
-
-// rtkRoutingInfoFromPayload returns applied RTK command information from one host payload.
-// rtkRoutingInfoFromPayload 从单个宿主载荷中返回已应用的 RTK 命令信息。
-function rtkRoutingInfoFromPayload(payload: Record<string, unknown> | null): RtkRoutingDisplayInfo | null {
-  return rtkRoutingInfoFromRtkValue(objectValue(payload?.rtk));
-}
-
-// rtkRoutingInfoFromDisplay returns applied RTK state from one shell display payload.
-// rtkRoutingInfoFromDisplay 从 shell 展示载荷中返回已应用的 RTK 状态。
-function rtkRoutingInfoFromDisplay(display: Record<string, unknown> | null): RtkRoutingDisplayInfo | null {
-  return rtkRoutingInfoFromRtkValue(objectValue(display?.rtk));
-}
-
-// rtkRoutingInfoFromRtkValue returns applied RTK command information from one structured RTK value.
-// rtkRoutingInfoFromRtkValue 从单个结构化 RTK 值中返回已应用的命令信息。
-function rtkRoutingInfoFromRtkValue(rtk: Record<string, unknown> | null): RtkRoutingDisplayInfo | null {
-  const status = stringValue(rtk?.status);
-  if (!rtk || status !== "applied") {
-    return null;
-  }
-  const originalCommand = stringValue(rtk.original_command ?? rtk.originalCommand);
-  const rewrittenCommand = stringValue(rtk.rewritten_command ?? rtk.rewrittenCommand);
-  return originalCommand && rewrittenCommand ? { originalCommand, rewrittenCommand } : null;
+  return { command, effectiveCommand, exitCode, pluginContributions, stderr, stdout };
 }
 
 // shellCommandArgumentFromMetadata reads shell_command from the fixed ToolStarted arguments field.
@@ -608,10 +583,36 @@ function parseShellCommandDisplayFromText(source: string): ShellCommandDisplay |
     command,
     effectiveCommand: null,
     exitCode,
-    rtkRouted: false,
+    pluginContributions: [],
     stderr,
     stdout,
   };
+}
+
+// commandPluginContributions validates the exact generic contribution array returned by plugin hooks.
+// commandPluginContributions 校验插件 Hook 返回的精确通用贡献数组。
+function commandPluginContributions(value: unknown): CommandPluginContribution[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const contributions: CommandPluginContribution[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const contribution = objectValue(item);
+    const label = stringValue(contribution?.label);
+    const contributionValue = stringValue(contribution?.value);
+    if (!label || !contributionValue) {
+      continue;
+    }
+    const badge = stringValue(contribution?.badge);
+    const identity = `${badge ?? ""}\u0000${label}\u0000${contributionValue}`;
+    if (seen.has(identity)) {
+      continue;
+    }
+    seen.add(identity);
+    contributions.push({ badge, label, value: contributionValue });
+  }
+  return contributions;
 }
 
 // commandFromText extracts a command header from rendered shell_command text.

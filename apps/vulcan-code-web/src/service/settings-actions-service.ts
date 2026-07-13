@@ -1,17 +1,12 @@
 import type {
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
-  RtkGainStatsResponse,
   WorkbenchSnapshot,
 } from "@/types";
 import {
   hasServiceRuntime,
   serviceClient,
 } from "@/service/webui-service-runtime";
-
-// RTK_GAIN_STATS_REQUEST_TIMEOUT_MS bounds the settings-page statistics request so the UI cannot stay loading forever.
-// RTK_GAIN_STATS_REQUEST_TIMEOUT_MS 限定设置页统计请求耗时，避免界面永久停留在读取状态。
-const RTK_GAIN_STATS_REQUEST_TIMEOUT_MS = 8000;
 
 // WorkbenchModelChoice carries the provider and model selected by the composer model picker.
 // WorkbenchModelChoice 承载输入区模型选择器选中的 Provider 与模型。
@@ -150,55 +145,11 @@ export async function saveGitCommitSettings(request: {
   newBranchPrefix: string;
   summaryModel: { mode: "session" } | { mode: "fixed"; providerId: string; modelId: string };
   summaryExtraPrompt: string;
-  useRtkSummary: boolean;
 }): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
   return serviceClient.request<WorkbenchSnapshot>("service_save_git_commit_settings", { request });
-}
-
-// saveRtkRoutingSettings persists RTK command-routing settings through the desktop service.
-// saveRtkRoutingSettings 通过桌面服务持久化 RTK 命令路由设置。
-export async function saveRtkRoutingSettings(request: {
-  enabled: boolean;
-  routeMode: "disabled" | "selected" | "all";
-  enabledRoutes: string[];
-  disabledRoutes: string[];
-  telemetryDisabled: boolean;
-}): Promise<WorkbenchSnapshot | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_save_rtk_routing_settings", { request });
-}
-
-// getRtkGainStats loads cached-display RTK token-savings statistics.
-// getRtkGainStats 加载用于缓存展示的 RTK Token 节省统计。
-export async function getRtkGainStats(): Promise<RtkGainStatsResponse | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  // controller aborts the browser-service RPC when the statistics bridge does not answer in time.
-  // controller 在统计桥接未及时返回时中止浏览器服务 RPC。
-  const controller = new AbortController();
-  // timeoutId stores the timeout handle so a completed request can release it promptly.
-  // timeoutId 保存超时句柄，便于请求完成后及时释放。
-  const timeoutId = globalThis.setTimeout(() => {
-    controller.abort();
-  }, RTK_GAIN_STATS_REQUEST_TIMEOUT_MS);
-  try {
-    return await serviceClient.request<RtkGainStatsResponse>("service_get_rtk_gain_stats", {}, {
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("RTK gain statistics request timed out. Please retry or check the local service.");
-    }
-    throw error;
-  } finally {
-    globalThis.clearTimeout(timeoutId);
-  }
 }
 
 // saveAiCapabilityVendor persists one shared AI capability vendor.

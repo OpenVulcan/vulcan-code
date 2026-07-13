@@ -1,0 +1,57 @@
+name: Vulcan RTK
+capability: Command routing, compressed Git context, and token-saving statistics
+messages:
+  title: RTK command routing
+  hookBadge: Declarative hooks
+  loadingSettings: Loading settings
+  enabled: Enabled
+  disabled: Disabled
+  densityTitle: High-density command context
+  densityDescription: RTK compresses noisy test, build, search, and Git output so the AI can retain more useful analysis. Unmatched or failed rewrites fall back to the original command.
+  enableRouting: Enable RTK routing
+  enableRoutingHelp: Rewrite supported shell_command calls through the bundled RTK binary.
+  gitContext: Use RTK for commit generation
+  gitContextHelp: Compress git status and git diff context used to generate commit messages.
+  disableTelemetry: Disable RTK telemetry environment variable
+  disableTelemetryHelp: Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes.
+  save: Save
+  saving: Saving
+  saved: Saved
+  stats.title: RTK context-density statistics
+  stats.description: Token savings are cached for thirty minutes. Switching daily, weekly, and monthly views never sends another request.
+  stats.loading: Loading
+  stats.ready: Stats ready
+  stats.unavailable: Unavailable
+  stats.refresh: Refresh
+  stats.refreshing: Refreshing
+  stats.lastLoaded: Last loaded
+  stats.generated: Generated
+  stats.none: None
+  stats.unavailableHelp: Statistics are currently unavailable.
+  stats.empty: No statistics yet
+  stats.noCommandBreakdown: No command breakdown yet
+  stats.chartLabel: RTK token savings trend
+  stats.savedTokens: Tokens saved
+  stats.averageSavings: Average savings
+  stats.commands: Commands
+  stats.capacityRatio: Context capacity
+  stats.daily: Daily
+  stats.weekly: Weekly
+  stats.monthly: Monthly
+  stats.command: Command
+  stats.count: Count
+  stats.saved: Tokens saved
+  stats.savingsRate: Savings
+  stats.byCommand: By command
+  stats.time: Time
+  stats.impact: Impact
+  routes.title: RTK routes
+  routes.description: Choose exactly which supported commands may be rewritten.
+  routes.curated: Curated
+  routes.all: All
+  routes.clear: Clear
+  routes.command: Command
+  routes.group: Group
+  routes.extended: Extended
+  routes.selected: RTK routes selected
+  routes.enable: Enable route

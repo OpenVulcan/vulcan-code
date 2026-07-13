@@ -3,7 +3,11 @@
 
 use std::sync::Arc;
 
-use vulcan_hooks::{FnHookHandler, HookDispatcher, HookError, HookRegistration};
+use serde_json::Value;
+use vulcan_hooks::{
+    FnHookHandler, HookContext, HookDispatchReport, HookDispatchRequest, HookDispatcher, HookError,
+    HookPayload, HookRegistration,
+};
 use vulcan_plugin_runtime::{
     SystemPluginCatalogSnapshot, SystemPluginHookDescriptor, SystemPluginRuntimeManager,
 };
@@ -11,6 +15,37 @@ use vulcan_plugin_runtime::{
 /// Stable registration prefix reserved for manifest-driven System Plugin hooks.
 /// 为清单驱动系统插件 hook 保留的稳定注册前缀。
 const SYSTEM_PLUGIN_HOOK_REGISTRATION_PREFIX: &str = "system-plugin/";
+
+/// Dispatches one host-owned hook point through the current enabled plugin snapshot.
+/// 通过当前已启用插件快照分发一个宿主持有 Hook 点。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns plugin leases, `context` identifies the host point, and `payload` is exact input.
+/// `runtime` 持有插件租约，`context` 标识宿主点位，`payload` 是精确输入。
+///
+/// # Returns
+/// 返回值
+/// Returns the shared dispatcher report with transformed payload and generic contributions.
+/// 返回包含转换后载荷与通用贡献的共享调度报告。
+pub async fn dispatch_system_plugin_hook(
+    runtime: SystemPluginRuntimeManager,
+    context: HookContext,
+    payload: Value,
+) -> Result<HookDispatchReport, HookError> {
+    let mut dispatcher = HookDispatcher::default();
+    for descriptor in super::conversation_hooks::host_hook_point_descriptors() {
+        dispatcher.register_point(descriptor)?;
+    }
+    let snapshot = runtime.snapshot();
+    synchronize_system_plugin_hooks(&mut dispatcher, runtime, &snapshot)?;
+    dispatcher
+        .dispatch(HookDispatchRequest::new(
+            context,
+            HookPayload::from_serializable(payload)?,
+        ))
+        .await
+}
 
 /// Atomically synchronizes enabled manifest hooks into the existing host dispatcher.
 /// 将已启用的清单 hook 原子同步到现有宿主调度器。
@@ -134,7 +169,7 @@ mod tests {
         fs::create_dir_all(package.join("runtime")).expect("create hook runtime directory");
         fs::write(package.join("dependencies.yaml"), "{}\n").expect("write dependencies");
         fs::write(
-            package.join("runtime/plugin.lua"),
+            package.join("runtime/plugin.bundle.lua"),
             r#"local M = {}
 local count = 0
 function M.dispatch() return '{"ok":true,"result":{}}' end
@@ -159,7 +194,7 @@ display:
   capability: Host hook bridge fixture
 runtime:
   dependencies_file: dependencies.yaml
-  module: runtime.plugin
+  bundle: runtime/plugin.bundle.lua
   invoke_function: dispatch
   shutdown_function: shutdown
   max_active_sessions: 1
@@ -199,12 +234,36 @@ hooks:
     fn system_plugin_hooks_share_existing_dispatcher_and_lifecycle() {
         let temp = tempfile::tempdir().expect("create temp directory");
         let runtime_root = temp.path().join("runtime");
-        let plugin_root = runtime_root.join("system_lua_lib");
+        let plugin_root = runtime_root.join("plugins");
         fs::create_dir_all(&plugin_root).expect("create System Plugin root");
         write_hook_package(&plugin_root);
+        let bridge_root = runtime_root
+            .join("system_lua_lib")
+            .join("vulcan-plugin-bridge");
+        fs::create_dir_all(bridge_root.join("runtime")).expect("create bridge runtime directory");
+        fs::write(bridge_root.join("dependencies.yaml"), "{}\n")
+            .expect("write bridge dependencies");
+        fs::write(
+            bridge_root.join("runtime/bridge.lua"),
+            include_str!("../../../../plugin-bridge/vulcan-plugin-bridge/runtime/bridge.lua"),
+        )
+        .expect("write bridge module");
+        let user_plugin_root = runtime_root.join("user_plugins");
+        let managed_runtime_root = runtime_root.join("managed_runtime");
+        let plugin_state_root = runtime_root.join("plugin_state");
+        let plugin_runtime_root = runtime_root.join("plugin_runtime");
+        fs::create_dir_all(&user_plugin_root).expect("create user plugin root");
+        fs::create_dir_all(&managed_runtime_root).expect("create managed runtime root");
+        fs::create_dir_all(&plugin_state_root).expect("create plugin state root");
+        fs::create_dir_all(&plugin_runtime_root).expect("create plugin runtime root");
         let manager = SystemPluginRuntimeManager::new(
             Arc::new(Mutex::new(test_engine(&runtime_root))),
             plugin_root,
+            user_plugin_root,
+            bridge_root,
+            managed_runtime_root,
+            plugin_state_root,
+            plugin_runtime_root,
         );
         let catalog = manager
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())

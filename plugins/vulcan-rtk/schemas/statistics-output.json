@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "available": { "type": "boolean" },
+    "summary": { "type": "object" },
+    "daily": { "type": "array" },
+    "weekly": { "type": "array" },
+    "monthly": { "type": "array" },
+    "byCommand": { "type": "array" },
+    "error": { "type": ["string", "null"] }
+  },
+  "required": ["available", "summary", "daily", "weekly", "monthly", "byCommand"],
+  "additionalProperties": false
+}

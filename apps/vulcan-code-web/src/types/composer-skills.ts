@@ -363,6 +363,38 @@ export interface LuaSkillsCatalogSummary {
   skills: LuaSkillSummary[];
 }
 
+// SystemPluginPermissionPreview is the host-validated authorization surface for one local package.
+// SystemPluginPermissionPreview 是宿主校验后的单个本地插件包授权界面数据。
+export interface SystemPluginPermissionPreview {
+  // Stable plugin identity.
+  // 稳定插件身份。
+  pluginId: string;
+  // Exact package version.
+  // 精确插件包版本。
+  version: string;
+  // Host-assigned package origin.
+  // 宿主分配的插件包来源。
+  origin: "user_installed";
+  // Complete capability set that must be approved exactly.
+  // 必须完整批准的能力集合。
+  capabilities: string[];
+  // Exact host Hook points affected by the plugin.
+  // 插件影响的精确宿主 Hook 点。
+  hookPoints: string[];
+  // Exact host UI mount points affected by the plugin.
+  // 插件影响的精确宿主界面挂载点。
+  uiMountPoints: string[];
+  // Declared native process identifiers.
+  // 声明的原生进程标识。
+  binaryIds: string[];
+  // Declared Node.js process identifiers.
+  // 声明的 Node.js 进程标识。
+  nodeEntryIds: string[];
+  // Declared Python process identifiers.
+  // 声明的 Python 进程标识。
+  pythonEntryIds: string[];
+}
+
 // PluginSummary describes one plugin or LuaSkills package projected by the service.
 // PluginSummary 描述服务端投影的单个插件或 LuaSkills 包。
 export interface PluginSummary {
@@ -430,6 +462,55 @@ export interface PluginSummary {
   // Stable lifecycle manager kind used by the action router.
   // 动作路由使用的稳定生命周期管理类型。
   managementKind: "luaSkill" | "systemPlugin";
+  // Optional manifest-owned extension surfaces for real Vulcan plugins.
+  // 真实 Vulcan 插件可用的可选清单自有扩展面。
+  extension?: {
+    // Stable package origin.
+    // 稳定的包来源。
+    origin: "bundledSystem" | "userInstalled";
+    // Exact host capabilities declared by the manifest.
+    // 清单声明的精确宿主能力。
+    capabilities: string[];
+    // Declared host hooks shown during authorization and management.
+    // 在授权与管理期间展示的已声明宿主 Hook。
+    hooks: Array<{ id: string; point: string }>;
+    // Host-callable plugin business actions.
+    // 宿主可调用的插件业务 Action。
+    actions: string[];
+    // Dynamic host UI mounts.
+    // 动态宿主界面挂载项。
+    uiMounts: Array<{
+      // Stable plugin-local mount identifier.
+      // 稳定的插件内挂载标识。
+      id: string;
+      // Stable host-owned mount point.
+      // 稳定的宿主自有挂载点。
+      point: "skillsPluginDetail" | "workspaceMain" | "conversationRightPanel";
+      // Named ESM export containing the component factory.
+      // 包含组件工厂的 ESM 命名导出。
+      exportName: string;
+    }>;
+  } | null;
+}
+
+// PluginUiModuleSource carries one bounded uncompressed plugin ESM module.
+// PluginUiModuleSource 携带一个有大小边界的未压缩插件 ESM 模块。
+export interface PluginUiModuleSource {
+  // Exact owning plugin identifier.
+  // 精确的所属插件标识。
+  pluginId: string;
+  // Exact plugin-local mount identifier.
+  // 精确的插件内挂载标识。
+  mountId: string;
+  // Named ESM export containing the component factory.
+  // 包含组件工厂的 ESM 命名导出。
+  exportName: string;
+  // Untouched UTF-8 ESM source returned by the authenticated service.
+  // 由已认证服务返回的原样 UTF-8 ESM 源码。
+  source: string;
+  // Plugin-owned UI messages grouped by locale and stable message key.
+  // 按语言与稳定消息键组织的插件自有界面文案。
+  messagesByLocale: Record<string, Record<string, string>>;
 }
 
 // LuaSkillsCatalogUpdate carries one revisioned full LuaSkills domain projection.

@@ -3,11 +3,13 @@
 
 use crate::{
     SYSTEM_PLUGIN_MANIFEST_SCHEMA_VERSION, SYSTEM_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS,
-    SYSTEM_PLUGIN_SESSION_ID_ARGUMENT, SystemPluginHookManifest, SystemPluginKind,
-    SystemPluginLocaleManifest, SystemPluginManifest, SystemPluginPromptManifest,
-    SystemPluginToolExecutionKind, SystemPluginToolManifest,
+    SYSTEM_PLUGIN_SESSION_ID_ARGUMENT, SystemPluginCapability, SystemPluginDependencyInstallMode,
+    SystemPluginHookManifest, SystemPluginLocaleManifest, SystemPluginManifest,
+    SystemPluginPromptManifest, SystemPluginToolExecutionKind, SystemPluginToolManifest,
 };
+use luaskills::PackageDependencyManifest;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,6 +18,18 @@ use std::sync::Arc;
 /// Fixed package manifest file name recognized by the host.
 /// 宿主识别的固定插件包清单文件名。
 pub const SYSTEM_PLUGIN_MANIFEST_FILE: &str = "plugin.yaml";
+
+/// Filesystem origin selected for one effective Vulcan plugin package.
+/// 单个生效 Vulcan 插件包选定的文件系统来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemPluginPackageOrigin {
+    /// Plugin shipped below the active Vulcan Code root.
+    /// 随当前 Vulcan Code 根目录交付的插件。
+    BundledSystem,
+    /// Plugin installed below the current user's Vulcan plugin root.
+    /// 安装在当前用户 Vulcan 插件根目录下的插件。
+    UserInstalled,
+}
 
 /// Effective package availability after platform and user policy projection.
 /// 应用平台与用户策略投影后的插件包有效可用状态。
@@ -141,9 +155,12 @@ pub struct SystemPluginDescriptor {
     /// Canonical package root.
     /// 规范化插件包根目录。
     pub package_root: PathBuf,
-    /// Stable in-process fingerprint of every distributable package file.
-    /// 插件全部可分发文件的稳定进程内指纹。
-    pub content_fingerprint: u64,
+    /// Effective package origin selected by deterministic root precedence.
+    /// 通过确定性根目录优先级选定的生效插件包来源。
+    pub origin: SystemPluginPackageOrigin,
+    /// Deterministic SHA-256 digest of every distributable package file.
+    /// 插件全部可分发文件的确定性 SHA-256 摘要。
+    pub content_fingerprint: String,
     /// Effective availability.
     /// 有效可用状态。
     pub availability: SystemPluginAvailability,
@@ -216,6 +233,9 @@ pub struct SystemPluginCatalogSnapshot {
     /// Canonical System Plugin root scanned for this snapshot.
     /// 当前快照扫描的规范化系统插件根目录。
     pub root: PathBuf,
+    /// Optional canonical user plugin root merged below the system root.
+    /// 合并在系统根之后的可选规范化用户插件根目录。
+    pub user_root: Option<PathBuf>,
     /// Discovered plugins keyed by stable identifier.
     /// 以稳定标识为键的已发现插件集合。
     pub plugins: BTreeMap<String, SystemPluginDescriptor>,
@@ -250,6 +270,7 @@ impl SystemPluginCatalogSnapshot {
         Self {
             revision: 0,
             root,
+            user_root: None,
             plugins: BTreeMap::new(),
             enabled_tools: BTreeMap::new(),
             enabled_hooks: BTreeMap::new(),
@@ -345,6 +366,173 @@ pub fn load_system_plugin_catalog(
     snapshot
 }
 
+/// Discovers system and user plugin roots with deterministic system precedence.
+/// 使用确定性的系统优先级发现系统与用户插件根目录。
+///
+/// `system_root` is the trusted distribution root, `user_root` is the install root owned by the
+/// current user, policy sets contain explicit enablement overrides, and `revision` labels the
+/// immutable result.
+/// `system_root` 是受信任发行根，`user_root` 是当前用户拥有的安装根，策略集合保存显式启停覆盖，
+/// `revision` 标记不可变结果。
+///
+/// Returns one merged catalog where a system package shadows the same user plugin id.
+/// 返回一份合并目录；系统插件会遮蔽同 ID 的用户插件。
+pub fn load_vulcan_plugin_catalog(
+    system_root: &Path,
+    user_root: Option<&Path>,
+    disabled_plugin_ids: &BTreeSet<String>,
+    enabled_plugin_ids: &BTreeSet<String>,
+    revision: u64,
+) -> SystemPluginCatalogSnapshot {
+    let mut system = load_system_plugin_catalog(
+        system_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+    );
+    for plugin in system.plugins.values_mut() {
+        plugin.origin = SystemPluginPackageOrigin::BundledSystem;
+        enforce_manifest_origin(plugin, crate::SystemPluginKind::BundledSystem);
+    }
+    let mut user = user_root.map_or_else(
+        || {
+            let mut snapshot = SystemPluginCatalogSnapshot::empty(system.root.clone());
+            snapshot.revision = revision;
+            snapshot
+        },
+        |user_root| {
+            load_system_plugin_catalog(user_root, disabled_plugin_ids, enabled_plugin_ids, revision)
+        },
+    );
+    for plugin in user.plugins.values_mut() {
+        plugin.origin = SystemPluginPackageOrigin::UserInstalled;
+        enforce_manifest_origin(plugin, crate::SystemPluginKind::UserInstalled);
+    }
+    system.user_root = user_root.map(|user_root| {
+        user_root
+            .canonicalize()
+            .unwrap_or_else(|_| user_root.to_path_buf())
+    });
+    system.diagnostics.extend(user.diagnostics);
+    for (plugin_id, descriptor) in user.plugins {
+        if system.plugins.contains_key(&plugin_id) {
+            system.diagnostics.push(format!(
+                "User plugin `{plugin_id}` is shadowed by the bundled system plugin with the same id."
+            ));
+            continue;
+        }
+        system.plugins.insert(plugin_id, descriptor);
+    }
+    rebuild_catalog_surface(&mut system);
+    system
+}
+
+/// Rejects packages whose manifest trust kind does not match the root that supplied them.
+/// 拒绝清单信任类型与其来源根不匹配的插件包。
+///
+/// # Parameters
+/// 参数
+/// `plugin` is the loaded descriptor and `expected_kind` is fixed by catalog root ownership.
+/// `plugin` 是已加载描述符，`expected_kind` 由目录根所有权固定。
+fn enforce_manifest_origin(
+    plugin: &mut SystemPluginDescriptor,
+    expected_kind: crate::SystemPluginKind,
+) {
+    let Some(manifest) = plugin.manifest.as_ref() else {
+        return;
+    };
+    if manifest.kind == expected_kind {
+        return;
+    }
+    plugin.availability = SystemPluginAvailability::Unavailable;
+    plugin.runtime_state = SystemPluginRuntimeState::Unavailable;
+    plugin.desired_enabled = false;
+    plugin.diagnostics.push(String::from(
+        "Plugin manifest kind does not match the owning catalog root.",
+    ));
+}
+
+/// Loads one standalone package for local installation inspection.
+/// 加载一个独立插件包用于本地安装检查。
+///
+/// # Parameters
+/// 参数
+/// `package_root` must be a direct package directory whose name matches its manifest identity.
+/// `package_root` 必须是名称与清单身份一致的直接插件包目录。
+///
+/// # Returns
+/// 返回值
+/// Returns one fully validated user-installed descriptor.
+/// 返回一个完整校验的用户安装插件描述符。
+pub fn inspect_user_plugin_package(package_root: &Path) -> Result<SystemPluginDescriptor, String> {
+    let canonical_package_root = package_root
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve local plugin package: {error}"))?;
+    if !canonical_package_root.is_dir() {
+        return Err(String::from("Local plugin package is not a directory."));
+    }
+    let catalog_root = canonical_package_root
+        .parent()
+        .ok_or_else(|| String::from("Local plugin package has no parent directory."))?;
+    let empty = BTreeSet::new();
+    let mut descriptor =
+        load_system_plugin_package(catalog_root, &canonical_package_root, &empty, &empty);
+    descriptor.origin = SystemPluginPackageOrigin::UserInstalled;
+    enforce_manifest_origin(&mut descriptor, crate::SystemPluginKind::UserInstalled);
+    if !matches!(
+        descriptor.availability,
+        SystemPluginAvailability::Enabled | SystemPluginAvailability::Disabled
+    ) {
+        return Err(descriptor.diagnostics.join("; "));
+    }
+    Ok(descriptor)
+}
+
+/// Rebuilds enabled provider, hook, and prompt surfaces after catalog merging.
+/// 在目录合并后重建已启用的 Provider、Hook 与提示词表面。
+///
+/// `snapshot` is the exact merged catalog whose derived surfaces are replaced atomically.
+/// `snapshot` 是需要原子替换派生表面的精确合并目录。
+///
+/// Returns no value.
+/// 不返回值。
+fn rebuild_catalog_surface(snapshot: &mut SystemPluginCatalogSnapshot) {
+    snapshot.enabled_tools.clear();
+    snapshot.enabled_hooks.clear();
+    snapshot.prompt_contributions.clear();
+    let mut reserved_tool_ids = BTreeSet::new();
+    for descriptor in snapshot.plugins.values_mut() {
+        if descriptor.availability != SystemPluginAvailability::Enabled {
+            continue;
+        }
+        if let Some(tool_id) = descriptor
+            .tools
+            .iter()
+            .find(|tool| reserved_tool_ids.contains(&tool.id))
+            .map(|tool| tool.id.clone())
+        {
+            descriptor.availability = SystemPluginAvailability::Unavailable;
+            descriptor.runtime_state = SystemPluginRuntimeState::Unavailable;
+            descriptor.diagnostics.push(format!(
+                "Tool id `{tool_id}` conflicts with another enabled Vulcan plugin."
+            ));
+            continue;
+        }
+        reserved_tool_ids.extend(descriptor.tools.iter().map(|tool| tool.id.clone()));
+        for tool in &descriptor.tools {
+            snapshot.enabled_tools.insert(tool.id.clone(), tool.clone());
+        }
+        for hook in &descriptor.hooks {
+            snapshot
+                .enabled_hooks
+                .insert(hook.registration_id.clone(), hook.clone());
+        }
+        snapshot
+            .prompt_contributions
+            .extend(descriptor.prompt_contributions.iter().cloned());
+    }
+}
+
 /// Loads and validates one exact package without allowing path escape.
 /// 加载并校验一个精确插件包，同时禁止路径逃逸。
 fn load_system_plugin_package(
@@ -365,7 +553,8 @@ fn load_system_plugin_package(
         id: fallback_id.clone(),
         version: None,
         package_root: canonical_package_root.clone(),
-        content_fingerprint: 0,
+        origin: SystemPluginPackageOrigin::BundledSystem,
+        content_fingerprint: String::new(),
         availability: SystemPluginAvailability::Unavailable,
         desired_enabled: false,
         runtime_state: SystemPluginRuntimeState::Unavailable,
@@ -401,7 +590,8 @@ fn load_system_plugin_package(
         id: manifest.id.clone(),
         version: Some(manifest.version.clone()),
         package_root: canonical_package_root.clone(),
-        content_fingerprint: 0,
+        origin: SystemPluginPackageOrigin::BundledSystem,
+        content_fingerprint: String::new(),
         availability: SystemPluginAvailability::Enabled,
         desired_enabled: if enabled_plugin_ids.contains(&manifest.id) {
             true
@@ -622,11 +812,6 @@ fn validate_manifest_identity(
             manifest.schema_version
         ));
     }
-    if manifest.kind != SystemPluginKind::BundledSystem {
-        return Err(String::from(
-            "Only bundled System Plugins are trusted by this host.",
-        ));
-    }
     validate_identifier(&manifest.id, "plugin id")?;
     if manifest.id != package_directory_id {
         return Err(format!(
@@ -660,7 +845,6 @@ fn validate_manifest_identity(
     for target in &manifest.platforms.excluded_targets {
         validate_target_triple(target)?;
     }
-    validate_lua_path(&manifest.runtime.module, "runtime module")?;
     validate_lua_identifier(&manifest.runtime.invoke_function, "runtime invoke function")?;
     validate_lua_identifier(
         &manifest.runtime.shutdown_function,
@@ -668,6 +852,157 @@ fn validate_manifest_identity(
     )?;
     if let Some(function) = &manifest.runtime.hook_shutdown_function {
         validate_lua_identifier(function, "runtime hook shutdown function")?;
+    }
+    let mut binary_ids = BTreeSet::new();
+    for binary in &manifest.binaries {
+        validate_identifier(&binary.id, "binary id")?;
+        if !binary_ids.insert(binary.id.as_str()) {
+            return Err(format!("Duplicate plugin binary id `{}`.", binary.id));
+        }
+        if binary.targets.is_empty() {
+            return Err(format!(
+                "Plugin binary `{}` must declare at least one target path.",
+                binary.id
+            ));
+        }
+        for target in binary.targets.keys() {
+            validate_target_triple(target)?;
+        }
+    }
+    let mut node_entry_ids = BTreeSet::new();
+    for entry in &manifest.node_entries {
+        validate_identifier(&entry.id, "Node entry id")?;
+        if !node_entry_ids.insert(entry.id.as_str()) {
+            return Err(format!("Duplicate plugin Node entry id `{}`.", entry.id));
+        }
+    }
+    let mut python_entry_ids = BTreeSet::new();
+    for entry in &manifest.python_entries {
+        validate_identifier(&entry.id, "Python entry id")?;
+        if !python_entry_ids.insert(entry.id.as_str()) {
+            return Err(format!("Duplicate plugin Python entry id `{}`.", entry.id));
+        }
+    }
+    let mut process_entry_ids = binary_ids.clone();
+    for entry_id in node_entry_ids.iter().chain(python_entry_ids.iter()) {
+        if !process_entry_ids.insert(entry_id) {
+            return Err(format!(
+                "Duplicate plugin process entry id `{entry_id}` across entry kinds."
+            ));
+        }
+    }
+    let unique_capabilities = manifest.capabilities.iter().collect::<BTreeSet<_>>();
+    if unique_capabilities.len() != manifest.capabilities.len() {
+        return Err(String::from(
+            "Plugin capabilities contains duplicate values.",
+        ));
+    }
+    if manifest.dependency_policy.install_mode == SystemPluginDependencyInstallMode::Registry
+        && !unique_capabilities.contains(&SystemPluginCapability::DependencyRegistryNetwork)
+    {
+        return Err(String::from(
+            "Registry dependency installation requires dependency_registry_network capability.",
+        ));
+    }
+    for (has_resources, capability, label) in [
+        (
+            !manifest.binaries.is_empty(),
+            SystemPluginCapability::ProcessBinary,
+            "native binary entries",
+        ),
+        (
+            !manifest.node_entries.is_empty(),
+            SystemPluginCapability::ProcessNode,
+            "Node entries",
+        ),
+        (
+            !manifest.python_entries.is_empty(),
+            SystemPluginCapability::ProcessPython,
+            "Python entries",
+        ),
+        (
+            manifest.config.is_some(),
+            SystemPluginCapability::Config,
+            "configuration",
+        ),
+        (
+            !manifest.ui.mounts.is_empty(),
+            SystemPluginCapability::UiHostContext,
+            "dynamic UI mounts",
+        ),
+    ] {
+        if has_resources && !unique_capabilities.contains(&capability) {
+            return Err(format!(
+                "Plugin {label} require capability `{}`.",
+                crate::runtime::plugin_capability_key(capability)
+            ));
+        }
+    }
+    for (label, function) in [
+        (
+            "lifecycle install function",
+            manifest.lifecycle.install.as_ref(),
+        ),
+        (
+            "lifecycle enable function",
+            manifest.lifecycle.enable.as_ref(),
+        ),
+        (
+            "lifecycle disable function",
+            manifest.lifecycle.disable.as_ref(),
+        ),
+        (
+            "lifecycle uninstall function",
+            manifest.lifecycle.uninstall.as_ref(),
+        ),
+    ] {
+        if let Some(function) = function {
+            validate_lua_identifier(function, label)?;
+        }
+    }
+    if manifest.lifecycle.install.is_some() && manifest.lifecycle.uninstall.is_none() {
+        return Err(String::from(
+            "Plugin lifecycle install requires an uninstall compensation callback.",
+        ));
+    }
+    if manifest.lifecycle.enable.is_some() && manifest.lifecycle.disable.is_none() {
+        return Err(String::from(
+            "Plugin lifecycle enable requires a disable compensation callback.",
+        ));
+    }
+    let mut action_ids = BTreeSet::new();
+    for action in &manifest.actions {
+        validate_identifier(&action.id, "action id")?;
+        validate_lua_identifier(&action.function, "action function")?;
+        if !action_ids.insert(action.id.as_str()) {
+            return Err(format!("Duplicate plugin action id `{}`.", action.id));
+        }
+        if action.timeout_ms == 0 {
+            return Err(format!(
+                "Plugin action `{}` timeout_ms must be greater than zero.",
+                action.id
+            ));
+        }
+        if action.callers.is_empty() {
+            return Err(format!(
+                "Plugin action `{}` must declare at least one caller.",
+                action.id
+            ));
+        }
+        if action.callers.iter().collect::<BTreeSet<_>>().len() != action.callers.len() {
+            return Err(format!(
+                "Plugin action `{}` callers contains duplicate values.",
+                action.id
+            ));
+        }
+    }
+    let mut mount_ids = BTreeSet::new();
+    for mount in &manifest.ui.mounts {
+        validate_identifier(&mount.id, "UI mount id")?;
+        validate_lua_identifier(&mount.export, "UI mount export")?;
+        if !mount_ids.insert(mount.id.as_str()) {
+            return Err(format!("Duplicate plugin UI mount id `{}`.", mount.id));
+        }
     }
     for tool in &manifest.tools {
         validate_identifier(&tool.id, "tool id")?;
@@ -924,13 +1259,13 @@ fn validate_runtime_files(
     package_root: &Path,
     manifest: &SystemPluginManifest,
 ) -> Result<(), String> {
-    resolve_package_file(
+    let dependency_file = resolve_package_file(
         package_root,
         &manifest.runtime.dependencies_file,
         "runtime dependency manifest",
     )?;
-    let module_path = format!("{}.lua", manifest.runtime.module.replace('.', "/"));
-    resolve_package_file(package_root, &module_path, "runtime Lua module")?;
+    let dependencies = PackageDependencyManifest::load_from_path(&dependency_file)?;
+    resolve_package_file(package_root, &manifest.runtime.bundle, "runtime Lua bundle")?;
     let unique_required_files = manifest
         .runtime
         .required_files
@@ -944,7 +1279,296 @@ fn validate_runtime_files(
     for required_file in &manifest.runtime.required_files {
         resolve_package_file(package_root, required_file, "required runtime file")?;
     }
+    for binary in &manifest.binaries {
+        // currentTarget selects the only target artifact required in this platform-specific package.
+        // currentTarget 选择当前平台专属插件包唯一必须存在的目标制品。
+        let current_target = env!("VULCAN_PLUGIN_RUNTIME_TARGET");
+        // relativePath must be declared explicitly; platform gaps cannot remain latent until invocation.
+        // relativePath 必须显式声明，平台缺口不能延迟到调用阶段才暴露。
+        let relative_path = binary.targets.get(current_target).ok_or_else(|| {
+            format!(
+                "Plugin binary `{}` does not declare current target `{current_target}`.",
+                binary.id
+            )
+        })?;
+        resolve_package_file(package_root, relative_path, "plugin binary")?;
+    }
+    for entry in &manifest.node_entries {
+        resolve_package_file(package_root, &entry.file, "plugin Node entry")?;
+        resolve_package_directory(package_root, &entry.cwd, "plugin Node working directory")?;
+    }
+    for entry in &manifest.python_entries {
+        resolve_package_file(package_root, &entry.file, "plugin Python entry")?;
+        resolve_package_directory(package_root, &entry.cwd, "plugin Python working directory")?;
+    }
+    validate_plugin_process_dependencies(package_root, manifest, &dependencies)?;
+    for action in &manifest.actions {
+        if let Some(path) = &action.input_schema_file {
+            read_json_file(&resolve_package_file(
+                package_root,
+                path,
+                "plugin action input schema",
+            )?)?;
+        }
+        if let Some(path) = &action.output_schema_file {
+            read_json_file(&resolve_package_file(
+                package_root,
+                path,
+                "plugin action output schema",
+            )?)?;
+        }
+    }
+    for mount in &manifest.ui.mounts {
+        let entry = resolve_package_file(package_root, &mount.entry, "plugin UI module")?;
+        if entry.extension().and_then(|extension| extension.to_str()) != Some("mjs") {
+            return Err(format!(
+                "Plugin UI mount `{}` entry must use the `.mjs` extension.",
+                mount.id
+            ));
+        }
+    }
+    if let Some(config) = &manifest.config {
+        let schema = read_json_file(&resolve_package_file(
+            package_root,
+            &config.schema_file,
+            "plugin configuration schema",
+        )?)?;
+        let defaults = read_json_file(&resolve_package_file(
+            package_root,
+            &config.defaults_file,
+            "plugin configuration defaults",
+        )?)?;
+        if !defaults.is_object() {
+            return Err(String::from(
+                "Plugin configuration defaults must contain a JSON object.",
+            ));
+        }
+        validate_json_schema_instance(&schema, &defaults, "plugin configuration defaults")?;
+    }
     Ok(())
+}
+
+/// Validates process dependency inputs and bundled artifact completeness.
+/// 校验进程依赖输入与随包制品完整性。
+fn validate_plugin_process_dependencies(
+    package_root: &Path,
+    manifest: &SystemPluginManifest,
+    dependencies: &PackageDependencyManifest,
+) -> Result<(), String> {
+    if !manifest.node_entries.is_empty() {
+        let node = dependencies.node_runtime.as_ref().ok_or_else(|| {
+            "Plugin Node entries require node_runtime in dependencies.yaml.".to_string()
+        })?;
+        let package_json = resolve_package_file(
+            package_root,
+            &node.package_json,
+            "plugin Node package manifest",
+        )?;
+        resolve_package_file(
+            package_root,
+            &node.lockfile,
+            "plugin Node dependency lockfile",
+        )?;
+        if manifest.dependency_policy.install_mode == SystemPluginDependencyInstallMode::Bundled {
+            let package = read_json_file(&package_json)?;
+            if node_package_declares_dependencies(&package)? {
+                let node_modules = package_json
+                    .parent()
+                    .ok_or_else(|| {
+                        "Plugin Node package manifest has no parent directory.".to_string()
+                    })?
+                    .join("node_modules");
+                resolve_existing_package_directory(
+                    package_root,
+                    &node_modules,
+                    "bundled Node dependency directory",
+                )?;
+            }
+        }
+    }
+    if !manifest.python_entries.is_empty() {
+        let python = dependencies.python_runtime.as_ref().ok_or_else(|| {
+            "Plugin Python entries require python_runtime in dependencies.yaml.".to_string()
+        })?;
+        let lockfile = resolve_package_file(
+            package_root,
+            &python.lockfile,
+            "plugin Python dependency lockfile",
+        )?;
+        if manifest.dependency_policy.install_mode == SystemPluginDependencyInstallMode::Bundled
+            && python_lockfile_declares_dependencies(&lockfile)?
+        {
+            resolve_package_directory(
+                package_root,
+                "python/vendor",
+                "bundled Python dependency directory",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Reports whether a Node package manifest declares any installable dependency.
+/// 判断 Node 包清单是否声明任一需要安装的依赖。
+fn node_package_declares_dependencies(package: &Value) -> Result<bool, String> {
+    let object = package
+        .as_object()
+        .ok_or_else(|| "Plugin Node package manifest must contain an object.".to_string())?;
+    for field in [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
+        if let Some(value) = object.get(field) {
+            let dependencies = value.as_object().ok_or_else(|| {
+                format!("Plugin Node package field `{field}` must contain an object.")
+            })?;
+            if !dependencies.is_empty() {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Reports whether one Python requirements lockfile contains a package requirement.
+/// 判断一个 Python requirements 锁文件是否包含包依赖。
+fn python_lockfile_declares_dependencies(lockfile: &Path) -> Result<bool, String> {
+    let text = fs::read_to_string(lockfile).map_err(|error| {
+        format!(
+            "Failed to read plugin Python dependency lockfile `{}`: {error}",
+            lockfile.display()
+        )
+    })?;
+    Ok(text.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    }))
+}
+
+/// Validates one already-joined package directory without accepting a second relative interpretation.
+/// 校验一个已拼接插件目录，且不接受第二次相对路径解释。
+fn resolve_existing_package_directory(
+    package_root: &Path,
+    directory: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
+    let canonical_root = package_root
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve plugin package root: {error}"))?;
+    let canonical_directory = directory.canonicalize().map_err(|error| {
+        format!(
+            "Failed to resolve {label} `{}`: {error}",
+            directory.display()
+        )
+    })?;
+    if !canonical_directory.starts_with(&canonical_root) || !canonical_directory.is_dir() {
+        return Err(format!(
+            "{label} escapes the plugin package root or is not a directory."
+        ));
+    }
+    Ok(canonical_directory)
+}
+
+/// Validates one JSON instance against a self-contained plugin schema.
+/// 根据一份自包含插件 Schema 校验一个 JSON 实例。
+///
+/// # Parameters
+/// 参数
+/// `schema` is package-owned schema data, `instance` is the exact value, and `label` names it.
+/// `schema` 是插件包持有的 Schema 数据，`instance` 是精确值，`label` 用于命名。
+///
+/// # Returns
+/// 返回值
+/// Returns unit when the schema compiles and the instance validates.
+/// Schema 可编译且实例校验通过时返回空值。
+pub(crate) fn validate_json_schema_instance(
+    schema: &Value,
+    instance: &Value,
+    label: &str,
+) -> Result<(), String> {
+    reject_external_schema_references(schema)?;
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|error| format!("Invalid {label} JSON Schema: {error}"))?;
+    validator
+        .validate(instance)
+        .map_err(|error| format!("Invalid {label}: {error}"))
+}
+
+/// Rejects remote JSON Schema references so plugin validation never performs implicit I/O.
+/// 拒绝远程 JSON Schema 引用，确保插件校验绝不执行隐式 I/O。
+///
+/// # Parameters
+/// 参数
+/// `value` is the current recursively inspected schema node.
+/// `value` 是当前递归检查的 Schema 节点。
+///
+/// # Returns
+/// 返回值
+/// Returns unit for local-only schemas or an explicit error for one external reference.
+/// Schema 仅含本地引用时返回空值，存在外部引用时返回显式错误。
+fn reject_external_schema_references(value: &Value) -> Result<(), String> {
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                && !reference.starts_with('#')
+            {
+                return Err(format!(
+                    "Plugin JSON Schema external reference `{reference}` is not allowed."
+                ));
+            }
+            for child in object.values() {
+                reject_external_schema_references(child)?;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                reject_external_schema_references(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Resolves one package-relative directory and rejects absolute paths, traversal, and symlinks.
+/// 解析一个插件包相对目录，并拒绝绝对路径、目录穿越与符号链接。
+///
+/// # Parameters
+/// 参数
+/// `package_root` is the validated package root, `relative_path` is untrusted manifest input,
+/// and `label` identifies the field in diagnostics.
+/// `package_root` 是已校验插件包根，`relative_path` 是不可信清单输入，`label` 标识诊断字段。
+///
+/// # Returns
+/// 返回值
+/// Returns the canonical contained directory.
+/// 返回规范化且位于包内的目录。
+fn resolve_package_directory(
+    package_root: &Path,
+    relative_path: &str,
+    label: &str,
+) -> Result<PathBuf, String> {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute() {
+        return Err(format!("System Plugin {label} must be relative."));
+    }
+    let joined = package_root.join(relative);
+    let canonical = joined
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve System Plugin {label}: {error}"))?;
+    if !canonical.starts_with(package_root) {
+        return Err(format!("System Plugin {label} escapes the package root."));
+    }
+    let metadata = fs::symlink_metadata(&joined)
+        .map_err(|error| format!("Failed to inspect System Plugin {label}: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "System Plugin {label} must be a regular directory and must not be a symbolic link."
+        ));
+    }
+    Ok(canonical)
 }
 
 /// Loads one prompt contribution and verifies its atomic tool dependency set.
@@ -1017,29 +1641,38 @@ fn read_json_file(path: &Path) -> Result<Value, String> {
         .map_err(|error| format!("Failed to decode JSON file `{}`: {error}", path.display()))
 }
 
-/// Computes a deterministic FNV-1a fingerprint over every regular package file.
-/// 对插件内每个普通文件计算确定性的 FNV-1a 指纹。
-fn compute_package_fingerprint(package_root: &Path) -> Result<u64, String> {
+/// Computes a deterministic SHA-256 digest over every regular package path and file body.
+/// 对插件包内每个普通文件路径与文件内容计算确定性的 SHA-256 摘要。
+pub(crate) fn compute_package_fingerprint(package_root: &Path) -> Result<String, String> {
+    // files are sorted before hashing so enumeration order cannot alter authorization identity.
+    // files 在哈希前排序，确保枚举顺序不会改变授权身份。
     let mut files = Vec::new();
     collect_package_files(package_root, package_root, &mut files)?;
     files.sort();
-    let mut fingerprint = 0xcbf29ce484222325_u64;
+    // digest owns the collision-resistant package authorization hash state.
+    // digest 持有抗碰撞的插件包授权哈希状态。
+    let mut digest = Sha256::new();
     for file in files {
+        // relative is the exact contained package path included before its file body.
+        // relative 是在文件内容前纳入摘要的精确包内路径。
         let relative = file
             .strip_prefix(package_root)
             .map_err(|error| format!("Failed to derive System Plugin fingerprint path: {error}"))?;
-        update_fnv1a(&mut fingerprint, relative.to_string_lossy().as_bytes());
-        update_fnv1a(&mut fingerprint, &[0]);
+        update_package_digest_path(&mut digest, relative);
+        digest.update([0]);
+        // bytes contains the exact distributable file body protected by authorization.
+        // bytes 保存受授权保护的精确可分发文件内容。
         let bytes = fs::read(&file).map_err(|error| {
             format!(
                 "Failed to read System Plugin fingerprint file `{}`: {error}",
                 file.display()
             )
         })?;
-        update_fnv1a(&mut fingerprint, &bytes);
-        update_fnv1a(&mut fingerprint, &[0xff]);
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(&bytes);
+        digest.update([0xff]);
     }
-    Ok(fingerprint)
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 /// Recursively collects regular package files while rejecting symbolic links and path escape.
@@ -1094,12 +1727,33 @@ fn collect_package_files(
     Ok(())
 }
 
-/// Updates one FNV-1a hash state with an exact byte slice.
-/// 使用精确字节切片更新一个 FNV-1a 哈希状态。
-fn update_fnv1a(fingerprint: &mut u64, bytes: &[u8]) {
-    for byte in bytes {
-        *fingerprint ^= u64::from(*byte);
-        *fingerprint = fingerprint.wrapping_mul(0x100000001b3);
+/// Updates a package digest with one exact platform-native relative path representation.
+/// 使用一个精确的平台原生相对路径表示更新插件包摘要。
+///
+/// # Parameters
+/// 参数
+/// `digest` is the active SHA-256 state and `path` is a contained relative package path.
+/// `digest` 是活动 SHA-256 状态，`path` 是受约束的包内相对路径。
+fn update_package_digest_path(digest: &mut Sha256, path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        // bytes preserves non-Unicode Unix path identities without lossy replacement.
+        // bytes 在不进行有损替换的情况下保留非 Unicode Unix 路径身份。
+        let bytes = path.as_os_str().as_bytes();
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        // units preserves the native Windows UTF-16 path identity.
+        // units 保留原生 Windows UTF-16 路径身份。
+        let units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        digest.update((units.len() as u64).to_le_bytes());
+        for unit in units {
+            digest.update(unit.to_le_bytes());
+        }
     }
 }
 
@@ -1120,17 +1774,6 @@ fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
 
 /// Validates one dot-separated Lua module path.
 /// 校验一个以点分隔的 Lua 模块路径。
-fn validate_lua_path(value: &str, label: &str) -> Result<(), String> {
-    if value
-        .split('.')
-        .all(|segment| validate_lua_identifier(segment, label).is_ok())
-    {
-        Ok(())
-    } else {
-        Err(format!("Invalid System Plugin {label} `{value}`."))
-    }
-}
-
 /// Validates one Lua identifier before embedding it into fixed host code.
 /// 在将标识符嵌入固定宿主代码前校验单个 Lua 标识符。
 fn validate_lua_identifier(value: &str, label: &str) -> Result<(), String> {
@@ -1188,7 +1831,7 @@ mod tests {
         fs::write(package.join("runtime/required.txt"), "required\n")
             .expect("write required runtime asset");
         fs::write(
-            package.join("runtime/plugin.lua"),
+            package.join("runtime/plugin.bundle.lua"),
             "return { dispatch=function() end, shutdown=function() end, on_precheck=function() return '{\"ok\":true,\"result\":{}}' end }\n",
         )
         .expect("write runtime");
@@ -1212,7 +1855,7 @@ display:
 runtime:
   dependencies_file: dependencies.yaml
   required_files: [runtime/required.txt]
-  module: runtime.plugin
+  bundle: runtime/plugin.bundle.lua
   invoke_function: dispatch
   shutdown_function: shutdown
   max_active_sessions: 2
@@ -1256,7 +1899,7 @@ prompt_contributions:
         fs::write(package.join("dependencies.yaml"), "dependencies: []\n")
             .expect("write named dependencies");
         fs::write(
-            package.join("runtime/plugin.lua"),
+            package.join("runtime/plugin.bundle.lua"),
             "return { dispatch=function() end, shutdown=function() end }\n",
         )
         .expect("write named runtime");
@@ -1276,7 +1919,7 @@ prompt_contributions:
         fs::write(
             package.join("plugin.yaml"),
             format!(
-                "schema_version: 1\nid: {plugin_id}\nversion: 1.0.0\nkind: bundled_system\ndefault_enabled: true\ndisplay:\n  name: {plugin_id}\n  capability: Collision fixture\nruntime:\n  dependencies_file: dependencies.yaml\n  module: runtime.plugin\n  invoke_function: dispatch\n  shutdown_function: shutdown\n  max_active_sessions: 1\ntools:\n{tools}"
+                "schema_version: 1\nid: {plugin_id}\nversion: 1.0.0\nkind: bundled_system\ndefault_enabled: true\ndisplay:\n  name: {plugin_id}\n  capability: Collision fixture\nruntime:\n  dependencies_file: dependencies.yaml\n  bundle: runtime/plugin.bundle.lua\n  invoke_function: dispatch\n  shutdown_function: shutdown\n  max_active_sessions: 1\ntools:\n{tools}"
             ),
         )
         .expect("write named manifest");
@@ -1314,7 +1957,7 @@ prompt_contributions:
         write_named_stateless_package(temp.path(), "c-plugin", &["recoverable_tool"]);
 
         let snapshot =
-            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+            load_vulcan_plugin_catalog(temp.path(), None, &BTreeSet::new(), &BTreeSet::new(), 1);
 
         assert_eq!(
             snapshot.plugins["b-plugin"].availability,
@@ -1390,13 +2033,43 @@ prompt_contributions:
         fs::write(manifest_path, manifest).expect("write incomplete lifecycle manifest");
 
         let snapshot =
-            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+            load_vulcan_plugin_catalog(temp.path(), None, &BTreeSet::new(), &BTreeSet::new(), 1);
         assert!(snapshot.enabled_tools.is_empty());
         assert_eq!(
             snapshot.plugins["test-plugin"].availability,
             SystemPluginAvailability::Unavailable
         );
         assert!(snapshot.plugins["test-plugin"].diagnostics[0].contains("exactly one"));
+    }
+
+    /// Verifies an enable callback without disable compensation is rejected before activation.
+    /// 验证缺少停用补偿的启用回调会在激活前被拒绝。
+    #[test]
+    fn enable_lifecycle_without_disable_compensation_is_rejected() {
+        // temp owns the isolated package whose lifecycle declaration is changed.
+        // temp 持有生命周期声明被修改的隔离插件包。
+        let temp = tempfile::tempdir().expect("create lifecycle validation directory");
+        write_valid_package(temp.path());
+        // manifestPath identifies the exact fixture manifest changed below.
+        // manifestPath 标识下方修改的精确测试清单。
+        let manifest_path = temp.path().join("test-plugin/plugin.yaml");
+        // manifest appends an unsafe one-way enable callback declaration.
+        // manifest 追加一个不安全的单向启用回调声明。
+        let manifest = format!(
+            "{}\nlifecycle:\n  enable: on_enable\n",
+            fs::read_to_string(&manifest_path).expect("read lifecycle fixture manifest")
+        );
+        fs::write(manifest_path, manifest).expect("write incomplete lifecycle callbacks");
+
+        // snapshot must withhold every provider surface from the invalid package.
+        // snapshot 必须阻止无效插件包贡献任何 Provider 能力面。
+        let snapshot =
+            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+        assert_eq!(
+            snapshot.plugins["test-plugin"].availability,
+            SystemPluginAvailability::Unavailable
+        );
+        assert!(snapshot.plugins["test-plugin"].diagnostics[0].contains("disable compensation"));
     }
 
     /// Verifies stateful call schemas must expose the exact required host session identifier.
@@ -1611,21 +2284,21 @@ prompt_contributions:
         assert!(snapshot.plugins["test-plugin"].diagnostics[0].contains("Duplicate tool id"));
     }
 
-    /// Verifies a missing runtime module makes the whole plugin unavailable.
-    /// 验证缺失运行时模块会使整个插件不可用。
+    /// Verifies a missing runtime bundle makes the whole plugin unavailable.
+    /// 验证缺失运行时 bundle 会使整个插件不可用。
     #[test]
-    fn missing_runtime_module_rejects_whole_package() {
+    fn missing_runtime_bundle_rejects_whole_package() {
         let temp = tempfile::tempdir().expect("create temp directory");
         write_valid_package(temp.path());
-        fs::remove_file(temp.path().join("test-plugin/runtime/plugin.lua"))
-            .expect("remove runtime module");
+        fs::remove_file(temp.path().join("test-plugin/runtime/plugin.bundle.lua"))
+            .expect("remove runtime bundle");
         let snapshot =
             load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
         assert_eq!(
             snapshot.plugins["test-plugin"].availability,
             SystemPluginAvailability::Unavailable
         );
-        assert!(snapshot.plugins["test-plugin"].diagnostics[0].contains("runtime Lua module"));
+        assert!(snapshot.plugins["test-plugin"].diagnostics[0].contains("runtime Lua bundle"));
     }
 
     /// Verifies a missing manifest-declared runtime asset makes the whole package unavailable.
@@ -1652,9 +2325,15 @@ prompt_contributions:
         let temp = tempfile::tempdir().expect("create temp directory");
         write_valid_package(temp.path());
         let first = load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
-        let first_fingerprint = first.plugins["test-plugin"].content_fingerprint;
+        let first_fingerprint = first.plugins["test-plugin"].content_fingerprint.clone();
+        assert_eq!(first_fingerprint.len(), 64);
+        assert!(
+            first_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
         fs::write(
-            temp.path().join("test-plugin/runtime/plugin.lua"),
+            temp.path().join("test-plugin/runtime/plugin.bundle.lua"),
             "return { dispatch=function() return true end, shutdown=function() end, on_precheck=function() return '{\"ok\":true,\"result\":{}}' end }\n",
         )
         .expect("update runtime module");
@@ -1685,6 +2364,61 @@ prompt_contributions:
         );
     }
 
+    /// Verifies a package kind cannot claim user trust semantics from the bundled root.
+    /// 验证插件包不能在内建根目录中声明用户级信任语义。
+    #[test]
+    fn bundled_root_rejects_user_installed_manifest_kind() {
+        let temp = tempfile::tempdir().expect("create origin validation directory");
+        write_valid_package(temp.path());
+        let manifest_path = temp.path().join("test-plugin/plugin.yaml");
+        let manifest = fs::read_to_string(&manifest_path)
+            .expect("read bundled manifest")
+            .replacen("kind: bundled_system", "kind: user_installed", 1);
+        fs::write(manifest_path, manifest).expect("write mismatched bundled manifest");
+        let snapshot =
+            load_vulcan_plugin_catalog(temp.path(), None, &BTreeSet::new(), &BTreeSet::new(), 1);
+        assert_eq!(
+            snapshot.plugins["test-plugin"].availability,
+            SystemPluginAvailability::Unavailable
+        );
+        assert!(snapshot.plugins["test-plugin"].diagnostics[0].contains("kind"));
+    }
+
+    /// Verifies a bundled package deterministically shadows the same authorized user package identity.
+    /// 验证内建插件包会确定性覆盖同一身份的已授权用户插件包。
+    #[test]
+    fn bundled_plugin_identity_shadows_user_plugin_identity() {
+        let temp = tempfile::tempdir().expect("create precedence validation directory");
+        let system_root = temp.path().join("system");
+        let user_root = temp.path().join("user");
+        fs::create_dir_all(&system_root).expect("create system root");
+        fs::create_dir_all(&user_root).expect("create user root");
+        write_valid_package(&system_root);
+        write_valid_package(&user_root);
+        let user_manifest_path = user_root.join("test-plugin/plugin.yaml");
+        let user_manifest = fs::read_to_string(&user_manifest_path)
+            .expect("read user manifest")
+            .replacen("kind: bundled_system", "kind: user_installed", 1);
+        fs::write(user_manifest_path, user_manifest).expect("write user manifest");
+        let snapshot = load_vulcan_plugin_catalog(
+            &system_root,
+            Some(&user_root),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1,
+        );
+        assert_eq!(
+            snapshot.plugins["test-plugin"].origin,
+            SystemPluginPackageOrigin::BundledSystem
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .iter()
+                .any(|issue| issue.contains("shadowed"))
+        );
+    }
+
     /// Verifies every repository-bundled package satisfies the same production loader contract.
     /// 验证仓库内建的每个插件包都满足同一套生产加载器契约。
     #[test]
@@ -1695,7 +2429,7 @@ prompt_contributions:
             .and_then(Path::parent)
             .expect("resolve workspace root");
         let snapshot = load_system_plugin_catalog(
-            &workspace_root.join("plugins/system"),
+            &workspace_root.join("plugins"),
             &BTreeSet::new(),
             &BTreeSet::new(),
             1,
@@ -1705,7 +2439,13 @@ prompt_contributions:
             snapshot
                 .plugins
                 .values()
-                .all(|plugin| plugin.availability == SystemPluginAvailability::Enabled)
+                .all(|plugin| plugin.availability == SystemPluginAvailability::Enabled),
+            "bundled plugin validation failed: {:?}",
+            snapshot
+                .plugins
+                .values()
+                .map(|plugin| (&plugin.id, &plugin.diagnostics))
+                .collect::<Vec<_>>()
         );
         assert!(!snapshot.enabled_tools.is_empty());
     }

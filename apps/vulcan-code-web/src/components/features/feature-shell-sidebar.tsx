@@ -6,6 +6,7 @@ import {
   Network,
   PanelTopOpen,
   Puzzle,
+  Route,
   Undo2,
   Settings,
 } from "lucide-react"
@@ -13,6 +14,7 @@ import {
 import { formatSkillText } from "@/components/features/featureText"
 import { vmmSectionIcon, type MemorySubAreaId } from "@/components/features/memory/MemoryArea"
 import { type SkillSubAreaId } from "@/components/features/skills/SkillsArea"
+import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types"
 import {
   settingsSubAreaGroups,
   type SettingsSubAreaGroup,
@@ -442,6 +444,9 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
       { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
       { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
       { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "systemPlugin").length }), icon: <Puzzle size={16} /> },
+      ...(hasEnabledPluginDetailMount(workbench.plugins, "vulcan-rtk")
+        ? [{ id: "luaskills-rtk", label: t("skills.navigation.rtkSettings"), detail: t("skills.header.rtkDetail"), icon: <Route size={16} /> }]
+        : []),
     ]
   }
   if (activeArea === "agent-skills") {
@@ -481,6 +486,9 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   }
   if (rowId === "luaskills-plugins") {
     return "plugins"
+  }
+  if (rowId === "luaskills-rtk") {
+    return "rtk"
   }
   return null
 }

@@ -25,6 +25,7 @@ pub(crate) fn startup_snapshot_with_phase(
                     ("luaskills", StartupStepStatus::Pending, "等待初始化"),
                     ("token-budget", StartupStepStatus::Pending, "等待初始化"),
                     ("mcp", StartupStepStatus::Pending, "等待初始化"),
+                    ("plugins", StartupStepStatus::Pending, "等待初始化"),
                     ("workspace", StartupStepStatus::Pending, "等待初始化"),
                 ],
             )
@@ -66,6 +67,7 @@ pub(crate) fn startup_step_label(id: &str) -> String {
         "luaskills" => "LuaSkills",
         "token-budget" => "Token Budget",
         "mcp" => "MCP Runtime",
+        "plugins" => "Plugin Runtime",
         "workspace" => "Workspace",
         _ => id,
     }

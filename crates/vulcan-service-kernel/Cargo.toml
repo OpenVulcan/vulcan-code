@@ -29,6 +29,7 @@ vulcan-context-injection.workspace = true
 vulcan-file-watcher.workspace = true
 vulcan-core.workspace = true
 vulcan-host-tools.workspace = true
+vulcan-hooks.workspace = true
 vulcan-luaskills-config.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-plugin-runtime.workspace = true

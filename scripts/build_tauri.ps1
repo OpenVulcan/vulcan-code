@@ -57,17 +57,17 @@ $SourceResourcesDir = Join-Path $ProjectDir "crates\vulcan-runtime-assets\resour
 # SourceSystemPromptSkillsDir 指向仓库持有的系统 Agent Skills 目录。
 $SourceSystemPromptSkillsDir = Join-Path $ProjectDir "crates\vulcan-prompt-skills\src\assets\system"
 
-# SourceRtkBinDir points at the RTK executable installed by make deps.
-# SourceRtkBinDir 指向 make deps 安装的 RTK 可执行文件目录。
-$SourceRtkBinDir = Join-Path $ProjectDir "third_party\rtk\bin"
-
 # SourceLuaRuntimeDir points at the official LuaSkills runtime payload installed by make deps-lua.
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 $SourceLuaRuntimeDir = Join-Path $ProjectDir "third_party\luaskills_runtime"
 
-# SourceSystemPluginsDir contains every manifest-driven System Plugin bundled with Vulcan Code.
-# SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动系统插件。
-$SourceSystemPluginsDir = Join-Path $ProjectDir "plugins\system"
+# SourceSystemPluginsDir contains every manifest-driven plugin bundled with Vulcan Code.
+# SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动插件。
+$SourceSystemPluginsDir = Join-Path $ProjectDir "plugins"
+
+# SourcePluginBridgeDir contains the only LuaSkills System package used by Vulcan plugins.
+# SourcePluginBridgeDir 包含 Vulcan 插件使用的唯一 LuaSkills System package。
+$SourcePluginBridgeDir = Join-Path $ProjectDir "plugin-bridge\vulcan-plugin-bridge"
 
 Set-Location $ProjectDir
 
@@ -205,9 +205,13 @@ $LegacyManagedRuntimeScriptsDir = Join-Path $OutputLuaRuntimeDir "scripts\deps"
 # LegacyManagedRuntimeDistributionDir 是已经废弃的 LuaSkills 私有 Python/Node 位置。
 $LegacyManagedRuntimeDistributionDir = Join-Path $OutputLuaRuntimeDir "dependencies\runtimes"
 
-# OutputSystemPluginsDir is the runtime directory scanned by the generic System Plugin host.
-# OutputSystemPluginsDir 是通用系统插件宿主扫描的运行时目录。
-$OutputSystemPluginsDir = Join-Path $OutputLuaRuntimeDir "system_lua_lib"
+# OutputSystemPluginsDir is the Vulcan-owned runtime directory scanned by the plugin host.
+# OutputSystemPluginsDir 是插件宿主扫描的 Vulcan 自有运行时目录。
+$OutputSystemPluginsDir = Join-Path $ProjectDir "output\plugins"
+
+# OutputPluginBridgeDir is the only plugin-related package deployed below system_lua_lib.
+# OutputPluginBridgeDir 是部署到 system_lua_lib 下的唯一插件相关 package。
+$OutputPluginBridgeDir = Join-Path $OutputLuaRuntimeDir "system_lua_lib\vulcan-plugin-bridge"
 
 # ManagedSystemPluginIndexPath records only packages owned by this build script for safe stale cleanup.
 # ManagedSystemPluginIndexPath 仅记录当前构建脚本拥有的插件包，用于安全清理陈旧项。
@@ -218,12 +222,6 @@ if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
 }
 if ($IsWindowsPlatform -and -not (Test-Path -LiteralPath $BuiltHelperPath)) {
     throw "Built Windows console helper was not found: $BuiltHelperPath"
-}
-
-New-Item -ItemType Directory -Path $OutputBinDir -Force | Out-Null
-Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force
-if ($IsWindowsPlatform) {
-    Copy-Item -LiteralPath $BuiltHelperPath -Destination $OutputHelperPath -Force
 }
 
 Write-Host "==> Syncing packaged config..."
@@ -288,8 +286,8 @@ foreach ($SystemPluginName in $PreviouslyManagedSystemPluginNames) {
     }
 }
 foreach ($SystemPluginName in $SourceSystemPluginNames) {
-    # DestinationSystemPluginDir is removed immediately if a package copy fails before ownership is committed.
-    # DestinationSystemPluginDir 会在所有权提交前复制失败时立即删除。
+    # DestinationSystemPluginDir receives an incremental overlay so debug builds preserve existing plugin files.
+    # DestinationSystemPluginDir 接收增量覆盖，确保调试构建保留已有插件文件。
     $DestinationSystemPluginDir = Join-Path $OutputSystemPluginsDir $SystemPluginName
     # ResolvedDestinationSystemPluginDir proves the cleanup target remains below the runtime plugin root.
     # ResolvedDestinationSystemPluginDir 用于证明清理目标仍位于运行时插件根目录下。
@@ -297,32 +295,40 @@ foreach ($SystemPluginName in $SourceSystemPluginNames) {
     if (-not $ResolvedDestinationSystemPluginDir.StartsWith($ResolvedOutputSystemPluginsDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to deploy System Plugin outside runtime root: $ResolvedDestinationSystemPluginDir"
     }
-    try {
-        Copy-DirectoryContents `
-            -SourceDirectory (Join-Path $SourceSystemPluginsDir $SystemPluginName) `
-            -DestinationDirectory $DestinationSystemPluginDir `
-            -Clean
-    }
-    catch {
-        if (Test-Path -LiteralPath $ResolvedDestinationSystemPluginDir) {
-            Remove-Item -LiteralPath $ResolvedDestinationSystemPluginDir -Recurse -Force
-        }
-        throw
+    Copy-DirectoryContents `
+        -SourceDirectory (Join-Path $SourceSystemPluginsDir $SystemPluginName) `
+        -DestinationDirectory $DestinationSystemPluginDir
+}
+# ASCII keeps the cross-shell ownership index free of a Windows PowerShell UTF-8 BOM.
+# ASCII 确保跨 Shell 使用的所有权索引不会带有 Windows PowerShell UTF-8 BOM。
+Set-Content -LiteralPath $ManagedSystemPluginIndexPath -Value ($SourceSystemPluginNames | Sort-Object) -Encoding ascii
+
+Write-Host "==> Syncing fixed LuaSkills plugin bridge package..."
+Copy-DirectoryContents -SourceDirectory $SourcePluginBridgeDir -DestinationDirectory $OutputPluginBridgeDir
+
+# LegacyOutputRtkToolDir is removed because RTK is now distributed only inside its plugin package.
+# LegacyOutputRtkToolDir 会被移除，因为 RTK 现在只通过其插件包分发。
+if (Test-Path -LiteralPath $LegacyOutputRtkToolDir) {
+    Remove-Item -LiteralPath $LegacyOutputRtkToolDir -Recurse -Force
+}
+Get-ChildItem -LiteralPath $OutputToolsDir -File -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ieq "rtk" -or $_.Name -ieq "rtk.exe" } |
+    Remove-Item -Force
+if ($IsWindowsPlatform) {
+    # OutputRtkPluginBinary is the exact current-target artifact already copied with the plugin package.
+    # OutputRtkPluginBinary 是随插件包一并复制的当前目标精确制品。
+    $OutputRtkPluginBinary = Join-Path $OutputSystemPluginsDir "vulcan-rtk\bin\x86_64-pc-windows-msvc\rtk.exe"
+    if (-not (Test-Path -LiteralPath $OutputRtkPluginBinary -PathType Leaf)) {
+        throw "RTK plugin binary is missing; run make deps-rtk before packaging."
     }
 }
-Set-Content -LiteralPath $ManagedSystemPluginIndexPath -Value ($SourceSystemPluginNames | Sort-Object) -Encoding utf8
 
-if (Test-Path -LiteralPath $SourceRtkBinDir -PathType Container) {
-    Write-Host "==> Syncing packaged RTK host tool..."
-    if (Test-Path -LiteralPath $LegacyOutputRtkToolDir) {
-        Remove-Item -LiteralPath $LegacyOutputRtkToolDir -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path $OutputToolsDir -Force | Out-Null
-    Get-ChildItem -LiteralPath $SourceRtkBinDir -File -Force | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $OutputToolsDir $_.Name) -Force
-    }
-} else {
-    Write-Host "==> RTK host tool not installed; run make deps-host to package it."
+# Copy the executable only after runtime payload synchronization so a locked debug binary cannot suppress plugin updates.
+# 仅在运行时载荷同步完成后复制可执行文件，避免被占用的调试二进制阻断插件更新。
+New-Item -ItemType Directory -Path $OutputBinDir -Force | Out-Null
+Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force
+if ($IsWindowsPlatform) {
+    Copy-Item -LiteralPath $BuiltHelperPath -Destination $OutputHelperPath -Force
 }
 
 Write-Host "==> Done. Binary: $OutputBinaryPath"

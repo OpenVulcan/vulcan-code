@@ -11,7 +11,6 @@ import {
   ArchivedRestoreSettingsArea,
   GitCommitSettingsArea,
   PromptComposerSettingsArea,
-  RtkRoutingSettingsArea,
 } from "@/components/features/settings/misc-settings-areas";
 import {
   ModelListSettingsArea,
@@ -137,9 +136,6 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "git-commit") {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
-  }
-  if (props.activeSettingsSubArea === "rtk-routing") {
-    return <RtkRoutingSettingsArea actions={props.actions} workbench={props.workbench} />;
   }
   if (props.activeSettingsSubArea === "prompt-composer") {
     return (

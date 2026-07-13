@@ -6,6 +6,7 @@ import {
   type WorkspaceContextPanelProps,
 } from "@/components/workspace/WorkspaceContextPanel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
+import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel";
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useI18n } from "@/i18n";
@@ -311,11 +312,50 @@ export function WorkspaceResizableBody(props: {
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp, { once: true });
   }, [dockedPanelOpen, dockedPanelWidth]);
+  // selectedProjectId is the exact trusted project context for workspace plugin actions.
+  // selectedProjectId 是工作区插件 Action 使用的精确可信项目上下文。
+  const selectedProjectId = props.selectedDraftConversation?.projectId
+    ?? props.selectedConversation?.projectId
+    ?? null;
+  // selectedWorkspacePath is resolved only from the host-projected project catalog.
+  // selectedWorkspacePath 仅从宿主投影的项目目录解析。
+  const selectedWorkspacePath = props.workbench.projects.find(
+    (project) => project.id === selectedProjectId,
+  )?.path ?? null;
+  // enabledPluginMounts flattens only enabled manifest-declared dynamic UI contributions.
+  // enabledPluginMounts 仅展开已启用且由清单声明的动态界面贡献。
+  const enabledPluginMounts = props.workbench.plugins.flatMap((plugin) => (
+    plugin.enabled && plugin.extension
+      ? plugin.extension.uiMounts.map((mount) => ({ plugin, mount }))
+      : []
+  ));
+  // workspaceMainPluginMounts target the integrated primary workspace surface.
+  // workspaceMainPluginMounts 指向集成式工作区主界面。
+  const workspaceMainPluginMounts = enabledPluginMounts.filter(
+    ({ mount }) => mount.point === "workspaceMain",
+  );
+  // conversationRightPluginMounts target the selected conversation's right-side context surface.
+  // conversationRightPluginMounts 指向所选会话的右侧上下文界面。
+  const conversationRightPluginMounts = enabledPluginMounts.filter(
+    ({ mount }) => mount.point === "conversationRightPanel",
+  );
   // mainContent keeps the body content shape identical with or without a side panel.
   // mainContent 保持有无侧边面板时主体内容结构一致。
   const mainContent = (
     <section className="workspace-main-shell">
       {props.children}
+      {workspaceMainPluginMounts.length > 0 ? (
+        <div className="workspace-plugin-main-mounts">
+          {workspaceMainPluginMounts.map(({ plugin, mount }) => (
+            <DynamicPluginMountPanel
+              key={`${plugin.id}:${mount.id}`}
+              mount={mount}
+              plugin={plugin}
+              workspacePath={selectedWorkspacePath}
+            />
+          ))}
+        </div>
+      ) : null}
     </section>
   );
   // renderedMainContent lets registered page panels share one adaptive layout implementation.
@@ -419,6 +459,18 @@ export function WorkspaceResizableBody(props: {
               gitCommitActionLabel={props.gitCommitActionLabel}
               onOpenGitCommitAction={props.onOpenGitCommitAction}
             />
+            {conversationRightPluginMounts.length > 0 ? (
+              <div className="conversation-plugin-right-mounts">
+                {conversationRightPluginMounts.map(({ plugin, mount }) => (
+                  <DynamicPluginMountPanel
+                    key={`${plugin.id}:${mount.id}`}
+                    mount={mount}
+                    plugin={plugin}
+                    workspacePath={selectedWorkspacePath}
+                  />
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

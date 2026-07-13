@@ -1,0 +1,57 @@
+name: Vulcan RTK
+capability: 命令路由、Git 上下文压缩与 Token 节省统计
+messages:
+  title: RTK 命令路由
+  hookBadge: 声明式 Hook
+  loadingSettings: 正在加载设置
+  enabled: 已启用
+  disabled: 已关闭
+  densityTitle: 高密度命令上下文
+  densityDescription: RTK 会压缩测试、构建、搜索和 Git 输出中的重复日志，让 AI 保留更多有效分析内容；未匹配或改写失败时自动回退原命令。
+  enableRouting: 启用 RTK 路由
+  enableRoutingHelp: 将支持的 shell_command 调用改写为随包 RTK 命令。
+  gitContext: 提交生成使用 RTK
+  gitContextHelp: 压缩自动生成提交信息时使用的 git status 与 git diff 上下文。
+  disableTelemetry: 禁用 RTK 遥测环境变量
+  disableTelemetryHelp: 为 rewrite 与代理命令进程注入 RTK_TELEMETRY_DISABLED=1。
+  save: 保存
+  saving: 保存中
+  saved: 已保存
+  stats.title: RTK 上下文密度统计
+  stats.description: Token 节省统计缓存三十分钟；切换日、周、月视图不会再次发送请求。
+  stats.loading: 读取中
+  stats.ready: 统计可用
+  stats.unavailable: 未统计
+  stats.refresh: 刷新
+  stats.refreshing: 刷新中
+  stats.lastLoaded: 上次统计
+  stats.generated: 数据生成
+  stats.none: 暂无
+  stats.unavailableHelp: 统计当前不可用。
+  stats.empty: 暂无统计
+  stats.noCommandBreakdown: 暂无命令分类统计
+  stats.chartLabel: RTK Token 节省趋势
+  stats.savedTokens: 节省 Token
+  stats.averageSavings: 平均节省率
+  stats.commands: 累计命令
+  stats.capacityRatio: 上下文容量
+  stats.daily: 日
+  stats.weekly: 周
+  stats.monthly: 月
+  stats.command: 命令
+  stats.count: 次数
+  stats.saved: 节省 Token
+  stats.savingsRate: 节省率
+  stats.byCommand: 按命令统计
+  stats.time: 耗时
+  stats.impact: 影响
+  routes.title: RTK 路由
+  routes.description: 精确选择允许改写的受支持命令。
+  routes.curated: 精选
+  routes.all: 全部
+  routes.clear: 清空
+  routes.command: 命令
+  routes.group: 分组
+  routes.extended: 扩展
+  routes.selected: 个 RTK 路由已选择
+  routes.enable: 启用路由

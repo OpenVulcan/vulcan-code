@@ -959,6 +959,15 @@ function CommandExecutionPresentationCard(props: {
   const sessionMetaLabel = commandSessionMetaLabel(hydratedPresentation, t);
   const detailHeading = commandDetailHeading(hydratedPresentation, t);
   const detailCommandText = commandDetailText(hydratedPresentation);
+  // pluginContributions preserves every badge contributed by the ordered hook chain.
+  // pluginContributions 保留有序 Hook 链贡献的全部徽标。
+  const pluginContributions = hydratedPresentation.pluginContributions ?? [];
+  // commandTitle exposes both the original command and generic contribution details without plugin-specific fields.
+  // commandTitle 在不引入插件专用字段的前提下展示原始命令与通用贡献详情。
+  const commandTitle = [
+    hydratedPresentation.command,
+    ...pluginContributions.map((contribution) => `${contribution.label}: ${contribution.value}`),
+  ].join("\n");
   const handleToggle = React.useCallback(() => {
     dispatchConversationManualViewportInteraction();
     onExpandedChange(presentation.id, !expanded);
@@ -970,14 +979,20 @@ function CommandExecutionPresentationCard(props: {
         aria-expanded={expanded}
         className="tool-presentation-summary"
         onClick={handleToggle}
-        title={hydratedPresentation.rtkRouted ? `${hydratedPresentation.command}\nRTK: ${detailCommandText}` : hydratedPresentation.command}
+        title={commandTitle}
         type="button"
       >
         <TerminalSquare className={cn("terminal-session-icon", terminalState && terminalStateClass(terminalState))} size={15} />
         <span className={cn("tool-presentation-state", hydratedPresentation.state === "running" && "shimmer")}>{statusLabel}</span>
-        <span className={cn("tool-presentation-route-badge", !hydratedPresentation.rtkRouted && "empty")}>
-          {hydratedPresentation.rtkRouted ? "RTK" : ""}
-        </span>
+        {pluginContributions.map((contribution, index) => contribution.badge ? (
+          <span
+            className="tool-presentation-route-badge"
+            key={`${contribution.badge}:${contribution.label}:${index}`}
+            title={`${contribution.label}: ${contribution.value}`}
+          >
+            {contribution.badge}
+          </span>
+        ) : null)}
         <span className="tool-presentation-command">{hydratedPresentation.command}</span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />

@@ -1,9 +1,9 @@
 import * as React from "react";
-import { Puzzle, Search } from "lucide-react";
+import { Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
-import type { PluginSummary } from "@/types";
+import type { PluginSummary, SystemPluginPermissionPreview } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
 // SystemPluginStatusFilter identifies the lifecycle subset shown in the System Plugin list.
@@ -135,6 +135,24 @@ export function SystemPluginsPanel(props: {
   // busyPluginId identifies the single System Plugin mutation currently in flight.
   // busyPluginId 标识当前正在执行变更的唯一 System Plugin。
   const [busyPluginId, setBusyPluginId] = React.useState<string | null>(null);
+  // installSourcePath stores the exact local plugin directory selected for inspection.
+  // installSourcePath 保存等待检查的精确本地插件目录。
+  const [installSourcePath, setInstallSourcePath] = React.useState("");
+  // permissionPreview stores only the latest host-validated package authorization surface.
+  // permissionPreview 仅保存最近一次经宿主校验的插件包授权界面数据。
+  const [permissionPreview, setPermissionPreview] = React.useState<SystemPluginPermissionPreview | null>(null);
+  // installError stores inspection or installation diagnostics without hiding the preview.
+  // installError 保存检查或安装诊断，同时不隐藏授权预览。
+  const [installError, setInstallError] = React.useState("");
+  // installBusy blocks overlapping package inspection, installation, and uninstallation.
+  // installBusy 阻止插件包检查、安装与卸载操作重叠执行。
+  const [installBusy, setInstallBusy] = React.useState(false);
+  // authorizationConfirmed records explicit approval of every displayed capability and mount.
+  // authorizationConfirmed 记录用户对所有已展示能力与挂载点的明确批准。
+  const [authorizationConfirmed, setAuthorizationConfirmed] = React.useState(false);
+  // registryDependenciesConfirmed records separate network consent when requested by the package.
+  // registryDependenciesConfirmed 记录插件请求注册表依赖时的独立联网许可。
+  const [registryDependenciesConfirmed, setRegistryDependenciesConfirmed] = React.useState(false);
   // actionRunningRef closes the repeat-click window before React commits the busy state.
   // actionRunningRef 在 React 提交忙碌状态前关闭重复点击窗口。
   const actionRunningRef = React.useRef(false);
@@ -164,7 +182,6 @@ export function SystemPluginsPanel(props: {
     const localizedCapability = localizedPluginText(plugin.capabilityByLocale, locale, plugin.capability);
     return systemPluginMatchesSearch(plugin, localizedName, localizedCapability, searchQuery);
   }), [locale, searchQuery, statusFilter, systemPlugins]);
-
   // togglePlugin persists one System Plugin state through the LuaSkills catalog transaction.
   // togglePlugin 通过 LuaSkills 目录事务持久化单个 System Plugin 状态。
   //
@@ -191,8 +208,172 @@ export function SystemPluginsPanel(props: {
     }
   }, [props.actions]);
 
+  // inspectPluginPackage validates the current path and resets every prior authorization decision.
+  // inspectPluginPackage 校验当前路径并重置此前的所有授权决定。
+  const inspectPluginPackage = React.useCallback(async () => {
+    const sourcePath = installSourcePath.trim();
+    if (!sourcePath || installBusy) {
+      return;
+    }
+    setInstallBusy(true);
+    setInstallError("");
+    setPermissionPreview(null);
+    setAuthorizationConfirmed(false);
+    setRegistryDependenciesConfirmed(false);
+    try {
+      setPermissionPreview(await props.actions.onInspectLocalPlugin(sourcePath));
+    } catch (reason: unknown) {
+      setInstallError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setInstallBusy(false);
+    }
+  }, [installBusy, installSourcePath, props.actions]);
+
+  // installInspectedPlugin installs only the unchanged path and exact host-projected capability set.
+  // installInspectedPlugin 仅使用未变化路径与宿主投影的精确能力集合安装插件。
+  const installInspectedPlugin = React.useCallback(async () => {
+    if (permissionPreview === null || !authorizationConfirmed || installBusy) {
+      return;
+    }
+    const requiresRegistryConsent = permissionPreview.capabilities.includes("dependency_registry_network");
+    if (requiresRegistryConsent && !registryDependenciesConfirmed) {
+      return;
+    }
+    setInstallBusy(true);
+    setInstallError("");
+    try {
+      await props.actions.onInstallLocalPlugin(
+        installSourcePath.trim(),
+        permissionPreview.capabilities,
+        registryDependenciesConfirmed,
+      );
+      setInstallSourcePath("");
+      setPermissionPreview(null);
+      setAuthorizationConfirmed(false);
+      setRegistryDependenciesConfirmed(false);
+    } catch (reason: unknown) {
+      setInstallError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setInstallBusy(false);
+    }
+  }, [
+    authorizationConfirmed,
+    installBusy,
+    installSourcePath,
+    permissionPreview,
+    props.actions,
+    registryDependenciesConfirmed,
+  ]);
+
+  // uninstallPlugin confirms and removes only one disabled user-installed plugin.
+  // uninstallPlugin 经确认后仅移除单个已停用的用户安装插件。
+  const uninstallPlugin = React.useCallback(async (plugin: PluginSummary) => {
+    if (installBusy || plugin.extension?.origin !== "userInstalled" || plugin.runtimeState !== "disabled") {
+      return;
+    }
+    const confirmed = window.confirm(
+      locale.startsWith("zh")
+        ? `确定卸载用户插件“${plugin.name}”吗？此操作会删除插件包、配置和隔离环境。`
+        : `Uninstall user plugin “${plugin.name}”? Its package, configuration, and isolated environments will be removed.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setInstallBusy(true);
+    setInstallError("");
+    try {
+      await props.actions.onUninstallUserPlugin(plugin.id);
+    } catch (reason: unknown) {
+      setInstallError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setInstallBusy(false);
+    }
+  }, [installBusy, locale, props.actions]);
+
   return (
     <div className="skill-page-body lua-skill-page-body">
+      <section className="system-plugin-install-panel" aria-label={locale.startsWith("zh") ? "安装本地插件" : "Install local plugin"}>
+        <div className="system-plugin-install-heading">
+          <ShieldCheck size={17} />
+          <div>
+            <strong>{locale.startsWith("zh") ? "安装本地插件" : "Install local plugin"}</strong>
+            <p>{locale.startsWith("zh")
+              ? "先检查插件包，再明确授权其能力、Hook、界面挂载点和进程入口。"
+              : "Inspect the package before explicitly authorizing its capabilities, hooks, UI mounts, and process entries."}</p>
+          </div>
+        </div>
+        <div className="system-plugin-install-input-row">
+          <input
+            aria-label={locale.startsWith("zh") ? "本地插件目录" : "Local plugin directory"}
+            disabled={installBusy}
+            onChange={(event) => {
+              setInstallSourcePath(event.target.value);
+              setPermissionPreview(null);
+              setAuthorizationConfirmed(false);
+              setRegistryDependenciesConfirmed(false);
+            }}
+            placeholder={locale.startsWith("zh") ? "输入包含 plugin.yaml 的本地目录" : "Directory containing plugin.yaml"}
+            value={installSourcePath}
+          />
+          <button
+            className="secondary-button"
+            disabled={installBusy || installSourcePath.trim().length === 0}
+            onClick={() => void inspectPluginPackage()}
+            type="button"
+          >
+            {locale.startsWith("zh") ? "检查" : "Inspect"}
+          </button>
+        </div>
+        {installError ? <div className="skill-empty-state warning">{installError}</div> : null}
+        {permissionPreview ? (
+          <div className="system-plugin-permission-preview">
+            <div className="system-plugin-permission-title">
+              <strong>{permissionPreview.pluginId}</strong>
+              <Badge variant="secondary">v{permissionPreview.version}</Badge>
+            </div>
+            <dl>
+              <div><dt>{locale.startsWith("zh") ? "能力" : "Capabilities"}</dt><dd>{permissionPreview.capabilities.join("、") || "—"}</dd></div>
+              <div><dt>Hooks</dt><dd>{permissionPreview.hookPoints.join("、") || "—"}</dd></div>
+              <div><dt>{locale.startsWith("zh") ? "界面挂载点" : "UI mounts"}</dt><dd>{permissionPreview.uiMountPoints.join("、") || "—"}</dd></div>
+              <div><dt>{locale.startsWith("zh") ? "原生进程" : "Native processes"}</dt><dd>{permissionPreview.binaryIds.join("、") || "—"}</dd></div>
+              <div><dt>Node.js</dt><dd>{permissionPreview.nodeEntryIds.join("、") || "—"}</dd></div>
+              <div><dt>Python</dt><dd>{permissionPreview.pythonEntryIds.join("、") || "—"}</dd></div>
+            </dl>
+            <label className="system-plugin-permission-consent">
+              <input
+                checked={authorizationConfirmed}
+                onChange={(event) => setAuthorizationConfirmed(event.target.checked)}
+                type="checkbox"
+              />
+              <span>{locale.startsWith("zh")
+                ? "我已核对并授权以上全部能力、Hook、挂载点和进程入口。"
+                : "I reviewed and authorize every capability, hook, mount, and process entry above."}</span>
+            </label>
+            {permissionPreview.capabilities.includes("dependency_registry_network") ? (
+              <label className="system-plugin-permission-consent warning">
+                <input
+                  checked={registryDependenciesConfirmed}
+                  onChange={(event) => setRegistryDependenciesConfirmed(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>{locale.startsWith("zh")
+                  ? "允许 Vulcan 在安装时联网从注册表获取该插件声明的锁定依赖。"
+                  : "Allow Vulcan to access registries for this plugin's locked dependencies during installation."}</span>
+              </label>
+            ) : null}
+            <button
+              className="primary-button"
+              disabled={installBusy
+                || !authorizationConfirmed
+                || (permissionPreview.capabilities.includes("dependency_registry_network") && !registryDependenciesConfirmed)}
+              onClick={() => void installInspectedPlugin()}
+              type="button"
+            >
+              {locale.startsWith("zh") ? "授权并安装" : "Authorize and install"}
+            </button>
+          </div>
+        ) : null}
+      </section>
       <div className="agent-catalog-filter-row skill-list-filter-row plugin-skill-filter-row">
         <label className="agent-catalog-search-input skill-list-search-input">
           <Search size={15} />
@@ -235,10 +416,13 @@ export function SystemPluginsPanel(props: {
           const toggleLabel = plugin.runtimeState === "disabledWithCleanupWarning"
             ? t("skills.plugins.retryCleanup")
             : plugin.desiredEnabled ? t("skills.action.disable") : t("skills.action.enable");
+          // PluginIcon preserves the original RTK route symbol while other plugins retain the generic plugin glyph.
+          // PluginIcon 保留原有 RTK 路由图标，其他插件继续使用通用插件图标。
+          const PluginIcon = plugin.id === "vulcan-rtk" ? Route : Puzzle;
           return (
             <article className="agent-definition-row system-plugin-definition-row" key={plugin.id}>
               <div className="agent-definition-row-icon" aria-hidden="true">
-                <span className="agent-definition-row-glyph"><Puzzle size={17} /></span>
+                <span className="agent-definition-row-glyph"><PluginIcon size={17} /></span>
               </div>
               <div className="agent-definition-row-main">
                 <div className="agent-definition-row-title-line">
@@ -248,7 +432,9 @@ export function SystemPluginsPanel(props: {
                       label={pluginRuntimeStatusLabel(plugin, t)}
                       status={!plugin.available || plugin.diagnostics.length > 0 ? "warning" : plugin.enabled ? "ready" : "pending"}
                     /> : null}
-                    <Badge variant="outline">{t("skills.plugins.systemKind")}</Badge>
+                    <Badge variant="outline">{plugin.extension?.origin === "userInstalled"
+                      ? (locale.startsWith("zh") ? "用户插件" : "User plugin")
+                      : t("skills.plugins.systemKind")}</Badge>
                     {plugin.version ? <Badge variant="secondary">v{plugin.version}</Badge> : null}
                     <Badge variant="outline">{t("skills.plugins.tools")} {plugin.toolCount}</Badge>
                     <Badge variant="outline">{t("skills.plugins.hooks")} {plugin.hookCount}</Badge>
@@ -261,6 +447,20 @@ export function SystemPluginsPanel(props: {
                 </span>
               </div>
               <div className="agent-definition-row-actions">
+              {plugin.extension?.origin === "userInstalled" ? (
+                <button
+                  aria-label={locale.startsWith("zh") ? "卸载用户插件" : "Uninstall user plugin"}
+                  className="icon-button danger"
+                  disabled={installBusy || plugin.runtimeState !== "disabled"}
+                  onClick={() => void uninstallPlugin(plugin)}
+                  title={plugin.runtimeState === "disabled"
+                    ? (locale.startsWith("zh") ? "卸载" : "Uninstall")
+                    : (locale.startsWith("zh") ? "请先停用插件" : "Disable the plugin first")}
+                  type="button"
+                >
+                  <Trash2 size={15} />
+                </button>
+              ) : null}
               <button
                 aria-busy={busyPluginId === plugin.id}
                 aria-checked={plugin.desiredEnabled}

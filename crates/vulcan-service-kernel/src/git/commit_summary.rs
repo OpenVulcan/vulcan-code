@@ -1,21 +1,23 @@
 //! Git commit-message generation service logic.
 //! Git 提交信息生成服务逻辑。
 
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
 use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use vulcan_agent_runtime::{
     ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport, ExecutionStreamEvent,
-    conversation_protocol::SessionConversationState, provider_config::ReasoningEffortLevel,
+    agent_runtime::{
+        conversation_hooks::HOOK_GIT_COMMIT_SUMMARY_CONTEXT,
+        system_plugin_hooks::dispatch_system_plugin_hook,
+    },
+    conversation_protocol::SessionConversationState,
+    provider_config::ReasoningEffortLevel,
     stream_runtime_run_with_intervention,
 };
 use vulcan_context::estimate_mixed_language_text_tokens;
-use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
-use vulcan_runtime_assets::resolve_bundled_rtk_executable_path;
+use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, SessionNodeId};
 use vulcan_workbench_model::SessionId;
 
@@ -42,15 +44,7 @@ pub(crate) async fn service_generate_git_commit_message(
         .map_err(|error| format!("会话标识无效，无法生成提交信息：{error}"))?;
     let repository_root =
         resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
-    let (
-        agent_runtime,
-        provider_id,
-        model_id,
-        reasoning_effort,
-        extra_prompt,
-        use_rtk_summary,
-        rtk_telemetry_disabled,
-    ) = {
+    let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt, plugin_runtime) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -85,11 +79,10 @@ pub(crate) async fn service_generate_git_commit_message(
             .summary_extra_prompt
             .trim()
             .to_string();
-        let use_rtk_summary = summary_provider_configuration.git_commit.use_rtk_summary;
-        let rtk_telemetry_disabled = summary_provider_configuration
-            .host_tools
-            .rtk
-            .telemetry_disabled;
+        let plugin_runtime = agent_runtime
+            .luaskills_runtime
+            .as_ref()
+            .map(|runtime| runtime.system_plugin_runtime.clone());
         agent_runtime.provider_configuration = summary_provider_configuration;
         (
             agent_runtime,
@@ -97,8 +90,7 @@ pub(crate) async fn service_generate_git_commit_message(
             model_id,
             reasoning_effort,
             extra_prompt,
-            use_rtk_summary,
-            rtk_telemetry_disabled,
+            plugin_runtime,
         )
     };
     let summary_input = build_git_commit_summary_input(
@@ -106,9 +98,10 @@ pub(crate) async fn service_generate_git_commit_message(
         request.include_unstaged,
         &model_id,
         agent_runtime.token_budget_runtime.estimator(),
-        use_rtk_summary,
-        rtk_telemetry_disabled,
-    )?;
+        plugin_runtime.as_ref(),
+        session_id,
+    )
+    .await?;
     let prompt = build_git_commit_summary_prompt(&summary_input, &extra_prompt);
     let estimated_input_tokens = estimate_git_commit_prompt_tokens(
         &model_id,
@@ -144,51 +137,115 @@ pub(crate) async fn service_generate_git_commit_message(
 /// Git 提交信息 diff 输入预留的最大 Token 预算。
 const GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET: usize = 100_000;
 
+/// One exact repository section carried through the generic Git context transform hook.
+/// 一段通过通用 Git 上下文转换 Hook 传递的精确仓库区块。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GitCommitContextSection {
+    /// Stable host or plugin-owned section identifier.
+    /// 稳定的宿主或插件自有区块标识。
+    id: String,
+    /// Human-readable Markdown section title.
+    /// 人类可读的 Markdown 区块标题。
+    title: String,
+    /// Exact section body.
+    /// 精确区块正文。
+    body: String,
+    /// Whether the host must wrap the body in a plain-text code fence.
+    /// 宿主是否必须把正文包裹在纯文本代码围栏中。
+    #[serde(default)]
+    code_fence: bool,
+}
+
+/// One generic user-visible contribution returned by a Git context hook.
+/// 一条由 Git 上下文 Hook 返回的通用用户可见贡献。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GitCommitContextContribution {
+    /// Short stable contribution label.
+    /// 简短稳定的贡献标签。
+    label: String,
+    /// Human-readable contribution value.
+    /// 人类可读的贡献值。
+    value: String,
+}
+
+/// Exact transform payload for `git.commit_summary.context`.
+/// `git.commit_summary.context` 使用的精确转换载荷。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GitCommitContextHookPayload {
+    /// Protocol schema version.
+    /// 协议 Schema 版本。
+    schema_version: u32,
+    /// Immutable canonical repository root.
+    /// 不可变的规范化仓库根目录。
+    repository_root: String,
+    /// Immutable unstaged-change inclusion policy.
+    /// 不可变的未暂存变更包含策略。
+    include_unstaged: bool,
+    /// Ordered repository context sections.
+    /// 有序仓库上下文区块。
+    sections: Vec<GitCommitContextSection>,
+    /// Ordered host notices.
+    /// 有序宿主提示。
+    notices: Vec<String>,
+    /// Generic display contributions.
+    /// 通用展示贡献。
+    #[serde(default)]
+    contributions: Vec<GitCommitContextContribution>,
+}
+
 /// Builds the repository change input for Git commit-message generation.
 /// 构建 Git 提交信息生成使用的仓库变更输入。
-fn build_git_commit_summary_input(
+async fn build_git_commit_summary_input(
     repository_root: &Path,
     include_unstaged: bool,
     model_id: &str,
     estimator: Option<&dyn vulcan_context::ContextTokenEstimator>,
-    use_rtk_summary: bool,
-    rtk_telemetry_disabled: bool,
+    plugin_runtime: Option<&vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    session_id: SessionId,
 ) -> Result<GitCommitSummaryInput, String> {
-    if use_rtk_summary
-        && let Some(rtk_content) = build_git_commit_summary_rtk_input(
-            repository_root,
-            include_unstaged,
-            rtk_telemetry_disabled,
-        )
-    {
-        let token_estimate = estimate_git_commit_prompt_tokens(model_id, &rtk_content, estimator);
-        if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
-            return Ok(GitCommitSummaryInput {
-                content: rtk_content,
-                truncated: false,
-            });
-        }
-    }
-
     let mut notices = Vec::new();
     let mut sections = Vec::new();
     let staged_diff = load_webui_staged_git_diff(repository_root)?;
-    append_git_commit_summary_diff_section(&mut sections, "Staged changes", &staged_diff);
+    append_git_commit_context_section(&mut sections, "staged", "Staged changes", &staged_diff);
     if include_unstaged {
         let unstaged_diff = load_webui_unstaged_git_diff(repository_root)?;
-        append_git_commit_summary_diff_section(
+        append_git_commit_context_section(
             &mut sections,
+            "unstaged",
             "Unstaged tracked changes",
             &unstaged_diff,
         );
         let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices)?;
-        append_git_commit_summary_diff_section(&mut sections, "Untracked files", &untracked_diff);
+        append_git_commit_context_section(
+            &mut sections,
+            "untracked",
+            "Untracked files",
+            &untracked_diff,
+        );
     }
     if sections.is_empty() {
         return Err(String::from("当前没有可用于生成提交信息的变更。"));
     }
-    prepend_git_commit_summary_notices(&mut sections, &notices);
-    let full_content = sections.join("\n\n");
+    let repository_root_text = repository_root.to_string_lossy().into_owned();
+    let initial_payload = GitCommitContextHookPayload {
+        schema_version: 1,
+        repository_root: repository_root_text.clone(),
+        include_unstaged,
+        sections,
+        notices,
+        contributions: Vec::new(),
+    };
+    let transformed_payload = apply_git_commit_context_hooks(
+        initial_payload,
+        plugin_runtime,
+        repository_root,
+        session_id,
+    )
+    .await?;
+    let full_content = render_git_commit_context_payload(&transformed_payload);
     let token_estimate = estimate_git_commit_prompt_tokens(model_id, &full_content, estimator);
     if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
         return Ok(GitCommitSummaryInput {
@@ -202,74 +259,14 @@ fn build_git_commit_summary_input(
     })
 }
 
-/// Builds RTK-compressed Git change input for commit-message generation.
-/// 构建用于提交信息生成的 RTK 压缩 Git 变更输入。
-fn build_git_commit_summary_rtk_input(
-    repository_root: &Path,
-    include_unstaged: bool,
-    telemetry_disabled: bool,
-) -> Option<String> {
-    let rtk_path = resolve_bundled_rtk_executable_path()?;
-    let status = load_rtk_git_commit_summary_command_section(
-        repository_root,
-        &rtk_path,
-        "Status (RTK)",
-        &["git", "status", "--short", "--branch"],
-        telemetry_disabled,
-    )?;
-    let staged = load_rtk_git_commit_summary_command_section(
-        repository_root,
-        &rtk_path,
-        "Staged changes (RTK compressed)",
-        &["git", "diff", "--cached", "--no-color"],
-        telemetry_disabled,
-    )?;
-    let mut change_sections = Vec::new();
-    if !rtk_section_body_is_empty(&staged) {
-        change_sections.push(staged);
-    }
-    if include_unstaged {
-        let unstaged = load_rtk_git_commit_summary_command_section(
-            repository_root,
-            &rtk_path,
-            "Unstaged tracked changes (RTK compressed)",
-            &["git", "diff", "--no-color"],
-            telemetry_disabled,
-        )?;
-        if !rtk_section_body_is_empty(&unstaged) {
-            change_sections.push(unstaged);
-        }
-        let mut notices = Vec::new();
-        let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices).ok()?;
-        append_git_commit_summary_diff_section(
-            &mut change_sections,
-            "Untracked files",
-            &untracked_diff,
-        );
-        prepend_git_commit_summary_notices(&mut change_sections, &notices);
-    }
-    if change_sections.is_empty() {
-        return None;
-    }
-
-    let mut sections = vec![
-        String::from(
-            "## RTK input note\n\nThe Git change data below was compressed through RTK when available. Use it as the source of truth for the commit message.",
-        ),
-        status,
-    ];
-    sections.extend(change_sections);
-    Some(sections.join("\n\n"))
-}
-
-/// Appends one Git commit-summary diff section when its body contains useful content.
-/// 当正文包含有效内容时，追加一段 Git 提交总结 diff 区块。
+/// Appends one raw Git context section when its body contains useful content.
+/// 当正文包含有效内容时追加一段原始 Git 上下文区块。
 ///
 /// # Parameters
 /// 参数
-/// `sections` receives the formatted prompt section.
-/// `sections` 接收格式化后的提示词区块。
-/// `title` is the markdown heading text without the leading hashes.
+/// `sections` receives the structured section and `id` is its stable protocol identity.
+/// `sections` 接收结构化区块，`id` 是其稳定协议身份。
+/// `title` is the Markdown heading text without leading hashes.
 /// `title` 是不包含井号前缀的 Markdown 标题文本。
 /// `body` is the raw Git diff body to preserve in the prompt.
 /// `body` 是需要在提示词中保留的原始 Git diff 正文。
@@ -278,81 +275,140 @@ fn build_git_commit_summary_rtk_input(
 /// 返回值
 /// Returns whether a section was appended.
 /// 返回是否实际追加了区块。
-fn append_git_commit_summary_diff_section(
-    sections: &mut Vec<String>,
+fn append_git_commit_context_section(
+    sections: &mut Vec<GitCommitContextSection>,
+    id: &str,
     title: &str,
     body: &str,
 ) -> bool {
     if body.trim().is_empty() {
         return false;
     }
-    sections.push(format!("## {title}\n\n{body}"));
+    sections.push(GitCommitContextSection {
+        id: id.to_string(),
+        title: title.to_string(),
+        body: body.to_string(),
+        code_fence: false,
+    });
     true
 }
 
-/// Prepends Git commit-summary notices before change sections.
-/// 将 Git 提交总结提示前置到变更区块之前。
-fn prepend_git_commit_summary_notices(sections: &mut Vec<String>, notices: &[String]) {
-    if notices.is_empty() {
-        return;
-    }
-    sections.insert(0, format!("## Notices\n\n{}", notices.join("\n")));
-}
-
-/// Runs one RTK Git command and formats its output as a prompt section.
-/// 执行单条 RTK Git 命令并将输出格式化为提示词片段。
-fn load_rtk_git_commit_summary_command_section(
+/// Applies the generic plugin transform chain to one exact Git context payload.
+/// 对一份精确 Git 上下文载荷应用通用插件转换链。
+///
+/// # Parameters
+/// 参数
+/// The payload is host-owned; runtime, repository root, and session provide dispatch context.
+/// 载荷由宿主持有；运行时、仓库根与会话提供调度上下文。
+///
+/// # Returns
+/// 返回值
+/// Returns a strictly validated payload while preserving immutable host fields.
+/// 返回经过严格校验且保留宿主不可变字段的载荷。
+async fn apply_git_commit_context_hooks(
+    payload: GitCommitContextHookPayload,
+    plugin_runtime: Option<&vulcan_plugin_runtime::SystemPluginRuntimeManager>,
     repository_root: &Path,
-    rtk_path: &Path,
-    title: &str,
-    args: &[&str],
-    telemetry_disabled: bool,
-) -> Option<String> {
-    let mut command = Command::new(rtk_path);
-    command
-        .args(args)
-        .current_dir(repository_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    apply_windows_release_no_window_to_std_command(&mut command);
-    if telemetry_disabled {
-        command.env("RTK_TELEMETRY_DISABLED", "1");
-    }
-    let output = command.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let cleaned = clean_rtk_git_commit_summary_output(&stdout);
-    let body = if cleaned.trim().is_empty() {
-        "(none)".to_string()
-    } else {
-        cleaned.trim().to_string()
+    session_id: SessionId,
+) -> Result<GitCommitContextHookPayload, String> {
+    let Some(plugin_runtime) = plugin_runtime else {
+        return Ok(payload);
     };
-    Some(format!("## {title}\n\n```text\n{body}\n```"))
-}
-
-/// Removes RTK runtime warning lines from Git summary output.
-/// 从 Git 总结输出中移除 RTK 运行时警告行。
-fn clean_rtk_git_commit_summary_output(stdout: &str) -> String {
-    let mut cleaned = String::new();
-    for line in stdout
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("[rtk]"))
-    {
-        if !cleaned.is_empty() {
-            cleaned.push('\n');
-        }
-        cleaned.push_str(line);
+    let original_repository_root = payload.repository_root.clone();
+    let original_include_unstaged = payload.include_unstaged;
+    let mut context = HookContext::new(
+        uuid::Uuid::new_v4().to_string(),
+        HOOK_GIT_COMMIT_SUMMARY_CONTEXT,
+    );
+    context.scope = HookScope::Workspace;
+    context.actor = HookActor::new("service/git_commit_summary");
+    context.workspace_id = Some(repository_root.to_string_lossy().into_owned());
+    context.metadata.insert(
+        String::from("workspace_root"),
+        Value::String(repository_root.to_string_lossy().into_owned()),
+    );
+    context.session_id = Some(session_id.to_string());
+    context.conversation_id = context.session_id.clone();
+    context.capabilities = HookCapabilitySet::default();
+    let report = dispatch_system_plugin_hook(
+        plugin_runtime.clone(),
+        context,
+        serde_json::to_value(payload)
+            .map_err(|error| format!("Failed to encode Git context hook payload: {error}"))?,
+    )
+    .await
+    .map_err(|error| format!("Git context hook dispatch failed: {error}"))?;
+    let transformed: GitCommitContextHookPayload = serde_json::from_value(report.payload.value)
+        .map_err(|error| format!("Git context hook returned an invalid payload: {error}"))?;
+    if transformed.schema_version != 1 {
+        return Err(format!(
+            "Git context hook returned unsupported schema_version `{}`.",
+            transformed.schema_version
+        ));
     }
-    cleaned
+    if transformed.repository_root != original_repository_root
+        || transformed.include_unstaged != original_include_unstaged
+    {
+        return Err(String::from(
+            "Git context hook must preserve repository_root and include_unstaged.",
+        ));
+    }
+    if transformed.sections.is_empty()
+        || transformed.sections.iter().any(|section| {
+            section.id.trim().is_empty()
+                || section.title.trim().is_empty()
+                || section.body.trim().is_empty()
+        })
+    {
+        return Err(String::from(
+            "Git context hook must return non-empty identified sections.",
+        ));
+    }
+    Ok(transformed)
 }
 
-/// Returns whether one formatted RTK section contains no useful command output.
-/// 返回单个格式化 RTK 区块是否不包含有效命令输出。
-fn rtk_section_body_is_empty(section: &str) -> bool {
-    section.contains("\n(none)\n")
+/// Renders one validated Git context hook payload into the model prompt source.
+/// 把一份通过校验的 Git 上下文 Hook 载荷渲染为模型提示词来源。
+///
+/// # Parameters
+/// 参数
+/// `payload` is the exact post-hook protocol value.
+/// `payload` 是精确的 Hook 后协议值。
+///
+/// # Returns
+/// 返回值
+/// Returns ordered Markdown preserving notices, contributions, and section bodies.
+/// 返回保留提示、贡献与区块正文顺序的 Markdown。
+fn render_git_commit_context_payload(payload: &GitCommitContextHookPayload) -> String {
+    let mut rendered = Vec::new();
+    if !payload.notices.is_empty() {
+        rendered.push(format!("## Notices\n\n{}", payload.notices.join("\n")));
+    }
+    if !payload.contributions.is_empty() {
+        rendered.push(format!(
+            "## Context transforms\n\n{}",
+            payload
+                .contributions
+                .iter()
+                .map(|contribution| format!("- {}: {}", contribution.label, contribution.value))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    for section in &payload.sections {
+        if section.body.trim() == "(none)" && section.id != "status" {
+            continue;
+        }
+        if section.code_fence {
+            rendered.push(format!(
+                "## {}\n\n```text\n{}\n```",
+                section.title, section.body
+            ));
+        } else {
+            rendered.push(format!("## {}\n\n{}", section.title, section.body));
+        }
+    }
+    rendered.join("\n\n")
 }
 
 /// Builds a compact change-metadata fallback when the full diff is too large.
@@ -542,72 +598,39 @@ fn clean_generated_git_commit_message(message: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Verifies RTK runtime warnings are removed before commit-summary prompts are built.
-    /// 验证构建提交总结提示词前会移除 RTK 运行时警告。
+    /// Verifies blank Git context bodies do not create empty protocol sections.
+    /// 验证空白 Git 上下文正文不会创建空协议区块。
     #[test]
-    fn cleans_rtk_warning_lines_from_commit_summary_output() {
-        let output = "[rtk] /!\\ No hook installed — run `rtk init -g`\n M src/lib.rs\n";
-        assert_eq!(clean_rtk_git_commit_summary_output(output), " M src/lib.rs");
-    }
-
-    /// Verifies RTK output cleaning keeps non-warning lines in their original order.
-    /// 验证 RTK 输出清理会保留非警告行的原始顺序。
-    #[test]
-    fn clean_rtk_git_commit_summary_output_preserves_remaining_lines() {
-        let output = concat!(
-            "## main...origin/main\n",
-            " M src/lib.rs\n",
-            "  [rtk] local warning with indentation\n",
-            "?? tests/new.rs\n",
-        );
-
-        assert_eq!(
-            clean_rtk_git_commit_summary_output(output),
-            "## main...origin/main\n M src/lib.rs\n?? tests/new.rs"
-        );
-    }
-
-    /// Verifies blank commit-summary diff bodies do not create empty prompt sections.
-    /// 验证空白提交总结 diff 正文不会创建空提示词区块。
-    #[test]
-    fn commit_summary_diff_section_skips_blank_body() {
+    fn git_commit_context_section_skips_blank_body() {
         let mut sections = Vec::new();
 
-        assert!(!append_git_commit_summary_diff_section(
+        assert!(!append_git_commit_context_section(
             &mut sections,
+            "staged_diff",
             "Staged changes",
             " \n\t"
         ));
         assert!(sections.is_empty());
 
-        assert!(append_git_commit_summary_diff_section(
+        assert!(append_git_commit_context_section(
             &mut sections,
+            "staged_diff",
             "Staged changes",
             "diff --git a/lib.rs b/lib.rs"
         ));
-        assert_eq!(
-            sections,
-            vec![String::from(
-                "## Staged changes\n\ndiff --git a/lib.rs b/lib.rs"
-            )]
-        );
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].id, "staged_diff");
+        assert_eq!(sections[0].title, "Staged changes");
+        assert_eq!(sections[0].body, "diff --git a/lib.rs b/lib.rs");
     }
 
-    /// Verifies commit-summary notices are prepended before collected change sections.
-    /// 验证提交总结提示会前置到已收集的变更区块之前。
+    /// Verifies generated commit messages discard surrounding Markdown fences.
+    /// 验证生成的提交信息会丢弃外围 Markdown 代码围栏。
     #[test]
-    fn commit_summary_notices_are_prepended_before_changes() {
-        let mut sections = vec![String::from("## Staged changes\n\nM src/lib.rs")];
-        let notices = vec![String::from("untracked file was skipped")];
-
-        prepend_git_commit_summary_notices(&mut sections, &notices);
-
+    fn generated_commit_message_removes_markdown_fence() {
         assert_eq!(
-            sections,
-            vec![
-                String::from("## Notices\n\nuntracked file was skipped"),
-                String::from("## Staged changes\n\nM src/lib.rs"),
-            ]
+            clean_generated_git_commit_message("```text\n实现插件迁移\n```"),
+            "实现插件迁移"
         );
     }
 }

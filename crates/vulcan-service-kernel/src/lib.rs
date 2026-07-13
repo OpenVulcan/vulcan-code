@@ -195,6 +195,7 @@ mod host_tools_settings;
 mod mcp_settings;
 mod pending_prompt_services;
 mod pending_prompts;
+mod plugin_services;
 mod project_conversation_services;
 mod project_directories;
 mod provider_settings;
@@ -291,10 +292,7 @@ use git::{
     service_save_git_commit_settings,
 };
 use git_diff_services::*;
-use host_tools_settings::{
-    host_tools_settings, host_tools_settings_with_native_tools, service_get_rtk_gain_stats,
-    service_save_rtk_routing_settings,
-};
+use host_tools_settings::{host_tools_settings, host_tools_settings_with_native_tools};
 use mcp_settings::*;
 use pending_prompt_services::{
     service_edit_pending_prompt, service_remove_pending_prompt, service_reorder_pending_prompts,
@@ -305,6 +303,7 @@ use pending_prompts::{
     provider_configuration_for_model_reference, runtime_state_has_queued_pending_prompt_work,
     session_has_blocking_system_prompt_work,
 };
+use plugin_services::{service_invoke_plugin_action, service_load_plugin_ui_module};
 pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;

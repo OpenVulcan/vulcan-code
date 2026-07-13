@@ -89,6 +89,36 @@ pub(super) async fn dispatch_service_rpc(
         "service_refresh_luaskills_catalog" => {
             rpc_json_result(service_refresh_luaskills_catalog(state).await)
         }
+        "service_inspect_local_plugin" => rpc_json_result(
+            service_inspect_local_plugin(state, rpc_required_param(&params, "sourcePath")?).await,
+        ),
+        "service_install_local_plugin" => rpc_json_result(
+            service_install_local_plugin(
+                state,
+                rpc_required_param(&params, "sourcePath")?,
+                rpc_required_param(&params, "approvedCapabilities")?,
+                rpc_required_param(&params, "allowRegistryDependencies")?,
+            )
+            .await,
+        ),
+        "service_uninstall_user_plugin" => rpc_json_result(
+            service_uninstall_user_plugin(state, rpc_required_param(&params, "pluginId")?).await,
+        ),
+        "service_load_plugin_ui_module" => rpc_json_result(service_load_plugin_ui_module(
+            state,
+            rpc_required_param(&params, "pluginId")?,
+            rpc_required_param(&params, "mountId")?,
+        )),
+        "service_invoke_plugin_action" => rpc_json_result(
+            service_invoke_plugin_action(
+                state,
+                rpc_required_param(&params, "pluginId")?,
+                rpc_required_param(&params, "actionId")?,
+                rpc_required_param(&params, "arguments")?,
+                rpc_optional_param(&params, "workspacePath")?,
+            )
+            .await,
+        ),
         "service_save_luaskills_runtime_settings" => rpc_json_result(
             service_save_luaskills_runtime_settings(
                 state,
@@ -534,11 +564,6 @@ pub(super) async fn dispatch_service_rpc(
             service_save_git_commit_settings(app, state, rpc_required_param(&params, "request")?)
                 .await,
         ),
-        "service_save_rtk_routing_settings" => rpc_json_result(
-            service_save_rtk_routing_settings(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_get_rtk_gain_stats" => rpc_json_result(service_get_rtk_gain_stats().await),
         "service_generate_git_commit_message" => rpc_json_result(
             service_generate_git_commit_message(state, rpc_required_param(&params, "request")?)
                 .await,

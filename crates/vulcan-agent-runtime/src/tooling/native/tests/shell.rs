@@ -79,7 +79,7 @@ fn shell_command_launcher_rejects_unknown_shell() {
 #[test]
 fn shell_tool_schemas_expose_dynamic_detected_shells() {
     let shell_support = test_shell_support();
-    let command_schema = shell_command_args_schema(&shell_support, &RtkRoutingSupport::disabled());
+    let command_schema = shell_command_args_schema(&shell_support);
     let session_schema = terminal_session_args_schema(&shell_support);
 
     assert_eq!(
@@ -97,13 +97,12 @@ fn shell_tool_schemas_expose_dynamic_detected_shells() {
 #[test]
 fn shell_tool_schema_descriptions_document_defaults_in_english() {
     let shell_support = test_shell_support();
-    let command_tool =
-        build_shell_command_tool(shell_support.clone(), RtkRoutingSupport::disabled());
+    let command_tool = build_shell_command_tool(shell_support.clone(), None);
     let session_tool = build_terminal_session_tool(
         Arc::new(CommandSessionRuntime::new()),
         shell_support.clone(),
     );
-    let command_schema = shell_command_args_schema(&shell_support, &RtkRoutingSupport::disabled());
+    let command_schema = shell_command_args_schema(&shell_support);
     let session_schema = terminal_session_args_schema(&shell_support);
 
     assert!(
@@ -196,79 +195,6 @@ fn shell_tool_schema_descriptions_document_defaults_in_english() {
             .unwrap_or_default()
             .contains("workspace root")
     );
-}
-
-/// Disabled RTK support should keep the AI-facing shell-command schema unchanged.
-/// 禁用 RTK 支持时，面向 AI 的 shell-command schema 应保持不变。
-#[test]
-fn shell_command_schema_omits_rtk_disable_flag_when_rtk_is_unavailable() {
-    let shell_support = test_shell_support();
-    let command_schema = shell_command_args_schema(&shell_support, &RtkRoutingSupport::disabled());
-
-    assert!(
-        command_schema["properties"]
-            .as_object()
-            .expect("schema properties should be an object")
-            .get("disabled_rtk")
-            .is_none()
-    );
-}
-
-/// Available RTK support should expose an invocation-level bypass flag to the AI.
-/// 可用 RTK 支持应向 AI 暴露单次调用级别的绕过开关。
-#[test]
-fn shell_command_schema_exposes_rtk_disable_flag_when_rtk_is_available() {
-    let shell_support = test_shell_support();
-    let rtk_file = tempfile::NamedTempFile::new().expect("test RTK file should be created");
-    let rtk_support = RtkRoutingSupport::from_test_parts(
-        PersistedRtkToolConfiguration::default(),
-        Some(rtk_file.path().to_path_buf()),
-    );
-    let command_schema = shell_command_args_schema(&shell_support, &rtk_support);
-
-    assert_eq!(
-        command_schema["properties"]["disabled_rtk"]["type"],
-        json!("boolean")
-    );
-}
-
-/// RTK route collection should capture each rewritten command route without treating separators as routes.
-/// RTK 路由采集应捕获每条重写命令的路由名，同时不把分隔符误判为路由。
-#[test]
-fn rtk_route_collection_handles_compound_rewritten_commands() {
-    let routes = collect_rtk_route_names("rtk git status && rtk cargo test --all");
-    let expected = BTreeSet::from([String::from("cargo"), String::from("git")]);
-
-    assert_eq!(routes, expected);
-}
-
-/// RTK route collection should ignore raw shell segments left by RTK's native partial rewrite.
-/// RTK 路由采集应忽略 RTK 原生局部改写保留下来的原始 shell 片段。
-#[test]
-fn rtk_route_collection_ignores_unrouted_shell_segments() {
-    let routes = collect_rtk_route_names("rtk git status && powershell -NoProfile");
-    let expected = BTreeSet::from([String::from("git")]);
-
-    assert_eq!(routes, expected);
-}
-
-/// Selected RTK routing should allow only enabled routes and always honor explicit deny entries.
-/// 精选 RTK 路由应只允许已启用路由，并始终遵守显式禁用项。
-#[test]
-fn rtk_route_allowance_honors_selected_and_disabled_routes() {
-    let rtk_support = RtkRoutingSupport::from_test_parts(
-        PersistedRtkToolConfiguration {
-            route_mode: PersistedRtkRouteMode::Selected,
-            enabled_routes: BTreeSet::from([String::from("git")]),
-            disabled_routes: BTreeSet::from([String::from("npm")]),
-            ..PersistedRtkToolConfiguration::default()
-        },
-        None,
-    );
-
-    assert!(rtk_support.allows_routes(&BTreeSet::from([String::from("git")])));
-    assert!(!rtk_support.allows_routes(&BTreeSet::from([String::from("npm")])));
-    assert!(!rtk_support.allows_routes(&BTreeSet::from([String::from("cargo")])));
 }
 
 /// The VMM write tool should expose numeric mappings and reserve profile extraction for the automatic pipeline.
@@ -382,7 +308,7 @@ fn session_shell_behavior_detects_nested_bash_from_command_text() {
 /// shell-command 工具应在 Plan 模式下继续对 AI 可见，以便规划回合仍能发现并选择宿主命令执行能力。
 #[test]
 fn shell_command_tool_stays_visible_in_plan_mode() {
-    let tool = build_shell_command_tool(test_shell_support(), RtkRoutingSupport::disabled());
+    let tool = build_shell_command_tool(test_shell_support(), None);
     assert!(tool.descriptor.ai_visible);
     assert!(tool.descriptor.available_in_plan);
 }
@@ -393,7 +319,7 @@ fn shell_command_tool_stays_visible_in_plan_mode() {
 async fn shell_command_tool_executes_simple_command() {
     let tool = build_shell_command_tool(
         HostCommandShellSupport::from_configured_default_id(None),
-        RtkRoutingSupport::disabled(),
+        None,
     );
     let result = tool
         .invoke(NativeToolExecutionRequest {
@@ -422,42 +348,6 @@ async fn shell_command_tool_executes_simple_command() {
         .expect("shell command should expose host metadata");
     assert_eq!(host_result.kind, "command_run");
     assert_eq!(host_result.payload["status"], "completed");
-}
-
-/// The per-call RTK bypass flag should run the raw command and record the bypass reason.
-/// 单次 RTK 绕过开关应执行原始命令并记录绕过原因。
-#[tokio::test]
-async fn shell_command_tool_records_disabled_rtk_bypass() {
-    let tool = build_shell_command_tool(
-        HostCommandShellSupport::from_configured_default_id(None),
-        RtkRoutingSupport::disabled(),
-    );
-    let result = tool
-        .invoke(NativeToolExecutionRequest {
-            arguments: json!({
-                "command": "echo hello",
-                "disabled_rtk": true
-            }),
-            session_id: None,
-            workspace_root: None,
-            controller_runtime: None,
-            spill_root: None,
-            enabled_prompt_skill_names: Vec::new(),
-            prompt_skill_user_root: None,
-            project_vmm: VmmConfigLayer::default(),
-            session_vmm: VmmConfigLayer::default(),
-        })
-        .await
-        .expect("shell command should execute");
-
-    let host_result = result
-        .host_result
-        .expect("shell command should expose host metadata");
-    assert_eq!(
-        host_result.payload["rtk"]["bypass_reason"],
-        json!("disabled_by_invocation")
-    );
-    assert_eq!(host_result.payload["rtk"]["status"], json!("bypassed"));
 }
 
 /// The shell-session tool should support a full start-read-write-read-stop round trip and keep the command-session identifier stable across actions.

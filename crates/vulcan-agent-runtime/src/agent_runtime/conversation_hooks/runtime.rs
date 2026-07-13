@@ -47,7 +47,7 @@ impl ConversationHookRuntime {
     /// Registers every built-in conversation hook point descriptor.
     /// 注册所有内置会话 hook 点位描述。
     fn register_builtin_points(&mut self) {
-        let descriptors = conversation_hook_point_descriptors();
+        let descriptors = host_hook_point_descriptors();
         self.dispatcher
             .register_points(descriptors)
             .expect("built-in conversation hook points should be valid");

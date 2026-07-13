@@ -4,6 +4,7 @@ import {
   Maximize2,
   Minimize2,
   Puzzle,
+  Route,
   Settings,
 } from "lucide-react";
 import {
@@ -12,6 +13,7 @@ import {
   type SkillActionProps,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
+import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 
@@ -73,6 +75,9 @@ export function FloatingSkillMenu(props: {
   // Selects one embedded skills sub page.
   // 选择一个内嵌技能子页面。
   onSelectSubArea: (subArea: SkillSubAreaId) => void;
+  // Workbench snapshot used to expose settings entries only for enabled plugins.
+  // 用于仅向已启用插件暴露设置入口的工作台快照。
+  workbench: WorkbenchSnapshot;
 }) {
   const { t } = useI18n();
   // rows stores the static embedded skills menu rows.
@@ -81,6 +86,9 @@ export function FloatingSkillMenu(props: {
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
+    ...(hasEnabledPluginDetailMount(props.workbench.plugins, "vulcan-rtk")
+      ? [{ icon: <Route size={15} />, id: "rtk" as const, label: t("skills.navigation.rtkSettings") }]
+      : []),
   ];
   // activeLabel stores the selected menu label for the collapsed pill.
   // activeLabel 保存收起胶囊展示的当前菜单标签。
@@ -138,6 +146,9 @@ export function skillSubAreaLabel(subArea: SkillSubAreaId, t: ReturnType<typeof 
   }
   if (subArea === "plugins") {
     return t("skills.navigation.plugins");
+  }
+  if (subArea === "rtk") {
+    return t("skills.navigation.rtkSettings");
   }
   return t("skills.navigation.list");
 }

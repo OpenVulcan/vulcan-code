@@ -6,21 +6,28 @@ default_enabled: true
 display:
   name: Vulcan Debug Runtime
   capability: Managed local CDP and DAP debugging
+capabilities:
+  - process_node
+  - process_session
 platforms:
   excluded_targets:
     - aarch64-pc-windows-msvc
     - arm64ec-pc-windows-msvc
 runtime:
   dependencies_file: dependencies.yaml
+  bundle: runtime/plugin.bundle.lua
   required_files:
     - node/sidecar.mjs
     - node/package.json
     - node/pnpm-lock.yaml
-  module: runtime.plugin
   invoke_function: dispatch
   shutdown_function: shutdown
   max_active_sessions: 8
   session_idle_timeout_sec: 1800
+node_entries:
+  - id: debug-sidecar
+    file: node/sidecar.mjs
+    cwd: node
 tools:
   - id: debug_session_open
     group: debug_session_tools

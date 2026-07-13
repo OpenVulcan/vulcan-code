@@ -16,10 +16,6 @@ pub struct GitCommitSettingsSummary {
     /// 追加到提交信息生成中的用户额外提示词。
     #[serde(default)]
     pub summary_extra_prompt: String,
-    /// Whether commit-message generation should prefer RTK-compressed Git input.
-    /// 提交信息生成是否优先使用 RTK 压缩后的 Git 输入。
-    #[serde(default = "default_git_commit_use_rtk_summary")]
-    pub use_rtk_summary: bool,
 }
 
 impl Default for GitCommitSettingsSummary {
@@ -30,15 +26,8 @@ impl Default for GitCommitSettingsSummary {
             new_branch_prefix: String::from("vulcan/"),
             summary_model: GitCommitSummaryModelSelectionSummary::default(),
             summary_extra_prompt: String::new(),
-            use_rtk_summary: true,
         }
     }
-}
-
-/// Returns the default RTK usage state for commit-message summary input.
-/// 返回提交信息总结输入默认 RTK 使用状态。
-const fn default_git_commit_use_rtk_summary() -> bool {
-    true
 }
 
 /// Describes the model selection used for automatic Git commit summaries.

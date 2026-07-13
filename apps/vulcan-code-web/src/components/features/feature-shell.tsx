@@ -22,6 +22,7 @@ import {
   type SkillHeaderBusyActionId,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea"
+import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types"
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import {
   type MemoryActionProps,
@@ -109,6 +110,11 @@ function FeatureShell(props: {
   // activeSkillSubArea keeps the left menu and right skill tabs synchronized.
   // activeSkillSubArea 保持左侧菜单与右侧技能页签同步。
   const [activeSkillSubArea, setActiveSkillSubArea] = React.useState<SkillSubAreaId>("catalog")
+  React.useEffect(() => {
+    if (activeSkillSubArea === "rtk" && !hasEnabledPluginDetailMount(props.workbench.plugins, "vulcan-rtk")) {
+      setActiveSkillSubArea("plugins")
+    }
+  }, [activeSkillSubArea, props.workbench.plugins])
   // activeMemorySubArea keeps VMM left navigation and content synchronized.
   // activeMemorySubArea 保持 VMM 左侧导航与内容区域同步。
   const [activeMemorySubArea, setActiveMemorySubArea] = React.useState<MemorySubAreaId>("status")

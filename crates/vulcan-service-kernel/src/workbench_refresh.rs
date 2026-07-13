@@ -493,6 +493,10 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
             .as_deref(),
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
         agent_runtime.provider_configuration.vmm.clone(),
+        agent_runtime
+            .luaskills_runtime
+            .as_ref()
+            .map(|runtime| runtime.system_plugin_runtime.clone()),
     );
     native_catalog
         .descriptors
@@ -1066,6 +1070,7 @@ mod tests {
             active_session_count: 0,
             diagnostics: Vec::new(),
             management_kind: String::from("luaSkill"),
+            extension: None,
         }];
 
         preserve_focused_catalog_domains_after_concurrent_refresh(

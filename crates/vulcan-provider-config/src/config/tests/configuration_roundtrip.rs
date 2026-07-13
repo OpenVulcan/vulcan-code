@@ -1,12 +1,10 @@
 use super::super::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
-    PersistedAiToolConfiguration, PersistedGitCommitConfiguration, PersistedHostToolsConfiguration,
-    PersistedLuaSkillToolRegistrationState, PersistedLuaSkillsConfiguration,
-    PersistedPromptSkillState, PersistedPromptSkillsConfiguration, PersistedRtkRouteMode,
-    PersistedRtkToolConfiguration, PersistedWebSearchConfiguration,
-    PersistedWebSearchProviderEntry, ProviderConfigurationFile, ReasoningEffortLevel,
-    WebSearchProviderDispatchMode, WebSearchProviderKind, WebSearchRoutingMode,
-    WorkbenchThinkingDisplayMode,
+    PersistedAiToolConfiguration, PersistedLuaSkillToolRegistrationState,
+    PersistedLuaSkillsConfiguration, PersistedPromptSkillState, PersistedPromptSkillsConfiguration,
+    PersistedWebSearchConfiguration, PersistedWebSearchProviderEntry, ProviderConfigurationFile,
+    ReasoningEffortLevel, WebSearchProviderDispatchMode, WebSearchProviderKind,
+    WebSearchRoutingMode, WorkbenchThinkingDisplayMode,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -135,83 +133,6 @@ fn provider_configuration_round_trips_vmm_configuration() {
     let restored: ProviderConfigurationFile =
         serde_json::from_value(value).expect("provider configuration must deserialize");
     assert_eq!(restored.vmm, config.vmm);
-}
-
-/// Verifies RTK host-tool configuration keeps the stable `hostTools.rtk` shape through serialization.
-/// 验证 RTK 宿主工具配置在序列化过程中保持稳定的 `hostTools.rtk` 形状。
-#[test]
-fn provider_configuration_round_trips_rtk_host_tool_configuration() {
-    let config = ProviderConfigurationFile {
-        host_tools: PersistedHostToolsConfiguration {
-            rtk: PersistedRtkToolConfiguration {
-                enabled: false,
-                route_mode: PersistedRtkRouteMode::All,
-                enabled_routes: BTreeSet::from([String::from("git")]),
-                disabled_routes: BTreeSet::from([String::from("npm")]),
-                telemetry_disabled: false,
-            },
-        },
-        ..ProviderConfigurationFile::default()
-    };
-
-    let value = serde_json::to_value(&config).expect("provider configuration must serialize");
-    assert_eq!(value["hostTools"]["rtk"]["enabled"], json!(false));
-    assert_eq!(value["hostTools"]["rtk"]["routeMode"], json!("all"));
-    assert_eq!(value["hostTools"]["rtk"]["enabledRoutes"], json!(["git"]));
-    assert_eq!(value["hostTools"]["rtk"]["disabledRoutes"], json!(["npm"]));
-    assert_eq!(value["hostTools"]["rtk"]["telemetryDisabled"], json!(false));
-
-    let restored: ProviderConfigurationFile =
-        serde_json::from_value(value).expect("provider configuration must deserialize");
-    assert_eq!(
-        restored.host_tools.rtk.route_mode,
-        PersistedRtkRouteMode::All
-    );
-    assert!(restored.host_tools.rtk.disabled_routes.contains("npm"));
-}
-
-/// Verifies default RTK host-tool settings are still materialized in the shared `.vulcan` configuration file.
-/// 验证默认 RTK 宿主工具设置仍会实体化写入共享 `.vulcan` 配置文件。
-#[test]
-fn provider_configuration_serializes_default_rtk_host_tool_configuration() {
-    let value = serde_json::to_value(ProviderConfigurationFile::default())
-        .expect("provider configuration must serialize");
-
-    assert_eq!(value["hostTools"]["rtk"]["enabled"], json!(true));
-    assert_eq!(value["hostTools"]["rtk"]["routeMode"], json!("selected"));
-    assert_eq!(
-        value["hostTools"]["rtk"]["enabledRoutes"],
-        json!([
-            "cargo", "find", "git", "go", "grep", "jest", "ls", "mypy", "npm", "npx", "pnpm",
-            "pytest", "read", "ruff", "tree", "tsc", "vitest", "wc"
-        ])
-    );
-    assert_eq!(value["hostTools"]["rtk"]["disabledRoutes"], json!([]));
-    assert_eq!(value["hostTools"]["rtk"]["telemetryDisabled"], json!(true));
-}
-
-/// Verifies Git commit summary settings persist an explicit RTK-disabled choice while skipping the default enabled state.
-/// 验证 Git 提交总结设置会持久化显式关闭 RTK 的选择，同时默认开启状态仍保持省略。
-#[test]
-fn provider_configuration_round_trips_git_commit_rtk_summary_choice() {
-    let default_value = serde_json::to_value(ProviderConfigurationFile::default())
-        .expect("provider configuration must serialize");
-    assert!(default_value.get("gitCommit").is_none());
-
-    let config = ProviderConfigurationFile {
-        git_commit: PersistedGitCommitConfiguration {
-            use_rtk_summary: false,
-            ..PersistedGitCommitConfiguration::default()
-        },
-        ..ProviderConfigurationFile::default()
-    };
-
-    let value = serde_json::to_value(&config).expect("provider configuration must serialize");
-    assert_eq!(value["gitCommit"]["useRtkSummary"], json!(false));
-
-    let restored: ProviderConfigurationFile =
-        serde_json::from_value(value).expect("provider configuration must deserialize");
-    assert!(!restored.git_commit.use_rtk_summary);
 }
 
 /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.

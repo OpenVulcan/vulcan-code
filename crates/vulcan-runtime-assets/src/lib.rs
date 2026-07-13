@@ -114,6 +114,10 @@ const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
 /// 打包在 output 根目录下的 LuaSkills 运行时根目录名称。
 const LUASKILLS_RUNTIME_ROOT_DIR_NAME: &str = "lua_runtime";
 
+/// Relative directory containing Vulcan-managed plugin packages.
+/// 包含 Vulcan 托管插件包的相对目录。
+const PLUGINS_DIR_NAME: &str = "plugins";
+
 /// Relative dependency directory name shared by host subsystems below the output root.
 /// output 根目录下由宿主各子系统共享的相对依赖目录名称。
 const DEPENDENCIES_DIR_NAME: &str = "dependencies";
@@ -124,7 +128,6 @@ const MANAGED_RUNTIME_DISTRIBUTIONS_DIR_NAME: &str = "runtimes";
 
 /// Relative host tools directory name bundled below the output root.
 /// 打包在 output 根目录下的宿主工具目录名称。
-const TOOLS_DIR_NAME: &str = "tools";
 
 /// Relative controller binary directory name bundled into the output root.
 /// 打包到 output 根目录中的控制器二进制目录名称。
@@ -261,14 +264,6 @@ pub fn resolve_bundled_controller_executable_path() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-/// Returns the bundled RTK executable path when the current process runs from one packaged output root.
-/// 当当前进程从某个打包 output 根目录运行时，返回其中的 RTK 可执行文件路径。
-pub fn resolve_bundled_rtk_executable_path() -> Option<PathBuf> {
-    let output_root = resolve_output_root()?;
-    let candidate = bundled_rtk_executable_candidate(&output_root);
-    candidate.is_file().then_some(candidate)
-}
-
 /// Resolves the active LuaSkills runtime root used by the WebUI host.
 /// 解析WebUI宿主实际使用的 LuaSkills 活动运行根目录。
 pub fn resolve_luaskills_runtime_root() -> Option<PathBuf> {
@@ -293,6 +288,59 @@ pub fn resolve_luaskills_runtime_root() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Returns the bundled Vulcan plugin root below the active output directory.
+/// 返回当前 output 目录下的内建 Vulcan 插件根目录。
+///
+/// # Returns
+/// 返回值
+/// The exact `<VULCAN_CODE_ROOT>/plugins` directory, or `None` when no output root exists.
+/// 返回精确的 `<VULCAN_CODE_ROOT>/plugins` 目录；不存在 output 根时返回 `None`。
+pub fn resolve_bundled_plugin_root() -> Option<PathBuf> {
+    if let Some(output_root) = resolve_output_root() {
+        return Some(output_root.join(PLUGINS_DIR_NAME));
+    }
+    let repository_output_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("output");
+    repository_output_root
+        .is_dir()
+        .then(|| repository_output_root.join(PLUGINS_DIR_NAME))
+}
+
+/// Returns the current user's Vulcan plugin installation root.
+/// 返回当前用户的 Vulcan 插件安装根目录。
+///
+/// # Returns
+/// 返回值
+/// The exact `~/vulcan/code/plugins` directory, or `None` when the home directory is unavailable.
+/// 返回精确的 `~/vulcan/code/plugins` 目录；无法取得用户主目录时返回 `None`。
+pub fn resolve_user_plugin_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join("vulcan").join("code").join("plugins"))
+}
+
+/// Returns the current user's Vulcan plugin state root.
+/// 返回当前用户的 Vulcan 插件状态根目录。
+///
+/// # Returns
+/// 返回值
+/// The exact `~/vulcan/code/plugin-state` directory, or `None` when home is unavailable.
+/// 返回精确的 `~/vulcan/code/plugin-state` 目录；无法取得用户主目录时返回 `None`。
+pub fn resolve_user_plugin_state_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join("vulcan").join("code").join("plugin-state"))
+}
+
+/// Returns the current user's Vulcan plugin dependency runtime root.
+/// 返回当前用户的 Vulcan 插件依赖运行根目录。
+///
+/// # Returns
+/// 返回值
+/// The exact `~/vulcan/code/plugin-runtime` directory, or `None` when home is unavailable.
+/// 返回精确的 `~/vulcan/code/plugin-runtime` 目录；无法取得用户主目录时返回 `None`。
+pub fn resolve_user_plugin_runtime_root() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join("vulcan").join("code").join("plugin-runtime"))
 }
 
 /// Resolves the host-owned distribution root shared by managed Python and Node consumers.
@@ -344,7 +392,6 @@ fn resolve_output_root() -> Option<PathBuf> {
             || candidate.join(CONFIG_DIR_NAME).is_dir()
             || candidate.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME).is_dir()
             || candidate.join(LUA_PACKAGES_DIR_NAME).is_dir()
-            || candidate.join(TOOLS_DIR_NAME).is_dir()
             || candidate.join(CONTROLLER_BIN_DIR_NAME).is_dir()
     })
 }
@@ -368,36 +415,9 @@ fn controller_executable_name() -> &'static str {
     }
 }
 
-/// Builds the output-root-relative RTK executable candidate path.
-/// 构建相对于 output root 的 RTK 可执行文件候选路径。
-fn bundled_rtk_executable_candidate(output_root: &Path) -> PathBuf {
-    output_root.join(TOOLS_DIR_NAME).join(rtk_executable_name())
-}
-
-/// Returns the platform-specific RTK executable file name.
-/// 返回平台相关的 RTK 可执行文件名。
-fn rtk_executable_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "rtk.exe"
-    } else {
-        "rtk"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bundled_rtk_candidate_uses_output_tools_directory() {
-        let candidate = bundled_rtk_executable_candidate(Path::new("output-root"));
-        assert_eq!(
-            candidate,
-            Path::new("output-root")
-                .join(TOOLS_DIR_NAME)
-                .join(rtk_executable_name())
-        );
-    }
 
     /// Verify drive and UNC verbatim paths share one stable native conversion.
     /// 验证盘符与 UNC verbatim 路径共享同一稳定原生转换。

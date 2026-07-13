@@ -1,0 +1,102 @@
+schema_version: 1
+id: vulcan-rtk
+version: 0.1.0
+kind: bundled_system
+default_enabled: true
+display:
+  name: Vulcan RTK
+  capability: Command routing, compressed Git context, and token-saving statistics
+capabilities:
+  - process_binary
+  - config
+  - ui_host_context
+platforms:
+  excluded_targets:
+    - aarch64-pc-windows-msvc
+    - arm64ec-pc-windows-msvc
+runtime:
+  dependencies_file: dependencies.yaml
+  bundle: runtime/plugin.bundle.lua
+  required_files:
+    - LICENSE
+    - config/schema.json
+    - config/defaults.json
+    - ui/index.mjs
+    - locales/en.yaml
+    - locales/zh-CN.yaml
+  invoke_function: dispatch
+  shutdown_function: shutdown
+  max_active_sessions: 8
+  session_idle_timeout_sec: 300
+dependency_policy:
+  install_mode: bundled
+config:
+  schema_file: config/schema.json
+  defaults_file: config/defaults.json
+binaries:
+  - id: rtk
+    targets:
+      x86_64-pc-windows-msvc: bin/x86_64-pc-windows-msvc/rtk.exe
+      x86_64-unknown-linux-gnu: bin/x86_64-unknown-linux-gnu/rtk
+      aarch64-unknown-linux-gnu: bin/aarch64-unknown-linux-gnu/rtk
+      x86_64-apple-darwin: bin/x86_64-apple-darwin/rtk
+      aarch64-apple-darwin: bin/aarch64-apple-darwin/rtk
+    allowed_env:
+      - RTK_TELEMETRY_DISABLED
+    allow_workspace_cwd: true
+actions:
+  - id: settings-get
+    function: settings_get
+    output_schema_file: schemas/settings-output.json
+    timeout_ms: 5000
+    callers:
+      - plugin_ui
+  - id: settings-update
+    function: settings_update
+    input_schema_file: config/schema.json
+    output_schema_file: schemas/settings-output.json
+    timeout_ms: 5000
+    callers:
+      - plugin_ui
+  - id: statistics-get
+    function: statistics_get
+    output_schema_file: schemas/statistics-output.json
+    timeout_ms: 12000
+    callers:
+      - plugin_ui
+  - id: self_check
+    function: self_check
+    output_schema_file: schemas/self-check-output.json
+    timeout_ms: 5000
+    callers:
+      - plugin_ui
+ui:
+  mounts:
+    - id: settings-and-statistics
+      point: skills_plugin_detail
+      entry: ui/index.mjs
+      export: createPluginPanel
+hooks:
+  - id: shell-command-rewrite
+    point: tool.shell_command.before_execute
+    mode: transform
+    scope: workspace
+    function: transform_shell_command
+    priority: 100
+    timeout_ms: 3000
+    failure_policy: continue
+    display_name: RTK command routing
+    progress_label: Rewriting command with RTK
+  - id: git-commit-context
+    point: git.commit_summary.context
+    mode: transform
+    scope: workspace
+    function: transform_git_commit_context
+    priority: 100
+    timeout_ms: 12000
+    failure_policy: continue
+    display_name: RTK Git context compression
+    progress_label: Compressing Git context with RTK
+locales:
+  en: locales/en.yaml
+  zh-CN: locales/zh-CN.yaml

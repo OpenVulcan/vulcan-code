@@ -17,6 +17,57 @@ pub struct PluginToolSummary {
     pub description: String,
 }
 
+/// Summarizes one host hook declared by a manifest-driven plugin.
+/// 汇总清单驱动插件声明的单个宿主 Hook。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHookSummary {
+    /// Stable plugin-local hook identifier.
+    /// 稳定的插件内 Hook 标识。
+    pub id: String,
+    /// Exact host-owned hook point.
+    /// 精确的宿主自有 Hook 点位。
+    pub point: String,
+}
+
+/// Summarizes one dynamic WebUI mount declared by a plugin.
+/// 汇总插件声明的单个动态 WebUI 挂载项。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginUiMountSummary {
+    /// Stable plugin-local mount identifier.
+    /// 稳定的插件内挂载标识。
+    pub id: String,
+    /// Stable host-owned mount point.
+    /// 稳定的宿主自有挂载点。
+    pub point: String,
+    /// Named ESM export containing the component factory.
+    /// 包含组件工厂的 ESM 命名导出。
+    pub export_name: String,
+}
+
+/// Describes manifest-owned extension surfaces unavailable to ordinary LuaSkill rows.
+/// 描述普通 LuaSkill 行不具备的清单自有扩展面。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginExtensionSummary {
+    /// Stable package origin such as bundled system or user installed.
+    /// 稳定的包来源，例如系统内建或用户安装。
+    pub origin: String,
+    /// Exact host capabilities declared by the plugin manifest.
+    /// 插件清单声明的精确宿主能力。
+    pub capabilities: Vec<String>,
+    /// Declared host hooks shown before installation authorization.
+    /// 在安装授权前展示的已声明宿主 Hook。
+    pub hooks: Vec<PluginHookSummary>,
+    /// Host-callable business action identifiers.
+    /// 宿主可调用的业务 Action 标识。
+    pub actions: Vec<String>,
+    /// Dynamic host UI mounts.
+    /// 动态宿主界面挂载项。
+    pub ui_mounts: Vec<PluginUiMountSummary>,
+}
+
 /// Summarizes one plugin or LuaSkill package.
 /// 汇总单个插件或 LuaSkill 包。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -86,6 +137,34 @@ pub struct PluginSummary {
     /// Stable lifecycle manager kind used by the WebUI action router.
     /// WebUI 动作路由使用的稳定生命周期管理类型。
     pub management_kind: String,
+    /// Optional manifest-owned extension surfaces for real Vulcan plugins.
+    /// 真实 Vulcan 插件可用的可选清单自有扩展面。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<PluginExtensionSummary>,
+}
+
+/// Returns one uncompressed plugin ESM module through the authenticated service boundary.
+/// 通过已认证服务边界返回一个未压缩插件 ESM 模块。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginUiModuleSource {
+    /// Exact owning plugin identifier.
+    /// 精确的所属插件标识。
+    pub plugin_id: String,
+    /// Exact plugin-local mount identifier.
+    /// 精确的插件内挂载标识。
+    pub mount_id: String,
+    /// Named ESM export containing the component factory.
+    /// 包含组件工厂的 ESM 命名导出。
+    pub export_name: String,
+    /// Untouched UTF-8 ESM source read from the validated package.
+    /// 从通过校验的插件包读取的原样 UTF-8 ESM 源码。
+    pub source: String,
+    /// Plugin-owned UI messages grouped by locale and stable message key.
+    /// 按语言和稳定消息键组织的插件自有界面文案。
+    #[serde(default)]
+    pub messages_by_locale:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
 /// Summarizes one settings section.
@@ -471,6 +550,7 @@ mod plugin_summary_tests {
             active_session_count: 0,
             diagnostics: Vec::new(),
             management_kind: String::from("systemPlugin"),
+            extension: None,
         };
         let value = serde_json::to_value(summary).expect("serialize plugin summary");
         assert_eq!(value["tools"], serde_json::json!([]));

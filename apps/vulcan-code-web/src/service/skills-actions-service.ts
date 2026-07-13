@@ -5,6 +5,8 @@ import type {
   LuaSkillsCatalogUpdate,
   LuaSkillsManagedRuntimeTarget,
   LuaSkillsRuntimeSettings,
+  PluginUiModuleSource,
+  SystemPluginPermissionPreview,
   SubagentCatalogUpdate,
   SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
@@ -16,6 +18,7 @@ import {
   hasServiceRuntime,
   serviceClient,
 } from "@/service/webui-service-runtime";
+import { invalidatePersistentPluginUiModules } from "@/service/plugin-ui-module-runtime";
 
 // AgentSkillProjectState describes one project-level prompt skill override state.
 // AgentSkillProjectState 描述单个项目级提示词技能覆盖状态。
@@ -202,7 +205,94 @@ export async function setLuaSkillsSystemPluginEnabled(pluginId: string, enabled:
       }
     }));
   }
-  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskills_system_plugin_enabled", { pluginId, enabled });
+  const update = await serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskills_system_plugin_enabled", { pluginId, enabled });
+  if (!enabled) {
+    invalidatePersistentPluginUiModules(pluginId);
+  }
+  return update;
+}
+
+// inspectLocalPlugin validates one local package without changing installed state.
+// inspectLocalPlugin 在不改变安装状态的情况下校验一个本地插件包。
+//
+// Parameters: sourcePath is the exact directory selected by the user.
+// 参数：sourcePath 是用户选择的精确目录。
+// Returns: the complete host-derived capability, Hook, UI, and process authorization preview.
+// 返回值：宿主派生的完整能力、Hook、界面与进程授权预览。
+export async function inspectLocalPlugin(sourcePath: string): Promise<SystemPluginPermissionPreview> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Local plugin inspection requires the Vulcan service runtime.");
+  }
+  return serviceClient.request<SystemPluginPermissionPreview>("service_inspect_local_plugin", { sourcePath });
+}
+
+// installLocalPlugin atomically installs one package with the exact approved capability set.
+// installLocalPlugin 使用精确批准的能力集合原子安装一个插件包。
+export async function installLocalPlugin(
+  sourcePath: string,
+  approvedCapabilities: string[],
+  allowRegistryDependencies: boolean,
+): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Local plugin installation requires the Vulcan service runtime.");
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_install_local_plugin", {
+    sourcePath,
+    approvedCapabilities,
+    allowRegistryDependencies,
+  });
+}
+
+// uninstallUserPlugin removes one disabled and fully drained user-installed plugin.
+// uninstallUserPlugin 移除一个已停用且完全排空的用户安装插件。
+export async function uninstallUserPlugin(pluginId: string): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    throw new Error("User plugin uninstallation requires the Vulcan service runtime.");
+  }
+  const update = await serviceClient.request<LuaSkillsCatalogUpdate>("service_uninstall_user_plugin", { pluginId });
+  invalidatePersistentPluginUiModules(pluginId);
+  return update;
+}
+
+// loadPluginUiModule loads one exact manifest-declared uncompressed ESM module.
+// loadPluginUiModule 加载一个精确的清单声明未压缩 ESM 模块。
+//
+// Parameters: pluginId and mountId identify one enabled plugin UI contribution.
+// 参数：pluginId 与 mountId 标识一个已启用插件界面贡献。
+// Returns: authenticated module identity and untouched UTF-8 source.
+// 返回值：经过认证的模块身份与原样 UTF-8 源码。
+export async function loadPluginUiModule(pluginId: string, mountId: string): Promise<PluginUiModuleSource> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Dynamic plugin UI modules require the Vulcan service runtime.");
+  }
+  return serviceClient.request<PluginUiModuleSource>("service_load_plugin_ui_module", {
+    pluginId,
+    mountId,
+  });
+}
+
+// invokePluginAction invokes one action through the plugin-owning mounted UI identity.
+// invokePluginAction 通过插件所属挂载界面身份调用一个 Action。
+//
+// Parameters: ids select the exact action, arguments is schema validated, and workspacePath is optional context.
+// 参数：标识选择精确 Action，arguments 会经过 Schema 校验，workspacePath 是可选上下文。
+// Returns: the exact schema-validated plugin result.
+// 返回值：经过 Schema 校验的精确插件结果。
+export async function invokePluginAction<Result>(
+  pluginId: string,
+  actionId: string,
+  argumentsValue: unknown,
+  workspacePath?: string | null,
+): Promise<Result> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Plugin actions require the Vulcan service runtime.");
+  }
+  return serviceClient.request<Result>("service_invoke_plugin_action", {
+    pluginId,
+    actionId,
+    arguments: argumentsValue,
+    workspacePath: workspacePath ?? null,
+  });
 }
 
 // uninstallLuaSkill removes one ordinary Lua Skill package.
