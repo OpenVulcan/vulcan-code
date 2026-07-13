@@ -1,4 +1,5 @@
 import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
+import { StartupDownloadProgress } from "@/components/shell/startup-download-progress";
 import type { StartupSnapshot, StartupStepSnapshot } from "@/types";
 
 // BootLocale is the minimal language set needed before the full i18n bundle is loaded.
@@ -23,6 +24,9 @@ interface BootText {
   // Startup failure prefix.
   // 启动失败前缀。
   failedPrefix: string;
+  // Managed-runtime download progress label.
+  // 受管运行时下载进度标签。
+  downloadProgress: string;
 }
 
 // BOOT_TEXT maps startup labels without importing the full application translation catalog.
@@ -34,6 +38,7 @@ const BOOT_TEXT: Record<BootLocale, BootText> = {
     loadingProjectIndex: "正在加载项目与会话索引",
     loadingStepPrefix: "正在加载",
     failedPrefix: "启动失败：",
+    downloadProgress: "下载进度",
   },
   "en-US": {
     loadingWorkspace: "Loading Workspace",
@@ -41,6 +46,7 @@ const BOOT_TEXT: Record<BootLocale, BootText> = {
     loadingProjectIndex: "Loading project and conversation indexes",
     loadingStepPrefix: "Loading",
     failedPrefix: "Startup failed: ",
+    downloadProgress: "Download progress",
   },
 };
 
@@ -82,6 +88,7 @@ export function BootLoadingScreen(props: {
             <div className="conversation-loading-bar-value" style={{ width: `${percent}%` }} />
           </div>
           <p className="startup-progress-message">{message}</p>
+          <StartupDownloadProgress step={activeStep} label={text.downloadProgress} />
         </div>
       </section>
     </main>
@@ -143,7 +150,7 @@ function startupProgressPercent(startup: StartupSnapshot | null): number {
       return sum + 1;
     }
     if (step.status === "running") {
-      return sum + 0.5;
+      return sum + Math.max(0, Math.min(100, step.progressPercent ?? 50)) / 100;
     }
     return sum;
   }, 0);

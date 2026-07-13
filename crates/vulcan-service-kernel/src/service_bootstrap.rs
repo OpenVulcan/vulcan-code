@@ -200,10 +200,36 @@ fn run_service_bootstrap(
         vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
             controller_configuration.clone(),
             |message| update_luaskills_bootstrap_progress(state, event_emitter, &logs, message),
+            |progress| {
+                update_managed_runtime_bootstrap_progress(state, event_emitter, &logs, progress)
+            },
         ),
         "luaskills",
         "LuaSkills",
     )?;
+    // Persist the managed-runtime outcome before later startup phases replace the transient progress snapshot.
+    // 在后续启动阶段覆盖临时进度快照前持久记录受管运行时结果。
+    let managed_runtime_report = luaskills_runtime
+        .managed_runtime_report
+        .lock()
+        .map_err(|_| {
+            ServiceBootstrapError::new(
+                "luaskills",
+                "LuaSkills",
+                "受管 Python/Node 初始化状态锁已损坏。",
+            )
+        })?
+        .clone();
+    logs.push(format!(
+        "[webui-service] managed runtimes: status={} platform={} install_attempted={} diagnostic={}",
+        managed_runtime_report.status.as_key(),
+        managed_runtime_report
+            .platform
+            .as_deref()
+            .unwrap_or("unknown"),
+        managed_runtime_report.install_attempted,
+        managed_runtime_report.diagnostic,
+    ));
     let luaskills_catalog = bootstrap_step(
         vulcan_service_runtime::luaskills_bridge::load_luaskills_catalog(&luaskills_runtime),
         "luaskills",

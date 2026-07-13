@@ -27,11 +27,13 @@ import {
   openSubagentUserDirectory,
   refreshAgentSkillsCatalog,
   refreshLuaSkillsCatalog,
+  retryLuaSkillsManagedRuntimes,
   refreshSubagentCatalog,
   restoreSubagentDefinitionDefault,
   restoreAgentSkillDefault,
   saveAgentSkill,
   saveAgentSkillCategory,
+  saveLuaSkillsRuntimeSettings,
   saveSubagentDefinition,
   setAgentSkillEnabled,
   setAgentSkillCategory,
@@ -284,6 +286,12 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   // luaSkillActions 归组独立 LuaSkills 生命周期边界。
   const luaSkillActions = React.useMemo<SkillActionProps>(() => ({
     onRefreshLuaSkills: () => runLuaSkillsCatalogAction(refreshLuaSkillsCatalog),
+    onRetryLuaSkillsManagedRuntimes: (target) => runLuaSkillsCatalogAction(
+      () => retryLuaSkillsManagedRuntimes(target),
+    ),
+    onSaveLuaSkillsRuntimeSettings: (settings) => runLuaSkillsCatalogAction(
+      () => saveLuaSkillsRuntimeSettings(settings),
+    ),
     onInstallLuaSkill: (skillId, source, sourceType) => runLuaSkillsCatalogAction(() => installLuaSkill(skillId, source, sourceType)),
     onUpdateLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId)),
     onSetLuaSkillEnabled: (skillId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillEnabled(skillId, enabled)),

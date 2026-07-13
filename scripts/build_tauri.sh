@@ -47,10 +47,6 @@ SourceRtkBinDir="$ProjectDir/third_party/rtk/bin"
 # SourceLuaRuntimeDir 指向 make deps-lua 安装的官方 LuaSkills 运行时载荷。
 SourceLuaRuntimeDir="$ProjectDir/third_party/luaskills_runtime"
 
-# SourceManagedRuntimeScriptsDir points at the tag-pinned managed runtime bootstrap assets.
-# SourceManagedRuntimeScriptsDir 指向按标签固定的受管运行时初始化资产。
-SourceManagedRuntimeScriptsDir="$ProjectDir/scripts/deps"
-
 # SourceSystemPluginsDir contains every manifest-driven System Plugin bundled with Vulcan Code.
 # SourceSystemPluginsDir 包含随 Vulcan Code 打包的所有清单驱动系统插件。
 SourceSystemPluginsDir="$ProjectDir/plugins/system"
@@ -190,9 +186,13 @@ LegacyOutputRtkToolDir="$OutputToolsDir/rtk"
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
 OutputLuaRuntimeDir="$ProjectDir/output/lua_runtime"
 
-# OutputManagedRuntimeScriptsDir stores bootstrap scripts executed during service startup.
-# OutputManagedRuntimeScriptsDir 保存服务启动期间执行的初始化脚本。
-OutputManagedRuntimeScriptsDir="$OutputLuaRuntimeDir/scripts/deps"
+# LegacyManagedRuntimeDistributionDir is the obsolete LuaSkills-private Python/Node location.
+# LegacyManagedRuntimeDistributionDir 是已经废弃的 LuaSkills 私有 Python/Node 位置。
+LegacyManagedRuntimeDistributionDir="$OutputLuaRuntimeDir/dependencies/runtimes"
+
+# LegacyManagedRuntimeScriptsDir stores obsolete downloader scripts removed by native Rust bootstrap.
+# LegacyManagedRuntimeScriptsDir 保存由 Rust 原生初始化取代的废弃下载脚本。
+LegacyManagedRuntimeScriptsDir="$OutputLuaRuntimeDir/scripts/deps"
 
 # OutputSystemPluginsDir is the runtime directory scanned by the generic System Plugin host.
 # OutputSystemPluginsDir 是通用系统插件宿主扫描的运行时目录。
@@ -229,8 +229,15 @@ copy_directory_contents "$SourceSystemPromptSkillsDir" "$OutputSystemPromptSkill
 echo "==> Syncing LuaSkills runtime payload..."
 copy_directory_contents "$SourceLuaRuntimeDir" "$OutputLuaRuntimeDir" 0
 
-echo "==> Syncing managed runtime bootstrap assets..."
-copy_directory_contents "$SourceManagedRuntimeScriptsDir" "$OutputManagedRuntimeScriptsDir" 1
+if [ -d "$LegacyManagedRuntimeDistributionDir" ]; then
+    echo "==> Removing obsolete LuaSkills-private managed runtimes..."
+    rm -rf -- "$LegacyManagedRuntimeDistributionDir"
+fi
+
+if [ -d "$LegacyManagedRuntimeScriptsDir" ]; then
+    echo "==> Removing obsolete managed runtime downloader scripts..."
+    rm -rf -- "$LegacyManagedRuntimeScriptsDir"
+fi
 
 echo "==> Syncing host System Plugin packages..."
 if [ ! -d "$SourceSystemPluginsDir" ]; then

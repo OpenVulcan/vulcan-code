@@ -3,6 +3,73 @@
 
 use std::path::{Path, PathBuf};
 
+/// Convert one raw host path into native text without Windows verbatim prefixes.
+/// 把一个原始宿主路径转换为不含 Windows verbatim 前缀的原生文本。
+///
+/// `path` is raw path text produced by filesystem canonicalization or user input.
+/// `path` 是文件系统规范化或用户输入产生的原始路径文本。
+///
+/// Returns equivalent drive or UNC addressing with native Windows separators when applicable.
+/// 适用时返回使用 Windows 原生分隔符的等价盘符或 UNC 寻址。
+pub fn native_host_path_text(path: &str) -> String {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return String::new();
+    }
+    // path_without_verbatim_prefix preserves the original drive or UNC address.
+    // path_without_verbatim_prefix 保留原始盘符或 UNC 地址。
+    let path_without_verbatim_prefix = strip_windows_verbatim_prefix(trimmed_path);
+    if looks_like_windows_path(trimmed_path, &path_without_verbatim_prefix) {
+        path_without_verbatim_prefix.replace('/', "\\")
+    } else {
+        path_without_verbatim_prefix
+    }
+}
+
+/// Convert one filesystem path into the shared native host path representation.
+/// 把一个文件系统路径转换为共享的宿主原生路径表示。
+///
+/// `path` is an existing or prospective filesystem path.
+/// `path` 是一个已存在或预期的文件系统路径。
+///
+/// Returns a path buffer safe to pass across ordinary host-process boundaries.
+/// 返回可安全传入常规宿主进程边界的路径缓冲区。
+pub fn native_host_path(path: &Path) -> PathBuf {
+    PathBuf::from(native_host_path_text(&path.to_string_lossy()))
+}
+
+/// Return whether one normalized path retains Windows drive or UNC semantics.
+/// 返回一条规范路径是否保留 Windows 盘符或 UNC 语义。
+fn looks_like_windows_path(original_path: &str, normalized_path: &str) -> bool {
+    let bytes = normalized_path.as_bytes();
+    (bytes.len() >= 3
+        && bytes[1] == b':'
+        && bytes[0].is_ascii_alphabetic()
+        && matches!(bytes[2], b'/' | b'\\'))
+        || normalized_path.starts_with(r"\\")
+        || original_path.starts_with(r"\\?\UNC\")
+        || original_path.starts_with("//?/UNC/")
+        || (cfg!(windows) && normalized_path.starts_with("//"))
+}
+
+/// Remove Windows verbatim prefixes while preserving ordinary addressing semantics.
+/// 移除 Windows verbatim 前缀，同时保留常规寻址语义。
+fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = path.strip_prefix("//?/UNC/") {
+        return format!("//{rest}");
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    if let Some(rest) = path.strip_prefix("//?/") {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
 /// Environment variable that explicitly points the application at one prepared output root.
 /// 显式将应用指向某个已准备好 output 根目录的环境变量。
 const OUTPUT_ROOT_ENV_KEY: &str = "VULCAN_CODE_OUTPUT_ROOT";
@@ -46,6 +113,14 @@ const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
 /// Relative LuaSkills runtime root directory name bundled below the output root.
 /// 打包在 output 根目录下的 LuaSkills 运行时根目录名称。
 const LUASKILLS_RUNTIME_ROOT_DIR_NAME: &str = "lua_runtime";
+
+/// Relative dependency directory name shared by host subsystems below the output root.
+/// output 根目录下由宿主各子系统共享的相对依赖目录名称。
+const DEPENDENCIES_DIR_NAME: &str = "dependencies";
+
+/// Relative managed-runtime distribution directory nested below the shared dependency root.
+/// 位于共享依赖根目录下的相对受管运行时发行目录名称。
+const MANAGED_RUNTIME_DISTRIBUTIONS_DIR_NAME: &str = "runtimes";
 
 /// Relative host tools directory name bundled below the output root.
 /// 打包在 output 根目录下的宿主工具目录名称。
@@ -128,6 +203,27 @@ pub fn resolve_app_config_directory() -> PathBuf {
     source_config_directory()
 }
 
+/// Returns the output-owned configuration directory without falling back to source files.
+/// 返回 output 持有的配置目录，且不会回退到源码文件。
+///
+/// # Returns
+/// 返回值
+/// The packaged `output/config` directory candidate, or `None` when no output root exists.
+/// 返回打包的 `output/config` 目录候选；不存在 output 根目录时返回 `None`。
+pub fn resolve_output_config_directory() -> Option<PathBuf> {
+    if let Some(output_root) = resolve_output_root() {
+        return Some(output_root.join(CONFIG_DIR_NAME));
+    }
+
+    let repository_output_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("output");
+    repository_output_root
+        .is_dir()
+        .then(|| repository_output_root.join(CONFIG_DIR_NAME))
+}
+
 /// Returns the effective controller configuration file path for the current process.
 /// 返回当前进程使用的生效控制器配置文件路径。
 pub fn resolve_controller_config_file_path() -> PathBuf {
@@ -197,6 +293,33 @@ pub fn resolve_luaskills_runtime_root() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Resolves the host-owned distribution root shared by managed Python and Node consumers.
+/// 解析由宿主持有、供受管 Python 与 Node 消费方共享的发行根目录。
+///
+/// # Returns
+/// 返回值
+/// The `output/dependencies/runtimes` path selected by the packaged or repository output root.
+/// 由打包或仓库 output 根目录选出的 `output/dependencies/runtimes` 路径。
+pub fn resolve_managed_runtime_distribution_root() -> Option<PathBuf> {
+    if let Some(output_root) = resolve_output_root() {
+        return Some(
+            output_root
+                .join(DEPENDENCIES_DIR_NAME)
+                .join(MANAGED_RUNTIME_DISTRIBUTIONS_DIR_NAME),
+        );
+    }
+
+    let repository_output_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("output");
+    repository_output_root.is_dir().then(|| {
+        repository_output_root
+            .join(DEPENDENCIES_DIR_NAME)
+            .join(MANAGED_RUNTIME_DISTRIBUTIONS_DIR_NAME)
+    })
 }
 
 /// Resolves one packaged output root from the environment or the current executable location.
@@ -273,6 +396,20 @@ mod tests {
             Path::new("output-root")
                 .join(TOOLS_DIR_NAME)
                 .join(rtk_executable_name())
+        );
+    }
+
+    /// Verify drive and UNC verbatim paths share one stable native conversion.
+    /// 验证盘符与 UNC verbatim 路径共享同一稳定原生转换。
+    #[test]
+    fn native_host_path_text_removes_windows_verbatim_prefixes() {
+        assert_eq!(
+            native_host_path_text(r"\\?\D:\openvulcan\vulcan-code"),
+            r"D:\openvulcan\vulcan-code"
+        );
+        assert_eq!(
+            native_host_path_text(r"\\?\UNC\server\share\runtime"),
+            r"\\server\share\runtime"
         );
     }
 }

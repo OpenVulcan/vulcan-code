@@ -9,8 +9,9 @@ use vulcan_plugin_runtime::{
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
     AgentSkillOriginSummary, AgentSkillRecordSummary, AgentSkillResourceSummary,
-    AgentSkillStandardMetadataSummary, PluginToolSummary, SubagentCategoryLocaleSummary,
-    SubagentDefinitionLocaleSummary, SubagentOriginSummary, SubagentProviderModelSummary,
+    AgentSkillStandardMetadataSummary, LuaSkillsManagedRuntimeProgressSummary, PluginToolSummary,
+    SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary, SubagentOriginSummary,
+    SubagentProviderModelSummary,
 };
 
 /// Converts LuaSkills catalog rows into plugin summaries.
@@ -151,7 +152,54 @@ pub(crate) fn lua_skills_catalog_summary(
 ) -> LuaSkillsCatalogSummary {
     LuaSkillsCatalogSummary {
         runtime_root: normalized_workspace_path_text_from_path(&catalog.runtime_root),
+        managed_runtime_distribution_root: normalized_workspace_path_text_from_path(
+            &catalog.managed_runtime_distribution_root,
+        ),
+        managed_runtime_environment_root: normalized_workspace_path_text_from_path(
+            &catalog.managed_runtime_environment_root,
+        ),
+        managed_runtime_bootstrap: LuaSkillsManagedRuntimeBootstrapSummary {
+            status: catalog.managed_runtime_report.status.as_key().to_string(),
+            platform: catalog.managed_runtime_report.platform.clone(),
+            install_attempted: catalog.managed_runtime_report.install_attempted,
+            diagnostic: catalog.managed_runtime_report.diagnostic.clone(),
+        },
+        managed_python_runtime: LuaSkillsManagedRuntimeComponentSummary {
+            version: catalog.managed_runtime_report.python.version.clone(),
+            status: catalog
+                .managed_runtime_report
+                .python
+                .status
+                .as_key()
+                .to_string(),
+            diagnostic: catalog.managed_runtime_report.python.diagnostic.clone(),
+        },
+        managed_node_runtime: LuaSkillsManagedRuntimeComponentSummary {
+            version: catalog.managed_runtime_report.node.version.clone(),
+            status: catalog
+                .managed_runtime_report
+                .node
+                .status
+                .as_key()
+                .to_string(),
+            diagnostic: catalog.managed_runtime_report.node.diagnostic.clone(),
+        },
+        managed_runtime_progress: catalog.managed_runtime_progress.as_ref().map(|progress| {
+            LuaSkillsManagedRuntimeProgressSummary {
+                phase: progress.phase.clone(),
+                component: progress.component.clone(),
+                message: progress.message.clone(),
+                completed_bytes: progress.completed_bytes,
+                total_bytes: progress.total_bytes,
+                overall_percent: progress.overall_percent,
+            }
+        }),
         system_lua_lib: normalized_workspace_path_text_from_path(&catalog.system_lua_lib_dir),
+        runtime_settings_file: normalized_workspace_path_text_from_path(
+            &catalog.runtime_settings_file,
+        ),
+        runtime_settings: catalog.runtime_settings.clone(),
+        restart_required: catalog.restart_required,
         entry_count: catalog.entry_count,
         notice: if catalog.runtime_root.as_os_str().is_empty() {
             String::from("LuaSkills 技能目录尚未载入。")

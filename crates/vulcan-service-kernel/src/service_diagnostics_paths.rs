@@ -62,46 +62,5 @@ pub(crate) fn normalized_workspace_path_text_from_path(path: &Path) -> String {
 /// Normalizes one raw workspace path string and strips Windows verbatim prefixes.
 /// 规范化单个原始工作区路径字符串，并移除 Windows verbatim 前缀。
 pub(crate) fn normalize_workspace_path_text(path: &str) -> String {
-    let trimmed_path = path.trim();
-    if trimmed_path.is_empty() {
-        return String::new();
-    }
-    let path_without_verbatim_prefix = strip_windows_verbatim_prefix(trimmed_path);
-    if looks_like_windows_path(trimmed_path, &path_without_verbatim_prefix) {
-        path_without_verbatim_prefix.replace('/', "\\")
-    } else {
-        path_without_verbatim_prefix
-    }
-}
-
-/// Returns whether one path should be displayed with Windows separators.
-/// 返回单个路径是否应使用 Windows 分隔符显示。
-pub(crate) fn looks_like_windows_path(original_path: &str, normalized_path: &str) -> bool {
-    let bytes = normalized_path.as_bytes();
-    bytes.len() >= 3
-        && bytes[1] == b':'
-        && bytes[0].is_ascii_alphabetic()
-        && matches!(bytes[2], b'/' | b'\\')
-        || normalized_path.starts_with(r"\\")
-        || original_path.starts_with(r"\\?\UNC\")
-        || original_path.starts_with("//?/UNC/")
-        || (cfg!(windows) && normalized_path.starts_with("//"))
-}
-
-/// Removes Windows verbatim path prefixes while preserving normal addressing semantics.
-/// 移除 Windows verbatim 路径前缀，同时保留普通寻址语义。
-pub(crate) fn strip_windows_verbatim_prefix(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{rest}");
-    }
-    if let Some(rest) = path.strip_prefix("//?/UNC/") {
-        return format!("//{rest}");
-    }
-    if let Some(rest) = path.strip_prefix(r"\\?\") {
-        return rest.to_string();
-    }
-    if let Some(rest) = path.strip_prefix("//?/") {
-        return rest.to_string();
-    }
-    path.to_string()
+    vulcan_runtime_assets::native_host_path_text(path)
 }

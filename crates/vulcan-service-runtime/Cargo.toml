@@ -10,16 +10,29 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
+flate2.workspace = true
 luaskills.workspace = true
 fs2.workspace = true
 libc.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
+sha2.workspace = true
+tar.workspace = true
 tokio.workspace = true
 vulcan-mcp-runtime.workspace = true
+vulcan-luaskills-config.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-token-counter.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workspace-store.workspace = true
+xz2.workspace = true
+zip.workspace = true
+
+[build-dependencies]
+semver = "1"
+serde_json.workspace = true
+toml = "0.8"

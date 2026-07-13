@@ -155,15 +155,203 @@ export interface LuaSkillSummary {
   tools: LuaSkillToolSummary[];
 }
 
+// LuaVmPoolSettings describes one LuaSkills VM pool startup policy.
+// LuaVmPoolSettings 描述单个 LuaSkills VM 池启动策略。
+export interface LuaVmPoolSettings {
+  // Minimum number of warm Lua VMs retained by the pool.
+  // 池内保留的最小预热 Lua VM 数量。
+  minSize: number;
+  // Maximum number of Lua VMs allowed in the pool.
+  // 池内允许存在的最大 Lua VM 数量。
+  maxSize: number;
+  // Idle seconds before one excess Lua VM may be retired.
+  // 多余 Lua VM 可被回收前的空闲秒数。
+  idleTtlSecs: number;
+}
+
+// LuaSkillsToolCacheSettings describes LuaSkills transient tool-cache startup settings.
+// LuaSkillsToolCacheSettings 描述 LuaSkills 临时工具缓存启动设置。
+export interface LuaSkillsToolCacheSettings {
+  // Maximum process-wide cached entry count.
+  // 进程级缓存最大条目数。
+  maxEntries: number;
+  // Default cache entry lifetime in seconds.
+  // 缓存条目的默认存活秒数。
+  defaultTtlSecs: number;
+  // Maximum accepted cache entry lifetime in seconds.
+  // 缓存条目允许的最大存活秒数。
+  maxTtlSecs: number;
+}
+
+// LuaSkillsNetworkSettings describes LuaSkills download and source-routing startup settings.
+// LuaSkillsNetworkSettings 描述 LuaSkills 下载与来源路由启动设置。
+export interface LuaSkillsNetworkSettings {
+  // Whether LuaSkills may download skills and dependencies.
+  // LuaSkills 是否允许下载技能与依赖。
+  allowDownloads: boolean;
+  // Optional GitHub website base URL override.
+  // 可选的 GitHub 网站基址覆盖。
+  githubBaseUrl?: string | null;
+  // Optional GitHub API base URL override.
+  // 可选的 GitHub API 基址覆盖。
+  githubApiBaseUrl?: string | null;
+  // Optional official LuaSkills Hub base URL override.
+  // 可选的 LuaSkills 官方 Hub 基址覆盖。
+  officialSkillHubBaseUrl?: string | null;
+  // Whether trusted system operations may install private URL manifests.
+  // 受信系统操作是否允许安装私有 URL 清单。
+  enablePrivateUrlSkillInstall: boolean;
+  // Allowed URL prefixes for private skill manifests.
+  // 私有技能清单允许的 URL 前缀。
+  privateSkillSourceAllowlist: string[];
+}
+
+// LuaSkillsCapabilitySettings describes LuaSkills host capabilities captured at startup.
+// LuaSkillsCapabilitySettings 描述 LuaSkills 启动时捕获的宿主能力。
+export interface LuaSkillsCapabilitySettings {
+  // Optional default encoding label for managed IO and process APIs.
+  // 托管 IO 与进程 API 使用的可选默认编码标签。
+  defaultTextEncoding?: string | null;
+  // Whether Lua may invoke the host skill-management bridge.
+  // Lua 是否可调用宿主技能管理桥接。
+  enableSkillManagementBridge: boolean;
+  // Whether sessions replace Lua's native global IO table with managed IO.
+  // 会话是否使用托管 IO 替换 Lua 原生全局 IO 表。
+  enableManagedIoCompat: boolean;
+}
+
+// LuaSkillsManagedRuntimeSettings describes managed Python and Node worker/session limits.
+// LuaSkillsManagedRuntimeSettings 描述受管 Python 与 Node Worker/会话限制。
+export interface LuaSkillsManagedRuntimeSettings {
+  // Maximum live workers for one exact environment and package owner.
+  // 单个精确环境与包所有者允许的最大活动 Worker 数量。
+  workerPoolMaxSizePerEnvironment: number;
+  // Idle seconds after which an unused managed worker may be retired.
+  // 未使用的受管 Worker 可被回收前的空闲秒数。
+  workerIdleTtlSecs: number;
+  // Maximum launching or active persistent sessions owned by one engine.
+  // 单个引擎允许持有的启动中或活动持久会话最大数量。
+  persistentSessionLimitPerEngine: number;
+  // Default retained byte limit for each persistent-session output stream.
+  // 每个持久会话输出流默认保留的字节上限。
+  persistentSessionDefaultBufferLimitBytesPerStream: number;
+  // Default invoke timeout in milliseconds; null means unlimited.
+  // 默认调用超时毫秒数；null 表示无限制。
+  invokeDefaultTimeoutMs?: number | null;
+}
+
+// LuaSkillsRuntimeSettings describes the complete Vulcan-owned engine startup document.
+// LuaSkillsRuntimeSettings 描述完整的 Vulcan 自有引擎启动设置文档。
+export interface LuaSkillsRuntimeSettings {
+  // Settings document schema version.
+  // 设置文档 schema 版本。
+  schemaVersion: number;
+  // Reusable VM pool used by ordinary Skill calls.
+  // 普通 Skill 调用使用的可复用 VM 池。
+  vmPool: LuaVmPoolSettings;
+  // Dedicated isolated VM pool used by runLua.
+  // runLua 使用的独立隔离 VM 池。
+  runLuaPool: LuaVmPoolSettings;
+  // Shared transient tool-cache policy.
+  // 共享临时工具缓存策略。
+  toolCache: LuaSkillsToolCacheSettings;
+  // Network and source-routing policy.
+  // 网络与来源路由策略。
+  network: LuaSkillsNetworkSettings;
+  // Host capabilities and default text encoding.
+  // 宿主能力与默认文本编码。
+  capabilities: LuaSkillsCapabilitySettings;
+  // Managed Python and Node worker and persistent-session policy.
+  // 受管 Python、Node Worker 与持久会话策略。
+  managedRuntime: LuaSkillsManagedRuntimeSettings;
+}
+
+// LuaSkillsManagedRuntimeBootstrapStatus identifies one completed bootstrap outcome.
+// LuaSkillsManagedRuntimeBootstrapStatus 标识一次已完成的初始化结果。
+export type LuaSkillsManagedRuntimeBootstrapStatus = "ready" | "installed" | "unsupported" | "unavailable";
+
+// LuaSkillsManagedRuntimeTarget identifies one independently installable runtime group.
+// LuaSkillsManagedRuntimeTarget 标识一个可独立安装的运行时组。
+export type LuaSkillsManagedRuntimeTarget = "python" | "node";
+
+// LuaSkillsManagedRuntimeBootstrapSummary describes the latest native managed runtime attempt.
+// LuaSkillsManagedRuntimeBootstrapSummary 描述最近一次原生受管运行时尝试。
+export interface LuaSkillsManagedRuntimeBootstrapSummary {
+  // Stable completed-attempt status.
+  // 稳定的已完成尝试状态。
+  status: LuaSkillsManagedRuntimeBootstrapStatus;
+  // Native platform key when platform detection succeeded.
+  // 平台检测成功时的原生平台键。
+  platform?: string | null;
+  // Whether the native installer attempted to update the runtime layout.
+  // 原生安装器是否尝试更新运行时目录布局。
+  installAttempted: boolean;
+  // Bounded backend diagnostic for the attempt.
+  // 当前尝试的有界后端诊断信息。
+  diagnostic: string;
+}
+
+// LuaSkillsManagedRuntimeComponentSummary describes one independently repairable runtime.
+// LuaSkillsManagedRuntimeComponentSummary 描述一个可独立修复的运行时。
+export interface LuaSkillsManagedRuntimeComponentSummary {
+  // Exact packaged runtime version.
+  // 随包提供的精确运行时版本。
+  version: string;
+  // Stable validation status for this runtime.
+  // 当前运行时的稳定校验状态。
+  status: LuaSkillsManagedRuntimeBootstrapStatus;
+  // Exact backend validation failure retained for diagnostics.
+  // 为诊断保留的精确后端校验失败信息。
+  diagnostic: string;
+}
+
+// LuaSkillsManagedRuntimeProgressSummary describes one live native installation update.
+// LuaSkillsManagedRuntimeProgressSummary 描述一次实时原生安装更新。
+export interface LuaSkillsManagedRuntimeProgressSummary {
+  phase: string;
+  component?: string | null;
+  message: string;
+  completedBytes?: number | null;
+  totalBytes?: number | null;
+  overallPercent?: number | null;
+}
+
 // LuaSkillsCatalogSummary describes the full Lua Skills catalog.
 // LuaSkillsCatalogSummary 描述完整 Lua Skills 目录。
 export interface LuaSkillsCatalogSummary {
   // Runtime root used by the embedded Lua Skills host.
   // 嵌入式 Lua Skills 宿主使用的运行时根目录。
   runtimeRoot: string;
+  // Host-owned shared root containing managed Python and Node distributions.
+  // 宿主持有的共享根目录，包含受管 Python 与 Node 发行包。
+  managedRuntimeDistributionRoot: string;
+  // LuaSkills-owned writable root containing reusable managed environments.
+  // LuaSkills 持有的可写根目录，包含可复用受管环境。
+  managedRuntimeEnvironmentRoot: string;
+  // Latest managed Python and Node bootstrap state.
+  // 最近一次受管 Python 与 Node 初始化状态。
+  managedRuntimeBootstrap: LuaSkillsManagedRuntimeBootstrapSummary;
+  // Independently repairable Python runtime state.
+  // 可独立修复的 Python 运行时状态。
+  managedPythonRuntime?: LuaSkillsManagedRuntimeComponentSummary | null;
+  // Independently repairable Node.js runtime state.
+  // 可独立修复的 Node.js 运行时状态。
+  managedNodeRuntime?: LuaSkillsManagedRuntimeComponentSummary | null;
+  // Current native installation progress while bootstrap or retry is active.
+  // 初始化或重试进行时的当前原生安装进度。
+  managedRuntimeProgress?: LuaSkillsManagedRuntimeProgressSummary | null;
   // System Lua library directory used by Lua Skills.
   // Lua Skills 使用的系统 Lua 库目录。
   systemLuaLib: string;
+  // Exact Vulcan-owned runtime settings file.
+  // 精确的 Vulcan 自有运行时设置文件。
+  runtimeSettingsFile: string;
+  // Complete Vulcan-owned startup settings saved for LuaSkills.
+  // 为 LuaSkills 保存的完整 Vulcan 自有启动设置。
+  runtimeSettings: LuaSkillsRuntimeSettings;
+  // Whether saved startup settings require an application restart.
+  // 已保存启动设置是否需要重启应用。
+  restartRequired: boolean;
   // Total visible runtime entry count.
   // 可见运行时入口总数。
   entryCount: number;

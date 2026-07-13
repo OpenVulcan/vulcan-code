@@ -145,6 +145,42 @@ textarea {
   white-space: nowrap;
 }
 
+.startup-download-progress {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.startup-download-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.startup-download-progress-bar {
+  height: 5px;
+}
+
+.startup-download-progress-indeterminate {
+  width: 34%;
+  min-width: 34%;
+  animation: startup-download-indeterminate 1.15s ease-in-out infinite;
+}
+
+@keyframes startup-download-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(310%);
+  }
+}
+
 .progress-ring {
   display: inline-block;
   flex: none;

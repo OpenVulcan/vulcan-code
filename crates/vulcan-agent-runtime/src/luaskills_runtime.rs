@@ -13,20 +13,23 @@ use crate::tooling::change_set::{
     change_set_host_verification_notice, luaskills_change_set_host_result_capabilities,
 };
 use futures_channel::oneshot;
+use luaskills::runtime_options::LuaRuntimeRunLuaPoolConfig;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
-    LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeDatabaseProviderMode,
-    LuaRuntimeHostOptions, LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig,
-    RuntimeClientInfo, RuntimeEntryDescriptor, RuntimeInvocationResult, RuntimeRequestContext,
+    LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeCapabilityOptions,
+    LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions, LuaRuntimeManagedRuntimeConfig,
+    LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig, RuntimeClientInfo,
+    RuntimeEntryDescriptor, RuntimeInvocationResult, RuntimeRequestContext,
     RuntimeSkillOperationProgressEvent, RuntimeSkillRoot, SkillInstallRequest,
     SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
-    SkillUninstallOptions, set_skill_operation_progress_callback,
+    SkillUninstallOptions, ToolCacheConfig, set_skill_operation_progress_callback,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use vulcan_luaskills_config::{LuaSkillsRuntimeSettings, load_runtime_settings};
 use vulcan_plugin_runtime::SystemPluginRuntimeManager;
 
 mod schema;
@@ -38,10 +41,6 @@ pub use schema::{
 };
 pub use types::*;
 use types::{RootSkillBootstrapConfig, RootSkillBootstrapEntry};
-
-/// Relative configuration file path that declares the host-managed ROOT skill bootstrap set.
-/// 声明宿主管理 ROOT 技能引导集合的相对配置文件路径。
-const ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH: &str = "config/luaskills_root_skills.yaml";
 
 /// Maximum queued LuaSkills progress event count retained for host polling snapshots.
 /// 为宿主轮询快照保留的 LuaSkills 进度事件最大排队数量。
@@ -65,18 +64,56 @@ fn bootstrap_luaskills_runtime_blocking(
     let runtime_root = application_luaskills_runtime_root().ok_or_else(|| {
         String::from("未找到 LuaSkills 活动运行根，请先执行 make build 并从 output 目录启动应用。")
     })?;
+    // runtime_root pins every derived host path to one absolute native directory identity.
+    // runtime_root 将所有派生宿主路径固定到一个绝对原生目录身份。
+    let runtime_root = fs::canonicalize(&runtime_root).map_err(|error| {
+        format!(
+            "规范化 LuaSkills 运行时根 `{}` 失败：{error}",
+            runtime_root.display()
+        )
+    })?;
+    // output_config_directory is the only runtime configuration root accepted by Vulcan Code.
+    // output_config_directory 是 Vulcan Code 唯一接受的运行时配置根目录。
+    let output_config_directory = runtime_assets::resolve_output_config_directory()
+        .ok_or_else(|| String::from("未找到 Vulcan output/config 目录。"))?;
+    // runtime_settings is the Vulcan-owned startup configuration shared with the service engine.
+    // runtime_settings 是与服务引擎共享的 Vulcan 自有启动配置。
+    let runtime_settings = load_runtime_settings(&output_config_directory)?;
+    // managed_runtime_distribution_root is shared with host consumers outside LuaSkills.
+    // managed_runtime_distribution_root 与 LuaSkills 之外的宿主消费方共享。
+    let managed_runtime_distribution_root =
+        runtime_assets::resolve_managed_runtime_distribution_root()
+            .ok_or_else(|| String::from("未找到 Vulcan 公共 Python/Node 发行根目录。"))?;
+    fs::create_dir_all(&managed_runtime_distribution_root).map_err(|error| {
+        format!(
+            "创建公共 Python/Node 发行根 `{}` 失败：{error}",
+            managed_runtime_distribution_root.display()
+        )
+    })?;
+    let managed_runtime_distribution_root = fs::canonicalize(&managed_runtime_distribution_root)
+        .map_err(|error| {
+            format!(
+                "规范化公共 Python/Node 发行根 `{}` 失败：{error}",
+                managed_runtime_distribution_root.display()
+            )
+        })?;
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
-    let host_options = build_host_options(&runtime_root, controller);
+    let host_options = build_host_options(
+        &runtime_root,
+        &managed_runtime_distribution_root,
+        controller,
+        &runtime_settings,
+    );
     let pool_config = LuaVmPoolConfig {
-        min_size: 1,
-        max_size: 2,
-        idle_ttl_secs: 30,
+        min_size: runtime_settings.vm_pool.min_size,
+        max_size: runtime_settings.vm_pool.max_size,
+        idle_ttl_secs: runtime_settings.vm_pool.idle_ttl_secs,
     };
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .map_err(|error| format!("创建 LuaSkills 引擎失败：{error}"))?;
 
-    ensure_configured_root_skills_installed(&runtime_root, &skill_roots, &mut engine)?;
+    ensure_configured_root_skills_installed(&skill_roots, &mut engine)?;
 
     engine
         .load_from_roots(&skill_roots)
@@ -185,12 +222,11 @@ where
 /// Ensures the configured host-managed ROOT skills are installed before the runtime catalog is loaded.
 /// 在加载运行时技能目录之前，确保配置声明的宿主管理 ROOT 技能已经完成安装。
 fn ensure_configured_root_skills_installed(
-    runtime_root: &Path,
     skill_roots: &[RuntimeSkillRoot],
     engine: &mut LuaEngine,
 ) -> Result<(), String> {
     let root_target = resolve_named_skill_root(skill_roots, "ROOT")?;
-    let configured_skills = load_root_skill_bootstrap_entries(runtime_root)?;
+    let configured_skills = load_root_skill_bootstrap_entries()?;
     if configured_skills.is_empty() {
         return Ok(());
     }
@@ -238,21 +274,15 @@ fn ensure_configured_root_skills_installed(
     Ok(())
 }
 
-/// Loads the declarative host-managed ROOT skill bootstrap list from the active runtime config directory.
-/// 从活动运行时配置目录加载声明式宿主管理 ROOT 技能引导列表。
-fn load_root_skill_bootstrap_entries(
-    runtime_root: &Path,
-) -> Result<Vec<RootSkillBootstrapEntry>, String> {
-    let mut candidate_paths = vec![runtime_root.join(ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH)];
-    let source_config_path =
-        crate::runtime_assets::source_config_directory().join("luaskills_root_skills.yaml");
-    if candidate_paths[0] != source_config_path {
-        candidate_paths.push(source_config_path);
-    }
-
-    let Some(config_path) = candidate_paths.into_iter().find(|path| path.exists()) else {
+/// Loads the declarative host-managed ROOT skill bootstrap list only from `output/config`.
+/// 仅从 `output/config` 加载声明式宿主管理 ROOT 技能引导列表。
+fn load_root_skill_bootstrap_entries() -> Result<Vec<RootSkillBootstrapEntry>, String> {
+    let config_path = runtime_assets::resolve_output_config_directory()
+        .ok_or_else(|| String::from("未找到 Vulcan output/config 目录。"))?
+        .join("luaskills_root_skills.yaml");
+    if !config_path.exists() {
         return Ok(Vec::new());
-    };
+    }
     if !config_path.is_file() {
         return Err(format!(
             "ROOT 技能引导配置不是有效文件：{}",
@@ -733,10 +763,57 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
 /// 构建一份宿主选项对象，强制 LuaSkills 通过控制器路由 SQLite 与 LanceDB。
 fn build_host_options(
     runtime_root: &Path,
+    managed_runtime_distribution_root: &Path,
     controller: PersistedControllerConfiguration,
+    runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
     let mut host_options = LuaRuntimeHostOptions::with_runtime_root(runtime_root.to_path_buf());
-    host_options.allow_network_download = true;
+    host_options.managed_runtime_distribution_root =
+        Some(managed_runtime_distribution_root.to_path_buf());
+    host_options.managed_runtime_environment_root =
+        Some(runtime_root.join("dependencies").join("envs"));
+    host_options.managed_runtime_config = LuaRuntimeManagedRuntimeConfig {
+        worker_pool_max_size_per_environment: runtime_settings
+            .managed_runtime
+            .worker_pool_max_size_per_environment,
+        worker_idle_ttl_secs: runtime_settings.managed_runtime.worker_idle_ttl_secs,
+        persistent_session_limit_per_engine: runtime_settings
+            .managed_runtime
+            .persistent_session_limit_per_engine,
+        persistent_session_default_buffer_limit_bytes_per_stream: runtime_settings
+            .managed_runtime
+            .persistent_session_default_buffer_limit_bytes_per_stream,
+        invoke_default_timeout_ms: runtime_settings.managed_runtime.invoke_default_timeout_ms,
+    };
+    host_options.allow_network_download = runtime_settings.network.allow_downloads;
+    host_options.github_base_url = runtime_settings.network.github_base_url.clone();
+    host_options.github_api_base_url = runtime_settings.network.github_api_base_url.clone();
+    host_options.official_skill_hub_base_url =
+        runtime_settings.network.official_skill_hub_base_url.clone();
+    host_options.enable_private_url_skill_install =
+        runtime_settings.network.enable_private_url_skill_install;
+    host_options.private_skill_source_allowlist = runtime_settings
+        .network
+        .private_skill_source_allowlist
+        .clone();
+    host_options.default_text_encoding =
+        runtime_settings.capabilities.default_text_encoding.clone();
+    host_options.cache_config = Some(ToolCacheConfig {
+        max_entries: runtime_settings.tool_cache.max_entries,
+        default_ttl_secs: runtime_settings.tool_cache.default_ttl_secs,
+        max_ttl_secs: runtime_settings.tool_cache.max_ttl_secs,
+    });
+    host_options.runlua_pool_config = Some(LuaRuntimeRunLuaPoolConfig {
+        min_size: runtime_settings.run_lua_pool.min_size,
+        max_size: runtime_settings.run_lua_pool.max_size,
+        idle_ttl_secs: runtime_settings.run_lua_pool.idle_ttl_secs,
+    });
+    host_options.capabilities = LuaRuntimeCapabilityOptions {
+        enable_skill_management_bridge: runtime_settings
+            .capabilities
+            .enable_skill_management_bridge,
+        enable_managed_io_compat: runtime_settings.capabilities.enable_managed_io_compat,
+    };
     host_options.sqlite_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.lancedb_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.space_controller.endpoint = controller

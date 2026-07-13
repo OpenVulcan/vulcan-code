@@ -37,6 +37,7 @@ vulcan-session-boundary.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-hooks.workspace = true
 vulcan-luaskills-prompt.workspace = true
+vulcan-luaskills-config.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-plugin-runtime.workspace = true
 vulcan-prompt-composer.workspace = true

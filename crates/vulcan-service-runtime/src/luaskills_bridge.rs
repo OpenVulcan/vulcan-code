@@ -7,21 +7,26 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::managed_runtime_bootstrap::{ManagedRuntimeBootstrapReport, bootstrap_managed_runtimes};
+use crate::managed_runtime_bootstrap::{
+    ManagedRuntimeBootstrapProgress, ManagedRuntimeBootstrapReport, ManagedRuntimeInstallTarget,
+    bootstrap_managed_runtimes, bootstrap_managed_runtimes_for_target,
+};
+use luaskills::runtime_options::LuaRuntimeRunLuaPoolConfig;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
-    LuaEngine, LuaEngineOptions, LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions,
-    LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig, RuntimeEntryDescriptor,
-    RuntimeSkillRoot, SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
-    SkillManager, SkillManagerConfig, SkillMeta, SkillUninstallOptions,
+    LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeDatabaseProviderMode,
+    LuaRuntimeHostOptions, LuaRuntimeManagedRuntimeConfig, LuaRuntimeSpaceControllerProcessMode,
+    LuaVmPoolConfig, RuntimeEntryDescriptor, RuntimeSkillRoot, SkillInstallRequest,
+    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
+    SkillUninstallOptions, ToolCacheConfig,
+};
+use vulcan_luaskills_config::{
+    LuaSkillsRuntimeSettings, load_runtime_settings, runtime_settings_file_path,
+    save_runtime_settings,
 };
 use vulcan_provider_config::config::{
     PersistedControllerConfiguration, PersistedControllerProcessMode,
 };
-
-/// Runtime-relative path for host-managed ROOT skill bootstrap config.
-/// 宿主管理 ROOT 技能引导配置的运行时相对路径。
-const ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH: &str = "config/luaskills_root_skills.yaml";
 
 /// Declarative bootstrap configuration for host-managed ROOT skills.
 /// 宿主管理 ROOT 技能使用的声明式引导配置。
@@ -81,12 +86,27 @@ pub struct TauriLuaSkillsHandle {
     /// Runtime root resolved from the prepared Vulcan output bundle.
     /// 从准备好的 Vulcan output 包解析出的运行时根目录。
     pub runtime_root: PathBuf,
+    /// Host-owned shared root containing managed Python and Node distributions.
+    /// 宿主持有的共享根目录，包含受管 Python 与 Node 发行包。
+    pub managed_runtime_distribution_root: PathBuf,
+    /// LuaSkills-owned writable root containing reusable managed environments.
+    /// LuaSkills 持有的可写根目录，包含可复用受管环境。
+    pub managed_runtime_environment_root: PathBuf,
+    /// Output-owned Vulcan configuration directory shared by both LuaSkills engines.
+    /// 两个 LuaSkills 引擎共享的 output 自有 Vulcan 配置目录。
+    pub output_config_directory: PathBuf,
     /// Mounted ROOT and USER skill roots.
     /// 已挂载的 ROOT 与 USER 技能根目录。
     pub skill_roots: Vec<RuntimeSkillRoot>,
     /// Result of the application-start managed Python and Node bootstrap.
     /// 应用启动阶段受管 Python 与 Node 初始化结果。
-    pub managed_runtime_report: ManagedRuntimeBootstrapReport,
+    pub managed_runtime_report: Arc<Mutex<ManagedRuntimeBootstrapReport>>,
+    /// Current native managed-runtime installation progress during an active attempt.
+    /// 活动尝试期间当前的原生受管运行时安装进度。
+    pub managed_runtime_progress: Arc<Mutex<Option<ManagedRuntimeBootstrapProgress>>>,
+    /// Runtime settings captured when the retained engine was created.
+    /// 创建保留引擎时捕获的运行时设置。
+    pub effective_runtime_settings: LuaSkillsRuntimeSettings,
 }
 
 impl std::fmt::Debug for TauriLuaSkillsHandle {
@@ -96,8 +116,22 @@ impl std::fmt::Debug for TauriLuaSkillsHandle {
         formatter
             .debug_struct("TauriLuaSkillsHandle")
             .field("runtime_root", &self.runtime_root)
+            .field(
+                "managed_runtime_distribution_root",
+                &self.managed_runtime_distribution_root,
+            )
+            .field(
+                "managed_runtime_environment_root",
+                &self.managed_runtime_environment_root,
+            )
+            .field("output_config_directory", &self.output_config_directory)
             .field("skill_roots", &self.skill_roots)
             .field("managed_runtime_report", &self.managed_runtime_report)
+            .field("managed_runtime_progress", &self.managed_runtime_progress)
+            .field(
+                "effective_runtime_settings",
+                &self.effective_runtime_settings,
+            )
             .finish()
     }
 }
@@ -109,6 +143,18 @@ pub struct TauriLuaSkillsCatalog {
     /// Runtime root used by the embedded LuaSkills host.
     /// 嵌入式 LuaSkills 宿主使用的运行时根目录。
     pub runtime_root: PathBuf,
+    /// Host-owned shared root containing managed Python and Node distributions.
+    /// 宿主持有的共享根目录，包含受管 Python 与 Node 发行包。
+    pub managed_runtime_distribution_root: PathBuf,
+    /// LuaSkills-owned writable root containing reusable managed environments.
+    /// LuaSkills 持有的可写根目录，包含可复用受管环境。
+    pub managed_runtime_environment_root: PathBuf,
+    /// Latest managed Python and Node bootstrap result retained across explicit retries.
+    /// 在显式重试之间保留的最近一次受管 Python 与 Node 初始化结果。
+    pub managed_runtime_report: ManagedRuntimeBootstrapReport,
+    /// Current native installation progress when a bootstrap or retry is active.
+    /// 初始化或重试进行中时的当前原生安装进度。
+    pub managed_runtime_progress: Option<ManagedRuntimeBootstrapProgress>,
     /// System Lua library directory used by the embedded host.
     /// 嵌入式宿主使用的系统 Lua 库目录。
     pub system_lua_lib_dir: PathBuf,
@@ -118,6 +164,15 @@ pub struct TauriLuaSkillsCatalog {
     /// Total visible tool entry count.
     /// 可见工具入口总数。
     pub entry_count: usize,
+    /// Vulcan-owned runtime settings currently saved on disk.
+    /// 当前保存在磁盘上的 Vulcan 自有运行时设置。
+    pub runtime_settings: LuaSkillsRuntimeSettings,
+    /// Exact Vulcan-owned runtime settings file path.
+    /// 精确的 Vulcan 自有运行时设置文件路径。
+    pub runtime_settings_file: PathBuf,
+    /// Whether saved settings differ from the running engine configuration.
+    /// 已保存设置是否不同于运行中引擎配置。
+    pub restart_required: bool,
 }
 
 /// Lightweight summary for one effective LuaSkill package.
@@ -185,12 +240,14 @@ pub struct TauriLuaSkillToolSummary {
 
 /// Bootstraps LuaSkills using the controller-backed database mode shared by Vulcan Code hosts.
 /// 使用 Vulcan Code 宿主共享的控制器数据库模式引导 LuaSkills。
-pub fn bootstrap_luaskills<F>(
+pub fn bootstrap_luaskills<F, G>(
     controller: PersistedControllerConfiguration,
     mut progress: F,
+    mut managed_progress: G,
 ) -> Result<TauriLuaSkillsHandle, String>
 where
     F: FnMut(&str),
+    G: FnMut(&ManagedRuntimeBootstrapProgress),
 {
     let runtime_root =
         vulcan_runtime_assets::resolve_luaskills_runtime_root().ok_or_else(|| {
@@ -198,38 +255,85 @@ where
                 "未找到 LuaSkills 运行时根目录，请先执行 make build 生成 output/lua_runtime。",
             )
         })?;
+    // runtime_root pins every derived host path to one absolute native directory identity.
+    // runtime_root 将所有派生宿主路径固定到一个绝对原生目录身份。
+    let runtime_root = fs::canonicalize(&runtime_root).map_err(|error| {
+        format!(
+            "规范化 LuaSkills 运行时根 `{}` 失败：{error}",
+            runtime_root.display()
+        )
+    })?;
     progress("正在准备 LuaSkills 运行时目录");
+    // output_config_directory is the only runtime configuration root accepted by Vulcan Code.
+    // output_config_directory 是 Vulcan Code 唯一接受的运行时配置根目录。
+    let output_config_directory = vulcan_runtime_assets::resolve_output_config_directory()
+        .ok_or_else(|| String::from("未找到 Vulcan output/config 目录。"))?;
+    // runtime_settings is the Vulcan-owned source of truth shared by both host engines.
+    // runtime_settings 是两个宿主引擎共享的 Vulcan 自有事实来源。
+    let runtime_settings = load_runtime_settings(&output_config_directory)?;
+    // managed_runtime_distribution_root is the canonical host-owned public runtime directory.
+    // managed_runtime_distribution_root 是宿主持有的规范公共运行时目录。
+    let managed_runtime_distribution_root =
+        vulcan_runtime_assets::resolve_managed_runtime_distribution_root()
+            .ok_or_else(|| String::from("未找到 Vulcan 公共 Python/Node 发行根目录。"))?;
+    fs::create_dir_all(&managed_runtime_distribution_root).map_err(|error| {
+        format!(
+            "创建公共 Python/Node 发行根 `{}` 失败：{error}",
+            managed_runtime_distribution_root.display()
+        )
+    })?;
+    let managed_runtime_distribution_root = fs::canonicalize(&managed_runtime_distribution_root)
+        .map_err(|error| {
+            format!(
+                "规范化公共 Python/Node 发行根 `{}` 失败：{error}",
+                managed_runtime_distribution_root.display()
+            )
+        })?;
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
-    let managed_runtime_report =
-        bootstrap_managed_runtimes(&runtime_root, |message| progress(message));
+    let managed_runtime_report = bootstrap_managed_runtimes(
+        &runtime_root,
+        &managed_runtime_distribution_root,
+        |event: &ManagedRuntimeBootstrapProgress| {
+            progress(&event.message);
+            managed_progress(event);
+        },
+    );
     progress(&format!(
         "受管 Python/Node 运行时：{}",
         managed_runtime_report.diagnostic
     ));
-    let host_options = build_host_options(&runtime_root, controller);
+    let host_options = build_host_options(
+        &runtime_root,
+        &managed_runtime_distribution_root,
+        controller,
+        &runtime_settings,
+    );
     let pool_config = LuaVmPoolConfig {
-        min_size: 1,
-        max_size: 2,
-        idle_ttl_secs: 30,
+        min_size: runtime_settings.vm_pool.min_size,
+        max_size: runtime_settings.vm_pool.max_size,
+        idle_ttl_secs: runtime_settings.vm_pool.idle_ttl_secs,
     };
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .map_err(|error| format!("创建 LuaSkills 引擎失败：{error}"))?;
-    ensure_configured_root_skills_installed(
-        &runtime_root,
-        &skill_roots,
-        &mut engine,
-        &mut progress,
-    )?;
+    ensure_configured_root_skills_installed(&skill_roots, &mut engine, &mut progress)?;
     progress("正在加载 LuaSkills 技能目录");
     engine
         .load_from_roots(&skill_roots)
         .map_err(|error| format!("加载 LuaSkills 技能根失败：{error}"))?;
 
+    // managed_runtime_environment_root keeps writable environments inside LuaSkills-owned data.
+    // managed_runtime_environment_root 将可写环境保留在 LuaSkills 自有数据目录内。
+    let managed_runtime_environment_root = runtime_root.join("dependencies").join("envs");
     Ok(TauriLuaSkillsHandle {
         engine: Arc::new(Mutex::new(engine)),
         runtime_root,
+        managed_runtime_distribution_root,
+        managed_runtime_environment_root,
+        output_config_directory,
         skill_roots,
-        managed_runtime_report,
+        managed_runtime_report: Arc::new(Mutex::new(managed_runtime_report)),
+        managed_runtime_progress: Arc::new(Mutex::new(None)),
+        effective_runtime_settings: runtime_settings,
     })
 }
 
@@ -243,6 +347,67 @@ pub fn load_luaskills_catalog(
         .lock()
         .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法读取插件目录。"))?;
     build_luaskills_catalog(handle, &engine)
+}
+
+/// Persist Vulcan-owned LuaSkills runtime settings and return the refreshed catalog projection.
+/// 持久化 Vulcan 自有 LuaSkills 运行时设置并返回刷新的目录投影。
+///
+/// `handle` retains the running engine baseline and `settings` is the complete next document.
+/// `handle` 保留运行中引擎基线，`settings` 是完整的下一份文档。
+/// Returns a catalog whose restart flag compares saved settings with the retained engine settings.
+/// 返回目录，其重启标志会比较已保存设置与保留引擎设置。
+pub fn save_luaskills_runtime_settings(
+    handle: &TauriLuaSkillsHandle,
+    settings: &LuaSkillsRuntimeSettings,
+) -> Result<TauriLuaSkillsCatalog, String> {
+    save_runtime_settings(&handle.output_config_directory, settings)?;
+    load_luaskills_catalog(handle)
+}
+
+/// Retries managed Python and Node bootstrap and returns the refreshed catalog projection.
+/// 重试受管 Python 与 Node 初始化并返回刷新的目录投影。
+///
+/// `handle` owns the exact runtime and distribution roots used by the running LuaSkills engine.
+/// `handle` 持有运行中 LuaSkills 引擎使用的精确运行时根与发行根。
+/// `target` selects the exact independently repairable runtime group.
+/// `target` 选择精确且可独立修复的运行时组。
+/// `progress` receives bounded human-readable progress updates from the shared bootstrap path.
+/// `progress` 接收共享初始化路径产生的有界可读进度更新。
+/// Returns the catalog carrying the latest ready, installed, unsupported, or unavailable report.
+/// 返回携带最近 ready、installed、unsupported 或 unavailable 报告的目录。
+pub fn retry_managed_runtimes<F>(
+    handle: &TauriLuaSkillsHandle,
+    target: ManagedRuntimeInstallTarget,
+    mut progress: F,
+) -> Result<TauriLuaSkillsCatalog, String>
+where
+    F: FnMut(&ManagedRuntimeBootstrapProgress),
+{
+    // report contains the exact outcome produced by the same bootstrap path used during startup.
+    // report 包含与启动阶段相同初始化路径产生的精确结果。
+    let report = bootstrap_managed_runtimes_for_target(
+        &handle.runtime_root,
+        &handle.managed_runtime_distribution_root,
+        target,
+        |event: &ManagedRuntimeBootstrapProgress| {
+            if let Ok(mut retained_progress) = handle.managed_runtime_progress.lock() {
+                *retained_progress = Some(event.clone());
+            }
+            progress(event);
+        },
+    );
+    // retained_report updates the shared handle before any catalog snapshot is rebuilt.
+    // retained_report 在重建任何目录快照前更新共享句柄。
+    let mut retained_report = handle
+        .managed_runtime_report
+        .lock()
+        .map_err(|_| String::from("受管 Python/Node 初始化状态锁已损坏，无法保存重试结果。"))?;
+    *retained_report = report;
+    drop(retained_report);
+    if let Ok(mut retained_progress) = handle.managed_runtime_progress.lock() {
+        *retained_progress = None;
+    }
+    load_luaskills_catalog(handle)
 }
 
 /// Performs one LuaSkills management action and returns the refreshed catalog.
@@ -484,12 +649,39 @@ fn build_luaskills_catalog(
             .cmp(&right.root_name)
             .then_with(|| left.skill_id.cmp(&right.skill_id))
     });
+    // runtime_settings is loaded once so the projected values and restart flag share one file image.
+    // runtime_settings 仅加载一次，使投影值与重启标志共享同一文件镜像。
+    let runtime_settings = load_runtime_settings(&handle.output_config_directory)?;
+    // restart_required compares persisted startup inputs with the immutable running-engine baseline.
+    // restart_required 比较持久化启动输入与不可变的运行中引擎基线。
+    let restart_required = runtime_settings != handle.effective_runtime_settings;
+    // managed_runtime_report is cloned once so every projected field belongs to one completed attempt.
+    // managed_runtime_report 仅克隆一次，使所有投影字段属于同一次已完成尝试。
+    let managed_runtime_report = handle
+        .managed_runtime_report
+        .lock()
+        .map_err(|_| String::from("受管 Python/Node 初始化状态锁已损坏，无法读取目录。"))?
+        .clone();
+    // managed_runtime_progress is cloned independently because retries update it while the engine remains live.
+    // managed_runtime_progress 独立克隆，因为重试会在引擎保持运行时更新它。
+    let managed_runtime_progress = handle
+        .managed_runtime_progress
+        .lock()
+        .map_err(|_| String::from("受管 Python/Node 初始化进度锁已损坏，无法读取目录。"))?
+        .clone();
 
     Ok(TauriLuaSkillsCatalog {
         runtime_root: handle.runtime_root.clone(),
+        managed_runtime_distribution_root: handle.managed_runtime_distribution_root.clone(),
+        managed_runtime_environment_root: handle.managed_runtime_environment_root.clone(),
+        managed_runtime_report,
+        managed_runtime_progress,
         system_lua_lib_dir: handle.runtime_root.join("system_lua_lib"),
         entry_count: skills.iter().map(|skill| skill.entry_count).sum(),
         skills,
+        runtime_settings,
+        runtime_settings_file: runtime_settings_file_path(&handle.output_config_directory),
+        restart_required,
     })
 }
 
@@ -549,13 +741,12 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
 /// Ensures configured host-managed ROOT skills exist before catalog loading.
 /// 在加载技能目录前确保配置声明的宿主管理 ROOT 技能已经存在。
 fn ensure_configured_root_skills_installed(
-    runtime_root: &Path,
     skill_roots: &[RuntimeSkillRoot],
     engine: &mut LuaEngine,
     progress: &mut impl FnMut(&str),
 ) -> Result<(), String> {
     let root_target = resolve_named_skill_root(skill_roots, "ROOT")?;
-    let configured_skills = load_root_skill_bootstrap_entries(runtime_root)?;
+    let configured_skills = load_root_skill_bootstrap_entries()?;
     if configured_skills.is_empty() {
         progress("未配置需要自动安装的 LuaSkills ROOT 技能");
         return Ok(());
@@ -611,21 +802,15 @@ fn ensure_configured_root_skills_installed(
     Ok(())
 }
 
-/// Loads declarative ROOT skill bootstrap entries from the active config directory.
-/// 从活动配置目录加载声明式 ROOT 技能引导条目。
-fn load_root_skill_bootstrap_entries(
-    runtime_root: &Path,
-) -> Result<Vec<RootSkillBootstrapEntry>, String> {
-    let mut candidate_paths = vec![runtime_root.join(ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH)];
-    let source_config_path =
-        vulcan_runtime_assets::source_config_directory().join("luaskills_root_skills.yaml");
-    if candidate_paths[0] != source_config_path {
-        candidate_paths.push(source_config_path);
-    }
-
-    let Some(config_path) = candidate_paths.into_iter().find(|path| path.exists()) else {
+/// Loads declarative ROOT skill bootstrap entries only from `output/config`.
+/// 仅从 `output/config` 加载声明式 ROOT 技能引导条目。
+fn load_root_skill_bootstrap_entries() -> Result<Vec<RootSkillBootstrapEntry>, String> {
+    let config_path = vulcan_runtime_assets::resolve_output_config_directory()
+        .ok_or_else(|| String::from("未找到 Vulcan output/config 目录。"))?
+        .join("luaskills_root_skills.yaml");
+    if !config_path.exists() {
         return Ok(Vec::new());
-    };
+    }
     if !config_path.is_file() {
         return Err(format!(
             "ROOT 技能引导配置不是有效文件：{}",
@@ -765,10 +950,57 @@ fn ordinary_uninstall_target_root_for_skill(
 /// 构建由共享 VLDB 控制器支撑的 LuaSkills 宿主选项。
 fn build_host_options(
     runtime_root: &Path,
+    managed_runtime_distribution_root: &Path,
     controller: PersistedControllerConfiguration,
+    runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
     let mut host_options = LuaRuntimeHostOptions::with_runtime_root(runtime_root.to_path_buf());
-    host_options.allow_network_download = true;
+    host_options.managed_runtime_distribution_root =
+        Some(managed_runtime_distribution_root.to_path_buf());
+    host_options.managed_runtime_environment_root =
+        Some(runtime_root.join("dependencies").join("envs"));
+    host_options.managed_runtime_config = LuaRuntimeManagedRuntimeConfig {
+        worker_pool_max_size_per_environment: runtime_settings
+            .managed_runtime
+            .worker_pool_max_size_per_environment,
+        worker_idle_ttl_secs: runtime_settings.managed_runtime.worker_idle_ttl_secs,
+        persistent_session_limit_per_engine: runtime_settings
+            .managed_runtime
+            .persistent_session_limit_per_engine,
+        persistent_session_default_buffer_limit_bytes_per_stream: runtime_settings
+            .managed_runtime
+            .persistent_session_default_buffer_limit_bytes_per_stream,
+        invoke_default_timeout_ms: runtime_settings.managed_runtime.invoke_default_timeout_ms,
+    };
+    host_options.allow_network_download = runtime_settings.network.allow_downloads;
+    host_options.github_base_url = runtime_settings.network.github_base_url.clone();
+    host_options.github_api_base_url = runtime_settings.network.github_api_base_url.clone();
+    host_options.official_skill_hub_base_url =
+        runtime_settings.network.official_skill_hub_base_url.clone();
+    host_options.enable_private_url_skill_install =
+        runtime_settings.network.enable_private_url_skill_install;
+    host_options.private_skill_source_allowlist = runtime_settings
+        .network
+        .private_skill_source_allowlist
+        .clone();
+    host_options.default_text_encoding =
+        runtime_settings.capabilities.default_text_encoding.clone();
+    host_options.cache_config = Some(ToolCacheConfig {
+        max_entries: runtime_settings.tool_cache.max_entries,
+        default_ttl_secs: runtime_settings.tool_cache.default_ttl_secs,
+        max_ttl_secs: runtime_settings.tool_cache.max_ttl_secs,
+    });
+    host_options.runlua_pool_config = Some(LuaRuntimeRunLuaPoolConfig {
+        min_size: runtime_settings.run_lua_pool.min_size,
+        max_size: runtime_settings.run_lua_pool.max_size,
+        idle_ttl_secs: runtime_settings.run_lua_pool.idle_ttl_secs,
+    });
+    host_options.capabilities = LuaRuntimeCapabilityOptions {
+        enable_skill_management_bridge: runtime_settings
+            .capabilities
+            .enable_skill_management_bridge,
+        enable_managed_io_compat: runtime_settings.capabilities.enable_managed_io_compat,
+    };
     host_options.sqlite_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.lancedb_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.space_controller.endpoint = controller

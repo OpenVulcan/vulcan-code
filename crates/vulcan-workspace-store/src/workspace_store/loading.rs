@@ -806,70 +806,7 @@ fn workspace_project_path_text_from_path(path: &std::path::Path) -> String {
 /// Returns stable project path text for storage and duplicate checks.
 /// 返回用于存储与重复检查的稳定项目路径文本。
 fn normalize_workspace_project_path_text(path: &str) -> String {
-    let trimmed_path = path.trim();
-    if trimmed_path.is_empty() {
-        return String::new();
-    }
-    let path_without_verbatim_prefix = strip_windows_verbatim_prefix(trimmed_path);
-    if looks_like_windows_path(trimmed_path, &path_without_verbatim_prefix) {
-        path_without_verbatim_prefix.replace('/', "\\")
-    } else {
-        path_without_verbatim_prefix
-    }
-}
-
-/// Returns whether one path should be represented with Windows separators.
-/// 返回单个路径是否应使用 Windows 分隔符表示。
-///
-/// # Parameters
-/// 参数
-/// `original_path` is the path before verbatim-prefix normalization.
-/// `original_path` 是移除 verbatim 前缀前的路径。
-/// `normalized_path` is the path after verbatim-prefix normalization.
-/// `normalized_path` 是移除 verbatim 前缀后的路径。
-///
-/// # Returns
-/// 返回值
-/// Returns `true` when the path has Windows drive or UNC semantics.
-/// 当路径具备 Windows 盘符或 UNC 语义时返回 `true`。
-fn looks_like_windows_path(original_path: &str, normalized_path: &str) -> bool {
-    let bytes = normalized_path.as_bytes();
-    (bytes.len() >= 3
-        && bytes[1] == b':'
-        && bytes[0].is_ascii_alphabetic()
-        && matches!(bytes[2], b'/' | b'\\'))
-        || normalized_path.starts_with(r"\\")
-        || original_path.starts_with(r"\\?\UNC\")
-        || original_path.starts_with("//?/UNC/")
-        || (cfg!(windows) && normalized_path.starts_with("//"))
-}
-
-/// Removes Windows verbatim path prefixes while preserving regular path addressing.
-/// 移除 Windows verbatim 路径前缀，同时保留常规路径寻址语义。
-///
-/// # Parameters
-/// 参数
-/// `path` is raw host path text.
-/// `path` 是原始宿主路径文本。
-///
-/// # Returns
-/// 返回值
-/// Returns the path text without a Windows verbatim prefix.
-/// 返回不含 Windows verbatim 前缀的路径文本。
-fn strip_windows_verbatim_prefix(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{rest}");
-    }
-    if let Some(rest) = path.strip_prefix("//?/UNC/") {
-        return format!("//{rest}");
-    }
-    if let Some(rest) = path.strip_prefix(r"\\?\") {
-        return rest.to_string();
-    }
-    if let Some(rest) = path.strip_prefix("//?/") {
-        return rest.to_string();
-    }
-    path.to_string()
+    vulcan_runtime_assets::native_host_path_text(path)
 }
 
 /// Clears process-scoped runtime latches that must never survive an application restart.

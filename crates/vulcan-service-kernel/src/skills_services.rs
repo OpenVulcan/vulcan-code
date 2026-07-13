@@ -2,6 +2,8 @@
 //! LuaSkills 与 AgentSkills 服务处理器。
 
 use super::*;
+use vulcan_luaskills_config::LuaSkillsRuntimeSettings;
+use vulcan_service_api::LuaSkillsManagedRuntimeProgressSummary;
 
 /// Serializes user-agent catalog file mutations across concurrent service requests.
 /// 串行化并发服务请求之间的用户智能体目录文件变更。
@@ -96,6 +98,110 @@ pub(crate) async fn service_refresh_luaskills_catalog(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, system_plugin_runtime, &system_plugin_catalog)?;
+    refresh_luaskills_local_state(&state).await
+}
+
+/// Saves Vulcan-owned LuaSkills startup settings and refreshes the WebUI projection.
+/// 保存 Vulcan 自有 LuaSkills 启动设置并刷新 WebUI 投影。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state and `settings` is the complete next settings document.
+/// `state` 是共享服务状态，`settings` 是完整的下一份设置文档。
+///
+/// # Returns
+/// 返回值
+/// Returns the committed LuaSkills catalog including the restart-required comparison.
+/// 返回已提交的 LuaSkills 目录，其中包含是否需要重启的比较结果。
+pub(crate) async fn service_save_luaskills_runtime_settings(
+    state: SharedServiceBridgeState,
+    settings: LuaSkillsRuntimeSettings,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Serialize package settings writes with every LuaSkills lifecycle mutation.
+    // 将包设置写入与所有 LuaSkills 生命周期变更串行化。
+    let _management_guard = lock_luaskills_management_mutation().await;
+    let handle = service_luaskills_handle(&state)?;
+    let catalog = run_luaskills_management_blocking("save runtime settings", move || {
+        vulcan_service_runtime::luaskills_bridge::save_luaskills_runtime_settings(
+            &handle, &settings,
+        )
+    })
+    .await?;
+    store_luaskills_catalog(&state, catalog)?;
+    refresh_luaskills_local_state(&state).await
+}
+
+/// Retries the packaged managed Python and Node bootstrap and reprojects its exact outcome.
+/// 重试随包受管 Python 与 Node 初始化并重新投影其精确结果。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained LuaSkills handle and the WebUI workbench projection.
+/// `state` 持有保留的 LuaSkills 句柄与 WebUI 工作台投影。
+/// `target` is the exact Python or Node.js runtime group requested by the user.
+/// `target` 是用户请求的精确 Python 或 Node.js 运行时组。
+///
+/// # Returns
+/// 返回值
+/// Returns the committed LuaSkills catalog even when optional managed runtimes remain unavailable.
+/// 即使可选受管运行时仍不可用，也返回已提交的 LuaSkills 目录。
+pub(crate) async fn service_retry_luaskills_managed_runtimes(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    target: String,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // Serialize downloads with every LuaSkills lifecycle mutation so one shared root has one writer.
+    // 将下载与所有 LuaSkills 生命周期变更串行化，使共享根始终只有一个写入者。
+    let _management_guard = lock_luaskills_management_mutation().await;
+    // handle preserves the startup-resolved roots and the shared bootstrap report.
+    // handle 保留启动时解析的目录与共享初始化报告。
+    let handle = service_luaskills_handle(&state)?;
+    // install_target rejects unknown wire values before any filesystem mutation begins.
+    // install_target 在任何文件系统变更开始前拒绝未知传输值。
+    let install_target =
+        vulcan_service_runtime::managed_runtime_bootstrap::ManagedRuntimeInstallTarget::from_key(
+            &target,
+        )?;
+    // progress_state and progress_app publish native byte progress without waiting for the blocking install to finish.
+    // progress_state 与 progress_app 会立即发布原生字节进度，无需等待阻塞安装结束。
+    let progress_state = state.clone();
+    let progress_app = app.clone();
+    // catalog contains the committed result even when the optional runtimes remain unavailable.
+    // catalog 即使在可选运行时仍不可用时也包含已提交结果。
+    let catalog = run_luaskills_management_blocking("retry managed runtimes", move || {
+        vulcan_service_runtime::luaskills_bridge::retry_managed_runtimes(
+            &handle,
+            install_target,
+            |progress| {
+                let workbench = if let Ok(mut guard) = progress_state.lock() {
+                    guard.workbench.lua_skills.managed_runtime_progress =
+                        Some(LuaSkillsManagedRuntimeProgressSummary {
+                            phase: progress.phase.clone(),
+                            component: progress.component.clone(),
+                            message: progress.message.clone(),
+                            completed_bytes: progress.completed_bytes,
+                            total_bytes: progress.total_bytes,
+                            overall_percent: progress.overall_percent,
+                        });
+                    Some(guard.workbench.clone())
+                } else {
+                    None
+                };
+                if let Some(workbench) = workbench {
+                    emit_workbench_event(&progress_app, &workbench);
+                }
+            },
+        )
+    })
+    .await?;
+    // message persists the exact retry outcome after transient UI progress is gone.
+    // message 在临时界面进度消失后持久记录精确重试结果。
+    let message = format!(
+        "managed runtime retry completed: status={} diagnostic={}",
+        catalog.managed_runtime_report.status.as_key(),
+        catalog.managed_runtime_report.diagnostic,
+    );
+    store_luaskills_catalog_with_log(&state, catalog, message)?;
     refresh_luaskills_local_state(&state).await
 }
 

@@ -307,9 +307,16 @@ pub(crate) fn invalidate_webui_session_addon_persist_version(
 pub(crate) fn empty_luaskills_catalog() -> TauriLuaSkillsCatalog {
     TauriLuaSkillsCatalog {
         runtime_root: PathBuf::new(),
+        managed_runtime_distribution_root: PathBuf::new(),
+        managed_runtime_environment_root: PathBuf::new(),
+        managed_runtime_report: Default::default(),
+        managed_runtime_progress: None,
         system_lua_lib_dir: PathBuf::new(),
         skills: Vec::new(),
         entry_count: 0,
+        runtime_settings: vulcan_luaskills_config::LuaSkillsRuntimeSettings::default(),
+        runtime_settings_file: PathBuf::new(),
+        restart_required: false,
     }
 }
 

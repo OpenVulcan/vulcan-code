@@ -1,5 +1,69 @@
 use super::*;
 
+/// Re-export the Vulcan-owned LuaSkills runtime settings wire contract.
+/// 重新导出 Vulcan 自有 LuaSkills 运行时设置传输契约。
+pub use vulcan_luaskills_config::LuaSkillsRuntimeSettings;
+
+/// WebUI-visible result of the latest managed Python and Node bootstrap attempt.
+/// WebUI 可见的最近一次受管 Python 与 Node 初始化尝试结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsManagedRuntimeBootstrapSummary {
+    /// Stable status key: ready, installed, unsupported, or unavailable.
+    /// 稳定状态键：ready、installed、unsupported 或 unavailable。
+    pub status: String,
+    /// Native platform key evaluated by the bootstrapper when available.
+    /// 初始化器在可用时判定的原生平台键。
+    pub platform: Option<String>,
+    /// Whether the native installer attempted to update the runtime layout.
+    /// 原生安装器是否尝试更新运行时目录布局。
+    pub install_attempted: bool,
+    /// Bounded diagnostic for the completed attempt.
+    /// 当前已完成尝试的有界诊断信息。
+    pub diagnostic: String,
+}
+
+/// WebUI-visible state of one independently repairable managed runtime.
+/// WebUI 可见的单个可独立修复受管运行时状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsManagedRuntimeComponentSummary {
+    /// Exact packaged runtime version.
+    /// 随包提供的精确运行时版本。
+    pub version: String,
+    /// Stable status key: ready, installed, unsupported, or unavailable.
+    /// 稳定状态键：ready、installed、unsupported 或 unavailable。
+    pub status: String,
+    /// Exact retained validation failure for diagnostics.
+    /// 为诊断保留的精确校验失败信息。
+    pub diagnostic: String,
+}
+
+/// WebUI-visible native managed-runtime installation progress.
+/// WebUI 可见的原生受管运行时安装进度。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsManagedRuntimeProgressSummary {
+    /// Stable native installation phase key.
+    /// 稳定的原生安装阶段键。
+    pub phase: String,
+    /// Runtime component currently being processed.
+    /// 当前正在处理的运行时组件。
+    pub component: Option<String>,
+    /// Human-readable progress message.
+    /// 可读的进度消息。
+    pub message: String,
+    /// Bytes transferred for the active download.
+    /// 当前下载已传输的字节数。
+    pub completed_bytes: Option<u64>,
+    /// Total bytes advertised for the active download.
+    /// 当前下载声明的总字节数。
+    pub total_bytes: Option<u64>,
+    /// Overall installation completion percentage.
+    /// 整体安装完成百分比。
+    pub overall_percent: Option<u8>,
+}
+
 /// Full WebUI summary for the embedded Lua Skills catalog.
 /// 嵌入式 Lua Skills 目录的完整 WebUI 摘要。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -8,9 +72,36 @@ pub struct LuaSkillsCatalogSummary {
     /// Runtime root used by the embedded Lua Skills host.
     /// 嵌入式 Lua Skills 宿主使用的运行时根目录。
     pub runtime_root: String,
+    /// Host-owned shared root containing managed Python and Node distributions.
+    /// 宿主持有的共享根目录，包含受管 Python 与 Node 发行包。
+    pub managed_runtime_distribution_root: String,
+    /// LuaSkills-owned writable root containing reusable managed environments.
+    /// LuaSkills 持有的可写根目录，包含可复用受管环境。
+    pub managed_runtime_environment_root: String,
+    /// Latest managed Python and Node bootstrap state and retained diagnostics.
+    /// 最近一次受管 Python 与 Node 初始化状态及保留诊断。
+    pub managed_runtime_bootstrap: LuaSkillsManagedRuntimeBootstrapSummary,
+    /// Independently repairable Python runtime state.
+    /// 可独立修复的 Python 运行时状态。
+    pub managed_python_runtime: LuaSkillsManagedRuntimeComponentSummary,
+    /// Independently repairable Node.js runtime state.
+    /// 可独立修复的 Node.js 运行时状态。
+    pub managed_node_runtime: LuaSkillsManagedRuntimeComponentSummary,
+    /// Current native managed-runtime installation progress when active.
+    /// 活动时的当前原生受管运行时安装进度。
+    pub managed_runtime_progress: Option<LuaSkillsManagedRuntimeProgressSummary>,
     /// System Lua library directory used by Lua Skills.
     /// Lua Skills 使用的系统 Lua 库目录。
     pub system_lua_lib: String,
+    /// Vulcan-owned runtime settings file used by LuaSkills.
+    /// LuaSkills 使用的 Vulcan 自有运行时设置文件。
+    pub runtime_settings_file: String,
+    /// Complete Vulcan-owned startup settings saved for LuaSkills.
+    /// 为 LuaSkills 保存的完整 Vulcan 自有启动设置。
+    pub runtime_settings: LuaSkillsRuntimeSettings,
+    /// Whether saved startup settings require an application restart to take effect.
+    /// 已保存启动设置是否需要重启应用后才能生效。
+    pub restart_required: bool,
     /// Total visible runtime entry count.
     /// 可见运行时入口总数。
     pub entry_count: usize,

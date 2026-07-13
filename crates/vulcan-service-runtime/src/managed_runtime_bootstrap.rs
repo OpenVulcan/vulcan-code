@@ -1,12 +1,13 @@
 //! Managed Python and Node runtime bootstrap for the active LuaSkills root.
 //! 活动 LuaSkills 根目录的受管 Python 与 Node 运行时初始化器。
 
+use crate::managed_runtime_installer::{
+    NativeManagedRuntimeInstallRequest, install_managed_runtimes,
+};
 use fs2::FileExt;
 use serde::Deserialize;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,37 +19,29 @@ const LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 非阻塞锁尝试之间的轮询间隔。
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Maximum stdout or stderr bytes retained in one diagnostic report.
-/// 单个诊断报告保留的 stdout 或 stderr 最大字节数。
-const MAX_DIAGNOSTIC_BYTES: usize = 8 * 1024;
-
-/// Maximum wall-clock time allowed for one upstream fetch script execution.
-/// 单次上游拉取脚本执行允许的最长墙钟时间。
-const FETCH_SCRIPT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-
-/// Poll interval used while supervising the upstream fetch process.
-/// 监督上游拉取进程时使用的轮询间隔。
-const FETCH_SCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
-
 /// LuaSkills release whose managed-runtime layout is implemented by this host.
 /// 当前宿主实现其受管运行时目录契约的 LuaSkills 版本。
-const EXPECTED_LUASKILLS_VERSION: &str = "0.5.0";
+const EXPECTED_LUASKILLS_VERSION: &str = env!("VULCAN_LUASKILLS_DEPENDENCY_VERSION");
 
 /// Exact CPython release packaged by this host integration.
 /// 当前宿主集成打包的精确 CPython 版本。
-const EXPECTED_PYTHON_VERSION: &str = "3.14.4";
+const EXPECTED_PYTHON_VERSION: &str = env!("VULCAN_MANAGED_PYTHON_VERSION");
 
 /// Exact uv release packaged by this host integration.
 /// 当前宿主集成打包的精确 uv 版本。
-const EXPECTED_UV_VERSION: &str = "0.11.28";
+const EXPECTED_UV_VERSION: &str = env!("VULCAN_MANAGED_UV_VERSION");
 
 /// Exact Node.js release packaged by this host integration.
 /// 当前宿主集成打包的精确 Node.js 版本。
-const EXPECTED_NODE_VERSION: &str = "24.18.0";
+const EXPECTED_NODE_VERSION: &str = env!("VULCAN_MANAGED_NODE_VERSION");
 
 /// Exact pnpm release packaged by this host integration.
 /// 当前宿主集成打包的精确 pnpm 版本。
-const EXPECTED_PNPM_VERSION: &str = "11.11.0";
+const EXPECTED_PNPM_VERSION: &str = env!("VULCAN_MANAGED_PNPM_VERSION");
+
+/// Comma-separated native targets published by the crate-owned runtime manifest.
+/// crate 自有运行时清单发布的原生目标逗号分隔列表。
+const SUPPORTED_PLATFORMS: &str = env!("VULCAN_MANAGED_SUPPORTED_PLATFORMS");
 
 /// Final state of the managed runtime bootstrap.
 /// 受管运行时初始化的最终状态。
@@ -68,9 +61,74 @@ pub enum ManagedRuntimeBootstrapStatus {
     Unavailable,
 }
 
+/// Selects the managed runtime group installed by an explicit retry.
+/// 选择显式重试要安装的受管运行时组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedRuntimeInstallTarget {
+    /// Installs only components that fail validation.
+    /// 仅安装未通过校验的组件。
+    Missing,
+    /// Reinstalls Python and its uv companion.
+    /// 重新安装 Python 及其配套 uv。
+    Python,
+    /// Reinstalls Node.js and its pnpm companion.
+    /// 重新安装 Node.js 及其配套 pnpm。
+    Node,
+}
+
+impl ManagedRuntimeInstallTarget {
+    /// Parses the exact service wire key into an install target.
+    /// 将精确的服务传输键解析为安装目标。
+    pub fn from_key(value: &str) -> Result<Self, String> {
+        match value {
+            "python" => Ok(Self::Python),
+            "node" => Ok(Self::Node),
+            other => Err(format!(
+                "unsupported managed runtime install target: {other}"
+            )),
+        }
+    }
+}
+
+/// Describes one independently repairable managed runtime group.
+/// 描述一个可独立修复的受管运行时组。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ManagedRuntimeComponentReport {
+    /// Exact runtime version shown to the user.
+    /// 向用户显示的精确运行时版本。
+    pub version: String,
+    /// Validation state for this runtime group.
+    /// 当前运行时组的校验状态。
+    pub status: ManagedRuntimeBootstrapStatus,
+    /// Exact validation failure retained for diagnostics.
+    /// 为诊断保留的精确校验失败信息。
+    pub diagnostic: String,
+}
+
+impl Default for ManagedRuntimeBootstrapStatus {
+    /// Uses unavailable as the safe empty-state value before the first bootstrap completes.
+    /// 在首次初始化完成前使用不可用作为安全的空状态值。
+    fn default() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl ManagedRuntimeBootstrapStatus {
+    /// Returns the stable wire key used by service and WebUI projections.
+    /// 返回服务与 WebUI 投影使用的稳定传输键。
+    pub const fn as_key(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Installed => "installed",
+            Self::Unsupported => "unsupported",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 /// Readable result returned after one bootstrap attempt.
 /// 单次初始化尝试结束后返回的可读结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ManagedRuntimeBootstrapReport {
     /// Final bootstrap status.
     /// 最终初始化状态。
@@ -81,12 +139,42 @@ pub struct ManagedRuntimeBootstrapReport {
     /// Stable platform key when the target is supported.
     /// 目标受支持时使用的稳定平台键。
     pub platform: Option<String>,
-    /// Whether the upstream fetch script was executed.
-    /// 是否执行过上游拉取脚本。
-    pub script_executed: bool,
+    /// Whether the native installer attempted to change the runtime layout.
+    /// 原生安装器是否尝试修改运行时目录布局。
+    pub install_attempted: bool,
     /// Concise human-readable diagnostic text.
     /// 简洁的可读诊断文本。
     pub diagnostic: String,
+    /// Independently validated Python runtime state.
+    /// 独立校验的 Python 运行时状态。
+    pub python: ManagedRuntimeComponentReport,
+    /// Independently validated Node.js runtime state.
+    /// 独立校验的 Node.js 运行时状态。
+    pub node: ManagedRuntimeComponentReport,
+}
+
+/// Structured progress emitted by the native managed-runtime installer.
+/// 原生受管运行时安装器发出的结构化进度。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ManagedRuntimeBootstrapProgress {
+    /// Stable installation phase key.
+    /// 稳定的安装阶段键。
+    pub phase: String,
+    /// Runtime component currently being processed.
+    /// 当前处理的运行时组件。
+    pub component: Option<String>,
+    /// Human-readable progress message.
+    /// 可读的进度消息。
+    pub message: String,
+    /// Bytes transferred for the active download.
+    /// 当前下载已传输的字节数。
+    pub completed_bytes: Option<u64>,
+    /// Total bytes advertised for the active download.
+    /// 当前下载声明的总字节数。
+    pub total_bytes: Option<u64>,
+    /// Overall bootstrap completion percentage.
+    /// 整体初始化完成百分比。
+    pub overall_percent: Option<u8>,
 }
 
 /// Exact managed runtime versions packaged with the application.
@@ -116,8 +204,8 @@ struct ManagedRuntimeBootstrapConfig {
     supported_platforms: Vec<String>,
 }
 
-/// Runtime manifest emitted by the upstream fetch scripts.
-/// 上游拉取脚本生成的运行时清单。
+/// Runtime manifest emitted by the native installer.
+/// 原生安装器生成的运行时清单。
 #[derive(Debug, Deserialize)]
 struct RuntimeInstallManifest {
     /// Manifest schema version.
@@ -154,38 +242,52 @@ struct RuntimeExpectation {
     install_dir: PathBuf,
 }
 
-/// One fetch-script failure with an exact process-start state.
-/// 一次带有精确进程启动状态的拉取脚本失败。
-struct FetchScriptError {
-    /// Whether the script process was successfully started.
-    /// 脚本进程是否已成功启动。
-    started: bool,
-    /// Readable bounded failure diagnostic.
-    /// 可读的有界失败诊断。
-    message: String,
-}
-
 /// Bootstrap managed Python and Node runtimes for one active LuaSkills root.
 /// 为一个活动 LuaSkills 根目录初始化受管 Python 与 Node 运行时。
 ///
 /// `runtime_root` is the exact root passed to `LuaRuntimeHostOptions`.
 /// `runtime_root` 是传入 `LuaRuntimeHostOptions` 的同一个精确根目录。
+/// `distribution_root` is the host-owned shared directory containing Python and Node distributions.
+/// `distribution_root` 是包含 Python 与 Node 发行包的宿主共享目录。
 /// `progress` receives concise startup messages and must not block.
 /// `progress` 接收简洁启动消息，且不得阻塞。
 /// The function always returns a report so ordinary Lua skills can remain available when downloads fail.
 /// 此函数始终返回报告，使下载失败时普通 Lua 技能仍可继续使用。
 pub fn bootstrap_managed_runtimes<F>(
     runtime_root: &Path,
+    distribution_root: &Path,
+    progress: F,
+) -> ManagedRuntimeBootstrapReport
+where
+    F: FnMut(&ManagedRuntimeBootstrapProgress),
+{
+    bootstrap_managed_runtimes_for_target(
+        runtime_root,
+        distribution_root,
+        ManagedRuntimeInstallTarget::Missing,
+        progress,
+    )
+}
+
+/// Bootstraps or explicitly reinstalls one managed runtime group.
+/// 初始化或显式重新安装一个受管运行时组。
+pub fn bootstrap_managed_runtimes_for_target<F>(
+    runtime_root: &Path,
+    distribution_root: &Path,
+    target: ManagedRuntimeInstallTarget,
     mut progress: F,
 ) -> ManagedRuntimeBootstrapReport
 where
-    F: FnMut(&str),
+    F: FnMut(&ManagedRuntimeBootstrapProgress),
 {
+    let config = compiled_bootstrap_config();
     let platform = match managed_runtime_platform_key() {
         Ok(platform) => platform,
         Err(reason) => {
             return report(
                 runtime_root,
+                distribution_root,
+                &config,
                 ManagedRuntimeBootstrapStatus::Unsupported,
                 None,
                 false,
@@ -194,18 +296,6 @@ where
         }
     };
 
-    let config = match load_bootstrap_config(runtime_root) {
-        Ok(config) => config,
-        Err(error) => {
-            return report(
-                runtime_root,
-                ManagedRuntimeBootstrapStatus::Unavailable,
-                Some(platform),
-                false,
-                error,
-            );
-        }
-    };
     if !config
         .supported_platforms
         .iter()
@@ -213,6 +303,8 @@ where
     {
         return report(
             runtime_root,
+            distribution_root,
+            &config,
             ManagedRuntimeBootstrapStatus::Unsupported,
             Some(platform.clone()),
             false,
@@ -223,15 +315,21 @@ where
     if let Err(error) = validate_config(&config) {
         return report(
             runtime_root,
+            distribution_root,
+            &config,
             ManagedRuntimeBootstrapStatus::Unavailable,
             Some(platform),
             false,
             error,
         );
     }
-    if validate_runtime_layout(runtime_root, &platform, &config).is_ok() {
+    if target == ManagedRuntimeInstallTarget::Missing
+        && validate_runtime_layout(distribution_root, &platform, &config).is_ok()
+    {
         return report(
             runtime_root,
+            distribution_root,
+            &config,
             ManagedRuntimeBootstrapStatus::Ready,
             Some(platform),
             false,
@@ -239,12 +337,19 @@ where
         );
     }
 
-    progress("正在等待受管 Python/Node 运行时初始化锁");
+    progress(&ManagedRuntimeBootstrapProgress {
+        phase: "locking".to_string(),
+        message: "正在等待受管 Python/Node 运行时初始化锁".to_string(),
+        overall_percent: Some(2),
+        ..ManagedRuntimeBootstrapProgress::default()
+    });
     let lock_file = match acquire_bootstrap_lock(runtime_root) {
         Ok(file) => file,
         Err(error) => {
             return report(
                 runtime_root,
+                distribution_root,
+                &config,
                 ManagedRuntimeBootstrapStatus::Unavailable,
                 Some(platform),
                 false,
@@ -253,10 +358,14 @@ where
         }
     };
 
-    if validate_runtime_layout(runtime_root, &platform, &config).is_ok() {
+    if target == ManagedRuntimeInstallTarget::Missing
+        && validate_runtime_layout(distribution_root, &platform, &config).is_ok()
+    {
         let _ = FileExt::unlock(&lock_file);
         return report(
             runtime_root,
+            distribution_root,
+            &config,
             ManagedRuntimeBootstrapStatus::Ready,
             Some(platform),
             false,
@@ -264,41 +373,61 @@ where
         );
     }
 
-    progress("正在按需拉取受管 Python/Node 运行时");
-    let script_result = run_fetch_script(runtime_root, &config);
+    let invalid = runtime_expectations(distribution_root, &platform, &config)
+        .into_iter()
+        .map(|expectation| {
+            let runtime = expectation.runtime;
+            (
+                runtime,
+                validate_runtime_installation(&expectation).is_err(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let (install_uv, install_python, install_node, install_pnpm) = install_flags(target, &invalid);
+    let request = NativeManagedRuntimeInstallRequest {
+        runtime_root,
+        distribution_root,
+        platform: &platform,
+        python_version: &config.python_version,
+        uv_version: &config.uv_version,
+        node_version: &config.node_version,
+        pnpm_version: &config.pnpm_version,
+        install_uv,
+        install_python,
+        install_node,
+        install_pnpm,
+    };
+    let install_result = install_managed_runtimes(&request, &mut progress);
     let _ = FileExt::unlock(&lock_file);
-    match script_result {
-        Ok(output) if output.status.success() => {
-            match validate_runtime_layout(runtime_root, &platform, &config) {
-                Ok(()) => report(
-                    runtime_root,
-                    ManagedRuntimeBootstrapStatus::Installed,
-                    Some(platform),
-                    true,
-                    "managed Python and Node runtimes were installed successfully".to_string(),
-                ),
-                Err(error) => report(
-                    runtime_root,
-                    ManagedRuntimeBootstrapStatus::Unavailable,
-                    Some(platform),
-                    true,
-                    format!("fetch script completed but validation failed: {error}"),
-                ),
-            }
-        }
-        Ok(output) => report(
+    match install_result {
+        Ok(()) => match validate_runtime_layout(distribution_root, &platform, &config) {
+            Ok(()) => report(
+                runtime_root,
+                distribution_root,
+                &config,
+                ManagedRuntimeBootstrapStatus::Installed,
+                Some(platform),
+                true,
+                "managed Python and Node runtimes were installed successfully".to_string(),
+            ),
+            Err(error) => report(
+                runtime_root,
+                distribution_root,
+                &config,
+                ManagedRuntimeBootstrapStatus::Unavailable,
+                Some(platform),
+                true,
+                format!("native installer completed but validation failed: {error}"),
+            ),
+        },
+        Err(error) => report(
             runtime_root,
+            distribution_root,
+            &config,
             ManagedRuntimeBootstrapStatus::Unavailable,
             Some(platform),
             true,
-            format_process_failure(&output),
-        ),
-        Err(error) => report(
-            runtime_root,
-            ManagedRuntimeBootstrapStatus::Unavailable,
-            Some(platform),
-            error.started,
-            error.message,
+            error,
         ),
     }
 }
@@ -307,28 +436,109 @@ where
 /// 构造单个初始化报告，避免重复字段初始化。
 fn report(
     runtime_root: &Path,
+    distribution_root: &Path,
+    config: &ManagedRuntimeBootstrapConfig,
     status: ManagedRuntimeBootstrapStatus,
     platform: Option<String>,
-    script_executed: bool,
+    install_attempted: bool,
     diagnostic: String,
 ) -> ManagedRuntimeBootstrapReport {
+    let (python, node) = component_reports(distribution_root, platform.as_deref(), config);
     ManagedRuntimeBootstrapReport {
         status,
         runtime_root: runtime_root.to_path_buf(),
         platform,
-        script_executed,
+        install_attempted,
         diagnostic,
+        python,
+        node,
     }
 }
 
-/// Load the exact runtime version configuration packaged under the active root.
-/// 加载活动根目录下打包的精确运行时版本配置。
-fn load_bootstrap_config(runtime_root: &Path) -> Result<ManagedRuntimeBootstrapConfig, String> {
-    let config_path = runtime_root.join("scripts/deps/managed-runtimes.json");
-    let text = fs::read_to_string(&config_path)
-        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
-    serde_json::from_str(&text)
-        .map_err(|error| format!("failed to parse {}: {error}", config_path.display()))
+/// Resolves exact installer flags for the requested repair scope.
+/// 为请求的修复范围解析精确的安装器开关。
+fn install_flags(
+    target: ManagedRuntimeInstallTarget,
+    invalid: &std::collections::HashMap<&'static str, bool>,
+) -> (bool, bool, bool, bool) {
+    match target {
+        ManagedRuntimeInstallTarget::Missing => (
+            invalid.get("uv").copied().unwrap_or(true),
+            invalid.get("python").copied().unwrap_or(true),
+            invalid.get("node").copied().unwrap_or(true),
+            invalid.get("pnpm").copied().unwrap_or(true),
+        ),
+        ManagedRuntimeInstallTarget::Python => (true, true, false, false),
+        ManagedRuntimeInstallTarget::Node => (false, false, true, true),
+    }
+}
+
+/// Validates Python and Node.js groups independently for WebUI status rows.
+/// 为 WebUI 状态行独立校验 Python 与 Node.js 运行时组。
+fn component_reports(
+    distribution_root: &Path,
+    platform: Option<&str>,
+    config: &ManagedRuntimeBootstrapConfig,
+) -> (ManagedRuntimeComponentReport, ManagedRuntimeComponentReport) {
+    let Some(platform) = platform else {
+        return (
+            unsupported_component(&config.python_version),
+            unsupported_component(&config.node_version),
+        );
+    };
+    let expectations = runtime_expectations(distribution_root, platform, config);
+    let python = component_report(&config.python_version, &expectations[0..2]);
+    let node = component_report(&config.node_version, &expectations[2..4]);
+    (python, node)
+}
+
+/// Builds one unavailable component report for an unsupported platform.
+/// 为不受支持的平台构建一个不可用组件报告。
+fn unsupported_component(version: &str) -> ManagedRuntimeComponentReport {
+    ManagedRuntimeComponentReport {
+        version: version.to_string(),
+        status: ManagedRuntimeBootstrapStatus::Unsupported,
+        diagnostic: String::from("managed runtime is not supported on this platform"),
+    }
+}
+
+/// Validates every exact installation belonging to one runtime group.
+/// 校验属于一个运行时组的每个精确安装项。
+fn component_report(
+    version: &str,
+    expectations: &[RuntimeExpectation],
+) -> ManagedRuntimeComponentReport {
+    let errors = expectations
+        .iter()
+        .filter_map(|expectation| validate_runtime_installation(expectation).err())
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        ManagedRuntimeComponentReport {
+            version: version.to_string(),
+            status: ManagedRuntimeBootstrapStatus::Ready,
+            diagnostic: String::new(),
+        }
+    } else {
+        ManagedRuntimeComponentReport {
+            version: version.to_string(),
+            status: ManagedRuntimeBootstrapStatus::Unavailable,
+            diagnostic: errors.join("; "),
+        }
+    }
+}
+
+/// Build the immutable runtime configuration exported from the crate-owned manifest.
+/// 构造从 crate 自有清单导出的不可变运行时配置。
+fn compiled_bootstrap_config() -> ManagedRuntimeBootstrapConfig {
+    ManagedRuntimeBootstrapConfig {
+        schema_version: 1,
+        luaskills_version: EXPECTED_LUASKILLS_VERSION.to_string(),
+        python_version: EXPECTED_PYTHON_VERSION.to_string(),
+        uv_version: EXPECTED_UV_VERSION.to_string(),
+        node_version: EXPECTED_NODE_VERSION.to_string(),
+        pnpm_version: EXPECTED_PNPM_VERSION.to_string(),
+        supported_platforms: SUPPORTED_PLATFORMS.split(',').map(str::to_string).collect(),
+    }
 }
 
 /// Validate immutable configuration fields before any process is launched.
@@ -399,11 +609,11 @@ fn managed_runtime_platform_key_for(os: &str, arch: &str) -> Result<String, Stri
 /// Validate all exact runtime installations required by one configuration.
 /// 校验一份配置所需的全部精确运行时安装。
 fn validate_runtime_layout(
-    runtime_root: &Path,
+    distribution_root: &Path,
     platform: &str,
     config: &ManagedRuntimeBootstrapConfig,
 ) -> Result<(), String> {
-    for expectation in runtime_expectations(runtime_root, platform, config) {
+    for expectation in runtime_expectations(distribution_root, platform, config) {
         validate_runtime_installation(&expectation)?;
     }
     Ok(())
@@ -412,12 +622,12 @@ fn validate_runtime_layout(
 /// Build the four exact runtime installation expectations.
 /// 构造四个精确运行时安装预期。
 fn runtime_expectations(
-    runtime_root: &Path,
+    distribution_root: &Path,
     platform: &str,
     config: &ManagedRuntimeBootstrapConfig,
 ) -> Vec<RuntimeExpectation> {
-    let python_root = runtime_root.join("dependencies/runtimes/python");
-    let node_root = runtime_root.join("dependencies/runtimes/node");
+    let python_root = distribution_root.join("python");
+    let node_root = distribution_root.join("node");
     vec![
         RuntimeExpectation {
             runtime: "python",
@@ -556,254 +766,6 @@ fn acquire_bootstrap_lock(runtime_root: &Path) -> Result<File, String> {
     }
 }
 
-/// Execute the platform-specific upstream fetch script with exact versions.
-/// 使用精确版本执行平台对应的上游拉取脚本。
-fn run_fetch_script(
-    runtime_root: &Path,
-    config: &ManagedRuntimeBootstrapConfig,
-) -> Result<Output, FetchScriptError> {
-    let mut command = build_fetch_script_command(runtime_root, config)?;
-    configure_fetch_process_group(&mut command);
-    let state_dir = runtime_root.join("state");
-    fs::create_dir_all(&state_dir).map_err(|error| FetchScriptError {
-        started: false,
-        message: format!("failed to create {}: {error}", state_dir.display()),
-    })?;
-    let stdout_path = state_dir.join("managed-runtime-bootstrap.stdout.log");
-    let stderr_path = state_dir.join("managed-runtime-bootstrap.stderr.log");
-    let stdout_file = File::create(&stdout_path).map_err(|error| FetchScriptError {
-        started: false,
-        message: format!("failed to create {}: {error}", stdout_path.display()),
-    })?;
-    let stderr_file = match File::create(&stderr_path) {
-        Ok(file) => file,
-        Err(error) => {
-            drop(stdout_file);
-            remove_fetch_logs(&stdout_path, &stderr_path);
-            return Err(FetchScriptError {
-                started: false,
-                message: format!("failed to create {}: {error}", stderr_path.display()),
-            });
-        }
-    };
-    command
-        .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file));
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            drop(command);
-            remove_fetch_logs(&stdout_path, &stderr_path);
-            return Err(FetchScriptError {
-                started: false,
-                message: format!("failed to start managed runtime fetch script: {error}"),
-            });
-        }
-    };
-    drop(command);
-    let deadline = Instant::now() + FETCH_SCRIPT_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => thread::sleep(FETCH_SCRIPT_POLL_INTERVAL),
-            Ok(None) => {
-                terminate_fetch_process_tree(&mut child);
-                let stdout = read_bounded_log(&stdout_path);
-                let stderr = read_bounded_log(&stderr_path);
-                remove_fetch_logs(&stdout_path, &stderr_path);
-                return Err(FetchScriptError {
-                    started: true,
-                    message: format!(
-                        "managed runtime fetch script timed out after {} seconds; stdout={stdout}; stderr={stderr}",
-                        FETCH_SCRIPT_TIMEOUT.as_secs()
-                    ),
-                });
-            }
-            Err(error) => {
-                terminate_fetch_process_tree(&mut child);
-                let stdout = read_bounded_log(&stdout_path);
-                let stderr = read_bounded_log(&stderr_path);
-                remove_fetch_logs(&stdout_path, &stderr_path);
-                return Err(FetchScriptError {
-                    started: true,
-                    message: format!(
-                        "failed while waiting for managed runtime fetch script: {error}; stdout={stdout}; stderr={stderr}"
-                    ),
-                });
-            }
-        }
-    };
-    let stdout = read_bounded_log_bytes(&stdout_path);
-    let stderr = read_bounded_log_bytes(&stderr_path);
-    remove_fetch_logs(&stdout_path, &stderr_path);
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
-}
-
-/// Builds the platform-specific fetch command with exact version arguments.
-/// 使用精确版本参数构建平台专用拉取命令。
-fn build_fetch_script_command(
-    runtime_root: &Path,
-    config: &ManagedRuntimeBootstrapConfig,
-) -> Result<Command, FetchScriptError> {
-    #[cfg(target_os = "windows")]
-    {
-        let script = runtime_root.join("scripts/deps/fetch_managed_runtimes.ps1");
-        if !script.is_file() {
-            return Err(FetchScriptError {
-                started: false,
-                message: format!(
-                    "managed runtime fetch script is missing: {}",
-                    script.display()
-                ),
-            });
-        }
-        let shell = if Command::new("pwsh").arg("--version").output().is_ok() {
-            "pwsh"
-        } else {
-            "powershell.exe"
-        };
-        let mut command = Command::new(shell);
-        command
-            .arg("-NoProfile")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-File")
-            .arg(script)
-            .arg("-Target")
-            .arg("all")
-            .arg("-RuntimeRoot")
-            .arg(runtime_root)
-            .arg("-PythonVersion")
-            .arg(&config.python_version)
-            .arg("-UvVersion")
-            .arg(&config.uv_version)
-            .arg("-NodeVersion")
-            .arg(&config.node_version)
-            .arg("-PnpmVersion")
-            .arg(&config.pnpm_version)
-            .current_dir(runtime_root);
-        Ok(command)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let script = runtime_root.join("scripts/deps/fetch_managed_runtimes.sh");
-        if !script.is_file() {
-            return Err(FetchScriptError {
-                started: false,
-                message: format!(
-                    "managed runtime fetch script is missing: {}",
-                    script.display()
-                ),
-            });
-        }
-        let mut command = Command::new("bash");
-        command
-            .arg(script)
-            .arg("all")
-            .env("RUNTIME_ROOT", runtime_root)
-            .env("PYTHON_VERSION", &config.python_version)
-            .env("UV_VERSION", &config.uv_version)
-            .env("NODE_VERSION", &config.node_version)
-            .env("PNPM_VERSION", &config.pnpm_version)
-            .current_dir(runtime_root);
-        Ok(command)
-    }
-}
-
-/// Places the fetch shell in an isolated process group on Unix.
-/// 在 Unix 上把拉取 shell 放入独立进程组。
-#[cfg(unix)]
-fn configure_fetch_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-}
-
-/// Leaves Windows process creation unchanged; taskkill performs tree termination when needed.
-/// Windows 进程创建保持不变；需要时由 taskkill 执行进程树终止。
-#[cfg(windows)]
-fn configure_fetch_process_group(_command: &mut Command) {}
-
-/// Terminates the complete fetch process tree after timeout or supervision failure.
-/// 在超时或监督失败后终止完整拉取进程树。
-fn terminate_fetch_process_tree(child: &mut Child) {
-    #[cfg(unix)]
-    unsafe {
-        // The child is created as its own process-group leader, so a negative PID targets only that fetch tree.
-        // 子进程会作为独立进程组组长创建，因此负 PID 只会终止该拉取进程树。
-        let _ = libc::kill(-(child.id() as i32), libc::SIGKILL);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let process_id = child.id().to_string();
-        let mut taskkill = Command::new("taskkill");
-        taskkill
-            .args(["/PID", process_id.as_str(), "/T", "/F"])
-            .creation_flags(CREATE_NO_WINDOW);
-        let _ = taskkill.status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// Reads the bounded tail of one process log as bytes.
-/// 以字节形式读取单个进程日志的有界尾部。
-fn read_bounded_log_bytes(path: &Path) -> Vec<u8> {
-    let Ok(mut file) = File::open(path) else {
-        return Vec::new();
-    };
-    let length = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-    if length > MAX_DIAGNOSTIC_BYTES as u64 {
-        let _ = file.seek(SeekFrom::End(-(MAX_DIAGNOSTIC_BYTES as i64)));
-    }
-    let mut bytes = Vec::with_capacity(length.min(MAX_DIAGNOSTIC_BYTES as u64) as usize);
-    let _ = file.read_to_end(&mut bytes);
-    bytes
-}
-
-/// Reads the bounded tail of one process log as diagnostic text.
-/// 以诊断文本形式读取单个进程日志的有界尾部。
-fn read_bounded_log(path: &Path) -> String {
-    truncate_output(&read_bounded_log_bytes(path))
-}
-
-/// Removes transient process logs after their bounded tails have been captured.
-/// 在捕获有界日志尾部后删除临时进程日志。
-fn remove_fetch_logs(stdout_path: &Path, stderr_path: &Path) {
-    let _ = fs::remove_file(stdout_path);
-    let _ = fs::remove_file(stderr_path);
-}
-
-/// Format one failed process result without retaining unbounded output.
-/// 格式化一次失败进程结果，同时不保留无限输出。
-fn format_process_failure(output: &Output) -> String {
-    format!(
-        "managed runtime fetch script failed with status {}; stdout={}; stderr={}",
-        output.status,
-        truncate_output(&output.stdout),
-        truncate_output(&output.stderr)
-    )
-}
-
-/// Decode and truncate diagnostic bytes on a UTF-8 boundary.
-/// 在 UTF-8 边界上解码并截断诊断字节。
-fn truncate_output(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    if text.len() <= MAX_DIAGNOSTIC_BYTES {
-        return text.trim().to_string();
-    }
-    let mut boundary = MAX_DIAGNOSTIC_BYTES;
-    while !text.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    format!("{}…", text[..boundary].trim())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -856,8 +818,8 @@ mod tests {
         let root = test_root("valid");
         let config = ManagedRuntimeBootstrapConfig {
             schema_version: 1,
-            luaskills_version: "0.5.0".to_string(),
-            python_version: "3.14.4".to_string(),
+            luaskills_version: EXPECTED_LUASKILLS_VERSION.to_string(),
+            python_version: EXPECTED_PYTHON_VERSION.to_string(),
             uv_version: "0.11.28".to_string(),
             node_version: "24.18.0".to_string(),
             pnpm_version: "11.11.0".to_string(),
@@ -869,6 +831,75 @@ mod tests {
         validate_runtime_layout(&root, "windows-x64", &config)
             .expect("complete runtime layout should validate");
         fs::remove_dir_all(root).expect("test root should be removed");
+    }
+
+    /// Verify Python and Node.js validation states remain independent.
+    /// 验证 Python 与 Node.js 的校验状态保持相互独立。
+    #[test]
+    fn runtime_component_reports_are_independent() {
+        let root = test_root("component-report");
+        let config = compiled_bootstrap_config();
+        let expectations = runtime_expectations(&root, "windows-x64", &config);
+        for expectation in &expectations[0..2] {
+            write_install(expectation);
+        }
+
+        let (python, node) = component_reports(&root, Some("windows-x64"), &config);
+
+        assert_eq!(python.status, ManagedRuntimeBootstrapStatus::Ready);
+        assert_eq!(python.version, EXPECTED_PYTHON_VERSION);
+        assert_eq!(node.status, ManagedRuntimeBootstrapStatus::Unavailable);
+        assert_eq!(node.version, EXPECTED_NODE_VERSION);
+        fs::remove_dir_all(root).expect("test root should be removed");
+    }
+
+    /// Verify explicit repairs reinstall only the selected runtime group.
+    /// 验证显式修复仅重新安装选中的运行时组。
+    #[test]
+    fn explicit_runtime_reinstall_flags_are_isolated() {
+        let invalid = std::collections::HashMap::from([
+            ("uv", false),
+            ("python", false),
+            ("node", false),
+            ("pnpm", false),
+        ]);
+
+        assert_eq!(
+            install_flags(ManagedRuntimeInstallTarget::Python, &invalid),
+            (true, true, false, false)
+        );
+        assert_eq!(
+            install_flags(ManagedRuntimeInstallTarget::Node, &invalid),
+            (false, false, true, true)
+        );
+    }
+
+    /// Verify service wire targets reject every unrecognized repair scope.
+    /// 验证服务传输目标会拒绝所有无法识别的修复范围。
+    #[test]
+    fn managed_runtime_install_target_is_strict() {
+        assert_eq!(
+            ManagedRuntimeInstallTarget::from_key("python")
+                .expect("python target should be accepted"),
+            ManagedRuntimeInstallTarget::Python
+        );
+        assert_eq!(
+            ManagedRuntimeInstallTarget::from_key("node").expect("node target should be accepted"),
+            ManagedRuntimeInstallTarget::Node
+        );
+        assert!(ManagedRuntimeInstallTarget::from_key("all").is_err());
+    }
+
+    /// Verify the packaged download manifest matches the exact compiled LuaSkills dependency.
+    /// 验证打包下载清单与编译使用的精确 LuaSkills 依赖版本一致。
+    #[test]
+    fn repository_download_manifest_matches_compiled_luaskills_version() {
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("managed-runtimes.json");
+        let text = fs::read_to_string(&config_path).expect("read managed runtime config");
+        let config = serde_json::from_str::<ManagedRuntimeBootstrapConfig>(&text)
+            .expect("parse managed runtime config");
+        assert_eq!(config.luaskills_version, EXPECTED_LUASKILLS_VERSION);
+        validate_config(&config).expect("validate exact packaged runtime versions");
     }
 
     /// Verify packaged version configuration cannot redirect startup downloads.
@@ -966,126 +997,42 @@ mod tests {
         fs::remove_dir_all(root).expect("test root should be removed");
     }
 
-    /// Verify process diagnostics retain only the configured log tail.
-    /// 验证进程诊断只保留配置上限内的日志尾部。
+    /// Downloads and validates all runtimes through the native Rust installer.
+    /// 通过 Rust 原生安装器下载并校验全部运行时。
     #[test]
-    fn process_diagnostic_log_is_bounded_to_tail() {
-        let root = test_root("bounded-log");
-        fs::create_dir_all(&root).expect("test root should be created");
-        let log_path = root.join("process.log");
-        let prefix = vec![b'a'; MAX_DIAGNOSTIC_BYTES];
-        let suffix = vec![b'b'; MAX_DIAGNOSTIC_BYTES];
-        let mut content = prefix;
-        content.extend_from_slice(&suffix);
-        fs::write(&log_path, content).expect("process log should be written");
-
-        let bytes = read_bounded_log_bytes(&log_path);
-
-        assert_eq!(bytes.len(), MAX_DIAGNOSTIC_BYTES);
-        assert!(bytes.iter().all(|byte| *byte == b'b'));
-        fs::remove_dir_all(root).expect("test root should be removed");
-    }
-
-    /// Verify a missing packaged script is reported before process startup.
-    /// 验证缺少打包脚本时会在启动进程前返回错误。
-    #[test]
-    fn missing_fetch_script_reports_not_started() {
-        let root = test_root("missing-script");
-        fs::create_dir_all(&root).expect("test root should be created");
-        let config = ManagedRuntimeBootstrapConfig {
-            schema_version: 1,
-            luaskills_version: "0.5.0".to_string(),
-            python_version: "3.14.4".to_string(),
-            uv_version: "0.11.28".to_string(),
-            node_version: "24.18.0".to_string(),
-            pnpm_version: "11.11.0".to_string(),
-            supported_platforms: Vec::new(),
-        };
-
-        let error = build_fetch_script_command(&root, &config)
-            .expect_err("missing fetch script should be rejected");
-
-        assert!(!error.started);
-        assert!(error.message.contains("fetch script is missing"));
-        fs::remove_dir_all(root).expect("test root should be removed");
-    }
-
-    /// Verify a pre-spawn stderr failure releases and removes the already-created stdout log.
-    /// 验证启动前 stderr 创建失败时会释放并删除已创建的 stdout 日志。
-    #[test]
-    fn pre_spawn_log_failure_removes_partial_stdout_log() {
-        let root = test_root("partial-process-log");
-        let scripts_dir = root.join("scripts/deps");
-        let state_dir = root.join("state");
-        fs::create_dir_all(&scripts_dir).expect("scripts directory should be created");
-        fs::create_dir_all(state_dir.join("managed-runtime-bootstrap.stderr.log"))
-            .expect("stderr collision directory should be created");
-        #[cfg(target_os = "windows")]
-        fs::write(
-            scripts_dir.join("fetch_managed_runtimes.ps1"),
-            b"Write-Output 'unused'",
-        )
-        .expect("dummy PowerShell script should be written");
-        #[cfg(not(target_os = "windows"))]
-        fs::write(
-            scripts_dir.join("fetch_managed_runtimes.sh"),
-            b"#!/usr/bin/env bash\nexit 0\n",
-        )
-        .expect("dummy shell script should be written");
-        let config = ManagedRuntimeBootstrapConfig {
-            schema_version: 1,
-            luaskills_version: EXPECTED_LUASKILLS_VERSION.to_string(),
-            python_version: EXPECTED_PYTHON_VERSION.to_string(),
-            uv_version: EXPECTED_UV_VERSION.to_string(),
-            node_version: EXPECTED_NODE_VERSION.to_string(),
-            pnpm_version: EXPECTED_PNPM_VERSION.to_string(),
-            supported_platforms: Vec::new(),
-        };
-
-        let error = run_fetch_script(&root, &config)
-            .expect_err("stderr path collision should fail before process startup");
-
-        assert!(!error.started);
-        assert!(
-            !state_dir
-                .join("managed-runtime-bootstrap.stdout.log")
-                .exists()
-        );
-        fs::remove_dir_all(root).expect("test root should be removed");
-    }
-
-    /// Validates a real externally fetched runtime tree when the explicit smoke-test root is provided.
-    /// 在显式提供烟测根目录时校验真实的外部拉取运行时树。
-    #[test]
-    #[ignore = "requires runtimes fetched by scripts/deps/fetch_managed_runtimes"]
-    fn externally_fetched_runtime_layout_matches_host_contract() {
+    #[ignore = "requires internet access and downloads complete native runtimes"]
+    fn native_installer_downloads_complete_runtime_layout() {
         let runtime_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT")
             .map(PathBuf::from)
             .expect("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT must be set");
+        let distribution_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT")
+            .map(PathBuf::from)
+            .expect("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT must be set");
+        let mut progress_events = Vec::new();
+        let report = bootstrap_managed_runtimes(&runtime_root, &distribution_root, |progress| {
+            progress_events.push(progress.clone());
+        });
         let platform = managed_runtime_platform_key().expect("supported smoke-test platform");
-        let config = ManagedRuntimeBootstrapConfig {
-            schema_version: 1,
-            luaskills_version: "0.5.0".to_string(),
-            python_version: "3.14.4".to_string(),
-            uv_version: "0.11.28".to_string(),
-            node_version: "24.18.0".to_string(),
-            pnpm_version: "11.11.0".to_string(),
-            supported_platforms: vec![platform.clone()],
-        };
-        validate_runtime_layout(&runtime_root, &platform, &config)
-            .expect("externally fetched runtime layout must satisfy the host contract");
+        assert_eq!(report.status, ManagedRuntimeBootstrapStatus::Installed);
+        assert!(report.install_attempted);
+        assert!(!progress_events.is_empty());
+        validate_runtime_layout(&distribution_root, &platform, &compiled_bootstrap_config())
+            .expect("native installed runtime layout must satisfy the host contract");
     }
 
-    /// Confirms a complete packaged root returns Ready without executing the fetch script again.
-    /// 确认完整打包根目录会返回 Ready，且不会再次执行拉取脚本。
+    /// Confirms a complete native runtime root is reused without reinstalling.
+    /// 确认完整原生运行时根会在不重新安装的情况下复用。
     #[test]
-    #[ignore = "requires a packaged runtime root with fetched managed runtimes"]
-    fn externally_fetched_bootstrap_is_idempotent() {
+    #[ignore = "requires the native smoke test runtime layout"]
+    fn native_bootstrap_is_idempotent() {
         let runtime_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT")
             .map(PathBuf::from)
             .expect("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT must be set");
-        let report = bootstrap_managed_runtimes(&runtime_root, |_| {});
+        let distribution_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT")
+            .map(PathBuf::from)
+            .expect("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT must be set");
+        let report = bootstrap_managed_runtimes(&runtime_root, &distribution_root, |_| {});
         assert_eq!(report.status, ManagedRuntimeBootstrapStatus::Ready);
-        assert!(!report.script_executed);
+        assert!(!report.install_attempted);
     }
 }

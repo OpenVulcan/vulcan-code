@@ -720,6 +720,240 @@
   text-align: center;
 }
 
+.lua-settings-page-body {
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--background);
+}
+
+.lua-settings-toolbar h3,
+.lua-settings-section h4 {
+  margin: 0;
+}
+
+.lua-settings-toolbar h3 {
+  font-size: 16px;
+}
+
+.lua-settings-toolbar p,
+.lua-settings-section > p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lua-settings-restart-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid color-mix(in oklch, #d97706 44%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in oklch, #d97706 12%, var(--card));
+  color: color-mix(in oklch, #d97706 74%, var(--foreground));
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.lua-settings-content {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 18px;
+}
+
+.lua-settings-section {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  padding: 14px;
+}
+
+.lua-settings-section h4 {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lua-settings-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lua-settings-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.lua-settings-field > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lua-settings-field input,
+.lua-settings-field select,
+.lua-settings-field textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+}
+
+.lua-settings-field input,
+.lua-settings-field select {
+  height: 36px;
+  padding: 0 10px;
+}
+
+.lua-settings-field textarea {
+  min-height: 88px;
+  resize: vertical;
+  padding: 9px 10px;
+  line-height: 1.45;
+}
+
+.lua-settings-field small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.lua-settings-toggle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--foreground);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lua-settings-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.lua-managed-runtime-list {
+  min-width: 0;
+  display: grid;
+}
+
+.lua-managed-runtime-row {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.lua-managed-runtime-row:first-child {
+  border-top: 1px solid var(--border);
+}
+
+.lua-managed-runtime-row-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.lua-managed-runtime-row-name {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.lua-managed-runtime-row-version {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-managed-runtime-row-action {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-managed-runtime-row.unavailable .lua-managed-runtime-row-action > span {
+  color: var(--destructive);
+}
+
+.lua-managed-runtime-row-progress {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.lua-managed-runtime-row-progress > span,
+.lua-managed-runtime-row-progress > small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.lua-managed-runtime-row-progress > progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--primary);
+}
+
+.lua-settings-restart-note,
+.lua-settings-feedback {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lua-settings-restart-note {
+  background: color-mix(in oklch, var(--muted) 70%, var(--card));
+  color: var(--muted-foreground);
+}
+
+.lua-settings-feedback.error {
+  border-color: color-mix(in oklch, var(--destructive) 38%, var(--border));
+  background: color-mix(in oklch, var(--destructive) 9%, var(--card));
+  color: var(--destructive);
+}
+
+.lua-settings-feedback.success {
+  border-color: color-mix(in oklch, var(--primary) 34%, var(--border));
+  background: color-mix(in oklch, var(--primary) 8%, var(--card));
+  color: var(--foreground);
+}
+
+.lua-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .lua-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lua-settings-toolbar .agent-catalog-toolbar-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .skill-card {
   gap: 10px;
 }

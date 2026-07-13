@@ -70,6 +70,62 @@ pub(crate) fn update_luaskills_bootstrap_progress(
     );
 }
 
+/// Emits exact native managed-runtime download progress during LuaSkills bootstrap.
+/// 在 LuaSkills 初始化期间发出精确的原生受管运行时下载进度。
+pub(crate) fn update_managed_runtime_bootstrap_progress(
+    state: &SharedServiceBridgeState,
+    event_emitter: &ServiceEventEmitter,
+    logs: &[String],
+    progress: &vulcan_service_runtime::managed_runtime_bootstrap::ManagedRuntimeBootstrapProgress,
+) {
+    update_startup(
+        state,
+        event_emitter,
+        "bootstrapping-luaskills",
+        logs,
+        |now| {
+            let mut steps = startup_steps_with_status(
+                now,
+                &[
+                    (
+                        "service-process",
+                        StartupStepStatus::Ready,
+                        "Tauri 本地服务桥接已启动",
+                    ),
+                    (
+                        "vldb",
+                        StartupStepStatus::Ready,
+                        "VLDB/controller 数据平面已就绪",
+                    ),
+                    (
+                        "luaskills",
+                        StartupStepStatus::Running,
+                        progress.message.as_str(),
+                    ),
+                    (
+                        "token-budget",
+                        StartupStepStatus::Pending,
+                        "等待 LuaSkills 就绪",
+                    ),
+                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "等待工作区数据库载入",
+                    ),
+                ],
+            );
+            if let Some(step) = steps.iter_mut().find(|step| step.id == "luaskills") {
+                step.progress_percent = progress.overall_percent;
+                step.completed_bytes = progress.completed_bytes;
+                step.total_bytes = progress.total_bytes;
+                step.progress_phase = Some(progress.phase.clone());
+            }
+            steps
+        },
+    );
+}
+
 /// Updates the shared service state after a startup failure.
 /// 在启动失败后更新共享服务状态。
 pub(crate) fn update_service_failure(
@@ -143,6 +199,10 @@ pub(crate) fn startup_failure_steps(
                 label: startup_step_label(step_id),
                 status,
                 message: Some(message),
+                progress_percent: None,
+                completed_bytes: None,
+                total_bytes: None,
+                progress_phase: None,
                 updated_at: Some(updated_at),
             }
         })

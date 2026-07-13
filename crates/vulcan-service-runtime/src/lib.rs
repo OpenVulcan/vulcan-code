@@ -3,6 +3,7 @@
 
 pub mod luaskills_bridge;
 pub mod managed_runtime_bootstrap;
+mod managed_runtime_installer;
 pub mod mcp_bridge;
 pub mod token_budget_bridge;
 pub mod vmm_management;

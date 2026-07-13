@@ -1,4 +1,5 @@
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
+import type { LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings } from "@/types"
 
 // SkillActionProps groups service-backed actions used by the skill page.
 // SkillActionProps 分组技能页面使用的服务端动作。
@@ -6,6 +7,12 @@ export interface SkillActionProps {
   // Refreshes the Lua Skills catalog.
   // 刷新 Lua Skills 目录。
   onRefreshLuaSkills: () => Promise<void>
+  // Retries managed Python and Node bootstrap.
+  // 重试受管 Python 与 Node 初始化。
+  onRetryLuaSkillsManagedRuntimes: (target: LuaSkillsManagedRuntimeTarget) => Promise<void>
+  // Saves the Vulcan-owned LuaSkills runtime startup settings.
+  // 保存 Vulcan 自有 LuaSkills 运行时启动设置。
+  onSaveLuaSkillsRuntimeSettings: (settings: LuaSkillsRuntimeSettings) => Promise<void>
   // Installs one Lua Skill package.
   // 安装单个 Lua Skill 包。
   onInstallLuaSkill: (skillId: string, source: string, sourceType: string) => Promise<void>

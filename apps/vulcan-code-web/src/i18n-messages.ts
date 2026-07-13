@@ -538,6 +538,7 @@ export type TranslationKey =
   | "startup.connectingService"
   | "startup.loadingStep"
   | "startup.loadingWorkspace"
+  | "startup.downloadProgress"
   | "startup.failed"
   | "workspaceFiles.copyContentSuccess"
   | "workspaceFiles.noProjectDirectory"
@@ -1149,8 +1150,59 @@ export type TranslationKey =
   | "skills.navigation.list"
   | "skills.navigation.plugins"
   | "skills.navigation.luaSettings"
-  | "skills.luaSettings.runtimeRoot"
-  | "skills.luaSettings.systemLuaLib"
+  | "skills.luaSettings.description"
+  | "skills.luaSettings.restartRequired"
+  | "skills.luaSettings.restartHint"
+  | "skills.luaSettings.saved"
+  | "skills.luaSettings.save"
+  | "skills.luaSettings.saving"
+  | "skills.luaSettings.mainPool"
+  | "skills.luaSettings.runLuaPool"
+  | "skills.luaSettings.poolHint"
+  | "skills.luaSettings.minSize"
+  | "skills.luaSettings.maxSize"
+  | "skills.luaSettings.idleTtl"
+  | "skills.luaSettings.toolCache"
+  | "skills.luaSettings.maxEntries"
+  | "skills.luaSettings.defaultTtl"
+  | "skills.luaSettings.maxTtl"
+  | "skills.luaSettings.network"
+  | "skills.luaSettings.allowDownloads"
+  | "skills.luaSettings.githubBaseUrl"
+  | "skills.luaSettings.githubApiBaseUrl"
+  | "skills.luaSettings.skillHubBaseUrl"
+  | "skills.luaSettings.privateUrlInstall"
+  | "skills.luaSettings.privateAllowlist"
+  | "skills.luaSettings.privateAllowlistHint"
+  | "skills.luaSettings.capabilities"
+  | "skills.luaSettings.defaultEncoding"
+  | "skills.luaSettings.autoEncoding"
+  | "skills.luaSettings.skillManagementBridge"
+  | "skills.luaSettings.managedIoCompat"
+  | "skills.luaSettings.managedRuntime"
+  | "skills.luaSettings.managedRuntimeHint"
+  | "skills.luaSettings.managedRuntimeStatusReady"
+  | "skills.luaSettings.managedRuntimeStatusInstalled"
+  | "skills.luaSettings.managedRuntimeStatusUnsupported"
+  | "skills.luaSettings.managedRuntimeStatusUnavailable"
+  | "skills.luaSettings.managedRuntimeRetrying"
+  | "skills.luaSettings.managedRuntimeRetryCompleted"
+  | "skills.luaSettings.pythonRuntime"
+  | "skills.luaSettings.nodeRuntime"
+  | "skills.luaSettings.managedRuntimeInstalled"
+  | "skills.luaSettings.managedRuntimeReinstall"
+  | "skills.luaSettings.managedRuntimePreparing"
+  | "skills.luaSettings.combinedRuntime"
+  | "skills.luaSettings.managedRuntimeNormal"
+  | "skills.luaSettings.managedWorkerPoolMax"
+  | "skills.luaSettings.managedWorkerIdleTtl"
+  | "skills.luaSettings.managedSessionLimit"
+  | "skills.luaSettings.managedSessionBuffer"
+  | "skills.luaSettings.managedInvokeTimeout"
+  | "skills.luaSettings.unlimited"
+  | "skills.luaSettings.validationPositive"
+  | "skills.luaSettings.validationPoolOrder"
+  | "skills.luaSettings.validationCacheOrder"
   | "skills.sidebar.agentDetail"
   | "skills.sidebar.pluginDetail"
   | "skills.header.luaDetail"
@@ -1729,6 +1781,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "startup.connectingService": "正在连接 Vulcan Core Service",
     "startup.loadingStep": "正在加载 {step}",
     "startup.loadingWorkspace": "正在加载 Workspace",
+    "startup.downloadProgress": "下载进度",
     "startup.failed": "启动失败：{error}",
     "workspaceFiles.copyContentSuccess": "已复制文件内容。",
     "workspaceFiles.noProjectDirectory": "当前会话没有关联项目目录。",
@@ -2340,8 +2393,59 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.navigation.list": "LuaSkills 技能",
     "skills.navigation.plugins": "插件管理",
     "skills.navigation.luaSettings": "LuaSkills 设置",
-    "skills.luaSettings.runtimeRoot": "运行时目录",
-    "skills.luaSettings.systemLuaLib": "系统 Lua 库：{path}",
+    "skills.luaSettings.description": "这些设置归 Vulcan 所有，并同时用于会话与服务两个 LuaSkills 引擎。",
+    "skills.luaSettings.restartRequired": "已保存，等待重启生效",
+    "skills.luaSettings.restartHint": "当前可配置项都是引擎启动参数。保存后需要重启 Vulcan Code，运行中的两个 LuaSkills 引擎不会被热替换。",
+    "skills.luaSettings.saved": "Vulcan LuaSkills 配置已保存。",
+    "skills.luaSettings.save": "保存 LuaSkills 配置",
+    "skills.luaSettings.saving": "正在保存…",
+    "skills.luaSettings.mainPool": "主 VM 池",
+    "skills.luaSettings.runLuaPool": "隔离 runLua VM 池",
+    "skills.luaSettings.poolHint": "最小值决定预热容量，最大值限制并发 VM 数，空闲时间控制多余 VM 的回收。",
+    "skills.luaSettings.minSize": "最小 VM 数",
+    "skills.luaSettings.maxSize": "最大 VM 数",
+    "skills.luaSettings.idleTtl": "空闲回收（秒）",
+    "skills.luaSettings.toolCache": "工具缓存",
+    "skills.luaSettings.maxEntries": "最大条目数",
+    "skills.luaSettings.defaultTtl": "默认 TTL（秒）",
+    "skills.luaSettings.maxTtl": "最大 TTL（秒）",
+    "skills.luaSettings.network": "网络与来源",
+    "skills.luaSettings.allowDownloads": "允许下载技能与依赖",
+    "skills.luaSettings.githubBaseUrl": "GitHub 网站基址",
+    "skills.luaSettings.githubApiBaseUrl": "GitHub API 基址",
+    "skills.luaSettings.skillHubBaseUrl": "LuaSkills Hub 基址",
+    "skills.luaSettings.privateUrlInstall": "允许受信系统操作安装私有 URL 清单",
+    "skills.luaSettings.privateAllowlist": "私有来源允许列表",
+    "skills.luaSettings.privateAllowlistHint": "每行填写一个允许的 URL 前缀；空行会在保存时移除。",
+    "skills.luaSettings.capabilities": "运行时能力",
+    "skills.luaSettings.defaultEncoding": "默认文本编码",
+    "skills.luaSettings.autoEncoding": "自动（跟随运行时）",
+    "skills.luaSettings.skillManagementBridge": "允许 Lua 调用宿主技能管理桥接",
+    "skills.luaSettings.managedIoCompat": "使用托管 IO 兼容层替换原生全局 IO",
+    "skills.luaSettings.managedRuntime": "Python / Node 受管运行时",
+    "skills.luaSettings.managedRuntimeHint": "这些参数控制每个引擎的 Worker、持久会话与调用默认值，保存后重启生效。",
+    "skills.luaSettings.managedRuntimeStatusReady": "已就绪",
+    "skills.luaSettings.managedRuntimeStatusInstalled": "本次运行已安装",
+    "skills.luaSettings.managedRuntimeStatusUnsupported": "当前平台不支持",
+    "skills.luaSettings.managedRuntimeStatusUnavailable": "安装不可用",
+    "skills.luaSettings.managedRuntimeRetrying": "正在重试下载…",
+    "skills.luaSettings.managedRuntimeRetryCompleted": "受管运行时初始化已完成，请查看最新状态。",
+    "skills.luaSettings.pythonRuntime": "Python 运行时",
+    "skills.luaSettings.nodeRuntime": "Node.js 运行时",
+    "skills.luaSettings.managedRuntimeInstalled": "已安装",
+    "skills.luaSettings.managedRuntimeReinstall": "重新安装",
+    "skills.luaSettings.managedRuntimePreparing": "正在准备安装…",
+    "skills.luaSettings.combinedRuntime": "Python / Node 运行时",
+    "skills.luaSettings.managedRuntimeNormal": "正常",
+    "skills.luaSettings.managedWorkerPoolMax": "单环境最大 Worker 数",
+    "skills.luaSettings.managedWorkerIdleTtl": "Worker 空闲回收（秒）",
+    "skills.luaSettings.managedSessionLimit": "单引擎持久会话上限",
+    "skills.luaSettings.managedSessionBuffer": "单输出流默认缓冲字节数",
+    "skills.luaSettings.managedInvokeTimeout": "默认调用超时（毫秒）",
+    "skills.luaSettings.unlimited": "无限制",
+    "skills.luaSettings.validationPositive": "容量、TTL 与空闲时间必须是大于 0 的整数。",
+    "skills.luaSettings.validationPoolOrder": "每个 VM 池的最大 VM 数不能小于最小 VM 数。",
+    "skills.luaSettings.validationCacheOrder": "最大缓存 TTL 不能小于默认缓存 TTL。",
     "skills.sidebar.agentDetail": "{count} 个技能",
     "skills.sidebar.pluginDetail": "{count} 个系统插件",
     "skills.header.luaDetail": "总技能数 {total} · 显示工具数 {visible} · 隐式工具数 {implicit}",
@@ -2917,6 +3021,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "startup.connectingService": "Connecting to Vulcan Core Service",
     "startup.loadingStep": "Loading {step}",
     "startup.loadingWorkspace": "Loading Workspace",
+    "startup.downloadProgress": "Download progress",
     "startup.failed": "Startup failed: {error}",
     "workspaceFiles.copyContentSuccess": "Copied file content.",
     "workspaceFiles.noProjectDirectory": "The current conversation is not linked to a project directory.",
@@ -3528,8 +3633,59 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.navigation.list": "LuaSkills Skills",
     "skills.navigation.plugins": "Plugin Management",
     "skills.navigation.luaSettings": "LuaSkills Settings",
-    "skills.luaSettings.runtimeRoot": "Runtime Directory",
-    "skills.luaSettings.systemLuaLib": "System Lua library: {path}",
+    "skills.luaSettings.description": "These settings are owned by Vulcan and configure both the conversation and service LuaSkills engines.",
+    "skills.luaSettings.restartRequired": "Saved; restart required",
+    "skills.luaSettings.restartHint": "Every currently exposed setting is captured when an engine starts. Restart Vulcan Code after saving; the two running LuaSkills engines are not hot-swapped.",
+    "skills.luaSettings.saved": "Vulcan LuaSkills configuration saved.",
+    "skills.luaSettings.save": "Save LuaSkills Configuration",
+    "skills.luaSettings.saving": "Saving…",
+    "skills.luaSettings.mainPool": "Main VM Pool",
+    "skills.luaSettings.runLuaPool": "Isolated runLua VM Pool",
+    "skills.luaSettings.poolHint": "The minimum controls warm capacity, the maximum limits concurrent VMs, and idle time retires excess VMs.",
+    "skills.luaSettings.minSize": "Minimum VMs",
+    "skills.luaSettings.maxSize": "Maximum VMs",
+    "skills.luaSettings.idleTtl": "Idle Retirement (seconds)",
+    "skills.luaSettings.toolCache": "Tool Cache",
+    "skills.luaSettings.maxEntries": "Maximum Entries",
+    "skills.luaSettings.defaultTtl": "Default TTL (seconds)",
+    "skills.luaSettings.maxTtl": "Maximum TTL (seconds)",
+    "skills.luaSettings.network": "Network and Sources",
+    "skills.luaSettings.allowDownloads": "Allow skill and dependency downloads",
+    "skills.luaSettings.githubBaseUrl": "GitHub Website Base URL",
+    "skills.luaSettings.githubApiBaseUrl": "GitHub API Base URL",
+    "skills.luaSettings.skillHubBaseUrl": "LuaSkills Hub Base URL",
+    "skills.luaSettings.privateUrlInstall": "Allow trusted system operations to install private URL manifests",
+    "skills.luaSettings.privateAllowlist": "Private Source Allowlist",
+    "skills.luaSettings.privateAllowlistHint": "Enter one allowed URL prefix per line; blank lines are removed when saving.",
+    "skills.luaSettings.capabilities": "Runtime Capabilities",
+    "skills.luaSettings.defaultEncoding": "Default Text Encoding",
+    "skills.luaSettings.autoEncoding": "Automatic (runtime default)",
+    "skills.luaSettings.skillManagementBridge": "Allow Lua to call the host skill-management bridge",
+    "skills.luaSettings.managedIoCompat": "Replace native global IO with the managed IO compatibility layer",
+    "skills.luaSettings.managedRuntime": "Managed Python / Node Runtime",
+    "skills.luaSettings.managedRuntimeHint": "These values control per-engine workers, persistent sessions, and invoke defaults. Restart after saving.",
+    "skills.luaSettings.managedRuntimeStatusReady": "Ready",
+    "skills.luaSettings.managedRuntimeStatusInstalled": "Installed during this run",
+    "skills.luaSettings.managedRuntimeStatusUnsupported": "Unsupported on this platform",
+    "skills.luaSettings.managedRuntimeStatusUnavailable": "Installation unavailable",
+    "skills.luaSettings.managedRuntimeRetrying": "Retrying download…",
+    "skills.luaSettings.managedRuntimeRetryCompleted": "Managed runtime bootstrap finished. Review the latest status.",
+    "skills.luaSettings.pythonRuntime": "Python Runtime",
+    "skills.luaSettings.nodeRuntime": "Node.js Runtime",
+    "skills.luaSettings.managedRuntimeInstalled": "Installed",
+    "skills.luaSettings.managedRuntimeReinstall": "Reinstall",
+    "skills.luaSettings.managedRuntimePreparing": "Preparing installation…",
+    "skills.luaSettings.combinedRuntime": "Python / Node Runtimes",
+    "skills.luaSettings.managedRuntimeNormal": "Normal",
+    "skills.luaSettings.managedWorkerPoolMax": "Maximum Workers per Environment",
+    "skills.luaSettings.managedWorkerIdleTtl": "Worker Idle Retirement (seconds)",
+    "skills.luaSettings.managedSessionLimit": "Persistent Sessions per Engine",
+    "skills.luaSettings.managedSessionBuffer": "Default Bytes per Output Stream",
+    "skills.luaSettings.managedInvokeTimeout": "Default Invoke Timeout (milliseconds)",
+    "skills.luaSettings.unlimited": "Unlimited",
+    "skills.luaSettings.validationPositive": "Pool sizes, TTL values, and idle time must be positive integers.",
+    "skills.luaSettings.validationPoolOrder": "The maximum VM count cannot be smaller than the minimum for either pool.",
+    "skills.luaSettings.validationCacheOrder": "The maximum cache TTL cannot be smaller than the default cache TTL.",
     "skills.sidebar.agentDetail": "{count} skills",
     "skills.sidebar.pluginDetail": "{count} system plugins",
     "skills.header.luaDetail": "Total skills {total} · Visible tools {visible} · Implicit tools {implicit}",

@@ -17,6 +17,22 @@ pub struct StartupStepSnapshot {
     /// Optional detailed startup step message.
     /// 可选的启动步骤详细消息。
     pub message: Option<String>,
+    /// Optional exact completion percentage for the active step.
+    /// 活动步骤的可选精确完成百分比。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<u8>,
+    /// Optional transferred-byte count for the active download.
+    /// 活动下载的可选已传输字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_bytes: Option<u64>,
+    /// Optional total-byte count for the active download.
+    /// 活动下载的可选总字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    /// Optional native managed-runtime progress phase.
+    /// 可选的原生受管运行时进度阶段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_phase: Option<String>,
     /// Optional timestamp for the most recent status update.
     /// 最近一次状态更新的可选时间戳。
     pub updated_at: Option<OffsetDateTime>,

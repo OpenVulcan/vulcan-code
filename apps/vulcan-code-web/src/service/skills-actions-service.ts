@@ -3,6 +3,8 @@ import type {
   AgentSkillCategorySaveRequest,
   AgentSkillSaveRequest,
   LuaSkillsCatalogUpdate,
+  LuaSkillsManagedRuntimeTarget,
+  LuaSkillsRuntimeSettings,
   SubagentCatalogUpdate,
   SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
@@ -87,6 +89,46 @@ export async function refreshLuaSkillsCatalog(): Promise<LuaSkillsCatalogUpdate>
     return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench(() => undefined));
   }
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_refresh_luaskills_catalog");
+}
+
+// retryLuaSkillsManagedRuntimes retries the packaged Python and Node bootstrap through the local service.
+// retryLuaSkillsManagedRuntimes 通过本地服务重试随包 Python 与 Node 初始化。
+// Parameters: target is the exact independently repairable runtime group selected by the user.
+// 参数：target 是用户选择的精确且可独立修复的运行时组。
+// Returns: the revisioned catalog containing fresh component validation states.
+// 返回值：包含最新组件校验状态的带版本目录。
+export async function retryLuaSkillsManagedRuntimes(
+  target: LuaSkillsManagedRuntimeTarget,
+): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench(() => undefined));
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>(
+    "service_retry_luaskills_managed_runtimes",
+    { target },
+  );
+}
+
+// saveLuaSkillsRuntimeSettings saves the Vulcan-owned LuaSkills startup document.
+// saveLuaSkillsRuntimeSettings 保存 Vulcan 自有 LuaSkills 启动文档。
+//
+// Parameters: settings is the complete validated startup document shown by the settings page.
+// 参数：settings 是设置页展示的完整待校验启动文档。
+// Returns: the revisioned LuaSkills catalog including the restart-required result.
+// 返回值：带版本的 LuaSkills 目录，其中包含是否需要重启的结果。
+export async function saveLuaSkillsRuntimeSettings(
+  settings: LuaSkillsRuntimeSettings,
+): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
+      snapshot.luaSkills.runtimeSettings = structuredClone(settings);
+      snapshot.luaSkills.restartRequired = true;
+    }));
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>(
+    "service_save_luaskills_runtime_settings",
+    { settings },
+  );
 }
 
 // installLuaSkill installs one Lua Skill package through the local service.

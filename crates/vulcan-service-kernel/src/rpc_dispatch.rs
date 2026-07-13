@@ -89,6 +89,21 @@ pub(super) async fn dispatch_service_rpc(
         "service_refresh_luaskills_catalog" => {
             rpc_json_result(service_refresh_luaskills_catalog(state).await)
         }
+        "service_save_luaskills_runtime_settings" => rpc_json_result(
+            service_save_luaskills_runtime_settings(
+                state,
+                rpc_required_param(&params, "settings")?,
+            )
+            .await,
+        ),
+        "service_retry_luaskills_managed_runtimes" => rpc_json_result(
+            service_retry_luaskills_managed_runtimes(
+                app,
+                state,
+                rpc_required_param(&params, "target")?,
+            )
+            .await,
+        ),
         "service_install_luaskill" => rpc_json_result(
             service_install_luaskill(
                 state,

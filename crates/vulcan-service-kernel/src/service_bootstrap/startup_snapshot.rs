@@ -48,6 +48,10 @@ pub(crate) fn startup_steps_with_status(
             label: startup_step_label(id),
             status: status.clone(),
             message: Some((*message).to_string()),
+            progress_percent: None,
+            completed_bytes: None,
+            total_bytes: None,
+            progress_phase: None,
             updated_at: Some(updated_at),
         })
         .collect()

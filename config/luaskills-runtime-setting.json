@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "vmPool": {
+    "minSize": 1,
+    "maxSize": 2,
+    "idleTtlSecs": 30
+  },
+  "runLuaPool": {
+    "minSize": 1,
+    "maxSize": 4,
+    "idleTtlSecs": 60
+  },
+  "toolCache": {
+    "maxEntries": 1000,
+    "defaultTtlSecs": 1800,
+    "maxTtlSecs": 1800
+  },
+  "network": {
+    "allowDownloads": true,
+    "githubBaseUrl": null,
+    "githubApiBaseUrl": null,
+    "officialSkillHubBaseUrl": null,
+    "enablePrivateUrlSkillInstall": false,
+    "privateSkillSourceAllowlist": []
+  },
+  "capabilities": {
+    "defaultTextEncoding": null,
+    "enableSkillManagementBridge": false,
+    "enableManagedIoCompat": true
+  },
+  "managedRuntime": {
+    "workerPoolMaxSizePerEnvironment": 4,
+    "workerIdleTtlSecs": 60,
+    "persistentSessionLimitPerEngine": 256,
+    "persistentSessionDefaultBufferLimitBytesPerStream": 1048576,
+    "invokeDefaultTimeoutMs": null
+  }
+}

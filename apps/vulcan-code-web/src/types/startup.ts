@@ -44,6 +44,18 @@ export interface StartupStepSnapshot {
   // Optional startup detail message.
   // 可选启动详情消息。
   message?: string | null;
+  // Exact completion percentage for the active step when available.
+  // 可用时活动步骤的精确完成百分比。
+  progressPercent?: number | null;
+  // Transferred bytes for the active download when available.
+  // 可用时活动下载的已传输字节数。
+  completedBytes?: number | null;
+  // Total bytes for the active download when available.
+  // 可用时活动下载的总字节数。
+  totalBytes?: number | null;
+  // Native managed-runtime progress phase when applicable.
+  // 适用时的原生受管运行时进度阶段。
+  progressPhase?: string | null;
 }
 
 // StartupSnapshot describes the full startup status returned by the service.

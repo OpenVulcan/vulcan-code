@@ -1,6 +1,7 @@
 import type { StartupSnapshot, StartupStepSnapshot } from "@/types";
 import { CircleAlert } from "lucide-react";
 import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
+import { StartupDownloadProgress } from "@/components/shell/startup-download-progress";
 import { useI18n } from "@/i18n";
 
 // LoadingScreen renders the earliest frontend loading state.
@@ -61,6 +62,7 @@ function StartupProgressPanel(props: {
           <div className="conversation-loading-bar-value" style={{ width: `${percent}%` }} />
         </div>
         <p className="startup-progress-message">{message}</p>
+        <StartupDownloadProgress step={activeStep} label={t("startup.downloadProgress")} />
       </div>
     </section>
   );
@@ -92,7 +94,7 @@ function startupProgressPercent(startup: StartupSnapshot | null): number {
       return sum + 1;
     }
     if (step.status === "running") {
-      return sum + 0.5;
+      return sum + Math.max(0, Math.min(100, step.progressPercent ?? 50)) / 100;
     }
     return sum;
   }, 0);

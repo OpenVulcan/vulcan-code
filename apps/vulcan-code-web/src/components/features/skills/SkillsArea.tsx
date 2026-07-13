@@ -3,6 +3,7 @@ import { useI18n } from "@/i18n"
 import type { WorkbenchSnapshot } from "@/types"
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
+import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { SystemPluginsPanel } from "./system-plugins-panel"
 import type { SkillActionProps, SkillHeaderSummary, SkillSubAreaId } from "./skill-area-types"
 
@@ -57,9 +58,6 @@ export function SkillsArea(props: {
   // 包含 LuaSkills 目录与运行时设置的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  // t resolves localized LuaSkills page labels for the current interface locale.
-  // t 为当前界面语言解析本地化 LuaSkills 页面文案。
-  const { t } = useI18n()
   return (
     <section className="skill-management-surface">
       {props.activeTab === "catalog" ? (
@@ -73,19 +71,10 @@ export function SkillsArea(props: {
           plugins={props.workbench.plugins}
         />
       ) : props.activeTab === "settings" ? (
-        <section className="skill-page-shell">
-          <div className="skill-page-toolbar">
-            <div>
-              <h3>{t("skills.navigation.luaSettings")}</h3>
-              <p>{props.workbench.luaSkills.notice}</p>
-            </div>
-          </div>
-          <div className="skill-empty-state">
-            <strong>{t("skills.luaSettings.runtimeRoot")}</strong>
-            <code>{props.workbench.luaSkills.runtimeRoot}</code>
-            <span>{formatSkillText(t("skills.luaSettings.systemLuaLib"), { path: props.workbench.luaSkills.systemLuaLib })}</span>
-          </div>
-        </section>
+        <LuaSkillsSettingsPanel
+          actions={props.skillActions}
+          catalog={props.workbench.luaSkills}
+        />
       ) : null}
     </section>
   )
