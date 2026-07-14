@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  ChartNoAxesCombined,
   Hammer,
   Maximize2,
   Minimize2,
@@ -13,7 +14,11 @@ import {
   type SkillActionProps,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
-import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types";
+import {
+  enabledPluginDetailMounts,
+  findEnabledPluginDetailMount,
+  localizedPluginMountLabel,
+} from "@/components/features/skills/skill-area-types";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 
@@ -79,20 +84,26 @@ export function FloatingSkillMenu(props: {
   // 用于仅向已启用插件暴露设置入口的工作台快照。
   workbench: WorkbenchSnapshot;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  // pluginRows projects every enabled plugin detail mount into the embedded menu.
+  // pluginRows 将每个已启用插件详情挂载点投影到内嵌菜单。
+  const pluginRows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = enabledPluginDetailMounts(props.workbench.plugins)
+    .map((selection) => ({
+      icon: embeddedPluginMountIcon(selection.mount.icon),
+      id: selection.subAreaId,
+      label: localizedPluginMountLabel(selection, locale),
+    }));
   // rows stores the static embedded skills menu rows.
   // rows 保存静态内嵌技能菜单行。
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
-    ...(hasEnabledPluginDetailMount(props.workbench.plugins, "vulcan-rtk")
-      ? [{ icon: <Route size={15} />, id: "rtk" as const, label: t("skills.navigation.rtkSettings") }]
-      : []),
+    ...pluginRows,
   ];
   // activeLabel stores the selected menu label for the collapsed pill.
   // activeLabel 保存收起胶囊展示的当前菜单标签。
-  const activeLabel = skillSubAreaLabel(props.activeSubArea, t);
+  const activeLabel = skillSubAreaLabel(props.activeSubArea, props.workbench, locale, t);
 
   if (!props.expanded) {
     return (
@@ -140,15 +151,40 @@ export function FloatingSkillMenu(props: {
 
 // skillSubAreaLabel returns the compact label for one embedded skills sub page.
 // skillSubAreaLabel 返回单个内嵌技能子页面的紧凑标签。
-export function skillSubAreaLabel(subArea: SkillSubAreaId, t: ReturnType<typeof useI18n>["t"]): string {
+export function skillSubAreaLabel(
+  subArea: SkillSubAreaId,
+  workbench: WorkbenchSnapshot,
+  locale: string,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
   if (subArea === "settings") {
     return t("skills.navigation.luaSettings");
   }
   if (subArea === "plugins") {
     return t("skills.navigation.plugins");
   }
-  if (subArea === "rtk") {
-    return t("skills.navigation.rtkSettings");
+  // pluginSelection resolves the selected manifest-owned navigation label.
+  // pluginSelection 解析选中的清单自有导航名称。
+  const pluginSelection = findEnabledPluginDetailMount(workbench.plugins, subArea);
+  if (pluginSelection) {
+    return localizedPluginMountLabel(pluginSelection, locale);
   }
   return t("skills.navigation.list");
+}
+
+// embeddedPluginMountIcon returns the compact host icon declared by one plugin mount.
+// embeddedPluginMountIcon 返回单个插件挂载点声明的紧凑宿主图标。
+//
+// Parameters: icon is the validated service projection identifier.
+// 参数：icon 是已经校验的服务投影标识。
+// Returns: the corresponding fifteen-pixel Lucide icon.
+// 返回值：返回对应的十五像素 Lucide 图标。
+function embeddedPluginMountIcon(icon: "plugin" | "route" | "chart"): React.ReactNode {
+  if (icon === "route") {
+    return <Route size={15} />;
+  }
+  if (icon === "chart") {
+    return <ChartNoAxesCombined size={15} />;
+  }
+  return <Puzzle size={15} />;
 }

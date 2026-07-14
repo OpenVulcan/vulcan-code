@@ -395,6 +395,20 @@ export interface SystemPluginPermissionPreview {
   pythonEntryIds: string[];
 }
 
+// PluginUiInvalidatedEvent describes one revision-only plugin UI data invalidation.
+// PluginUiInvalidatedEvent 描述一次仅含修订号的插件界面数据失效。
+export interface PluginUiInvalidatedEvent {
+  // Exact plugin identity owning the topic.
+  // 拥有主题的精确插件身份。
+  pluginId: string;
+  // Plugin-local invalidation topic.
+  // 插件内失效主题。
+  topic: string;
+  // Monotonic plugin data revision.
+  // 单调递增的插件数据修订号。
+  revision: number;
+}
+
 // PluginSummary describes one plugin or LuaSkills package projected by the service.
 // PluginSummary 描述服务端投影的单个插件或 LuaSkills 包。
 export interface PluginSummary {
@@ -486,6 +500,15 @@ export interface PluginSummary {
       // Stable host-owned mount point.
       // 稳定的宿主自有挂载点。
       point: "skillsPluginDetail" | "workspaceMain" | "conversationRightPanel";
+      // Default host navigation label declared by the mount.
+      // 挂载点声明的默认宿主导航名称。
+      label: string;
+      // Localized navigation labels keyed by locale identifier.
+      // 以语言标识为键的本地化导航名称。
+      labelByLocale: Record<string, string>;
+      // Stable host-owned navigation icon identifier.
+      // 稳定的宿主导航图标标识。
+      icon: "plugin" | "route" | "chart";
       // Named ESM export containing the component factory.
       // 包含组件工厂的 ESM 命名导出。
       exportName: string;

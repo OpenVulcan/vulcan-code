@@ -2,6 +2,9 @@
 //! 运行时流式增量处理辅助逻辑与可变循环状态模块。
 
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent};
+use crate::agent_runtime::provider_request_telemetry::{
+    ProviderRequestTelemetryContext, ProviderRequestTelemetryTracker,
+};
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_stream_projection::{
     is_provider_tool_boundary_runtime_event, normalize_streamed_thinking_output,
@@ -60,6 +63,9 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Terminal provider error captured from the stream, if one has occurred.
     /// 如果已经发生，则保存从流中捕获到的终态 Provider 错误。
     terminal_error: Option<String>,
+    /// Low-frequency physical Provider request telemetry state machine.
+    /// 低频真实 Provider 请求遥测状态机。
+    provider_request_telemetry: ProviderRequestTelemetryTracker,
 }
 
 impl RuntimeStreamDeltaState {
@@ -80,7 +86,28 @@ impl RuntimeStreamDeltaState {
             cumulative_successful_provider_usage: None,
             cumulative_usage_accounted_assistant_turns: 0,
             terminal_error: None,
+            provider_request_telemetry: ProviderRequestTelemetryTracker::default(),
         }
+    }
+
+    /// Installs immutable request telemetry context derived from execution preparation.
+    /// 安装从执行准备派生的不可变请求遥测上下文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `context` contains the exact model and owner facts for this stream.
+    /// `context` 包含当前流的精确模型与归属事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the updated state for launch assembly.
+    /// 返回用于启动装配的更新状态。
+    pub(crate) fn with_provider_request_telemetry_context(
+        mut self,
+        context: ProviderRequestTelemetryContext,
+    ) -> Self {
+        self.provider_request_telemetry.install_context(context);
+        self
     }
 
     /// Returns the immutable host-owned controller captured by the loop state.
@@ -188,7 +215,7 @@ impl RuntimeStreamDeltaState {
         &mut self,
         session_id: SessionId,
         delta: String,
-    ) -> Option<ExecutionStreamEvent> {
+    ) -> Vec<ExecutionStreamEvent> {
         self.core_controller.record_thinking(delta.clone());
         self.thinking_raw_output.push_str(&delta);
         let normalized_visible_output =
@@ -199,10 +226,23 @@ impl RuntimeStreamDeltaState {
             .to_string();
         self.thinking_visible_output = normalized_visible_output;
 
-        (!visible_delta.is_empty()).then_some(ExecutionStreamEvent::ThinkingDelta {
+        if visible_delta.is_empty() {
+            self.provider_request_telemetry.observe_first_event();
+            return Vec::new();
+        }
+        // events preserves the first-token Hook before the visible delta projection.
+        // events 保留首 Token Hook 先于可见增量投影的顺序。
+        let mut events = Vec::new();
+        if let Some(telemetry_event) = self.provider_request_telemetry.observe_first_token() {
+            events.push(ExecutionStreamEvent::ProviderRequestTelemetry(
+                telemetry_event,
+            ));
+        }
+        events.push(ExecutionStreamEvent::ThinkingDelta {
             session_id,
             delta: visible_delta,
-        })
+        });
+        events
     }
 
     /// Applies one provider output delta and emits the pending thinking-completed event before the visible output delta when needed.
@@ -212,7 +252,16 @@ impl RuntimeStreamDeltaState {
         session_id: SessionId,
         delta: String,
     ) -> Vec<ExecutionStreamEvent> {
+        // events preserves the first-token Hook before visible output projection.
+        // events 保留首 Token Hook 先于可见输出投影的顺序。
         let mut events = Vec::new();
+        if !delta.is_empty()
+            && let Some(telemetry_event) = self.provider_request_telemetry.observe_first_token()
+        {
+            events.push(ExecutionStreamEvent::ProviderRequestTelemetry(
+                telemetry_event,
+            ));
+        }
         self.core_controller.record_output(delta.clone());
         if let Some(thinking_completed_event) = self.complete_pending_thinking(session_id) {
             events.push(thinking_completed_event);
@@ -229,6 +278,7 @@ impl RuntimeStreamDeltaState {
         session_id: SessionId,
         event: RuntimeEvent,
     ) -> Vec<ExecutionStreamEvent> {
+        self.provider_request_telemetry.observe_first_event();
         let mut events = Vec::new();
         if is_provider_tool_boundary_runtime_event(&event) {
             if let Some(thinking_completed_event) = self.complete_pending_thinking(session_id) {
@@ -321,27 +371,51 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
             state.latest_request_snapshot = Some(snapshot.clone());
             state.provider_request_count = state.provider_request_count.saturating_add(1);
-            vec![
+            // events begins with telemetry so an effect Hook can observe the request before UI timing markers.
+            // events 以遥测开始，使 Effect Hook 能在界面计时标记前观测请求。
+            let mut events = state
+                .provider_request_telemetry
+                .start_request(&snapshot)
+                .into_iter()
+                .map(ExecutionStreamEvent::ProviderRequestTelemetry)
+                .collect::<Vec<_>>();
+            events.extend([
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
                     session_id,
                     snapshot,
                 },
                 ExecutionStreamEvent::RequestReady { session_id },
                 ExecutionStreamEvent::RequestStarted { session_id },
-            ]
+            ]);
+            events
         }
         Ok(ProviderStreamDelta::WireRequest(request_json)) => {
             state.latest_wire_request_json = Some(request_json);
             vec![ExecutionStreamEvent::WireRequestReady { session_id }]
         }
-        Ok(ProviderStreamDelta::Thinking(delta)) => state
-            .process_thinking_delta(session_id, delta)
-            .into_iter()
-            .collect(),
+        Ok(ProviderStreamDelta::Thinking(delta)) => state.process_thinking_delta(session_id, delta),
         Ok(ProviderStreamDelta::Output(delta)) => state.process_output_delta(session_id, delta),
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
             state.process_runtime_event(session_id, event)
         }
+        Ok(ProviderStreamDelta::RequestFailed {
+            will_retry,
+            retry_number,
+            max_retries,
+            delay_ms,
+            error_category,
+        }) => state
+            .provider_request_telemetry
+            .complete_failure(
+                will_retry,
+                retry_number,
+                max_retries,
+                delay_ms,
+                &error_category,
+            )
+            .into_iter()
+            .map(ExecutionStreamEvent::ProviderRequestTelemetry)
+            .collect(),
         Ok(ProviderStreamDelta::LoweringRepair(event)) => {
             vec![ExecutionStreamEvent::ProviderLoweringRepair { session_id, event }]
         }
@@ -350,20 +424,37 @@ pub(crate) fn process_provider_stream_delta(
             last_successful_provider_usage,
         )) => {
             state.final_conversation_state = Some(conversation_state.clone());
-            if let Some(usage) = last_successful_provider_usage {
+            if let Some(ref usage) = last_successful_provider_usage {
                 state.last_successful_provider_usage = Some(usage.clone());
-                state.record_successful_provider_usage_checkpoint(&conversation_state, &usage);
+                state.record_successful_provider_usage_checkpoint(&conversation_state, usage);
             }
-            vec![ExecutionStreamEvent::ConversationCheckpoint {
+            // events closes the active physical request before publishing its replayable checkpoint.
+            // events 在发布可回放检查点前关闭活动真实请求。
+            let mut events = state
+                .provider_request_telemetry
+                .complete_success(last_successful_provider_usage.as_ref())
+                .map(ExecutionStreamEvent::ProviderRequestTelemetry)
+                .into_iter()
+                .collect::<Vec<_>>();
+            events.push(ExecutionStreamEvent::ConversationCheckpoint {
                 session_id,
                 conversation_state,
                 last_successful_provider_usage: state.last_successful_provider_usage.clone(),
                 provider_request_count: state.provider_request_count(),
-            }]
+            });
+            events
         }
         Err(error) => {
+            // telemetryEvents closes a request when an adapter error bypassed the typed failure delta.
+            // telemetryEvents 在适配器错误绕过类型化失败增量时关闭请求。
+            let telemetry_events = state
+                .provider_request_telemetry
+                .complete_failure(false, 0, 0, 0, "provider_stream_error")
+                .into_iter()
+                .map(ExecutionStreamEvent::ProviderRequestTelemetry)
+                .collect();
             state.terminal_error = Some(error);
-            Vec::new()
+            telemetry_events
         }
     }
 }

@@ -196,6 +196,8 @@ mod mcp_settings;
 mod pending_prompt_services;
 mod pending_prompts;
 mod plugin_services;
+mod plugin_storage;
+mod plugin_ui_events;
 mod project_conversation_services;
 mod project_directories;
 mod provider_settings;

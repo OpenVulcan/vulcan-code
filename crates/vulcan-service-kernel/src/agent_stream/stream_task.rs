@@ -78,6 +78,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         webui_trace("stream_task_entered", format!("session={session_id}"));
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut reached_finished_event = false;
+        // providerTelemetryGuard closes an active physical request even when this task future is aborted.
+        // providerTelemetryGuard 即使当前任务 Future 被中止，也会关闭活动真实请求。
+        let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(task_state.clone());
         let intervention_started_at = current_unix_millis_value();
         let prompt_ai_tool_configuration = request.ai_tool_configuration.clone();
         let prompt_intervention = build_webui_prompt_intervention(
@@ -196,6 +199,9 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     ) {
                         eprintln!("[webui-service] provider request checkpoint failed: {error}");
                     }
+                }
+                ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+                    provider_telemetry_guard.forward(event);
                 }
                 ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
                     if let Err(error) = record_webui_provider_lowering_repair(

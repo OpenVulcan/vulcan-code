@@ -950,16 +950,15 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
             Err(error) => vec![error.to_string()],
         }
     };
-    if !enabled {
-        if let Err(error) = system_plugin_runtime
+    if !enabled
+        && let Err(error) = system_plugin_runtime
             .invoke_lifecycle(
                 stable_plugin_id,
                 vulcan_plugin_runtime::SystemPluginLifecycleEvent::Disable,
             )
             .await
-        {
-            cleanup_failures.push(format!("插件停用生命周期回调失败：{error}"));
-        }
+    {
+        cleanup_failures.push(format!("插件停用生命周期回调失败：{error}"));
     }
     let effective_configuration = provider_configuration_from_state(&state)?;
     let final_catalog = system_plugin_runtime

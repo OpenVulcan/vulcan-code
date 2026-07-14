@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": 1 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "execution_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": ["string", "null"] },
+    "workspace_id": { "type": "string", "minLength": 1 },
+    "owner_kind": { "enum": ["main_agent", "subagent", "context_compaction", "git_commit_summary"] },
+    "owner_id": { "type": "string", "minLength": 1 },
+    "owner_name": { "type": "string", "minLength": 1 },
+    "provider_key": { "type": "string", "minLength": 1 },
+    "provider_name": { "type": "string", "minLength": 1 },
+    "model_key": { "type": "string", "minLength": 1 },
+    "model_name": { "type": "string", "minLength": 1 },
+    "attempt_index": { "type": "integer", "minimum": 0 },
+    "retry_count": { "type": "integer", "minimum": 0 },
+    "started_at_ms": { "type": "integer" },
+    "first_token_at_ms": { "type": "integer" },
+    "time_to_first_token_ms": { "type": "integer", "minimum": 0 }
+  },
+  "required": ["schema_version", "request_id", "execution_id", "session_id", "project_id", "workspace_id", "owner_kind", "owner_id", "owner_name", "provider_key", "provider_name", "model_key", "model_name", "attempt_index", "retry_count", "started_at_ms", "first_token_at_ms", "time_to_first_token_ms"],
+  "additionalProperties": false
+}

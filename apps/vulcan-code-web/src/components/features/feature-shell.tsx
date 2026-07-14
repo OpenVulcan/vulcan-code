@@ -22,7 +22,10 @@ import {
   type SkillHeaderBusyActionId,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea"
-import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types"
+import {
+  findEnabledPluginDetailMount,
+  isPluginDetailSubArea,
+} from "@/components/features/skills/skill-area-types"
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import {
   type MemoryActionProps,
@@ -111,7 +114,10 @@ function FeatureShell(props: {
   // activeSkillSubArea 保持左侧菜单与右侧技能页签同步。
   const [activeSkillSubArea, setActiveSkillSubArea] = React.useState<SkillSubAreaId>("catalog")
   React.useEffect(() => {
-    if (activeSkillSubArea === "rtk" && !hasEnabledPluginDetailMount(props.workbench.plugins, "vulcan-rtk")) {
+    if (
+      isPluginDetailSubArea(activeSkillSubArea)
+      && !findEnabledPluginDetailMount(props.workbench.plugins, activeSkillSubArea)
+    ) {
       setActiveSkillSubArea("plugins")
     }
   }, [activeSkillSubArea, props.workbench.plugins])
@@ -215,7 +221,7 @@ function FeatureShell(props: {
   // skillHeaderSummary stores the active skill page title and compact metrics.
   // skillHeaderSummary 保存当前技能页标题与紧凑统计。
   const skillHeaderSummary = props.activeArea === "skills"
-    ? activeSkillHeaderSummary(activeSkillSubArea, props.workbench, t)
+    ? activeSkillHeaderSummary(activeSkillSubArea, props.workbench, locale, t)
     : null
   // agentsHeaderSummary stores the independent Agents page title and compact metrics.
   // agentsHeaderSummary 保存独立智能体页面标题与紧凑统计。

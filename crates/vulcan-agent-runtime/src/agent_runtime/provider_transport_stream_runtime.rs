@@ -239,6 +239,18 @@ where
                         {
                             completed_retries += 1;
                             let delay_ms = decision.delay.as_millis() as u64;
+                            // failedRequestDelta closes the exact physical request before the retry wait begins.
+                            // failedRequestDelta 在重试等待开始前关闭精确的真实请求。
+                            let failed_request_delta = ProviderStreamDelta::RequestFailed {
+                                will_retry: true,
+                                retry_number: decision.retry_number,
+                                max_retries: decision.max_retries,
+                                delay_ms,
+                                error_category: String::from("retryable_provider_transport_error"),
+                            };
+                            if task_sender.send(Ok(failed_request_delta)).is_err() {
+                                break;
+                            }
                             let retry_event = crate::agent_runtime::events::RuntimeEvent::new(
                                 crate::agent_runtime::events::RuntimeEventKind::Retrying,
                                 "Provider 自动重试",
@@ -271,6 +283,16 @@ where
 
                         let last_successful_provider_usage =
                             controller.last_successful_provider_usage().cloned();
+                        // failedRequestDelta closes the exact physical request before terminal stream teardown.
+                        // failedRequestDelta 在终态流清理前关闭精确的真实请求。
+                        let failed_request_delta = ProviderStreamDelta::RequestFailed {
+                            will_retry: false,
+                            retry_number: 0,
+                            max_retries: completed_retries,
+                            delay_ms: 0,
+                            error_category: String::from("provider_transport_error"),
+                        };
+                        let _ = task_sender.send(Ok(failed_request_delta));
                         // Preserve only the controller snapshot before the terminal error is reported.
                         // 只保留终态错误上报前的控制器快照，避免把损坏调用的流式输出写入上下文。
                         // final_delta preserves the last valid controller state only when its message identities remain canonical.

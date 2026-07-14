@@ -63,6 +63,30 @@ pub(crate) fn host_hook_point_descriptors() -> Vec<HookPointDescriptor> {
         )
         .with_default_scope(HookScope::Session),
         HookPointDescriptor::new(
+            crate::agent_runtime::provider_request_telemetry::HOOK_PROVIDER_REQUEST_STARTED,
+            [HookMode::Observe, HookMode::Effect],
+            "Runs after one physical Provider API request starts.",
+        )
+        .with_default_scope(HookScope::Session),
+        HookPointDescriptor::new(
+            crate::agent_runtime::provider_request_telemetry::HOOK_PROVIDER_RESPONSE_FIRST_TOKEN,
+            [HookMode::Observe, HookMode::Effect],
+            "Runs after one physical Provider response exposes its first visible token.",
+        )
+        .with_default_scope(HookScope::Session),
+        HookPointDescriptor::new(
+            crate::agent_runtime::provider_request_telemetry::HOOK_PROVIDER_REQUEST_COMPLETED,
+            [HookMode::Observe, HookMode::Effect],
+            "Runs after one physical Provider API request reaches its terminal state.",
+        )
+        .with_default_scope(HookScope::Session),
+        HookPointDescriptor::new(
+            crate::agent_runtime::provider_request_telemetry::HOOK_PROVIDER_REQUEST_RETRYING,
+            [HookMode::Observe, HookMode::Effect],
+            "Runs while the Provider transport waits before an automatic retry.",
+        )
+        .with_default_scope(HookScope::Session),
+        HookPointDescriptor::new(
             HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE,
             [HookMode::Transform],
             "Transforms one shell command before the host launches its process.",

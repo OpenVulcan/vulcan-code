@@ -6,14 +6,26 @@ import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mou
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { SystemPluginsPanel } from "./system-plugins-panel"
-import type { SkillActionProps, SkillHeaderSummary, SkillSubAreaId } from "./skill-area-types"
+import {
+  findEnabledPluginDetailMount,
+  localizedPluginCapability,
+  localizedPluginMountLabel,
+  type SkillActionProps,
+  type SkillHeaderSummary,
+  type SkillSubAreaId,
+} from "./skill-area-types"
 
 export { LuaSkillInstallDialog }
 export type { SkillActionProps, SkillHeaderBusyActionId, SkillHeaderSummary, SkillSubAreaId } from "./skill-area-types"
 
 // activeSkillHeaderSummary returns the title and metrics for the current skill sub page.
 // activeSkillHeaderSummary 返回当前技能子页面的标题与统计。
-export function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): SkillHeaderSummary {
+export function activeSkillHeaderSummary(
+  activeTab: SkillSubAreaId,
+  workbench: WorkbenchSnapshot,
+  locale: string,
+  t: ReturnType<typeof useI18n>["t"],
+): SkillHeaderSummary {
   if (activeTab === "settings") {
     return {
       title: t("skills.navigation.luaSettings"),
@@ -32,10 +44,13 @@ export function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: W
       }),
     }
   }
-  if (activeTab === "rtk") {
+  // pluginSelection resolves a dynamic manifest-owned detail page without plugin-specific branches.
+  // pluginSelection 解析动态清单自有详情页，不包含插件专用分支。
+  const pluginSelection = findEnabledPluginDetailMount(workbench.plugins, activeTab)
+  if (pluginSelection) {
     return {
-      title: t("skills.navigation.rtkSettings"),
-      detail: t("skills.header.rtkDetail"),
+      title: localizedPluginMountLabel(pluginSelection, locale),
+      detail: localizedPluginCapability(pluginSelection.plugin, locale),
     }
   }
   const visibleToolCount = workbench.luaSkills.skills.reduce((count, skill) => count + skill.entryCount, 0)
@@ -65,17 +80,9 @@ export function SkillsArea(props: {
   // 包含 LuaSkills 目录与运行时设置的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  // rtkPlugin is the exact enabled built-in plugin that owns the dedicated RTK settings entry.
-  // rtkPlugin 是拥有独立 RTK 设置入口的精确已启用内建插件。
-  const rtkPlugin = props.workbench.plugins.find((plugin) => (
-    plugin.id === "vulcan-rtk"
-    && plugin.available
-    && plugin.enabled
-    && plugin.runtimeState === "enabled"
-  )) ?? null
-  // rtkMount is the plugin-declared integrated detail mount rendered by the dedicated menu entry.
-  // rtkMount 是由独立菜单入口渲染的插件声明式集成详情挂载点。
-  const rtkMount = rtkPlugin?.extension?.uiMounts.find((mount) => mount.point === "skillsPluginDetail") ?? null
+  // pluginSelection is the exact enabled dynamic page selected by the host navigation.
+  // pluginSelection 是宿主导航选中的精确已启用动态页面。
+  const pluginSelection = findEnabledPluginDetailMount(props.workbench.plugins, props.activeTab)
   return (
     <section className="skill-management-surface">
       {props.activeTab === "catalog" ? (
@@ -94,9 +101,9 @@ export function SkillsArea(props: {
           catalog={props.workbench.luaSkills}
         />
       ) : null}
-      {rtkPlugin && rtkMount ? (
-        <div hidden={props.activeTab !== "rtk"} key="vulcan-rtk-settings">
-          <DynamicPluginMountPanel mount={rtkMount} plugin={rtkPlugin} />
+      {pluginSelection ? (
+        <div key={pluginSelection.subAreaId}>
+          <DynamicPluginMountPanel mount={pluginSelection.mount} plugin={pluginSelection.plugin} />
         </div>
       ) : null}
     </section>

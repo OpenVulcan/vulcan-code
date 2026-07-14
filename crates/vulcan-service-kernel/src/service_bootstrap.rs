@@ -28,6 +28,7 @@ use vulcan_service_api::{
     ServiceEvent, ServiceEventEmitter, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
     WorkbenchSnapshot,
 };
+use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
 use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, WorkbenchRuntimeProjection,
@@ -245,8 +246,14 @@ fn run_service_bootstrap(
         luaskills_catalog.skills.len(),
         luaskills_catalog.entry_count
     ));
-    let (system_plugin_runtime, system_plugin_catalog) =
-        prepare_system_plugin_runtime(&luaskills_runtime, &provider_configuration, &mut logs)?;
+    let (system_plugin_runtime, system_plugin_catalog) = prepare_system_plugin_runtime(
+        &luaskills_runtime,
+        &provider_configuration,
+        &controller_runtime,
+        runtime.handle().clone(),
+        event_emitter.clone(),
+        &mut logs,
+    )?;
     // pluginPrewarmTask overlaps the cold System VM creation cost with independent token-budget and MCP initialization.
     // pluginPrewarmTask 将冷启动 System VM 的创建成本与独立的 Token 预算及 MCP 初始化并行重叠。
     let plugin_prewarm_runtime = system_plugin_runtime.clone();
@@ -772,7 +779,8 @@ fn run_service_bootstrap(
 /// # Parameters
 /// 参数
 /// `luaskills_runtime` supplies the shared engine, `provider_configuration` supplies enable overrides, and `logs` records migration outcomes.
-/// `luaskills_runtime` 提供共享引擎，`provider_configuration` 提供启用覆盖，`logs` 记录迁移结果。
+/// `luaskills_runtime` supplies the shared engine, `provider_configuration` supplies enable overrides, `controller_runtime` supplies storage, `service_runtime` bridges async calls, and `logs` records migration outcomes.
+/// `luaskills_runtime` 提供共享引擎，`provider_configuration` 提供启用覆盖，`controller_runtime` 提供存储，`service_runtime` 桥接异步调用，`logs` 记录迁移结果。
 ///
 /// # Returns
 /// 返回值
@@ -781,6 +789,9 @@ fn run_service_bootstrap(
 fn prepare_system_plugin_runtime(
     luaskills_runtime: &vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle,
     provider_configuration: &ProviderConfigurationFile,
+    controller_runtime: &ControllerRuntimeHandle,
+    service_runtime: tokio::runtime::Handle,
+    event_emitter: ServiceEventEmitter,
     logs: &mut Vec<String>,
 ) -> Result<
     (
@@ -817,6 +828,11 @@ fn prepare_system_plugin_runtime(
             ),
         )
     })?;
+    // pluginStateRoot is shared by the manager metadata and Controller-backed data isolation.
+    // pluginStateRoot 由管理器元数据与 Controller 后端数据隔离共同使用。
+    let plugin_state_root = runtime_assets::resolve_user_plugin_state_root().ok_or_else(|| {
+        ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件状态根目录。")
+    })?;
     let system_plugin_runtime = vulcan_plugin_runtime::SystemPluginRuntimeManager::new(
         Arc::clone(&luaskills_runtime.engine),
         bundled_plugin_root,
@@ -832,9 +848,7 @@ fn prepare_system_plugin_runtime(
                 "未找到 Vulcan 共享 Python/Node 发行根目录。",
             )
         })?,
-        runtime_assets::resolve_user_plugin_state_root().ok_or_else(|| {
-            ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件状态根目录。")
-        })?,
+        plugin_state_root.clone(),
         runtime_assets::resolve_user_plugin_runtime_root().ok_or_else(|| {
             ServiceBootstrapError::new(
                 "plugins",
@@ -843,6 +857,30 @@ fn prepare_system_plugin_runtime(
             )
         })?,
     );
+    // storageService routes plugin database calls through the already-connected shared Controller client.
+    // storageService 通过已连接的共享 Controller 客户端路由插件数据库调用。
+    let storage_service = Arc::new(crate::plugin_storage::ControllerPluginStorageService::new(
+        controller_runtime.client.clone(),
+        service_runtime,
+        plugin_state_root,
+    ));
+    // uiEventPublisher forwards revision-only invalidations through existing service event sinks.
+    // uiEventPublisher 通过现有服务事件接收器转发仅含修订号的失效通知。
+    let ui_event_publisher = Arc::new(crate::plugin_ui_events::ServicePluginUiEventPublisher::new(
+        event_emitter,
+    ));
+    system_plugin_runtime
+        .install_host_services(vulcan_plugin_runtime::SystemPluginHostServices {
+            storage: Some(storage_service),
+            ui_events: Some(ui_event_publisher),
+        })
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "plugins",
+                "System Plugins",
+                format!("安装系统插件宿主服务失败：{error}"),
+            )
+        })?;
     let system_plugin_catalog = system_plugin_runtime
         .refresh_catalog(
             &provider_configuration.luaskills.disabled_system_plugins,

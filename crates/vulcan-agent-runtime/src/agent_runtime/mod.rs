@@ -36,6 +36,7 @@ pub mod provider_request_preview;
 pub mod provider_request_snapshot_builder;
 pub mod provider_request_snapshot_preview;
 pub mod provider_request_snapshot_support;
+pub mod provider_request_telemetry;
 pub mod provider_request_turn_snapshot;
 pub mod provider_runtime_context;
 pub mod provider_runtime_dispatch;

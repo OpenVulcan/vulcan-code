@@ -3,9 +3,11 @@
 
 mod atomic_file;
 mod catalog;
+mod host_services;
 mod manifest;
 mod runtime;
 
 pub use catalog::*;
+pub use host_services::*;
 pub use manifest::*;
 pub use runtime::*;

@@ -1,9 +1,25 @@
 import * as React from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/shared/status";
+import {
+  ActivityHeatmap,
+  ActivityHeatmapLegend,
+  ChartLegend,
+  EmptyState,
+  ErrorState,
+  MetricCard,
+  SelectControl,
+  TimeSeriesLineChart,
+} from "@/components/plugins/plugin-host-components";
 import { useI18n } from "@/i18n";
 import { loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
 import { invokePluginAction, loadPluginUiModule } from "@/service/skills-actions-service";
+import {
+  latestPluginUiInvalidationRevision,
+  subscribePluginUiInvalidation,
+} from "@/service/plugin-ui-events";
 import type { PluginSummary } from "@/types";
 
 // PluginUiSdk is the stable host context exposed to one authorized dynamic plugin module.
@@ -24,13 +40,60 @@ interface PluginUiSdk {
     // Shared Vulcan badge component.
     // Vulcan 共享徽标组件。
     Badge: typeof Badge;
+    // Shared Vulcan button component.
+    // Vulcan 共享按钮组件。
+    Button: typeof Button;
     // Shared Vulcan status component.
     // Vulcan 共享状态组件。
     StatusPill: typeof StatusPill;
+    // Shared host KPI card component.
+    // 共享宿主 KPI 卡片组件。
+    MetricCard: typeof MetricCard;
+    // Shared host select control.
+    // 共享宿主下拉控件。
+    SelectControl: typeof SelectControl;
+    // Shared host calendar activity heatmap.
+    // 共享宿主日历活动热力图。
+    ActivityHeatmap: typeof ActivityHeatmap;
+    // Shared host activity intensity legend.
+    // 共享宿主活动强度图例。
+    ActivityHeatmapLegend: typeof ActivityHeatmapLegend;
+    // Shared host responsive multi-series line chart.
+    // 共享宿主响应式多序列折线图。
+    TimeSeriesLineChart: typeof TimeSeriesLineChart;
+    // Shared host chart legend.
+    // 共享宿主图表图例。
+    ChartLegend: typeof ChartLegend;
+    // Shared host empty state.
+    // 共享宿主空状态。
+    EmptyState: typeof EmptyState;
+    // Shared host error state.
+    // 共享宿主错误状态。
+    ErrorState: typeof ErrorState;
+  };
+  // Revision-only event utilities keep plugin UI data synchronized without carrying business payloads.
+  // 仅含修订号的事件工具在不携带业务载荷的前提下同步插件界面数据。
+  events: {
+    // Subscribes to one current-plugin invalidation topic and returns synchronous cleanup.
+    // 订阅一个当前插件失效主题并返回同步清理函数。
+    subscribe: (topic: string, listener: (revision: number) => void) => () => void;
+    // Returns the highest revision already observed for one current-plugin topic.
+    // 返回一个当前插件主题已观测到的最高修订号。
+    latestRevision: (topic: string) => number;
   };
   // Formats one numeric value through the active host locale.
   // 使用当前宿主语言格式化单个数值。
   formatNumber: (value: number) => string;
+  // Host notifications let plugins report bounded user-initiated action results.
+  // 宿主通知允许插件报告有边界的用户发起操作结果。
+  notifications: {
+    // Shows one successful operation toast.
+    // 显示一条操作成功 Toast。
+    success: (message: string) => void;
+    // Shows one failed operation toast.
+    // 显示一条操作失败 Toast。
+    error: (message: string) => void;
+  };
   // Resolves one plugin-owned localized message with an explicit source fallback.
   // 使用明确的源码回退解析一条插件自有本地化文案。
   t: (key: string, fallback: string) => string;
@@ -101,8 +164,28 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       invokePluginAction<Result>(props.plugin.id, actionId, argumentsValue, props.workspacePath)
     ),
     locale,
-    components: { Badge, StatusPill },
+    components: {
+      Badge,
+      Button,
+      StatusPill,
+      MetricCard,
+      SelectControl,
+      ActivityHeatmap,
+      ActivityHeatmapLegend,
+      TimeSeriesLineChart,
+      ChartLegend,
+      EmptyState,
+      ErrorState,
+    },
+    events: {
+      subscribe: (topic, listener) => subscribePluginUiInvalidation(props.plugin.id, topic, listener),
+      latestRevision: (topic) => latestPluginUiInvalidationRevision(props.plugin.id, topic),
+    },
     formatNumber: (value: number) => new Intl.NumberFormat(locale).format(value),
+    notifications: {
+      success: (message: string) => toast.success(message),
+      error: (message: string) => toast.error(message),
+    },
   }), [locale, props.plugin.id, props.workspacePath]);
 
   React.useEffect(() => {

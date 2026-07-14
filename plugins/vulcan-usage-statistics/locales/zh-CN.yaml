@@ -1,0 +1,103 @@
+name: Vulcan 用量统计
+capability: Provider API 用量、延迟、可靠性与 Token 统计
+messages:
+  navigationLabel: 使用统计
+  title: API 使用统计
+  subtitle: 按模型与代理归属统计真实 Provider 请求，不保存提示词、输出、请求头或凭据。
+  status.ready: 统计可用
+  status.loading: 正在读取
+  status.error: 统计加载失败
+  refresh: 刷新
+  refreshing: 刷新中
+  settings.title: 采集设置
+  settings.enabled: 启用统计功能
+  settings.enabledSuccess: 统计功能已启用
+  settings.disabledSuccess: 统计功能已关闭
+  settings.retention: 日志保留时长
+  settings.retentionDays: "{{days}} 天"
+  settings.retentionPermanent: 永久
+  settings.retentionSuccess: 日志保留时长已更新
+  settings.range: 默认时间范围
+  settings.metric: 默认趋势指标
+  settings.save: 保存设置
+  settings.saving: 保存中
+  settings.saved: 已保存
+  range.7: 最近 7 天
+  range.30: 最近 30 天
+  range.90: 最近 90 天
+  range.365: 最近 365 天
+  range.0: 累计
+  range.label: 时间范围
+  owner.label: 请求归属
+  owner.all: 全部归属
+  owner.main_agent: 主代理
+  owner.subagent: 子代理
+  owner.context_compaction: 上下文压缩
+  owner.git_commit_summary: Git 提交摘要
+  metric.total_tokens: Token 用量
+  metric.input_tokens: 输入 Token
+  metric.output_tokens: 输出 Token
+  metric.requests: 请求次数
+  metric.duration_ms: 平均耗时
+  metric.time_to_first_token_ms: 平均首 Token
+  metric.label: 趋势指标
+  summary.tokens: Token 用量
+  summary.inputTokens: 输入 Token
+  summary.outputTokens: 输出 Token
+  summary.cachedTokens: 缓存输入 Token
+  summary.requests: 请求次数
+  summary.retries: "{{count}} 次重试"
+  summary.successRate: 成功率
+  summary.firstToken: 平均首 Token
+  summary.averageDuration: 平均请求时长
+  summary.activeDays: 活跃天数
+  summary.streak: 当前连续天数
+  summary.longestStreak: 最长连续 {{days}} 天
+  summary.cacheRate: 缓存命中率
+  summary.peakTokens: 峰值日 Token
+  summary.peakRequest: "{{count}} / 次请求"
+  summary.longestRequest: 最长请求时长
+  summary.mainAgentTokens: 主代理 Token
+  summary.subagentTokens: 子代理 Token
+  summary.internalTokens: 内部任务 Token
+  summary.topModel: 最常用模型
+  summary.expand: 展开更多
+  summary.collapse: 收起
+  heatmap.title: 活动热力图
+  heatmap.aria: 最近 365 天 Token 活动点阵图
+  heatmap.empty: 暂无 Token 活动
+  heatmap.tooltip: "{{date}}：{{value}} Token · {{requests}} 次请求 · 成功率 {{successRate}} · {{model}}"
+  heatmap.noModel: 无模型
+  heatmap.less: 较少
+  heatmap.more: 较多
+  trend.title: 按天趋势
+  trend.aria: 按模型分组的每日统计折线图
+  trend.empty: 当前范围暂无趋势数据
+  models.title: 模型用量
+  models.top: "前 {{count}}"
+  models.tokens: "{{count}} Token"
+  models.requests: "{{count}} 次请求"
+  models.empty: 当前范围暂无模型用量
+  errors.title: 失败类型
+  errors.count: 次失败
+  errors.empty: 当前范围没有失败请求
+  recent.title: 最近请求
+  recent.empty: 暂无原始请求记录
+  recent.model: 模型
+  recent.owner: 归属
+  recent.status: 状态
+  recent.tokens: Token
+  recent.tokenBreakdown: 明细（输入/输出/缓存）
+  recent.speed: 输出速度
+  recent.inputTokens: 输入
+  recent.cachedTokens: 缓存
+  recent.outputTokens: 输出
+  recent.firstToken: 首 Token
+  recent.duration: 耗时
+  recent.time: 时间
+  status.succeeded: 成功
+  status.failed: 失败
+  status.cancelled: 已取消
+  other: 其他
+  unit.days: 天
+  privacy: 原始请求仅保留统计字段；模型维度与每日聚合永久保留，即使模型已从配置删除也不会丢失。

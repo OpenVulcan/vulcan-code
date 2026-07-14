@@ -1,0 +1,103 @@
+name: Vulcan Usage Statistics
+capability: Provider API usage, latency, reliability, and token statistics
+messages:
+  navigationLabel: Usage Statistics
+  title: API Usage Statistics
+  subtitle: Measures physical Provider requests by model and owner without storing prompts, outputs, headers, or credentials.
+  status.ready: Statistics available
+  status.loading: Loading statistics
+  status.error: Statistics failed to load
+  refresh: Refresh
+  refreshing: Refreshing
+  settings.title: Capture settings
+  settings.enabled: Enable statistics
+  settings.enabledSuccess: Statistics enabled
+  settings.disabledSuccess: Statistics disabled
+  settings.retention: Log retention
+  settings.retentionDays: "{{days}} days"
+  settings.retentionPermanent: Permanent
+  settings.retentionSuccess: Log retention updated
+  settings.range: Default time range
+  settings.metric: Default trend metric
+  settings.save: Save settings
+  settings.saving: Saving
+  settings.saved: Saved
+  range.7: Last 7 days
+  range.30: Last 30 days
+  range.90: Last 90 days
+  range.365: Last 365 days
+  range.0: All time
+  range.label: Time range
+  owner.label: Request owner
+  owner.all: All owners
+  owner.main_agent: Main agent
+  owner.subagent: Subagent
+  owner.context_compaction: Context compaction
+  owner.git_commit_summary: Git commit summary
+  metric.total_tokens: Token usage
+  metric.input_tokens: Input tokens
+  metric.output_tokens: Output tokens
+  metric.requests: Requests
+  metric.duration_ms: Average duration
+  metric.time_to_first_token_ms: Average first token
+  metric.label: Trend metric
+  summary.tokens: Token usage
+  summary.inputTokens: Input tokens
+  summary.outputTokens: Output tokens
+  summary.cachedTokens: Cached input tokens
+  summary.requests: Requests
+  summary.retries: "{{count}} retries"
+  summary.successRate: Success rate
+  summary.firstToken: Average first token
+  summary.averageDuration: Average duration
+  summary.activeDays: Active days
+  summary.streak: Current streak
+  summary.longestStreak: Longest streak {{days}} days
+  summary.cacheRate: Cache hit rate
+  summary.peakTokens: Peak daily tokens
+  summary.peakRequest: "{{count}} per request"
+  summary.longestRequest: Longest request
+  summary.mainAgentTokens: Main agent tokens
+  summary.subagentTokens: Subagent tokens
+  summary.internalTokens: Internal task tokens
+  summary.topModel: Most used model
+  summary.expand: Show more
+  summary.collapse: Show less
+  heatmap.title: Activity heatmap
+  heatmap.aria: Token activity heatmap for the last 365 days
+  heatmap.empty: No token activity yet
+  heatmap.tooltip: "{{date}}: {{value}} tokens · {{requests}} requests · {{successRate}} success · {{model}}"
+  heatmap.noModel: No model
+  heatmap.less: Less
+  heatmap.more: More
+  trend.title: Daily trend
+  trend.aria: Daily statistics line chart grouped by model
+  trend.empty: No trend data in this range
+  models.title: Model usage
+  models.top: "Top {{count}}"
+  models.tokens: "{{count}} tokens"
+  models.requests: "{{count}} requests"
+  models.empty: No model usage in this range
+  errors.title: Failure categories
+  errors.count: failures
+  errors.empty: No failures in this range
+  recent.title: Recent requests
+  recent.empty: No raw request records yet
+  recent.model: Model
+  recent.owner: Owner
+  recent.status: Status
+  recent.tokens: Tokens
+  recent.tokenBreakdown: Details (input/output/cached)
+  recent.speed: Output speed
+  recent.inputTokens: Input
+  recent.cachedTokens: Cached
+  recent.outputTokens: Output
+  recent.firstToken: First token
+  recent.duration: Duration
+  recent.time: Time
+  status.succeeded: Succeeded
+  status.failed: Failed
+  status.cancelled: Cancelled
+  other: Other
+  unit.days: days
+  privacy: Raw requests retain statistics fields only. Model dimensions and daily aggregates persist even after a model is removed from configuration.

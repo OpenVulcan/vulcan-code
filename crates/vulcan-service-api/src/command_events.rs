@@ -115,6 +115,22 @@ pub struct SessionAddonChangedEvent {
     pub source_instance_id: Option<String>,
 }
 
+/// Describes one plugin-scoped UI data invalidation without carrying business data.
+/// 描述一次不携带业务数据的插件作用域界面数据失效。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginUiInvalidatedEvent {
+    /// Exact plugin identity owning the invalidation topic.
+    /// 拥有失效主题的精确插件身份。
+    pub plugin_id: String,
+    /// Plugin-local invalidation topic.
+    /// 插件内失效主题。
+    pub topic: String,
+    /// Monotonic plugin data revision.
+    /// 单调递增的插件数据修订号。
+    pub revision: u64,
+}
+
 /// Represents one event emitted from the local service bridge.
 /// 表示本地服务桥接层发出的单个事件。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -132,6 +148,9 @@ pub enum ServiceEvent {
     /// Session addon namespace change event.
     /// 会话附属状态命名空间变更事件。
     SessionAddonChanged(Box<SessionAddonChangedEvent>),
+    /// Plugin UI data invalidation event.
+    /// 插件界面数据失效事件。
+    PluginUiInvalidated(Box<PluginUiInvalidatedEvent>),
 }
 
 /// Receives one service event emitted by the Core Service boundary.

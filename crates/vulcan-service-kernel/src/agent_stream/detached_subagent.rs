@@ -69,6 +69,9 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
     );
     spawn_service_task(async move {
         let mut record_ids = SessionStreamingRecordIds::default();
+        // providerTelemetryGuard survives for the complete detached child-event subscription.
+        // providerTelemetryGuard 在完整分离子事件订阅期间保持存活。
+        let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(state.clone());
         let mut stream = Box::pin(
             agent_runtime
                 .task_runtime
@@ -91,6 +94,7 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
                 task_id,
                 &execution_id,
                 &mut record_ids,
+                &mut provider_telemetry_guard,
                 event,
             )
             .await
@@ -112,6 +116,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
     task_id: SessionId,
     execution_id: &str,
     record_ids: &mut SessionStreamingRecordIds,
+    provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
     event: DetachedTaskRuntimeEvent,
 ) -> Result<(), String> {
     let listener_is_current = state
@@ -136,6 +141,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 agent_runtime,
                 execution_id,
                 record_ids,
+                provider_telemetry_guard,
                 event,
             )
             .await
@@ -566,11 +572,16 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
     agent_runtime: &AgentRuntimeBridge,
     execution_id: &str,
     record_ids: &mut SessionStreamingRecordIds,
+    provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
     event: ExecutionStreamEvent,
 ) -> Result<(), String> {
     match event {
         ExecutionStreamEvent::Prepared(_) => Ok(()),
         ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => Ok(()),
+        ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+            provider_telemetry_guard.forward(event);
+            Ok(())
+        }
         ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
             record_webui_provider_lowering_repair(controller_runtime, session_id, event)
         }

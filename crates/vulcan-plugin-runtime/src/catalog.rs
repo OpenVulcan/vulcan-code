@@ -1000,6 +1000,26 @@ fn validate_manifest_identity(
     for mount in &manifest.ui.mounts {
         validate_identifier(&mount.id, "UI mount id")?;
         validate_lua_identifier(&mount.export, "UI mount export")?;
+        if mount
+            .label
+            .as_ref()
+            .is_some_and(|label| label.trim().is_empty())
+        {
+            return Err(format!(
+                "Plugin UI mount `{}` label must not be empty.",
+                mount.id
+            ));
+        }
+        if mount
+            .label_message_key
+            .as_ref()
+            .is_some_and(|key| key.trim().is_empty())
+        {
+            return Err(format!(
+                "Plugin UI mount `{}` label_message_key must not be empty.",
+                mount.id
+            ));
+        }
         if !mount_ids.insert(mount.id.as_str()) {
             return Err(format!("Duplicate plugin UI mount id `{}`.", mount.id));
         }

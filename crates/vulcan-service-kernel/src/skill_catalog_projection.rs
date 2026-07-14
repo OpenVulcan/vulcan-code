@@ -5,8 +5,8 @@ use super::*;
 use vulcan_agent_runtime::runtime_assets;
 use vulcan_plugin_runtime::{
     SystemPluginAvailability, SystemPluginCatalogSnapshot, SystemPluginPackageOrigin,
-    SystemPluginRuntimeState, SystemPluginUiMountPoint, load_vulcan_plugin_catalog,
-    plugin_capability_key,
+    SystemPluginRuntimeState, SystemPluginUiMountIcon, SystemPluginUiMountPoint,
+    load_vulcan_plugin_catalog, plugin_capability_key,
 };
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
@@ -189,6 +189,28 @@ pub(crate) fn plugins_from_luaskills(
                                 SystemPluginUiMountPoint::ConversationRightPanel => {
                                     String::from("conversationRightPanel")
                                 }
+                            },
+                            label: mount
+                                .label
+                                .clone()
+                                .unwrap_or_else(|| manifest.display.name.clone()),
+                            label_by_locale: plugin
+                                .locales
+                                .iter()
+                                .map(|(locale, localized)| {
+                                    let label = mount
+                                        .label_message_key
+                                        .as_deref()
+                                        .and_then(|key| localized.messages.get(key))
+                                        .cloned()
+                                        .unwrap_or_else(|| localized.name.clone());
+                                    (locale.clone(), label)
+                                })
+                                .collect(),
+                            icon: match mount.icon {
+                                SystemPluginUiMountIcon::Plugin => String::from("plugin"),
+                                SystemPluginUiMountIcon::Route => String::from("route"),
+                                SystemPluginUiMountIcon::Chart => String::from("chart"),
                             },
                             export_name: mount.export.clone(),
                         })

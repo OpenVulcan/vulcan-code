@@ -30,6 +30,25 @@ pub(crate) enum ProviderStreamDelta {
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
+    /// Terminal failure metadata for the currently active physical Provider request.
+    /// 当前活动真实 Provider 请求的终态失败元数据。
+    RequestFailed {
+        /// Whether the transport will start another attempt.
+        /// 传输层是否会开始另一次尝试。
+        will_retry: bool,
+        /// One-based retry number, or zero when no retry follows.
+        /// 从一开始的重试序号；不继续重试时为零。
+        retry_number: u32,
+        /// Configured retry ceiling.
+        /// 配置的重试上限。
+        max_retries: u32,
+        /// Retry delay in milliseconds, or zero when no retry follows.
+        /// 重试延迟毫秒数；不继续重试时为零。
+        delay_ms: u64,
+        /// Stable redacted failure category.
+        /// 稳定脱敏失败类别。
+        error_category: String,
+    },
     /// Provider lowering repair, downgrade, or rejection emitted for runtime audit.
     /// 为运行时审计发出的 Provider 转换修复、降级或拒绝事件。
     LoweringRepair(RuntimeProviderLoweringRepairEvent),

@@ -4,6 +4,7 @@
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::RuntimeEvent;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
+use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryContext;
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
 use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntime};
@@ -98,6 +99,10 @@ pub(crate) fn build_runtime_stream_launch_payload(
     let turn_start_mode = runtime_stream_turn_start_mode_for_request(request);
     let effective_prompt =
         controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot);
+    // providerTelemetryContext captures model and owner facts before preparation moves into the launch payload.
+    // providerTelemetryContext 在执行准备移入启动载荷前捕获模型与归属事实。
+    let provider_telemetry_context =
+        ProviderRequestTelemetryContext::from_preparation(&bootstrap.preparation);
     RuntimeStreamLaunch {
         task_execution_context,
         session_id: request.session_id,
@@ -115,7 +120,8 @@ pub(crate) fn build_runtime_stream_launch_payload(
         warnings: bootstrap.warnings,
         system_preamble: bootstrap.system_preamble,
         core_snapshot: bootstrap.core_snapshot,
-        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller),
+        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller)
+            .with_provider_request_telemetry_context(provider_telemetry_context),
         lowering_repair_events: bootstrap.lowering_repair_events,
     }
 }

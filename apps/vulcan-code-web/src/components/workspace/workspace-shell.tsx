@@ -125,7 +125,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const sidebar = useSidebar();
   // t translates shared workspace chrome labels.
   // t 翻译共享工作区外壳标签。
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   // shellRef measures the available workspace width for automatic panel collapse.
   // shellRef 测量工作台可用宽度，用于自动折叠面板。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
@@ -684,7 +684,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   );
   // skillHeaderSummary stores the active skills page title detail for descriptor generation.
   // skillHeaderSummary 保存当前技能页 descriptor 使用的标题详情。
-  const skillHeaderSummary = activeSkillHeaderSummary(props.activeSkillSubArea, props.workbench, t);
+  const skillHeaderSummary = activeSkillHeaderSummary(props.activeSkillSubArea, props.workbench, locale, t);
   // agentsHeaderSummary stores the independent Agents page title detail for descriptor generation.
   // agentsHeaderSummary 保存独立智能体页 descriptor 使用的标题详情。
   const agentsHeaderSummary = activeAgentsHeaderSummary(props.workbench, t);
@@ -782,7 +782,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         workbench={props.workbench}
       />
     ),
-    detail: `${skillSubAreaLabel(props.activeSkillSubArea, t)} · ${skillHeaderSummary.detail}`,
+    detail: `${skillSubAreaLabel(props.activeSkillSubArea, props.workbench, locale, t)} · ${skillHeaderSummary.detail}`,
     headerActions: skillHeaderActions,
     title: t("workspaceShell.skillsTitle"),
     toolPanels: [{

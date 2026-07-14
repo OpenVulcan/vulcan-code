@@ -1,4 +1,5 @@
 import type {
+  PluginUiInvalidatedEvent,
   SessionAddonChangedEvent,
   StartupSnapshot,
   WorkbenchDeltaEnvelope,
@@ -55,7 +56,8 @@ type BrowserServiceEvent =
   | { kind: "startup"; payload: StartupSnapshot }
   | { kind: "workbench"; payload: WorkbenchSnapshot }
   | { kind: "workbenchDelta"; payload: WorkbenchDeltaEnvelope }
-  | { kind: "sessionAddonChanged"; payload: SessionAddonChangedEvent };
+  | { kind: "sessionAddonChanged"; payload: SessionAddonChangedEvent }
+  | { kind: "pluginUiInvalidated"; payload: PluginUiInvalidatedEvent };
 
 // EVENT_KIND_TO_TOPIC maps service event kinds to protocol topics.
 // EVENT_KIND_TO_TOPIC 将服务事件类型映射为协议主题。
@@ -64,6 +66,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   workbench: "workbench",
   workbenchDelta: "workbench.delta",
   sessionAddonChanged: "session.addon.changed",
+  pluginUiInvalidated: "plugin.ui.invalidated",
 };
 
 // BrowserServiceTransport talks to the local service through HTTP RPC and WebSocket events.

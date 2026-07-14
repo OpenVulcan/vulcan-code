@@ -53,7 +53,10 @@ import type {
   SkillActionProps,
   SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
-import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types";
+import {
+  findEnabledPluginDetailMount,
+  isPluginDetailSubArea,
+} from "@/components/features/skills/skill-area-types";
 import type {
   MemorySubAreaId,
 } from "@/components/features/memory/MemoryArea";
@@ -255,11 +258,6 @@ export function WorkbenchLayout(props: {
   // activeWorkbenchSkillSubArea stores the embedded skills settings sub page.
   // activeWorkbenchSkillSubArea 保存内嵌技能设置的子页面。
   const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("catalog");
-  React.useEffect(() => {
-    if (activeWorkbenchSkillSubArea === "rtk" && !hasEnabledPluginDetailMount(props.workbench.plugins, "vulcan-rtk")) {
-      setActiveWorkbenchSkillSubArea("plugins");
-    }
-  }, [activeWorkbenchSkillSubArea, props.workbench.plugins]);
   // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
   // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
   const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("status");
@@ -310,6 +308,14 @@ export function WorkbenchLayout(props: {
   const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(
     () => workbenchWithSubagentSurfaceMessageCache(props.workbench, subagentSurfaceMessageCacheRef.current),
   );
+  React.useEffect(() => {
+    if (
+      isPluginDetailSubArea(activeWorkbenchSkillSubArea)
+      && !findEnabledPluginDetailMount(workbenchState.plugins, activeWorkbenchSkillSubArea)
+    ) {
+      setActiveWorkbenchSkillSubArea("plugins");
+    }
+  }, [activeWorkbenchSkillSubArea, workbenchState.plugins]);
   // acceptedWorkbenchRevisionRef tracks the highest service revision accepted by any state entrypoint.
   // acceptedWorkbenchRevisionRef 跟踪任意状态入口已接受的最高服务版本。
   const acceptedWorkbenchRevisionRef = React.useRef(workbenchState.revision ?? 0);

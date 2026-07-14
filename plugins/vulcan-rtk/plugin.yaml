@@ -74,6 +74,9 @@ ui:
   mounts:
     - id: settings-and-statistics
       point: skills_plugin_detail
+      label: RTK Settings
+      label_message_key: navigationLabel
+      icon: route
       entry: ui/index.mjs
       export: createPluginPanel
 hooks:

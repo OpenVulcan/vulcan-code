@@ -4,9 +4,11 @@
 use crate::{
     SYSTEM_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS, SYSTEM_PLUGIN_SESSION_ID_ARGUMENT,
     SystemPluginAvailability, SystemPluginCapability, SystemPluginCatalogSnapshot,
-    SystemPluginDependencyInstallMode, SystemPluginHookDescriptor, SystemPluginManifest,
-    SystemPluginPackageOrigin, SystemPluginRuntimeState, SystemPluginToolDescriptor,
-    SystemPluginToolExecutionKind, inspect_user_plugin_package, load_vulcan_plugin_catalog,
+    SystemPluginDependencyInstallMode, SystemPluginHookDescriptor, SystemPluginHostServices,
+    SystemPluginManifest, SystemPluginPackageOrigin, SystemPluginRuntimeState,
+    SystemPluginStorageOperation, SystemPluginStorageRequest, SystemPluginToolDescriptor,
+    SystemPluginToolExecutionKind, SystemPluginUiInvalidation, inspect_user_plugin_package,
+    load_vulcan_plugin_catalog,
 };
 use luaskills::{
     LuaEngine, ManagedRuntimeKind, PackageDependencyManifest, RuntimeHostToolAction,
@@ -15,6 +17,7 @@ use luaskills::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -51,6 +54,61 @@ const VULCAN_PLUGIN_CONFIG_GET_TOOL: &str = "vulcan.plugin.config.get";
 /// Fixed host-tool name used by a plugin bundle to update its own configuration.
 /// 插件 bundle 用于更新自身配置的固定宿主工具名称。
 const VULCAN_PLUGIN_CONFIG_UPDATE_TOOL: &str = "vulcan.plugin.config.update";
+
+/// Fixed host-tool name used to apply one ordered SQLite migration.
+/// 用于应用一组有序 SQLite 迁移的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_SQLITE_MIGRATE_TOOL: &str = "vulcan.plugin.storage.sqlite.migrate";
+
+/// Fixed host-tool name used to execute one SQLite statement.
+/// 用于执行一条 SQLite 语句的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_TOOL: &str = "vulcan.plugin.storage.sqlite.execute";
+
+/// Fixed host-tool name used to execute one SQLite statement batch.
+/// 用于执行一组 SQLite 语句的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_BATCH_TOOL: &str =
+    "vulcan.plugin.storage.sqlite.execute_batch";
+
+/// Fixed host-tool name used to query isolated plugin SQLite rows.
+/// 用于查询隔离插件 SQLite 行的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_SQLITE_QUERY_TOOL: &str = "vulcan.plugin.storage.sqlite.query";
+
+/// Fixed host-tool name used to flush isolated plugin SQLite writes.
+/// 用于刷新隔离插件 SQLite 写入的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_SQLITE_FLUSH_TOOL: &str = "vulcan.plugin.storage.sqlite.flush";
+
+/// Fixed host-tool name used to create one isolated LanceDB table.
+/// 用于创建一张隔离 LanceDB 表的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_LANCEDB_CREATE_TABLE_TOOL: &str =
+    "vulcan.plugin.storage.lancedb.create_table";
+
+/// Fixed host-tool name used to upsert isolated LanceDB rows.
+/// 用于写入或更新隔离 LanceDB 行的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_LANCEDB_UPSERT_TOOL: &str = "vulcan.plugin.storage.lancedb.upsert";
+
+/// Fixed host-tool name used to search one isolated LanceDB table.
+/// 用于检索一张隔离 LanceDB 表的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_LANCEDB_SEARCH_TOOL: &str = "vulcan.plugin.storage.lancedb.search";
+
+/// Fixed host-tool name used to delete isolated LanceDB rows.
+/// 用于删除隔离 LanceDB 行的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_LANCEDB_DELETE_TOOL: &str = "vulcan.plugin.storage.lancedb.delete";
+
+/// Fixed host-tool name used to drop one isolated LanceDB table.
+/// 用于删除一张隔离 LanceDB 表的固定宿主工具名称。
+const VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL: &str =
+    "vulcan.plugin.storage.lancedb.drop_table";
+
+/// Fixed host-tool name used to invalidate current plugin UI data.
+/// 用于使当前插件界面数据失效的固定宿主工具名称。
+const VULCAN_PLUGIN_UI_INVALIDATE_TOOL: &str = "vulcan.plugin.ui.invalidate";
+
+/// Borrowed or normalized object payload received through the fixed plugin bridge.
+/// 通过固定插件桥接层收到的借用或规范化对象载荷。
+type SystemPluginBridgePayload<'a> = Cow<'a, Map<String, Value>>;
+
+/// Authenticated plugin identity paired with its validated bridge payload.
+/// 经过认证的插件身份及其已校验桥接载荷。
+type SystemPluginBridgeIdentityPayload<'a> = (&'a str, SystemPluginBridgePayload<'a>);
 
 /// Process-wide manager registry used by the single LuaSkills host-tool callback.
 /// 单一 LuaSkills 宿主工具回调使用的进程级管理器注册表。
@@ -541,6 +599,9 @@ struct SystemPluginManagerState {
     /// User-owned root containing isolated plugin dependency environments.
     /// 包含隔离插件依赖环境的用户自有根目录。
     plugin_runtime_root: PathBuf,
+    /// Host services installed by the surrounding application runtime.
+    /// 由外围应用运行时安装的宿主服务。
+    host_services: RwLock<SystemPluginHostServices>,
     /// Current immutable catalog snapshot.
     /// 当前不可变目录快照。
     snapshot: RwLock<Arc<SystemPluginCatalogSnapshot>>,
@@ -741,6 +802,7 @@ impl SystemPluginRuntimeManager {
                 managed_runtime_distribution_root,
                 plugin_state_root,
                 plugin_runtime_root,
+                host_services: RwLock::new(SystemPluginHostServices::default()),
                 snapshot: RwLock::new(snapshot),
                 next_revision: AtomicU64::new(1),
                 next_request_id: AtomicU64::new(1),
@@ -759,6 +821,30 @@ impl SystemPluginRuntimeManager {
         };
         manager.install_host_tool_bridge();
         manager
+    }
+
+    /// Installs the current application-owned services used by authorized plugin bridge calls.
+    /// 安装当前应用持有且供已授权插件桥接调用使用的服务。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `services` contains optional storage and UI event implementations.
+    /// `services` 包含可选的存储与界面事件实现。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns unit after atomic publication or a lock diagnostic.
+    /// 原子发布后返回空值，否则返回锁诊断。
+    pub fn install_host_services(&self, services: SystemPluginHostServices) -> Result<(), String> {
+        // hostServicesGuard serializes publication without holding the lock during service calls.
+        // hostServicesGuard 负责串行发布，服务调用期间不会持有此锁。
+        let mut host_services_guard = self
+            .state
+            .host_services
+            .write()
+            .map_err(|_| "Vulcan plugin host services lock is poisoned.".to_string())?;
+        *host_services_guard = services;
+        Ok(())
     }
 
     /// Installs the process-wide LuaSkills host-tool callback for the fixed plugin bridge.
@@ -3912,12 +3998,34 @@ fn dispatch_plugin_host_tool_request(
             VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL,
             VULCAN_PLUGIN_CONFIG_GET_TOOL,
             VULCAN_PLUGIN_CONFIG_UPDATE_TOOL,
+            VULCAN_PLUGIN_STORAGE_SQLITE_MIGRATE_TOOL,
+            VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_TOOL,
+            VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_BATCH_TOOL,
+            VULCAN_PLUGIN_STORAGE_SQLITE_QUERY_TOOL,
+            VULCAN_PLUGIN_STORAGE_SQLITE_FLUSH_TOOL,
+            VULCAN_PLUGIN_STORAGE_LANCEDB_CREATE_TABLE_TOOL,
+            VULCAN_PLUGIN_STORAGE_LANCEDB_UPSERT_TOOL,
+            VULCAN_PLUGIN_STORAGE_LANCEDB_SEARCH_TOOL,
+            VULCAN_PLUGIN_STORAGE_LANCEDB_DELETE_TOOL,
+            VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL,
+            VULCAN_PLUGIN_UI_INVALIDATE_TOOL,
         ])),
         RuntimeHostToolAction::Has => Ok(json!(matches!(
             request.tool_name.as_deref(),
             Some(VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL)
                 | Some(VULCAN_PLUGIN_CONFIG_GET_TOOL)
                 | Some(VULCAN_PLUGIN_CONFIG_UPDATE_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_SQLITE_MIGRATE_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_BATCH_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_SQLITE_QUERY_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_SQLITE_FLUSH_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_CREATE_TABLE_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_UPSERT_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_SEARCH_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_DELETE_TOOL)
+                | Some(VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL)
+                | Some(VULCAN_PLUGIN_UI_INVALIDATE_TOOL)
         ))),
         RuntimeHostToolAction::Call => {
             let state = weak_state
@@ -3958,6 +4066,12 @@ fn dispatch_plugin_host_tool_request(
                         .update_plugin_config(plugin_id, value)
                         .map_err(|error| error.message)
                 }
+                Some(tool_name) if plugin_storage_operation(tool_name).is_some() => {
+                    dispatch_plugin_storage_request(&state, tool_name, &request.args)
+                }
+                Some(VULCAN_PLUGIN_UI_INVALIDATE_TOOL) => {
+                    dispatch_plugin_ui_invalidation(&state, &request.args)
+                }
                 _ => Err(format!(
                     "Unsupported Vulcan plugin host tool `{}`.",
                     request.tool_name.as_deref().unwrap_or("<missing>")
@@ -3969,6 +4083,161 @@ fn dispatch_plugin_host_tool_request(
             }))
         }
     }
+}
+
+/// Maps one fixed storage host-tool name to its exact operation.
+/// 将一个固定存储宿主工具名称映射到精确操作。
+///
+/// # Parameters
+/// 参数
+/// `tool_name` is the untrusted requested host-tool name.
+/// `tool_name` 是不受信任的请求宿主工具名称。
+///
+/// # Returns
+/// 返回值
+/// Returns the exact operation for a registered storage tool.
+/// 对已注册存储工具返回精确操作。
+fn plugin_storage_operation(tool_name: &str) -> Option<SystemPluginStorageOperation> {
+    match tool_name {
+        VULCAN_PLUGIN_STORAGE_SQLITE_MIGRATE_TOOL => {
+            Some(SystemPluginStorageOperation::SqliteMigrate)
+        }
+        VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_TOOL => {
+            Some(SystemPluginStorageOperation::SqliteExecute)
+        }
+        VULCAN_PLUGIN_STORAGE_SQLITE_EXECUTE_BATCH_TOOL => {
+            Some(SystemPluginStorageOperation::SqliteExecuteBatch)
+        }
+        VULCAN_PLUGIN_STORAGE_SQLITE_QUERY_TOOL => Some(SystemPluginStorageOperation::SqliteQuery),
+        VULCAN_PLUGIN_STORAGE_SQLITE_FLUSH_TOOL => Some(SystemPluginStorageOperation::SqliteFlush),
+        VULCAN_PLUGIN_STORAGE_LANCEDB_CREATE_TABLE_TOOL => {
+            Some(SystemPluginStorageOperation::LanceDbCreateTable)
+        }
+        VULCAN_PLUGIN_STORAGE_LANCEDB_UPSERT_TOOL => {
+            Some(SystemPluginStorageOperation::LanceDbUpsert)
+        }
+        VULCAN_PLUGIN_STORAGE_LANCEDB_SEARCH_TOOL => {
+            Some(SystemPluginStorageOperation::LanceDbSearch)
+        }
+        VULCAN_PLUGIN_STORAGE_LANCEDB_DELETE_TOOL => {
+            Some(SystemPluginStorageOperation::LanceDbDelete)
+        }
+        VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL => {
+            Some(SystemPluginStorageOperation::LanceDbDropTable)
+        }
+        _ => None,
+    }
+}
+
+/// Dispatches one capability-checked storage request without exposing host binding metadata.
+/// 分发一条经过能力校验且不暴露宿主绑定元数据的存储请求。
+///
+/// # Parameters
+/// 参数
+/// `state` owns host services, `tool_name` selects the operation, and `request_args` carries bridge identity.
+/// `state` 持有宿主服务，`tool_name` 选择操作，`request_args` 携带桥接身份。
+///
+/// # Returns
+/// 返回值
+/// Returns the JSON-safe storage result.
+/// 返回 JSON 安全的存储结果。
+fn dispatch_plugin_storage_request(
+    state: &Arc<SystemPluginManagerState>,
+    tool_name: &str,
+    request_args: &Value,
+) -> Result<Value, String> {
+    // storageOperation is fixed by the registered host-tool name.
+    // storageOperation 由已注册的宿主工具名称固定决定。
+    let storage_operation = plugin_storage_operation(tool_name)
+        .ok_or_else(|| format!("Unsupported Vulcan plugin storage tool `{tool_name}`."))?;
+    // pluginIdentity and payload are extracted only from the trusted bridge envelope.
+    // pluginIdentity 与 payload 仅从可信桥接信封中提取。
+    let (plugin_identity, payload) = bridge_request_identity_and_payload(request_args)?;
+    // leaseScope binds capability checks to the exact runtime lifecycle state.
+    // leaseScope 将能力校验绑定到精确运行时生命周期状态。
+    let lease_scope = bridge_request_lease_scope(request_args)?;
+    // requiredCapability prevents SQLite and LanceDB permissions from substituting for each other.
+    // requiredCapability 防止 SQLite 与 LanceDB 权限彼此替代。
+    let required_capability = if storage_operation.is_sqlite() {
+        SystemPluginCapability::StorageSqlite
+    } else {
+        SystemPluginCapability::StorageLancedb
+    };
+    ensure_plugin_capability(state, plugin_identity, required_capability, lease_scope)?;
+    // storageService is cloned before invocation so no runtime service lock crosses the call boundary.
+    // storageService 在调用前克隆，避免运行时服务锁跨越调用边界。
+    let storage_service = state
+        .host_services
+        .read()
+        .map_err(|_| "Vulcan plugin host services lock is poisoned.".to_string())?
+        .storage
+        .clone()
+        .ok_or_else(|| "Vulcan plugin storage service is unavailable.".to_string())?;
+    storage_service.execute(SystemPluginStorageRequest {
+        plugin_id: plugin_identity.to_string(),
+        operation: storage_operation,
+        payload: Value::Object(payload.into_owned()),
+    })
+}
+
+/// Publishes one capability-checked plugin UI invalidation event.
+/// 发布一条经过能力校验的插件界面失效事件。
+///
+/// # Parameters
+/// 参数
+/// `state` owns host services and `request_args` carries bridge identity and event data.
+/// `state` 持有宿主服务，`request_args` 携带桥接身份与事件数据。
+///
+/// # Returns
+/// 返回值
+/// Returns an acknowledgement object after publication.
+/// 发布后返回确认对象。
+fn dispatch_plugin_ui_invalidation(
+    state: &Arc<SystemPluginManagerState>,
+    request_args: &Value,
+) -> Result<Value, String> {
+    // pluginIdentity and payload are extracted only from the trusted bridge envelope.
+    // pluginIdentity 与 payload 仅从可信桥接信封中提取。
+    let (plugin_identity, payload) = bridge_request_identity_and_payload(request_args)?;
+    // leaseScope binds capability checks to the exact runtime lifecycle state.
+    // leaseScope 将能力校验绑定到精确运行时生命周期状态。
+    let lease_scope = bridge_request_lease_scope(request_args)?;
+    ensure_plugin_capability(
+        state,
+        plugin_identity,
+        SystemPluginCapability::UiHostContext,
+        lease_scope,
+    )?;
+    // topic is plugin-local and cannot address another plugin channel.
+    // topic 属于插件内部，不能寻址其他插件通道。
+    let topic = payload
+        .get("topic")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or_else(|| {
+            "Vulcan plugin UI invalidation requires a topic of 1 to 128 bytes.".to_string()
+        })?;
+    // revision is a monotonic plugin-owned data version.
+    // revision 是插件持有的单调数据版本。
+    let revision = payload
+        .get("revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Vulcan plugin UI invalidation requires u64 revision.".to_string())?;
+    // uiEventPublisher is cloned before invocation so no runtime service lock crosses the call boundary.
+    // uiEventPublisher 在调用前克隆，避免运行时服务锁跨越调用边界。
+    let ui_event_publisher = state
+        .host_services
+        .read()
+        .map_err(|_| "Vulcan plugin host services lock is poisoned.".to_string())?
+        .ui_events
+        .clone()
+        .ok_or_else(|| "Vulcan plugin UI event publisher is unavailable.".to_string())?;
+    ui_event_publisher.publish(SystemPluginUiInvalidation {
+        plugin_id: plugin_identity.to_string(),
+        topic: topic.to_string(),
+        revision,
+    })?;
+    Ok(json!({ "published": true }))
 }
 
 /// Requires one enabled plugin to declare an exact authorized host capability.
@@ -4130,15 +4399,20 @@ fn canonical_bridge_workspace_root(request: &Map<String, Value>) -> Result<PathB
 /// 返回插件标识与载荷对象。
 fn bridge_request_identity_and_payload(
     request_args: &Value,
-) -> Result<(&str, &Map<String, Value>), String> {
+) -> Result<SystemPluginBridgeIdentityPayload<'_>, String> {
     let request = request_args
         .as_object()
         .ok_or_else(|| "Vulcan plugin host request must be an object.".to_string())?;
     let plugin_id = required_json_string(request, "plugin_id")?;
-    let payload = request
-        .get("payload")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "Vulcan plugin host request requires object field `payload`.".to_string())?;
+    // payload borrows ordinary objects and normalizes only Lua's ambiguous empty-table encoding.
+    // payload 借用普通对象，并且仅规范化 Lua 存在歧义的空表编码。
+    let payload = match request.get("payload") {
+        Some(Value::Object(payload)) => Cow::Borrowed(payload),
+        Some(Value::Array(payload)) if payload.is_empty() => Cow::Owned(Map::new()),
+        _ => {
+            return Err("Vulcan plugin host request requires object field `payload`.".to_string());
+        }
+    };
     Ok((plugin_id, payload))
 }
 
@@ -5403,6 +5677,8 @@ pub fn plugin_capability_key(capability: SystemPluginCapability) -> &'static str
         SystemPluginCapability::ModelCatalogRead => "model_catalog_read",
         SystemPluginCapability::ModelInvoke => "model_invoke",
         SystemPluginCapability::DependencyRegistryNetwork => "dependency_registry_network",
+        SystemPluginCapability::StorageSqlite => "storage_sqlite",
+        SystemPluginCapability::StorageLancedb => "storage_lancedb",
     }
 }
 
@@ -5845,12 +6121,197 @@ fn current_unix_millis_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SystemPluginStorageService, SystemPluginUiEventPublisher};
     use luaskills::{LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};
     use std::fs;
     use vulcan_hooks::{
         HookActor, HookCapabilitySet, HookContext, HookMode, HookPayload, HookRegistration,
         HookScope,
     };
+
+    /// RecordingStorageService simulates the host database boundary for real plugin Lua tests.
+    /// RecordingStorageService 为真实插件 Lua 测试模拟宿主数据库边界。
+    #[derive(Default)]
+    struct RecordingStorageService {
+        /// Ordered authenticated storage calls received from the fixed bridge.
+        /// 从固定桥接层收到的有序已认证存储调用。
+        calls: Mutex<Vec<SystemPluginStorageRequest>>,
+    }
+
+    impl SystemPluginStorageService for RecordingStorageService {
+        /// Records one request and returns deterministic rows required by the statistics Hook.
+        /// 记录一条请求，并返回统计 Hook 所需的确定性数据行。
+        ///
+        /// # Parameters
+        /// 参数
+        /// `request` is the authenticated fixed-bridge storage operation.
+        /// `request` 是经过认证的固定桥接存储操作。
+        ///
+        /// # Returns
+        /// 返回值
+        /// Returns deterministic migration, write, and query envelopes.
+        /// 返回确定性的迁移、写入与查询信封。
+        fn execute(&self, request: SystemPluginStorageRequest) -> Result<Value, String> {
+            // sql is captured before the request moves into the ordered assertion log.
+            // sql 在请求移入有序断言日志前被提取。
+            let sql = request
+                .payload
+                .get("sql")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            // operation selects the exact production response shape expected by bridge.lua.
+            // operation 选择 bridge.lua 期望的精确生产响应形状。
+            let operation = request.operation;
+            self.calls
+                .lock()
+                .expect("lock recording storage calls")
+                .push(request);
+            match operation {
+                SystemPluginStorageOperation::SqliteMigrate => {
+                    Ok(json!({"applied": true, "version": 1}))
+                }
+                SystemPluginStorageOperation::SqliteExecute => Ok(json!({"affected_rows": 1})),
+                SystemPluginStorageOperation::SqliteQuery
+                    if sql.contains("SELECT model_ref FROM models") =>
+                {
+                    Ok(json!({"rows": [{"model_ref": 1}], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery
+                    if sql.contains("FROM statistics_meta") =>
+                {
+                    Ok(json!({"rows": [{"revision": 1}], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery
+                    if sql.contains("COALESCE(SUM(request_count)") =>
+                {
+                    Ok(json!({"rows": [{
+                        "requests": 1,
+                        "successes": 1,
+                        "failures": 0,
+                        "cancelled": 0,
+                        "retries": 0,
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                        "reasoningTokens": 5,
+                        "totalTokens": 35,
+                        "cachedInputTokens": 4,
+                        "cacheCreationInputTokens": 2,
+                        "durationMs": 500,
+                        "averageDurationMs": 500,
+                        "mainAgentTokens": 35,
+                        "subagentTokens": 0,
+                        "internalTokens": 0,
+                        "longestRequestMs": 500,
+                        "peakRequestTokens": 35,
+                        "averageFirstTokenMs": 120,
+                        "activeDays": 1
+                    }], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery if sql.contains("WITH active AS") => {
+                    Ok(json!({"rows": [{
+                        "longestStreakDays": 1,
+                        "currentStreakDays": 1
+                    }], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery if sql.contains("WITH filtered AS") => {
+                    Ok(json!({"rows": [{
+                        "date": "2026-07-14",
+                        "value": 35,
+                        "requests": 1,
+                        "successes": 1,
+                        "topProviderName": "Provider One",
+                        "topModelName": "Model One"
+                    }], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery if sql.contains("MAX(daily_tokens)") => {
+                    Ok(json!({"rows": [{"peakDailyTokens": 35}], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery if sql.contains("WITH ranked AS") => {
+                    Ok(json!({"rows": [{
+                        "date": "2026-07-14",
+                        "seriesRef": 1,
+                        "seriesKey": "provider-1/model-1",
+                        "label": "Model One",
+                        "value": 10
+                    }], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery
+                    if sql.contains("JOIN models m ON m.model_ref = d.model_ref") =>
+                {
+                    Ok(json!({"rows": [{
+                        "modelRef": 1,
+                        "providerKey": "provider-1",
+                        "providerName": "Provider One",
+                        "modelKey": "model-1",
+                        "modelName": "Model One",
+                        "totalTokens": 35,
+                        "requests": 1,
+                        "sharePercent": 100
+                    }], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery
+                    if sql.contains("SELECT e.request_id AS requestId") =>
+                {
+                    Ok(json!({"rows": [{
+                        "requestId": "request-1",
+                        "completedAtMs": 1_500,
+                        "providerName": "Provider One",
+                        "modelName": "Model One",
+                        "ownerKind": "main_agent",
+                        "ownerName": "Main Agent",
+                        "status": "succeeded",
+                        "inputTokens": 10,
+                        "outputTokens": 20,
+                        "totalTokens": 35,
+                        "cachedInputTokens": 4,
+                        "timeToFirstTokenMs": 120,
+                        "durationMs": 500,
+                        "retryCount": 0,
+                        "errorCategory": null,
+                        "errorCode": null
+                    }], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery
+                    if sql.contains("WHERE e.status = 'failed'") =>
+                {
+                    Ok(json!({"rows": [{
+                        "errorCategory": "provider_http",
+                        "errorCode": "429",
+                        "count": 1
+                    }], "row_count": 1}))
+                }
+                SystemPluginStorageOperation::SqliteQuery => {
+                    Ok(json!({"rows": [], "row_count": 0}))
+                }
+                SystemPluginStorageOperation::SqliteFlush => Ok(json!({"flushed": true})),
+                _ => Err(String::from(
+                    "Unexpected storage operation in SQLite Hook test.",
+                )),
+            }
+        }
+    }
+
+    /// RecordingUiEventPublisher captures plugin-scoped revision notifications.
+    /// RecordingUiEventPublisher 捕获插件作用域的修订通知。
+    #[derive(Default)]
+    struct RecordingUiEventPublisher {
+        /// Ordered invalidation events published after durable writes.
+        /// 持久写入后发布的有序失效事件。
+        events: Mutex<Vec<SystemPluginUiInvalidation>>,
+    }
+
+    impl SystemPluginUiEventPublisher for RecordingUiEventPublisher {
+        /// Records one validated plugin invalidation.
+        /// 记录一条已经校验的插件失效通知。
+        fn publish(&self, event: SystemPluginUiInvalidation) -> Result<(), String> {
+            self.events
+                .lock()
+                .expect("lock recording UI events")
+                .push(event);
+            Ok(())
+        }
+    }
 
     /// Writes one hook-only package whose Lua module retains an invocation counter.
     /// 写入一个仅含 hook 的插件包，其 Lua 模块会保留调用计数器。
@@ -6213,6 +6674,393 @@ return M
         assert_eq!(report.closed_hook_runtimes, 1);
         assert_eq!(report.closed_ui_action_runtimes, 1);
         assert!(report.failures.is_empty());
+    }
+
+    /// Verifies the repository usage-statistics plugin manifest, Lua bundle, and configuration action.
+    /// 验证仓库用量统计插件的清单、Lua Bundle 与配置 Action。
+    #[test]
+    fn bundled_usage_statistics_plugin_loads_through_fixed_bridge() {
+        // temp owns the isolated LuaSkills bridge and plugin runtime state.
+        // temp 持有隔离的 LuaSkills 桥接与插件运行时状态。
+        let temp = tempfile::tempdir().expect("create usage statistics plugin test directory");
+        // runtimeRoot is the deterministic manager root for this integration test.
+        // runtimeRoot 是当前集成测试使用的确定性管理器根目录。
+        let runtime_root = temp.path().join("runtime");
+        fs::create_dir_all(&runtime_root).expect("create usage statistics test runtime root");
+        // repositoryRoot is derived from the current crate instead of a process working directory.
+        // repositoryRoot 从当前 Crate 派生，不依赖进程工作目录。
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("resolve repository root");
+        // manager loads the real repository package through the production catalog path.
+        // manager 通过生产目录路径加载真实仓库插件包。
+        let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+        // storage records the exact SQL and parameter protocol emitted by the real Lua bundle.
+        // storage 记录真实 Lua Bundle 发出的精确 SQL 与参数协议。
+        let storage = Arc::new(RecordingStorageService::default());
+        // uiEvents records the revision-only notification emitted after the terminal fact.
+        // uiEvents 记录终态事实写入后发出的仅含修订号通知。
+        let ui_events = Arc::new(RecordingUiEventPublisher::default());
+        manager
+            .install_host_services(SystemPluginHostServices {
+                storage: Some(storage.clone()),
+                ui_events: Some(ui_events.clone()),
+            })
+            .expect("install recording usage statistics host services");
+        // catalog proves the package passed manifest, schema, asset, and locale validation.
+        // catalog 证明插件包已通过清单、Schema、资产与语言包校验。
+        let catalog = manager
+            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+            .expect("load repository plugin catalog");
+        assert!(
+            catalog.plugins.contains_key("vulcan-usage-statistics"),
+            "catalog diagnostics: {:?}",
+            catalog.diagnostics
+        );
+        // runtime executes the real uncompressed Lua bundle deterministically.
+        // runtime 确定性执行真实未压缩 Lua Bundle。
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("create usage statistics Tokio runtime");
+        runtime
+            .block_on(manager.prewarm_plugin_runtime("vulcan-usage-statistics"))
+            .expect("prewarm usage statistics plugin runtime");
+        // settings is the exact host-validated default configuration.
+        // settings 是经宿主精确校验的默认配置。
+        let settings = runtime
+            .block_on(manager.invoke_action(SystemPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("settings-get"),
+                arguments: json!({}),
+                caller: crate::SystemPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("invoke usage statistics settings action");
+        assert_eq!(settings["enabled"], true);
+        assert_eq!(settings["retentionDays"], 180);
+        assert_eq!(settings["defaultRangeDays"], 30);
+        assert_eq!(settings["defaultMetric"], "total_tokens");
+        // permanentSettings validates the zero-day permanent-retention sentinel through the production config boundary.
+        // permanentSettings 通过生产配置边界验证零天永久保留哨兵。
+        let permanent_settings = runtime
+            .block_on(manager.invoke_action(SystemPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("settings-update"),
+                arguments: json!({
+                    "enabled": true,
+                    "retentionDays": 0,
+                    "defaultRangeDays": 30,
+                    "defaultMetric": "total_tokens"
+                }),
+                caller: crate::SystemPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("persist permanent usage statistics retention");
+        assert_eq!(permanent_settings["retentionDays"], 0);
+        // completedHook is the real repository Hook descriptor, including its payload schema.
+        // completedHook 是包含载荷 Schema 的真实仓库 Hook 描述符。
+        let completed_hook = catalog
+            .enabled_hooks
+            .get("system-plugin/vulcan-usage-statistics/provider-request-completed")
+            .cloned()
+            .expect("resolve usage statistics completed Hook");
+        // completedPayload contains every host-owned field required by schema version one.
+        // completedPayload 包含 Schema 版本一要求的全部宿主持有字段。
+        let completed_payload = json!({
+            "schema_version": 1,
+            "request_id": "request-1",
+            "execution_id": "execution-1",
+            "session_id": "session-1",
+            "project_id": "project-1",
+            "workspace_id": repository_root.to_string_lossy(),
+            "owner_kind": "main_agent",
+            "owner_id": "main-agent",
+            "owner_name": "Main Agent",
+            "provider_key": "provider-1",
+            "provider_name": "Provider One",
+            "model_key": "model-1",
+            "model_name": "Model One",
+            "attempt_index": 0,
+            "retry_count": 0,
+            "status": "succeeded",
+            "started_at_ms": 1_000,
+            "first_event_at_ms": 1_100,
+            "first_token_at_ms": 1_120,
+            "completed_at_ms": 1_500,
+            "time_to_first_event_ms": 100,
+            "time_to_first_token_ms": 120,
+            "duration_ms": 500,
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "reasoning_tokens": 5,
+            "total_tokens": 35,
+            "cached_input_tokens": 4,
+            "cache_creation_input_tokens": 2,
+            "finish_reason": "stop",
+            "error_category": null,
+            "error_code": null,
+            "calendar_date": "2026-07-14",
+            "timezone_offset_minutes": 480
+        });
+        // completedInvocation uses the exact runtime context expected by a session-scoped effect Hook.
+        // completedInvocation 使用会话作用域 Effect Hook 期望的精确运行时上下文。
+        let completed_invocation = HookInvocation {
+            registration: HookRegistration::new(
+                completed_hook.registration_id.clone(),
+                "provider.request.completed",
+                HookMode::Effect,
+            ),
+            context: HookContext {
+                run_id: String::from("execution-1"),
+                point: String::from("provider.request.completed"),
+                scope: HookScope::Session,
+                actor: HookActor::new("runtime-test"),
+                workspace_id: Some(repository_root.to_string_lossy().into_owned()),
+                project_id: Some(String::from("project-1")),
+                session_id: Some(String::from("session-1")),
+                conversation_id: Some(String::from("session-1")),
+                user_id: None,
+                capabilities: HookCapabilitySet::default(),
+                metadata: BTreeMap::new(),
+            },
+            payload: HookPayload {
+                value: completed_payload,
+            },
+        };
+        runtime
+            .block_on(manager.invoke_hook(&completed_hook, completed_invocation))
+            .expect("persist one real usage statistics terminal Hook");
+        // recent validates that an omitted optional owner does not mutate shared Lua parameters.
+        // recent 验证省略可选归属时不会修改共享 Lua 参数。
+        let recent = runtime
+            .block_on(manager.invoke_action(SystemPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("recent-get"),
+                arguments: json!({ "limit": 20 }),
+                caller: crate::SystemPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("query recent usage statistics requests");
+        assert!(recent["requests"].is_array());
+        assert_eq!(recent["requests"][0]["requestId"], "request-1");
+        assert!(recent["requests"][0].get("errorCategory").is_none());
+        // dashboard validates the real aggregate SQL path and strict action output schema.
+        // dashboard 验证真实聚合 SQL 路径与严格 Action 输出 Schema。
+        let dashboard = runtime
+            .block_on(manager.invoke_action(SystemPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("dashboard-get"),
+                arguments: json!({
+                    "rangeDays": 30,
+                    "metric": "input_tokens"
+                }),
+                caller: crate::SystemPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("query usage statistics dashboard");
+        assert_eq!(dashboard["summary"]["totalTokens"], 35);
+        assert_eq!(dashboard["heatmap"][0]["topModelName"], "Model One");
+        assert_eq!(dashboard["series"][0]["value"], 10);
+        // groupedErrors validates the same omitted-owner contract after prior action reuse.
+        // groupedErrors 验证此前 Action 复用后的同一省略归属契约。
+        let grouped_errors = runtime
+            .block_on(manager.invoke_action(SystemPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("errors-get"),
+                arguments: json!({
+                    "rangeDays": 30,
+                    "metric": "input_tokens"
+                }),
+                caller: crate::SystemPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("query grouped usage statistics errors");
+        assert!(grouped_errors["errors"].is_array());
+        assert_eq!(
+            grouped_errors["errors"][0]["errorCategory"],
+            "provider_http"
+        );
+        assert_eq!(grouped_errors["errors"][0]["errorCode"], "429");
+        // allTime validates the zero-day sentinel without synthetic date parameters.
+        // allTime 验证零天累计哨兵，且不生成虚假的日期参数。
+        let all_time = runtime
+            .block_on(manager.invoke_action(SystemPluginActionRequest {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                action_id: String::from("dashboard-get"),
+                arguments: json!({
+                    "rangeDays": 0,
+                    "metric": "total_tokens"
+                }),
+                caller: crate::SystemPluginActionCaller::PluginUi,
+                workspace_root: repository_root.to_path_buf(),
+                reuse_enabled_runtime: true,
+            }))
+            .expect("query all-time usage statistics dashboard");
+        assert_eq!(all_time["rangeDays"], 0);
+        // calls proves multi-value statements use numbered placeholders accepted by Controller.
+        // calls 证明多值语句使用 Controller 接受的编号占位符。
+        let calls = storage.calls.lock().expect("read recording storage calls");
+        assert!(
+            !calls.iter().any(|request| request
+                .payload
+                .get("sql")
+                .and_then(Value::as_str)
+                .is_some_and(|sql| sql.contains("DELETE FROM api_request_events"))),
+            "permanent retention must not delete raw request facts"
+        );
+        let model_insert = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| sql.contains("INSERT INTO models"))
+            })
+            .expect("record model dimension insert");
+        assert!(
+            model_insert.payload["sql"]
+                .as_str()
+                .expect("model insert SQL text")
+                .contains("?6")
+        );
+        assert_eq!(
+            model_insert.payload["params"]
+                .as_array()
+                .expect("model insert parameters")
+                .len(),
+            6
+        );
+        let fact_insert = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| sql.contains("INSERT OR IGNORE INTO api_request_events"))
+            })
+            .expect("record request fact insert");
+        assert!(
+            fact_insert.payload["sql"]
+                .as_str()
+                .expect("request fact insert SQL text")
+                .contains("?31")
+        );
+        assert_eq!(
+            fact_insert.payload["params"]
+                .as_array()
+                .expect("request fact insert parameters")
+                .len(),
+            31
+        );
+        // summaryQuery must retain only the date-range parameter after recent-get appends its limit.
+        // summaryQuery 在 recent-get 追加 limit 后仍必须只保留日期范围参数。
+        let summary_query = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| sql.contains("COALESCE(SUM(request_count)"))
+            })
+            .expect("record dashboard summary query");
+        assert_eq!(
+            summary_query.payload["params"]
+                .as_array()
+                .expect("finite dashboard summary parameters")
+                .len(),
+            1
+        );
+        // allTimeSummary is the final summary query and has no range or owner parameters.
+        // allTimeSummary 是最后一条汇总查询，不包含范围或归属参数。
+        let all_time_summary = calls
+            .iter()
+            .rev()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| sql.contains("COALESCE(SUM(request_count)"))
+            })
+            .expect("record all-time dashboard summary query");
+        assert_eq!(
+            all_time_summary.payload["params"]
+                .as_array()
+                .expect("all-time dashboard summary parameters")
+                .len(),
+            0
+        );
+        // errorsQuery also retains only its date-range parameter with no owner filter.
+        // errorsQuery 在无归属筛选时同样只保留日期范围参数。
+        let errors_query = calls
+            .iter()
+            .find(|request| {
+                request
+                    .payload
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sql| sql.contains("WHERE e.status = 'failed'"))
+            })
+            .expect("record grouped errors query");
+        assert_eq!(
+            errors_query.payload["params"]
+                .as_array()
+                .expect("grouped error query parameters")
+                .len(),
+            1
+        );
+        drop(calls);
+        assert_eq!(
+            ui_events
+                .events
+                .lock()
+                .expect("read recording UI events")
+                .as_slice(),
+            &[SystemPluginUiInvalidation {
+                plugin_id: String::from("vulcan-usage-statistics"),
+                topic: String::from("statistics.changed"),
+                revision: 1,
+            }]
+        );
+        // disableReport proves the real plugin can drain its persistent lease before lifecycle cleanup.
+        // disableReport 证明真实插件可在生命周期清理前排空其持久租约。
+        manager
+            .begin_draining("vulcan-usage-statistics")
+            .expect("begin usage statistics plugin draining");
+        let disable_report = runtime
+            .block_on(manager.drain_plugin_sessions("vulcan-usage-statistics"))
+            .expect("drain usage statistics plugin sessions");
+        assert!(disable_report.failures.is_empty());
+        runtime
+            .block_on(manager.invoke_lifecycle(
+                "vulcan-usage-statistics",
+                SystemPluginLifecycleEvent::Disable,
+            ))
+            .expect("invoke usage statistics disable lifecycle");
+        // flushRequest proves an argument-free host call remains an object across the Lua/JSON boundary.
+        // flushRequest 证明无参数宿主调用跨越 Lua/JSON 边界后仍保持对象语义。
+        let flush_request = storage
+            .calls
+            .lock()
+            .expect("read disable lifecycle storage calls")
+            .last()
+            .cloned()
+            .expect("record usage statistics disable flush");
+        assert_eq!(
+            flush_request.operation,
+            SystemPluginStorageOperation::SqliteFlush
+        );
+        assert_eq!(flush_request.payload, json!({}));
     }
 
     /// Verifies the repository RTK plugin executes its action and shell transform through the fixed bridge.

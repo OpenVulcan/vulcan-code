@@ -868,12 +868,12 @@ pub(crate) async fn execute_shell_command_tool(
         request.workspace_root.as_deref(),
         &effective_cwd,
     );
-    let session_id = request.session_id.clone();
+    let session_id = request.session_id;
     let (effective_args, process_options, hook_report) = apply_shell_command_plugin_hooks(
         &parsed_args,
         &effective_cwd,
         request.workspace_root.as_deref(),
-        session_id.clone(),
+        session_id,
         plugin_runtime,
     )
     .await?;

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { ChartNoAxesCombined, Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
@@ -416,9 +416,12 @@ export function SystemPluginsPanel(props: {
           const toggleLabel = plugin.runtimeState === "disabledWithCleanupWarning"
             ? t("skills.plugins.retryCleanup")
             : plugin.desiredEnabled ? t("skills.action.disable") : t("skills.action.enable");
-          // PluginIcon preserves the original RTK route symbol while other plugins retain the generic plugin glyph.
-          // PluginIcon 保留原有 RTK 路由图标，其他插件继续使用通用插件图标。
-          const PluginIcon = plugin.id === "vulcan-rtk" ? Route : Puzzle;
+          // primaryMountIcon is declared by the first plugin-detail mount available on this card.
+          // primaryMountIcon 由当前卡片上首个可用的插件详情挂载点声明。
+          const primaryMountIcon = plugin.extension?.uiMounts.find((mount) => mount.point === "skillsPluginDetail")?.icon ?? "plugin";
+          // PluginIcon maps the stable manifest icon key without special-casing plugin identities.
+          // PluginIcon 映射稳定的清单图标键，不对插件身份进行特判。
+          const PluginIcon = primaryMountIcon === "route" ? Route : primaryMountIcon === "chart" ? ChartNoAxesCombined : Puzzle;
           return (
             <article className="agent-definition-row system-plugin-definition-row" key={plugin.id}>
               <div className="agent-definition-row-icon" aria-hidden="true">

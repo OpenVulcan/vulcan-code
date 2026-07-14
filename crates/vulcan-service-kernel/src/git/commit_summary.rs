@@ -30,7 +30,10 @@ use super::model::{
     GitCommitSummaryGenerateRequest, GitCommitSummaryGenerateResponse, GitCommitSummaryInput,
 };
 use super::settings::resolve_git_commit_summary_model;
-use crate::{AgentRuntimeBridge, SharedServiceBridgeState, active_reasoning_selection_effort};
+use crate::{
+    AgentRuntimeBridge, ProviderTelemetryHookGuard, SharedServiceBridgeState,
+    active_reasoning_selection_effort,
+};
 
 /// Generates a Git commit message through the configured internal summary model.
 /// 通过已配置的内部总结模型生成 Git 提交信息。
@@ -109,6 +112,7 @@ pub(crate) async fn service_generate_git_commit_message(
         agent_runtime.token_budget_runtime.estimator(),
     );
     let report = run_git_commit_summary_model(
+        state.clone(),
         agent_runtime,
         session_id,
         &request.workspace_path,
@@ -513,6 +517,7 @@ fn estimate_git_commit_prompt_tokens(
 /// Runs the internal provider request that generates a Git commit message.
 /// 执行生成 Git 提交信息的内部 Provider 请求。
 async fn run_git_commit_summary_model(
+    state: SharedServiceBridgeState,
     agent_runtime: AgentRuntimeBridge,
     session_id: SessionId,
     workspace_path: &str,
@@ -571,12 +576,21 @@ async fn run_git_commit_summary_model(
         request,
         None,
     ));
+    // providerTelemetryGuard forwards statistics and closes an active request if this future is dropped.
+    // providerTelemetryGuard 转发统计，并在当前 Future 被丢弃时关闭活动请求。
+    let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(state);
     while let Some(event) = stream.next().await {
-        if let ExecutionStreamEvent::Finished(report) = event {
-            if let Some(error) = report.error.as_ref() {
-                return Err(error.clone());
+        match event {
+            ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+                provider_telemetry_guard.forward(event);
             }
-            return Ok(report);
+            ExecutionStreamEvent::Finished(report) => {
+                if let Some(error) = report.error.as_ref() {
+                    return Err(error.clone());
+                }
+                return Ok(report);
+            }
+            _ => {}
         }
     }
     Err(String::from("提交信息生成请求未返回终态报告。"))

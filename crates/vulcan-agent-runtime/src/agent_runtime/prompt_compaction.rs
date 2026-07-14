@@ -266,7 +266,8 @@ fn prompt_compaction_progress_for_runtime_event(
         ExecutionStreamEvent::OutputDelta { .. } => {
             Some(prompt_compaction_progress("output_delta"))
         }
-        ExecutionStreamEvent::RuntimeEvent { .. }
+        ExecutionStreamEvent::ProviderRequestTelemetry(_)
+        | ExecutionStreamEvent::RuntimeEvent { .. }
         | ExecutionStreamEvent::ConversationCheckpoint { .. }
         | ExecutionStreamEvent::ThinkingCompleted { .. }
         | ExecutionStreamEvent::Finished(_) => None,

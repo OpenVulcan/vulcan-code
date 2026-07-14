@@ -1,6 +1,7 @@
 name: Vulcan RTK
 capability: 命令路由、Git 上下文压缩与 Token 节省统计
 messages:
+  navigationLabel: RTK 设置
   title: RTK 命令路由
   hookBadge: 声明式 Hook
   loadingSettings: 正在加载设置

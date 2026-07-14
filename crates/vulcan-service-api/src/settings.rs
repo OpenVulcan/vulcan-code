@@ -41,6 +41,16 @@ pub struct PluginUiMountSummary {
     /// Stable host-owned mount point.
     /// 稳定的宿主自有挂载点。
     pub point: String,
+    /// Default host navigation label declared by this mount.
+    /// 此挂载点声明的默认宿主导航名称。
+    pub label: String,
+    /// Localized navigation labels keyed by locale identifier.
+    /// 以语言标识为键的本地化导航名称。
+    #[serde(default)]
+    pub label_by_locale: BTreeMap<String, String>,
+    /// Stable host-owned navigation icon identifier.
+    /// 稳定的宿主导航图标标识。
+    pub icon: String,
     /// Named ESM export containing the component factory.
     /// 包含组件工厂的 ESM 命名导出。
     pub export_name: String,

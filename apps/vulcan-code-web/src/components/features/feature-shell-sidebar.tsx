@@ -1,6 +1,7 @@
 import * as React from "react"
 import {
   BrainCircuit,
+  ChartNoAxesCombined,
   ChevronDown,
   Hammer,
   Network,
@@ -14,7 +15,11 @@ import {
 import { formatSkillText } from "@/components/features/featureText"
 import { vmmSectionIcon, type MemorySubAreaId } from "@/components/features/memory/MemoryArea"
 import { type SkillSubAreaId } from "@/components/features/skills/SkillsArea"
-import { hasEnabledPluginDetailMount } from "@/components/features/skills/skill-area-types"
+import {
+  enabledPluginDetailMounts,
+  localizedPluginCapability,
+  localizedPluginMountLabel,
+} from "@/components/features/skills/skill-area-types"
 import {
   settingsSubAreaGroups,
   type SettingsSubAreaGroup,
@@ -142,8 +147,10 @@ function FeatureOverviewMenu(props: {
   // 行计数使用的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  const { t } = useI18n()
-  const rows = featureSidebarRows(props.activeArea, props.workbench, t)
+  const { locale, t } = useI18n()
+  // rows contains static host pages and manifest-generated plugin pages.
+  // rows 包含宿主静态页面与清单生成的插件页面。
+  const rows = featureSidebarRows(props.activeArea, props.workbench, locale, t)
 
   return (
     <SidebarGroup>
@@ -438,15 +445,26 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
 
 // featureSidebarRows builds left sidebar rows for the current non-settings feature.
 // featureSidebarRows 为当前非设置功能构建左侧栏条目。
-function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
+function featureSidebarRows(
+  activeArea: MainAreaId,
+  workbench: WorkbenchSnapshot,
+  locale: string,
+  t: ReturnType<typeof useI18n>["t"],
+): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
   if (activeArea === "skills") {
+    // pluginRows projects every enabled detail mount into one independent navigation row.
+    // pluginRows 将每个已启用详情挂载点投影为独立导航行。
+    const pluginRows = enabledPluginDetailMounts(workbench.plugins).map((selection) => ({
+      id: selection.subAreaId,
+      label: localizedPluginMountLabel(selection, locale),
+      detail: localizedPluginCapability(selection.plugin, locale),
+      icon: pluginDetailMountIcon(selection.mount.icon),
+    }))
     return [
       { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
       { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
       { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "systemPlugin").length }), icon: <Puzzle size={16} /> },
-      ...(hasEnabledPluginDetailMount(workbench.plugins, "vulcan-rtk")
-        ? [{ id: "luaskills-rtk", label: t("skills.navigation.rtkSettings"), detail: t("skills.header.rtkDetail"), icon: <Route size={16} /> }]
-        : []),
+      ...pluginRows,
     ]
   }
   if (activeArea === "agent-skills") {
@@ -474,6 +492,23 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
   return []
 }
 
+// pluginDetailMountIcon returns the host-owned icon declared by one plugin mount.
+// pluginDetailMountIcon 返回单个插件挂载点声明的宿主持有图标。
+//
+// Parameters: icon is the validated service projection identifier.
+// 参数：icon 是已经校验的服务投影标识。
+// Returns: the corresponding Lucide icon node.
+// 返回值：返回对应的 Lucide 图标节点。
+function pluginDetailMountIcon(icon: "plugin" | "route" | "chart"): React.ReactNode {
+  if (icon === "route") {
+    return <Route size={16} />
+  }
+  if (icon === "chart") {
+    return <ChartNoAxesCombined size={16} />
+  }
+  return <Puzzle size={16} />
+}
+
 
 // skillSidebarRowToSubArea maps a skills sidebar row id to its content page id.
 // skillSidebarRowToSubArea 将技能侧栏行标识映射到对应内容页面标识。
@@ -487,8 +522,8 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   if (rowId === "luaskills-plugins") {
     return "plugins"
   }
-  if (rowId === "luaskills-rtk") {
-    return "rtk"
+  if (rowId.startsWith("plugin:")) {
+    return rowId as SkillSubAreaId
   }
   return null
 }

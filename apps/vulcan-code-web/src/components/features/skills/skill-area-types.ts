@@ -42,9 +42,140 @@ export interface SkillActionProps {
   onSetLuaSkillToolRegistrationState: (skillId: string, localName: string, registrationState: string) => Promise<void>
 }
 
+// PluginSkillSubAreaId identifies one exact plugin-owned detail page.
+// PluginSkillSubAreaId 标识一个精确的插件自有详情页。
+export type PluginSkillSubAreaId = `plugin:${string}:${string}`
+
 // SkillSubAreaId identifies the selected skill management category.
 // SkillSubAreaId 标识当前选中的技能管理分类。
-export type SkillSubAreaId = "catalog" | "plugins" | "rtk" | "settings"
+export type SkillSubAreaId = "catalog" | "plugins" | "settings" | PluginSkillSubAreaId
+
+// PluginDetailMountSelection binds one enabled plugin to one exact detail mount and navigation id.
+// PluginDetailMountSelection 将一个已启用插件绑定到一个精确详情挂载点及导航标识。
+export interface PluginDetailMountSelection {
+  // Exact enabled plugin projection.
+  // 精确的已启用插件投影。
+  plugin: PluginSummary
+  // Exact plugin-owned detail mount.
+  // 精确的插件自有详情挂载点。
+  mount: NonNullable<PluginSummary["extension"]>["uiMounts"][number]
+  // Stable skill subarea id generated from manifest identifiers.
+  // 由清单标识生成的稳定技能子区域标识。
+  subAreaId: PluginSkillSubAreaId
+}
+
+// pluginDetailSubAreaId builds the stable navigation id for one exact plugin mount.
+// pluginDetailSubAreaId 为一个精确插件挂载点构建稳定导航标识。
+//
+// Parameters: pluginId and mountId are validated lowercase manifest identifiers.
+// 参数：pluginId 与 mountId 是已经校验的小写清单标识。
+// Returns: a collision-free id because validated manifest identifiers cannot contain colons.
+// 返回值：由于已校验清单标识不能包含冒号，因此返回无冲突标识。
+export function pluginDetailSubAreaId(pluginId: string, mountId: string): PluginSkillSubAreaId {
+  return `plugin:${pluginId}:${mountId}`
+}
+
+// enabledPluginDetailMounts returns all runtime-ready plugin detail mounts in catalog order.
+// enabledPluginDetailMounts 按目录顺序返回全部运行时就绪的插件详情挂载点。
+//
+// Parameters: plugins is the committed plugin projection.
+// 参数：plugins 是已提交的插件投影。
+// Returns: exact plugin, mount, and subarea tuples for enabled detail mounts only.
+// 返回值：仅包含已启用详情挂载点的精确插件、挂载点与子区域元组。
+export function enabledPluginDetailMounts(plugins: PluginSummary[]): PluginDetailMountSelection[] {
+  return plugins.flatMap((plugin) => {
+    if (
+      !plugin.available
+      || !plugin.enabled
+      || plugin.runtimeState !== "enabled"
+      || !plugin.extension
+    ) {
+      return []
+    }
+    return plugin.extension.uiMounts
+      .filter((mount) => mount.point === "skillsPluginDetail")
+      .map((mount) => ({
+        mount,
+        plugin,
+        subAreaId: pluginDetailSubAreaId(plugin.id, mount.id),
+      }))
+  })
+}
+
+// findEnabledPluginDetailMount resolves one selected dynamic subarea against the committed catalog.
+// findEnabledPluginDetailMount 根据已提交目录解析一个选中的动态子区域。
+//
+// Parameters: plugins is the committed projection and subAreaId is the selected page id.
+// 参数：plugins 是已提交投影，subAreaId 是选中的页面标识。
+// Returns: the one exact enabled selection, or null when the page is no longer available.
+// 返回值：返回唯一精确的已启用选择项；页面不再可用时返回 null。
+export function findEnabledPluginDetailMount(
+  plugins: PluginSummary[],
+  subAreaId: SkillSubAreaId,
+): PluginDetailMountSelection | null {
+  return enabledPluginDetailMounts(plugins).find((selection) => selection.subAreaId === subAreaId) ?? null
+}
+
+// isPluginDetailSubArea reports whether one skill subarea is manifest-generated.
+// isPluginDetailSubArea 判断一个技能子区域是否由插件清单生成。
+//
+// Parameters: subAreaId is the selected skill page id.
+// 参数：subAreaId 是选中的技能页面标识。
+// Returns: true only for the reserved plugin detail prefix.
+// 返回值：仅对保留的插件详情前缀返回 true。
+export function isPluginDetailSubArea(subAreaId: SkillSubAreaId): subAreaId is PluginSkillSubAreaId {
+  return subAreaId.startsWith("plugin:")
+}
+
+// localizedPluginMountLabel resolves the exact locale, same-language locale, then default label.
+// localizedPluginMountLabel 依次解析精确语言、同语言语言包与默认名称。
+//
+// Parameters: selection owns the label maps and locale is the active WebUI language.
+// 参数：selection 持有名称映射，locale 是当前 WebUI 语言。
+// Returns: the effective host navigation label.
+// 返回值：返回生效的宿主导航名称。
+export function localizedPluginMountLabel(selection: PluginDetailMountSelection, locale: string): string {
+  // exactLabel is the mount label for the complete locale identifier.
+  // exactLabel 是完整语言标识对应的挂载点名称。
+  const exactLabel = selection.mount.labelByLocale[locale]
+  if (exactLabel) {
+    return exactLabel
+  }
+  // languagePrefix matches locales such as en-US to the plugin's en locale file.
+  // languagePrefix 将 en-US 等语言匹配到插件的 en 语言文件。
+  const languagePrefix = `${locale.split("-")[0]}-`
+  // languageLabel is the first deterministic same-language localized label.
+  // languageLabel 是第一个确定性的同语言本地化名称。
+  const languageLabelEntry = Object.entries(selection.mount.labelByLocale)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .find(([candidate]) => candidate === locale.split("-")[0] || candidate.startsWith(languagePrefix))
+  return languageLabelEntry ? languageLabelEntry[1] : selection.mount.label
+}
+
+// localizedPluginCapability resolves plugin capability text for the active WebUI language.
+// localizedPluginCapability 为当前 WebUI 语言解析插件能力说明。
+//
+// Parameters: plugin is the exact projection and locale is the active WebUI language.
+// 参数：plugin 是精确插件投影，locale 是当前 WebUI 语言。
+// Returns: exact locale, same-language locale, or the projected default capability.
+// 返回值：返回精确语言、同语言语言包或投影的默认能力说明。
+export function localizedPluginCapability(plugin: PluginSummary, locale: string): string {
+  // exactCapability is the text for the complete locale identifier.
+  // exactCapability 是完整语言标识对应的能力说明。
+  const exactCapability = plugin.capabilityByLocale[locale]
+  if (exactCapability) {
+    return exactCapability
+  }
+  // languagePrefix matches regional locales to the corresponding plugin language.
+  // languagePrefix 将区域语言匹配到对应的插件语言。
+  const languagePrefix = `${locale.split("-")[0]}-`
+  // languageCapabilityEntry is the deterministic same-language capability entry.
+  // languageCapabilityEntry 是确定性的同语言能力说明条目。
+  const languageCapabilityEntry = Object.entries(plugin.capabilityByLocale)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .find(([candidate]) => candidate === locale.split("-")[0] || candidate.startsWith(languagePrefix))
+  return languageCapabilityEntry ? languageCapabilityEntry[1] : plugin.capability
+}
 
 // hasEnabledPluginDetailMount reports whether one exact enabled plugin contributes the requested integrated mount point.
 // hasEnabledPluginDetailMount 判断一个精确的已启用插件是否贡献了请求的集成挂载点。
@@ -54,13 +185,7 @@ export type SkillSubAreaId = "catalog" | "plugins" | "rtk" | "settings"
 // Returns: true only when the plugin is available, enabled, runtime-ready, and declares the detail mount.
 // 返回值：仅当插件可用、已启用、运行时就绪且声明详情挂载点时返回 true。
 export function hasEnabledPluginDetailMount(plugins: PluginSummary[], pluginId: string): boolean {
-  return plugins.some((plugin) => (
-    plugin.id === pluginId
-    && plugin.available
-    && plugin.enabled
-    && plugin.runtimeState === "enabled"
-    && plugin.extension?.uiMounts.some((mount) => mount.point === "skillsPluginDetail") === true
-  ))
+  return enabledPluginDetailMounts(plugins).some((selection) => selection.plugin.id === pluginId)
 }
 
 // SkillHeaderBusyActionId identifies one title-bar skill action currently showing feedback.

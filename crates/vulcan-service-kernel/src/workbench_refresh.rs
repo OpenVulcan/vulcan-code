@@ -642,6 +642,9 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
             ExecutionStreamEvent::ProviderRequestCheckpoint { .. },
         ) => "child.provider_request_checkpoint",
         DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderRequestTelemetry(_),
+        ) => "child.provider_request_telemetry",
+        DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ProviderLoweringRepair { .. },
         ) => "child.provider_lowering_repair",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RequestReady { .. }) => {

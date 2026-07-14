@@ -2,7 +2,10 @@
 //! 上下文压缩 streaming 辅助逻辑。
 
 use super::*;
-use crate::{Uuid, remove_active_stream_task_if_id, spawn_registered_active_stream_task};
+use crate::{
+    ProviderTelemetryHookGuard, Uuid, remove_active_stream_task_if_id,
+    spawn_registered_active_stream_task,
+};
 
 /// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
 /// 流式执行一次提示词压缩请求，并将 Provider 增量镜像到 WebUI 状态。
@@ -40,6 +43,9 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     let mut record_ids = SessionStreamingRecordIds::default();
     let mut output_message_id: Option<String> = None;
     let mut terminal_result = None;
+    // providerTelemetryGuard closes an active compaction request if the stream future is dropped.
+    // providerTelemetryGuard 在压缩流 Future 被丢弃时关闭活动请求。
+    let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(state.clone());
     let mut stream = Box::pin(stream_prompt_compaction_job(request));
     while let Some(event) = stream.next().await {
         match event {
@@ -68,6 +74,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                     trigger,
                     &mut record_ids,
                     &mut output_message_id,
+                    &mut provider_telemetry_guard,
                     event,
                 ) {
                     eprintln!(
@@ -218,6 +225,7 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
     trigger: &str,
     record_ids: &mut SessionStreamingRecordIds,
     output_message_id: &mut Option<String>,
+    provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
     event: ExecutionStreamEvent,
 ) -> Result<(), String> {
     match event {
@@ -225,6 +233,10 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
         | ExecutionStreamEvent::ProviderRequestCheckpoint { .. }
         | ExecutionStreamEvent::ProviderLoweringRepair { .. }
         | ExecutionStreamEvent::RequestReady { .. } => Ok(()),
+        ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
+            provider_telemetry_guard.forward(event);
+            Ok(())
+        }
         ExecutionStreamEvent::WireRequestReady { .. } => Ok(()),
         ExecutionStreamEvent::RequestStarted { .. } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)

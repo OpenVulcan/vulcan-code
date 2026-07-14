@@ -2,6 +2,7 @@
 //! 供后续代理执行界面使用的运行时事件定义。
 
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionRunReport};
+use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
@@ -118,6 +119,9 @@ pub enum ExecutionStreamEvent {
         /// 拥有该 Provider 请求的会话标识。
         session_id: SessionId,
     },
+    /// Low-frequency structured telemetry for one physical Provider request.
+    /// 单次真实 Provider 请求的低频结构化遥测。
+    ProviderRequestTelemetry(ProviderRequestTelemetryEvent),
     /// Visible assistant thinking delta that should stay outside future context.
     /// 应保持在未来上下文之外的可见思考增量。
     ThinkingDelta {

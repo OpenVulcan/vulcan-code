@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "retentionDays": 180,
+  "defaultRangeDays": 30,
+  "defaultMetric": "total_tokens"
+}

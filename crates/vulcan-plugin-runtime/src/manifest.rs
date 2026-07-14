@@ -195,6 +195,12 @@ pub enum SystemPluginCapability {
     /// Install dependencies from a remote registry.
     /// 从远程注册表安装依赖。
     DependencyRegistryNetwork,
+    /// Use the current plugin's isolated SQLite database.
+    /// 使用当前插件的隔离 SQLite 数据库。
+    StorageSqlite,
+    /// Use the current plugin's isolated LanceDB database.
+    /// 使用当前插件的隔离 LanceDB 数据库。
+    StorageLancedb,
 }
 
 /// One plugin business action callable through the generic service boundary.
@@ -262,12 +268,41 @@ pub struct SystemPluginUiMountManifest {
     /// Host-owned mount point.
     /// 宿主持有的挂载点。
     pub point: SystemPluginUiMountPoint,
+    /// Default host navigation label for this mount.
+    /// 此挂载点使用的默认宿主导航名称。
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Plugin locale message key overriding the navigation label.
+    /// 覆盖导航名称的插件语言包消息键。
+    #[serde(default)]
+    pub label_message_key: Option<String>,
+    /// Host-owned icon rendered beside the navigation label.
+    /// 在导航名称旁渲染的宿主持有图标。
+    #[serde(default)]
+    pub icon: SystemPluginUiMountIcon,
     /// Package-relative uncompressed ESM file.
     /// 插件包相对未压缩 ESM 文件。
     pub entry: String,
     /// Named ESM export containing the mount factory.
     /// 包含挂载工厂的 ESM 命名导出。
     pub export: String,
+}
+
+/// Stable host-owned icons available to dynamic plugin navigation entries.
+/// 动态插件导航条目可使用的稳定宿主图标。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemPluginUiMountIcon {
+    /// Generic plugin puzzle icon.
+    /// 通用插件拼图图标。
+    #[default]
+    Plugin,
+    /// Command-routing icon.
+    /// 命令路由图标。
+    Route,
+    /// Usage statistics chart icon.
+    /// 用量统计图表图标。
+    Chart,
 }
 
 /// Stable host-owned dynamic UI mount points.

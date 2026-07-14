@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": 1 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "execution_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "retry_number": { "type": "integer", "minimum": 1 },
+    "max_retries": { "type": "integer", "minimum": 1 },
+    "delay_ms": { "type": "integer", "minimum": 0 },
+    "error_category": { "type": "string", "minLength": 1 },
+    "retrying_at_ms": { "type": "integer" }
+  },
+  "required": ["schema_version", "request_id", "execution_id", "session_id", "retry_number", "max_retries", "delay_ms", "error_category", "retrying_at_ms"],
+  "additionalProperties": false
+}
