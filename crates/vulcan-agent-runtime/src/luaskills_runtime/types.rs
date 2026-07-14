@@ -2,6 +2,44 @@
 //! LuaSkills 运行时数据模型与管理动作类型。
 
 use super::*;
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// One host-owned public Lua runtime lease bound to an exact conversation owner.
+/// 一条绑定到精确会话所有者的宿主自有公开 Lua 运行时租约。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RunLuaOwnedSession {
+    /// Conversation session that exclusively owns this lease.
+    /// 独占当前租约的会话 Session。
+    pub(super) owner_session_id: String,
+    /// Human-oriented session name supplied by the AI call.
+    /// AI 调用提供的面向使用者的会话名称。
+    pub(super) name: String,
+    /// Stable LuaSkills SID used for identity validation.
+    /// 用于身份校验的稳定 LuaSkills SID。
+    pub(super) sid: String,
+    /// Opaque LuaSkills lease identifier exposed as the public session ID.
+    /// 作为公开 Session ID 暴露的不透明 LuaSkills 租约标识。
+    pub(super) lease_id: String,
+    /// SID-local generation returned by LuaSkills.
+    /// LuaSkills 返回的 SID 内部代际编号。
+    pub(super) generation: u64,
+    /// Finite idle lease lifetime in seconds.
+    /// 有限的闲置租约生命周期秒数。
+    pub(super) ttl_sec: u64,
+}
+
+/// Shared ownership registry for AI-created public Lua runtime leases.
+/// AI 创建的公开 Lua 运行时租约共享归属注册表。
+#[derive(Debug, Default)]
+pub(super) struct RunLuaSessionRegistry {
+    /// Active leases keyed by the opaque LuaSkills lease identifier.
+    /// 以不透明 LuaSkills 租约标识索引的活跃租约。
+    pub(super) leases: BTreeMap<String, RunLuaOwnedSession>,
+    /// Owner/name pairs reserved while an upstream lease is being created.
+    /// 上游租约创建期间已经预留的所有者/名称组合。
+    pub(super) pending_starts: BTreeSet<(String, String)>,
+}
 
 /// Long-lived LuaSkills runtime handle kept by the host runtime after startup succeeds.
 /// 启动成功后由宿主运行时保留的长生命周期 LuaSkills 运行时句柄。
@@ -31,6 +69,15 @@ pub struct LuaSkillsRuntimeHandle {
     /// Long-lived generic System Plugin manager sharing this LuaSkills engine.
     /// 共享当前 LuaSkills 引擎的长生命周期通用系统插件管理器。
     pub system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager,
+    /// Live host-only switch controlling AI visibility of isolated RunLua execution.
+    /// 控制隔离 RunLua 执行 AI 可见性的实时宿主开关。
+    pub(super) runlua_ai_tool_enabled: Arc<AtomicBool>,
+    /// Live host-only switch controlling AI visibility of persistent RunLua sessions.
+    /// 控制持久 RunLua 会话 AI 可见性的实时宿主开关。
+    pub(super) runlua_session_ai_tool_enabled: Arc<AtomicBool>,
+    /// Conversation ownership registry for public persistent RunLua leases.
+    /// 公开持久 RunLua 租约的会话归属注册表。
+    pub(super) runlua_sessions: Arc<Mutex<RunLuaSessionRegistry>>,
 }
 
 impl std::fmt::Debug for LuaSkillsRuntimeHandle {
@@ -60,7 +107,58 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
                     .len(),
             )
             .field("system_plugin_runtime", &self.system_plugin_runtime)
+            .field(
+                "runlua_ai_tool_enabled",
+                &self.runlua_ai_tool_enabled.load(Ordering::Acquire),
+            )
+            .field(
+                "runlua_session_ai_tool_enabled",
+                &self.runlua_session_ai_tool_enabled.load(Ordering::Acquire),
+            )
+            .field(
+                "runlua_session_count",
+                &self
+                    .runlua_sessions
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .leases
+                    .len(),
+            )
             .finish()
+    }
+}
+
+impl LuaSkillsRuntimeHandle {
+    /// Creates an agent-facing handle from one already initialized shared LuaSkills engine.
+    /// 根据一个已初始化的共享 LuaSkills 引擎创建面向 Agent 的句柄。
+    pub fn from_shared_engine(
+        engine: Arc<Mutex<LuaEngine>>,
+        runtime_root: PathBuf,
+        skill_roots: Vec<RuntimeSkillRoot>,
+        entry_count: usize,
+        tool_entries: Vec<RuntimeEntryDescriptor>,
+        system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager,
+        runlua_ai_tool_enabled: bool,
+        runlua_session_ai_tool_enabled: bool,
+    ) -> Self {
+        // system_lua_lib_dir is derived from the single verified runtime root contract.
+        // system_lua_lib_dir 根据唯一且已验证的运行时根目录契约派生。
+        let system_lua_lib_dir = runtime_root.join("system_lua_lib");
+        Self {
+            engine,
+            runtime_root,
+            system_lua_lib_dir,
+            skill_roots,
+            entry_count,
+            tool_entries: Arc::new(Mutex::new(tool_entries)),
+            operation_progress_events: Arc::new(Mutex::new(VecDeque::new())),
+            system_plugin_runtime,
+            runlua_ai_tool_enabled: Arc::new(AtomicBool::new(runlua_ai_tool_enabled)),
+            runlua_session_ai_tool_enabled: Arc::new(AtomicBool::new(
+                runlua_session_ai_tool_enabled,
+            )),
+            runlua_sessions: Arc::new(Mutex::new(RunLuaSessionRegistry::default())),
+        }
     }
 }
 

@@ -22,6 +22,23 @@ fn default_user_skill_root_uses_vulcan_code_directory() {
     assert!(default_user_skill_root().ends_with(Path::new(".vulcan/code/skills")));
 }
 
+/// Verifies the packaged RunLua guide exists in the program system-skill source and separates both tool families.
+/// 验证打包 RunLua 指引存在于程序系统 Skill 源目录，并区分两类工具。
+#[test]
+fn packaged_runlua_skill_requires_native_skill_lookup() {
+    let skill_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("assets")
+        .join("system")
+        .join("runlua")
+        .join(SKILL_FILE_NAME);
+    let content = fs::read_to_string(skill_file).expect("packaged RunLua Skill should be readable");
+    assert!(content.contains("{\"name\":\"runlua\"}"));
+    assert!(content.contains("The tool id is `skill`, singular."));
+    assert!(content.contains("Do not call `luaskill`"));
+    assert!(content.contains("LuaSkills: `0.5.2`"));
+}
+
 /// Builds one complete user prompt skill fixture for policy and rendering tests.
 /// 为策略与渲染测试构建一个完整用户提示词技能夹具。
 fn prompt_skill_fixture(name: &str, description: &str) -> PromptSkill {

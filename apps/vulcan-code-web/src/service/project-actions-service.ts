@@ -162,6 +162,51 @@ export async function selectConversation(conversationId: string): Promise<Workbe
 
 // openExternalUrl asks the service to open one trusted external URL.
 // openExternalUrl 请求服务打开单个可信外部链接。
-export async function openExternalUrl(url: string): Promise<void> {
-  await serviceClient.request<string>("service_open_external_url", { url });
+// EXTERNAL_URL_OPENED is the exact host result for a completed shell navigation request.
+// EXTERNAL_URL_OPENED 是 Shell 导航请求完成时返回的精确宿主结果。
+const EXTERNAL_URL_OPENED = "opened";
+
+// EXTERNAL_URL_CONFIRMATION_REQUIRED is the exact host result for a blocked non-allowlisted domain.
+// EXTERNAL_URL_CONFIRMATION_REQUIRED 是非白名单域名被拦截时返回的精确宿主结果。
+const EXTERNAL_URL_CONFIRMATION_REQUIRED = "confirmation_required";
+
+// ExternalUrlConfirmationRequiredError carries the exact URL awaiting a trusted user gesture.
+// ExternalUrlConfirmationRequiredError 携带等待可信用户操作的精确 URL。
+export class ExternalUrlConfirmationRequiredError extends Error {
+  // url is the exact safe HTTPS URL rejected only by the domain allowlist.
+  // url 是仅因域名白名单而被拒绝的精确安全 HTTPS URL。
+  readonly url: string;
+
+  // Creates one typed confirmation request for the trusted host UI.
+  // 为可信宿主界面创建一个类型化确认请求。
+  //
+  // url is the exact safe HTTPS URL returned by the service decision.
+  // url 是服务决策返回的精确安全 HTTPS URL。
+  // Returns a typed error consumed only by the trusted UI layer.
+  // 返回一个仅由可信界面层处理的类型化错误。
+  constructor(url: string) {
+    super("External URL requires explicit user confirmation.");
+    this.name = "ExternalUrlConfirmationRequiredError";
+    this.url = url;
+  }
+}
+
+// Opens one HTTPS external URL or requests a trusted UI confirmation for a non-allowlisted domain.
+// 打开一个 HTTPS 外部链接，或为非白名单域名请求可信界面确认。
+//
+// url is the exact target and userConfirmed records a direct trusted-UI confirmation gesture.
+// url 是精确目标，userConfirmed 记录可信界面的直接确认操作。
+// Returns after opening, or throws a typed confirmation request or host failure.
+// 打开后返回，或抛出类型化确认请求及宿主失败。
+export async function openExternalUrl(url: string, userConfirmed = false): Promise<void> {
+  // result is the exact stable host decision for this URL and confirmation state.
+  // result 是宿主针对当前 URL 与确认状态返回的精确稳定决策。
+  const result = await serviceClient.request<string>("service_open_external_url", { url, userConfirmed });
+  if (result === EXTERNAL_URL_OPENED) {
+    return;
+  }
+  if (result === EXTERNAL_URL_CONFIRMATION_REQUIRED) {
+    throw new ExternalUrlConfirmationRequiredError(url);
+  }
+  throw new Error(`Unexpected external URL service result: ${result}`);
 }

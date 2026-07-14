@@ -823,6 +823,14 @@ fn tool_result_projection_preserves_raw_change_set_host_result() {
     );
 }
 
+/// Verifies compact Lua host results remain available to specialized transcript cards.
+/// 验证紧凑 Lua 宿主结果会保留给专用转录卡片使用。
+#[test]
+fn lua_host_result_kinds_are_visible() {
+    assert!(raw_host_result_kind_is_visible(Some("lua_execution")));
+    assert!(raw_host_result_kind_is_visible(Some("lua_runtime_session")));
+}
+
 /// Verifies wait_agent keeps child usage metadata on the visible tool row without copying child output text.
 /// 验证 wait_agent 会在可见工具行保留子智能体用量元数据，同时不复制子智能体输出正文。
 #[test]

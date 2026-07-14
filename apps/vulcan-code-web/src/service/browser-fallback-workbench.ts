@@ -183,6 +183,10 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     runtimeSettingsFile: "D:/openvulcan/vulcan-code/output/config/luaskills-runtime-setting.json",
     runtimeSettings: {
       schemaVersion: 1,
+      aiTools: {
+        enableRunLua: true,
+        enableRunLuaSession: true,
+      },
       vmPool: { minSize: 1, maxSize: 2, idleTtlSecs: 30 },
       runLuaPool: { minSize: 1, maxSize: 4, idleTtlSecs: 60 },
       toolCache: { maxEntries: 1000, defaultTtlSecs: 1800, maxTtlSecs: 1800 },

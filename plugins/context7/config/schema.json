@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "defaultFastMode": {
+      "type": "boolean",
+      "description": "Use Context7 fast vector-only retrieval by default."
+    },
+    "requestTimeoutMs": {
+      "type": "integer",
+      "minimum": 10000,
+      "maximum": 60000,
+      "description": "Maximum Context7 request duration in milliseconds."
+    },
+    "retentionDays": {
+      "type": "integer",
+      "enum": [30, 90, 180, 365],
+      "description": "Number of days to retain local request statistics."
+    }
+  },
+  "required": ["defaultFastMode", "requestTimeoutMs", "retentionDays"],
+  "additionalProperties": false
+}

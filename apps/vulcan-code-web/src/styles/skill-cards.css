@@ -847,6 +847,28 @@
   accent-color: var(--primary);
 }
 
+.lua-settings-toggle > label {
+  cursor: pointer;
+}
+
+.lua-settings-help-trigger {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: help;
+}
+
+.lua-settings-help-trigger:hover,
+.lua-settings-help-trigger:focus-visible {
+  color: var(--foreground);
+}
+
 .lua-managed-runtime-list {
   min-width: 0;
   display: grid;

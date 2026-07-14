@@ -14,6 +14,10 @@ import {
   resolveMarkdownToolPresentation,
 } from "./tool-presentations/markdown-output-presentation";
 import {
+  hydrateLuaExecutionPresentation,
+  resolveLuaExecutionPresentation,
+} from "./tool-presentations/lua-execution-presentation";
+import {
   commandPresentationStatusLabel,
   hydrateCommandExecutionPresentation,
   resolveCommandExecutionPresentation,
@@ -36,6 +40,7 @@ export type {
   FileChangeFilePresentation,
   FileChangeOperation,
   FileChangePresentation,
+  LuaExecutionPresentation,
   MarkdownToolPresentation,
   MarkdownToolPresentationIcon,
   SubagentOrchestrationAgent,
@@ -50,6 +55,7 @@ export {
   commandPresentationStatusLabel,
   fileChangeStatusLabel,
   hydrateMarkdownToolPresentation,
+  hydrateLuaExecutionPresentation,
   hydrateSubagentOrchestrationPresentation,
   hydrateAskQuestionPresentation,
   hydrateCommandExecutionPresentation,
@@ -66,6 +72,7 @@ export function resolveToolPresentation(
   return resolveSubagentOrchestrationPresentation(blocks, displayState, detailRef)
     ?? resolveAskQuestionPresentation(blocks, displayState, detailRef)
     ?? resolveFileChangePresentation(blocks, displayState, options)
+    ?? resolveLuaExecutionPresentation(blocks, displayState, detailRef)
     ?? resolveMarkdownToolPresentation(blocks, displayState, detailRef)
     ?? resolveCommandExecutionPresentation(blocks, displayState, detailRef, options);
 }

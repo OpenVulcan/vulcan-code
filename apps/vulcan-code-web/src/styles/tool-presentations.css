@@ -164,6 +164,57 @@
   line-height: 1.45;
 }
 
+.tool-presentation-card.lua-execution {
+  width: min(100%, 860px);
+}
+
+.lua-execution .tool-presentation-summary {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.lua-execution-icon {
+  width: 16px;
+  height: 16px;
+  color: #42a5f5;
+  flex: none;
+}
+
+.lua-execution .tool-presentation-command {
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.lua-execution-detail {
+  display: grid;
+  gap: 0;
+  border: 0;
+  border-left: 2px solid color-mix(in oklch, var(--border) 88%, transparent);
+  border-radius: 0;
+  background: transparent;
+}
+
+.lua-execution-section {
+  min-width: 0;
+  padding: 12px 16px;
+}
+
+.lua-execution-section-title {
+  margin-bottom: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lua-execution-output {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.lua-execution-output .markdown-message {
+  min-width: 0;
+}
+
 .terminal-output-view {
   color: var(--muted-foreground);
 }

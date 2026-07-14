@@ -2744,10 +2744,23 @@ impl SystemPluginRuntimeManager {
                 hook.plugin_id
             )));
         }
+        // trusted_workspace_root is the normalized host path authorized for Lua bridge operations.
+        // trusted_workspace_root 是授权给 Lua bridge 操作的规范化宿主路径。
         let trusted_workspace_root = trusted_hook_workspace_root(&invocation.context)?;
+        // lua_context prevents the original verbatim workspace metadata from entering the Lua invocation payload.
+        // lua_context 防止原始 verbatim 工作区元数据进入 Lua 调用载荷。
+        let mut lua_context = invocation.context;
+        // workspace_root borrows the already-normalized Lua boundary value when this hook has workspace scope.
+        // workspace_root 在当前 Hook 具有工作区作用域时借用已完成规范化的 Lua 边界值。
+        if let Some(workspace_root) = trusted_workspace_root.as_ref() {
+            lua_context.metadata.insert(
+                String::from("workspace_root"),
+                Value::String(workspace_root.clone()),
+            );
+        }
         let invocation_json = serde_json::to_string(&json!({
             "registration": invocation.registration,
-            "context": invocation.context,
+            "context": lua_context,
             "payload": invocation.payload,
         }))
         .map_err(|error| {
@@ -3382,16 +3395,22 @@ impl SystemPluginRuntimeManager {
                 "Failed to read Vulcan plugin bridge module: {error}"
             ))
         })?;
+        // lua_bridge_package_root removes Windows verbatim prefixes before the System package root enters LuaSkills.
+        // lua_bridge_package_root 在 System package 根进入 LuaSkills 前移除 Windows verbatim 前缀。
+        let lua_bridge_package_root = vulcan_runtime_assets::native_host_path(&bridge_package_root);
+        // lua_workspace_root removes Windows verbatim prefixes before the authorized workspace enters LuaSkills.
+        // lua_workspace_root 在授权工作区进入 LuaSkills 前移除 Windows verbatim 前缀。
+        let lua_workspace_root = vulcan_runtime_assets::native_host_path(&canonical_workspace_root);
         let requested_sid = format!("vulcan-plugin/{}/{session_id}", manifest.id);
         let create_request = json!({
             "sid": requested_sid.clone(),
             "ttl_sec": 0,
             "replace": false,
-            "cwd": bridge_package_root.to_string_lossy(),
-            "workspace_root": canonical_workspace_root.to_string_lossy(),
+            "cwd": lua_bridge_package_root,
+            "workspace_root": lua_workspace_root,
             "system_package": {
                 "id": "vulcan-plugin-bridge",
-                "root": bridge_package_root.to_string_lossy(),
+                "root": lua_bridge_package_root,
                 "dependencies_file": "dependencies.yaml",
             },
         });
@@ -3424,8 +3443,9 @@ impl SystemPluginRuntimeManager {
                     "plugin_id": manifest.id,
                     "runtime_id": self.state.manager_id.clone(),
                     "lease_scope": lease_scope.as_str(),
-                    "workspace_root": canonical_workspace_root.to_string_lossy(),
+                    "workspace_root": lua_workspace_root,
                     "bundle_source": bundle_source,
+                    "lua_modules": manifest.runtime.lua_modules,
                     "invoke_function": manifest.runtime.invoke_function,
                     "shutdown_function": manifest.runtime.shutdown_function,
                     "hook_shutdown_function": manifest.runtime.hook_shutdown_function,
@@ -4319,7 +4339,9 @@ fn trusted_hook_workspace_root(
             "Hook context workspace root is not a directory.",
         ));
     }
-    Ok(Some(workspace_root.to_string_lossy().into_owned()))
+    Ok(Some(vulcan_runtime_assets::native_host_path_text(
+        &workspace_root.to_string_lossy(),
+    )))
 }
 
 /// Reads the bridge-injected plugin identity from one host-tool request.
@@ -5668,6 +5690,8 @@ fn build_permission_preview(
 /// 返回单个插件能力的稳定持久化键。
 pub fn plugin_capability_key(capability: SystemPluginCapability) -> &'static str {
     match capability {
+        SystemPluginCapability::RuntimeLuaModules => "runtime_lua_modules",
+        SystemPluginCapability::NetworkHttps => "network_https",
         SystemPluginCapability::ProcessBinary => "process_binary",
         SystemPluginCapability::ProcessNode => "process_node",
         SystemPluginCapability::ProcessPython => "process_python",
@@ -6493,11 +6517,14 @@ return M
     /// Builds one minimal real LuaSkills engine for System lease integration tests.
     /// 为系统租约集成测试构建一个最小真实 LuaSkills 引擎。
     fn test_engine(runtime_root: &Path) -> LuaEngine {
-        let host_options = LuaRuntimeHostOptions::with_runtime_root(
-            runtime_root
+        // native_runtime_root keeps the integration-test Lua package paths free of Windows verbatim prefixes.
+        // native_runtime_root 使集成测试的 Lua package 路径不包含 Windows verbatim 前缀。
+        let native_runtime_root = vulcan_runtime_assets::native_host_path(
+            &runtime_root
                 .canonicalize()
                 .expect("canonicalize LuaSkills runtime root"),
         );
+        let host_options = LuaRuntimeHostOptions::with_runtime_root(native_runtime_root);
         LuaEngine::new(LuaEngineOptions::new(
             LuaVmPoolConfig {
                 min_size: 1,

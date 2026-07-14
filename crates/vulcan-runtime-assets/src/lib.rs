@@ -126,9 +126,6 @@ const DEPENDENCIES_DIR_NAME: &str = "dependencies";
 /// 位于共享依赖根目录下的相对受管运行时发行目录名称。
 const MANAGED_RUNTIME_DISTRIBUTIONS_DIR_NAME: &str = "runtimes";
 
-/// Relative host tools directory name bundled below the output root.
-/// 打包在 output 根目录下的宿主工具目录名称。
-
 /// Relative controller binary directory name bundled into the output root.
 /// 打包到 output 根目录中的控制器二进制目录名称。
 const CONTROLLER_BIN_DIR_NAME: &str = "bin";
@@ -429,6 +426,14 @@ mod tests {
         );
         assert_eq!(
             native_host_path_text(r"\\?\UNC\server\share\runtime"),
+            r"\\server\share\runtime"
+        );
+        assert_eq!(
+            native_host_path_text("//?/D:/openvulcan/vulcan-code"),
+            r"D:\openvulcan\vulcan-code"
+        );
+        assert_eq!(
+            native_host_path_text("//?/UNC/server/share/runtime"),
             r"\\server\share\runtime"
         );
     }

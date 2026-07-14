@@ -483,12 +483,35 @@ pub(crate) async fn service_save_luaskills_runtime_settings(
     // 将包设置写入与所有 LuaSkills 生命周期变更串行化。
     let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
+    // AI tool switches are copied before the complete settings document moves into the blocking save.
+    // AI 工具开关在完整设置文档移入阻塞保存前完成复制。
+    let runlua_enabled = settings.ai_tools.enable_run_lua;
+    let runlua_session_enabled = settings.ai_tools.enable_run_lua_session;
     let catalog = run_luaskills_management_blocking("save runtime settings", move || {
         vulcan_service_runtime::luaskills_bridge::save_luaskills_runtime_settings(
             &handle, &settings,
         )
     })
     .await?;
+    // agent_luaskills_runtime is cloned without holding service state across asynchronous lease cleanup.
+    // agent_luaskills_runtime 在异步租约清理期间不持有服务状态锁的前提下完成克隆。
+    let agent_luaskills_runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard
+            .agent_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.luaskills_runtime.clone())
+    };
+    if let Some(agent_luaskills_runtime) = agent_luaskills_runtime {
+        vulcan_agent_runtime::luaskills_runtime::set_runlua_ai_tools_enabled(
+            agent_luaskills_runtime,
+            runlua_enabled,
+            runlua_session_enabled,
+        )
+        .await?;
+    }
     store_luaskills_catalog(&state, catalog)?;
     refresh_luaskills_local_state(&state).await
 }

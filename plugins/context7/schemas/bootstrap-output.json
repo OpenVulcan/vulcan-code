@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "credentialStatus": {
+      "type": "object",
+      "properties": {
+        "configured": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["anonymous", "api_key"] },
+        "credentialGeneration": { "type": "integer", "minimum": 0 },
+        "updatedAtMs": { "type": "integer", "minimum": 0 },
+        "validationStatus": { "type": "string", "enum": ["unknown", "untested", "valid", "invalid"] },
+        "validatedAtMs": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "required": ["configured", "mode", "credentialGeneration", "updatedAtMs", "validationStatus"],
+      "additionalProperties": false
+    },
+    "localStats": {
+      "type": "object",
+      "properties": {
+        "requests": { "type": "integer", "minimum": 0 },
+        "successes": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 },
+        "averageDurationMs": { "type": "number", "minimum": 0 },
+        "anonymousRequests": { "type": "integer", "minimum": 0 },
+        "apiKeyRequests": { "type": "integer", "minimum": 0 },
+        "resolveRequests": { "type": "integer", "minimum": 0 },
+        "queryRequests": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["requests", "successes", "failures", "averageDurationMs", "anonymousRequests", "apiKeyRequests", "resolveRequests", "queryRequests"],
+      "additionalProperties": false
+    },
+    "quotaSnapshot": {
+      "type": "object",
+      "properties": {
+        "authMode": { "type": "string", "enum": ["anonymous", "api_key"] },
+        "credentialGeneration": { "type": "integer", "minimum": 0 },
+        "quotaTier": { "type": ["string", "null"] },
+        "quotaLimit": { "type": ["integer", "null"], "minimum": 0 },
+        "quotaRemaining": { "type": ["integer", "null"], "minimum": 0 },
+        "quotaResetUnixSec": { "type": ["integer", "null"], "minimum": 0 },
+        "retryAfterSec": { "type": ["integer", "null"], "minimum": 0 },
+        "httpStatus": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "observedAtMs": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["authMode", "credentialGeneration", "httpStatus", "observedAtMs"],
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "properties": {
+    "settings": {
+      "type": "object",
+      "properties": {
+        "defaultFastMode": { "type": "boolean" },
+        "requestTimeoutMs": { "type": "integer", "minimum": 10000, "maximum": 60000 },
+        "retentionDays": { "type": "integer", "enum": [30, 90, 180, 365] }
+      },
+      "required": ["defaultFastMode", "requestTimeoutMs", "retentionDays"],
+      "additionalProperties": false
+    },
+    "credential": { "$ref": "#/$defs/credentialStatus" },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "rangeDays": { "type": "integer", "enum": [7, 30, 90, 365] },
+        "credential": { "$ref": "#/$defs/credentialStatus" },
+        "localStats": { "$ref": "#/$defs/localStats" },
+        "quotaSnapshot": { "$ref": "#/$defs/quotaSnapshot" }
+      },
+      "required": ["revision", "rangeDays", "credential", "localStats"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["settings", "credential", "usage"],
+  "additionalProperties": false
+}

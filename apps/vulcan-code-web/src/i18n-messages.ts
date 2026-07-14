@@ -809,6 +809,38 @@ export type TranslationKey =
   | "toolPresentation.command.lost"
   | "toolPresentation.command.current"
   | "toolPresentation.command.currentState"
+  | "toolPresentation.lua.title"
+  | "toolPresentation.lua.running"
+  | "toolPresentation.lua.failed"
+  | "toolPresentation.lua.stopped"
+  | "toolPresentation.lua.completed"
+  | "toolPresentation.lua.action.eval"
+  | "toolPresentation.lua.action.invalid"
+  | "toolPresentation.lua.action.list"
+  | "toolPresentation.lua.action.start"
+  | "toolPresentation.lua.action.status"
+  | "toolPresentation.lua.action.close"
+  | "toolPresentation.lua.oneShot"
+  | "toolPresentation.lua.persistent"
+  | "toolPresentation.lua.session"
+  | "toolPresentation.lua.ttl"
+  | "toolPresentation.lua.elapsed"
+  | "toolPresentation.lua.code"
+  | "toolPresentation.lua.arguments"
+  | "toolPresentation.lua.output"
+  | "toolPresentation.lua.argumentName"
+  | "toolPresentation.lua.argumentValue"
+  | "toolPresentation.lua.sessionName"
+  | "toolPresentation.lua.sessionId"
+  | "toolPresentation.lua.sessionState"
+  | "toolPresentation.lua.sessionTtl"
+  | "toolPresentation.lua.sessionExpiresAt"
+  | "toolPresentation.lua.sessionActive"
+  | "toolPresentation.lua.sessionClosed"
+  | "toolPresentation.lua.sessionExpired"
+  | "toolPresentation.lua.sessionFailed"
+  | "toolPresentation.lua.noSessions"
+  | "toolPresentation.lua.closeSucceeded"
   | "toolPresentation.ask.running"
   | "toolPresentation.ask.ignored"
   | "toolPresentation.ask.completed"
@@ -1155,6 +1187,12 @@ export type TranslationKey =
   | "skills.luaSettings.saved"
   | "skills.luaSettings.save"
   | "skills.luaSettings.saving"
+  | "skills.luaSettings.aiTools"
+  | "skills.luaSettings.aiToolsHint"
+  | "skills.luaSettings.enableRunLua"
+  | "skills.luaSettings.enableRunLuaSession"
+  | "skills.luaSettings.runLuaTooltip"
+  | "skills.luaSettings.runLuaSessionTooltip"
   | "skills.luaSettings.mainPool"
   | "skills.luaSettings.runLuaPool"
   | "skills.luaSettings.poolHint"
@@ -1229,6 +1267,9 @@ export type TranslationKey =
   | "skills.plugins.emptyTitle"
   | "skills.plugins.emptyDetail"
   | "skills.plugins.loadingPage"
+  | "skills.plugins.externalUrlConfirmation"
+  | "skills.plugins.externalUrlOpenAnyway"
+  | "skills.plugins.externalUrlOpenFailed"
   | "skills.plugins.unavailable"
   | "skills.plugins.enabling"
   | "skills.plugins.draining"
@@ -2053,6 +2094,38 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.command.lost": "实时状态已丢失",
     "toolPresentation.command.current": "当前",
     "toolPresentation.command.currentState": "当前{state}",
+    "toolPresentation.lua.title": "执行 Lua 代码",
+    "toolPresentation.lua.running": "执行中",
+    "toolPresentation.lua.failed": "执行失败",
+    "toolPresentation.lua.stopped": "已停止",
+    "toolPresentation.lua.completed": "已执行",
+    "toolPresentation.lua.action.eval": "执行Lua代码",
+    "toolPresentation.lua.action.invalid": "Lua会话操作失败",
+    "toolPresentation.lua.action.list": "列出Lua会话",
+    "toolPresentation.lua.action.start": "启动Lua持久会话",
+    "toolPresentation.lua.action.status": "读取Lua会话状态",
+    "toolPresentation.lua.action.close": "关闭Lua会话",
+    "toolPresentation.lua.oneShot": "隔离执行",
+    "toolPresentation.lua.persistent": "持久会话",
+    "toolPresentation.lua.session": "会话",
+    "toolPresentation.lua.ttl": "闲置时限",
+    "toolPresentation.lua.elapsed": "耗时",
+    "toolPresentation.lua.code": "Lua 代码",
+    "toolPresentation.lua.arguments": "结构化参数",
+    "toolPresentation.lua.output": "执行结果",
+    "toolPresentation.lua.argumentName": "参数名字",
+    "toolPresentation.lua.argumentValue": "参数值",
+    "toolPresentation.lua.sessionName": "名称",
+    "toolPresentation.lua.sessionId": "会话 ID",
+    "toolPresentation.lua.sessionState": "状态",
+    "toolPresentation.lua.sessionTtl": "闲置时限",
+    "toolPresentation.lua.sessionExpiresAt": "到期时间",
+    "toolPresentation.lua.sessionActive": "运行中",
+    "toolPresentation.lua.sessionClosed": "已关闭",
+    "toolPresentation.lua.sessionExpired": "已过期",
+    "toolPresentation.lua.sessionFailed": "异常",
+    "toolPresentation.lua.noSessions": "当前没有 Lua 持久会话。",
+    "toolPresentation.lua.closeSucceeded": "Lua 会话 `{session}` 已关闭。",
     "toolPresentation.ask.running": "提问中",
     "toolPresentation.ask.ignored": "已忽略",
     "toolPresentation.ask.completed": "已提问",
@@ -2395,10 +2468,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.navigation.luaSettings": "LuaSkills 设置",
     "skills.luaSettings.description": "这些设置归 Vulcan 所有，并同时用于会话与服务两个 LuaSkills 引擎。",
     "skills.luaSettings.restartRequired": "已保存，等待重启生效",
-    "skills.luaSettings.restartHint": "当前可配置项都是引擎启动参数。保存后需要重启 Vulcan Code，运行中的两个 LuaSkills 引擎不会被热替换。",
+    "skills.luaSettings.restartHint": "RunLua AI 工具开关保存后立即生效；VM 池、网络、运行时与能力参数仍需重启 Vulcan Code。",
     "skills.luaSettings.saved": "Vulcan LuaSkills 配置已保存。",
     "skills.luaSettings.save": "保存 LuaSkills 配置",
     "skills.luaSettings.saving": "正在保存…",
+    "skills.luaSettings.aiTools": "AI 工具",
+    "skills.luaSettings.aiToolsHint": "仅控制 AI 可见工具，不会关闭 LuaSkills 内部运行时或插件使用的 Lua 会话。",
+    "skills.luaSettings.enableRunLua": "runlua",
+    "skills.luaSettings.enableRunLuaSession": "runlua-session",
+    "skills.luaSettings.runLuaTooltip": "执行一次隔离的 Lua 代码，适合单次计算、转换和脚本处理；调用结束后不保留 Lua 状态。",
+    "skills.luaSettings.runLuaSessionTooltip": "启用持久 Lua 会话，可在多次调用之间保留变量、模块和中间结果；对应 AI 工具 runlua_session。",
     "skills.luaSettings.mainPool": "主 VM 池",
     "skills.luaSettings.runLuaPool": "隔离 runLua VM 池",
     "skills.luaSettings.poolHint": "最小值决定预热容量，最大值限制并发 VM 数，空闲时间控制多余 VM 的回收。",
@@ -2473,6 +2552,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.plugins.emptyTitle": "暂无系统插件",
     "skills.plugins.emptyDetail": "随包的 LuaSkills System Plugin 会显示在这里。",
     "skills.plugins.loadingPage": "正在加载插件页面…",
+    "skills.plugins.externalUrlConfirmation": "此外部链接不在白名单中，确认信任后仍可打开。",
+    "skills.plugins.externalUrlOpenAnyway": "仍然打开",
+    "skills.plugins.externalUrlOpenFailed": "打开外部链接失败",
     "skills.plugins.unavailable": "不可用",
     "skills.plugins.enabling": "正在启用",
     "skills.plugins.draining": "正在排空会话",
@@ -3294,6 +3376,38 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "toolPresentation.command.lost": "live status lost",
     "toolPresentation.command.current": "current",
     "toolPresentation.command.currentState": "current {state}",
+    "toolPresentation.lua.title": "Execute Lua code",
+    "toolPresentation.lua.running": "Running",
+    "toolPresentation.lua.failed": "Failed",
+    "toolPresentation.lua.stopped": "Stopped",
+    "toolPresentation.lua.completed": "Executed",
+    "toolPresentation.lua.action.eval": "Execute Lua code",
+    "toolPresentation.lua.action.invalid": "Lua session operation failed",
+    "toolPresentation.lua.action.list": "List Lua sessions",
+    "toolPresentation.lua.action.start": "Start persistent Lua session",
+    "toolPresentation.lua.action.status": "Read Lua session status",
+    "toolPresentation.lua.action.close": "Close Lua session",
+    "toolPresentation.lua.oneShot": "Isolated execution",
+    "toolPresentation.lua.persistent": "Persistent session",
+    "toolPresentation.lua.session": "Session",
+    "toolPresentation.lua.ttl": "Idle TTL",
+    "toolPresentation.lua.elapsed": "Elapsed",
+    "toolPresentation.lua.code": "Lua code",
+    "toolPresentation.lua.arguments": "Structured arguments",
+    "toolPresentation.lua.output": "Result",
+    "toolPresentation.lua.argumentName": "Parameter",
+    "toolPresentation.lua.argumentValue": "Value",
+    "toolPresentation.lua.sessionName": "Name",
+    "toolPresentation.lua.sessionId": "Session ID",
+    "toolPresentation.lua.sessionState": "State",
+    "toolPresentation.lua.sessionTtl": "Idle TTL",
+    "toolPresentation.lua.sessionExpiresAt": "Expires at",
+    "toolPresentation.lua.sessionActive": "Active",
+    "toolPresentation.lua.sessionClosed": "Closed",
+    "toolPresentation.lua.sessionExpired": "Expired",
+    "toolPresentation.lua.sessionFailed": "Unavailable",
+    "toolPresentation.lua.noSessions": "There are no persistent Lua sessions.",
+    "toolPresentation.lua.closeSucceeded": "Lua session `{session}` was closed.",
     "toolPresentation.ask.running": "Asking",
     "toolPresentation.ask.ignored": "Ignored",
     "toolPresentation.ask.completed": "Asked",
@@ -3636,10 +3750,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.navigation.luaSettings": "LuaSkills Settings",
     "skills.luaSettings.description": "These settings are owned by Vulcan and configure both the conversation and service LuaSkills engines.",
     "skills.luaSettings.restartRequired": "Saved; restart required",
-    "skills.luaSettings.restartHint": "Every currently exposed setting is captured when an engine starts. Restart Vulcan Code after saving; the two running LuaSkills engines are not hot-swapped.",
+    "skills.luaSettings.restartHint": "The RunLua AI tool switch applies immediately. VM pool, network, runtime, and capability changes still require restarting Vulcan Code.",
     "skills.luaSettings.saved": "Vulcan LuaSkills configuration saved.",
     "skills.luaSettings.save": "Save LuaSkills Configuration",
     "skills.luaSettings.saving": "Saving…",
+    "skills.luaSettings.aiTools": "AI Tools",
+    "skills.luaSettings.aiToolsHint": "Controls AI-visible tools only; LuaSkills internals and plugin-owned Lua sessions remain available.",
+    "skills.luaSettings.enableRunLua": "runlua",
+    "skills.luaSettings.enableRunLuaSession": "runlua-session",
+    "skills.luaSettings.runLuaTooltip": "Runs one isolated Lua snippet for a calculation, transformation, or script task. Lua state is discarded after the call.",
+    "skills.luaSettings.runLuaSessionTooltip": "Enables persistent Lua sessions that retain variables, modules, and intermediate values across calls. This controls the runlua_session AI tool.",
     "skills.luaSettings.mainPool": "Main VM Pool",
     "skills.luaSettings.runLuaPool": "Isolated runLua VM Pool",
     "skills.luaSettings.poolHint": "The minimum controls warm capacity, the maximum limits concurrent VMs, and idle time retires excess VMs.",
@@ -3714,6 +3834,9 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.plugins.emptyTitle": "No system plugins",
     "skills.plugins.emptyDetail": "Bundled LuaSkills System Plugins appear here.",
     "skills.plugins.loadingPage": "Loading plugin page…",
+    "skills.plugins.externalUrlConfirmation": "This external link is not allowlisted. You can still open it if you trust it.",
+    "skills.plugins.externalUrlOpenAnyway": "Open anyway",
+    "skills.plugins.externalUrlOpenFailed": "Failed to open external link",
     "skills.plugins.unavailable": "Unavailable",
     "skills.plugins.enabling": "Enabling",
     "skills.plugins.draining": "Draining sessions",

@@ -28,19 +28,27 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use vulcan_luaskills_config::{LuaSkillsRuntimeSettings, load_runtime_settings};
 use vulcan_plugin_runtime::SystemPluginRuntimeManager;
 
+mod runlua;
 mod schema;
 mod types;
 
+pub use runlua::{
+    RUNLUA_SESSION_TOOL_NAME, RUNLUA_TOOL_NAME, build_runlua_tool_candidates,
+    set_runlua_ai_tools_enabled,
+};
 pub use schema::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, PWD_PARAMETER_NAME,
     luaskills_entry_args_schema,
 };
 pub use types::*;
-use types::{RootSkillBootstrapConfig, RootSkillBootstrapEntry};
+use types::{
+    RootSkillBootstrapConfig, RootSkillBootstrapEntry, RunLuaOwnedSession, RunLuaSessionRegistry,
+};
 
 /// Maximum queued LuaSkills progress event count retained for host polling snapshots.
 /// 为宿主轮询快照保留的 LuaSkills 进度事件最大排队数量。
@@ -64,14 +72,15 @@ fn bootstrap_luaskills_runtime_blocking(
     let runtime_root = application_luaskills_runtime_root().ok_or_else(|| {
         String::from("未找到 LuaSkills 活动运行根，请先执行 make build 并从 output 目录启动应用。")
     })?;
-    // runtime_root pins every derived host path to one absolute native directory identity.
-    // runtime_root 将所有派生宿主路径固定到一个绝对原生目录身份。
-    let runtime_root = fs::canonicalize(&runtime_root).map_err(|error| {
-        format!(
-            "规范化 LuaSkills 运行时根 `{}` 失败：{error}",
-            runtime_root.display()
-        )
-    })?;
+    // runtime_root pins every derived host path to one absolute native directory identity while removing Windows verbatim prefixes before the path reaches LuaSkills.
+    // runtime_root 将所有派生宿主路径固定到一个绝对原生目录身份，并在路径进入 LuaSkills 前移除 Windows verbatim 前缀。
+    let runtime_root =
+        runtime_assets::native_host_path(&fs::canonicalize(&runtime_root).map_err(|error| {
+            format!(
+                "规范化 LuaSkills 运行时根 `{}` 失败：{error}",
+                runtime_root.display()
+            )
+        })?);
     // output_config_directory is the only runtime configuration root accepted by Vulcan Code.
     // output_config_directory 是 Vulcan Code 唯一接受的运行时配置根目录。
     let output_config_directory = runtime_assets::resolve_output_config_directory()
@@ -90,13 +99,16 @@ fn bootstrap_luaskills_runtime_blocking(
             managed_runtime_distribution_root.display()
         )
     })?;
-    let managed_runtime_distribution_root = fs::canonicalize(&managed_runtime_distribution_root)
-        .map_err(|error| {
+    // managed_runtime_distribution_root uses the same native-path boundary required by LuaSkills host options.
+    // managed_runtime_distribution_root 使用 LuaSkills 宿主选项要求的同一原生路径边界。
+    let managed_runtime_distribution_root = runtime_assets::native_host_path(
+        &fs::canonicalize(&managed_runtime_distribution_root).map_err(|error| {
             format!(
                 "规范化公共 Python/Node 发行根 `{}` 失败：{error}",
                 managed_runtime_distribution_root.display()
             )
-        })?;
+        })?,
+    );
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
     let host_options = build_host_options(
@@ -184,6 +196,13 @@ fn bootstrap_luaskills_runtime_blocking(
             tool_entries: Arc::new(Mutex::new(tool_entries)),
             operation_progress_events,
             system_plugin_runtime,
+            runlua_ai_tool_enabled: Arc::new(AtomicBool::new(
+                runtime_settings.ai_tools.enable_run_lua,
+            )),
+            runlua_session_ai_tool_enabled: Arc::new(AtomicBool::new(
+                runtime_settings.ai_tools.enable_run_lua_session,
+            )),
+            runlua_sessions: Arc::new(Mutex::new(RunLuaSessionRegistry::default())),
         },
     })
 }
@@ -535,6 +554,9 @@ fn perform_luaskills_management_action_blocking(
     engine
         .reload_from_roots(&handle.skill_roots)
         .map_err(|error| format!("同步 LuaSkills 管理操作后的运行时入口失败：{error}"))?;
+    // Public runtime leases are replaced by reload, so host ownership must be invalidated atomically with it.
+    // 公开运行时租约会被 reload 替换，因此宿主归属必须与其同步失效。
+    runlua::clear_runlua_session_registry(handle);
 
     let catalog = build_luaskills_catalog(handle, &engine)?;
     Ok(LuaSkillsManagementReport { message, catalog })
@@ -767,7 +789,9 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     let state_dir = runtime_root.join("state");
     let download_root = temp_dir.join("downloads");
     let root_skills_dir = runtime_root.join("skills");
-    let user_skills_dir = default_user_skill_root();
+    // user_skills_dir is normalized before it becomes a LuaSkills RuntimeSkillRoot.
+    // user_skills_dir 在成为 LuaSkills RuntimeSkillRoot 前完成原生路径规范化。
+    let user_skills_dir = runtime_assets::native_host_path(&default_user_skill_root());
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
 
     for directory in [
@@ -814,11 +838,17 @@ fn build_host_options(
     controller: PersistedControllerConfiguration,
     runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
-    let mut host_options = LuaRuntimeHostOptions::with_runtime_root(runtime_root.to_path_buf());
-    host_options.managed_runtime_distribution_root =
-        Some(managed_runtime_distribution_root.to_path_buf());
+    // lua_runtime_root enforces the native-path invariant at the final LuaSkills HostOptions boundary.
+    // lua_runtime_root 在最终 LuaSkills HostOptions 边界强制执行原生路径不变量。
+    let lua_runtime_root = runtime_assets::native_host_path(runtime_root);
+    // lua_managed_runtime_distribution_root applies the same invariant to managed runtime discovery.
+    // lua_managed_runtime_distribution_root 对受管运行时发现路径应用相同不变量。
+    let lua_managed_runtime_distribution_root =
+        runtime_assets::native_host_path(managed_runtime_distribution_root);
+    let mut host_options = LuaRuntimeHostOptions::with_runtime_root(lua_runtime_root.clone());
+    host_options.managed_runtime_distribution_root = Some(lua_managed_runtime_distribution_root);
     host_options.managed_runtime_environment_root =
-        Some(runtime_root.join("dependencies").join("envs"));
+        Some(lua_runtime_root.join("dependencies").join("envs"));
     host_options.managed_runtime_config = LuaRuntimeManagedRuntimeConfig {
         worker_pool_max_size_per_environment: runtime_settings
             .managed_runtime
@@ -876,7 +906,8 @@ fn build_host_options(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(runtime_assets::resolve_bundled_controller_executable_path);
+        .or_else(runtime_assets::resolve_bundled_controller_executable_path)
+        .map(|path| runtime_assets::native_host_path(&path));
     host_options.space_controller.process_mode = match controller.process_mode {
         PersistedControllerProcessMode::Service => LuaRuntimeSpaceControllerProcessMode::Service,
         PersistedControllerProcessMode::Managed => LuaRuntimeSpaceControllerProcessMode::Managed,

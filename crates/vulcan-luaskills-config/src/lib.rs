@@ -212,6 +212,66 @@ pub struct LuaSkillsManagedRuntimeSettings {
     pub invoke_default_timeout_ms: Option<u64>,
 }
 
+/// AI-visible LuaSkills tool exposure controlled by the Vulcan host.
+/// 由 Vulcan 宿主控制的 AI 可见 LuaSkills 工具曝光设置。
+#[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsAiToolSettings {
+    /// Whether the host exposes the isolated `runlua` tool to AI providers.
+    /// 宿主是否向 AI Provider 暴露隔离执行的 `runlua` 工具。
+    pub enable_run_lua: bool,
+    /// Whether the host exposes the persistent `runlua_session` tool to AI providers.
+    /// 宿主是否向 AI Provider 暴露持久执行的 `runlua_session` 工具。
+    pub enable_run_lua_session: bool,
+}
+
+impl Default for LuaSkillsAiToolSettings {
+    /// Returns the stable host default that exposes RunLua tools without changing LuaSkills internals.
+    /// 返回稳定的宿主默认值：暴露 RunLua 工具但不改变 LuaSkills 内部能力。
+    fn default() -> Self {
+        Self {
+            enable_run_lua: true,
+            enable_run_lua_session: true,
+        }
+    }
+}
+
+/// Backward-compatible wire representation for host-owned RunLua exposure settings.
+/// 宿主自有 RunLua 曝光设置的向后兼容传输结构。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LuaSkillsAiToolSettingsWire {
+    /// Legacy and current isolated RunLua exposure value.
+    /// 旧版与当前隔离 RunLua 曝光值。
+    #[serde(default = "default_enabled_ai_tool")]
+    enable_run_lua: bool,
+    /// Optional persistent-session exposure added after the original combined switch.
+    /// 在原合并开关之后增加的可选持久会话曝光值。
+    #[serde(default)]
+    enable_run_lua_session: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for LuaSkillsAiToolSettings {
+    /// Decodes old combined settings by applying `enableRunLua` to both tools when needed.
+    /// 解码旧版合并设置；缺少新字段时将 `enableRunLua` 同时应用于两个工具。
+    fn deserialize<Deserializer>(deserializer: Deserializer) -> Result<Self, Deserializer::Error>
+    where
+        Deserializer: serde::Deserializer<'de>,
+    {
+        let wire = LuaSkillsAiToolSettingsWire::deserialize(deserializer)?;
+        Ok(Self {
+            enable_run_lua: wire.enable_run_lua,
+            enable_run_lua_session: wire.enable_run_lua_session.unwrap_or(wire.enable_run_lua),
+        })
+    }
+}
+
+/// Returns the stable enabled default used by omitted AI tool switches.
+/// 返回 AI 工具开关省略时使用的稳定启用默认值。
+fn default_enabled_ai_tool() -> bool {
+    true
+}
+
 impl Default for LuaSkillsManagedRuntimeSettings {
     /// Return the stable LuaSkills 0.5.2 managed-runtime defaults.
     /// 返回 LuaSkills 0.5.2 的稳定受管运行时默认值。
@@ -291,6 +351,10 @@ pub struct LuaSkillsRuntimeSettings {
     /// 受管 Python、Node Worker 与持久会话策略。
     #[serde(default)]
     pub managed_runtime: LuaSkillsManagedRuntimeSettings,
+    /// Host-owned AI tool exposure that does not alter the underlying LuaSkills engine features.
+    /// 不改变底层 LuaSkills 引擎能力的宿主自有 AI 工具曝光设置。
+    #[serde(default)]
+    pub ai_tools: LuaSkillsAiToolSettings,
 }
 
 impl Default for LuaSkillsRuntimeSettings {
@@ -328,6 +392,7 @@ impl Default for LuaSkillsRuntimeSettings {
                 enable_managed_io_compat: true,
             },
             managed_runtime: LuaSkillsManagedRuntimeSettings::default(),
+            ai_tools: LuaSkillsAiToolSettings::default(),
         }
     }
 }
@@ -357,7 +422,23 @@ impl LuaSkillsRuntimeSettings {
             network: self.network.normalized(),
             capabilities: self.capabilities.normalized()?,
             managed_runtime: self.managed_runtime,
+            ai_tools: self.ai_tools,
         })
+    }
+
+    /// Returns whether persisted engine-startup fields differ from one running-engine baseline.
+    /// 返回持久化引擎启动字段是否不同于某个运行中引擎基线。
+    ///
+    /// The host-only AI tool exposure is applied live and is intentionally excluded.
+    /// 宿主专用 AI 工具曝光会实时应用，因此刻意排除在外。
+    pub fn requires_engine_restart_from(&self, running: &Self) -> bool {
+        self.schema_version != running.schema_version
+            || self.vm_pool != running.vm_pool
+            || self.run_lua_pool != running.run_lua_pool
+            || self.tool_cache != running.tool_cache
+            || self.network != running.network
+            || self.capabilities != running.capabilities
+            || self.managed_runtime != running.managed_runtime
     }
 }
 
@@ -427,6 +508,7 @@ fn normalized_optional_text(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// Verify the repository template synchronized into output matches the compiled defaults.
     /// 验证同步到 output 的仓库模板与编译默认值一致。
@@ -454,6 +536,48 @@ mod tests {
             load_runtime_settings(root.path()).expect("load default settings"),
             LuaSkillsRuntimeSettings::default()
         );
+    }
+
+    /// Verify pre-RunLua settings documents enable the new host tools through serde defaults.
+    /// 验证 RunLua 开关引入前的设置文档会通过 serde 默认值启用新宿主工具。
+    #[test]
+    fn legacy_settings_default_runlua_ai_tools_to_enabled() {
+        let mut legacy = serde_json::to_value(LuaSkillsRuntimeSettings::default())
+            .expect("serialize default settings");
+        legacy
+            .as_object_mut()
+            .expect("settings should be an object")
+            .remove("aiTools");
+        let decoded = serde_json::from_value::<LuaSkillsRuntimeSettings>(legacy)
+            .expect("decode legacy settings");
+        assert!(decoded.ai_tools.enable_run_lua);
+        assert!(decoded.ai_tools.enable_run_lua_session);
+    }
+
+    /// Verify the original combined switch migrates to both independent tools.
+    /// 验证原始合并开关会迁移到两个独立工具。
+    #[test]
+    fn combined_runlua_switch_migrates_to_both_tools() {
+        let decoded = serde_json::from_value::<LuaSkillsAiToolSettings>(json!({
+            "enableRunLua": false
+        }))
+        .expect("decode combined RunLua switch");
+        assert!(!decoded.enable_run_lua);
+        assert!(!decoded.enable_run_lua_session);
+    }
+
+    /// Verify the live RunLua exposure switch does not request an engine restart.
+    /// 验证实时 RunLua 曝光开关不会请求引擎重启。
+    #[test]
+    fn runlua_ai_tool_switch_is_not_an_engine_restart_field() {
+        let running = LuaSkillsRuntimeSettings::default();
+        let mut saved = running.clone();
+        saved.ai_tools.enable_run_lua = false;
+        assert!(!saved.requires_engine_restart_from(&running));
+        saved.ai_tools.enable_run_lua_session = false;
+        assert!(!saved.requires_engine_restart_from(&running));
+        saved.vm_pool.max_size += 1;
+        assert!(saved.requires_engine_restart_from(&running));
     }
 
     /// Verify saved settings round-trip through the Vulcan-owned path.

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "libraryId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^/[^/]+/[^/]+([/@][^/]+)?$",
+      "description": "Exact Context7-compatible library ID returned by the resolve tool, optionally pinned to a version."
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "One focused documentation question or task, stripped of secrets and unrelated private content."
+    },
+    "fast": {
+      "type": "boolean",
+      "description": "Skip LLM reranking for lower latency when true."
+    }
+  },
+  "required": ["libraryId", "query"],
+  "additionalProperties": false
+}

@@ -904,6 +904,49 @@ fn validate_manifest_identity(
             "Registry dependency installation requires dependency_registry_network capability.",
         ));
     }
+    // uniqueLuaModules rejects ambiguous duplicate access declarations before lease creation.
+    // uniqueLuaModules 在创建租约前拒绝含义不明确的重复访问声明。
+    let unique_lua_modules = manifest.runtime.lua_modules.iter().collect::<BTreeSet<_>>();
+    if unique_lua_modules.len() != manifest.runtime.lua_modules.len() {
+        return Err(String::from(
+            "Plugin runtime lua_modules contains duplicate module names.",
+        ));
+    }
+    if !manifest.runtime.lua_modules.is_empty()
+        && manifest.kind != crate::SystemPluginKind::BundledSystem
+    {
+        return Err(String::from(
+            "Only bundled System Plugins may declare runtime lua_modules.",
+        ));
+    }
+    if !manifest.runtime.lua_modules.is_empty()
+        && !unique_capabilities.contains(&SystemPluginCapability::RuntimeLuaModules)
+    {
+        return Err(String::from(
+            "Plugin runtime lua_modules require capability `runtime_lua_modules`.",
+        ));
+    }
+    for module_name in &manifest.runtime.lua_modules {
+        if !matches!(
+            module_name.as_str(),
+            "lcurl.safe" | "openssl.cipher" | "openssl.rand"
+        ) {
+            return Err(format!(
+                "Plugin runtime Lua module `{module_name}` is not allowed by the host."
+            ));
+        }
+    }
+    if manifest
+        .runtime
+        .lua_modules
+        .iter()
+        .any(|module_name| module_name == "lcurl.safe")
+        && !unique_capabilities.contains(&SystemPluginCapability::NetworkHttps)
+    {
+        return Err(String::from(
+            "Plugin runtime module `lcurl.safe` requires capability `network_https`.",
+        ));
+    }
     for (has_resources, capability, label) in [
         (
             !manifest.binaries.is_empty(),
@@ -2382,6 +2425,124 @@ prompt_contributions:
             snapshot.plugins["test-plugin"].availability,
             SystemPluginAvailability::Unavailable
         );
+    }
+
+    /// Verifies allowlisted Lua modules require both explicit capabilities and bundled trust.
+    /// 验证白名单 Lua 模块同时要求显式能力与内建信任类型。
+    #[test]
+    fn allowlisted_runtime_lua_modules_load_for_bundled_plugin() {
+        // root owns one isolated bundled plugin catalog.
+        // root 持有一个隔离的内建插件目录。
+        let root = tempfile::tempdir().expect("create plugin catalog root");
+        write_valid_package(root.path());
+        // manifestPath addresses the exact fixture manifest before discovery.
+        // manifestPath 在目录发现前寻址精确测试清单。
+        let manifest_path = root.path().join("test-plugin/plugin.yaml");
+        // manifest adds the two required capabilities and all currently authorized modules.
+        // manifest 增加两项必需能力与当前全部已授权模块。
+        let manifest = fs::read_to_string(&manifest_path)
+            .expect("read fixture manifest")
+            .replace(
+                "runtime:\n",
+                "capabilities:\n  - runtime_lua_modules\n  - network_https\nruntime:\n  lua_modules: [lcurl.safe, openssl.cipher, openssl.rand]\n",
+            );
+        fs::write(&manifest_path, manifest).expect("write Lua module manifest");
+        // snapshot proves catalog validation accepts the complete declaration.
+        // snapshot 证明目录校验接受完整声明。
+        let snapshot =
+            load_system_plugin_catalog(root.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+        let plugin = snapshot.plugins.get("test-plugin").expect("load plugin");
+        assert_eq!(plugin.availability, SystemPluginAvailability::Enabled);
+        assert!(plugin.diagnostics.is_empty(), "{:?}", plugin.diagnostics);
+    }
+
+    /// Verifies unknown Lua modules cannot enter a fixed plugin bridge lease.
+    /// 验证未知 Lua 模块无法进入固定插件桥租约。
+    #[test]
+    fn unknown_runtime_lua_module_rejects_package() {
+        // root owns one isolated bundled plugin catalog.
+        // root 持有一个隔离的内建插件目录。
+        let root = tempfile::tempdir().expect("create plugin catalog root");
+        write_valid_package(root.path());
+        // manifestPath addresses the exact fixture manifest before discovery.
+        // manifestPath 在目录发现前寻址精确测试清单。
+        let manifest_path = root.path().join("test-plugin/plugin.yaml");
+        // manifest requests one module absent from the host allowlist.
+        // manifest 请求一个不存在于宿主白名单的模块。
+        let manifest = fs::read_to_string(&manifest_path)
+            .expect("read fixture manifest")
+            .replace(
+                "runtime:\n",
+                "capabilities:\n  - runtime_lua_modules\nruntime:\n  lua_modules: [socket]\n",
+            );
+        fs::write(&manifest_path, manifest).expect("write unknown Lua module manifest");
+        // snapshot preserves the unavailable descriptor and its exact diagnostic.
+        // snapshot 保留不可用描述符及其精确诊断。
+        let snapshot =
+            load_system_plugin_catalog(root.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+        let plugin = snapshot.plugins.get("test-plugin").expect("load plugin");
+        assert_eq!(plugin.availability, SystemPluginAvailability::Unavailable);
+        assert!(plugin.diagnostics.iter().any(|diagnostic| diagnostic
+            .contains("runtime Lua module `socket` is not allowed")));
+    }
+
+    /// Verifies module declarations cannot silently bypass capability authorization.
+    /// 验证模块声明无法静默绕过能力授权。
+    #[test]
+    fn runtime_lua_modules_without_capability_reject_package() {
+        // root owns one isolated bundled plugin catalog.
+        // root 持有一个隔离的内建插件目录。
+        let root = tempfile::tempdir().expect("create plugin catalog root");
+        write_valid_package(root.path());
+        // manifestPath addresses the exact fixture manifest before discovery.
+        // manifestPath 在目录发现前寻址精确测试清单。
+        let manifest_path = root.path().join("test-plugin/plugin.yaml");
+        // manifest declares an allowed module but omits runtime_lua_modules.
+        // manifest 声明一个允许模块，但省略 runtime_lua_modules 能力。
+        let manifest = fs::read_to_string(&manifest_path)
+            .expect("read fixture manifest")
+            .replace("runtime:\n", "runtime:\n  lua_modules: [openssl.rand]\n");
+        fs::write(&manifest_path, manifest).expect("write unauthorized Lua module manifest");
+        // snapshot preserves the unavailable descriptor and its exact diagnostic.
+        // snapshot 保留不可用描述符及其精确诊断。
+        let snapshot =
+            load_system_plugin_catalog(root.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+        let plugin = snapshot.plugins.get("test-plugin").expect("load plugin");
+        assert_eq!(plugin.availability, SystemPluginAvailability::Unavailable);
+        assert!(plugin.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("lua_modules require capability `runtime_lua_modules`")
+        }));
+    }
+
+    /// Verifies HTTPS-capable lua-cURL access cannot omit the visible network capability.
+    /// 验证具备 HTTPS 能力的 lua-cURL 访问不能省略可见网络能力。
+    #[test]
+    fn lcurl_runtime_module_without_network_capability_rejects_package() {
+        // root owns one isolated bundled plugin catalog.
+        // root 持有一个隔离的内建插件目录。
+        let root = tempfile::tempdir().expect("create plugin catalog root");
+        write_valid_package(root.path());
+        // manifestPath addresses the exact fixture manifest before discovery.
+        // manifestPath 在目录发现前寻址精确测试清单。
+        let manifest_path = root.path().join("test-plugin/plugin.yaml");
+        // manifest requests lua-cURL while omitting network_https.
+        // manifest 请求 lua-cURL，但省略 network_https。
+        let manifest = fs::read_to_string(&manifest_path)
+            .expect("read fixture manifest")
+            .replace(
+                "runtime:\n",
+                "capabilities:\n  - runtime_lua_modules\nruntime:\n  lua_modules: [lcurl.safe]\n",
+            );
+        fs::write(&manifest_path, manifest).expect("write network capability fixture");
+        // snapshot preserves the unavailable descriptor and its exact diagnostic.
+        // snapshot 保留不可用描述符及其精确诊断。
+        let snapshot =
+            load_system_plugin_catalog(root.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+        let plugin = snapshot.plugins.get("test-plugin").expect("load plugin");
+        assert_eq!(plugin.availability, SystemPluginAvailability::Unavailable);
+        assert!(plugin.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("`lcurl.safe` requires capability `network_https`")
+        }));
     }
 
     /// Verifies a package kind cannot claim user trust semantics from the bundled root.

@@ -6348,6 +6348,7 @@ dependencies = [
  "tokio",
  "uuid",
  "vulcan-hooks",
+ "vulcan-runtime-assets",
 ]
 
 [[package]]

@@ -1,0 +1,60 @@
+name: Context7
+capability: 为编码智能体提供最新且支持版本定位的库文档
+messages:
+  navigationLabel: Context7
+  title: Context7 文档服务
+  subtitle: 配置鉴权方式，并查看请求配额与本地用量。
+  aboutTitle: Context7 是什么？
+  aboutDescription: Context7 会按库和版本为编码智能体检索最新文档，并把与当前任务相关的内容直接提供给智能体，减少因模型知识过时而使用错误 API 的情况。
+  allowanceDescription: 未配置 API Key 时使用匿名模式，可调用 200 次；注册并配置免费的 API Key 后，可调用 1000 次，并能在官方控制台查看账户用量。
+  quickLinks: 快捷链接：
+  refresh: 刷新
+  loading: 正在加载 Context7 设置…
+  loadError: 无法加载 Context7 数据。
+  credentialTitle: 身份验证
+  anonymousMode: 匿名模式
+  apiKeyMode: API Key 模式
+  configured: 已配置 API Key
+  notConfigured: 尚未配置 API Key；请求将使用匿名额度。
+  apiKeyPlaceholder: ctx7sk-…
+  saveApiKey: 保存 API Key
+  replaceApiKey: 替换 API Key
+  deleteApiKey: 删除 API Key
+  confirmDeleteApiKey: 确认删除
+  apiKeySaved: Context7 API Key 已保存。
+  apiKeyDeleted: Context7 API Key 已删除，现已启用匿名模式。
+  credentialInvalid: Context7 已拒绝当前配置的 API Key。
+  credentialValid: 当前配置的 API Key 已验证成功。
+  credentialUntested: 当前配置的 API Key 尚未测试。
+  credentialUnknown: 暂无 API Key 验证结果。
+  connectionTest: 测试连接
+  connectionTestHint: 测试会消耗当前额度中的一次 Context7 请求。
+  connectionSuccess: Context7 连接成功。
+  behaviorTitle: 请求行为
+  defaultFastMode: 默认使用快速模式
+  defaultFastModeHint: 跳过 Context7 的 LLM 重排序以降低延迟，但相关性可能下降。
+  timeout: 请求超时
+  retention: 本地统计保留期
+  saveSettings: 保存设置
+  settingsSaved: Context7 设置已保存。
+  usageTitle: 用量与配额
+  localStatsTitle: 本地调用统计
+  usageRange: 本地统计范围
+  requests: 请求数
+  successes: 成功
+  failures: 失败
+  averageDuration: 平均耗时
+  quotaTitle: 最新 Context7 配额快照
+  quotaTier: 等级
+  quotaRemaining: 剩余
+  quotaLimit: 上限
+  quotaReset: 重置时间
+  noQuota: 当前鉴权代次尚未收到配额响应。
+  localUsageNotice: 本地统计仅包含通过当前 Vulcan Code 插件发起的请求。
+  officialUsageNotice: 完整账户用量、计费周期、席位和费用仍以 Context7 官方控制台为准。
+  dashboardLink: Context7 控制台
+  apiKeyDocsLink: 获取免费 API Key
+  usageDocsLink: API 与用量文档
+  saving: 正在保存…
+  testing: 正在测试…
+  days: "{{days}} 天"

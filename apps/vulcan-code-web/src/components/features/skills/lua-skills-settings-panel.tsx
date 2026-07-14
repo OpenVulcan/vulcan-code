@@ -1,6 +1,8 @@
 import * as React from "react"
+import { CircleHelp } from "lucide-react"
 
 import { useI18n } from "@/i18n"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import type {
   LuaSkillsCatalogSummary,
   LuaSkillsManagedRuntimeComponentSummary,
@@ -191,6 +193,7 @@ function cloneLuaSkillsRuntimeSettings(settings: LuaSkillsRuntimeSettings): LuaS
     },
     capabilities: { ...settings.capabilities },
     managedRuntime: { ...settings.managedRuntime },
+    aiTools: { ...settings.aiTools },
   }
 }
 
@@ -422,6 +425,16 @@ export function LuaSkillsSettingsPanel(props: {
     setFeedback(null)
   }, [])
 
+  // updateRunLuaAiTool updates one exact host-only exposure switch without altering VM-pool settings.
+  // updateRunLuaAiTool 更新一个精确的宿主专用曝光开关，但不会改变 VM 池设置。
+  const updateRunLuaAiTool = React.useCallback((field: "enableRunLua" | "enableRunLuaSession", enabled: boolean) => {
+    setDraft((current) => ({
+      ...current,
+      aiTools: { ...current.aiTools, [field]: enabled },
+    }))
+    setFeedback(null)
+  }, [])
+
   // saveSettings validates and commits the complete Vulcan-owned settings document.
   // saveSettings 校验并提交完整的 Vulcan 自有设置文档。
   const saveSettings = React.useCallback(async () => {
@@ -498,6 +511,23 @@ export function LuaSkillsSettingsPanel(props: {
             <CombinedManagedRuntimeRow status={props.catalog.managedRuntimeBootstrap.status} />
           )}
         </div>
+
+        <section className="lua-settings-section">
+          <h4>{t("skills.luaSettings.aiTools")}</h4>
+          <p>{t("skills.luaSettings.aiToolsHint")}</p>
+          <ToggleSettingField
+            label={t("skills.luaSettings.enableRunLua")}
+            checked={draft.aiTools.enableRunLua}
+            tooltip={t("skills.luaSettings.runLuaTooltip")}
+            onChange={(enabled) => updateRunLuaAiTool("enableRunLua", enabled)}
+          />
+          <ToggleSettingField
+            label={t("skills.luaSettings.enableRunLuaSession")}
+            checked={draft.aiTools.enableRunLuaSession}
+            tooltip={t("skills.luaSettings.runLuaSessionTooltip")}
+            onChange={(enabled) => updateRunLuaAiTool("enableRunLuaSession", enabled)}
+          />
+        </section>
 
         <PoolSettingsSection
           title={t("skills.luaSettings.mainPool")}
@@ -787,6 +817,9 @@ function ToggleSettingField(props: {
   // Localized toggle label.
   // 本地化开关标签。
   label: string
+  // Optional localized explanation shown from the adjacent help icon.
+  // 可选的本地化说明，通过相邻帮助图标显示。
+  tooltip?: string
   // Current Boolean value.
   // 当前布尔值。
   checked: boolean
@@ -794,14 +827,44 @@ function ToggleSettingField(props: {
   // 提交下一份布尔草稿。
   onChange: (checked: boolean) => void
 }) {
+  // inputId associates the visible label with this exact checkbox without wrapping the help button.
+  // inputId 将可见标签与当前精确复选框关联，同时避免包裹帮助按钮。
+  const inputId = React.useId()
+  if (!props.tooltip) {
+    return (
+      <label className="lua-settings-toggle">
+        <input
+          type="checkbox"
+          checked={props.checked}
+          onChange={(event) => props.onChange(event.currentTarget.checked)}
+        />
+        <span>{props.label}</span>
+      </label>
+    )
+  }
   return (
-    <label className="lua-settings-toggle">
+    <div className="lua-settings-toggle">
       <input
+        id={inputId}
         type="checkbox"
         checked={props.checked}
         onChange={(event) => props.onChange(event.currentTarget.checked)}
       />
-      <span>{props.label}</span>
-    </label>
+      <label htmlFor={inputId}>{props.label}</label>
+      <TooltipProvider delayDuration={500}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              aria-label={`${props.label}: ${props.tooltip}`}
+              className="lua-settings-help-trigger"
+              type="button"
+            >
+              <CircleHelp aria-hidden="true" size={14} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={6}>{props.tooltip}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
   )
 }

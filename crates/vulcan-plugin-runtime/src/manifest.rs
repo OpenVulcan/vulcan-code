@@ -168,6 +168,12 @@ pub struct SystemPluginLifecycleManifest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SystemPluginCapability {
+    /// Access host-allowlisted Lua runtime modules declared by this bundled plugin.
+    /// 访问当前内建插件声明且经宿主白名单允许的 Lua 运行时模块。
+    RuntimeLuaModules,
+    /// Perform HTTPS requests through an explicitly declared runtime network client.
+    /// 通过显式声明的运行时网络客户端执行 HTTPS 请求。
+    NetworkHttps,
     /// Execute manifest-declared native binaries.
     /// 执行清单声明的原生二进制文件。
     ProcessBinary,
@@ -426,6 +432,10 @@ pub struct SystemPluginRuntimeManifest {
     /// 插件可启用前必须存在的其他包相对普通文件集合。
     #[serde(default)]
     pub required_files: Vec<String>,
+    /// Host-allowlisted Lua modules exposed through the restricted plugin runtime API.
+    /// 通过受限插件运行时 API 暴露的宿主白名单 Lua 模块。
+    #[serde(default)]
+    pub lua_modules: Vec<String>,
     /// Lua function used for normal operations.
     /// 常规操作使用的 Lua 函数。
     pub invoke_function: String,

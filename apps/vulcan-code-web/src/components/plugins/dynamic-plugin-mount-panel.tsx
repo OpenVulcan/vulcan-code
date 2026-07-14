@@ -23,7 +23,10 @@ import {
   loadPluginUiModule,
   readPluginTextAsset,
 } from "@/service/skills-actions-service";
-import { openExternalUrl } from "@/service/project-actions-service";
+import {
+  ExternalUrlConfirmationRequiredError,
+  openExternalUrl,
+} from "@/service/project-actions-service";
 import {
   latestPluginUiInvalidationRevision,
   subscribePluginUiInvalidation,
@@ -179,6 +182,37 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
   // error stores bounded module-load or Action diagnostics.
   // error 保存有边界的模块加载或 Action 诊断。
   const [error, setError] = React.useState("");
+  // openPluginExternalUrl keeps allowlist overrides behind a direct trusted-host toast action.
+  // openPluginExternalUrl 将白名单绕过限制在可信宿主 Toast 的直接操作之后。
+  //
+  // url is the exact plugin-requested external target.
+  // url 是插件请求打开的精确外部目标。
+  // Returns after opening an allowlisted URL or presenting the confirmation Toast.
+  // 在打开白名单链接或展示确认 Toast 后返回。
+  const openPluginExternalUrl = React.useCallback(async (url: string): Promise<void> => {
+    try {
+      await openExternalUrl(url);
+    } catch (reason) {
+      if (!(reason instanceof ExternalUrlConfirmationRequiredError)) {
+        throw reason;
+      }
+      toast.warning(t("skills.plugins.externalUrlConfirmation"), {
+        description: reason.url,
+        duration: 15_000,
+        action: {
+          label: t("skills.plugins.externalUrlOpenAnyway"),
+          onClick: () => {
+            void openExternalUrl(reason.url, true).catch((openReason: unknown) => {
+              // message is the bounded host failure shown after an explicit override fails.
+              // message 是显式绕过失败后展示的有界宿主错误。
+              const message = openReason instanceof Error ? openReason.message : String(openReason);
+              toast.error(t("skills.plugins.externalUrlOpenFailed"), { description: message });
+            });
+          },
+        },
+      });
+    }
+  }, [t]);
   // sdk binds every action invocation to the selected plugin identity and host context.
   // sdk 把每次 Action 调用绑定到所选插件身份与宿主上下文。
   const sdk = React.useMemo<Omit<PluginUiSdk, "t">>(() => ({
@@ -192,7 +226,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       const asset = await readPluginTextAsset(props.plugin.id, path);
       return asset.content;
     },
-    openExternalUrl,
+    openExternalUrl: openPluginExternalUrl,
     locale,
     components: {
       Badge,
@@ -219,7 +253,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       success: (message: string) => toast.success(message),
       error: (message: string) => toast.error(message),
     },
-  }), [locale, props.plugin.id, props.workspacePath]);
+  }), [locale, openPluginExternalUrl, props.plugin.id, props.workspacePath]);
 
   React.useEffect(() => {
     // cancelled prevents a stale module from replacing a newer plugin selection.

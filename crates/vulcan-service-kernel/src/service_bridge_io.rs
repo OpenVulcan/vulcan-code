@@ -5,17 +5,46 @@ use super::*;
 use reqwest::Url;
 use vulcan_service_api::WebuiServiceDiscoverySnapshot;
 
+/// Stable service result returned after an external URL is opened.
+/// 外部链接成功打开后返回的稳定服务结果。
+const EXTERNAL_URL_OPENED: &str = "opened";
+
+/// Stable service result requesting an explicit trusted-UI user confirmation.
+/// 请求可信界面进行明确用户确认时返回的稳定服务结果。
+const EXTERNAL_URL_CONFIRMATION_REQUIRED: &str = "confirmation_required";
+
 /// Opens a trusted external URL with the system default browser.
 /// 使用系统默认浏览器打开可信外部链接。
 pub(crate) fn service_open_external_url(
     state: SharedServiceBridgeState,
     url: String,
+    user_confirmed: bool,
 ) -> Result<String, String> {
-    if !external_url_is_allowed(&url) {
-        return Err(String::from("不允许打开未授权的外部链接。"));
+    if !external_url_is_safe(&url) {
+        return Err(String::from("不允许打开不安全的外部链接。"));
+    }
+    if !external_url_is_allowed(&url) && !user_confirmed {
+        return Ok(String::from(EXTERNAL_URL_CONFIRMATION_REQUIRED));
     }
     shell_host_from_state(&state)?.open_url(&url)?;
-    Ok(String::from("已请求使用系统默认浏览器打开外部链接。"))
+    Ok(String::from(EXTERNAL_URL_OPENED))
+}
+
+/// Returns whether one external URL satisfies non-bypassable transport and credential safety rules.
+/// 返回外部链接是否满足不可绕过的传输与凭据安全规则。
+///
+/// `url` is the exact caller-provided external URL.
+/// `url` 是调用方提供的精确外部 URL。
+/// Returns true only for HTTPS URLs with a host and without embedded credentials.
+/// 仅对包含主机且不内嵌凭据的 HTTPS URL 返回 true。
+fn external_url_is_safe(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
 }
 
 /// Returns whether one external URL may be opened by the host shell.
@@ -24,10 +53,10 @@ fn external_url_is_allowed(url: &str) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
     };
-    parsed.scheme() == "https"
-        && parsed.host_str() == Some("github.com")
-        && parsed.username().is_empty()
-        && parsed.password().is_none()
+    // allowed_host limits shell navigation to exact source-defined HTTPS domains.
+    // allowed_host 将 Shell 导航限制为源码明确声明的精确 HTTPS 域名。
+    let allowed_host = matches!(parsed.host_str(), Some("github.com" | "context7.com"));
+    external_url_is_safe(url) && allowed_host
 }
 
 /// Returns the host shell adapter from shared service state.
@@ -353,8 +382,19 @@ mod tests {
         ));
     }
 
-    /// Verifies non-GitHub or unsafe URLs remain blocked.
-    /// 验证非 GitHub 或不安全链接仍会被阻止。
+    /// Verifies every HTTPS path on the exact Context7 domain is allowed.
+    /// 验证精确 Context7 域名下的全部 HTTPS 路径均被允许。
+    #[test]
+    fn external_url_allowlist_accepts_context7_https_urls() {
+        assert!(external_url_is_allowed("https://context7.com"));
+        assert!(external_url_is_allowed("https://context7.com/dashboard"));
+        assert!(external_url_is_allowed(
+            "https://context7.com/docs/howto/api-keys?source=vulcan#setup"
+        ));
+    }
+
+    /// Verifies non-allowlisted or unsafe URLs remain blocked.
+    /// 验证非白名单或不安全链接仍会被阻止。
     #[test]
     fn external_url_allowlist_rejects_unsafe_urls() {
         assert!(!external_url_is_allowed(
@@ -366,7 +406,22 @@ mod tests {
         assert!(!external_url_is_allowed(
             "https://user:token@github.com/msitarzewski/agency-agents"
         ));
+        assert!(!external_url_is_allowed("http://context7.com/dashboard"));
+        assert!(!external_url_is_allowed("https://docs.context7.com"));
+        assert!(!external_url_is_allowed(
+            "https://user:token@context7.com/dashboard"
+        ));
         assert!(!external_url_is_allowed("not a url"));
+    }
+
+    /// Verifies explicit confirmation may bypass only the domain allowlist, not URL safety rules.
+    /// 验证明示确认只能绕过域名白名单，不能绕过 URL 安全规则。
+    #[test]
+    fn external_url_safety_remains_non_bypassable() {
+        assert!(external_url_is_safe("https://example.com/path"));
+        assert!(!external_url_is_safe("http://example.com/path"));
+        assert!(!external_url_is_safe("https://user:token@example.com/path"));
+        assert!(!external_url_is_safe("not a url"));
     }
 
     /// Verifies required RPC params report missing keys with the canonical message.

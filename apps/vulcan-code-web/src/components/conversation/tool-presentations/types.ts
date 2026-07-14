@@ -215,6 +215,53 @@ export interface MarkdownToolPresentation {
   markdown: string;
 }
 
+// LuaExecutionPresentation describes one isolated RunLua call or persistent Lua lifecycle action.
+// LuaExecutionPresentation 描述一次隔离 RunLua 调用或持久 Lua 生命周期动作。
+export interface LuaExecutionPresentation {
+  // Discriminator for the dedicated Lua execution card.
+  // 专用 Lua 执行卡片的判别字段。
+  kind: "lua_execution";
+  // Stable id used for expansion state across virtualized remounts.
+  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  id: string;
+  // Exact public tool id that produced the execution.
+  // 生成本次执行的精确公开工具标识。
+  toolId: "runlua" | "runlua_session";
+  // Current compact display state.
+  // 当前紧凑展示状态。
+  state: ToolPresentationDisplayState;
+  // Execution mode selected by the exact public tool contract.
+  // 由精确公开工具契约选定的执行模式。
+  mode: "one_shot" | "persistent";
+  // Exact lifecycle action, or invalid when malformed session arguments omit a valid action.
+  // 精确生命周期动作；畸形会话参数缺少有效动作时为 invalid。
+  action: "eval" | "list" | "start" | "status" | "close" | "invalid";
+  // Short user-facing task or session label.
+  // 面向用户的简短任务或会话标签。
+  label: string | null;
+  // Lua source obtained from the fixed invocation arguments or bounded host preview.
+  // 从固定调用参数或有界宿主预览取得的 Lua 源码。
+  code: string | null;
+  // Exact structured arguments obtained from the fixed invocation contract for table rendering.
+  // 从固定调用契约取得的精确结构化参数，用于表格渲染。
+  arguments: Record<string, unknown> | null;
+  // Opaque persistent session identifier when the action addresses one session.
+  // 动作指向单个会话时使用的不透明持久会话标识。
+  sessionId: string | null;
+  // Idle lease lifetime returned by a persistent session action.
+  // 持久会话动作返回的闲置租约生命周期。
+  ttlSec: number | null;
+  // Complete host-side action latency when reported.
+  // 宿主报告的完整动作耗时。
+  elapsedMs: number | null;
+  // Best available model-facing output, hydrated lazily when necessary.
+  // 当前可获得的面向模型输出，必要时按需补全。
+  output: string;
+  // Hidden detail reference used to hydrate full execution output.
+  // 用于补全完整执行输出的隐藏详情引用。
+  detailRef?: ConversationDetailRef;
+}
+
 // FileChangeDiffRow describes one rendered line inside a file change panel.
 // FileChangeDiffRow 描述文件变更面板中的单条渲染行。
 export interface FileChangeDiffRow {
@@ -394,4 +441,4 @@ export interface SubagentUsageSummary {
 
 // ToolPresentation is the union of all recognized custom tool displays.
 // ToolPresentation 是所有已识别自定义工具展示的联合类型。
-export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | MarkdownToolPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation;
+export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | MarkdownToolPresentation | LuaExecutionPresentation | AskQuestionPresentation | SubagentOrchestrationPresentation;

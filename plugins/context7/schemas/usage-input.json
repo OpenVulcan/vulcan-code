@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "rangeDays": { "type": "integer", "enum": [7, 30, 90, 365] }
+  },
+  "required": ["rangeDays"],
+  "additionalProperties": false
+}

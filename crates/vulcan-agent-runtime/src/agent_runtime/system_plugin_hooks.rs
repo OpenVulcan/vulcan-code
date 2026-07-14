@@ -213,17 +213,20 @@ hooks:
     /// Builds one real LuaSkills engine rooted at the test runtime layout.
     /// 构建一个以测试运行布局为根的真实 LuaSkills 引擎。
     fn test_engine(runtime_root: &Path) -> LuaEngine {
+        // native_runtime_root keeps the integration-test Lua package paths free of Windows verbatim prefixes.
+        // native_runtime_root 使集成测试的 Lua package 路径不包含 Windows verbatim 前缀。
+        let native_runtime_root = crate::runtime_assets::native_host_path(
+            &runtime_root
+                .canonicalize()
+                .expect("canonicalize LuaSkills runtime root"),
+        );
         LuaEngine::new(LuaEngineOptions::new(
             LuaVmPoolConfig {
                 min_size: 1,
                 max_size: 1,
                 idle_ttl_secs: 60,
             },
-            LuaRuntimeHostOptions::with_runtime_root(
-                runtime_root
-                    .canonicalize()
-                    .expect("canonicalize LuaSkills runtime root"),
-            ),
+            LuaRuntimeHostOptions::with_runtime_root(native_runtime_root),
         ))
         .expect("create LuaSkills test engine")
     }

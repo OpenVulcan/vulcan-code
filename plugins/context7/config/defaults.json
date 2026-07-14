@@ -1,0 +1,5 @@
+{
+  "defaultFastMode": false,
+  "requestTimeoutMs": 30000,
+  "retentionDays": 90
+}

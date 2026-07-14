@@ -1,0 +1,17 @@
+schema_version: 3
+interface:
+  display_name: "RunLua"
+  short_description: "Use one-shot and persistent Lua execution safely"
+  emoji: "🌙"
+  color: "#7C3AED"
+  locales:
+    zh-CN:
+      display_name: "RunLua"
+      short_description: "安全使用一次性与持久 Lua 执行"
+catalog:
+  category_id: "operations"
+  tags: ["lua", "runtime", "session"]
+origin:
+  kind: "builtin"
+  label: "VulcanCode"
+  managed: true

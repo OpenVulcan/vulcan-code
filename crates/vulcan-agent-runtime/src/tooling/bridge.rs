@@ -10,8 +10,9 @@ use crate::image_understanding_compat::{
 };
 use crate::luaskills_runtime::{
     LUASKILL_SID_PARAMETER_NAME, LUASKILLS_HOST_MANAGED_SID_PREFIX, LuaSkillsRuntimeHandle,
-    PWD_PARAMETER_NAME, build_luaskills_tool_invocation_context, call_luaskills_tool_entry,
-    luaskills_entry_args_schema, render_luaskills_invocation_result_text,
+    PWD_PARAMETER_NAME, build_luaskills_tool_invocation_context, build_runlua_tool_candidates,
+    call_luaskills_tool_entry, luaskills_entry_args_schema,
+    render_luaskills_invocation_result_text,
 };
 use crate::mcp::McpRuntimeToolBinding;
 use crate::media_generation_compat::{
@@ -217,6 +218,20 @@ pub fn build_vulcan_tools_manager(
                 })
             }),
         });
+    }
+
+    if let Some(runtime) = luaskills_runtime.clone() {
+        // runlua_candidates are engine-level LuaSkills tools rather than manifest entries.
+        // runlua_candidates 是引擎级 LuaSkills 工具，而不是清单入口。
+        let runlua_candidates = build_runlua_tool_candidates(runtime, workspace_root.clone());
+        for candidate in runlua_candidates {
+            // runlua_tool_id reserves the exact public id before manifest-backed entries are projected.
+            // runlua_tool_id 在投影清单入口前保留精确公开标识。
+            let runlua_tool_id = candidate.descriptor.id.clone();
+            if occupied_public_tool_ids.insert(runlua_tool_id.clone()) {
+                candidates.push(candidate);
+            }
+        }
     }
 
     let mut plugin_groups = BTreeMap::<(String, String), Vec<SystemPluginToolDescriptor>>::new();

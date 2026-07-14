@@ -1,0 +1,60 @@
+name: Context7
+capability: Current, version-aware library documentation for coding agents
+messages:
+  navigationLabel: Context7
+  title: Context7 documentation
+  subtitle: Configure authentication and inspect request quota and local usage.
+  aboutTitle: What is Context7?
+  aboutDescription: Context7 retrieves current, version-aware library documentation for coding agents and supplies relevant content directly to the active task, reducing incorrect API usage caused by stale model knowledge.
+  allowanceDescription: Anonymous mode provides 200 requests without an API key. Registering and configuring a free API key provides 1,000 requests and account usage visibility in the official dashboard.
+  quickLinks: "Quick links:"
+  refresh: Refresh
+  loading: Loading Context7 settings…
+  loadError: Context7 data could not be loaded.
+  credentialTitle: Authentication
+  anonymousMode: Anonymous mode
+  apiKeyMode: API key mode
+  configured: API key configured
+  notConfigured: No API key configured; requests use the anonymous allowance.
+  apiKeyPlaceholder: ctx7sk-…
+  saveApiKey: Save API key
+  replaceApiKey: Replace API key
+  deleteApiKey: Delete API key
+  confirmDeleteApiKey: Confirm deletion
+  apiKeySaved: Context7 API key saved.
+  apiKeyDeleted: Context7 API key deleted; anonymous mode is active.
+  credentialInvalid: The configured API key was rejected by Context7.
+  credentialValid: The configured API key was validated successfully.
+  credentialUntested: The configured API key has not been tested yet.
+  credentialUnknown: No API key validation result is available.
+  connectionTest: Test connection
+  connectionTestHint: Testing consumes one Context7 request from the current allowance.
+  connectionSuccess: Context7 connection succeeded.
+  behaviorTitle: Request behavior
+  defaultFastMode: Fast mode by default
+  defaultFastModeHint: Skip Context7 LLM reranking for lower latency and potentially lower relevance.
+  timeout: Request timeout
+  retention: Local statistics retention
+  saveSettings: Save settings
+  settingsSaved: Context7 settings saved.
+  usageTitle: Usage and quota
+  localStatsTitle: Local request statistics
+  usageRange: Local range
+  requests: Requests
+  successes: Successful
+  failures: Failed
+  averageDuration: Average duration
+  quotaTitle: Latest Context7 quota snapshot
+  quotaTier: Tier
+  quotaRemaining: Remaining
+  quotaLimit: Limit
+  quotaReset: Reset
+  noQuota: No quota response has been observed for the current authentication generation.
+  localUsageNotice: Local statistics include only requests made by this Vulcan Code plugin.
+  officialUsageNotice: Complete account usage, billing periods, seats, and cost remain available in the official Context7 dashboard.
+  dashboardLink: Context7 dashboard
+  apiKeyDocsLink: Get a free API key
+  usageDocsLink: API and usage documentation
+  saving: Saving…
+  testing: Testing…
+  days: "{{days}} days"

@@ -348,7 +348,14 @@ pub(super) fn raw_visible_host_result(
 pub(super) fn raw_host_result_kind_is_visible(kind: Option<&str>) -> bool {
     matches!(
         kind,
-        Some("change_set" | "ask" | "command_run" | "plan_artifact")
+        Some(
+            "change_set"
+                | "ask"
+                | "command_run"
+                | "plan_artifact"
+                | "lua_execution"
+                | "lua_runtime_session"
+        )
     )
 }
 

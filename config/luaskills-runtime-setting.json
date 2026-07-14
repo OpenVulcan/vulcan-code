@@ -34,5 +34,9 @@
     "persistentSessionLimitPerEngine": 256,
     "persistentSessionDefaultBufferLimitBytesPerStream": 1048576,
     "invokeDefaultTimeoutMs": null
+  },
+  "aiTools": {
+    "enableRunLua": true,
+    "enableRunLuaSession": true
   }
 }

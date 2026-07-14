@@ -2,7 +2,7 @@
 //! WebUI 服务引导编排与启动快照投影。
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -474,16 +474,22 @@ fn run_service_bootstrap(
                 )
             })?
     };
-    let agent_luaskills_runtime = LuaSkillsRuntimeHandle {
-        engine: Arc::clone(&luaskills_runtime.engine),
-        runtime_root: luaskills_runtime.runtime_root.clone(),
-        system_lua_lib_dir: luaskills_runtime.runtime_root.join("system_lua_lib"),
-        skill_roots: luaskills_runtime.skill_roots.clone(),
-        entry_count: luaskills_catalog.entry_count,
-        tool_entries: Arc::new(Mutex::new(agent_luaskills_tool_entries)),
-        operation_progress_events: Arc::new(Mutex::new(VecDeque::new())),
-        system_plugin_runtime: system_plugin_runtime.clone(),
-    };
+    let agent_luaskills_runtime = LuaSkillsRuntimeHandle::from_shared_engine(
+        Arc::clone(&luaskills_runtime.engine),
+        luaskills_runtime.runtime_root.clone(),
+        luaskills_runtime.skill_roots.clone(),
+        luaskills_catalog.entry_count,
+        agent_luaskills_tool_entries,
+        system_plugin_runtime.clone(),
+        luaskills_runtime
+            .effective_runtime_settings
+            .ai_tools
+            .enable_run_lua,
+        luaskills_runtime
+            .effective_runtime_settings
+            .ai_tools
+            .enable_run_lua_session,
+    );
     update_startup(
         state,
         event_emitter,

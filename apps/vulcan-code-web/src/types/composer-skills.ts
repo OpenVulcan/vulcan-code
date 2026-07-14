@@ -264,6 +264,20 @@ export interface LuaSkillsRuntimeSettings {
   // Managed Python and Node worker and persistent-session policy.
   // 受管 Python、Node Worker 与持久会话策略。
   managedRuntime: LuaSkillsManagedRuntimeSettings;
+  // AI-visible LuaSkills tools controlled by the Vulcan host.
+  // 由 Vulcan 宿主控制的 AI 可见 LuaSkills 工具。
+  aiTools: LuaSkillsAiToolSettings;
+}
+
+// LuaSkillsAiToolSettings controls host tool exposure without disabling LuaSkills internals.
+// LuaSkillsAiToolSettings 控制宿主工具曝光，但不会关闭 LuaSkills 内部能力。
+export interface LuaSkillsAiToolSettings {
+  // Whether isolated one-shot Lua execution is visible to AI providers.
+  // 隔离的一次性 Lua 执行是否对 AI Provider 可见。
+  enableRunLua: boolean;
+  // Whether persistent Lua runtime sessions are visible to AI providers.
+  // 持久 Lua 运行时会话是否对 AI Provider 可见。
+  enableRunLuaSession: boolean;
 }
 
 // LuaSkillsManagedRuntimeBootstrapStatus identifies one completed bootstrap outcome.
