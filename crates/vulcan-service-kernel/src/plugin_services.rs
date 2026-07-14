@@ -6,13 +6,17 @@ use std::path::{Path, PathBuf};
 use vulcan_plugin_runtime::{
     SystemPluginActionCaller, SystemPluginActionRequest, SystemPluginRuntimeState,
 };
-use vulcan_service_api::PluginUiModuleSource;
+use vulcan_service_api::{PluginTextAssetSource, PluginUiModuleSource};
 
 use crate::{SharedServiceBridgeState, service_system_plugin_runtime};
 
 /// Maximum uncompressed UTF-8 source size accepted for one dynamic plugin UI module.
 /// 单个动态插件界面模块允许的最大未压缩 UTF-8 源码大小。
 const PLUGIN_UI_MODULE_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Maximum UTF-8 text size returned for one manifest-declared plugin asset.
+/// 单个清单声明插件文本资源允许返回的最大 UTF-8 文本大小。
+const PLUGIN_TEXT_ASSET_MAX_BYTES: u64 = 256 * 1024;
 
 /// Invokes one manifest-declared plugin business action for the owning mounted UI.
 /// 为所属挂载界面调用一个清单声明的插件业务 Action。
@@ -160,6 +164,120 @@ pub(crate) fn service_load_plugin_ui_module(
     })
 }
 
+/// Loads one bounded UTF-8 text asset explicitly declared by an enabled plugin manifest.
+/// 加载一个由已启用插件清单明确声明且有大小边界的 UTF-8 文本资源。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the current runtime while `plugin_id` and `relative_path` select one exact package asset.
+/// `state` 持有当前运行时，`plugin_id` 与 `relative_path` 选择一个精确包内资源。
+///
+/// # Returns
+/// 返回值
+/// Returns the authenticated plugin identity, declared relative path, and untouched UTF-8 content.
+/// 返回经过认证的插件身份、已声明相对路径与原样 UTF-8 内容。
+pub(crate) fn service_read_plugin_text_asset(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    relative_path: String,
+) -> Result<PluginTextAssetSource, String> {
+    // runtime resolves the current installed package through the host-owned plugin catalog.
+    // runtime 通过宿主自有插件目录解析当前已安装包。
+    let runtime = service_system_plugin_runtime(&state)?;
+    // snapshot provides one stable manifest identity before package-root preparation.
+    // snapshot 在准备包根目录前提供一个稳定清单身份。
+    let snapshot = runtime.snapshot();
+    // plugin is the exact catalog entry selected by the authenticated mounted UI.
+    // plugin 是经过认证的挂载界面所选择的精确目录条目。
+    let plugin = snapshot
+        .plugins
+        .get(&plugin_id)
+        .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is not installed."))?;
+    if plugin.runtime_state != SystemPluginRuntimeState::Enabled {
+        return Err(format!("Vulcan plugin `{plugin_id}` is not enabled."));
+    }
+    // manifest owns the only allowlist accepted by this generic text-resource boundary.
+    // manifest 持有此通用文本资源边界接受的唯一允许列表。
+    let manifest = plugin
+        .manifest
+        .as_ref()
+        .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
+    if !manifest
+        .runtime
+        .required_files
+        .iter()
+        .any(|declared_path| declared_path == &relative_path)
+    {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` does not declare required text asset `{relative_path}`."
+        ));
+    }
+    // contentFingerprint detects a catalog generation race during root resolution.
+    // contentFingerprint 检测根目录解析期间的目录代次竞争。
+    let content_fingerprint = plugin.content_fingerprint.clone();
+    // packageRoot is the trusted execution copy selected by package origin.
+    // packageRoot 是根据插件包来源选择的可信执行副本。
+    let package_root = runtime
+        .plugin_execution_package_root(&plugin_id)
+        .map_err(|error| error.to_string())?;
+    // currentSnapshot verifies that authorization did not change during root preparation.
+    // currentSnapshot 校验根目录准备期间授权状态没有变化。
+    let current_snapshot = runtime.snapshot();
+    // currentPlugin is the post-preparation descriptor compared with the original identity.
+    // currentPlugin 是与原始身份比较的准备后描述符。
+    let current_plugin = current_snapshot
+        .plugins
+        .get(&plugin_id)
+        .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is no longer installed."))?;
+    if current_plugin.runtime_state != SystemPluginRuntimeState::Enabled
+        || current_plugin.content_fingerprint != content_fingerprint
+    {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` changed while text asset `{relative_path}` was being resolved."
+        ));
+    }
+    // assetPath is the canonical file selected by the exact manifest path.
+    // assetPath 是由精确清单路径选择的规范化文件。
+    let asset_path = package_root
+        .join(&relative_path)
+        .canonicalize()
+        .map_err(|error| {
+            format!(
+                "Failed to resolve Vulcan plugin `{plugin_id}` text asset `{relative_path}`: {error}"
+            )
+        })?;
+    validate_plugin_text_asset_path(&package_root, &asset_path)?;
+    // metadata enforces the byte bound before allocating the text buffer.
+    // metadata 在分配文本缓冲区前执行字节大小边界。
+    let metadata = std::fs::metadata(&asset_path).map_err(|error| {
+        format!(
+            "Failed to inspect Vulcan plugin `{plugin_id}` text asset `{relative_path}`: {error}"
+        )
+    })?;
+    if metadata.len() > PLUGIN_TEXT_ASSET_MAX_BYTES {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` text asset `{relative_path}` exceeds {PLUGIN_TEXT_ASSET_MAX_BYTES} bytes."
+        ));
+    }
+    // content preserves the exact package text while requiring valid UTF-8.
+    // content 保留精确包文本，同时要求内容是有效 UTF-8。
+    let content = std::fs::read_to_string(&asset_path).map_err(|error| {
+        format!(
+            "Failed to read Vulcan plugin `{plugin_id}` text asset `{relative_path}` as UTF-8: {error}"
+        )
+    })?;
+    if content.len() as u64 > PLUGIN_TEXT_ASSET_MAX_BYTES {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` text asset `{relative_path}` changed while being read or exceeds {PLUGIN_TEXT_ASSET_MAX_BYTES} bytes."
+        ));
+    }
+    Ok(PluginTextAssetSource {
+        plugin_id,
+        path: relative_path,
+        content,
+    })
+}
+
 /// Resolves an optional UI action workspace into one canonical existing directory.
 /// 把可选界面 Action 工作区解析为一个规范化且已存在的目录。
 ///
@@ -209,6 +327,27 @@ fn validate_plugin_ui_module_path(package_root: &Path, entry_path: &Path) -> Res
     {
         return Err(String::from(
             "Vulcan plugin UI module escapes its package root or is not a regular `.mjs` file.",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that one declared text asset remains a regular file inside its package root.
+/// 校验一个已声明文本资源仍是插件包根内的普通文件。
+///
+/// # Parameters
+/// 参数
+/// `package_root` is the trusted package root and `asset_path` is the canonical selected file.
+/// `package_root` 是可信包根目录，`asset_path` 是规范化后的已选文件。
+///
+/// # Returns
+/// 返回值
+/// Returns success only for one contained regular file.
+/// 仅对受目录约束的普通文件返回成功。
+fn validate_plugin_text_asset_path(package_root: &Path, asset_path: &Path) -> Result<(), String> {
+    if !asset_path.starts_with(package_root) || !asset_path.is_file() {
+        return Err(String::from(
+            "Vulcan plugin text asset escapes its package root or is not a regular file.",
         ));
     }
     Ok(())

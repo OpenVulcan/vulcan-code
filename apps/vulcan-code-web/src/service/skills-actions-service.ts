@@ -6,6 +6,7 @@ import type {
   LuaSkillsManagedRuntimeTarget,
   LuaSkillsRuntimeSettings,
   PluginUiModuleSource,
+  PluginTextAssetSource,
   SystemPluginPermissionPreview,
   SubagentCatalogUpdate,
   SubagentDefinitionSaveRequest,
@@ -268,6 +269,23 @@ export async function loadPluginUiModule(pluginId: string, mountId: string): Pro
   return serviceClient.request<PluginUiModuleSource>("service_load_plugin_ui_module", {
     pluginId,
     mountId,
+  });
+}
+
+// readPluginTextAsset reads one exact manifest-declared UTF-8 asset from an enabled plugin package.
+// readPluginTextAsset 从已启用插件包读取一个由清单精确声明的 UTF-8 资源。
+//
+// Parameters: pluginId selects the owning plugin and path selects one exact required_files entry.
+// 参数：pluginId 选择所属插件，path 选择一个精确的 required_files 条目。
+// Returns: authenticated plugin identity, relative path, and untouched bounded text.
+// 返回值：返回经过认证的插件身份、相对路径与原样有界文本。
+export async function readPluginTextAsset(pluginId: string, path: string): Promise<PluginTextAssetSource> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Plugin text assets require the Vulcan service runtime.");
+  }
+  return serviceClient.request<PluginTextAssetSource>("service_read_plugin_text_asset", {
+    pluginId,
+    path,
   });
 }
 

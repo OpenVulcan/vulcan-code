@@ -1,3 +1,94 @@
+.plugin-help-tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: help;
+}
+
+.plugin-help-tooltip-trigger:hover,
+.plugin-help-tooltip-trigger:focus-visible {
+  color: var(--foreground);
+  outline: none;
+}
+
+.plugin-help-tooltip-content {
+  max-width: 320px;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.5;
+}
+
+.plugin-metadata-link {
+  display: inline-flex;
+  min-width: 0;
+  height: 20px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.plugin-metadata-link:hover,
+.plugin-metadata-link:focus-visible {
+  border-color: color-mix(in oklch, var(--foreground) 30%, var(--border));
+  color: var(--foreground);
+  outline: none;
+}
+
+.plugin-metadata-link:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.plugin-metadata-link svg {
+  flex: 0 0 auto;
+}
+
+.plugin-text-document-dialog {
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  height: min(680px, calc(100vh - 48px));
+}
+
+.plugin-text-document-content,
+.plugin-text-document-state {
+  min-height: 0;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.plugin-text-document-state.error {
+  color: var(--destructive);
+  font-family: inherit;
+}
+
 .plugin-metric-card {
   display: grid;
   grid-template-rows: 18px minmax(28px, 1fr) 16px;

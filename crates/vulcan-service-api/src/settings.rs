@@ -177,6 +177,22 @@ pub struct PluginUiModuleSource {
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
+/// Returns one bounded UTF-8 text asset declared by an enabled plugin package.
+/// 返回一个由已启用插件包声明且有大小边界的 UTF-8 文本资源。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginTextAssetSource {
+    /// Exact owning plugin identifier.
+    /// 精确的所属插件标识。
+    pub plugin_id: String,
+    /// Exact package-relative path declared by the plugin manifest.
+    /// 插件清单声明的精确包内相对路径。
+    pub path: String,
+    /// Untouched UTF-8 text read from the validated plugin package.
+    /// 从通过校验的插件包读取的原样 UTF-8 文本。
+    pub content: String,
+}
+
 /// Summarizes one settings section.
 /// 汇总单个设置分组。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

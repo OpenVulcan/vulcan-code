@@ -2,6 +2,14 @@
 // RTK_GAIN_STATS_CACHE_MS 将已有统计快照保留三十分钟。
 const RTK_GAIN_STATS_CACHE_MS = 30 * 60 * 1000;
 
+// RTK_REPOSITORY_URL is the upstream project address disclosed for license compliance.
+// RTK_REPOSITORY_URL 是为许可证合规披露的上游项目地址。
+const RTK_REPOSITORY_URL = "https://github.com/rtk-ai/rtk";
+
+// RTK_LICENSE_PATH is the exact manifest-declared package license asset.
+// RTK_LICENSE_PATH 是清单明确声明的包内许可证资源路径。
+const RTK_LICENSE_PATH = "LICENSE";
+
 // rtkGainStatsCache survives tab switches because the enabled plugin module remains mounted.
 // rtkGainStatsCache 会跨页签切换保留，因为已启用插件模块保持挂载。
 let rtkGainStatsCache = null;
@@ -27,6 +35,10 @@ const RTK_AVAILABLE_ROUTES = [
 // DEFAULT_RTK_ROUTE_SET 为精选路由标签提供常数时间查找。
 const DEFAULT_RTK_ROUTE_SET = new Set(DEFAULT_RTK_ROUTES);
 
+// EXTENDED_RTK_ROUTES contains every available route outside the curated set.
+// EXTENDED_RTK_ROUTES 包含精选集合之外的全部可用路由。
+const EXTENDED_RTK_ROUTES = RTK_AVAILABLE_ROUTES.filter((route) => !DEFAULT_RTK_ROUTE_SET.has(route));
+
 // Create the RTK settings panel through the host-provided stable UI SDK.
 // 通过宿主提供的稳定 UI SDK 创建 RTK 设置面板。
 //
@@ -44,6 +56,15 @@ export function createPluginPanel(sdk) {
   // StatusPill is the shared Vulcan lifecycle status component.
   // StatusPill 是 Vulcan 共享生命周期状态组件。
   const StatusPill = sdk.components.StatusPill;
+  // HelpTooltip is the shared host-rendered contextual-help component.
+  // HelpTooltip 是宿主共享渲染的上下文帮助组件。
+  const HelpTooltip = sdk.components.HelpTooltip;
+  // PluginMetadataLink is the shared host compact actionable metadata tag.
+  // PluginMetadataLink 是宿主共享的紧凑可操作元数据标签。
+  const PluginMetadataLink = sdk.components.PluginMetadataLink;
+  // TextDocumentDialog is the shared host read-only text document dialog.
+  // TextDocumentDialog 是宿主共享的只读文本文档浮动框。
+  const TextDocumentDialog = sdk.components.TextDocumentDialog;
   // text resolves one plugin-owned locale key and retains a safe English source fallback.
   // text 解析一个插件自有语言键，并保留安全的英语源码回退。
   const text = (key, fallback) => sdk.t(key, fallback);
@@ -276,6 +297,55 @@ export function createPluginPanel(sdk) {
     // error stores the latest bounded action diagnostic.
     // error 保存最近一次有边界的 Action 诊断。
     const [error, setError] = React.useState("");
+    // licenseOpen controls the host-rendered Apache-2.0 document dialog.
+    // licenseOpen 控制由宿主渲染的 Apache-2.0 文档浮动框。
+    const [licenseOpen, setLicenseOpen] = React.useState(false);
+    // licenseContent caches the exact LICENSE text read from the current RTK package.
+    // licenseContent 缓存从当前 RTK 包读取的精确 LICENSE 文本。
+    const [licenseContent, setLicenseContent] = React.useState("");
+    // licenseLoading reports the bounded package-resource request state.
+    // licenseLoading 报告有界包资源请求状态。
+    const [licenseLoading, setLicenseLoading] = React.useState(false);
+    // licenseError stores only the latest license resource diagnostic.
+    // licenseError 仅保存最近一次许可证资源诊断。
+    const [licenseError, setLicenseError] = React.useState("");
+
+    // openRepository opens the exact upstream RTK project through the host URL policy.
+    // openRepository 通过宿主地址策略打开精确的 RTK 上游项目。
+    //
+    // Returns a promise settled after the host accepts or rejects the external URL.
+    // 返回在宿主接受或拒绝外部地址后结束的 Promise。
+    const openRepository = React.useCallback(async () => {
+      try {
+        await sdk.openExternalUrl(RTK_REPOSITORY_URL);
+      } catch (reason) {
+        sdk.notifications.error(`${text("compliance.githubOpenFailed", "Failed to open GitHub repository")}: ${reason instanceof Error ? reason.message : String(reason)}`);
+      }
+    }, []);
+
+    // openLicense opens the dialog immediately and lazily reads the package LICENSE once.
+    // openLicense 立即打开浮动框，并按需仅首次读取包内 LICENSE。
+    //
+    // Returns a promise settled after cached content selection or the authenticated asset request.
+    // 返回在选择缓存内容或完成经过认证的资源请求后结束的 Promise。
+    const openLicense = React.useCallback(async () => {
+      setLicenseOpen(true);
+      if (licenseContent || licenseLoading) {
+        return;
+      }
+      setLicenseLoading(true);
+      setLicenseError("");
+      try {
+        // content is the untouched UTF-8 license text from this plugin generation.
+        // content 是当前插件代次中的原样 UTF-8 许可证文本。
+        const content = await sdk.readTextAsset(RTK_LICENSE_PATH);
+        setLicenseContent(content);
+      } catch (reason) {
+        setLicenseError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        setLicenseLoading(false);
+      }
+    }, [licenseContent, licenseLoading]);
 
     // loadSettings loads only configuration so statistics can never block the settings surface.
     // loadSettings 仅加载配置，确保统计绝不会阻塞设置界面。
@@ -381,6 +451,58 @@ export function createPluginPanel(sdk) {
       }
     }
 
+    // setRouteGroup applies one bulk selection state to an exact route group.
+    // setRouteGroup 将一个批量选择状态应用到精确的路由分组。
+    //
+    // routes contains only the curated or extended route names and enabled selects or clears them.
+    // routes 仅包含精选或扩展路由名，enabled 决定全选或清空这些路由。
+    // Returns no value.
+    // 不返回值。
+    function setRouteGroup(routes, enabled) {
+      // nextCheckedRoutes preserves selections belonging to the other route group.
+      // nextCheckedRoutes 保留属于另一个路由分组的选择状态。
+      const nextCheckedRoutes = new Set(checkedRoutes);
+      for (const route of routes) {
+        if (enabled) nextCheckedRoutes.add(route); else nextCheckedRoutes.delete(route);
+      }
+      setCheckedRoutes(nextCheckedRoutes);
+      if (nextCheckedRoutes.size === 0) {
+        setRouteMode("disabled");
+      } else if (routeMode === "disabled") {
+        setRouteMode("selected");
+      }
+    }
+
+    // renderRouteGroup renders one non-scrolling four-column checkbox section.
+    // renderRouteGroup 渲染一个无内部滚动的四列复选分组。
+    //
+    // titleKey and titleFallback localize the heading while routes supplies the exact group members.
+    // titleKey 与 titleFallback 用于本地化标题，routes 提供精确的分组成员。
+    // Returns one route-group section with independent select-all and clear actions.
+    // 返回一个带独立全选与清空操作的路由分组区域。
+    function renderRouteGroup(titleKey, titleFallback, routes) {
+      return React.createElement("section", { className: "settings-route-group" },
+        React.createElement("header", { className: "settings-route-group-header" },
+          React.createElement("strong", null, text(titleKey, titleFallback)),
+          React.createElement("div", { className: "settings-route-bulk-actions" },
+            React.createElement("button", { className: "settings-route-bulk-button", onClick: () => setRouteGroup(routes, true), type: "button" }, text("routes.selectAll", "Select all")),
+            React.createElement("button", { className: "settings-route-bulk-button", onClick: () => setRouteGroup(routes, false), type: "button" }, text("routes.clear", "Clear")),
+          ),
+        ),
+        React.createElement("div", { className: "settings-route-grid" },
+          ...routes.map((route) => {
+            // enabled is the exact draft membership rendered by this checkbox.
+            // enabled 是当前复选框渲染的精确草稿成员状态。
+            const enabled = checkedRoutes.has(route);
+            return React.createElement("label", { className: "settings-route-option", key: route, title: route },
+              React.createElement("input", { "aria-label": `${text("routes.enable", "Enable route")} ${route}`, checked: enabled, onChange: (event) => toggleRoute(route, event.currentTarget.checked), type: "checkbox" }),
+              React.createElement("span", null, route),
+            );
+          }),
+        ),
+      );
+    }
+
     // summary contains aggregate RTK command and token metrics.
     // summary 包含 RTK 命令与 Token 汇总指标。
     const summary = statistics?.summary ?? {};
@@ -399,38 +521,63 @@ export function createPluginPanel(sdk) {
     // byCommand 包含解析后的 RTK 命令明细。
     const byCommand = Array.isArray(statistics?.byCommand) ? statistics.byCommand : [];
 
-    return React.createElement("section", { className: "panel full-height settings-detail-panel plugin-panel-rtk" },
-      React.createElement("div", { className: "settings-panel-title-row" },
-        React.createElement("strong", null, text("title", "RTK command routing")),
-        React.createElement(Badge, { variant: "outline" }, text("hookBadge", "Declarative hooks")),
+    return React.createElement("section", { className: "full-height settings-detail-panel plugin-statistics-layout plugin-panel-rtk" },
+      React.createElement("div", { className: "plugin-statistics-header" },
+        React.createElement("div", { className: "rtk-page-heading" },
+          React.createElement("div", { className: "rtk-page-title-row" },
+            React.createElement("strong", null, text("title", "RTK command routing")),
+            React.createElement("div", { className: "rtk-compliance-tags" },
+              React.createElement(StatusPill, {
+                status: settings ? "ready" : "warning",
+                label: settingsLoading ? text("loadingSettings", "Loading settings") : settings ? text("availability.ready", "RTK available") : text("availability.unavailable", "RTK unavailable"),
+              }),
+              React.createElement(PluginMetadataLink, {
+                ariaLabel: text("compliance.githubAria", "Open the RTK GitHub repository"),
+                href: RTK_REPOSITORY_URL,
+                icon: "github",
+                label: "rtk-ai/rtk",
+                onActivate: () => void openRepository(),
+              }),
+              React.createElement(PluginMetadataLink, {
+                ariaLabel: text("compliance.licenseAria", "Open the Apache-2.0 license"),
+                icon: "license",
+                label: "Apache-2.0",
+                onActivate: () => void openLicense(),
+              }),
+            ),
+          ),
+          React.createElement("p", null, text("densityDescription", "RTK compresses noisy test, build, search, and Git output so the AI can retain more useful analysis. Unmatched or failed rewrites fall back to the original command.")),
+        ),
       ),
       React.createElement("div", { className: "settings-form-grid" },
-        React.createElement("article", { className: "settings-card" },
-          React.createElement(StatusPill, {
-            status: settings?.enabled ? "ready" : "warning",
-            label: settingsLoading ? text("loadingSettings", "Loading settings") : settings?.enabled ? text("enabled", "Enabled") : text("disabled", "Disabled"),
-          }),
-          React.createElement("strong", null, text("densityTitle", "High-density command context")),
-          React.createElement("p", null, text("densityDescription", "RTK compresses noisy test, build, search, and Git output so the AI can retain more useful analysis. Unmatched or failed rewrites fall back to the original command.")),
-          settings ? React.createElement(React.Fragment, null,
-            React.createElement("label", { className: "settings-checkbox-line" },
-              React.createElement("input", { checked: settings.enabled, onChange: (event) => setSettings({ ...settings, enabled: event.currentTarget.checked }), type: "checkbox" }),
-              React.createElement("span", null, React.createElement("strong", null, text("enableRouting", "Enable RTK routing")), React.createElement("small", null, text("enableRoutingHelp", "Rewrite supported shell_command calls through the bundled RTK binary."))),
+        React.createElement("article", { className: "settings-card rtk-routing-config" },
+          settings ? React.createElement("div", { className: "rtk-routing-option-row" },
+            React.createElement("div", { className: "rtk-routing-option" },
+              React.createElement("label", null,
+                React.createElement("input", { checked: settings.enabled, onChange: (event) => setSettings({ ...settings, enabled: event.currentTarget.checked }), type: "checkbox" }),
+                React.createElement("span", null, text("enableRouting", "Enable RTK routing")),
+              ),
+              React.createElement(HelpTooltip, { ariaLabel: text("enableRoutingHelp", "RTK routing description"), content: text("enableRoutingHelp", "Rewrite supported shell_command calls through the bundled RTK binary."), delayMs: 500 }),
             ),
-            React.createElement("label", { className: "settings-checkbox-line" },
-              React.createElement("input", { checked: settings.gitCommitContextEnabled, onChange: (event) => setSettings({ ...settings, gitCommitContextEnabled: event.currentTarget.checked }), type: "checkbox" }),
-              React.createElement("span", null, React.createElement("strong", null, text("gitContext", "Use RTK for commit generation")), React.createElement("small", null, text("gitContextHelp", "Compress git status and git diff context used to generate commit messages."))),
+            React.createElement("div", { className: "rtk-routing-option" },
+              React.createElement("label", null,
+                React.createElement("input", { checked: settings.gitCommitContextEnabled, onChange: (event) => setSettings({ ...settings, gitCommitContextEnabled: event.currentTarget.checked }), type: "checkbox" }),
+                React.createElement("span", null, text("gitContext", "Use RTK for commit generation")),
+              ),
+              React.createElement(HelpTooltip, { ariaLabel: text("gitContextHelp", "RTK Git context description"), content: text("gitContextHelp", "Compress git status and git diff context used to generate commit messages."), delayMs: 500 }),
             ),
-            React.createElement("label", { className: "settings-checkbox-line" },
-              React.createElement("input", { checked: settings.telemetryDisabled, onChange: (event) => setSettings({ ...settings, telemetryDisabled: event.currentTarget.checked }), type: "checkbox" }),
-              React.createElement("span", null, React.createElement("strong", null, text("disableTelemetry", "Disable RTK telemetry environment variable")), React.createElement("small", null, text("disableTelemetryHelp", "Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes."))),
+            React.createElement("div", { className: "rtk-routing-option" },
+              React.createElement("label", null,
+                React.createElement("input", { checked: settings.telemetryDisabled, onChange: (event) => setSettings({ ...settings, telemetryDisabled: event.currentTarget.checked }), type: "checkbox" }),
+                React.createElement("span", null, text("disableTelemetry", "Disable RTK telemetry environment variable")),
+              ),
+              React.createElement(HelpTooltip, { ariaLabel: text("disableTelemetryHelp", "RTK telemetry description"), content: text("disableTelemetryHelp", "Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes."), delayMs: 500 }),
             ),
           ) : null,
         ),
         React.createElement("article", { className: "settings-card rtk-gain-panel" },
           React.createElement("div", { className: "rtk-gain-header" },
             React.createElement("div", null,
-              React.createElement(StatusPill, { status: statistics?.available ? "ready" : "warning", label: statisticsLoading ? text("stats.loading", "Loading") : statistics?.available ? text("stats.ready", "Stats ready") : text("stats.unavailable", "Unavailable") }),
               React.createElement("strong", null, text("stats.title", "RTK context-density statistics")),
               React.createElement("p", null, text("stats.description", "Token savings are cached for thirty minutes. Switching daily, weekly, and monthly views never sends another request.")),
             ),
@@ -452,29 +599,25 @@ export function createPluginPanel(sdk) {
             React.createElement("div", null, React.createElement("strong", null, text("routes.title", "RTK routes")), React.createElement("p", null, text("routes.description", "Choose exactly which supported commands may be rewritten."))),
             React.createElement(Badge, { variant: "outline" }, `${checkedRoutes.size}/${RTK_AVAILABLE_ROUTES.length}`),
           ),
-          React.createElement("div", { className: "settings-route-actions" },
-            React.createElement("button", { className: "secondary-button", onClick: () => { setRouteMode("selected"); setCheckedRoutes(new Set(DEFAULT_RTK_ROUTES)); }, type: "button" }, text("routes.curated", "Curated")),
-            React.createElement("button", { className: "secondary-button", onClick: () => { setRouteMode("all"); setCheckedRoutes(new Set(RTK_AVAILABLE_ROUTES)); }, type: "button" }, text("routes.all", "All")),
-            React.createElement("button", { className: "secondary-button", onClick: () => { setRouteMode("disabled"); setCheckedRoutes(new Set()); }, type: "button" }, text("routes.clear", "Clear")),
-          ),
-          React.createElement("div", { className: "settings-route-table-wrap" },
-            React.createElement("table", { className: "settings-route-table" },
-              React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null), React.createElement("th", null, text("routes.command", "Command")), React.createElement("th", null, text("routes.group", "Group")))),
-              React.createElement("tbody", null, ...RTK_AVAILABLE_ROUTES.map((route) => {
-                const enabled = checkedRoutes.has(route);
-                return React.createElement("tr", { "aria-checked": enabled, className: "settings-route-row", key: route, onClick: () => toggleRoute(route, !enabled), onKeyDown: (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleRoute(route, !enabled); } }, role: "checkbox", tabIndex: 0 },
-                  React.createElement("td", null, React.createElement("input", { "aria-label": `${text("routes.enable", "Enable route")} ${route}`, checked: enabled, onChange: (event) => toggleRoute(route, event.currentTarget.checked), onClick: (event) => event.stopPropagation(), type: "checkbox" })),
-                  React.createElement("td", null, React.createElement("strong", null, route)),
-                  React.createElement("td", null, DEFAULT_RTK_ROUTE_SET.has(route) ? text("routes.curated", "Curated") : text("routes.extended", "Extended")),
-                );
-              })),
-            ),
+          React.createElement("div", { className: "settings-route-groups" },
+            renderRouteGroup("routes.curated", "Curated", DEFAULT_RTK_ROUTES),
+            renderRouteGroup("routes.extended", "Extended", EXTENDED_RTK_ROUTES),
           ),
           React.createElement("small", { className: "settings-muted-line" }, `${checkedRoutes.size} ${text("routes.selected", "RTK routes selected")}`),
         ),
         error ? React.createElement("p", { className: "plugin-panel-error" }, error) : null,
         React.createElement("div", { className: "settings-card-actions" }, React.createElement("button", { className: "skill-action-button", disabled: saving || !settings, onClick: () => void saveSettings(), type: "button" }, saving ? text("saving", "Saving") : saved ? text("saved", "Saved") : text("save", "Save"))),
       ),
+      React.createElement(TextDocumentDialog, {
+        content: licenseContent,
+        description: text("compliance.licenseDescription", "License text read directly from the installed RTK plugin package."),
+        error: licenseError,
+        loading: licenseLoading,
+        loadingLabel: text("compliance.licenseLoading", "Loading license"),
+        onOpenChange: setLicenseOpen,
+        open: licenseOpen,
+        title: text("compliance.licenseTitle", "RTK Apache-2.0 License"),
+      }),
     );
   }
 

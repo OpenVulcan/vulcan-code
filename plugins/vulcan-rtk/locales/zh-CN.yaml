@@ -5,6 +5,14 @@ messages:
   title: RTK 命令路由
   hookBadge: 声明式 Hook
   loadingSettings: 正在加载设置
+  availability.ready: RTK 可用
+  availability.unavailable: RTK 不可用
+  compliance.githubAria: 打开 RTK GitHub 仓库
+  compliance.githubOpenFailed: 无法打开 GitHub 仓库
+  compliance.licenseAria: 打开 Apache-2.0 许可证
+  compliance.licenseTitle: RTK Apache-2.0 许可证
+  compliance.licenseDescription: 许可证内容直接读取自当前安装的 RTK 插件包。
+  compliance.licenseLoading: 正在读取许可证
   enabled: 已启用
   disabled: 已关闭
   densityTitle: 高密度命令上下文
@@ -50,6 +58,7 @@ messages:
   routes.description: 精确选择允许改写的受支持命令。
   routes.curated: 精选
   routes.all: 全部
+  routes.selectAll: 全选
   routes.clear: 清空
   routes.command: 命令
   routes.group: 分组

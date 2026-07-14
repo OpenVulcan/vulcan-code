@@ -536,6 +536,20 @@ export interface PluginUiModuleSource {
   messagesByLocale: Record<string, Record<string, string>>;
 }
 
+// PluginTextAssetSource carries one bounded manifest-declared UTF-8 plugin asset.
+// PluginTextAssetSource 携带一个有大小边界且由清单声明的 UTF-8 插件资源。
+export interface PluginTextAssetSource {
+  // Exact owning plugin identifier.
+  // 精确的所属插件标识。
+  pluginId: string;
+  // Exact package-relative path declared by the plugin manifest.
+  // 插件清单声明的精确包内相对路径。
+  path: string;
+  // Untouched UTF-8 text returned by the authenticated service.
+  // 由已认证服务返回的原样 UTF-8 文本。
+  content: string;
+}
+
 // LuaSkillsCatalogUpdate carries one revisioned full LuaSkills domain projection.
 // LuaSkillsCatalogUpdate 携带单次带版本的完整 LuaSkills 领域投影。
 export interface LuaSkillsCatalogUpdate {

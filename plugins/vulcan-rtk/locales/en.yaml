@@ -5,6 +5,14 @@ messages:
   title: RTK command routing
   hookBadge: Declarative hooks
   loadingSettings: Loading settings
+  availability.ready: RTK available
+  availability.unavailable: RTK unavailable
+  compliance.githubAria: Open the RTK GitHub repository
+  compliance.githubOpenFailed: Failed to open GitHub repository
+  compliance.licenseAria: Open the Apache-2.0 license
+  compliance.licenseTitle: RTK Apache-2.0 License
+  compliance.licenseDescription: License text read directly from the currently installed RTK plugin package.
+  compliance.licenseLoading: Loading license
   enabled: Enabled
   disabled: Disabled
   densityTitle: High-density command context
@@ -50,6 +58,7 @@ messages:
   routes.description: Choose exactly which supported commands may be rewritten.
   routes.curated: Curated
   routes.all: All
+  routes.selectAll: Select all
   routes.clear: Clear
   routes.command: Command
   routes.group: Group

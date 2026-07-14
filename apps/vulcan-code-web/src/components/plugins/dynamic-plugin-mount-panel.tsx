@@ -9,13 +9,21 @@ import {
   ChartLegend,
   EmptyState,
   ErrorState,
+  HelpTooltip,
   MetricCard,
+  PluginMetadataLink,
   SelectControl,
+  TextDocumentDialog,
   TimeSeriesLineChart,
 } from "@/components/plugins/plugin-host-components";
 import { useI18n } from "@/i18n";
 import { loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
-import { invokePluginAction, loadPluginUiModule } from "@/service/skills-actions-service";
+import {
+  invokePluginAction,
+  loadPluginUiModule,
+  readPluginTextAsset,
+} from "@/service/skills-actions-service";
+import { openExternalUrl } from "@/service/project-actions-service";
 import {
   latestPluginUiInvalidationRevision,
   subscribePluginUiInvalidation,
@@ -31,6 +39,12 @@ interface PluginUiSdk {
   // Invokes one action declared by the owning plugin manifest.
   // 调用所属插件清单声明的单个 Action。
   invoke: <Result>(actionId: string, argumentsValue: unknown) => Promise<Result>;
+  // Reads one exact UTF-8 text asset declared in the owning plugin manifest.
+  // 读取所属插件清单中声明的一个精确 UTF-8 文本资源。
+  readTextAsset: (path: string) => Promise<string>;
+  // Opens one host-authorized external URL through the active shell.
+  // 通过当前宿主壳打开一个经宿主授权的外部地址。
+  openExternalUrl: (url: string) => Promise<void>;
   // Active Vulcan WebUI locale inherited by plugin content.
   // 插件内容继承的当前 Vulcan WebUI 语言。
   locale: string;
@@ -46,12 +60,21 @@ interface PluginUiSdk {
     // Shared Vulcan status component.
     // Vulcan 共享状态组件。
     StatusPill: typeof StatusPill;
+    // Shared host contextual-help tooltip.
+    // 共享宿主上下文帮助 Tooltip。
+    HelpTooltip: typeof HelpTooltip;
     // Shared host KPI card component.
     // 共享宿主 KPI 卡片组件。
     MetricCard: typeof MetricCard;
+    // Shared host compact actionable metadata tag.
+    // 共享宿主紧凑可操作元数据标签。
+    PluginMetadataLink: typeof PluginMetadataLink;
     // Shared host select control.
     // 共享宿主下拉控件。
     SelectControl: typeof SelectControl;
+    // Shared host read-only text document dialog.
+    // 共享宿主只读文本文档浮动框。
+    TextDocumentDialog: typeof TextDocumentDialog;
     // Shared host calendar activity heatmap.
     // 共享宿主日历活动热力图。
     ActivityHeatmap: typeof ActivityHeatmap;
@@ -163,13 +186,23 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     invoke: <Result,>(actionId: string, argumentsValue: unknown) => (
       invokePluginAction<Result>(props.plugin.id, actionId, argumentsValue, props.workspacePath)
     ),
+    readTextAsset: async (path: string) => {
+      // asset is authenticated against the current plugin identity and manifest allowlist.
+      // asset 会根据当前插件身份与清单允许列表进行认证。
+      const asset = await readPluginTextAsset(props.plugin.id, path);
+      return asset.content;
+    },
+    openExternalUrl,
     locale,
     components: {
       Badge,
       Button,
       StatusPill,
+      HelpTooltip,
       MetricCard,
+      PluginMetadataLink,
       SelectControl,
+      TextDocumentDialog,
       ActivityHeatmap,
       ActivityHeatmapLegend,
       TimeSeriesLineChart,

@@ -109,6 +109,11 @@ pub(super) async fn dispatch_service_rpc(
             rpc_required_param(&params, "pluginId")?,
             rpc_required_param(&params, "mountId")?,
         )),
+        "service_read_plugin_text_asset" => rpc_json_result(service_read_plugin_text_asset(
+            state,
+            rpc_required_param(&params, "pluginId")?,
+            rpc_required_param(&params, "path")?,
+        )),
         "service_invoke_plugin_action" => rpc_json_result(
             service_invoke_plugin_action(
                 state,

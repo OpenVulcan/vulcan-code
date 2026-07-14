@@ -305,7 +305,9 @@ use pending_prompts::{
     provider_configuration_for_model_reference, runtime_state_has_queued_pending_prompt_work,
     session_has_blocking_system_prompt_work,
 };
-use plugin_services::{service_invoke_plugin_action, service_load_plugin_ui_module};
+use plugin_services::{
+    service_invoke_plugin_action, service_load_plugin_ui_module, service_read_plugin_text_asset,
+};
 pub use project_conversation_services::service_add_project_initial_directory;
 use project_conversation_services::*;
 pub use project_directories::service_add_project_from_path;

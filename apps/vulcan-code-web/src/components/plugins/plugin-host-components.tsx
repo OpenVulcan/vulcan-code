@@ -4,12 +4,22 @@ import {
   Bot,
   Calendar,
   CheckCircle2,
+  CircleHelp,
   Clock3,
   Database,
+  FileText,
+  Github,
   MessageSquareText,
   Network,
   User,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -22,6 +32,174 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+
+// HelpTooltipProps describes one host-rendered contextual-help icon for plugin interfaces.
+// HelpTooltipProps 描述插件界面使用的宿主渲染上下文帮助图标。
+export interface HelpTooltipProps {
+  // Accessible label announced for the focusable question-mark trigger.
+  // 可聚焦问号触发器对辅助技术声明的标签。
+  ariaLabel: string;
+  // Localized explanatory text displayed inside the tooltip.
+  // Tooltip 内显示的本地化说明文字。
+  content: string;
+  // Hover delay in milliseconds before the tooltip opens.
+  // Tooltip 打开前的鼠标悬停延迟毫秒数。
+  delayMs?: number;
+}
+
+// HelpTooltip renders one reusable circled-question trigger through the host tooltip layer.
+// HelpTooltip 通过宿主 Tooltip 层渲染一个可复用的圆圈问号触发器。
+//
+// Parameters: props supplies accessible text, localized content, and an optional open delay.
+// 参数：props 提供无障碍文字、本地化内容和可选的打开延迟。
+// Returns: one keyboard-focusable help icon with a portal-backed tooltip.
+// 返回值：返回一个带 Portal Tooltip 且可通过键盘聚焦的帮助图标。
+export function HelpTooltip(props: HelpTooltipProps) {
+  return (
+    <Tooltip delayDuration={props.delayMs ?? 500}>
+      <TooltipTrigger asChild>
+        <button aria-label={props.ariaLabel} className="plugin-help-tooltip-trigger" type="button">
+          <CircleHelp aria-hidden="true" size={14} />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="plugin-help-tooltip-content" side="top" sideOffset={6}>
+        {props.content}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+// PluginMetadataLinkIcon identifies the bounded host icon set for plugin metadata tags.
+// PluginMetadataLinkIcon 标识插件元数据标签可使用的有界宿主图标集合。
+export type PluginMetadataLinkIcon = "github" | "license";
+
+// PluginMetadataLinkProps describes one compact actionable metadata tag.
+// PluginMetadataLinkProps 描述一个紧凑的可操作元数据标签。
+export interface PluginMetadataLinkProps {
+  // Localized visible tag label.
+  // 本地化可见标签文案。
+  label: string;
+  // Accessible action label.
+  // 可访问操作标签。
+  ariaLabel: string;
+  // Stable host icon selected for this metadata kind.
+  // 为当前元数据类型选择的稳定宿主图标。
+  icon: PluginMetadataLinkIcon;
+  // Optional external destination retained for native link semantics.
+  // 为原生链接语义保留的可选外部目标地址。
+  href?: string;
+  // Runs the owning plugin's host-authorized action.
+  // 执行所属插件经宿主授权的操作。
+  onActivate: () => void;
+  // Whether the metadata action currently rejects interaction.
+  // 元数据操作当前是否拒绝交互。
+  disabled?: boolean;
+}
+
+// PluginMetadataLink renders one host-themed compact link or button tag.
+// PluginMetadataLink 渲染一个采用宿主主题的紧凑链接或按钮标签。
+//
+// Parameters: props supplies the icon, label, optional URL, and authorized activation callback.
+// 参数：props 提供图标、标签、可选地址与经授权的激活回调。
+// Returns: one keyboard-accessible metadata tag with stable host styling.
+// 返回值：返回一个具备稳定宿主样式且可通过键盘访问的元数据标签。
+export function PluginMetadataLink(props: PluginMetadataLinkProps) {
+  // Icon resolves the bounded metadata kind to one current host icon component.
+  // Icon 将有界元数据类型解析为当前宿主图标组件。
+  const Icon = props.icon === "github" ? Github : FileText;
+  // content is shared by native links and local dialog buttons.
+  // content 由原生链接与本地浮动框按钮共享。
+  const content = (
+    <>
+      <Icon aria-hidden="true" size={13} />
+      <span>{props.label}</span>
+    </>
+  );
+  if (props.href) {
+    return (
+      <a
+        aria-label={props.ariaLabel}
+        className="plugin-metadata-link"
+        href={props.href}
+        onClick={(event) => {
+          event.preventDefault();
+          props.onActivate();
+        }}
+        rel="noreferrer"
+        target="_blank"
+      >
+        {content}
+      </a>
+    );
+  }
+  return (
+    <button
+      aria-label={props.ariaLabel}
+      className="plugin-metadata-link"
+      disabled={props.disabled}
+      onClick={props.onActivate}
+      type="button"
+    >
+      {content}
+    </button>
+  );
+}
+
+// TextDocumentDialogProps describes one host-rendered read-only text document dialog.
+// TextDocumentDialogProps 描述一个由宿主渲染的只读文本文档浮动框。
+export interface TextDocumentDialogProps {
+  // Whether the dialog is visible.
+  // 浮动框当前是否可见。
+  open: boolean;
+  // Receives the next controlled visibility state.
+  // 接收下一个受控可见状态。
+  onOpenChange: (open: boolean) => void;
+  // Localized document title.
+  // 本地化文档标题。
+  title: string;
+  // Optional localized supporting description.
+  // 可选本地化辅助说明。
+  description?: string;
+  // Untouched document content displayed in a selectable monospace area.
+  // 显示在可选择等宽区域内的原样文档内容。
+  content: string;
+  // Whether the host is waiting for the document resource.
+  // 宿主当前是否正在等待文档资源。
+  loading?: boolean;
+  // Localized loading label.
+  // 本地化加载文案。
+  loadingLabel?: string;
+  // Optional bounded resource-load error.
+  // 可选的有界资源加载错误。
+  error?: string;
+}
+
+// TextDocumentDialog renders one selectable read-only document through the host dialog layer.
+// TextDocumentDialog 通过宿主浮动框层渲染一个可选择的只读文档。
+//
+// Parameters: props controls visibility and supplies localized metadata plus current resource state.
+// 参数：props 控制可见性，并提供本地化元数据与当前资源状态。
+// Returns: one portal-backed modal whose document body preserves package text formatting.
+// 返回值：返回一个通过 Portal 渲染且保留包文本格式的模态浮动框。
+export function TextDocumentDialog(props: TextDocumentDialogProps) {
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="plugin-text-document-dialog">
+        <DialogHeader>
+          <DialogTitle>{props.title}</DialogTitle>
+          {props.description ? <DialogDescription>{props.description}</DialogDescription> : null}
+        </DialogHeader>
+        {props.loading ? (
+          <div className="plugin-text-document-state">{props.loadingLabel ?? "Loading"}</div>
+        ) : props.error ? (
+          <div className="plugin-text-document-state error" role="alert">{props.error}</div>
+        ) : (
+          <pre className="plugin-text-document-content">{props.content}</pre>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // SelectControlOption describes one stable value-label choice in a plugin select.
 // SelectControlOption 描述插件下拉控件中的一个稳定值标签选项。
