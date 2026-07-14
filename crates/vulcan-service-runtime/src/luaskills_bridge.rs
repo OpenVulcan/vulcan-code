@@ -637,7 +637,7 @@ fn build_luaskills_catalog(
             display_name: meta.name,
             version,
             root_name: resolved.root_name,
-            skill_dir: resolved.actual_dir,
+            skill_dir: vulcan_runtime_assets::native_host_path(&resolved.actual_dir),
             enabled,
             disabled_reason,
             managed,
@@ -677,16 +677,24 @@ fn build_luaskills_catalog(
         .clone();
 
     Ok(TauriLuaSkillsCatalog {
-        runtime_root: handle.runtime_root.clone(),
-        managed_runtime_distribution_root: handle.managed_runtime_distribution_root.clone(),
-        managed_runtime_environment_root: handle.managed_runtime_environment_root.clone(),
+        runtime_root: vulcan_runtime_assets::native_host_path(&handle.runtime_root),
+        managed_runtime_distribution_root: vulcan_runtime_assets::native_host_path(
+            &handle.managed_runtime_distribution_root,
+        ),
+        managed_runtime_environment_root: vulcan_runtime_assets::native_host_path(
+            &handle.managed_runtime_environment_root,
+        ),
         managed_runtime_report,
         managed_runtime_progress,
-        system_lua_lib_dir: handle.runtime_root.join("system_lua_lib"),
+        system_lua_lib_dir: vulcan_runtime_assets::native_host_path(
+            &handle.runtime_root.join("system_lua_lib"),
+        ),
         entry_count: skills.iter().map(|skill| skill.entry_count).sum(),
         skills,
         runtime_settings,
-        runtime_settings_file: runtime_settings_file_path(&handle.output_config_directory),
+        runtime_settings_file: vulcan_runtime_assets::native_host_path(
+            &runtime_settings_file_path(&handle.output_config_directory),
+        ),
         restart_required,
     })
 }

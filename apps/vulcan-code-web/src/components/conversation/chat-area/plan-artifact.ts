@@ -50,7 +50,10 @@ export function displayPlanArtifactPath(path: string): string {
   if (trimmed.toLowerCase().startsWith(extendedUncPrefix.toLowerCase())) {
     return `\\\\${trimmed.slice(extendedUncPrefix.length)}`;
   }
-  if (trimmed.startsWith(extendedPathPrefix)) {
+  if (
+    trimmed.startsWith(extendedPathPrefix) &&
+    /^[A-Za-z]:[\\/]/.test(trimmed.slice(extendedPathPrefix.length))
+  ) {
     return trimmed.slice(extendedPathPrefix.length);
   }
   return trimmed;

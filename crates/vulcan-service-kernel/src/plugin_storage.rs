@@ -269,7 +269,7 @@ impl ControllerPluginStorageService {
             .enable_sqlite(ControllerSqliteEnableRequest {
                 space_id: plugin_space_id(plugin_id),
                 binding_id: plugin_sqlite_binding_id(plugin_id, &self.binding_scope),
-                db_path: sqlite_path.display().to_string(),
+                db_path: vulcan_runtime_assets::native_host_path_text_from_path(&sqlite_path),
                 connection_pool_size: 2,
                 busy_timeout_ms: 10_000,
                 journal_mode: "WAL".to_string(),
@@ -333,8 +333,12 @@ impl ControllerPluginStorageService {
             .enable_lancedb(ControllerLanceDbEnableRequest {
                 space_id: plugin_space_id(plugin_id),
                 binding_id: plugin_lancedb_binding_id(plugin_id, &self.binding_scope),
-                default_db_path: lancedb_root.display().to_string(),
-                db_root: Some(lancedb_root.display().to_string()),
+                default_db_path: vulcan_runtime_assets::native_host_path_text_from_path(
+                    &lancedb_root,
+                ),
+                db_root: Some(vulcan_runtime_assets::native_host_path_text_from_path(
+                    &lancedb_root,
+                )),
                 read_consistency_interval_ms: Some(250),
                 max_upsert_payload: 16 * 1024 * 1024,
                 max_search_limit: PLUGIN_LANCEDB_MAX_SEARCH_LIMIT as usize,
@@ -371,7 +375,9 @@ impl ControllerPluginStorageService {
                 space_id: plugin_space_id(plugin_id),
                 space_label: format!("PLUGIN {plugin_id}"),
                 space_kind: SpaceKind::User,
-                space_root: plugin_data_root.display().to_string(),
+                space_root: vulcan_runtime_assets::native_host_path_text_from_path(
+                    plugin_data_root,
+                ),
             })
             .await
             .map_err(|error| format!("Failed to attach plugin data space: {error}"))?;

@@ -51,13 +51,16 @@ pub fn record_staged_attachment(
             asset_id: asset_id.to_string(),
             kind: attachment.kind.clone(),
             original_file_name: attachment.file_name.clone(),
-            managed_path: attachment.local_path.clone(),
+            managed_path: vulcan_runtime_assets::native_host_path_text(&attachment.local_path),
             mime_type: attachment.mime_type.clone(),
             byte_len: attachment.byte_len,
             staged_at_local_text: timestamp.local_timestamp_text.clone(),
             staged_date_text: timestamp.local_date_text.clone(),
             staged_at_unix_millis: timestamp.unix_millis,
-            source_path: attachment.source_path.clone(),
+            source_path: attachment
+                .source_path
+                .as_deref()
+                .map(vulcan_runtime_assets::native_host_path_text),
             session_ids: Vec::new(),
             message_ids: Vec::new(),
             staging_refs: Vec::new(),
@@ -399,9 +402,11 @@ fn finish_pending_attachment_deletion_at(
         file_name: document.assets[index].original_file_name.clone(),
         local_path: match &planned_path {
             CleanupManagedPath::Existing(managed_path) => {
-                managed_path.to_string_lossy().into_owned()
+                vulcan_runtime_assets::native_host_path_text_from_path(managed_path)
             }
-            CleanupManagedPath::Missing => document.assets[index].managed_path.clone(),
+            CleanupManagedPath::Missing => {
+                vulcan_runtime_assets::native_host_path_text(&document.assets[index].managed_path)
+            }
         },
         source_path: None,
         asset_id: Some(document.assets[index].asset_id.clone()),

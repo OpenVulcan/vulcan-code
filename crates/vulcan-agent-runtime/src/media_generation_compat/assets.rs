@@ -360,8 +360,10 @@ pub(super) fn resolve_attachment_from_local_path(
         file_name: candidate_path
             .file_name()
             .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_else(|| candidate_path.display().to_string()),
-        local_path: candidate_path.to_string_lossy().into_owned(),
+            .unwrap_or_else(|| {
+                vulcan_runtime_assets::native_host_path_text_from_path(&candidate_path)
+            }),
+        local_path: vulcan_runtime_assets::native_host_path_text_from_path(&candidate_path),
         source_path: None,
         asset_id: None,
         byte_len: metadata.map(|value| value.len()),

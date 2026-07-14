@@ -233,7 +233,8 @@ async fn build_git_commit_summary_input(
     if sections.is_empty() {
         return Err(String::from("当前没有可用于生成提交信息的变更。"));
     }
-    let repository_root_text = repository_root.to_string_lossy().into_owned();
+    let repository_root_text =
+        vulcan_runtime_assets::native_host_path_text_from_path(repository_root);
     let initial_payload = GitCommitContextHookPayload {
         schema_version: 1,
         repository_root: repository_root_text.clone(),
@@ -326,10 +327,14 @@ async fn apply_git_commit_context_hooks(
     );
     context.scope = HookScope::Workspace;
     context.actor = HookActor::new("service/git_commit_summary");
-    context.workspace_id = Some(repository_root.to_string_lossy().into_owned());
+    context.workspace_id = Some(vulcan_runtime_assets::native_host_path_text_from_path(
+        repository_root,
+    ));
     context.metadata.insert(
         String::from("workspace_root"),
-        Value::String(repository_root.to_string_lossy().into_owned()),
+        Value::String(vulcan_runtime_assets::native_host_path_text_from_path(
+            repository_root,
+        )),
     );
     context.session_id = Some(session_id.to_string());
     context.conversation_id = context.session_id.clone();

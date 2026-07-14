@@ -790,7 +790,7 @@ fn default_workspace_project_id(root_path_text: &str) -> String {
 /// Returns normalized native path text with Windows verbatim prefixes removed.
 /// 返回移除 Windows verbatim 前缀后的原生路径文本。
 fn workspace_project_path_text_from_path(path: &std::path::Path) -> String {
-    normalize_workspace_project_path_text(&path.to_string_lossy())
+    vulcan_runtime_assets::native_host_path_text_from_path(path)
 }
 
 /// Normalizes one raw project path string using the same native rules as project creation.

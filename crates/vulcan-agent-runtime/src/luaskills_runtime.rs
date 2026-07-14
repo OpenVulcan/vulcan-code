@@ -1014,7 +1014,7 @@ fn build_luaskills_catalog(
             display_name: meta.name.clone(),
             version: meta.version().to_string(),
             root_name: resolved.root_name.clone(),
-            skill_dir: resolved.actual_dir.clone(),
+            skill_dir: runtime_assets::native_host_path(&resolved.actual_dir),
             enabled,
             disabled_reason,
             managed,
@@ -1033,8 +1033,8 @@ fn build_luaskills_catalog(
     });
 
     Ok(LuaSkillsCatalog {
-        runtime_root: handle.runtime_root.clone(),
-        system_lua_lib_dir: handle.system_lua_lib_dir.clone(),
+        runtime_root: runtime_assets::native_host_path(&handle.runtime_root),
+        system_lua_lib_dir: runtime_assets::native_host_path(&handle.system_lua_lib_dir),
         entry_count: skills.iter().map(|skill| skill.entry_count).sum(),
         skills,
     })

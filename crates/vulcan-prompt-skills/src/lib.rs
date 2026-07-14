@@ -782,7 +782,7 @@ pub fn save_user_prompt_skill_package(
     fs::create_dir_all(user_root).map_err(|error| {
         format!(
             "Failed to create Agent Skills user root `{}`: {error}",
-            user_root.display()
+            vulcan_runtime_assets::native_host_path_text_from_path(user_root)
         )
     })?;
     let target_dir = user_root.join(&target_name);
@@ -1160,7 +1160,7 @@ fn copy_prompt_skill_directory(source: &Path, destination: &Path) -> Result<(), 
         if file_type.is_symlink() {
             return Err(format!(
                 "Symbolic links are not permitted in managed Agent Skill packages: {}",
-                entry.path().display()
+                vulcan_runtime_assets::native_host_path_text_from_path(&entry.path())
             ));
         }
         let next_destination = destination.join(entry.file_name());
@@ -1201,13 +1201,13 @@ fn read_host_prompt_skill_catalog_strict(
     let raw = fs::read_to_string(&path).map_err(|error| {
         format!(
             "Failed to read Agent Skills catalog `{}`: {error}",
-            path.display()
+            vulcan_runtime_assets::native_host_path_text_from_path(&path)
         )
     })?;
     let catalog: HostPromptSkillCatalog = serde_yaml::from_str(&raw).map_err(|error| {
         format!(
             "Failed to parse Agent Skills catalog `{}`: {error}",
-            path.display()
+            vulcan_runtime_assets::native_host_path_text_from_path(&path)
         )
     })?;
     if catalog.schema_version != VULCAN_SKILL_CATALOG_SCHEMA_VERSION {
@@ -1876,7 +1876,7 @@ pub fn render_prompt_skills_instructions(skills: &[ResolvedPromptSkill]) -> Opti
             "- {}: {} (file: {})",
             resolved.skill.name,
             collapse_whitespace(&resolved.skill.description),
-            resolved.skill.skill_file.display()
+            vulcan_runtime_assets::native_host_path_text_from_path(&resolved.skill.skill_file)
         ));
     }
     lines.extend([
@@ -1892,7 +1892,7 @@ pub fn render_prompt_skills_instructions(skills: &[ResolvedPromptSkill]) -> Opti
 /// Renders one prompt skill as the output of the native skill tool.
 /// 将单个提示词技能渲染为原生 skill 工具输出。
 pub fn render_skill_tool_output(skill: &PromptSkill, sampled_files: &[PathBuf]) -> String {
-    let base_dir = skill.base_dir.display().to_string();
+    let base_dir = vulcan_runtime_assets::native_host_path_text_from_path(&skill.base_dir);
     let mut lines = vec![
         format!("<skill_content name=\"{}\">", xml_escape(&skill.name)),
         format!("# Skill: {}", skill.name),
@@ -1911,7 +1911,9 @@ pub fn render_skill_tool_output(skill: &PromptSkill, sampled_files: &[PathBuf]) 
     for file in sampled_files {
         lines.push(format!(
             "<file>{}</file>",
-            xml_escape(&file.display().to_string())
+            xml_escape(&vulcan_runtime_assets::native_host_path_text_from_path(
+                file,
+            ))
         ));
     }
     lines.extend([

@@ -17,7 +17,10 @@ impl TextPromptResourceLoader {
             return Ok(None);
         }
         let raw = fs::read_to_string(path).map_err(|error| {
-            PromptComposerError::ResourceLoad(format!("{}: {error}", path.display()))
+            PromptComposerError::ResourceLoad(format!(
+                "{}: {error}",
+                vulcan_runtime_assets::native_host_path_text_from_path(path)
+            ))
         })?;
         let trimmed = raw.trim().to_string();
         if trimmed.is_empty() {
@@ -33,8 +36,10 @@ impl TextPromptResourceLoader {
     ) -> Result<Option<ProviderPromptSnapshot>, PromptComposerError> {
         Self::read_optional_text_file(path).map(|text| {
             text.map(|text| {
-                ProviderPromptSnapshot::new(text)
-                    .with_source_label(format!("Provider prompt resource `{}`", path.display()))
+                ProviderPromptSnapshot::new(text).with_source_label(format!(
+                    "Provider prompt resource `{}`",
+                    vulcan_runtime_assets::native_host_path_text_from_path(path)
+                ))
             })
         })
     }
@@ -46,8 +51,10 @@ impl TextPromptResourceLoader {
     ) -> Result<Option<AgentPromptSnapshot>, PromptComposerError> {
         Self::read_optional_text_file(path).map(|text| {
             text.map(|text| {
-                AgentPromptSnapshot::new(text)
-                    .with_source_label(format!("Agent prompt resource `{}`", path.display()))
+                AgentPromptSnapshot::new(text).with_source_label(format!(
+                    "Agent prompt resource `{}`",
+                    vulcan_runtime_assets::native_host_path_text_from_path(path)
+                ))
             })
         })
     }
@@ -58,7 +65,12 @@ impl TextPromptResourceLoader {
         path: &Path,
     ) -> Result<Option<ProjectRulesSnapshot>, PromptComposerError> {
         Self::read_optional_text_file(path).map(|text| {
-            text.map(|text| ProjectRulesSnapshot::new(path.display().to_string(), text))
+            text.map(|text| {
+                ProjectRulesSnapshot::new(
+                    vulcan_runtime_assets::native_host_path_text_from_path(path),
+                    text,
+                )
+            })
         })
     }
 }

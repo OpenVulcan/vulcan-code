@@ -56,11 +56,5 @@ pub(crate) const WEBUI_DIFF_DEFAULT_CONTEXT_LINES: usize = 3;
 /// Converts one filesystem path into a stable native display and persistence string.
 /// 将单个文件系统路径转换成稳定的原生展示与持久化字符串。
 pub(crate) fn normalized_workspace_path_text_from_path(path: &Path) -> String {
-    normalize_workspace_path_text(&path.to_string_lossy())
-}
-
-/// Normalizes one raw workspace path string and strips Windows verbatim prefixes.
-/// 规范化单个原始工作区路径字符串，并移除 Windows verbatim 前缀。
-pub(crate) fn normalize_workspace_path_text(path: &str) -> String {
-    vulcan_runtime_assets::native_host_path_text(path)
+    vulcan_runtime_assets::native_host_path_text_from_path(path)
 }

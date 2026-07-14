@@ -246,7 +246,10 @@ fn render_page_text(
     };
 
     let mut context = HashMap::new();
-    context.insert("raw_file", raw_file.to_string_lossy().to_string());
+    context.insert(
+        "raw_file",
+        vulcan_runtime_assets::native_host_path_text_from_path(&raw_file),
+    );
     context.insert("format", "markdown".to_string());
     context.insert("total_bytes", chunk_plan.total_bytes.to_string());
     context.insert("total_lines", chunk_plan.total_lines.to_string());

@@ -1120,7 +1120,9 @@ pub(crate) async fn service_open_agent_skills_user_directory(
     std::fs::create_dir_all(&user_root)
         .map_err(|error| format!("创建 Agent Skills 用户目录失败：{error}"))?;
     let update = refresh_agent_skills_local_state(&state).await?;
-    shell_host_from_state(&state)?.open_path(&user_root.to_string_lossy())?;
+    shell_host_from_state(&state)?.open_path(
+        &vulcan_runtime_assets::native_host_path_text_from_path(&user_root),
+    )?;
     Ok(update)
 }
 
@@ -1515,7 +1517,9 @@ pub(crate) async fn service_open_subagent_user_directory(
     // Release catalog serialization before the external file-manager request, which does not mutate catalog state.
     // 在不变更目录状态的外部文件管理器请求前释放目录串行守卫。
     drop(_catalog_mutation_guard);
-    shell_host_from_state(&state)?.open_path(&user_definition_root.to_string_lossy())?;
+    shell_host_from_state(&state)?.open_path(
+        &vulcan_runtime_assets::native_host_path_text_from_path(&user_definition_root),
+    )?;
     Ok(snapshot)
 }
 

@@ -4687,7 +4687,9 @@ fn resolve_plugin_node_spec(
     build_plugin_process_spec(
         runtime.executable,
         cwd,
-        vec![script.to_string_lossy().into_owned()],
+        vec![vulcan_runtime_assets::native_host_path_text_from_path(
+            &script,
+        )],
         mode,
         options,
         None,
@@ -4743,7 +4745,7 @@ fn resolve_plugin_python_spec(
     if bundled_packages.is_dir() {
         fixed_environment.insert(
             String::from("PYTHONPATH"),
-            bundled_packages.to_string_lossy().into_owned(),
+            vulcan_runtime_assets::native_host_path_text_from_path(&bundled_packages),
         );
     }
     let executable =
@@ -4755,7 +4757,9 @@ fn resolve_plugin_python_spec(
     build_plugin_process_spec(
         executable,
         cwd,
-        vec![script.to_string_lossy().into_owned()],
+        vec![vulcan_runtime_assets::native_host_path_text_from_path(
+            &script,
+        )],
         mode,
         options,
         None,
@@ -4834,12 +4838,14 @@ fn build_plugin_process_spec(
     let mut spec = Map::new();
     spec.insert(
         "program".to_string(),
-        Value::String(program.to_string_lossy().into_owned()),
+        Value::String(vulcan_runtime_assets::native_host_path_text_from_path(
+            &program,
+        )),
     );
     spec.insert("args".to_string(), json!(fixed_args));
     spec.insert(
         "cwd".to_string(),
-        Value::String(cwd.to_string_lossy().into_owned()),
+        Value::String(vulcan_runtime_assets::native_host_path_text_from_path(&cwd)),
     );
     for encoding_field in [
         "encoding",
@@ -5456,15 +5462,15 @@ fn install_plugin_registry_dependencies(
         fs::create_dir_all(&store_directory)
             .map_err(|error| format!("Failed to create Vulcan plugin pnpm store: {error}"))?;
         run_plugin_dependency_command(
-            Command::new(&runtime.executable)
-                .arg(&package_manager)
+            Command::new(vulcan_runtime_assets::native_host_path(&runtime.executable))
+                .arg(vulcan_runtime_assets::native_host_path(&package_manager))
                 .arg("install")
                 .arg("--frozen-lockfile")
                 .arg("--node-linker")
                 .arg("hoisted")
                 .arg("--store-dir")
-                .arg(&store_directory)
-                .current_dir(package_directory),
+                .arg(vulcan_runtime_assets::native_host_path(&store_directory))
+                .current_dir(vulcan_runtime_assets::native_host_path(package_directory)),
             "install Node plugin dependencies",
         )?;
     }
@@ -5489,12 +5495,14 @@ fn install_plugin_registry_dependencies(
         )?;
         let virtual_environment = environment_root.join(".venv");
         run_plugin_dependency_command(
-            Command::new(&package_manager)
+            Command::new(vulcan_runtime_assets::native_host_path(&package_manager))
                 .arg("venv")
                 .arg("--python")
-                .arg(&runtime.executable)
-                .arg(&virtual_environment)
-                .current_dir(environment_root)
+                .arg(vulcan_runtime_assets::native_host_path(&runtime.executable))
+                .arg(vulcan_runtime_assets::native_host_path(
+                    &virtual_environment,
+                ))
+                .current_dir(vulcan_runtime_assets::native_host_path(environment_root))
                 .env("UV_NO_CONFIG", "1"),
             "create Python plugin environment",
         )?;
@@ -5502,15 +5510,17 @@ fn install_plugin_registry_dependencies(
         fs::create_dir_all(&store_directory)
             .map_err(|error| format!("Failed to create Vulcan plugin uv store: {error}"))?;
         run_plugin_dependency_command(
-            Command::new(&package_manager)
+            Command::new(vulcan_runtime_assets::native_host_path(&package_manager))
                 .arg("pip")
                 .arg("sync")
-                .arg(&lockfile)
+                .arg(vulcan_runtime_assets::native_host_path(&lockfile))
                 .arg("--python")
-                .arg(plugin_python_environment_executable(environment_root))
+                .arg(vulcan_runtime_assets::native_host_path(
+                    &plugin_python_environment_executable(environment_root),
+                ))
                 .arg("--cache-dir")
-                .arg(&store_directory)
-                .current_dir(environment_root)
+                .arg(vulcan_runtime_assets::native_host_path(&store_directory))
+                .current_dir(vulcan_runtime_assets::native_host_path(environment_root))
                 .env("UV_NO_CONFIG", "1"),
             "install Python plugin dependencies",
         )?;
@@ -7692,6 +7702,32 @@ return M
                 .expect("claim restored lease")
                 .len(),
             1
+        );
+    }
+
+    /// Verifies plugin process specifications expose standard Windows paths to the Lua bridge.
+    /// 验证插件进程规格向 Lua 桥暴露标准 Windows 路径。
+    #[cfg(windows)]
+    #[test]
+    fn plugin_process_spec_normalizes_windows_verbatim_paths() {
+        let spec = build_plugin_process_spec(
+            PathBuf::from(r"\\?\D:\openvulcan\runtime\node.exe"),
+            PathBuf::from(r"\\?\D:\openvulcan\plugins\context7"),
+            Vec::new(),
+            "exec",
+            &Map::new(),
+            None,
+            BTreeMap::new(),
+        )
+        .expect("build plugin process specification");
+
+        assert_eq!(
+            spec.get("program").and_then(Value::as_str),
+            Some(r"D:\openvulcan\runtime\node.exe")
+        );
+        assert_eq!(
+            spec.get("cwd").and_then(Value::as_str),
+            Some(r"D:\openvulcan\plugins\context7")
         );
     }
 }

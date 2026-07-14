@@ -47,8 +47,15 @@ impl CommandSessionRuntime {
     /// 启动一条宿主管理命令会话并返回其初始快照。
     pub async fn start_session(
         self: &Arc<Self>,
-        request: CommandSessionStartRequest,
+        mut request: CommandSessionStartRequest,
     ) -> Result<CommandSessionSnapshot, String> {
+        // cwd crosses both the child-process and snapshot boundaries, so it must use one standard native spelling.
+        // cwd 同时跨越子进程与快照边界，因此必须统一使用标准原生写法。
+        request.cwd = vulcan_runtime_assets::native_host_path(&request.cwd);
+        // launcher_program crosses the same process boundary and may originate from a canonical PATH probe.
+        // launcher_program 跨越同一进程边界，并且可能来自规范化后的 PATH 探测。
+        request.launcher_program =
+            vulcan_runtime_assets::native_host_path_text(&request.launcher_program);
         match request.backend {
             CommandSessionBackend::Pipe => self.start_pipe_session(request).await,
             CommandSessionBackend::Pty => self.start_pty_session(request).await,
@@ -230,7 +237,7 @@ impl CommandSessionRuntime {
         request: CommandSessionStartRequest,
     ) -> Result<CommandSessionSnapshot, String> {
         let helper_path = resolve_windows_console_helper_path()?;
-        let mut helper = TokioCommand::new(&helper_path);
+        let mut helper = TokioCommand::new(vulcan_runtime_assets::native_host_path(&helper_path));
         helper.creation_flags(WINDOWS_CREATE_NO_WINDOW);
         helper.stdin(Stdio::piped());
         helper.stdout(Stdio::piped());
@@ -254,7 +261,7 @@ impl CommandSessionRuntime {
         let start_request = WindowsConsoleHelperRequest::Start {
             program: request.launcher_program.clone(),
             args: request.launcher_args.clone(),
-            cwd: request.cwd.display().to_string(),
+            cwd: vulcan_runtime_assets::native_host_path_text_from_path(&request.cwd),
             rows: 24,
             cols: 100,
             initial_stdin: request.initial_stdin.clone(),

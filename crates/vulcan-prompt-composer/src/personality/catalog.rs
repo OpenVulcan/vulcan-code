@@ -86,11 +86,17 @@ impl PersonalityCatalog {
             return Ok(catalog);
         }
         let read_dir = fs::read_dir(directory).map_err(|error| {
-            PromptComposerError::ResourceLoad(format!("{}: {error}", directory.display()))
+            PromptComposerError::ResourceLoad(format!(
+                "{}: {error}",
+                vulcan_runtime_assets::native_host_path_text_from_path(directory)
+            ))
         })?;
         for entry in read_dir {
             let entry = entry.map_err(|error| {
-                PromptComposerError::ResourceLoad(format!("{}: {error}", directory.display()))
+                PromptComposerError::ResourceLoad(format!(
+                    "{}: {error}",
+                    vulcan_runtime_assets::native_host_path_text_from_path(directory)
+                ))
             })?;
             let path = entry.path();
             if !path.is_file() {
@@ -106,7 +112,10 @@ impl PersonalityCatalog {
                 continue;
             }
             let text = fs::read_to_string(&path).map_err(|error| {
-                PromptComposerError::ResourceLoad(format!("{}: {error}", path.display()))
+                PromptComposerError::ResourceLoad(format!(
+                    "{}: {error}",
+                    vulcan_runtime_assets::native_host_path_text_from_path(&path)
+                ))
             })?;
             let trimmed = text.trim();
             if trimmed.is_empty() {
@@ -118,7 +127,10 @@ impl PersonalityCatalog {
                 text: trimmed.to_string(),
                 fingerprint: stable_text_hash(trimmed),
                 builtin: false,
-                source_label: format!("User personality resource `{}`", path.display()),
+                source_label: format!(
+                    "User personality resource `{}`",
+                    vulcan_runtime_assets::native_host_path_text_from_path(&path)
+                ),
             };
             catalog
                 .definitions

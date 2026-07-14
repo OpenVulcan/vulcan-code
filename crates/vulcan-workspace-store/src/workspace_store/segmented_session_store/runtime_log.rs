@@ -469,7 +469,7 @@ pub(in crate::workspace_store) fn ensure_runtime_metadata_absence_is_consistent(
     // rendered_paths 保留每个冲突产物，不猜测其中哪个具有权威性。
     let rendered_paths = existing_paths
         .iter()
-        .map(|path| path.display().to_string())
+        .map(|path| vulcan_runtime_assets::native_host_path_text_from_path(path.as_path()))
         .collect::<Vec<_>>()
         .join(", ");
     Err(format!(

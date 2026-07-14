@@ -13,13 +13,13 @@ pub(crate) fn canonicalize_workspace_path(path: &Path) -> PathBuf {
 /// Converts one filesystem path buffer into the normalized workspace text shown to users and providers.
 /// 将一个文件系统路径缓冲区转换为展示给用户与 Provider 的规范工作区文本。
 pub(crate) fn normalized_workspace_path_text_from_path(path: &Path) -> String {
-    normalize_workspace_path_text(&path.to_string_lossy())
+    vulcan_runtime_assets::native_host_path_text_from_path(path)
 }
 
 /// Converts one filesystem path buffer into the native host path text used for host-managed runtime injections.
 /// 将一个文件系统路径缓冲区转换为用于宿主管理运行时注入的宿主原生路径文本。
 pub(crate) fn native_workspace_path_text_from_path(path: &Path) -> String {
-    native_workspace_path_text(&canonicalize_workspace_path(path).to_string_lossy())
+    vulcan_runtime_assets::native_host_path_text_from_path(&canonicalize_workspace_path(path))
 }
 
 /// Converts one raw workspace path string into a stable human-readable text form without Windows verbatim prefixes.

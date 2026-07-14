@@ -85,10 +85,10 @@ fn build_child_command(
     cwd: Option<&Path>,
     env: &BTreeMap<String, String>,
 ) -> Command {
-    let mut command = Command::new(program);
+    let mut command = Command::new(vulcan_runtime_assets::native_host_path(Path::new(program)));
     command.args(argv);
     if let Some(cwd) = cwd {
-        command.current_dir(cwd);
+        command.current_dir(vulcan_runtime_assets::native_host_path(cwd));
     }
     if !env.is_empty() {
         command.envs(env);
@@ -172,6 +172,30 @@ mod tests {
         assert_eq!(
             env_entries,
             vec![(String::from("VULCAN_MCP_MODE"), Some(String::from("stdio")),)]
+        );
+    }
+
+    /// Verifies Windows verbatim paths are converted before crossing the MCP child-process boundary.
+    /// 验证 Windows 逐字路径在跨越 MCP 子进程边界前会转换为标准路径。
+    #[cfg(windows)]
+    #[test]
+    fn child_command_builder_normalizes_windows_verbatim_paths() {
+        let cwd = PathBuf::from(r"\\?\D:\openvulcan\workspace");
+        let command = build_child_command(
+            OsStr::new(r"\\?\D:\openvulcan\runtime\node.exe"),
+            &[],
+            Some(cwd.as_path()),
+            &BTreeMap::new(),
+        );
+        let std_command = command.as_std();
+
+        assert_eq!(
+            std_command.get_program(),
+            OsStr::new(r"D:\openvulcan\runtime\node.exe")
+        );
+        assert_eq!(
+            std_command.get_current_dir(),
+            Some(std::path::Path::new(r"D:\openvulcan\workspace"))
         );
     }
 }

@@ -126,7 +126,9 @@ pub fn execute_attachment_cleanup(
                     let preview_cleanup_attachment = ConversationAttachment {
                         kind: record.kind.clone(),
                         file_name: record.original_file_name.clone(),
-                        local_path: managed_path.to_string_lossy().into_owned(),
+                        local_path: vulcan_runtime_assets::native_host_path_text_from_path(
+                            &managed_path,
+                        ),
                         source_path: None,
                         asset_id: Some(record.asset_id.clone()),
                         byte_len: record.byte_len,
@@ -149,7 +151,7 @@ pub fn execute_attachment_cleanup(
                 let preview_cleanup_attachment = ConversationAttachment {
                     kind: record.kind.clone(),
                     file_name: record.original_file_name.clone(),
-                    local_path: record.managed_path.clone(),
+                    local_path: vulcan_runtime_assets::native_host_path_text(&record.managed_path),
                     source_path: None,
                     asset_id: Some(record.asset_id.clone()),
                     byte_len: record.byte_len,

@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+vulcan-runtime-assets.workspace = true
 
 [lints]
 workspace = true

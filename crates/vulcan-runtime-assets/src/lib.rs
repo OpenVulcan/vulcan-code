@@ -12,14 +12,13 @@ use std::path::{Path, PathBuf};
 /// Returns equivalent drive or UNC addressing with native Windows separators when applicable.
 /// 适用时返回使用 Windows 原生分隔符的等价盘符或 UNC 寻址。
 pub fn native_host_path_text(path: &str) -> String {
-    let trimmed_path = path.trim();
-    if trimmed_path.is_empty() {
+    if path.is_empty() {
         return String::new();
     }
     // path_without_verbatim_prefix preserves the original drive or UNC address.
     // path_without_verbatim_prefix 保留原始盘符或 UNC 地址。
-    let path_without_verbatim_prefix = strip_windows_verbatim_prefix(trimmed_path);
-    if looks_like_windows_path(trimmed_path, &path_without_verbatim_prefix) {
+    let path_without_verbatim_prefix = strip_windows_verbatim_prefix(path);
+    if looks_like_windows_path(path, &path_without_verbatim_prefix) {
         path_without_verbatim_prefix.replace('/', "\\")
     } else {
         path_without_verbatim_prefix
@@ -38,14 +37,26 @@ pub fn native_host_path(path: &Path) -> PathBuf {
     PathBuf::from(native_host_path_text(&path.to_string_lossy()))
 }
 
+/// Render one filesystem path as host-visible native text without Windows verbatim prefixes.
+/// 将一个文件系统路径渲染为不含 Windows verbatim 前缀的宿主可见原生文本。
+///
+/// # Parameters
+/// 参数
+/// `path` is the filesystem path crossing a JSON, process, persistence, UI, or model boundary.
+/// `path` 是即将跨越 JSON、进程、持久化、界面或模型边界的文件系统路径。
+///
+/// # Returns
+/// 返回值
+/// A stable native path string suitable for host-facing protocols.
+/// 返回适用于宿主侧协议的稳定原生路径字符串。
+pub fn native_host_path_text_from_path(path: &Path) -> String {
+    native_host_path_text(&path.to_string_lossy())
+}
+
 /// Return whether one normalized path retains Windows drive or UNC semantics.
 /// 返回一条规范路径是否保留 Windows 盘符或 UNC 语义。
 fn looks_like_windows_path(original_path: &str, normalized_path: &str) -> bool {
-    let bytes = normalized_path.as_bytes();
-    (bytes.len() >= 3
-        && bytes[1] == b':'
-        && bytes[0].is_ascii_alphabetic()
-        && matches!(bytes[2], b'/' | b'\\'))
+    is_windows_drive_absolute_path(normalized_path)
         || normalized_path.starts_with(r"\\")
         || original_path.starts_with(r"\\?\UNC\")
         || original_path.starts_with("//?/UNC/")
@@ -55,19 +66,41 @@ fn looks_like_windows_path(original_path: &str, normalized_path: &str) -> bool {
 /// Remove Windows verbatim prefixes while preserving ordinary addressing semantics.
 /// 移除 Windows verbatim 前缀，同时保留常规寻址语义。
 fn strip_windows_verbatim_prefix(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+    if path
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\?\UNC\"))
+    {
+        let rest = &path[8..];
         return format!(r"\\{rest}");
     }
-    if let Some(rest) = path.strip_prefix("//?/UNC/") {
+    if path
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("//?/UNC/"))
+    {
+        let rest = &path[8..];
         return format!("//{rest}");
     }
-    if let Some(rest) = path.strip_prefix(r"\\?\") {
+    if let Some(rest) = path.strip_prefix(r"\\?\")
+        && is_windows_drive_absolute_path(rest)
+    {
         return rest.to_string();
     }
-    if let Some(rest) = path.strip_prefix("//?/") {
+    if let Some(rest) = path.strip_prefix("//?/")
+        && is_windows_drive_absolute_path(rest)
+    {
         return rest.to_string();
     }
     path.to_string()
+}
+
+/// Return whether one path starts with an absolute Windows drive address.
+/// 返回一条路径是否以 Windows 绝对盘符地址开头。
+fn is_windows_drive_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
 }
 
 /// Environment variable that explicitly points the application at one prepared output root.
@@ -435,6 +468,18 @@ mod tests {
         assert_eq!(
             native_host_path_text("//?/UNC/server/share/runtime"),
             r"\\server\share\runtime"
+        );
+        assert_eq!(
+            native_host_path_text_from_path(Path::new(r"\\?\D:\openvulcan\vulcan-code")),
+            r"D:\openvulcan\vulcan-code"
+        );
+        assert_eq!(
+            native_host_path_text(r"D:\directory with trailing space "),
+            r"D:\directory with trailing space "
+        );
+        assert_eq!(
+            native_host_path_text(r"\\?\Volume{01234567-89AB-CDEF-0123-456789ABCDEF}\runtime"),
+            r"\\?\Volume{01234567-89AB-CDEF-0123-456789ABCDEF}\runtime"
         );
     }
 }

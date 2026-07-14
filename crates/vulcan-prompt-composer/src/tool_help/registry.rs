@@ -88,11 +88,17 @@ impl ToolHelpRegistry {
             return Ok(());
         }
         let read_dir = fs::read_dir(directory).map_err(|error| {
-            PromptComposerError::ResourceLoad(format!("{}: {error}", directory.display()))
+            PromptComposerError::ResourceLoad(format!(
+                "{}: {error}",
+                vulcan_runtime_assets::native_host_path_text_from_path(directory)
+            ))
         })?;
         for entry in read_dir {
             let entry = entry.map_err(|error| {
-                PromptComposerError::ResourceLoad(format!("{}: {error}", directory.display()))
+                PromptComposerError::ResourceLoad(format!(
+                    "{}: {error}",
+                    vulcan_runtime_assets::native_host_path_text_from_path(directory)
+                ))
             })?;
             let path = entry.path();
             if !path.is_file() {
@@ -108,7 +114,10 @@ impl ToolHelpRegistry {
                 continue;
             }
             let text = fs::read_to_string(&path).map_err(|error| {
-                PromptComposerError::ResourceLoad(format!("{}: {error}", path.display()))
+                PromptComposerError::ResourceLoad(format!(
+                    "{}: {error}",
+                    vulcan_runtime_assets::native_host_path_text_from_path(&path)
+                ))
             })?;
             let trimmed = text.trim();
             if trimmed.is_empty() {
@@ -116,8 +125,12 @@ impl ToolHelpRegistry {
             }
             self.entries.insert(
                 stem.to_string(),
-                ToolHelpEntry::new(stem.to_string(), trimmed.to_string())
-                    .with_source_label(format!("User tool-help resource `{}`", path.display())),
+                ToolHelpEntry::new(stem.to_string(), trimmed.to_string()).with_source_label(
+                    format!(
+                        "User tool-help resource `{}`",
+                        vulcan_runtime_assets::native_host_path_text_from_path(&path)
+                    ),
+                ),
             );
         }
         Ok(())

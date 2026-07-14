@@ -61,14 +61,16 @@ local function normalize_windows_package_search_path(search_path)
         -- forward_verbatim_drive_prefix accepts the equivalent slash drive spelling.
         -- forward_verbatim_drive_prefix 接受等价的正斜杠盘符写法。
         local forward_verbatim_drive_prefix = "//?/"
-        if string.sub(entry, 1, #verbatim_unc_prefix) == verbatim_unc_prefix then
+        if string.lower(string.sub(entry, 1, #verbatim_unc_prefix)) == string.lower(verbatim_unc_prefix) then
             entry = [[\\]] .. string.sub(entry, #verbatim_unc_prefix + 1)
-        elseif string.sub(entry, 1, #verbatim_drive_prefix) == verbatim_drive_prefix then
+        elseif string.sub(entry, 1, #verbatim_drive_prefix) == verbatim_drive_prefix
+            and string.match(string.sub(entry, #verbatim_drive_prefix + 1), "^[A-Za-z]:[\\/]") ~= nil then
             entry = string.sub(entry, #verbatim_drive_prefix + 1)
-        elseif string.sub(entry, 1, #forward_verbatim_unc_prefix) == forward_verbatim_unc_prefix then
-            entry = "//" .. string.sub(entry, #forward_verbatim_unc_prefix + 1)
-        elseif string.sub(entry, 1, #forward_verbatim_drive_prefix) == forward_verbatim_drive_prefix then
-            entry = string.sub(entry, #forward_verbatim_drive_prefix + 1)
+        elseif string.lower(string.sub(entry, 1, #forward_verbatim_unc_prefix)) == string.lower(forward_verbatim_unc_prefix) then
+            entry = [[\\]] .. string.gsub(string.sub(entry, #forward_verbatim_unc_prefix + 1), "/", "\\")
+        elseif string.sub(entry, 1, #forward_verbatim_drive_prefix) == forward_verbatim_drive_prefix
+            and string.match(string.sub(entry, #forward_verbatim_drive_prefix + 1), "^[A-Za-z]:[\\/]") ~= nil then
+            entry = string.gsub(string.sub(entry, #forward_verbatim_drive_prefix + 1), "/", "\\")
         end
         entries[#entries + 1] = entry
         if separator_index == nil then

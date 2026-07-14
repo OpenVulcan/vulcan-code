@@ -68,8 +68,11 @@ pub(crate) fn run_webui_git_mutating_command_with_stdin(
 /// 返回尚未附加调用方参数或 stdio 配置的 `git` 命令。
 fn webui_git_command(working_directory: &Path, disable_repository_hooks: bool) -> Command {
     let mut command = Command::new("git");
+    // Git receives a standard host path so Windows child-process startup never inherits a verbatim prefix.
+    // Git 接收标准宿主路径，避免 Windows 子进程启动继承逐字路径前缀。
+    let native_working_directory = vulcan_runtime_assets::native_host_path(working_directory);
     command
-        .current_dir(working_directory)
+        .current_dir(native_working_directory)
         .env("GIT_PAGER", "")
         .arg("-c")
         .arg("core.fsmonitor=false");

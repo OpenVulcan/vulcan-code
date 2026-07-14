@@ -140,7 +140,7 @@ pub async fn bootstrap_application_data_plane(
                 space_id: String::from(APP_SPACE_ID),
                 space_label: String::from("APP"),
                 space_kind: SpaceKind::User,
-                space_root: data_root.display().to_string(),
+                space_root: runtime_assets::native_host_path_text_from_path(&data_root),
             })
             .await
             .map_err(|error| format!("附着应用数据空间失败：{error}"))?;
@@ -149,7 +149,7 @@ pub async fn bootstrap_application_data_plane(
             .enable_sqlite(ControllerSqliteEnableRequest {
                 space_id: String::from(APP_SPACE_ID),
                 binding_id: sqlite_binding_id.clone(),
-                db_path: sqlite_path.display().to_string(),
+                db_path: runtime_assets::native_host_path_text_from_path(&sqlite_path),
                 ..ControllerSqliteEnableRequest::default()
             })
             .await
@@ -210,10 +210,10 @@ fn build_controller_client_config(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .map(runtime_assets::native_host_path_text)
         .or_else(|| {
             runtime_assets::resolve_bundled_controller_executable_path()
-                .map(|path| path.display().to_string())
+                .map(|path| runtime_assets::native_host_path_text_from_path(&path))
         });
     config.spawn_process_mode = match controller.process_mode {
         PersistedControllerProcessMode::Service => ControllerProcessMode::Service,

@@ -212,7 +212,7 @@ pub(in crate::workspace_store) fn repair_segmented_session_display_if_needed(
     let backup_dir = backup_segmented_session_before_display_maintenance(session_dir, &reason)?;
     let report = SegmentedDisplayMaintenanceReport {
         reason,
-        backup_dir: backup_dir.to_string_lossy().to_string(),
+        backup_dir: vulcan_runtime_assets::native_host_path_text_from_path(&backup_dir),
         original_segment_count,
         rebuilt_segment_count: repaired_build.metadata.segments.len(),
         effective_message_count: messages.len(),

@@ -6208,6 +6208,7 @@ dependencies = [
  "tauri-build",
  "tokio",
  "vulcan-host-tools",
+ "vulcan-runtime-assets",
  "vulcan-service-api",
  "vulcan-service-host",
  "vulcan-service-kernel",
@@ -6332,6 +6333,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "vulcan-host-tools",
+ "vulcan-runtime-assets",
 ]
 
 [[package]]
@@ -6354,6 +6356,9 @@ dependencies = [
 [[package]]
 name = "vulcan-prompt-composer"
 version = "0.1.0"
+dependencies = [
+ "vulcan-runtime-assets",
+]
 
 [[package]]
 name = "vulcan-prompt-skills"
@@ -6364,6 +6369,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "vulcan-runtime-assets",
 ]
 
 [[package]]

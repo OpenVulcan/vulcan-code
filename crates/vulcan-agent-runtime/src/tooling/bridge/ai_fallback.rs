@@ -160,7 +160,7 @@ fn configured_image_generation_candidate(
     if !configuration.has_usable_targets_for_kind(AiToolKind::ImageGeneration) {
         return None;
     }
-    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::ImageGeneration))
         .collect::<Vec<_>>()
@@ -212,7 +212,7 @@ fn configured_video_generation_candidate(
     if !configuration.has_usable_targets_for_kind(AiToolKind::VideoGeneration) {
         return None;
     }
-    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::VideoGeneration))
         .collect::<Vec<_>>()
@@ -263,7 +263,7 @@ fn configured_speech_synthesis_candidate(
     if !configuration.has_usable_targets_for_kind(AiToolKind::SpeechSynthesis) {
         return None;
     }
-    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::SpeechSynthesis))
         .collect::<Vec<_>>()
@@ -304,7 +304,7 @@ fn configured_music_generation_candidate(
     if !configuration.has_usable_targets_for_kind(AiToolKind::MusicGeneration) {
         return None;
     }
-    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::MusicGeneration))
         .collect::<Vec<_>>()
@@ -346,7 +346,7 @@ fn configured_music_cover_candidate(
     if !configuration.has_usable_targets_for_kind(AiToolKind::MusicCover) {
         return None;
     }
-    let workspace_path = workspace_root?.to_string_lossy().into_owned();
+    let workspace_path = vulcan_runtime_assets::native_host_path_text_from_path(&workspace_root?);
     let audio_attachments = conversation_attachments
         .into_iter()
         .filter(|attachment| attachment.kind == ConversationAttachmentKind::Audio)

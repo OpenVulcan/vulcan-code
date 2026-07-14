@@ -267,24 +267,27 @@ pub(crate) fn resolve_shell_command_working_directory(
     raw_cwd: Option<&str>,
 ) -> Result<PathBuf, NativeToolError> {
     let workspace_root = workspace_root.filter(|path| !path.as_os_str().is_empty());
-    let fallback_directory = std::env::current_dir().map_err(|error| {
-        NativeToolError::new(format!(
-            "Failed to read the current working directory: {error}"
-        ))
-    })?;
+    let fallback_directory =
+        crate::runtime_assets::native_host_path(&std::env::current_dir().map_err(|error| {
+            NativeToolError::new(format!(
+                "Failed to read the current working directory: {error}"
+            ))
+        })?);
     let Some(raw_cwd) = raw_cwd.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(workspace_root
-            .map(Path::to_path_buf)
+            .map(crate::runtime_assets::native_host_path)
             .unwrap_or(fallback_directory));
     };
     let requested_path = PathBuf::from(raw_cwd);
     if requested_path.is_absolute() {
-        return Ok(requested_path);
+        return Ok(crate::runtime_assets::native_host_path(&requested_path));
     }
     let base_directory = workspace_root
-        .map(Path::to_path_buf)
+        .map(crate::runtime_assets::native_host_path)
         .unwrap_or(fallback_directory);
-    Ok(base_directory.join(requested_path))
+    Ok(crate::runtime_assets::native_host_path(
+        &base_directory.join(requested_path),
+    ))
 }
 
 /// Resolves the spill root used by one shell-command invocation when oversized output must be paged.

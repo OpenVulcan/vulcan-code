@@ -205,7 +205,9 @@ pub fn stage_attachment_file(
     let file_name = canonical_source_path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| canonical_source_path.display().to_string());
+        .unwrap_or_else(|| {
+            vulcan_runtime_assets::native_host_path_text_from_path(&canonical_source_path)
+        });
 
     stage_attachment_bytes(
         workspace_path,
@@ -261,7 +263,7 @@ pub fn stage_attachment_bytes(
     let attachment = ConversationAttachment {
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
-        local_path: managed_file_path.to_string_lossy().into_owned(),
+        local_path: vulcan_runtime_assets::native_host_path_text_from_path(&managed_file_path),
         source_path: source_path
             .map(canonicalize_workspace_path)
             .map(|path| normalized_workspace_path_text_from_path(&path)),

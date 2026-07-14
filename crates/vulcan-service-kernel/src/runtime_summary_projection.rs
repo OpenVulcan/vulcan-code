@@ -85,7 +85,9 @@ pub(crate) fn command_session_summary_from_snapshot(
         status: snapshot.status.as_str().to_string(),
         preview,
         owner_session_id: Some(snapshot.owner_session_id.to_string()),
-        cwd: Some(snapshot.cwd.display().to_string()),
+        cwd: Some(vulcan_runtime_assets::native_host_path_text_from_path(
+            &snapshot.cwd,
+        )),
         shell_label: Some(snapshot.shell_label),
         backend: Some(snapshot.backend.as_str().to_string()),
         screen_frame_seq: snapshot.screen_frame_seq,

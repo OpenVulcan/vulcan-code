@@ -119,13 +119,16 @@ pub fn run() {
 /// `Ok(())` when the operating system accepted the open request.
 /// 当操作系统接受打开请求时返回 `Ok(())`。
 fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
+    // native_path is the standard host spelling passed to every platform file-manager process.
+    // native_path 是传给各平台文件管理器进程的标准宿主路径写法。
+    let native_path = vulcan_runtime_assets::native_host_path_text(path);
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = Command::new("explorer");
-        if Path::new(path).is_file() {
-            command.arg(format!("/select,{path}"));
+        if Path::new(&native_path).is_file() {
+            command.arg(format!("/select,{native_path}"));
         } else {
-            command.arg(path);
+            command.arg(&native_path);
         }
         command
     };
@@ -133,10 +136,10 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = Command::new("open");
-        if Path::new(path).is_file() {
-            command.arg("-R").arg(path);
+        if Path::new(&native_path).is_file() {
+            command.arg("-R").arg(&native_path);
         } else {
-            command.arg(path);
+            command.arg(&native_path);
         }
         command
     };
@@ -144,14 +147,14 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     let mut command = {
         let mut command = Command::new("xdg-open");
-        if Path::new(path).is_file() {
-            if let Some(parent) = Path::new(path).parent() {
+        if Path::new(&native_path).is_file() {
+            if let Some(parent) = Path::new(&native_path).parent() {
                 command.arg(parent);
             } else {
-                command.arg(path);
+                command.arg(&native_path);
             }
         } else {
-            command.arg(path);
+            command.arg(&native_path);
         }
         command
     };

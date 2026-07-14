@@ -98,7 +98,7 @@ fn project_prompt_file_marker(
         Err(error) => {
             return Err(PromptComposerError::ResourceLoad(format!(
                 "{}: {error}",
-                path.display()
+                vulcan_runtime_assets::native_host_path_text_from_path(path)
             )));
         }
     };
@@ -122,14 +122,17 @@ fn read_project_prompt_snapshot(
     path: &Path,
 ) -> Result<Option<ProjectPromptSnapshot>, PromptComposerError> {
     let text = fs::read_to_string(path).map_err(|error| {
-        PromptComposerError::ResourceLoad(format!("{}: {error}", path.display()))
+        PromptComposerError::ResourceLoad(format!(
+            "{}: {error}",
+            vulcan_runtime_assets::native_host_path_text_from_path(path)
+        ))
     })?;
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
     }
     Ok(Some(ProjectPromptSnapshot::new(
-        path.display().to_string(),
+        vulcan_runtime_assets::native_host_path_text_from_path(path),
         text.to_string(),
     )))
 }

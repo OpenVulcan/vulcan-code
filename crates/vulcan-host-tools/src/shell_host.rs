@@ -359,7 +359,7 @@ fn resolve_launcher_program(shell: HostCommandShell) -> Option<String> {
             .candidate_absolute_programs()
             .into_iter()
             .find(|path| path.is_file())
-            .map(|path| path.display().to_string())
+            .map(|path| vulcan_runtime_assets::native_host_path_text_from_path(&path))
     })
 }
 
@@ -373,7 +373,7 @@ fn search_path_for_program(program_names: &[&str]) -> Option<String> {
         path_entries
             .iter()
             .find_map(|directory| find_program_in_directory(directory, program_name))
-            .map(|path| path.display().to_string())
+            .map(|path| vulcan_runtime_assets::native_host_path_text_from_path(&path))
     })
 }
 
