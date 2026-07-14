@@ -309,7 +309,9 @@ export function ProjectSidebar(props: {
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         />
-        <SidebarMenu>
+        {/* Hide primary feature shortcuts in icon-only mode so collapsed navigation stays project-focused. */}
+        {/* 在纯图标折叠模式隐藏主功能快捷入口，使折叠导航只聚焦项目。 */}
+        {sidebarState !== "collapsed" ? <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
               active={props.skillsActive}
@@ -354,7 +356,7 @@ export function ProjectSidebar(props: {
               <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.memory")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
-        </SidebarMenu>
+        </SidebarMenu> : null}
       </SidebarHeader>
       <SidebarContent>
         {pinnedConversations.length > 0 || visiblePinnedProjects.length > 0 ? (
