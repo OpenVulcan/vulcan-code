@@ -3273,6 +3273,29 @@ impl SystemPluginRuntimeManager {
                 "Vulcan plugin bridge dependencies.yaml is unavailable.",
             ));
         }
+        // bridgeModulePath must remain inside the canonical fixed System package root.
+        // bridgeModulePath 必须保持在规范化的固定 System 包根目录内。
+        let bridge_module_path = bridge_package_root
+            .join("runtime")
+            .join("bridge.lua")
+            .canonicalize()
+            .map_err(|error| {
+                SystemPluginRuntimeError::new(format!(
+                    "Failed to resolve Vulcan plugin bridge module: {error}"
+                ))
+            })?;
+        if !bridge_module_path.starts_with(&bridge_package_root) || !bridge_module_path.is_file() {
+            return Err(SystemPluginRuntimeError::new(
+                "Vulcan plugin bridge module escapes its package root or is not a regular file.",
+            ));
+        }
+        // bridgeSource bypasses Lua package.searchpath while preserving the exact trusted package file.
+        // bridgeSource 绕过 Lua package.searchpath，同时保留完全相同的可信包文件。
+        let bridge_source = fs::read_to_string(&bridge_module_path).map_err(|error| {
+            SystemPluginRuntimeError::new(format!(
+                "Failed to read Vulcan plugin bridge module: {error}"
+            ))
+        })?;
         let requested_sid = format!("vulcan-plugin/{}/{session_id}", manifest.id);
         let create_request = json!({
             "sid": requested_sid.clone(),
@@ -3308,32 +3331,35 @@ impl SystemPluginRuntimeManager {
             "lease_id": lease_id.clone(),
             "sid": sid.clone(),
             "generation": generation,
-            "code": "local bridge = require('runtime.bridge')\nreturn bridge.load(args)",
+            "code": "local loader, compile_error = load(args.bridge_source, '@vulcan-plugin-bridge/runtime/bridge.lua', 't')\nif loader == nil then error('Failed to compile Vulcan plugin bridge: ' .. tostring(compile_error)) end\nlocal bridge = loader()\nif type(bridge) ~= 'table' then error('Vulcan plugin bridge must return a table') end\npackage.loaded['runtime.bridge'] = bridge\nreturn bridge.load(args.plugin)",
             "args": {
-                "plugin_id": manifest.id,
-                "runtime_id": self.state.manager_id.clone(),
-                "lease_scope": lease_scope.as_str(),
-                "workspace_root": canonical_workspace_root.to_string_lossy(),
-                "bundle_source": bundle_source,
-                "invoke_function": manifest.runtime.invoke_function,
-                "shutdown_function": manifest.runtime.shutdown_function,
-                "hook_shutdown_function": manifest.runtime.hook_shutdown_function,
-                "hook_functions": manifest
-                    .hooks
-                    .iter()
-                    .map(|hook| hook.function.clone())
-                    .collect::<Vec<_>>(),
-                "additional_functions": manifest
-                    .actions
-                    .iter()
-                    .map(|action| action.function.clone())
-                    .chain([
-                        manifest.lifecycle.install.clone(),
-                        manifest.lifecycle.enable.clone(),
-                        manifest.lifecycle.disable.clone(),
-                        manifest.lifecycle.uninstall.clone(),
-                    ].into_iter().flatten())
-                    .collect::<BTreeSet<_>>(),
+                "bridge_source": bridge_source,
+                "plugin": {
+                    "plugin_id": manifest.id,
+                    "runtime_id": self.state.manager_id.clone(),
+                    "lease_scope": lease_scope.as_str(),
+                    "workspace_root": canonical_workspace_root.to_string_lossy(),
+                    "bundle_source": bundle_source,
+                    "invoke_function": manifest.runtime.invoke_function,
+                    "shutdown_function": manifest.runtime.shutdown_function,
+                    "hook_shutdown_function": manifest.runtime.hook_shutdown_function,
+                    "hook_functions": manifest
+                        .hooks
+                        .iter()
+                        .map(|hook| hook.function.clone())
+                        .collect::<Vec<_>>(),
+                    "additional_functions": manifest
+                        .actions
+                        .iter()
+                        .map(|action| action.function.clone())
+                        .chain([
+                            manifest.lifecycle.install.clone(),
+                            manifest.lifecycle.enable.clone(),
+                            manifest.lifecycle.disable.clone(),
+                            manifest.lifecycle.uninstall.clone(),
+                        ].into_iter().flatten())
+                        .collect::<BTreeSet<_>>(),
+                },
             },
             "timeout_ms": SYSTEM_PLUGIN_PROBE_TIMEOUT_MS,
         });

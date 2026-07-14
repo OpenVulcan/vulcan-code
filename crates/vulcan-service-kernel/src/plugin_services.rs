@@ -1,9 +1,8 @@
 //! Generic Vulcan plugin service boundaries for mounted UI modules and business actions.
 //! 面向挂载界面模块与业务 Action 的通用 Vulcan 插件服务边界。
 
-use std::path::{Path, PathBuf};
-
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use vulcan_plugin_runtime::{
     SystemPluginActionCaller, SystemPluginActionRequest, SystemPluginRuntimeState,
 };
