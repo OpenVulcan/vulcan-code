@@ -1754,34 +1754,40 @@ end
 -- Dispatch one provider-visible Context7 operation through the exact tool operation field.
 -- 通过精确工具操作字段分发一个 Provider 可见 Context7 操作。
 --
--- args is the schema-validated provider payload with a host-inserted op field.
--- args 是经过 Schema 校验并由宿主插入 op 字段的 Provider 载荷。
+-- args is the fixed bridge frame containing the serialized schema-validated provider payload.
+-- args 是固定桥帧，其中包含序列化后的、经过 Schema 校验的 Provider 载荷。
 -- Returns one serialized Markdown success result.
 -- 返回一个序列化 Markdown 成功结果。
 function M.dispatch(args)
-    if type(args) ~= "table" then
-        error("Context7 tool arguments must be an object")
+    if type(args) ~= "table" or type(args.payload_json) ~= "string" or args.payload_json == "" then
+        error("Context7 tool payload_json is required")
+    end
+    -- decode_ok and input enforce the exact System Plugin bridge serialization boundary.
+    -- decode_ok 与 input 强制执行精确的 System Plugin 固定桥序列化边界。
+    local decode_ok, input = pcall(vulcan.json.decode, args.payload_json)
+    if not decode_ok or type(input) ~= "table" then
+        error("Context7 tool payload_json must decode to an object")
     end
     -- config supplies only the default fast-mode selection.
     -- config 仅提供默认快速模式选择。
     local config = read_config()
-    if args.op == "resolve_library_id" then
+    if input.op == "resolve_library_id" then
         -- decoded is the documented SearchResponse for the exact provider arguments.
         -- decoded 是精确 Provider 参数对应的文档化 SearchResponse。
         local decoded = execute_context7_request("resolve_library_id", SEARCH_PATH, {
-            { "libraryName", args.libraryName },
-            { "query", args.query },
-            { "fast", resolve_fast(args.fast, config) },
+            { "libraryName", input.libraryName },
+            { "query", input.query },
+            { "fast", resolve_fast(input.fast, config) },
         })
         return success(render_search_results(decoded))
-    elseif args.op == "query_docs" then
+    elseif input.op == "query_docs" then
         -- decoded is the documented ContextResponse for the exact provider arguments.
         -- decoded 是精确 Provider 参数对应的文档化 ContextResponse。
         local decoded = execute_context7_request("query_docs", CONTEXT_PATH, {
-            { "libraryId", args.libraryId },
-            { "query", args.query },
+            { "libraryId", input.libraryId },
+            { "query", input.query },
             { "type", "json" },
-            { "fast", resolve_fast(args.fast, config) },
+            { "fast", resolve_fast(input.fast, config) },
         })
         return success(render_documentation(decoded))
     end

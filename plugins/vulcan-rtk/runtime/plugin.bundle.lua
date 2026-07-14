@@ -416,7 +416,6 @@ function M.transform_git_commit_context(args)
     end
     payload.sections = sections
     table.insert(payload.contributions, {
-        badge = "RTK",
         label = "Git context",
         value = "compressed by vulcan-rtk",
     })

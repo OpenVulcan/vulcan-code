@@ -7100,8 +7100,8 @@ return M
         assert_eq!(flush_request.payload, json!({}));
     }
 
-    /// Verifies the repository RTK plugin executes its action and shell transform through the fixed bridge.
-    /// 验证仓库 RTK 插件通过固定桥接层执行 Action 与 shell 转换。
+    /// Verifies the repository RTK plugin executes its actions, shell transform, and Git context transform through the fixed bridge.
+    /// 验证仓库 RTK 插件通过固定桥接层执行 Action、Shell 转换与 Git 上下文转换。
     #[cfg(target_os = "windows")]
     #[test]
     fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
@@ -7123,6 +7123,13 @@ return M
             .get("system-plugin/vulcan-rtk/shell-command-rewrite")
             .cloned()
             .expect("resolve RTK shell hook");
+        // git_hook is the production Git commit-context registration whose contribution protocol differs from the shell hook.
+        // git_hook 是生产 Git 提交上下文注册，其贡献协议不同于 Shell Hook。
+        let git_hook = catalog
+            .enabled_hooks
+            .get("system-plugin/vulcan-rtk/git-commit-context")
+            .cloned()
+            .expect("resolve RTK Git context hook");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -7208,6 +7215,64 @@ return M
         );
         assert_eq!(transformed["binary_path_requests"][0]["binary_id"], "rtk");
         assert_eq!(transformed["contributions"][0]["badge"], "RTK");
+        // git_invocation uses the exact strict service-kernel payload contract for commit-summary context transforms.
+        // git_invocation 使用提交摘要上下文转换的精确严格 Service Kernel 载荷契约。
+        let git_invocation = HookInvocation {
+            registration: HookRegistration::new(
+                git_hook.registration_id.clone(),
+                "git.commit_summary.context",
+                HookMode::Transform,
+            ),
+            context: HookContext {
+                run_id: Uuid::new_v4().to_string(),
+                point: String::from("git.commit_summary.context"),
+                scope: HookScope::Workspace,
+                actor: HookActor::new("runtime-test"),
+                workspace_id: Some(workspace_root.to_string_lossy().into_owned()),
+                project_id: None,
+                session_id: Some(String::from("session-rtk-git")),
+                conversation_id: Some(String::from("session-rtk-git")),
+                user_id: None,
+                capabilities: HookCapabilitySet::default(),
+                metadata: BTreeMap::from([(
+                    String::from("workspace_root"),
+                    Value::String(workspace_root.to_string_lossy().into_owned()),
+                )]),
+            },
+            payload: HookPayload {
+                value: json!({
+                    "schema_version": 1,
+                    "repository_root": workspace_root.to_string_lossy(),
+                    "include_unstaged": false,
+                    "sections": [{
+                        "id": "staged",
+                        "title": "Staged changes",
+                        "body": "fixture",
+                        "code_fence": false,
+                    }],
+                    "notices": [],
+                    "contributions": [],
+                }),
+            },
+        };
+        // git_hook_result is the real fixed-bridge transform result validated before service-kernel decoding.
+        // git_hook_result 是在 Service Kernel 解码前取得的真实固定桥转换结果。
+        let git_hook_result = runtime
+            .block_on(manager.invoke_hook(&git_hook, git_invocation))
+            .expect("invoke RTK Git context transform");
+        // git_transformed is the exact host-owned payload returned by the RTK plugin.
+        // git_transformed 是 RTK 插件返回的精确宿主持有载荷。
+        let git_transformed = git_hook_result
+            .payload
+            .expect("RTK Git hook should return transformed payload")
+            .value;
+        assert_eq!(
+            git_transformed["contributions"][0],
+            json!({
+                "label": "Git context",
+                "value": "compressed by vulcan-rtk",
+            })
+        );
         // resolvedBinaryDirectory proves the logical hook request resolves to the repository plugin bin.
         // resolvedBinaryDirectory 证明逻辑 Hook 请求会解析到仓库插件 bin 目录。
         let resolved_binary_directory = manager

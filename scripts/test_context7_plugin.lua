@@ -429,6 +429,33 @@ local function decode_result(raw)
     return decoded.result
 end
 
+-- tool_frame serializes one Provider payload exactly as the fixed System Plugin bridge does.
+-- tool_frame 按固定 System Plugin 桥的真实方式序列化一个 Provider 载荷。
+--
+-- arguments is the schema-valid business object before host metadata is injected.
+-- arguments 是宿主元数据注入前经过 Schema 校验的业务对象。
+-- Returns the exact frame received by plugin.dispatch.
+-- 返回 plugin.dispatch 收到的精确帧结构。
+local function tool_frame(arguments)
+    -- request_id and host_timeout_ms match the metadata inserted before runtime dispatch serialization.
+    -- request_id 与 host_timeout_ms 对齐运行时分发序列化前注入的元数据。
+    arguments.request_id = "context7-test-request"
+    arguments.host_timeout_ms = 65000
+    return {
+        payload_json = runtime_vulcan.json.encode(arguments),
+        host_timeout_ms = 65000,
+    }
+end
+
+-- malformed_payload_ok proves dispatch rejects a bridge frame whose JSON cannot be decoded.
+-- malformed_payload_ok 验证 dispatch 会拒绝 JSON 无法解码的固定桥帧。
+local malformed_payload_ok, malformed_payload_error = pcall(plugin.dispatch, {
+    payload_json = "{",
+    host_timeout_ms = 65000,
+})
+assert(malformed_payload_ok == false)
+assert(tostring(malformed_payload_error):find("payload_json must decode to an object", 1, true) ~= nil)
+
 -- bootstrap proves a cold settings-page load uses one migration and a bounded number of host round trips.
 -- bootstrap 证明设置页冷启动只使用一次迁移与有界数量的宿主往返。
 local bootstrap = decode_result(plugin.bootstrap_get({ arguments = { rangeDays = 30 } }))
@@ -504,22 +531,22 @@ assert(state.config.requestTimeoutMs == 10000)
 if args.online == true then
     -- search_markdown is the live anonymous resolve result rendered through the real plugin.
     -- search_markdown 是通过真实插件渲染的在线匿名解析结果。
-    local search_markdown = decode_result(plugin.dispatch({
+    local search_markdown = decode_result(plugin.dispatch(tool_frame({
         op = "resolve_library_id",
         libraryName = "react",
         query = "React effect cleanup",
         fast = true,
-    }))
+    })))
     assert(search_markdown:find("Context7 library matches", 1, true) ~= nil)
     assert(search_markdown:find("SECURITY BOUNDARY", 1, true) ~= nil)
     -- docs_markdown is the live anonymous documentation result rendered through the real plugin.
     -- docs_markdown 是通过真实插件渲染的在线匿名文档结果。
-    local docs_markdown = decode_result(plugin.dispatch({
+    local docs_markdown = decode_result(plugin.dispatch(tool_frame({
         op = "query_docs",
         libraryId = "/react/react",
         query = "useEffect cleanup",
         fast = true,
-    }))
+    })))
     assert(docs_markdown:find("Context7 documentation", 1, true) ~= nil)
     assert(docs_markdown:find("SECURITY BOUNDARY", 1, true) ~= nil)
     assert(#state.events == 2)
