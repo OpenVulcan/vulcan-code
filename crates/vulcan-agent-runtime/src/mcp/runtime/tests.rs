@@ -152,6 +152,35 @@ fn runtime_server_diagnostic_exposes_stable_summary_and_warning_text() {
     );
 }
 
+/// Verifies a refresh warning preserves the connected title while remaining a warning projection.
+/// 验证刷新警告保留在线标题，同时仍投影为警告级别。
+#[test]
+fn connected_server_refresh_warning_keeps_online_event_title() {
+    // diagnostic represents a usable tool connection with a failed optional-capability refresh.
+    // diagnostic 表示工具连接可用但可选能力刷新失败的服务器。
+    let diagnostic = McpRuntimeServerDiagnostic {
+        name: String::from("Connected Server"),
+        status: McpRuntimeServerStatus::Connected,
+        tool_count: 2,
+        prompt_count: 1,
+        resource_count: 3,
+        last_error: Some(String::from("prompt refresh failed")),
+    };
+    // projection is the exact upper-layer event derived from connected status plus warning state.
+    // projection 是由连接状态与警告状态共同派生的精确上层事件。
+    let projection = diagnostic.to_runtime_event_projection();
+
+    assert_eq!(
+        diagnostic.runtime_event_title(),
+        String::from("MCP 服务器在线 · Connected Server")
+    );
+    assert_eq!(projection.kind, McpRuntimeEventProjectionKind::Warning);
+    assert_eq!(
+        projection.title,
+        String::from("MCP 服务器在线 · Connected Server")
+    );
+}
+
 #[test]
 fn enabled_server_discovery_report_preserves_rows_warnings_and_event_projections() {
     let snapshot = McpRuntimeSnapshot {

@@ -114,14 +114,17 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 "tool_name": request.tool_name,
                 "arguments": request.arguments,
             }))),
-        );
+        )
+        .map_err(|message| VulcanCoreError::InvalidState { message })?;
         let _ = self
             .live_sender
             .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_started_event)));
         // Wait for the host bridge to project the start card before the real tool body can begin.
         // 在真实工具主体开始前等待宿主桥接层完成开始卡片投影。
         let has_projection_barrier = projection_barrier.is_some();
-        wait_runtime_event_projection_barrier(projection_barrier).await;
+        wait_runtime_event_projection_barrier(projection_barrier)
+            .await
+            .map_err(|message| VulcanCoreError::InvalidState { message })?;
         if !has_projection_barrier {
             tokio::task::yield_now().await;
         }
@@ -175,13 +178,16 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 format_host_tool_result_runtime_detail(&result.model_output),
             )
             .with_metadata(event_metadata),
-        );
+        )
+        .map_err(|message| VulcanCoreError::InvalidState { message })?;
         let _ = self
             .live_sender
             .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_finished_event)));
         // Wait for the host bridge to observe terminal tool state before Core enters the next provider turn.
         // 在 Core 进入下一次 Provider 回合前，等待宿主桥接层先观察到工具终态。
-        wait_runtime_event_projection_barrier(projection_barrier).await;
+        wait_runtime_event_projection_barrier(projection_barrier)
+            .await
+            .map_err(|message| VulcanCoreError::InvalidState { message })?;
         Ok(result)
     }
 }

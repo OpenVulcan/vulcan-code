@@ -2,6 +2,7 @@
 //! workbench session panels 辅助逻辑。
 
 use super::*;
+use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
 use vulcan_service_api::{ConversationAttentionSummary, ConversationSummary};
 
 /// Projects session todolist state into the WebUI snapshot.
@@ -230,18 +231,37 @@ pub(crate) fn session_todolist_item_status_key(status: SessionTodolistItemStatus
 ///
 /// # Returns
 /// 返回值
-/// Ordered pending ask summaries sorted by their runtime sequence.
-/// 按运行时序号排序的待处理 ask 摘要。
+/// Returns ordered pending ask summaries, or an explicit runtime projection error.
+/// 返回按运行时序号排序的待处理 ask 摘要，失败时返回明确的运行时投影错误。
 pub(crate) fn pending_question_snapshots_from_agent_runtime(
     agent_runtime: Option<&AgentRuntimeBridge>,
-) -> Vec<PendingQuestionSnapshot> {
+) -> Result<Vec<PendingQuestionSnapshot>, String> {
     let Some(question_runtime) = agent_runtime.map(|runtime| runtime.question_runtime.as_ref())
     else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let mut snapshots = question_runtime
-        .list_pending()
-        .unwrap_or_default()
+    project_pending_question_requests(question_runtime.list_pending())
+}
+
+/// Converts one authoritative pending-request read into ordered WebUI snapshots.
+/// 将一次权威 pending 请求读取转换为有序 WebUI 快照。
+///
+/// # Parameters
+/// 参数
+/// `pending_requests` is the exact QuestionRuntime read result to project without fallback.
+/// `pending_requests` 是不得回退的精确 QuestionRuntime 读取结果。
+///
+/// # Returns
+/// 返回值
+/// Returns ordered snapshots for a successful read, or a contextualized registry-read error.
+/// 读取成功时返回有序快照，失败时返回带上下文的注册表读取错误。
+fn project_pending_question_requests(
+    pending_requests: Result<Vec<QuestionRequest>, String>,
+) -> Result<Vec<PendingQuestionSnapshot>, String> {
+    // snapshots contains only facts read successfully from the authoritative question registry.
+    // snapshots 仅包含从权威问题注册表成功读取的事实。
+    let mut snapshots = pending_requests
+        .map_err(|error| format!("failed to project pending ask requests: {error}"))?
         .into_iter()
         .map(|request| PendingQuestionSnapshot {
             id: request.id,
@@ -270,7 +290,7 @@ pub(crate) fn pending_question_snapshots_from_agent_runtime(
         })
         .collect::<Vec<_>>();
     snapshots.sort_by_key(|snapshot| snapshot.sequence);
-    snapshots
+    Ok(snapshots)
 }
 
 /// Builds the highest-priority sidebar attention marker for one conversation.
@@ -590,6 +610,21 @@ pub(crate) fn compact_panel_preview(content: &str) -> String {
 mod tests {
     use super::*;
     use vulcan_service_api::PendingPromptsChangedDelta;
+
+    /// Verifies a pending-question registry failure cannot be projected as an empty request list.
+    /// 验证待回答问题注册表失败无法被投影为空请求列表。
+    #[test]
+    fn pending_question_projection_preserves_registry_failure() {
+        // error is the contextualized Service Kernel failure returned for an authoritative read error.
+        // error 是权威读取失败时返回的带上下文 Service Kernel 错误。
+        let error = project_pending_question_requests(Err(String::from(
+            "The question runtime registry is locked.",
+        )))
+        .expect_err("registry failure must not become an empty pending-question list");
+
+        assert!(error.contains("failed to project pending ask requests"));
+        assert!(error.contains("question runtime registry is locked"));
+    }
 
     /// Builds one pending question snapshot for attention-priority tests.
     /// 为注意力优先级测试构建单个待回答问题快照。

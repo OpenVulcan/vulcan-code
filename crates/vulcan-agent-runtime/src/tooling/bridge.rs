@@ -22,7 +22,6 @@ use crate::media_generation_compat::{
     execute_configured_music_cover, execute_configured_music_generation,
     execute_configured_speech_synthesis, execute_configured_video_generation,
 };
-use crate::project_temp_maintenance;
 use crate::provider_config::{
     AiToolKind, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID, MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID,
     MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, PersistedAiToolConfiguration,
@@ -202,9 +201,7 @@ pub fn build_vulcan_tools_manager(
                                 session_id: session_id
                                     .as_deref()
                                     .and_then(|value| Uuid::parse_str(value).ok()),
-                                spill_root: workspace_root.as_deref().and_then(|path| {
-                                    project_temp_maintenance::ensure_project_temp_dir(path).ok()
-                                }),
+                                spill_root: None,
                                 workspace_root,
                                 controller_runtime,
                                 enabled_prompt_skill_names,
@@ -384,7 +381,7 @@ pub fn build_vulcan_tools_manager(
                         Some(&skill_id),
                         &result,
                         workspace_root.as_deref(),
-                    ));
+                    )?);
                     let invocation_result = if let Some(host_result) = result.host_result.as_ref() {
                         VulcanToolInvocationResult::from_model_output(model_output)
                             .with_host_result(VulcanToolHostResult {

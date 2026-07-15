@@ -200,6 +200,18 @@ pub enum WorkbenchDelta {
     /// Complete Agent Skills catalog replacement after one effective filesystem change.
     /// Agent Skills 文件系统发生一次有效变化后的完整目录替换增量。
     AgentSkillsCatalogChanged(AgentSkillsCatalogChangedDelta),
+    /// Complete LuaSkills catalog and plugin replacement after one committed mutation.
+    /// LuaSkills 完成一次已提交变更后的完整目录与插件替换增量。
+    LuaSkillsCatalogChanged(Box<LuaSkillsCatalogChangedDelta>),
+    /// Complete subagent catalog replacement after one committed mutation.
+    /// 智能体目录完成一次已提交变更后的完整替换增量。
+    SubagentCatalogChanged(Box<SubagentCatalogChangedDelta>),
+    /// Project-scoped settings invalidation for dialogs that load data outside the workbench snapshot.
+    /// 项目级设置失效通知，用于重新加载工作台快照之外的弹窗数据。
+    ProjectSettingsChanged(ProjectSettingsChangedDelta),
+    /// Native LuaSkills managed-runtime progress replacement.
+    /// LuaSkills 原生受管运行时进度替换增量。
+    LuaSkillsManagedRuntimeProgressChanged(LuaSkillsManagedRuntimeProgressChangedDelta),
 }
 
 /// Replaces the Agent Skills domain without resending the full workbench snapshot.
@@ -210,6 +222,65 @@ pub struct AgentSkillsCatalogChangedDelta {
     /// Complete Agent Skills catalog committed at the envelope generation.
     /// 在信封版本提交的完整 Agent Skills 目录。
     pub agent_skills: AgentSkillsCatalogSummary,
+}
+
+/// Replaces the LuaSkills and plugin domains from one atomic catalog projection.
+/// 使用同一份原子目录投影替换 LuaSkills 与插件领域。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsCatalogChangedDelta {
+    /// Complete LuaSkills catalog committed at the envelope generation.
+    /// 在信封版本提交的完整 LuaSkills 目录。
+    pub lua_skills: LuaSkillsCatalogSummary,
+    /// Plugin rows derived from the same committed catalog.
+    /// 从同一份已提交目录派生的插件行。
+    pub plugins: Vec<PluginSummary>,
+}
+
+/// Replaces the subagent catalog without resending unrelated workbench domains.
+/// 在不重发无关工作台领域的情况下替换智能体目录。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentCatalogChangedDelta {
+    /// Complete subagent catalog committed at the envelope generation.
+    /// 在信封版本提交的完整智能体目录。
+    pub subagent_catalog: SubagentCatalogSummary,
+}
+
+/// Identifies one independently loaded project-settings domain.
+/// 标识一个独立加载的项目设置领域。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectSettingsDomain {
+    /// Project-scoped VMM configuration.
+    /// 项目级 VMM 配置。
+    Vmm,
+    /// Project-scoped Agent Skill overrides.
+    /// 项目级 Agent Skill 覆盖。
+    AgentSkills,
+}
+
+/// Invalidates one independently loaded settings domain for one exact project.
+/// 使单个准确项目的一个独立加载设置领域失效。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettingsChangedDelta {
+    /// Stable project identifier whose settings changed, or `None` when a global setting invalidates every project.
+    /// 设置发生变化的稳定项目标识；全局设置使所有项目失效时为 `None`。
+    pub project_id: Option<String>,
+    /// Exact independently loaded settings domain that changed.
+    /// 发生变化的准确独立加载设置领域。
+    pub domain: ProjectSettingsDomain,
+}
+
+/// Replaces only the active LuaSkills managed-runtime installation progress.
+/// 仅替换当前 LuaSkills 受管运行时安装进度。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsManagedRuntimeProgressChangedDelta {
+    /// Current progress, or `None` after the operation reaches a terminal state.
+    /// 当前进度；操作到达终态后为 `None`。
+    pub progress: Option<LuaSkillsManagedRuntimeProgressSummary>,
 }
 
 /// Replaces the current conversation hydration progress without resending a full workbench.

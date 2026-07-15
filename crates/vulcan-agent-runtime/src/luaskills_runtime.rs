@@ -636,17 +636,35 @@ pub async fn call_luaskills_tool_entry(
 
 /// Render one LuaSkills invocation result into the final host-managed text returned to the model.
 /// 将单次 LuaSkills 调用结果渲染为返回给模型的最终宿主管理文本。
+///
+/// # Parameters
+/// # 参数
+/// - `handle`: Runtime handle that supplies skill and shared template roots.
+/// - `handle`：提供技能模板根目录和共享模板根目录的运行时句柄。
+/// - `tool_name`: Canonical tool name used to resolve the client budget.
+/// - `tool_name`：用于解析客户端预算的规范工具名称。
+/// - `skill_name`: Optional skill identity used to select a local overflow template.
+/// - `skill_name`：用于选择本地超限模板的可选技能标识。
+/// - `result`: Exact LuaSkills runtime invocation result.
+/// - `result`：精确的 LuaSkills 运行时调用结果。
+/// - `workspace_root`: Optional project root used to derive the lazy spill path.
+/// - `workspace_root`：用于派生延迟超限路径的可选项目根目录。
+///
+/// # Returns
+/// # 返回值
+/// Returns rendered model text, or the exact host rendering and persistence failure.
+/// 返回渲染后的模型文本，或精确的宿主渲染与持久化失败。
 pub fn render_luaskills_invocation_result_text(
     handle: &LuaSkillsRuntimeHandle,
     tool_name: &str,
     skill_name: Option<&str>,
     result: &RuntimeInvocationResult,
     workspace_root: Option<&Path>,
-) -> String {
+) -> Result<String, String> {
     let client_budget = build_default_luaskills_budget_snapshot(tool_name);
     let spill_root = workspace_root
         .filter(|path| !path.as_os_str().is_empty())
-        .and_then(|path| project_temp_maintenance::ensure_project_temp_dir(path).ok());
+        .map(project_temp_maintenance::resolve_project_temp_dir);
     let render_options = HostRenderOptions {
         spill_root,
         template_skill_roots: handle

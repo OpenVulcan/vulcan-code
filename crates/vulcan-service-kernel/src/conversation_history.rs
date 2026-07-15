@@ -932,7 +932,7 @@ pub(super) async fn load_hydrated_session_workbench(
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(
             projection_context.agent_runtime_for_status.as_ref(),
-        ),
+        )?,
         logs: &projection_context.logs,
         live_context_budgets: &projection_context.live_context_budgets,
         session_goal_summaries: &session_goal_summaries,
@@ -945,6 +945,7 @@ pub(super) async fn load_hydrated_session_workbench(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.hydrated_conversation_windows = hydrated_windows;

@@ -4,6 +4,8 @@
 use crate::agent_runtime::events::RuntimeEvent;
 use crate::model::SessionId;
 use serde_json::{Map, Value, json};
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,9 +49,20 @@ pub const RUNTIME_EVENT_PROJECTION_BARRIER_ID: &str = "webui_projection_barrier_
 /// 仅在存在可确认投影的服务消费端时启用投影屏障。
 static RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+thread_local! {
+    /// Optional projection-barrier state isolated to the current test thread.
+    /// 隔离到当前测试线程的可选投影屏障状态。
+    static RUNTIME_EVENT_PROJECTION_BARRIERS_TEST_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
 /// Stores pending projection barrier acknowledgements by stable barrier id.
 /// 按稳定屏障标识保存等待中的投影确认发送端。
-static RUNTIME_EVENT_PROJECTION_BARRIERS: OnceLock<Mutex<HashMap<String, oneshot::Sender<()>>>> =
+type RuntimeEventProjectionBarrierRegistry = HashMap<String, oneshot::Sender<()>>;
+
+/// Process-wide pending projection barrier acknowledgements keyed by stable barrier id.
+/// 以稳定屏障标识为键的进程级待确认投影屏障集合。
+static RUNTIME_EVENT_PROJECTION_BARRIERS: OnceLock<Mutex<RuntimeEventProjectionBarrierRegistry>> =
     OnceLock::new();
 
 /// Maximum time a tool may wait for the UI projection acknowledgement before continuing.
@@ -110,33 +123,174 @@ impl VulcanManagedToolRuntimeBridge {
 
 /// Enables or disables runtime-event projection barriers for host-owned streams.
 /// 为宿主拥有的流启用或停用运行时事件投影屏障。
-pub fn set_runtime_event_projection_barriers_enabled(enabled: bool) {
+///
+/// # Parameters
+/// 参数
+/// `enabled` selects whether newly emitted host-owned runtime events require projection acknowledgement.
+/// `enabled` 指定新发出的宿主持有运行时事件是否需要投影确认。
+///
+/// # Returns
+/// 返回值
+/// Success after updating the process-wide setting and required cleanup, or an explicit registry-lock error.
+/// 更新进程级配置并完成必要清理后返回成功，否则返回明确的注册表锁错误。
+pub fn set_runtime_event_projection_barriers_enabled(enabled: bool) -> Result<(), String> {
     RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.store(enabled, Ordering::SeqCst);
-    if !enabled
-        && let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get()
-        && let Ok(mut guard) = registry.lock()
-    {
-        guard.clear();
+    if !enabled && let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() {
+        clear_runtime_event_projection_barriers(registry, "disable projection barriers")?;
     }
+    Ok(())
+}
+
+/// Inserts one pending projection barrier into the supplied authoritative registry.
+/// 向给定权威注册表插入一条待确认投影屏障。
+///
+/// # Parameters
+/// 参数
+/// `registry` owns the pending acknowledgement senders.
+/// `registry` 持有待确认发送端。
+/// `barrier_id` is the stable identity copied into event metadata.
+/// `barrier_id` 是复制到事件元数据中的稳定身份。
+/// `sender` resolves the exact waiting runtime execution.
+/// `sender` 用于恢复精确等待中的运行时执行。
+/// `operation` describes the caller operation for diagnostics.
+/// `operation` 描述调用方操作以生成诊断。
+///
+/// # Returns
+/// 返回值
+/// Success after insertion, or an explicit poisoned-registry error.
+/// 插入完成后返回成功，否则返回明确的注册表中毒错误。
+fn insert_runtime_event_projection_barrier(
+    registry: &Mutex<RuntimeEventProjectionBarrierRegistry>,
+    barrier_id: String,
+    sender: oneshot::Sender<()>,
+    operation: &str,
+) -> Result<(), String> {
+    registry
+        .lock()
+        .map_err(|_| {
+            format!(
+                "The runtime-event projection barrier registry is locked and cannot {operation}."
+            )
+        })?
+        .insert(barrier_id, sender);
+    Ok(())
+}
+
+/// Removes one pending projection barrier from the supplied authoritative registry.
+/// 从给定权威注册表移除一条待确认投影屏障。
+///
+/// # Parameters
+/// 参数
+/// `registry` owns the pending acknowledgement senders.
+/// `registry` 持有待确认发送端。
+/// `barrier_id` identifies the exact pending acknowledgement.
+/// `barrier_id` 标识精确的待确认项。
+/// `operation` describes the caller operation for diagnostics.
+/// `operation` 描述调用方操作以生成诊断。
+///
+/// # Returns
+/// 返回值
+/// The removed sender when still pending, `None` when legitimately absent, or a lock error.
+/// 仍待确认时返回已移除发送端，合法缺席时返回 `None`，否则返回锁错误。
+fn remove_runtime_event_projection_barrier(
+    registry: &Mutex<RuntimeEventProjectionBarrierRegistry>,
+    barrier_id: &str,
+    operation: &str,
+) -> Result<Option<oneshot::Sender<()>>, String> {
+    Ok(registry
+        .lock()
+        .map_err(|_| {
+            format!(
+                "The runtime-event projection barrier registry is locked and cannot {operation}."
+            )
+        })?
+        .remove(barrier_id))
+}
+
+/// Clears every pending projection barrier from the supplied authoritative registry.
+/// 清空给定权威注册表中的全部待确认投影屏障。
+///
+/// # Parameters
+/// 参数
+/// `registry` owns the pending acknowledgement senders.
+/// `registry` 持有待确认发送端。
+/// `operation` describes the caller operation for diagnostics.
+/// `operation` 描述调用方操作以生成诊断。
+///
+/// # Returns
+/// 返回值
+/// Success after clearing, or an explicit poisoned-registry error.
+/// 清空完成后返回成功，否则返回明确的注册表中毒错误。
+fn clear_runtime_event_projection_barriers(
+    registry: &Mutex<RuntimeEventProjectionBarrierRegistry>,
+    operation: &str,
+) -> Result<(), String> {
+    registry
+        .lock()
+        .map_err(|_| {
+            format!(
+                "The runtime-event projection barrier registry is locked and cannot {operation}."
+            )
+        })?
+        .clear();
+    Ok(())
+}
+
+/// Returns whether runtime-event projection barriers are enabled for the current execution thread.
+/// 返回当前执行线程是否启用运行时事件投影屏障。
+///
+/// # Returns
+/// 返回值
+/// The thread-local test override when present, otherwise the production process-wide setting.
+/// 测试线程覆盖存在时返回覆盖值，否则返回生产进程级配置。
+fn runtime_event_projection_barriers_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = RUNTIME_EVENT_PROJECTION_BARRIERS_TEST_OVERRIDE.get() {
+        return enabled;
+    }
+    RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.load(Ordering::SeqCst)
+}
+
+/// Sets or clears the projection-barrier override for the current test thread.
+/// 设置或清除当前测试线程的投影屏障覆盖。
+///
+/// # Parameters
+/// 参数
+/// `enabled` selects an isolated state, while `None` restores the production process-wide setting.
+/// `enabled` 选择隔离状态，`None` 恢复读取生产进程级配置。
+#[cfg(test)]
+pub(super) fn set_runtime_event_projection_barriers_test_override(enabled: Option<bool>) {
+    RUNTIME_EVENT_PROJECTION_BARRIERS_TEST_OVERRIDE.set(enabled);
 }
 
 /// Attaches a projection barrier id to one runtime event when service barriers are enabled.
 /// 当服务屏障启用时，为单条运行时事件附加投影屏障标识。
+///
+/// # Parameters
+/// 参数
+/// `event` is the authoritative runtime event that may require host projection acknowledgement.
+/// `event` 是可能需要宿主投影确认的权威运行时事件。
+///
+/// # Returns
+/// 返回值
+/// The event and its exact wait handle, no handle when barriers are disabled, or a registry-lock error.
+/// 返回事件及其精确等待句柄；屏障停用时不含句柄，注册表锁失败时返回错误。
 pub(crate) fn attach_runtime_event_projection_barrier(
     mut event: RuntimeEvent,
-) -> (RuntimeEvent, Option<RuntimeEventProjectionBarrier>) {
-    if !RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.load(Ordering::SeqCst) {
-        return (event, None);
+) -> Result<(RuntimeEvent, Option<RuntimeEventProjectionBarrier>), String> {
+    if !runtime_event_projection_barriers_enabled() {
+        return Ok((event, None));
     }
 
     let barrier_id = Uuid::new_v4().to_string();
     let (sender, receiver) = oneshot::channel();
     let registry = RUNTIME_EVENT_PROJECTION_BARRIERS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut guard) = registry.lock() {
-        guard.insert(barrier_id.clone(), sender);
-    } else {
-        return (event, None);
-    }
+    insert_runtime_event_projection_barrier(
+        registry,
+        barrier_id.clone(),
+        sender,
+        "register a runtime event",
+    )?;
 
     let mut metadata = match event.metadata.take() {
         Some(Value::Object(map)) => map,
@@ -153,78 +307,108 @@ pub(crate) fn attach_runtime_event_projection_barrier(
     );
     event.metadata = Some(Value::Object(metadata));
 
-    (
+    Ok((
         event,
         Some(RuntimeEventProjectionBarrier {
             id: barrier_id,
             receiver,
         }),
-    )
+    ))
 }
 
 /// Waits until the host bridge confirms the runtime event has been projected.
 /// 等待宿主桥接层确认运行时事件已经完成投影。
+///
+/// # Parameters
+/// 参数
+/// `barrier` is the exact optional acknowledgement receiver returned while attaching the event.
+/// `barrier` 是附加事件时返回的精确可选确认接收端。
+///
+/// # Returns
+/// 返回值
+/// Success after acknowledgement, legitimate timeout, or no barrier; timeout cleanup lock failure is returned explicitly.
+/// 收到确认、合法超时或没有屏障时返回成功；超时清理锁失败会被明确返回。
 pub(crate) async fn wait_runtime_event_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
-) {
+) -> Result<(), String> {
     let Some(barrier) = barrier else {
-        return;
+        return Ok(());
     };
     let barrier_id = barrier.id.clone();
     if tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver)
         .await
         .is_err()
         && let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get()
-        && let Ok(mut guard) = registry.lock()
     {
-        guard.remove(&barrier_id);
+        remove_runtime_event_projection_barrier(
+            registry,
+            &barrier_id,
+            "remove a timed-out barrier",
+        )?;
     }
+    Ok(())
 }
 
 /// Removes a projection barrier for a runtime event that will never reach the host bridge.
 /// 移除一条永远不会到达宿主桥接层的运行时事件投影屏障。
+///
+/// # Parameters
+/// 参数
+/// `barrier` is the exact optional wait handle whose registry entry must no longer remain pending.
+/// `barrier` 是其注册表条目不应继续等待的精确可选等待句柄。
+///
+/// # Returns
+/// 返回值
+/// Success when no barrier exists or cancellation completes, otherwise an explicit registry-lock error.
+/// 没有屏障或取消完成时返回成功，否则返回明确的注册表锁错误。
 pub(crate) fn cancel_runtime_event_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
-) {
+) -> Result<(), String> {
     let Some(barrier) = barrier else {
-        return;
+        return Ok(());
     };
     let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
-        return;
+        return Ok(());
     };
-    let Ok(mut guard) = registry.lock() else {
-        eprintln!(
-            "[tool-runtime] runtime-event projection barrier registry is locked; barrier {} could not be cancelled",
-            barrier.id
-        );
-        return;
-    };
-    guard.remove(&barrier.id);
+    remove_runtime_event_projection_barrier(registry, &barrier.id, "cancel a barrier")?;
+    Ok(())
 }
 
 /// Acknowledges one projection barrier from runtime-event metadata after the service emits it.
 /// 服务发出运行时事件投影后，根据事件元数据确认对应投影屏障。
-pub fn acknowledge_runtime_event_projection_barrier_from_event(event: &RuntimeEvent) -> bool {
+///
+/// # Parameters
+/// 参数
+/// `event` carries the authoritative optional barrier identity attached by the Agent runtime.
+/// `event` 携带 Agent 运行时附加的权威可选屏障标识。
+///
+/// # Returns
+/// 返回值
+/// `Ok(true)` for a delivered acknowledgement, `Ok(false)` for legitimate absence or an abandoned waiter, or a registry-lock error.
+/// 确认已送达时返回 `Ok(true)`，合法缺席或等待方已放弃时返回 `Ok(false)`，注册表锁失败时返回错误。
+pub fn acknowledge_runtime_event_projection_barrier_from_event(
+    event: &RuntimeEvent,
+) -> Result<bool, String> {
     let Some(barrier_id) = event
         .metadata
         .as_ref()
         .and_then(|metadata| metadata.get(RUNTIME_EVENT_PROJECTION_BARRIER_ID))
         .and_then(Value::as_str)
     else {
-        return false;
+        return Ok(false);
     };
     let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
-        return false;
+        return Ok(false);
     };
-    let sender = registry
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.remove(barrier_id));
+    let sender = remove_runtime_event_projection_barrier(
+        registry,
+        barrier_id,
+        "acknowledge a projected event",
+    )?;
     if let Some(sender) = sender {
-        let _ = sender.send(());
-        true
+        Ok(sender.send(()).is_ok())
     } else {
-        false
+        Ok(false)
     }
 }
 

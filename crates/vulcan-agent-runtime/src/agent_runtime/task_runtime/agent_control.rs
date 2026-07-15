@@ -572,8 +572,10 @@ impl TaskRuntime {
         current_session_id: SessionId,
         target: &SubagentRegistryEntry,
     ) -> Result<Option<InterAgentImmediateResumeResult>, String> {
+        // backend is the exact parent-session handler required to resume queued child work.
+        // backend 是续跑排队子任务所需的精确父会话处理器。
         let backend = self
-            .backend_for_session(current_session_id)
+            .backend_for_session(current_session_id)?
             .ok_or_else(|| {
                 format!(
                     "The current session `{}` does not have a task backend installed, so the child agent cannot resume.",

@@ -145,7 +145,9 @@ pub(crate) async fn service_compact_selected_conversation_context(
         session.updated_at = current_unix_millis_text();
     }
     let turn_id = format!("context-compaction-{}", current_unix_millis_text());
-    {
+    // expected_kernel_generation binds every later launch failure to this exact compaction turn.
+    // expected_kernel_generation 将后续每个启动失败绑定到当前精确压缩回合。
+    let expected_kernel_generation = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -155,9 +157,12 @@ pub(crate) async fn service_compact_selected_conversation_context(
             &turn_id,
             ActiveTurnKind::ContextCompaction,
         )?;
-    }
-    let workbench =
-        store_and_emit_full_workbench_snapshot_for_cold_refresh(FullWorkbenchColdRefreshRequest {
+        webui_session_kernel_generation(&guard, selected_session_id)
+    };
+    // workbench commits the prepared workspace before active stream-task registration begins.
+    // workbench 在活动流任务注册开始前提交已准备的工作区。
+    let workbench = match store_and_emit_full_workbench_snapshot_for_cold_refresh(
+        FullWorkbenchColdRefreshRequest {
             app: &app,
             state: &state,
             controller_runtime: &controller_runtime,
@@ -169,7 +174,28 @@ pub(crate) async fn service_compact_selected_conversation_context(
             workspace_snapshot,
             logs: &logs,
             subagent_navigation_mode: SubagentNavigationRefreshMode::Rebuild,
-        })?;
+        },
+    ) {
+        Ok(workbench) => workbench,
+        Err(error) => {
+            // cleanup_outcome proves compensation cannot terminate a replacement task or kernel generation.
+            // cleanup_outcome 证明补偿不会终结替代任务或替代内核代际。
+            let cleanup_outcome = handle_pre_registration_stream_task_launch_failure(
+                &app,
+                &state,
+                selected_session_id,
+                expected_kernel_generation,
+            )
+            .map_err(|cleanup_error| {
+                format!("{error}; context compaction launch cleanup failed: {cleanup_error}")
+            })?;
+            webui_trace(
+                "context_compaction_pre_registration_failure_handled",
+                format!("session={selected_session_id} outcome={cleanup_outcome:?} error={error}"),
+            );
+            return Err(error);
+        }
+    };
 
     spawn_webui_context_compaction_task(
         app.clone(),
@@ -617,7 +643,7 @@ pub(crate) async fn service_set_session_vmm_policy(
             vmm_hook_runtime.replace_snapshot(build_vmm_hook_config_snapshot(
                 &provider_configuration,
                 &refreshed_workspace_snapshot,
-            ));
+            ))?;
         }
     }
     emit_session_addons_changed_delta(&app, &state, session_id)

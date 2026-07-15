@@ -20,21 +20,14 @@ fn frontend_service_rpc_methods_are_dispatched_by_kernel() {
         include_str!("../../../../apps/vulcan-code-web/src/service/skills-actions-service.ts"),
         include_str!("../../../../apps/vulcan-code-web/src/service/workbench-snapshot-service.ts"),
     ];
-    let kernel_sources = [
-        include_str!("../lib.rs"),
-        include_str!("../rpc_dispatch.rs"),
-    ];
     let methods = frontend_service_rpc_methods(&frontend_sources);
     assert!(
         !methods.is_empty(),
         "frontend service RPC method extraction should not be empty"
     );
     for method in methods {
-        let needle = format!("\"{method}\"");
         assert!(
-            kernel_sources
-                .iter()
-                .any(|kernel_source| kernel_source.contains(&needle)),
+            crate::rpc_dispatch::service_rpc_method_names().contains(method.as_str()),
             "frontend RPC method `{method}` is not present in kernel dispatcher"
         );
     }

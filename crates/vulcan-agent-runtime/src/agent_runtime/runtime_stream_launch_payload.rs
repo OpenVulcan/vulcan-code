@@ -103,6 +103,9 @@ pub(crate) fn build_runtime_stream_launch_payload(
     // providerTelemetryContext 在执行准备移入启动载荷前捕获模型与归属事实。
     let provider_telemetry_context =
         ProviderRequestTelemetryContext::from_preparation(&bootstrap.preparation);
+    // provider_api_family preserves the canonical typed API family before preparation moves into the launch payload.
+    // provider_api_family 在执行准备移入启动载荷前保留规范强类型 API 协议族。
+    let provider_api_family = bootstrap.preparation.model_blueprint.api_family();
     RuntimeStreamLaunch {
         task_execution_context,
         session_id: request.session_id,
@@ -120,7 +123,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
         warnings: bootstrap.warnings,
         system_preamble: bootstrap.system_preamble,
         core_snapshot: bootstrap.core_snapshot,
-        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller)
+        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, provider_api_family)
             .with_provider_request_telemetry_context(provider_telemetry_context),
         lowering_repair_events: bootstrap.lowering_repair_events,
     }
@@ -315,6 +318,7 @@ mod tests {
                 session_id: vulcan_session_core::SessionNodeId::from(Uuid::nil()),
             },
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
+            conversation_hook_turn_id: Some(String::from("test-hook-turn")),
             execution_agent_id: None,
             agent_prompt_snapshot: None,
             subagent_prompt_context: None,

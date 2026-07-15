@@ -40,7 +40,7 @@ pub(super) fn build_task_runtime_preparation_request(
     request.runtime_policy = resolved_config.runtime_policy;
     request.execution_agent_id = context.request_template.execution_agent_id.clone();
     request.agent_prompt_snapshot =
-        task_record_agent_prompt_snapshot(&context.foundation.task_runtime(), invocation.task_id)
+        task_record_agent_prompt_snapshot(&context.foundation.task_runtime(), invocation.task_id)?
             .or_else(|| context.agent_prompt_snapshot.clone());
     request.subagent_prompt_context =
         build_task_subagent_prompt_context(invocation, resolved_config);
@@ -91,6 +91,7 @@ pub(super) fn build_task_runtime_preparation_request(
 /// `request` is the cloned parent request being rewritten into a child-agent request.
 /// `request` 是正在改写为子智能体请求的父级请求克隆。
 fn clear_parent_request_runtime_state_for_task_session(request: &mut ExecutionPreparationRequest) {
+    request.conversation_hook_turn_id = None;
     request.tool_request_rejection_reason = None;
     request.tool_request_rejection_all_tools = false;
     request.tool_request_rejection_tool_ids.clear();
@@ -137,16 +138,22 @@ fn task_context_budget_override_from_snapshot(
 ///
 /// # Returns
 /// 返回值
-/// The stored fixed prompt snapshot when the task record is available.
-/// 当任务记录可用时返回已保存的固定提示词快照。
+/// The stored fixed prompt snapshot, a legitimate absence, or an explicit registry error.
+/// 返回已保存的固定提示词快照、合法缺失状态或明确的注册表错误。
 fn task_record_agent_prompt_snapshot(
     task_runtime: &TaskRuntime,
     task_id: SessionId,
-) -> Option<ExecutionAgentPromptSnapshot> {
-    let sessions = task_runtime.sessions.read().ok()?;
-    sessions
+) -> Result<Option<ExecutionAgentPromptSnapshot>, String> {
+    // sessions is the authoritative task-record registry guard for this lookup.
+    // sessions 是本次查询所使用的权威任务记录注册表守卫。
+    let sessions = task_runtime.sessions.read().map_err(|_| {
+        format!(
+            "The task-session registry is locked and cannot read the fixed agent prompt snapshot for task {task_id}."
+        )
+    })?;
+    Ok(sessions
         .get(&task_id)
-        .and_then(|record| record.agent_prompt_snapshot.clone())
+        .and_then(|record| record.agent_prompt_snapshot.clone()))
 }
 
 /// Builds the structured prompt context for one child-agent execution.

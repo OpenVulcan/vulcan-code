@@ -52,6 +52,14 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
       return envelope.delta.payload.progress.sessionId;
     case "agentSkillsCatalogChanged":
       return null;
+    case "luaSkillsCatalogChanged":
+      return null;
+    case "subagentCatalogChanged":
+      return null;
+    case "projectSettingsChanged":
+      return null;
+    case "luaSkillsManagedRuntimeProgressChanged":
+      return null;
   }
 }
 

@@ -174,6 +174,9 @@ pub struct ExecutionPreparationRequest {
     /// Runtime feature policy enforced for this execution request.
     /// 本次执行请求强制执行的运行时能力策略。
     pub runtime_policy: ExecutionRuntimePolicy,
+    /// Optional immutable conversation Hook turn identifier captured by a Hook-enabled main-session request.
+    /// 启用 Hook 的主会话请求捕获的可选不可变会话 Hook 回合标识。
+    pub conversation_hook_turn_id: Option<String>,
     /// Optional agent identifier that should own this execution instead of the globally active agent.
     /// 可选的本次执行代理标识，用于替代全局激活代理。
     pub execution_agent_id: Option<String>,

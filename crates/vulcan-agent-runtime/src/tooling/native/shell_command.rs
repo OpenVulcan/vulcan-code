@@ -292,6 +292,20 @@ pub(crate) fn resolve_shell_command_working_directory(
 
 /// Resolves the spill root used by one shell-command invocation when oversized output must be paged.
 /// 为单次 shell 命令调用解析在超长输出需要分页时使用的超限目录。
+///
+/// # Parameters
+/// # 参数
+/// - `explicit_spill_root`: Optional host-selected path that takes precedence unchanged.
+/// - `explicit_spill_root`：可选的宿主指定路径，保持原值并具有最高优先级。
+/// - `workspace_root`: Optional workspace used to derive `.vulcan/temp`.
+/// - `workspace_root`：用于派生 `.vulcan/temp` 的可选工作区。
+/// - `effective_cwd`: Concrete command directory used when no workspace exists.
+/// - `effective_cwd`：不存在工作区时使用的实际命令目录。
+///
+/// # Returns
+/// # 返回值
+/// Returns the selected path without touching the filesystem; the page writer creates it lazily.
+/// 返回选定路径且不触碰文件系统；分页写入器会延迟创建该路径。
 pub(crate) fn resolve_shell_command_spill_root(
     explicit_spill_root: Option<&Path>,
     workspace_root: Option<&Path>,
@@ -303,7 +317,7 @@ pub(crate) fn resolve_shell_command_spill_root(
     workspace_root
         .filter(|path| !path.as_os_str().is_empty())
         .or(Some(effective_cwd))
-        .and_then(|path| project_temp_maintenance::ensure_project_temp_dir(path).ok())
+        .map(project_temp_maintenance::resolve_project_temp_dir)
 }
 
 /// Resolves the concrete shell executable, argument vector, and host-visible shell label.
@@ -907,7 +921,8 @@ pub(crate) async fn execute_shell_command_tool(
             template_skill_roots: Vec::new(),
             template_resources_root: None,
         },
-    );
+    )
+    .map_err(NativeToolError::new)?;
 
     Ok(
         VulcanToolInvocationResult::from_model_output(Value::String(model_output))

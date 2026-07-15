@@ -194,6 +194,9 @@ pub(crate) struct WebuiSubagentSurfaceDetailCacheEntry {
 /// 单个会话暂时拒绝新 kernel 回合准入的权威原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionTurnAdmissionReservationKind {
+    /// One existing-session user submission owns turn registration until its kernel commit.
+    /// 单个已有会话用户提交在 kernel 提交前拥有回合登记权。
+    PromptSubmission,
     /// The session is crossing an archive or removal lifecycle transaction.
     /// 会话正在跨越归档或删除生命周期事务。
     LifecycleTransition,
@@ -207,6 +210,7 @@ impl SessionTurnAdmissionReservationKind {
     /// 返回此预留原因的稳定诊断标签。
     pub(crate) const fn diagnostic_label(self) -> &'static str {
         match self {
+            Self::PromptSubmission => "user prompt submission",
             Self::LifecycleTransition => "archive or removal lifecycle transition",
             Self::GoalMutation => "Goal authority mutation",
         }
@@ -223,6 +227,53 @@ pub(crate) struct SessionTurnAdmissionReservation {
     /// Domain reason that owns the reservation.
     /// 持有此预留的领域原因。
     pub(crate) kind: SessionTurnAdmissionReservationKind,
+}
+
+/// Project-level scope serialized against lifecycle transitions and prompt submissions.
+/// 与生命周期转换和提示词提交串行化的项目级作用域。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ProjectAdmissionScope {
+    /// One exact active project identity.
+    /// 单个精确活动项目身份。
+    Exact(String),
+    /// A submission whose authoritative project cannot be selected before workspace loading.
+    /// 在工作区加载前无法选择权威项目的提交。
+    UnresolvedSubmission,
+}
+
+/// Authoritative reason why one project scope temporarily rejects competing mutations.
+/// 单个项目作用域暂时拒绝竞争变更的权威原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectAdmissionReservationKind {
+    /// A prompt submission owns project membership until its workspace commit.
+    /// 提示词提交在工作区提交前拥有项目成员关系。
+    PromptSubmission,
+    /// The project is crossing an archive or removal lifecycle transaction.
+    /// 项目正在跨越归档或移除生命周期事务。
+    LifecycleTransition,
+}
+
+impl ProjectAdmissionReservationKind {
+    /// Returns the stable diagnostic label for this project reservation reason.
+    /// 返回此项目预留原因的稳定诊断标签。
+    pub(crate) const fn diagnostic_label(self) -> &'static str {
+        match self {
+            Self::PromptSubmission => "user prompt submission",
+            Self::LifecycleTransition => "archive or removal lifecycle transition",
+        }
+    }
+}
+
+/// Owned reservation that blocks conflicting work for one project admission scope.
+/// 阻止单个项目准入作用域冲突工作的有所有权预留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProjectAdmissionReservation {
+    /// Unique owner identity used to protect successor reservations from stale cleanup.
+    /// 用于保护后继预留不被过期清理删除的唯一所有者身份。
+    pub(crate) reservation_id: Uuid,
+    /// Domain reason that owns the project scope.
+    /// 持有项目作用域的领域原因。
+    pub(crate) kind: ProjectAdmissionReservationKind,
 }
 
 /// Shared service state exposed to Tauri commands.
@@ -321,9 +372,10 @@ pub struct ServiceBridgeState {
     /// 按精确会话标识索引的有所有权回合准入预留。
     pub(crate) session_turn_admission_reservations:
         BTreeMap<SessionId, SessionTurnAdmissionReservation>,
-    /// Owned lifecycle reservations keyed by exact project id.
-    /// 按精确项目标识索引的有所有权生命周期预留。
-    pub(crate) project_lifecycle_transition_reservations: BTreeMap<String, Uuid>,
+    /// Owned project-admission reservations keyed by exact or unresolved scope.
+    /// 按精确或未解析作用域索引的有所有权项目准入预留。
+    pub(crate) project_admission_reservations:
+        BTreeMap<ProjectAdmissionScope, ProjectAdmissionReservation>,
     /// Latest background persistence version keyed by session id.
     /// 按会话标识索引的最新后台持久化版本。
     pub(crate) session_persist_versions: BTreeMap<SessionId, u64>,
@@ -338,6 +390,35 @@ pub struct ServiceBridgeState {
 /// Thread-safe service state handle.
 /// 线程安全的服务状态句柄。
 pub type SharedServiceBridgeState = Arc<Mutex<ServiceBridgeState>>;
+
+/// Locks shared service state for exact admission-reservation cleanup, recovering poisoned ownership state when necessary.
+/// 为精确准入预留清理锁定共享服务状态，并在必要时恢复中毒的所有权状态。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the authoritative typed admission reservation tables.
+/// `state` 持有权威的类型化准入预留表。
+/// `owner_label` identifies the exact Guard kind performing Drop cleanup.
+/// `owner_label` 标识执行 Drop 清理的精确 Guard 类型。
+///
+/// # Returns
+/// # 返回值
+/// A service-state guard that permits only the caller's exact, id-qualified cleanup operation.
+/// 返回仅供调用方执行精确且带所有者标识清理操作的服务状态守卫。
+pub(crate) fn lock_service_state_for_admission_cleanup<'state>(
+    state: &'state SharedServiceBridgeState,
+    owner_label: &str,
+) -> std::sync::MutexGuard<'state, ServiceBridgeState> {
+    match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            eprintln!(
+                "[webui-service] recovering poisoned service state for {owner_label} admission reservation cleanup"
+            );
+            poisoned.into_inner()
+        }
+    }
+}
 
 /// Host-provided shell capabilities required by the service kernel.
 /// 服务内核所需的宿主壳能力。
@@ -422,6 +503,33 @@ impl ActiveStreamTask {
     }
 }
 
+/// Returns whether an active stream task still owns the retained session entry.
+/// 返回活动流任务是否仍拥有保留的会话条目。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the active stream task map.
+/// `state` 持有活动流任务映射。
+/// `session_id` identifies the session slot being inspected.
+/// `session_id` 标识正在检查的会话槽位。
+/// `task_id` is the unique identity captured by the active task.
+/// `task_id` 是活动任务捕获的唯一身份。
+///
+/// # Returns
+/// 返回值
+/// Returns `true` only when the retained entry still belongs to the exact task id.
+/// 仅当保留条目仍属于精确 task id 时返回 `true`。
+pub(crate) fn active_stream_task_matches_id(
+    state: &ServiceBridgeState,
+    session_id: SessionId,
+    task_id: Uuid,
+) -> bool {
+    state
+        .active_stream_tasks
+        .get(&session_id)
+        .is_some_and(|entry| entry.task_id == task_id)
+}
+
 /// Removes an active stream task only when the caller still owns the retained entry.
 /// 仅当调用方仍拥有保留条目时移除活动流任务。
 ///
@@ -443,14 +551,104 @@ pub(crate) fn remove_active_stream_task_if_id(
     session_id: SessionId,
     task_id: Uuid,
 ) -> Option<ActiveStreamTask> {
-    let owns_entry = state
-        .active_stream_tasks
-        .get(&session_id)
-        .is_some_and(|entry| entry.task_id == task_id);
+    // owns_entry reuses the exact non-mutating ownership predicate shared by terminal transactions.
+    // owns_entry 复用终态事务共享的精确只读所有权判定。
+    let owns_entry = active_stream_task_matches_id(state, session_id, task_id);
     owns_entry
         .then(|| state.active_stream_tasks.remove(&session_id))
         .flatten()
 }
+
+/// Failure returned when an active stream task cannot complete gated registration.
+/// 活动流任务无法完成闸门注册时返回的失败。
+#[derive(Debug)]
+pub(crate) enum ActiveStreamTaskRegistrationError {
+    /// The authoritative registry could not be locked, so no new entry was installed.
+    /// 无法锁定权威注册表，因此未安装新条目。
+    RegistryUnavailable {
+        /// Exact mutex failure text retained for diagnostics.
+        /// 为诊断保留的精确互斥锁失败文本。
+        detail: String,
+    },
+    /// The spawned task exited before its start gate opened.
+    /// 已启动任务在启动闸门打开前退出。
+    StartGateClosed {
+        /// Whether cleanup removed the exact entry installed by this registration attempt.
+        /// 清理是否移除了本次注册尝试安装的精确条目。
+        owned_entry_removed: bool,
+    },
+}
+
+impl ActiveStreamTaskRegistrationError {
+    /// Creates a start-gate failure carrying the exact registry-removal ownership fact.
+    /// 创建携带精确注册表移除所有权事实的启动闸门失败。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// `owned_entry_removed` reports whether cleanup removed this attempt's exact task entry.
+    /// `owned_entry_removed` 表示清理是否移除了本次尝试的精确任务条目。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// A typed start-gate registration error preserving the supplied ownership evidence.
+    /// 返回保留所提供所有权证据的强类型启动闸门注册错误。
+    pub(crate) fn start_gate_closed(owned_entry_removed: bool) -> Self {
+        Self::StartGateClosed {
+            owned_entry_removed,
+        }
+    }
+
+    /// Returns whether this failed attempt proved ownership by removing its exact registered entry.
+    /// 返回本次失败尝试是否通过移除精确注册条目证明了所有权。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This method has no parameters beyond the registration error.
+    /// 此方法除注册错误外没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// `true` only when start-gate cleanup removed the exact task identity.
+    /// 仅当启动闸门清理移除了精确任务身份时返回 `true`。
+    pub(crate) fn owned_entry_removed(&self) -> bool {
+        matches!(
+            self,
+            Self::StartGateClosed {
+                owned_entry_removed: true
+            }
+        )
+    }
+}
+
+impl std::fmt::Display for ActiveStreamTaskRegistrationError {
+    /// Formats the stable registration failure diagnostic.
+    /// 格式化稳定的注册失败诊断。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// `formatter` receives the stable English diagnostic text for the registration failure.
+    /// `formatter` 接收注册失败的稳定英文诊断文本。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// The formatter result after writing the complete diagnostic.
+    /// 返回写入完整诊断后的格式化结果。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RegistryUnavailable { detail } => {
+                write!(formatter, "failed to lock service state: {detail}")
+            }
+            Self::StartGateClosed {
+                owned_entry_removed,
+            } => write!(
+                formatter,
+                "registered stream task exited before its start gate opened; owned_entry_removed={owned_entry_removed}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ActiveStreamTaskRegistrationError {}
 
 /// Spawns one stream task behind a gate that opens only after durable in-memory registration.
 /// 在内存注册完成后才打开的闸门后启动一个流任务。
@@ -478,7 +676,7 @@ pub(crate) fn spawn_registered_active_stream_task<F>(
     task_id: Uuid,
     session_goal_id: Option<String>,
     future: F,
-) -> Result<(), String>
+) -> Result<(), ActiveStreamTaskRegistrationError>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -495,18 +693,22 @@ where
         ),
         Err(error) => {
             handle.abort();
-            return Err(format!("failed to lock service state: {error}"));
+            return Err(ActiveStreamTaskRegistrationError::RegistryUnavailable {
+                detail: error.to_string(),
+            });
         }
     };
     if let Some(previous_task) = previous_task {
         previous_task.abort();
     }
     if start_sender.send(()).is_err() {
-        if let Ok(mut guard) = state.lock() {
-            remove_active_stream_task_if_id(&mut guard, session_id, task_id);
-        }
-        return Err(String::from(
-            "registered stream task exited before its start gate opened",
+        // owned_entry_removed preserves the exact ownership fact needed by failure terminalization.
+        // owned_entry_removed 保留失败终结所需的精确所有权事实。
+        let owned_entry_removed = state.lock().is_ok_and(|mut guard| {
+            remove_active_stream_task_if_id(&mut guard, session_id, task_id).is_some()
+        });
+        return Err(ActiveStreamTaskRegistrationError::start_gate_closed(
+            owned_entry_removed,
         ));
     }
     Ok(())

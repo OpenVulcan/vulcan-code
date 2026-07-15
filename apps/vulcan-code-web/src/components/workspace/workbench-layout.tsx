@@ -24,6 +24,7 @@ import {
   projectConversationCount,
   type ProjectAgentSkillState,
   type ProjectSettingsDialogTarget,
+  type ProjectSettingsRevision,
 } from "@/components/project/project-settings-dialog";
 import {
   type ConversationMenuAction,
@@ -340,6 +341,24 @@ export function WorkbenchLayout(props: {
   // acceptedProjectLifecycleRevisionByIdRef orders target-owned project removal responses independently.
   // acceptedProjectLifecycleRevisionByIdRef 按目标独立排序项目移除响应。
   const acceptedProjectLifecycleRevisionByIdRef = React.useRef<Map<string, number>>(new Map());
+  // acceptedProjectSettingsRevisionByKeyRef orders settings invalidations independently by project and domain.
+  // acceptedProjectSettingsRevisionByKeyRef 按项目与领域独立排序设置失效通知。
+  const acceptedProjectSettingsRevisionByKeyRef = React.useRef<Map<string, number>>(new Map());
+  // projectSettingsRevisionInitializedRef limits initial snapshot seeding to the first render.
+  // projectSettingsRevisionInitializedRef 将初始快照播种限制在首次渲染。
+  const projectSettingsRevisionInitializedRef = React.useRef(false);
+  if (!projectSettingsRevisionInitializedRef.current) {
+    for (const [projectId, revisions] of Object.entries(workbenchState.projectSettingsRevisions.byProject)) {
+      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, revisions.vmm);
+      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:agentSkills`, revisions.agentSkills);
+    }
+    projectSettingsRevisionInitializedRef.current = true;
+  }
+  // acceptedGlobalProjectSettingsRevisionByDomainRef orders global invalidations independently by domain.
+  // acceptedGlobalProjectSettingsRevisionByDomainRef 按领域独立排序全局设置失效通知。
+  const acceptedGlobalProjectSettingsRevisionByDomainRef = React.useRef<ProjectSettingsRevision>(
+    workbenchState.projectSettingsRevisions.global,
+  );
   // workbenchStateRef exposes the latest workbench state to route-click callbacks without stale closures.
   // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
@@ -687,6 +706,16 @@ export function WorkbenchLayout(props: {
   // projectSettingsTarget stores the project currently shown in the settings dialog.
   // projectSettingsTarget 保存当前显示设置弹窗的项目。
   const [projectSettingsTarget, setProjectSettingsTarget] = React.useState<ProjectSettingsDialogTarget | null>(null);
+  // projectSettingsRevisionById exposes accepted domain revisions without coupling projects or drafts.
+  // projectSettingsRevisionById 暴露已接收的领域版本，同时避免项目或草稿相互耦合。
+  const [projectSettingsRevisionById, setProjectSettingsRevisionById] = React.useState<Record<string, ProjectSettingsRevision>>(
+    workbenchState.projectSettingsRevisions.byProject,
+  );
+  // globalProjectSettingsRevision exposes independently ordered global invalidations for every project dialog.
+  // globalProjectSettingsRevision 向所有项目弹窗暴露独立排序的全局失效版本。
+  const [globalProjectSettingsRevision, setGlobalProjectSettingsRevision] = React.useState<ProjectSettingsRevision>(
+    workbenchState.projectSettingsRevisions.global,
+  );
   // projectFolderPickerOpen stores whether the service-backed folder picker is open.
   // projectFolderPickerOpen 保存服务驱动的文件夹选择器是否打开。
   const [projectFolderPickerOpen, setProjectFolderPickerOpen] = React.useState(false);
@@ -1205,6 +1234,44 @@ export function WorkbenchLayout(props: {
     if (!acceptServiceWorkbenchSnapshot(props.workbench)) {
       return;
     }
+    // acceptedGlobalSettings keeps a later delta authoritative if it arrived before this snapshot effect ran.
+    // acceptedGlobalSettings 在较新增量先于当前快照副作用到达时继续保持其权威性。
+    const acceptedGlobalSettings = {
+      vmm: Math.max(
+        acceptedGlobalProjectSettingsRevisionByDomainRef.current.vmm,
+        props.workbench.projectSettingsRevisions.global.vmm,
+      ),
+      agentSkills: Math.max(
+        acceptedGlobalProjectSettingsRevisionByDomainRef.current.agentSkills,
+        props.workbench.projectSettingsRevisions.global.agentSkills,
+      ),
+    };
+    acceptedGlobalProjectSettingsRevisionByDomainRef.current = acceptedGlobalSettings;
+    setGlobalProjectSettingsRevision(acceptedGlobalSettings);
+    // acceptedProjectSettings applies every full-snapshot domain revision without lowering a newer focused delta.
+    // acceptedProjectSettings 应用全量快照中的每个领域版本，同时不降低较新的聚焦增量。
+    const acceptedProjectSettings: Record<string, ProjectSettingsRevision> = {};
+    for (const [projectId, revisions] of Object.entries(props.workbench.projectSettingsRevisions.byProject)) {
+      // acceptedRevisions merges two independently ordered domains for this exact project.
+      // acceptedRevisions 合并当前准确项目的两个独立排序领域。
+      const acceptedRevisions = {
+        vmm: Math.max(
+          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
+          revisions.vmm,
+        ),
+        agentSkills: Math.max(
+          acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
+          revisions.agentSkills,
+        ),
+      };
+      acceptedProjectSettingsRevisionByKeyRef.current.set(`${projectId}:vmm`, acceptedRevisions.vmm);
+      acceptedProjectSettingsRevisionByKeyRef.current.set(
+        `${projectId}:agentSkills`,
+        acceptedRevisions.agentSkills,
+      );
+      acceptedProjectSettings[projectId] = acceptedRevisions;
+    }
+    setProjectSettingsRevisionById((current) => ({ ...current, ...acceptedProjectSettings }));
     setWorkbenchState((current) => (
       mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
         current,
@@ -1233,6 +1300,9 @@ export function WorkbenchLayout(props: {
       return;
     }
     const acceptedEnvelopes: WorkbenchDeltaEnvelope[] = [];
+    // acceptedProjectSettingsRevisions collects target-and-domain invalidations committed by this event batch.
+    // acceptedProjectSettingsRevisions 收集当前事件批次提交的目标与领域失效版本。
+    const acceptedProjectSettingsRevisions = new Map<string, ProjectSettingsRevision>();
     let nextAcceptedRevision = acceptedWorkbenchRevisionRef.current;
     for (const envelope of props.workbenchDelta.envelopes) {
       if (envelope.delta.kind === "conversationArchived") {
@@ -1305,11 +1375,99 @@ export function WorkbenchLayout(props: {
         }
         continue;
       }
+      if (envelope.delta.kind === "agentSkillsCatalogChanged") {
+        // Agent Skills uses its own revision so an unrelated newer domain cannot suppress this catalog.
+        // Agent Skills 使用独立版本，避免无关领域的较新版本压掉当前目录。
+        if (!shouldAcceptWorkbenchRevision(acceptedAgentSkillsRevisionRef.current, envelope.generation)) {
+          continue;
+        }
+        acceptedAgentSkillsRevisionRef.current = envelope.generation;
+        acceptedEnvelopes.push(envelope);
+        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        continue;
+      }
+      if (
+        envelope.delta.kind === "luaSkillsCatalogChanged"
+        || envelope.delta.kind === "luaSkillsManagedRuntimeProgressChanged"
+      ) {
+        // Every LuaSkills projection shares one domain gate so unrelated newer deltas cannot hide progress.
+        // 所有 LuaSkills 投影共享同一领域闸门，避免无关的较新增量隐藏进度。
+        if (!shouldAcceptWorkbenchRevision(acceptedLuaSkillsRevisionRef.current, envelope.generation)) {
+          continue;
+        }
+        acceptedLuaSkillsRevisionRef.current = envelope.generation;
+        acceptedEnvelopes.push(envelope);
+        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        continue;
+      }
+      if (envelope.delta.kind === "subagentCatalogChanged") {
+        // Subagent catalog uses one revision gate for broadcast events and initiating RPC responses.
+        // 智能体目录让广播事件与发起方 RPC 响应共享同一版本闸门。
+        if (!shouldAcceptWorkbenchRevision(acceptedSubagentCatalogRevisionRef.current, envelope.generation)) {
+          continue;
+        }
+        acceptedSubagentCatalogRevisionRef.current = envelope.generation;
+        acceptedEnvelopes.push(envelope);
+        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        continue;
+      }
+      if (envelope.delta.kind === "projectSettingsChanged") {
+        // projectId and domain own independent gates so unrelated settings never suppress each other.
+        // projectId 与 domain 持有独立闸门，避免无关设置相互压制。
+        const projectId = envelope.delta.payload.projectId;
+        const domain = envelope.delta.payload.domain;
+        if (projectId === null) {
+          const acceptedRevision = acceptedGlobalProjectSettingsRevisionByDomainRef.current[domain];
+          if (!shouldAcceptWorkbenchRevision(acceptedRevision, envelope.generation)) {
+            continue;
+          }
+          acceptedGlobalProjectSettingsRevisionByDomainRef.current = {
+            ...acceptedGlobalProjectSettingsRevisionByDomainRef.current,
+            [domain]: envelope.generation,
+          };
+          setGlobalProjectSettingsRevision((current) => ({
+            ...current,
+            [domain]: envelope.generation,
+          }));
+          acceptedEnvelopes.push(envelope);
+          nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+          continue;
+        }
+        const settingsKey = `${projectId}:${domain}`;
+        const acceptedRevision = acceptedProjectSettingsRevisionByKeyRef.current.get(settingsKey) ?? 0;
+        if (!shouldAcceptWorkbenchRevision(acceptedRevision, envelope.generation)) {
+          continue;
+        }
+        acceptedProjectSettingsRevisionByKeyRef.current.set(settingsKey, envelope.generation);
+        const acceptedDomains = acceptedProjectSettingsRevisions.get(projectId)
+          ?? {
+            vmm: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:vmm`) ?? 0,
+            agentSkills: acceptedProjectSettingsRevisionByKeyRef.current.get(`${projectId}:agentSkills`) ?? 0,
+          };
+        acceptedProjectSettingsRevisions.set(projectId, {
+          ...acceptedDomains,
+          [domain]: envelope.generation,
+        });
+        acceptedEnvelopes.push(envelope);
+        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        continue;
+      }
       if (!shouldAcceptWorkbenchRevision(nextAcceptedRevision, envelope.generation)) {
         continue;
       }
       acceptedEnvelopes.push(envelope);
       nextAcceptedRevision = envelope.generation;
+    }
+    if (acceptedProjectSettingsRevisions.size > 0) {
+      setProjectSettingsRevisionById((current) => {
+        // next exposes every independently accepted project revision in one React commit.
+        // next 在一次 React 提交中暴露所有独立接收的项目版本。
+        const next = { ...current };
+        for (const [projectId, revisions] of acceptedProjectSettingsRevisions) {
+          next[projectId] = revisions;
+        }
+        return next;
+      });
     }
     if (acceptedEnvelopes.length === 0) {
       return;
@@ -1537,6 +1695,18 @@ export function WorkbenchLayout(props: {
         pendingQuestion={workbenchState.pendingQuestion ?? null}
         projectFolderPickerOpen={projectFolderPickerOpen}
         projectIconTarget={projectIconTarget}
+        projectSettingsRevision={projectSettingsTarget
+          ? {
+            vmm: Math.max(
+              globalProjectSettingsRevision.vmm,
+              projectSettingsRevisionById[projectSettingsTarget.project.id]?.vmm ?? 0,
+            ),
+            agentSkills: Math.max(
+              globalProjectSettingsRevision.agentSkills,
+              projectSettingsRevisionById[projectSettingsTarget.project.id]?.agentSkills ?? 0,
+            ),
+          }
+          : { vmm: 0, agentSkills: 0 }}
         projectSettingsTarget={projectSettingsTarget}
         removeProjectSubmitting={removeProjectSubmitting}
         removeProjectTarget={removeProjectTarget}

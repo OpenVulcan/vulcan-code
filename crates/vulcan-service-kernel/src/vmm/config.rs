@@ -43,6 +43,9 @@ pub(crate) async fn save_vmm_memory_config(
         )
         .await;
     }
+    if scope != "global" {
+        return Err(format!("不支持的 VMM 配置作用域：{scope}"));
+    }
     mutate_provider_configuration(
         state,
         "保存 VMM 全局配置失败",
@@ -56,7 +59,7 @@ pub(crate) async fn save_vmm_memory_config(
         },
         refresh_guard_vmm_hook_snapshot,
     )
-    .await
+    .await?
 }
 
 /// Loads one persisted project VMM layer and resolves its effective editable fallback.

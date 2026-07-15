@@ -343,7 +343,7 @@ pub(super) fn test_service_state_with_parent_session(
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_turn_admission_reservations: BTreeMap::new(),
-        project_lifecycle_transition_reservations: BTreeMap::new(),
+        project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),

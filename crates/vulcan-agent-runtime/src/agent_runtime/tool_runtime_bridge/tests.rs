@@ -1,6 +1,9 @@
 use super::{
-    VulcanManagedToolRuntimeBridge, acknowledge_runtime_event_projection_barrier_from_event,
-    set_runtime_event_projection_barriers_enabled,
+    RuntimeEventProjectionBarrierRegistry, VulcanManagedToolRuntimeBridge,
+    acknowledge_runtime_event_projection_barrier_from_event,
+    attach_runtime_event_projection_barrier, clear_runtime_event_projection_barriers,
+    insert_runtime_event_projection_barrier, remove_runtime_event_projection_barrier,
+    runtime_event_projection_barriers_enabled, set_runtime_event_projection_barriers_test_override,
 };
 use crate::agent_runtime::events::RuntimeEventKind;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
@@ -11,7 +14,7 @@ use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use uuid::Uuid;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::provider::VulcanProviderAdapter;
@@ -219,16 +222,140 @@ fn drain_live_events(
     events
 }
 
-/// Resets runtime projection barriers when a test scope exits.
-/// 测试作用域退出时重置运行时投影屏障。
-struct RuntimeProjectionBarrierResetGuard;
+/// Owns one projection-barrier override isolated to the current test thread.
+/// 持有一份隔离到当前测试线程的投影屏障覆盖。
+struct RuntimeProjectionBarrierTestOverrideGuard;
 
-impl Drop for RuntimeProjectionBarrierResetGuard {
-    /// Disables projection barriers during test cleanup.
-    /// 在测试清理阶段禁用投影屏障。
-    fn drop(&mut self) {
-        set_runtime_event_projection_barriers_enabled(false);
+impl RuntimeProjectionBarrierTestOverrideGuard {
+    /// Enables projection barriers only for the current test thread.
+    /// 仅为当前测试线程启用投影屏障。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A scope guard that clears the override during normal return or panic unwinding.
+    /// 返回在正常退出或 panic 展开时清除覆盖的作用域守卫。
+    fn enabled() -> Self {
+        set_runtime_event_projection_barriers_test_override(Some(true));
+        Self
     }
+}
+
+impl Drop for RuntimeProjectionBarrierTestOverrideGuard {
+    /// Clears the current-thread override during test cleanup.
+    /// 在测试清理阶段清除当前线程覆盖。
+    fn drop(&mut self) {
+        set_runtime_event_projection_barriers_test_override(None);
+    }
+}
+
+/// Verifies the test override is thread-local and clears during panic unwinding.
+/// 验证测试覆盖仅作用于当前线程，并会在 panic 展开期间清除。
+#[test]
+fn projection_barrier_test_override_is_thread_local_and_unwind_safe() {
+    // panicResult captures deliberate unwinding while the override guard owns current-thread state.
+    // panicResult 捕获覆盖守卫持有当前线程状态期间的刻意展开。
+    let panic_result = std::panic::catch_unwind(|| {
+        // barrierOverride enables only the current test thread for this nested scope.
+        // barrierOverride 仅为当前测试线程的嵌套作用域启用屏障。
+        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
+        assert!(runtime_event_projection_barriers_enabled());
+        // otherThreadEnabled observes the production default from a distinct thread without the override.
+        // otherThreadEnabled 从没有覆盖的独立线程观察生产默认值。
+        let other_thread_enabled = std::thread::spawn(runtime_event_projection_barriers_enabled)
+            .join()
+            .expect("barrier isolation thread should join");
+        assert!(!other_thread_enabled);
+        panic!("trigger projection-barrier override cleanup");
+    });
+
+    assert!(panic_result.is_err());
+    assert!(
+        !runtime_event_projection_barriers_enabled(),
+        "panic unwinding must clear the current-thread test override"
+    );
+}
+
+/// Verifies every registry mutation helper reports a poisoned authoritative lock.
+/// 验证每个注册表变更辅助函数都会报告权威锁中毒。
+#[test]
+fn projection_barrier_registry_helpers_report_poisoned_lock() {
+    // registry is a local authoritative barrier table that can be poisoned without affecting other tests.
+    // registry 是可在不影响其他测试的前提下中毒的局部权威屏障表。
+    let registry = Mutex::new(RuntimeEventProjectionBarrierRegistry::new());
+    // poisonResult proves subsequent helper calls cannot acquire authoritative state.
+    // poisonResult 证明后续辅助函数无法取得权威状态。
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = registry
+            .lock()
+            .expect("local barrier registry should lock before poisoning");
+        panic!("poison local projection barrier registry");
+    }));
+    assert!(poison_result.is_err());
+    // sender is the pending acknowledgement value rejected by the poisoned insert helper.
+    // sender 是被中毒插入辅助函数拒绝的待确认值。
+    let (sender, _receiver) = oneshot::channel();
+
+    // insertError identifies the failed registration operation.
+    // insertError 标识失败的注册操作。
+    let insert_error = insert_runtime_event_projection_barrier(
+        &registry,
+        String::from("poisoned-insert"),
+        sender,
+        "register a test barrier",
+    )
+    .expect_err("poisoned registry must reject insertion");
+    // removeError identifies the failed removal operation.
+    // removeError 标识失败的移除操作。
+    let remove_error = remove_runtime_event_projection_barrier(
+        &registry,
+        "poisoned-remove",
+        "remove a test barrier",
+    )
+    .expect_err("poisoned registry must reject removal");
+    // clearError identifies the failed bulk cleanup operation.
+    // clearError 标识失败的批量清理操作。
+    let clear_error = clear_runtime_event_projection_barriers(&registry, "clear test barriers")
+        .expect_err("poisoned registry must reject clearing");
+
+    assert!(insert_error.contains("register a test barrier"));
+    assert!(remove_error.contains("remove a test barrier"));
+    assert!(clear_error.contains("clear test barriers"));
+}
+
+/// Verifies missing and already-abandoned acknowledgements remain legitimate non-error outcomes.
+/// 验证缺失屏障与等待方已放弃的确认仍是合法非错误结果。
+#[test]
+fn projection_barrier_acknowledgement_preserves_legitimate_absence() {
+    // eventWithoutBarrier has no projection metadata and therefore no acknowledgement responsibility.
+    // eventWithoutBarrier 不含投影元数据，因此没有确认责任。
+    let event_without_barrier = crate::agent_runtime::events::RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "No barrier",
+        "No barrier metadata",
+    );
+    assert!(
+        !acknowledge_runtime_event_projection_barrier_from_event(&event_without_barrier)
+            .expect("missing barrier metadata should remain a valid outcome")
+    );
+
+    // barrierOverride enables a real isolated barrier for the abandoned-waiter case.
+    // barrierOverride 为等待方已放弃场景启用真实隔离屏障。
+    let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
+    // event and barrier share the exact acknowledgement channel created by the runtime.
+    // event 与 barrier 共享运行时创建的精确确认通道。
+    let (event, barrier) =
+        attach_runtime_event_projection_barrier(crate::agent_runtime::events::RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "Abandoned barrier",
+            "Receiver dropped before acknowledgement",
+        ))
+        .expect("isolated barrier should attach");
+    drop(barrier);
+
+    assert!(
+        !acknowledge_runtime_event_projection_barrier_from_event(&event)
+            .expect("abandoned waiter should remain a valid late acknowledgement")
+    );
 }
 
 /// Captures pre-planned provider turn responses and records the built request history for assertions.
@@ -1053,6 +1180,9 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
         .expect("runtime should build");
 
     runtime.block_on(async {
+        // barrierOverride enables real acknowledgements without mutating the process-wide production switch.
+        // barrierOverride 启用真实确认且不修改进程级生产开关。
+        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         let task = tokio::spawn(async move { executor.execute_tool(&request).await });
         let first_event = receiver
             .recv()
@@ -1060,23 +1190,47 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
             .expect("tool-start event should be sent")
             .expect("tool-start event should be ok");
 
-        assert!(matches!(
-            first_event,
-            ProviderStreamDelta::RuntimeEvent(runtime_event)
-                if runtime_event.kind == RuntimeEventKind::ToolStarted
-                    && runtime_event
-                        .metadata
-                        .as_ref()
-                        .and_then(|metadata| metadata.get("tool_call_id"))
-                        .and_then(serde_json::Value::as_str)
-                        == Some("gated-call-1")
-        ));
+        // startedEvent is the exact UI-visible event whose acknowledgement gates the tool body.
+        // startedEvent 是以确认操作阻塞工具主体的精确界面可见事件。
+        let ProviderStreamDelta::RuntimeEvent(started_event) = first_event else {
+            panic!("first delta should be a tool-start runtime event");
+        };
+        assert_eq!(started_event.kind, RuntimeEventKind::ToolStarted);
+        assert_eq!(
+            started_event
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_call_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("gated-call-1")
+        );
         assert!(
             !entered_tool_body.load(Ordering::SeqCst),
             "tool body should not run before the UI-visible start event is observable"
         );
+        assert!(
+            acknowledge_runtime_event_projection_barrier_from_event(&started_event)
+                .expect("tool-start barrier registry should remain available"),
+            "tool-start barrier should acknowledge"
+        );
 
         release_tool_body.notify_one();
+        // finishedEvent is the terminal event that must also release its pending barrier.
+        // finishedEvent 是同样必须释放待确认屏障的终态事件。
+        let finished_event = receiver
+            .recv()
+            .await
+            .expect("tool-finished event should be sent")
+            .expect("tool-finished event should be ok");
+        let ProviderStreamDelta::RuntimeEvent(finished_event) = finished_event else {
+            panic!("second delta should be a tool-finished runtime event");
+        };
+        assert_eq!(finished_event.kind, RuntimeEventKind::ToolFinished);
+        assert!(
+            acknowledge_runtime_event_projection_barrier_from_event(&finished_event)
+                .expect("tool-finished barrier registry should remain available"),
+            "tool-finished barrier should acknowledge"
+        );
         let result = task
             .await
             .expect("tool task should join")
@@ -1113,9 +1267,9 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
         .expect("runtime should build");
 
     runtime.block_on(async {
-        set_runtime_event_projection_barriers_enabled(false);
-        set_runtime_event_projection_barriers_enabled(true);
-        let _barrier_reset = RuntimeProjectionBarrierResetGuard;
+        // barrierOverride isolates real projection acknowledgements to this current-thread runtime.
+        // barrierOverride 将真实投影确认隔离到当前线程运行时。
+        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         let task = tokio::spawn(async move { executor.execute_tool(&request).await });
 
         let started_event = receiver
@@ -1128,7 +1282,8 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
         };
         assert_eq!(started_event.kind, RuntimeEventKind::ToolStarted);
         assert!(
-            acknowledge_runtime_event_projection_barrier_from_event(&started_event),
+            acknowledge_runtime_event_projection_barrier_from_event(&started_event)
+                .expect("tool-start barrier registry should remain available"),
             "tool-start barrier should acknowledge"
         );
 
@@ -1147,7 +1302,8 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
         );
 
         assert!(
-            acknowledge_runtime_event_projection_barrier_from_event(&finished_event),
+            acknowledge_runtime_event_projection_barrier_from_event(&finished_event)
+                .expect("tool-finished barrier registry should remain available"),
             "tool-finished barrier should acknowledge"
         );
         let result = task

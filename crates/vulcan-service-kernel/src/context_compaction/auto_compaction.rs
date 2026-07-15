@@ -3,11 +3,26 @@
 
 use super::*;
 
+/// Runs budget-triggered context compaction before one exact active Provider stream continues.
+/// 在一个精确活动 Provider 流继续前执行预算触发的上下文压缩。
+///
+/// # Parameters
+/// 参数
+/// `app` emits committed deltas, `state` owns retained service state, and `controller_runtime` persists terminal snapshots.
+/// `app` 发送已提交增量，`state` 持有保留服务状态，`controller_runtime` 持久化终态快照。
+/// `agent_runtime` executes compaction, `active_stream_task_id` proves exact stream ownership, and `request` with `preparation` supplies the pending Provider request and budget facts.
+/// `agent_runtime` 执行压缩，`active_stream_task_id` 证明精确流所有权，`request` 与 `preparation` 提供待执行 Provider 请求及预算事实。
+///
+/// # Returns
+/// 返回值
+/// Returns a refreshed request after committed compaction, `None` when compaction is unnecessary, or an explicit terminal failure.
+/// 压缩提交后返回刷新请求；无需压缩时返回 `None`；失败时返回显式终态错误。
 pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
+    active_stream_task_id: Uuid,
     request: &ExecutionPreparationRequest,
     preparation: &ExecutionPreparation,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
@@ -41,41 +56,61 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
                 .get(&session_id)
                 .and_then(|runtime_state| runtime_state.context_start_message_id.clone())
         });
-    let (previous_phase, status_message_id) = {
+    // preparation_commit carries the previous phase, status id, and aligned delta from one exact-owner mutation.
+    // preparation_commit 携带由一次精确所有者变更生成的前序阶段、状态标识与对齐增量。
+    let (previous_phase, status_message_id, phase_event) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        let previous_phase = workspace
-            .session_run_phases
-            .get(&session_id)
-            .copied()
-            .unwrap_or(SessionRunPhase::Preparing);
-        let status_message_id = append_webui_context_compaction_status_message_to_workspace(
-            workspace,
-            session_id,
-            &budget_note,
-            AUTO_CONTEXT_COMPACTION_TRIGGER,
-        )?;
-        workspace
-            .session_run_phases
-            .insert(session_id, SessionRunPhase::Preparing);
-        if let Some(session) = workspace
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.status = SessionState::Running;
-            session.last_updated_label = String::from("刚刚");
-            session.updated_at = current_unix_millis_text();
+        if !active_stream_task_matches_id(&guard, session_id, active_stream_task_id) {
+            return Err(format!(
+                "context compaction ownership was superseded before preparation: session={session_id} task={active_stream_task_id}"
+            ));
         }
-        (previous_phase, status_message_id)
+        // preparation_state is created while exact stream ownership remains protected by the state guard.
+        // preparation_state 在精确流所有权仍受状态 guard 保护时创建。
+        let (previous_phase, status_message_id) = {
+            let workspace = guard
+                .workspace_snapshot
+                .as_mut()
+                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            let previous_phase = workspace
+                .session_run_phases
+                .get(&session_id)
+                .copied()
+                .unwrap_or(SessionRunPhase::Preparing);
+            let status_message_id = append_webui_context_compaction_status_message_to_workspace(
+                workspace,
+                session_id,
+                &budget_note,
+                AUTO_CONTEXT_COMPACTION_TRIGGER,
+            )?;
+            workspace
+                .session_run_phases
+                .insert(session_id, SessionRunPhase::Preparing);
+            if let Some(session) = workspace
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            {
+                session.status = SessionState::Running;
+                session.last_updated_label = String::from("刚刚");
+                session.updated_at = current_unix_millis_text();
+            }
+            (previous_phase, status_message_id)
+        };
+        // phase_event is generated before releasing ownership so replacement work cannot be overwritten.
+        // phase_event 在释放所有权前生成，避免替代任务被覆盖。
+        let phase_event =
+            apply_session_phase_to_state(&mut guard, session_id, SessionRunPhase::Preparing)?;
+        (previous_phase, status_message_id, phase_event)
     };
     emit_context_compaction_message_window_delta(app, state, session_id)?;
-    apply_session_phase(app, state, session_id, SessionRunPhase::Preparing)?;
+    emit_service_event_with_trace(
+        app,
+        "context_compaction_preparing_phase_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(phase_event)),
+    );
 
     if webui_auto_context_compaction_failure_count(state, session_id)
         >= MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES
@@ -87,6 +122,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
             app,
             state,
             controller_runtime,
+            active_stream_task_id,
             session_id,
             previous_phase,
             &status_message_id,
@@ -109,6 +145,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
                 app,
                 state,
                 controller_runtime,
+                active_stream_task_id,
                 session_id,
                 previous_phase,
                 &status_message_id,
@@ -132,6 +169,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
                 app,
                 state,
                 controller_runtime,
+                active_stream_task_id,
                 session_id,
                 previous_phase,
                 &status_message_id,
@@ -158,7 +196,9 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
                 &execution,
             );
-            let snapshot = finish_webui_context_compaction_execution(
+            // finish_outcome distinguishes a committed compaction from a persisted rejection.
+            // finish_outcome 区分已提交压缩与已持久化拒绝。
+            let finish_outcome = finish_webui_context_compaction_execution(
                 app,
                 state,
                 agent_runtime,
@@ -167,16 +207,35 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
                 &status_message_id,
                 &budget_note,
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
+                ContextCompactionCommitMode::ContinueActiveStream {
+                    task_id: active_stream_task_id,
+                },
                 execution,
             )?;
+            // rejection_error must survive outcome consumption so automatic continuation can stop.
+            // rejection_error 必须跨越终态结果消费，以便停止自动续接。
+            let rejection_error = finish_outcome.rejection_error().map(str::to_owned);
+            // snapshot always requires persistence, including a committed rejection record.
+            // snapshot 始终需要持久化，包括已提交的拒绝记录。
+            let snapshot = finish_outcome.into_workspace_snapshot();
+            // persist_reason preserves the authoritative terminal classification for diagnostics.
+            // persist_reason 为诊断保留权威终态分类。
+            let persist_reason = if rejection_error.is_some() {
+                "auto_context_compaction_rejected"
+            } else {
+                "auto_context_compaction"
+            };
             spawn_context_compaction_persist_task(
                 state.clone(),
                 controller_runtime.clone(),
                 snapshot,
                 session_id,
                 status_message_id.clone(),
-                Some(String::from("auto_context_compaction")),
+                Some(String::from(persist_reason)),
             );
+            if let Some(error) = rejection_error {
+                return Err(error);
+            }
             let mut refreshed =
                 refreshed_execution_request_after_context_compaction(state, request)?;
             refreshed
@@ -189,6 +248,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
                 app,
                 state,
                 controller_runtime,
+                active_stream_task_id,
                 session_id,
                 previous_phase,
                 &status_message_id,
@@ -272,10 +332,23 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
 
 /// Persists and projects one failed automatic or manual compaction attempt.
 /// 持久化并投影一次失败的自动或手动压缩尝试。
+///
+/// # Parameters
+/// 参数
+/// `app` emits committed deltas, `state` owns retained service state, and `controller_runtime` persists the failed snapshot.
+/// `app` 发送已提交增量，`state` 持有保留服务状态，`controller_runtime` 持久化失败快照。
+/// `active_stream_task_id` proves the exact continuing stream; the remaining values identify and describe the failed compaction attempt.
+/// `active_stream_task_id` 证明精确续接流；其余参数标识并描述失败的压缩尝试。
+///
+/// # Returns
+/// 返回值
+/// Returns success after scheduling persistence, or an ownership/state error before persistence.
+/// 持久化任务排队后返回成功；持久化前所有权或状态异常时返回错误。
 pub(crate) fn persist_failed_webui_context_compaction(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
+    active_stream_task_id: Uuid,
     session_id: SessionId,
     previous_phase: SessionRunPhase,
     section_id: &str,
@@ -291,6 +364,9 @@ pub(crate) fn persist_failed_webui_context_compaction(
         section_id,
         budget_note,
         trigger,
+        ContextCompactionCommitMode::ContinueActiveStream {
+            task_id: active_stream_task_id,
+        },
         error,
     )?;
     spawn_workspace_session_persist_task(

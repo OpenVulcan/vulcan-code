@@ -107,12 +107,28 @@ pub(crate) struct RuntimeBootstrapCore {
 
 /// Builds the provider-facing runtime bootstrap core from the canonical conversation state and execution preparation.
 /// 根据规范会话状态与执行准备构建面向 Provider 的运行时 bootstrap 核心对象。
+///
+/// # Parameters
+/// # 参数
+/// - `preparation`: Validated execution preparation containing provider, workspace, and prompt inputs.
+/// - `preparation`：包含 Provider、工作区与提示输入的已验证执行准备。
+/// - `request`: Canonical conversation request projected into the provider-facing core snapshot.
+/// - `request`：投影为面向 Provider 核心快照的规范会话请求。
+/// - `active_agent`: Optional resolved agent definition supplying agent-scoped runtime settings.
+/// - `active_agent`：提供代理级运行时设置的可选已解析代理定义。
+///
+/// # Returns
+/// # 返回值
+/// Returns a complete bootstrap core, or the first exact prompt-source, projection, or controller validation failure.
+/// 返回完整 bootstrap 核心，或首个精确的提示来源、投影或控制器验证失败。
 pub(crate) fn build_runtime_bootstrap_core(
     preparation: &ExecutionPreparation,
     request: &ExecutionPreparationRequest,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> Result<RuntimeBootstrapCore, String> {
-    let runtime_prompt = build_runtime_prompt_layers_for_agent(preparation, active_agent);
+    // runtime_prompt is complete only after every configured project prompt source loads successfully.
+    // runtime_prompt 仅在所有已配置项目提示来源均成功加载后才是完整结果。
+    let runtime_prompt = build_runtime_prompt_layers_for_agent(preparation, active_agent)?;
     let system_preamble = runtime_prompt.fallback_text.clone();
     let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state)?;
     let system_update_policy = ProviderSystemUpdateLoweringPolicy::default();

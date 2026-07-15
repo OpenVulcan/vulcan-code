@@ -2,12 +2,19 @@
 //! VMM memory actions 辅助逻辑。
 
 use super::*;
+use crate::{
+    commit_and_emit_project_settings_changed_delta,
+    emit_context_injection_changed_delta_for_session, emit_workbench_event,
+};
+use vulcan_service_api::{ProjectSettingsDomain, ServiceEventEmitter};
 
 /// Runs one VMM memory management action and returns its structured result.
 /// 执行单个 VMM 记忆管理动作并返回结构化结果。
 ///
 /// # Parameters
 /// 参数
+/// `app` broadcasts state changes to every connected WebUI client.
+/// `app` 将状态变更广播给每个已连接 WebUI 客户端。
 /// `state` is the shared service-kernel state used to read configuration and session state.
 /// `state` 是用于读取配置与会话状态的共享 service-kernel 状态。
 /// `request` is the WebUI VMM action request to execute.
@@ -18,11 +25,12 @@ use super::*;
 /// A structured WebUI VMM action result or a user-visible error message.
 /// 返回结构化 WebUI VMM 动作结果，或用户可见的错误消息。
 pub(crate) async fn service_run_vmm_memory_action(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
     if request.action.trim() == "suppress_context_injection_item" {
-        return service_suppress_context_injection_item(state, request).await;
+        return service_suppress_context_injection_item(app, state, request).await;
     }
     let (layer, management_user_ref, management_project_ref) =
         vmm_action_context(&state, &request)?;
@@ -38,9 +46,24 @@ pub(crate) async fn service_run_vmm_memory_action(
     vmm_memory_action_result(&request.action, request_preview, outcome)
 }
 
-/// Suppresses one context-injection item only for the selected session.
-/// 仅在当前选中会话中抑制单条上下文注入内容。
+/// Suppresses one context-injection item for the exact requested session and broadcasts its projection.
+/// 为准确请求的会话抑制单条上下文注入内容并广播其投影。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the changed exact-session projection to every connected client.
+/// `app` 将变更后的准确会话投影广播给每个已连接客户端。
+/// `state` owns the retained workspace mutation and persistence runtime.
+/// `state` 持有保留的工作区变更与持久化运行时。
+/// `request` carries the exact conversation identity and memory item identity.
+/// `request` 携带准确的会话身份与记忆条目身份。
+///
+/// # Returns
+/// 返回值
+/// A structured suppression result after persistence and broadcast complete.
+/// 持久化与广播完成后返回结构化抑制结果。
 pub(crate) async fn service_suppress_context_injection_item(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
@@ -102,6 +125,7 @@ pub(crate) async fn service_suppress_context_injection_item(
             session_id,
         )
         .await?;
+        emit_context_injection_changed_delta_for_session(&app, &state, session_id)?;
     }
 
     Ok(VmmMemoryActionResult {
@@ -169,6 +193,8 @@ pub(crate) fn vmm_suppression_session_id(
 ///
 /// # Parameters
 /// 参数
+/// `app` broadcasts the refreshed snapshot and project-scoped invalidation.
+/// `app` 广播刷新后的快照与项目级失效通知。
 /// `state` is the shared service-kernel state that owns provider and workspace snapshots.
 /// `state` 是持有 Provider 与工作区快照的共享 service-kernel 状态。
 /// `request` is the VMM configuration draft submitted by the WebUI.
@@ -179,11 +205,35 @@ pub(crate) fn vmm_suppression_session_id(
 /// The refreshed workbench snapshot after the configuration has been saved.
 /// 返回配置保存后的刷新工作台快照。
 pub(crate) async fn service_save_vmm_memory_config(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: VmmConfigSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
+    // project_scope distinguishes one project target from an intentional global invalidation.
+    // project_scope 区分单个项目目标与有意使用的全局失效通知。
+    let project_scope = request.scope.trim().eq_ignore_ascii_case("project");
+    // changed_project_id retains the exact project identity before the request is consumed.
+    // changed_project_id 在请求被消费前保留准确的项目身份。
+    let changed_project_id = project_scope.then(|| request.project_id.clone()).flatten();
     save_vmm_memory_config(&state, request).await?;
-    refresh_workbench_snapshot(state).await
+    // workbench is the exact snapshot returned to the initiating client and broadcast to peers.
+    // workbench 是返回给发起客户端并广播给其他端的准确快照。
+    let workbench = refresh_workbench_snapshot(state.clone()).await?;
+    emit_workbench_event(&app, &workbench);
+    // project_settings_target is absent only for a valid global save that affects every project.
+    // project_settings_target 仅在影响所有项目的有效全局保存中为空。
+    let project_settings_target = if project_scope {
+        Some(changed_project_id.ok_or_else(|| String::from("项目 VMM 配置缺少项目标识。"))?)
+    } else {
+        None
+    };
+    commit_and_emit_project_settings_changed_delta(
+        &app,
+        &state,
+        project_settings_target,
+        ProjectSettingsDomain::Vmm,
+    )?;
+    Ok(workbench)
 }
 
 /// Loads one project-scoped VMM configuration draft for the WebUI project settings modal.

@@ -48,6 +48,11 @@ pub struct HostTextRenderInput {
 const TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR: &str =
     "Tool output exceeds the current VulcanCode client limit.";
 
+/// Explicit error returned when page mode needs persistence but no host spill directory was selected.
+/// 当分页模式需要持久化但宿主未选择超限目录时返回的显式错误。
+const PAGE_SPILL_ROOT_REQUIRED_ERROR: &str =
+    "Page-mode tool output requires a host-managed spill directory.";
+
 /// Default trailing notice appended by the truncate template when content exceeds the host budget.
 /// 当内容超出宿主预算时，由截断模板附加的默认尾部提示。
 const DEFAULT_TRUNCATE_NOTICE: &str =
@@ -131,14 +136,30 @@ struct OverflowChunk {
     byte_count: usize,
 }
 
-/// Render one tool text payload into the final AI-visible text according to the host policy.
+/// Renders one tool text payload into final AI-visible text according to the host policy.
 /// 按宿主策略把单次工具文本载荷渲染成最终面向 AI 的可见文本。
+///
+/// # Parameters
+/// # 参数
+/// - `output`: Stable text and overflow metadata produced by the tool runtime.
+/// - `output`：工具运行时生成的稳定文本与超限元数据。
+/// - `skill_name`: Optional LuaSkills identity used for template resolution.
+/// - `skill_name`：用于解析模板的可选 LuaSkills 标识。
+/// - `client_budget`: Effective inline and page-read budgets.
+/// - `client_budget`：生效的内联与分页读取预算。
+/// - `render_options`: Host-owned spill and template locations.
+/// - `render_options`：宿主拥有的超限文件与模板位置。
+///
+/// # Returns
+/// # 返回值
+/// Returns rendered text on success, or the exact budget, spill-path, clock, or write failure.
+/// 成功时返回渲染文本；失败时返回精确的预算、超限路径、时钟或写入错误。
 pub fn render_tool_result_text(
     output: &HostTextRenderInput,
     skill_name: Option<&str>,
     client_budget: &ToolResultBudgetSnapshot,
     render_options: &HostRenderOptions,
-) -> String {
+) -> Result<String, String> {
     let policy = resolve_overflow_policy(skill_name, output);
     match policy.mode {
         OverflowMode::Truncate => {
@@ -180,24 +201,42 @@ fn resolve_template_name(explicit_template_name: Option<&str>, mode: OverflowMod
         .to_string()
 }
 
-/// Render the final truncate-mode text, returning the raw content when it already fits the host budget.
-/// 渲染最终截断模式文本；若原文已满足宿主预算则直接返回原文。
+/// Renders truncate-mode text and rejects content that cannot fit even one complete line.
+/// 渲染截断模式文本，并拒绝连一整行都无法容纳的内容。
+///
+/// # Parameters
+/// # 参数
+/// - `output`: Source text and stable size metadata.
+/// - `output`：源文本与稳定大小元数据。
+/// - `skill_name`: Optional skill identity used for template lookup.
+/// - `skill_name`：用于查找模板的可选技能标识。
+/// - `policy`: Resolved truncate policy and template name.
+/// - `policy`：已解析的截断策略与模板名称。
+/// - `client_budget`: Effective inline and read budgets.
+/// - `client_budget`：生效的内联与读取预算。
+/// - `render_options`: Host template lookup locations.
+/// - `render_options`：宿主模板查找位置。
+///
+/// # Returns
+/// # 返回值
+/// Returns normalized or truncated text, or the exact host-budget error.
+/// 返回规范化或截断后的文本，或精确的宿主预算错误。
 fn render_truncate_text(
     output: &HostTextRenderInput,
     skill_name: Option<&str>,
     policy: &OverflowPolicy,
     client_budget: &ToolResultBudgetSnapshot,
     render_options: &HostRenderOptions,
-) -> String {
+) -> Result<String, String> {
     let tool_result_budget = &client_budget.tool_result;
     if content_fits_budget(output, tool_result_budget) {
-        return normalize_text(&output.content);
+        return Ok(normalize_text(&output.content));
     }
 
     let Some(truncated_content) =
         truncate_content_at_line_boundary(&output.content, tool_result_budget)
     else {
-        return TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR.to_string();
+        return Err(TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR.to_string());
     };
 
     let mut context = HashMap::new();
@@ -207,43 +246,56 @@ fn render_truncate_text(
     if let Some(template_text) =
         load_template_text(skill_name, policy.template_name.as_str(), render_options)
     {
-        return render_template_text(&template_text, &context);
+        return Ok(render_template_text(&template_text, &context));
     }
 
-    render_template_text(
+    Ok(render_template_text(
         "{{truncated_content}}\n...\n# {{truncate_notice}}",
         &context,
-    )
+    ))
 }
 
-/// Render the final page-mode text, creating one project-scoped spill file and safe read directory when needed.
-/// 渲染最终分页模式文本，并在需要时创建项目级超限文件与安全读取目录。
+/// Renders page-mode text and persists oversized content into the selected host spill directory.
+/// 渲染分页模式文本，并将超长内容持久化到选定的宿主超限目录。
+///
+/// # Parameters
+/// # 参数
+/// - `output`: Source text and stable size metadata.
+/// - `output`：源文本与稳定大小元数据。
+/// - `skill_name`: Optional skill identity used for template lookup.
+/// - `skill_name`：用于查找模板的可选技能标识。
+/// - `policy`: Resolved page policy and spill-file template name.
+/// - `policy`：已解析的分页策略与超限文件模板名称。
+/// - `client_budget`: Effective inline and safe-read budgets.
+/// - `client_budget`：生效的内联与安全读取预算。
+/// - `render_options`: Host spill and template lookup locations.
+/// - `render_options`：宿主超限文件与模板查找位置。
+///
+/// # Returns
+/// # 返回值
+/// Returns inline text or a page pointer, or the exact chunk-planning and persistence failure.
+/// 返回内联文本或分页指针，或精确的分块规划与持久化失败。
 fn render_page_text(
     output: &HostTextRenderInput,
     skill_name: Option<&str>,
     policy: &OverflowPolicy,
     client_budget: &ToolResultBudgetSnapshot,
     render_options: &HostRenderOptions,
-) -> String {
+) -> Result<String, String> {
     let tool_result_budget = &client_budget.tool_result;
     if content_fits_budget(output, tool_result_budget) {
-        return normalize_text(&output.content);
+        return Ok(normalize_text(&output.content));
     }
 
     let file_read_budget = &client_budget.file_read;
-    let chunk_plan = match build_chunk_plan(&output.content, file_read_budget) {
-        Ok(plan) => plan,
-        Err(_) => return TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR.to_string(),
-    };
+    let chunk_plan = build_chunk_plan(&output.content, file_read_budget)?;
 
-    let Some(spill_root) = render_options.spill_root.as_deref() else {
-        return TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR.to_string();
-    };
+    let spill_root = render_options
+        .spill_root
+        .as_deref()
+        .ok_or_else(|| PAGE_SPILL_ROOT_REQUIRED_ERROR.to_string())?;
 
-    let raw_file = match write_overflow_text_file(&output.content, policy, spill_root) {
-        Ok(path) => path,
-        Err(_) => return TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR.to_string(),
-    };
+    let raw_file = write_overflow_text_file(&output.content, policy, spill_root)?;
 
     let mut context = HashMap::new();
     context.insert(
@@ -284,10 +336,10 @@ fn render_page_text(
     if let Some(template_text) =
         load_template_text(skill_name, policy.template_name.as_str(), render_options)
     {
-        return render_template_text(&template_text, &context);
+        return Ok(render_template_text(&template_text, &context));
     }
 
-    render_page_default(&context)
+    Ok(render_page_default(&context))
 }
 
 /// Decide whether the original content already fits inside the current budget and can bypass host overflow handling.
@@ -503,5 +555,180 @@ fn join_lines_with_trailing_newline(existing_lines: &[String], next_line: &str) 
         next_line.to_string()
     } else {
         format!("{}\n{}", existing_lines.join("\n"), next_line)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies page overflow without a host spill path returns a protocol-level error.
+    /// 验证分页超限缺少宿主超限路径时返回协议级错误。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails if a missing spill path becomes normal model text.
+    /// 此测试无返回值；若缺失超限路径退化为普通模型文本则失败。
+    #[test]
+    fn page_render_requires_host_spill_root() {
+        // output forces page mode while keeping every source line valid for the read budget.
+        // output 强制进入分页模式，同时保证每一行均满足读取预算。
+        let output = HostTextRenderInput {
+            content: String::from("alpha\nbeta"),
+            overflow_mode: Some(HostToolOverflowMode::Page),
+            template_hint: None,
+            content_bytes: 10,
+            content_lines: 2,
+        };
+        // budget rejects inline output but permits one source line per safe page chunk.
+        // budget 拒绝内联输出，但允许每个安全分页块容纳一行源码。
+        let budget = ToolResultBudgetSnapshot {
+            tool_result: EffectiveBudgetScope {
+                bytes: 4,
+                lines: -1,
+            },
+            file_read: EffectiveBudgetScope {
+                bytes: 6,
+                lines: -1,
+            },
+        };
+
+        let error = render_tool_result_text(&output, None, &budget, &HostRenderOptions::default())
+            .expect_err("page overflow should require a spill root");
+
+        assert_eq!(error, PAGE_SPILL_ROOT_REQUIRED_ERROR);
+    }
+
+    /// Verifies a non-directory spill root preserves the concrete directory-creation failure.
+    /// 验证非目录超限路径保留具体的目录创建失败。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails if persistence errors collapse into a size message.
+    /// 此测试无返回值；若持久化错误退化为大小提示则失败。
+    #[test]
+    fn page_render_preserves_spill_directory_creation_error() {
+        // spill_root_file is an existing file and therefore cannot become the required directory.
+        // spill_root_file 是一个既有文件，因此无法成为所需目录。
+        let spill_root_file = std::env::temp_dir().join(format!(
+            "vulcan-render-spill-file-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("test clock should follow the Unix epoch")
+                .as_nanos()
+        ));
+        fs::write(&spill_root_file, b"not a directory")
+            .expect("spill-root fixture file should be created");
+        let output = HostTextRenderInput {
+            content: String::from("alpha\nbeta"),
+            overflow_mode: Some(HostToolOverflowMode::Page),
+            template_hint: None,
+            content_bytes: 10,
+            content_lines: 2,
+        };
+        let budget = ToolResultBudgetSnapshot {
+            tool_result: EffectiveBudgetScope {
+                bytes: 4,
+                lines: -1,
+            },
+            file_read: EffectiveBudgetScope {
+                bytes: 6,
+                lines: -1,
+            },
+        };
+
+        let error = render_tool_result_text(
+            &output,
+            None,
+            &budget,
+            &HostRenderOptions {
+                spill_root: Some(spill_root_file.clone()),
+                ..HostRenderOptions::default()
+            },
+        )
+        .expect_err("a file cannot serve as the spill directory");
+        fs::remove_file(&spill_root_file).expect("spill-root fixture file should be removed");
+
+        assert!(error.starts_with("Failed to create the overflow directory:"));
+        assert!(!error.contains(TOOL_OUTPUT_EXCEEDS_LIMIT_ERROR));
+    }
+
+    /// Verifies successful page rendering creates the selected directory and exact overflow file.
+    /// 验证成功分页渲染会创建选定目录和内容精确的超限文件。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails if lazy persistence or pointer rendering regresses.
+    /// 此测试无返回值；若延迟持久化或指针渲染退化则失败。
+    #[test]
+    fn page_render_lazily_persists_exact_overflow_content() {
+        // spill_root starts absent so the page writer owns directory creation.
+        // spill_root 初始不存在，因此目录创建由分页写入器负责。
+        let spill_root = std::env::temp_dir().join(format!(
+            "vulcan-render-spill-dir-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("test clock should follow the Unix epoch")
+                .as_nanos()
+        ));
+        let output = HostTextRenderInput {
+            content: String::from("alpha\nbeta"),
+            overflow_mode: Some(HostToolOverflowMode::Page),
+            template_hint: None,
+            content_bytes: 10,
+            content_lines: 2,
+        };
+        let budget = ToolResultBudgetSnapshot {
+            tool_result: EffectiveBudgetScope {
+                bytes: 4,
+                lines: -1,
+            },
+            file_read: EffectiveBudgetScope {
+                bytes: 6,
+                lines: -1,
+            },
+        };
+
+        let rendered = render_tool_result_text(
+            &output,
+            None,
+            &budget,
+            &HostRenderOptions {
+                spill_root: Some(spill_root.clone()),
+                ..HostRenderOptions::default()
+            },
+        )
+        .expect("page overflow should persist successfully");
+        // overflow_files contains the one file created by this isolated render call.
+        // overflow_files 包含本次隔离渲染调用创建的唯一文件。
+        let overflow_files = fs::read_dir(&spill_root)
+            .expect("spill directory should exist")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("spill directory entries should be readable");
+
+        assert!(rendered.contains("# LARGE RESULT POINTER"));
+        assert_eq!(overflow_files.len(), 1);
+        assert_eq!(
+            fs::read_to_string(overflow_files[0].path()).expect("overflow file should be readable"),
+            output.content
+        );
+        fs::remove_dir_all(&spill_root).expect("spill directory should be removed");
     }
 }

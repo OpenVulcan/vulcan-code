@@ -8,48 +8,47 @@ use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
 use vulcan_service_api::{
-    ComposerAttachmentSummary, ConversationSummary, ConversationSummaryChangedDelta, ServiceEvent,
-    ServiceEventEmitter, SubmitConversationPromptAck, UpdateConversationRunPhaseDelta,
-    WorkbenchDelta, WorkbenchDeltaEnvelope,
+    ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
+    UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
-use vulcan_workbench_model::{
-    PendingSessionPromptSource, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-};
+use vulcan_workbench_model::{PendingSessionPromptSource, SessionRunPhase, SessionState};
 
 use super::{
     SharedServiceBridgeState, UserPromptEditSubmitRequest, active_kernel_session_ids,
     apply_webui_prompt_begin_outer_steps_deferred_context_persist,
     build_conversation_messages_patched_delta, build_vmm_hook_config_snapshot,
     capture_preserved_workspace_run_state, composer_attachment_summary_to_core,
-    conversation_fork_source_summary_from_session, conversation_messages_from_session,
-    current_unix_millis_text, current_unix_millis_value,
-    current_workspace_snapshot_from_shared_state, effective_workbench_disabled_ai_capability_kinds,
-    emit_materialized_session_message_delta, emit_pending_prompts_changed_delta,
-    emit_service_event_with_trace, enqueue_webui_pending_prompt_from_submission,
-    ensure_session_ai_tool_configuration, ensure_session_can_enter_plan_mode,
-    ensure_webui_session_runtime_state, hydrate_retained_submission_session_if_needed,
-    is_active_session_run_phase, load_workspace_for_submission,
-    mark_webui_prompt_snapshot_preparing, materialize_prompt_session,
-    owning_project_id_for_session, parse_ai_capability_target_order_overrides,
-    parse_ai_capability_target_selectors, parse_reasoning_effort, parse_session_id,
-    pending_question_snapshots_from_agent_runtime, preserve_active_session_run_state,
-    refresh_conversation_attention_summary, replace_conversation_messages_in_workbench_window,
+    conversation_messages_from_session, current_unix_millis_text, current_unix_millis_value,
+    current_workspace_snapshot_from_shared_state, emit_materialized_session_message_delta,
+    emit_pending_prompts_changed_delta, emit_service_event_with_trace,
+    enqueue_webui_pending_prompt_from_submission, hydrate_retained_submission_session_if_needed,
+    load_workspace_for_submission, mark_webui_prompt_snapshot_preparing,
+    materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
+    parse_session_id, preserve_active_session_run_state,
+    replace_conversation_messages_in_workbench_window,
     retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
     rollback_persisted_session_before_user_prompt, runtime_parts_from_state,
-    session_ai_tool_configuration_or_default, session_has_blocking_system_prompt_work,
-    session_plan_mode_summary_from_runtime_state, session_summary_project_id_owned,
-    snapshot_webui_context_before_user_prompt, spawn_service_task,
-    spawn_workspace_session_persist_task, start_webui_precheck_or_continue,
+    session_has_blocking_system_prompt_work, snapshot_webui_context_before_user_prompt,
+    spawn_service_task, spawn_workspace_session_persist_task,
+    start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
     start_webui_session_kernel_user_turn, store_workspace_snapshot_without_workbench_rebuild,
     sync_hydrated_session_dialogue_ready_marker, validate_composer_attachment_summary,
-    webui_session_allows_user_prompt_editing, webui_session_has_active_run,
-    webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
-    webui_trace_if_slow, workbench_with_live_pending_question, workspace_path_for_session,
-    workspace_session_summary_for_session, workspace_user_prompt_message_allows_destructive_edit,
+    webui_session_allows_user_prompt_editing, webui_session_kernel_has_active_turn,
+    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
+    workbench_with_live_pending_question, workspace_path_for_session,
+    workspace_user_prompt_message_allows_destructive_edit,
 };
+mod activation;
 mod edit;
+mod preflight;
+mod queue;
+mod runtime_options;
 
+pub(crate) use activation::*;
 pub(super) use edit::*;
+pub(crate) use preflight::*;
+pub(crate) use queue::*;
+pub(crate) use runtime_options::*;
 
 /// Submits a WebUI user prompt into a new or existing conversation.
 /// 将 WebUI 用户提示词提交到新会话或已有会话。
@@ -141,93 +140,24 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(runtime_parts_started_at)
         ),
     );
-    let submission_session_id = conversation_id.as_deref().and_then(parse_session_id);
+    // submission_target fixes create-or-continue intent before admission, loading, or hydration starts.
+    // submission_target 在准入、加载或水合开始前固定新建或继续意图。
+    let submission_target = parse_prompt_session_target(conversation_id.as_deref())?;
+    // submission_session_id is the existing identity used by retained-state and hydration lookups.
+    // submission_session_id 是保留状态与水合查找使用的已有会话身份。
+    let submission_session_id = submission_target.existing_session_id();
     // Measures retained workspace reuse without cloning the full workbench snapshot on the hot path.
     // 衡量保留工作区复用，并避免在热路径克隆完整工作台快照。
     let retained_snapshot_started_at = current_unix_millis_value();
-    let (
+    // RetainedSubmissionPreflight keeps admission ownership aligned with the captured workspace revision.
+    // RetainedSubmissionPreflight 让准入所有权与捕获的工作区版本保持一致。
+    let RetainedSubmissionPreflight {
+        turn_admission,
+        project_admission,
         preserved_workspace_run_state,
         retained_dialogue_context_available,
         retained_workspace_snapshot,
-    ) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if let Some(session_id) = submission_session_id
-            && let Some(reservation) = guard.session_turn_admission_reservations.get(&session_id)
-        {
-            return Err(format!(
-                "会话 `{session_id}` 已由 {} 预留，无法提交新的提示词。",
-                reservation.kind.diagnostic_label()
-            ));
-        }
-        // retained_owner_project_id resolves an existing session owner when the request omits projectId.
-        // retained_owner_project_id 在请求省略 projectId 时解析现有会话所属项目。
-        let retained_owner_project_id = submission_session_id.and_then(|session_id| {
-            guard
-                .workspace_snapshot
-                .as_ref()
-                .and_then(|workspace_snapshot| {
-                    owning_project_id_for_session(workspace_snapshot, session_id)
-                })
-        });
-        // lifecycle_project_id is the exact project target used by the submission lifecycle gate.
-        // lifecycle_project_id 是提交生命周期闸门使用的精确项目目标。
-        let lifecycle_project_id = project_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|project_id| !project_id.is_empty())
-            .or(retained_owner_project_id.as_deref());
-        if let Some(lifecycle_project_id) = lifecycle_project_id {
-            if guard
-                .project_lifecycle_transition_reservations
-                .contains_key(lifecycle_project_id)
-            {
-                return Err(format!(
-                    "项目 `{lifecycle_project_id}` 正在执行批量归档或移除转换，无法创建或运行子会话。"
-                ));
-            }
-        } else if submission_session_id.is_none()
-            && !guard.project_lifecycle_transition_reservations.is_empty()
-        {
-            return Err(String::from(
-                "项目生命周期转换正在进行，未指定所属项目的新会话暂时无法提交。",
-            ));
-        }
-        let active_kernel_sessions = active_kernel_session_ids(&guard);
-        let retained_dialogue_context_available = submission_session_id.is_some_and(|session_id| {
-            guard
-                .workspace_snapshot
-                .as_ref()
-                .is_some_and(|workspace_snapshot| {
-                    retained_submission_snapshot_has_session_context(workspace_snapshot, session_id)
-                })
-        });
-        // Reuses the retained workspace on the submit hot path before falling back to full disk reload.
-        // 在发送热路径优先复用保留工作区，再按需回退到完整磁盘重载。
-        let retained_workspace_snapshot =
-            guard
-                .workspace_snapshot
-                .as_ref()
-                .and_then(|workspace_snapshot| {
-                    retained_submission_snapshot_is_usable(
-                        workspace_snapshot,
-                        project_id.as_deref(),
-                        submission_session_id,
-                    )
-                    .then(|| workspace_snapshot.clone())
-                });
-        let preserved_workspace_run_state = capture_preserved_workspace_run_state(
-            guard.workspace_snapshot.as_ref(),
-            &active_kernel_sessions,
-            submission_session_id,
-        );
-        (
-            preserved_workspace_run_state,
-            retained_dialogue_context_available,
-            retained_workspace_snapshot,
-        )
-    };
+    } = prepare_retained_submission_preflight(&state, project_id.as_deref(), submission_target)?;
     webui_trace_if_slow(
         "submit_prompt_retained_snapshot_slow",
         retained_snapshot_started_at,
@@ -241,17 +171,16 @@ pub(super) async fn service_submit_conversation_prompt(
         ),
     );
     let workspace_load_started_at = current_unix_millis_value();
-    let (mut workspace_snapshot, workspace_source) = if let Some(workspace_snapshot) =
-        retained_workspace_snapshot
-    {
-        (workspace_snapshot, "retained")
-    } else {
-        (
-            load_workspace_for_submission(controller_runtime.clone(), conversation_id.as_deref())
-                .await?,
-            "disk",
-        )
-    };
+    let (mut workspace_snapshot, workspace_source) =
+        if let Some(workspace_snapshot) = retained_workspace_snapshot {
+            (workspace_snapshot, "retained")
+        } else {
+            (
+                load_workspace_for_submission(controller_runtime.clone(), submission_session_id)
+                    .await?,
+                "disk",
+            )
+        };
     if let Some(session_id) = submission_session_id {
         hydrate_retained_submission_session_if_needed(
             controller_runtime.clone(),
@@ -272,154 +201,79 @@ pub(super) async fn service_submit_conversation_prompt(
         preserved_workspace_run_state.as_ref(),
         &mut workspace_snapshot,
     );
-    if let Some(session_id) = conversation_id.as_deref().and_then(parse_session_id) {
-        let blocking_check_started_at = current_unix_millis_value();
-        // Measures the active stream and kernel state lookup portion of the blocking gate.
-        // 衡量阻塞闸门中活跃流与内核状态查询部分的耗时。
-        let active_state_started_at = current_unix_millis_value();
-        let (has_active_stream_task, has_active_kernel_turn, has_active_session_run) = {
-            let guard = state
-                .lock()
-                .map_err(|error| format!("failed to lock service state: {error}"))?;
-            (
-                guard.active_stream_tasks.contains_key(&session_id),
-                webui_session_kernel_has_active_turn(&guard, session_id),
-                webui_session_has_active_run(&guard, session_id),
-            )
-        };
-        webui_trace_if_slow(
-            "submit_prompt_active_state_check_slow",
-            active_state_started_at,
-            format!("session={session_id}"),
-        );
-        let has_running_subagents = false;
-        webui_submit_trace(
-            "submit_prompt_subagent_running_check_skipped",
-            format!("session={session_id} reason=independent_subagent_lane"),
-        );
-        webui_submit_trace(
-            "submit_prompt_blocking_check",
-            format!(
-                "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_active_session_run={has_active_session_run} has_running_subagents={has_running_subagents} elapsed_ms={}",
-                current_unix_millis_value().saturating_sub(blocking_check_started_at)
-            ),
-        );
-        let has_precheck_progress = workspace_snapshot
-            .session_runtime_state
-            .get(&session_id)
-            .and_then(|runtime_state| runtime_state.active_precheck_turn_id.as_deref())
-            .is_some_and(|turn_id| !turn_id.trim().is_empty());
-        if session_has_blocking_system_prompt_work(
+    if let ExistingSubmissionQueueDecision::Queue { session_id } =
+        evaluate_existing_submission_queue(
+            &state,
             &workspace_snapshot,
             &agent_runtime.provider_configuration,
-            session_id,
-            has_active_session_run,
-            has_precheck_progress,
-        ) {
-            webui_submit_trace(
-                "submit_prompt_queued",
-                format!(
-                    "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_running_subagents={has_running_subagents}"
-                ),
-            );
-            let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
-            enqueue_webui_pending_prompt_from_submission(
-                &mut workspace_snapshot,
-                &agent_runtime,
+            submission_session_id,
+        )?
+    {
+        return queue_existing_submission(
+            &app,
+            &state,
+            &controller_runtime,
+            &agent_runtime,
+            ExistingSubmissionQueueInput {
+                workspace_snapshot,
                 session_id,
-                &workspace_path,
                 prompt,
-                hidden_model_guidance.clone(),
+                hidden_model_guidance,
                 attachments,
-                reasoning_effort.as_deref(),
-                disabled_ai_capability_kinds.as_deref(),
-            )?;
-            let run_phase = workspace_snapshot
-                .session_run_phases
-                .get(&session_id)
-                .copied()
-                .unwrap_or(SessionRunPhase::Idle);
-            store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot.clone())?;
-            let _pending_revision = emit_pending_prompts_changed_delta(&app, &state, session_id)?;
-            let revision = emit_queued_prompt_run_phase_delta(&app, &state, session_id, run_phase)?;
-            let state_for_persist = state.clone();
-            let controller_runtime_for_persist = controller_runtime.clone();
-            spawn_service_task(async move {
-                let snapshot =
-                    match current_workspace_snapshot_from_shared_state(&state_for_persist) {
-                        Ok(Some(snapshot)) => snapshot,
-                        Ok(None) => return,
-                        Err(error) => {
-                            eprintln!(
-                                "[webui-service] queued submit persist snapshot failed: {error}"
-                            );
-                            return;
-                        }
-                    };
-                spawn_workspace_session_persist_task(
-                    state_for_persist,
-                    controller_runtime_for_persist,
-                    snapshot,
-                    session_id,
-                    Some(String::from("queued_submit")),
-                );
-            });
-            webui_submit_trace(
-                "submit_prompt_queued_returning",
-                format!(
-                    "session={session_id} elapsed_ms_since_received={}",
-                    current_unix_millis_value().saturating_sub(submit_total_started_at)
-                ),
-            );
-            return Ok(SubmitConversationPromptAck {
-                conversation_id: session_id.to_string(),
-                accepted_message_id: None,
-                turn_id: None,
-                run_phase: run_phase.to_string(),
-                queued: true,
-                revision,
-            });
-        }
+                reasoning_effort,
+                disabled_ai_capability_kinds,
+                submit_total_started_at,
+            },
+        );
     }
     let materialize_started_at = current_unix_millis_value();
-    let (session_id, session_title, workspace_path) = materialize_prompt_session(
+    // materialization_project_id pins a new session to the exact project selected under preflight ownership.
+    // materialization_project_id 将新会话固定到预检所有权下选择的精确项目。
+    let materialization_project_id = if submission_session_id.is_none() {
+        project_admission
+            .exact_project_id()
+            .or(project_id.as_deref())
+    } else {
+        project_id.as_deref()
+    };
+    let materialized_session = materialize_prompt_session(
         &mut workspace_snapshot,
-        project_id.as_deref(),
-        conversation_id.as_deref(),
+        materialization_project_id,
+        submission_target,
         if prompt.is_empty() {
             "附件会话"
         } else {
             &prompt
         },
     )?;
+    project_admission.validate_materialized_session(&materialized_session)?;
     webui_submit_trace(
         "submit_prompt_materialize_ready",
         format!(
-            "session={session_id} title_chars={} workspace_path_chars={} elapsed_ms={}",
-            session_title.chars().count(),
-            workspace_path.chars().count(),
+            "session={} title_chars={} workspace_path_chars={} elapsed_ms={}",
+            materialized_session.session_id,
+            materialized_session.session_title.chars().count(),
+            materialized_session.workspace_path.chars().count(),
             current_unix_millis_value().saturating_sub(materialize_started_at)
         ),
     );
-    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)?;
-    ensure_session_ai_tool_configuration(
+    // kernel_reservation_id binds an existing materialization to the exact admission owner captured before loading.
+    // kernel_reservation_id 将已有会话物化结果绑定到加载前捕获的精确准入所有者。
+    let kernel_reservation_id = turn_admission.kernel_reservation_id(&materialized_session)?;
+    prepare_materialized_submission_session(
         &mut workspace_snapshot,
-        session_id,
+        &materialized_session,
         &agent_runtime.ai_tool_configuration,
-    );
-    emit_submitted_conversation_summary_delta(&app, &state, &workspace_snapshot, session_id)?;
-    if conversation_id.is_some() {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.session_subagent_navigation_rounds.remove(&session_id);
-        if guard
-            .active_subagent_panel
-            .is_some_and(|selection| selection.parent_session_id == session_id)
-        {
-            guard.active_subagent_panel = None;
-        }
-    }
+    )?;
+    // session_id is copied from the authoritative materialization result after activation consumes its classification.
+    // session_id 在激活阶段消费物化分类后，从权威物化结果中复制。
+    let session_id = materialized_session.session_id;
+    // session_title borrows the authoritative title through the final activation commit.
+    // session_title 借用权威标题直到最终激活提交完成。
+    let session_title = materialized_session.session_title.as_str();
+    // workspace_path borrows the owning project path through precheck dispatch preparation.
+    // workspace_path 借用所属项目路径直到 precheck 分发准备完成。
+    let workspace_path = materialized_session.workspace_path.as_str();
     webui_submit_trace(
         "submit_prompt_starting_run",
         format!(
@@ -428,33 +282,20 @@ pub(super) async fn service_submit_conversation_prompt(
         ),
     );
     let submit_run_prepare_started_at = current_unix_millis_value();
-    let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
-        &workspace_snapshot,
+    let runtime_options = prepare_submission_runtime_options(
+        &controller_runtime,
+        &mut workspace_snapshot,
         session_id,
         &agent_runtime.ai_tool_configuration,
-    );
-    let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
-        session_ai_tool_configuration,
-        disabled_ai_capability_kinds.as_deref(),
-    )?;
-    let disabled_ai_capability_target_selectors =
-        parse_ai_capability_target_selectors(disabled_ai_capability_target_selectors);
-    let ai_capability_target_order_overrides =
-        parse_ai_capability_target_order_overrides(ai_capability_target_order_overrides)?;
-    let effective_execution_mode = execution_mode.unwrap_or_else(|| String::from("build"));
-    if effective_execution_mode.eq_ignore_ascii_case("plan") {
-        ensure_session_can_enter_plan_mode(&controller_runtime, session_id).await?;
-        let updated_at = current_unix_millis_text();
-        let runtime_state = workspace_snapshot
-            .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: updated_at.clone(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        runtime_state.active_work_mode = Some(String::from("plan"));
-        runtime_state.updated_at = updated_at;
-    }
+        SubmissionRuntimeOptionsInput {
+            execution_mode,
+            reasoning_effort,
+            disabled_ai_capability_kinds,
+            disabled_ai_capability_target_selectors,
+            ai_capability_target_order_overrides,
+        },
+    )
+    .await?;
     webui_submit_trace(
         "submit_prompt_runtime_options_ready",
         format!(
@@ -476,6 +317,25 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(context_snapshot_started_at)
         ),
     );
+    // Resolves every fallible precheck-plan input before hook runtime opens a logical turn.
+    // 在 hook runtime 打开逻辑回合前解析全部可失败的 precheck 计划输入。
+    let precheck_plan_started_at = current_unix_millis_value();
+    let precheck_plan = webui_shared_prompt_precheck_plan(
+        &agent_runtime,
+        &workspace_snapshot,
+        session_id,
+        workspace_path,
+    )?;
+    webui_submit_trace(
+        "submit_prompt_precheck_plan_ready",
+        format!(
+            "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
+            precheck_plan.has_precheck_hooks,
+            precheck_plan.should_skip_precheck,
+            precheck_plan.progress_labels.len(),
+            current_unix_millis_value().saturating_sub(precheck_plan_started_at)
+        ),
+    );
     let turn_begin_started_at = current_unix_millis_value();
     let precheck_start = {
         let mut hook_runtime = agent_runtime
@@ -487,8 +347,8 @@ pub(super) async fn service_submit_conversation_prompt(
             &mut hook_runtime,
             SharedPromptTurnBeginInput {
                 session_id,
-                session_title: &session_title,
-                workspace_path: &workspace_path,
+                session_title,
+                workspace_path,
                 prompt_entry_id: format!(
                     "webui-prompt-{session_id}-{}",
                     current_unix_millis_text()
@@ -500,11 +360,13 @@ pub(super) async fn service_submit_conversation_prompt(
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
                 source: PendingSessionPromptSource::UserFollowup,
-                execution_mode: effective_execution_mode,
-                reasoning_effort: reasoning_effort.as_deref().and_then(parse_reasoning_effort),
-                disabled_ai_capability_kinds,
-                disabled_ai_capability_target_selectors,
-                ai_capability_target_order_overrides,
+                execution_mode: runtime_options.execution_mode,
+                reasoning_effort: runtime_options.reasoning_effort,
+                disabled_ai_capability_kinds: runtime_options.disabled_ai_capability_kinds,
+                disabled_ai_capability_target_selectors: runtime_options
+                    .disabled_ai_capability_target_selectors,
+                ai_capability_target_order_overrides: runtime_options
+                    .ai_capability_target_order_overrides,
             },
         )
     }?;
@@ -517,25 +379,6 @@ pub(super) async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(turn_begin_started_at)
         ),
     );
-    // Resolves the precheck decision before the first visible delta chooses its phase.
-    // 在首个可见增量选择阶段前解析 precheck 决策。
-    let precheck_plan_started_at = current_unix_millis_value();
-    let precheck_plan = webui_shared_prompt_precheck_plan(
-        &agent_runtime,
-        &workspace_snapshot,
-        session_id,
-        &workspace_path,
-    )?;
-    webui_submit_trace(
-        "submit_prompt_precheck_plan_ready",
-        format!(
-            "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
-            precheck_plan.has_precheck_hooks,
-            precheck_plan.should_skip_precheck,
-            precheck_plan.progress_labels.len(),
-            current_unix_millis_value().saturating_sub(precheck_plan_started_at)
-        ),
-    );
     // Keeps skipped precheck turns in the preparatory phase until provider execution starts.
     // 在 precheck 跳过时保持准备阶段，直到模型执行真正开始。
     let submit_visible_run_phase =
@@ -544,12 +387,58 @@ pub(super) async fn service_submit_conversation_prompt(
         } else {
             SessionRunPhase::MemoryRecall
         };
+    {
+        let kernel_turn_started_at = current_unix_millis_value();
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some(kernel_reservation_id) = kernel_reservation_id {
+            start_reserved_webui_session_kernel_user_turn(
+                &mut guard,
+                session_id,
+                precheck_start.precheck_request.turn_id(),
+                kernel_reservation_id,
+            )?;
+        } else {
+            start_webui_session_kernel_user_turn(
+                &mut guard,
+                session_id,
+                precheck_start.precheck_request.turn_id(),
+            )?;
+        }
+        webui_submit_trace(
+            "submit_prompt_kernel_turn_started",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(kernel_turn_started_at)
+            ),
+        );
+    }
+    mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
+    let begin_commit_started_at = current_unix_millis_value();
+    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot.clone())?;
+    webui_submit_trace(
+        "submit_prompt_begin_workspace_committed",
+        format!(
+            "session={session_id} elapsed_ms={} elapsed_ms_since_received={}",
+            current_unix_millis_value().saturating_sub(begin_commit_started_at),
+            current_unix_millis_value().saturating_sub(submit_total_started_at)
+        ),
+    );
+    commit_materialized_submission_activation(
+        &app,
+        &state,
+        &workspace_snapshot,
+        &materialized_session,
+    )?;
     if let Some(message_id) = precheck_start.visible_user_prompt_record_id.as_deref()
         && let Some(message) = workspace_snapshot
             .session_messages
             .get(&session_id)
             .and_then(|messages| messages.iter().find(|message| message.id == message_id))
     {
+        // delta_started_at measures only the post-commit visible projection and event emission.
+        // delta_started_at 仅衡量提交后的可见投影与事件发送。
         let delta_started_at = current_unix_millis_value();
         emit_materialized_session_message_delta(
             &app,
@@ -575,35 +464,6 @@ pub(super) async fn service_submit_conversation_prompt(
             ),
         );
     }
-    {
-        let kernel_turn_started_at = current_unix_millis_value();
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        start_webui_session_kernel_user_turn(
-            &mut guard,
-            session_id,
-            precheck_start.precheck_request.turn_id(),
-        )?;
-        webui_submit_trace(
-            "submit_prompt_kernel_turn_started",
-            format!(
-                "session={session_id} elapsed_ms={}",
-                current_unix_millis_value().saturating_sub(kernel_turn_started_at)
-            ),
-        );
-    }
-    mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
-    let begin_commit_started_at = current_unix_millis_value();
-    store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot.clone())?;
-    webui_submit_trace(
-        "submit_prompt_begin_workspace_committed",
-        format!(
-            "session={session_id} elapsed_ms={} elapsed_ms_since_received={}",
-            current_unix_millis_value().saturating_sub(begin_commit_started_at),
-            current_unix_millis_value().saturating_sub(submit_total_started_at)
-        ),
-    );
     webui_submit_trace(
         "submit_prompt_visible_user_message_emitted",
         format!(
@@ -616,7 +476,7 @@ pub(super) async fn service_submit_conversation_prompt(
         &controller_runtime,
         &mut workspace_snapshot,
         session_id,
-        &session_title,
+        session_title,
     );
     webui_submit_trace(
         "submit_prompt_outer_steps_ready",
@@ -631,7 +491,7 @@ pub(super) async fn service_submit_conversation_prompt(
         .replace_snapshot(build_vmm_hook_config_snapshot(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
-        ));
+        ))?;
     webui_submit_trace(
         "submit_prompt_hook_snapshot_ready",
         format!(
@@ -702,92 +562,6 @@ pub(super) async fn service_submit_conversation_prompt(
     })
 }
 
-/// Emits the submitted conversation sidebar summary before transcript deltas target the surface.
-/// 在转录增量指向界面前发送本次提交会话的侧栏摘要。
-fn emit_submitted_conversation_summary_delta(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    workspace_snapshot: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
-    session_id: vulcan_workbench_model::SessionId,
-) -> Result<u64, String> {
-    let session = workspace_session_summary_for_session(workspace_snapshot, session_id)
-        .ok_or_else(|| format!("submitted session was not materialized: {session_id}"))?;
-    let run_phase = workspace_snapshot
-        .session_run_phases
-        .get(&session_id)
-        .copied()
-        .unwrap_or(SessionRunPhase::Idle);
-    let is_running =
-        session.status == SessionState::Running || is_active_session_run_phase(run_phase);
-    let unread = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .is_some_and(|runtime_state| runtime_state.ui_state.unread);
-    let session_plan_mode = session_plan_mode_summary_from_runtime_state(
-        workspace_snapshot.session_runtime_state.get(&session_id),
-    );
-    let mut conversation = ConversationSummary {
-        id: session_id.to_string(),
-        title: session.title.clone(),
-        status: if is_running {
-            SessionState::Running.label()
-        } else {
-            session.status.label()
-        }
-        .to_string(),
-        run_phase: run_phase.to_string(),
-        last_updated_label: session.last_updated_label.clone(),
-        last_updated_at: session.updated_at.clone(),
-        unread,
-        attention: None,
-        project_id: session_summary_project_id_owned(session),
-        fork_source: conversation_fork_source_summary_from_session(session),
-    };
-    let event = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let pending_questions =
-            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
-        refresh_conversation_attention_summary(
-            &mut conversation,
-            session_id,
-            &pending_questions,
-            session_plan_mode.as_ref(),
-        );
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        let revision = guard.workbench_generation;
-        guard.workbench.revision = revision;
-        guard.workbench.selected_conversation_id = Some(conversation.id.clone());
-        if let Some(existing) = guard
-            .workbench
-            .conversations
-            .iter_mut()
-            .find(|candidate| candidate.id == conversation.id)
-        {
-            *existing = conversation.clone();
-        } else {
-            guard
-                .workbench
-                .conversations
-                .insert(0, conversation.clone());
-        }
-        WorkbenchDeltaEnvelope {
-            generation: revision,
-            delta: WorkbenchDelta::ConversationSummaryChanged(ConversationSummaryChangedDelta {
-                conversation,
-                selected_conversation_id: Some(session_id.to_string()),
-            }),
-        }
-    };
-    emit_service_event_with_trace(
-        app,
-        "workbench_conversation_summary_delta_emit",
-        ServiceEvent::WorkbenchDelta(Box::new(event)),
-    );
-    current_workbench_revision_from_state(state)
-}
-
 /// Reads the latest accepted workbench revision from shared service state.
 /// 从共享服务状态读取最新已接受的工作台版本号。
 fn current_workbench_revision_from_state(state: &SharedServiceBridgeState) -> Result<u64, String> {
@@ -797,18 +571,43 @@ fn current_workbench_revision_from_state(state: &SharedServiceBridgeState) -> Re
         .map(|guard| guard.workbench_generation)
 }
 
-/// Emits the queued-prompt run phase as an ordered workbench delta.
-/// 将排队提示词对应的运行阶段作为有序工作台增量发出。
-fn emit_queued_prompt_run_phase_delta(
+/// Emits the latest queued-prompt projection as an ordered workbench delta.
+/// 将最新排队提示词投影作为有序工作台增量发出。
+///
+/// # Parameters
+/// # 参数
+/// - `app`: Event emitter that publishes the ordered projection.
+/// - `app`：发布有序投影的事件发送器。
+/// - `state`: Shared service state containing the authoritative workspace and revision.
+/// - `state`：包含权威工作区与版本号的共享服务状态。
+/// - `session_id`: Conversation whose current run phase must be projected.
+/// - `session_id`：需要投影当前运行阶段的会话。
+///
+/// # Returns
+/// # 返回值
+/// The committed workbench revision and authoritative current run phase, or an exact state error.
+/// 已提交的工作台版本与权威当前运行阶段，或准确的状态错误。
+pub(crate) fn emit_queued_prompt_run_phase_delta(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: Uuid,
-    run_phase: SessionRunPhase,
-) -> Result<u64, String> {
-    let event = {
+) -> Result<(u64, SessionRunPhase), String> {
+    let (event, run_phase) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        // workspace is reread under the generation lock so later turn advancement always wins.
+        // workspace 在版本锁内重新读取，使之后发生的回合推进始终胜出。
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("cannot project queued prompt without a retained workspace snapshot")
+        })?;
+        // run_phase is the current authoritative phase, never the value captured by queue commit.
+        // run_phase 是当前权威阶段，绝不使用排队提交时捕获的旧值。
+        let run_phase = workspace
+            .session_run_phases
+            .get(&session_id)
+            .copied()
+            .unwrap_or(SessionRunPhase::Idle);
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let revision = guard.workbench_generation;
         guard.workbench.revision = revision;
@@ -826,15 +625,20 @@ fn emit_queued_prompt_run_phase_delta(
             status = Some(conversation.status.clone());
             last_updated_label = Some(conversation.last_updated_label.clone());
         }
-        WorkbenchDeltaEnvelope {
-            generation: revision,
-            delta: WorkbenchDelta::UpdateConversationRunPhase(UpdateConversationRunPhaseDelta {
-                conversation_id,
-                run_phase: run_phase_text,
-                status,
-                last_updated_label,
-            }),
-        }
+        (
+            WorkbenchDeltaEnvelope {
+                generation: revision,
+                delta: WorkbenchDelta::UpdateConversationRunPhase(
+                    UpdateConversationRunPhaseDelta {
+                        conversation_id,
+                        run_phase: run_phase_text,
+                        status,
+                        last_updated_label,
+                    },
+                ),
+            },
+            run_phase,
+        )
     };
     let generation = event.generation;
     emit_service_event_with_trace(
@@ -842,5 +646,5 @@ fn emit_queued_prompt_run_phase_delta(
         "workbench_queued_prompt_run_phase_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
-    Ok(generation)
+    Ok((generation, run_phase))
 }

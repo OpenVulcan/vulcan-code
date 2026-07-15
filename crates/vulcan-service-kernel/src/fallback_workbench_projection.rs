@@ -59,6 +59,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
             icon_key: None,
         }],
         expanded_project_ids: vec![String::from("current-workspace")],
+        project_settings_revisions: vulcan_service_api::ProjectSettingsRevisionSnapshot::default(),
         conversations: Vec::new(),
         archived_projects: Vec::new(),
         archived_conversations: Vec::new(),

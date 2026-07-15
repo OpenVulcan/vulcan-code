@@ -56,7 +56,9 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
             panel_state.task_id, event.kind, panel_state.public_task_id, panel_state.subagent_label
         ),
     );
-    let normalized_state = {
+    // normalized_state and message_window_events are produced by one atomic state transaction.
+    // normalized_state 与 message_window_events 由单次原子状态事务共同生成。
+    let (normalized_state, message_window_events) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -68,44 +70,23 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
         }) {
             return Ok(true);
         }
-        let normalized = if is_finished {
-            terminal_webui_subagent_task_state(panel_state.clone())
+        // normalizedState remains transaction-local until workspace preflight and projection succeed.
+        // normalizedState 在工作区预检与投影成功前始终保持为事务局部状态。
+        let normalized_state = if is_finished {
+            terminal_webui_subagent_task_state(panel_state)
         } else {
-            panel_state.clone()
+            panel_state
         };
-        guard
-            .session_subagent_navigation_rounds
-            .insert(parent_session_id);
-        if is_finished && listener_execution_id.is_none() {
-            guard
-                .detached_subagent_task_listeners
-                .remove(&normalized.task_id);
-        }
-        normalized
-    };
-    webui_trace(
-        "subagent_runtime_event_normalized",
-        format!(
-            "parent={parent_session_id} task={} run_state={} has_conversation_state={} result_chars={} terminal={is_finished}",
-            normalized_state.task_id,
-            normalized_state.run_state.metadata_key(),
-            normalized_state.conversation_state.is_some(),
-            normalized_state.result_text.chars().count()
-        ),
-    );
-
-    let message_window_events = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if listener_execution_id.is_some_and(|execution_id| {
-            guard
-                .detached_subagent_task_listeners
-                .get(&normalized_state.task_id)
-                .is_none_or(|current_execution_id| current_execution_id != execution_id)
-        }) {
-            return Ok(true);
-        }
+        webui_trace(
+            "subagent_runtime_event_normalized",
+            format!(
+                "parent={parent_session_id} task={} run_state={} has_conversation_state={} result_chars={} terminal={is_finished}",
+                normalized_state.task_id,
+                normalized_state.run_state.metadata_key(),
+                normalized_state.conversation_state.is_some(),
+                normalized_state.result_text.chars().count()
+            ),
+        );
         let parent_conversation_id = parent_session_id.to_string();
         let before_parent_visible_messages = guard
             .workbench
@@ -144,6 +125,20 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
                 .workspace_snapshot
                 .as_mut()
                 .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+            // Parent feedback construction owns the only remaining fallible workspace operation and must run before any other workspace mutation.
+            // 父级反馈构建持有唯一剩余的可失败工作区操作，必须在其他工作区变更之前执行。
+            let parent_changed = if is_finished {
+                append_webui_subagent_feedback_records_if_missing(
+                    workspace,
+                    parent_session_id,
+                    metadata,
+                    &normalized_state,
+                    feedback_projection_policy,
+                    parent_turn_binding.as_ref(),
+                )?
+            } else {
+                false
+            };
             attach_webui_task_session_metadata_to_parent_tool_message(
                 workspace,
                 parent_session_id,
@@ -167,18 +162,6 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
                     task_prompt_anchor,
                 );
             }
-            let parent_changed = if is_finished {
-                append_webui_subagent_feedback_records_if_missing(
-                    workspace,
-                    parent_session_id,
-                    metadata,
-                    &normalized_state,
-                    feedback_projection_policy,
-                    parent_turn_binding.as_ref(),
-                )?
-            } else {
-                false
-            };
             let parent_messages = if parent_changed {
                 workspace
                     .session_messages
@@ -204,6 +187,16 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
                 parent_changed,
             )
         };
+        // Shared navigation and listener ownership are committed only after every fallible projection step has succeeded.
+        // 共享导航与监听器所有权仅在全部可失败投影步骤成功后提交。
+        guard
+            .session_subagent_navigation_rounds
+            .insert(parent_session_id);
+        if is_finished && listener_execution_id.is_none() {
+            guard
+                .detached_subagent_task_listeners
+                .remove(&normalized_state.task_id);
+        }
         let cache_access_ms = current_unix_millis_value();
         guard.subagent_surface_detail_cache.insert(
             normalized_state.task_id,
@@ -254,7 +247,7 @@ pub(crate) fn ingest_webui_subagent_runtime_event_for_listener_execution(
                 delta: WorkbenchDelta::ConversationMessagesPatched(message_patch),
             });
         }
-        message_window_events
+        (normalized_state, message_window_events)
     };
     for event in message_window_events {
         emit_service_event_with_trace(

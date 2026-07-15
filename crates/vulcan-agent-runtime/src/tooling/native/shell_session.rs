@@ -459,7 +459,8 @@ pub(crate) async fn execute_shell_session_start_action(
             template_skill_roots: Vec::new(),
             template_resources_root: None,
         },
-    );
+    )
+    .map_err(NativeToolError::new)?;
 
     Ok(
         VulcanToolInvocationResult::from_model_output(Value::String(model_output))
@@ -524,7 +525,8 @@ pub(crate) async fn execute_shell_session_read_action(
             template_skill_roots: Vec::new(),
             template_resources_root: None,
         },
-    );
+    )
+    .map_err(NativeToolError::new)?;
 
     Ok(
         VulcanToolInvocationResult::from_model_output(Value::String(model_output))

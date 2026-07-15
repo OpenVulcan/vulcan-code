@@ -654,7 +654,12 @@ export function applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
   // ownsIndependentLifecycleDomain 标识其领域版本独立于无关状态接收的增量。
   const ownsIndependentLifecycleDomain = envelope.delta.kind === "conversationArchived"
     || envelope.delta.kind === "conversationsArchived"
-    || envelope.delta.kind === "projectRemoved";
+    || envelope.delta.kind === "projectRemoved"
+    || envelope.delta.kind === "agentSkillsCatalogChanged"
+    || envelope.delta.kind === "luaSkillsCatalogChanged"
+    || envelope.delta.kind === "subagentCatalogChanged"
+    || envelope.delta.kind === "projectSettingsChanged"
+    || envelope.delta.kind === "luaSkillsManagedRuntimeProgressChanged";
   if (!ownsIndependentLifecycleDomain && envelope.generation <= (workbench.revision ?? 0)) {
     return workbench;
   }
@@ -772,6 +777,61 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
       return {
         ...workbench,
         agentSkills: envelope.delta.payload.agentSkills,
+      };
+    case "luaSkillsCatalogChanged":
+      return {
+        ...workbench,
+        luaSkills: envelope.delta.payload.luaSkills,
+        plugins: envelope.delta.payload.plugins,
+      };
+    case "subagentCatalogChanged":
+      return {
+        ...workbench,
+        subagentCatalog: envelope.delta.payload.subagentCatalog,
+      };
+    case "projectSettingsChanged":
+      // changedProjectId selects the exact project-owned revision map or the global revision pair.
+      // changedProjectId 选择准确的项目级版本映射或全局版本对。
+      const changedProjectId = envelope.delta.payload.projectId;
+      // changedDomain identifies the only revision advanced by this focused delta.
+      // changedDomain 标识当前聚焦增量唯一推进的版本。
+      const changedDomain = envelope.delta.payload.domain;
+      if (changedProjectId === null) {
+        return {
+          ...workbench,
+          projectSettingsRevisions: {
+            ...workbench.projectSettingsRevisions,
+            global: {
+              ...workbench.projectSettingsRevisions.global,
+              [changedDomain]: envelope.generation,
+            },
+          },
+        };
+      }
+      // currentProjectRevisions provides the complete initial pair for a project's first focused delta.
+      // currentProjectRevisions 为项目首次聚焦增量提供完整的初始版本对。
+      const currentProjectRevisions = workbench.projectSettingsRevisions.byProject[changedProjectId]
+        ?? { vmm: 0, agentSkills: 0 };
+      return {
+        ...workbench,
+        projectSettingsRevisions: {
+          ...workbench.projectSettingsRevisions,
+          byProject: {
+            ...workbench.projectSettingsRevisions.byProject,
+            [changedProjectId]: {
+              ...currentProjectRevisions,
+              [changedDomain]: envelope.generation,
+            },
+          },
+        },
+      };
+    case "luaSkillsManagedRuntimeProgressChanged":
+      return {
+        ...workbench,
+        luaSkills: {
+          ...workbench.luaSkills,
+          managedRuntimeProgress: envelope.delta.payload.progress,
+        },
       };
   }
 }

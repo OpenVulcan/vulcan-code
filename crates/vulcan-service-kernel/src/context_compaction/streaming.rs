@@ -2,10 +2,7 @@
 //! 上下文压缩 streaming 辅助逻辑。
 
 use super::*;
-use crate::{
-    ProviderTelemetryHookGuard, Uuid, remove_active_stream_task_if_id,
-    spawn_registered_active_stream_task,
-};
+use crate::{ProviderTelemetryHookGuard, Uuid, spawn_registered_active_stream_task};
 
 /// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
 /// 流式执行一次提示词压缩请求，并将 Provider 增量镜像到 WebUI 状态。
@@ -124,7 +121,25 @@ pub(crate) fn spawn_webui_context_compaction_task(
     );
     let task_state = state.clone();
     let task_app = app.clone();
+    // registration_failure_controller_runtime persists a formal failure after task-body ownership moves its clone.
+    // registration_failure_controller_runtime 在任务体取得其克隆所有权后持久化正式注册失败。
+    let registration_failure_controller_runtime = controller_runtime.clone();
+    // registration_failure_status_message_id retains the committed section identity for launch compensation.
+    // registration_failure_status_message_id 为启动补偿保留已提交分段身份。
+    let registration_failure_status_message_id = status_message_id.clone();
+    // registration_failure_budget_note retains the exact visible budget diagnosis for failure persistence.
+    // registration_failure_budget_note 为失败持久化保留精确可见预算诊断。
+    let registration_failure_budget_note = budget_note.clone();
+    // registration_failure_trigger retains the authoritative manual or automatic trigger label.
+    // registration_failure_trigger 保留权威的手动或自动触发标签。
+    let registration_failure_trigger = trigger.clone();
     let active_stream_task_id = Uuid::new_v4();
+    // expected_kernel_generation binds registration failure cleanup to this exact compaction turn.
+    // expected_kernel_generation 将注册失败清理绑定到当前精确压缩回合。
+    let expected_kernel_generation = state
+        .lock()
+        .ok()
+        .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
     let task_future = async move {
         let terminal_result = match request {
             Ok(request) => {
@@ -141,26 +156,13 @@ pub(crate) fn spawn_webui_context_compaction_task(
             }
             Err(error) => Err(error),
         };
-        let terminal_status = if terminal_result.is_ok() {
-            TurnTerminalStatus::Completed
-        } else {
-            TurnTerminalStatus::Failed
+        // commit_mode keeps ownership validation, domain mutation, task removal, and kernel closure in one transaction.
+        // commit_mode 将所有权校验、领域修改、任务移除与 kernel 关闭保留在同一事务中。
+        let commit_mode = ContextCompactionCommitMode::FinishActiveStream {
+            task_id: active_stream_task_id,
         };
-        let owns_active_stream_entry = match task_state.lock() {
-            Ok(mut guard) => {
-                let owns_entry =
-                    remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id)
-                        .is_some();
-                if owns_entry {
-                    finish_webui_session_kernel_turn(&mut guard, session_id, terminal_status);
-                }
-                owns_entry
-            }
-            Err(_) => false,
-        };
-        if !owns_active_stream_entry {
-            return;
-        }
+        // finish_result classifies both provider failures and fallback summaries before kernel closure.
+        // finish_result 在关闭内核前同时分类 Provider 失败与回退摘要。
         let finish_result = match terminal_result {
             Ok(execution) => finish_webui_context_compaction_execution(
                 &task_app,
@@ -171,6 +173,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 &status_message_id,
                 &budget_note,
                 &trigger,
+                commit_mode,
                 execution,
             ),
             Err(error) => fail_webui_context_compaction_execution(
@@ -181,36 +184,125 @@ pub(crate) fn spawn_webui_context_compaction_task(
                 &status_message_id,
                 &budget_note,
                 &trigger,
+                commit_mode,
                 &error,
+            )
+            .map(
+                |workspace_snapshot| ContextCompactionFinishOutcome::Rejected {
+                    workspace_snapshot,
+                    error,
+                },
             ),
         };
         match finish_result {
-            Ok(snapshot) => spawn_context_compaction_persist_task(
-                task_state,
-                controller_runtime,
-                snapshot,
-                session_id,
-                status_message_id.clone(),
-                Some(String::from("context_compaction")),
-            ),
+            Ok(outcome) => {
+                // rejection_error determines the durable reason without discarding its snapshot.
+                // rejection_error 在不丢弃快照的前提下决定持久化原因。
+                let rejection_error = outcome.rejection_error().map(str::to_owned);
+                // snapshot contains either the successful checkpoint or the rejected-attempt record.
+                // snapshot 包含成功检查点或被拒绝尝试记录。
+                let snapshot = outcome.into_workspace_snapshot();
+                if let Some(error) = rejection_error.as_ref() {
+                    eprintln!("[webui-service] context compaction rejected: {error}");
+                }
+                spawn_context_compaction_persist_task(
+                    task_state,
+                    controller_runtime,
+                    snapshot,
+                    session_id,
+                    status_message_id.clone(),
+                    Some(String::from(if rejection_error.is_some() {
+                        "context_compaction_rejected"
+                    } else {
+                        "context_compaction"
+                    })),
+                );
+            }
             Err(error) => {
                 eprintln!("[webui-service] context compaction finish failed: {error}");
-                let _ = apply_session_phase(
-                    &task_app,
-                    &task_state,
-                    session_id,
-                    SessionRunPhase::Failed,
-                );
             }
         }
     };
-    spawn_registered_active_stream_task(
+    if let Err(error) = spawn_registered_active_stream_task(
         &state,
         session_id,
         active_stream_task_id,
         None,
         task_future,
-    )?;
+    ) {
+        eprintln!("[webui-service] register context compaction stream task failed: {error}");
+        // registration_error_text is committed into the durable failed compaction boundary.
+        // registration_error_text 被提交到可持久化的压缩失败边界。
+        let registration_error_text = error.to_string();
+        // failure_commit combines exact launch ownership, domain failure state, and kernel closure.
+        // failure_commit 组合精确启动所有权、领域失败状态与内核关闭。
+        let failure_commit = commit_stream_task_registration_failure(
+            &state,
+            session_id,
+            expected_kernel_generation,
+            &error,
+            |service_state| {
+                // workspace owns the Running compaction section installed by the cold commit.
+                // workspace 持有冷提交安装的 Running 压缩分段。
+                let workspace = service_state
+                    .workspace_snapshot
+                    .as_mut()
+                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+                apply_webui_context_compaction_failure_to_workspace(
+                    workspace,
+                    session_id,
+                    previous_phase,
+                    &registration_failure_status_message_id,
+                    &registration_failure_budget_note,
+                    &registration_failure_trigger,
+                    &registration_error_text,
+                )?;
+                // phase_event is generated inside the exact launch-ownership transaction.
+                // phase_event 在精确启动所有权事务内部生成。
+                apply_session_phase_to_state(service_state, session_id, previous_phase)
+            },
+            |service_state, phase_event| {
+                // workspace_snapshot is projected only after the generic boundary terminalizes the exact kernel generation.
+                // workspace_snapshot 仅在通用边界终结精确内核代际后投影。
+                let workspace_snapshot = service_state
+                    .workspace_snapshot
+                    .as_ref()
+                    .ok_or_else(|| String::from("workspace snapshot is not ready"))?
+                    .clone();
+                Ok((workspace_snapshot, phase_event))
+            },
+        );
+        match failure_commit {
+            Ok(StreamTaskLaunchFailureCommit::Committed((snapshot, phase_event))) => {
+                project_committed_context_compaction_surfaces(
+                    &app,
+                    &state,
+                    session_id,
+                    phase_event,
+                );
+                spawn_context_compaction_persist_task(
+                    state.clone(),
+                    registration_failure_controller_runtime,
+                    snapshot,
+                    session_id,
+                    registration_failure_status_message_id,
+                    Some(String::from("context_compaction_registration_failed")),
+                );
+                webui_trace(
+                    "context_compaction_registration_failure_handled",
+                    format!("session={session_id} outcome=domain_failure_committed"),
+                );
+            }
+            Ok(StreamTaskLaunchFailureCommit::Skipped(outcome)) => webui_trace(
+                "context_compaction_registration_failure_handled",
+                format!("session={session_id} outcome={outcome:?}"),
+            ),
+            Err(cleanup_error) => eprintln!(
+                "[webui-service] context compaction registration failure projection failed: {cleanup_error}"
+            ),
+        }
+        return Err(error.to_string());
+    }
     Ok(())
 }
 
@@ -241,19 +333,16 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
         ExecutionStreamEvent::RequestStarted { .. } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
         }
-        ExecutionStreamEvent::ThinkingDelta { delta, .. } => append_stream_delta_record(
+        ExecutionStreamEvent::ThinkingDelta { delta, .. } => append_stream_content_delta(
             app,
             state,
             session_id,
-            &mut record_ids.thinking_record_id,
-            SessionMessageRecordKind::ThinkingOutput,
-            "思考",
+            record_ids,
+            StreamContentKind::Thinking,
             &delta,
-            true,
         ),
         ExecutionStreamEvent::ThinkingCompleted { .. } => {
-            collapse_streaming_thinking(app, state, session_id, record_ids)?;
-            apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
+            complete_streaming_thinking_phase(app, state, session_id, record_ids)
         }
         ExecutionStreamEvent::OutputDelta { delta, .. } => {
             append_webui_context_compaction_output_delta(
@@ -268,8 +357,7 @@ pub(crate) fn apply_webui_context_compaction_stream_event(
             )
         }
         ExecutionStreamEvent::RuntimeEvent { event, .. } => {
-            append_runtime_event_projection(app, state, session_id, &event)?;
-            acknowledge_runtime_event_projection_barrier(&event);
+            append_runtime_event_projection_and_release_barrier(app, state, session_id, &event)?;
             Ok(())
         }
         ExecutionStreamEvent::ConversationCheckpoint { .. } => Ok(()),

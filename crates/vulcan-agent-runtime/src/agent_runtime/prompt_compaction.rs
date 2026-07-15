@@ -648,6 +648,7 @@ fn build_prompt_compaction_launch_request(
             node_id: vulcan_session_core::SessionNodeId::from(session_id),
         },
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::context_compaction(),
+        conversation_hook_turn_id: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         subagent_prompt_context: None,

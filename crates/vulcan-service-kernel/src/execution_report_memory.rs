@@ -3,7 +3,9 @@
 
 use vulcan_agent_runtime::{
     ExecutionPromptPurpose, ExecutionRunReport,
-    agent_runtime::conversation_hooks::ConversationCompletionRequest,
+    agent_runtime::conversation_hooks::{
+        ConversationCompletionRequest, ConversationTurnCompletionStatus,
+    },
     conversation_protocol::SessionConversationState,
 };
 use vulcan_core::types::ProviderUsageSnapshot;
@@ -150,6 +152,153 @@ pub(super) struct TerminalReportMemoryApply {
     /// Completed-turn hook request that should run asynchronously.
     /// 需要异步执行的完成回合 hook 请求。
     pub(super) completion_request: Option<ConversationCompletionRequest>,
+}
+
+/// Exact conversation-hook side effect committed for one terminal report.
+/// 单个终态报告提交的精确会话 Hook 副作用。
+enum TerminalConversationHookCommit {
+    /// This report does not own a completed or terminated hook action.
+    /// 此报告不持有完成或终止 Hook 操作。
+    None,
+    /// A completed-turn request was prepared with its real logical turn identity.
+    /// 已使用真实逻辑回合标识准备完成回合请求。
+    Completion {
+        /// Stable logical turn identifier consumed by final context injection state.
+        /// 由最终上下文注入状态消费的稳定逻辑回合标识。
+        turn_id: String,
+        /// Prepared asynchronous completed-turn hook request.
+        /// 已准备的异步完成回合 Hook 请求。
+        request: ConversationCompletionRequest,
+    },
+    /// The failed logical turn was removed and its termination hook was dispatched.
+    /// 失败逻辑回合已移除且其终止 Hook 已分发。
+    Terminated,
+}
+
+/// Exclusive terminal conversation-hook action selected from report ownership and outcome.
+/// 根据报告所有权与结果选择的互斥终态会话 Hook 操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalConversationHookAction {
+    /// The report owns no logical main-session hook transition.
+    /// 报告不持有主会话逻辑 Hook 转换。
+    None,
+    /// A successful report prepares completed-turn dispatch.
+    /// 成功报告准备完成回合分发。
+    Complete,
+    /// A failed report terminates the logical turn.
+    /// 失败报告终止逻辑回合。
+    Terminate,
+}
+
+impl TerminalConversationHookAction {
+    /// Selects one exclusive action from authoritative terminal facts.
+    /// 根据权威终态事实选择一个互斥操作。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `is_main_session` proves ownership, `is_success` is the report result, and `owns_hook_turn` proves hook participation.
+    /// `is_main_session` 证明所有权，`is_success` 是报告结果，`owns_hook_turn` 证明 Hook 参与。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns exactly one action without permitting contradictory completion and termination.
+    /// 返回唯一操作，不允许同时完成与终止的矛盾状态。
+    fn from_terminal_facts(is_main_session: bool, is_success: bool, owns_hook_turn: bool) -> Self {
+        if !is_main_session || !owns_hook_turn {
+            Self::None
+        } else if is_success {
+            Self::Complete
+        } else {
+            Self::Terminate
+        }
+    }
+}
+
+/// Immutable facts required to commit one terminal conversation-hook action.
+/// 提交单个终态会话 Hook 操作所需的不可变事实。
+struct TerminalConversationHookRequest<'a> {
+    /// Exact regular session receiving the terminal report.
+    /// 接收终态报告的精确普通会话。
+    session_id: SessionId,
+    /// Authoritative owning project projected into hook payloads.
+    /// 投影到 Hook 载荷中的权威所属项目。
+    project_id: Option<String>,
+    /// Visible assistant output supplied to the completion hook.
+    /// 提供给完成 Hook 的可见助手输出。
+    assistant_content: &'a str,
+    /// Provider request count recorded by the finished run.
+    /// 已结束运行记录的 Provider 请求次数。
+    provider_request_count: usize,
+    /// Final conversation state supplied to completed-turn hooks.
+    /// 提供给完成回合 Hook 的最终会话状态。
+    conversation_state: &'a SessionConversationState,
+    /// Completion-gate status that decides whether the logical turn is final.
+    /// 决定逻辑回合是否终结的完成闸门状态。
+    completion_status: ConversationTurnCompletionStatus,
+    /// Number of descendant subagents still blocking final completion.
+    /// 仍阻止最终完成的后代子代理数量。
+    pending_subagent_count: usize,
+    /// Exclusive logical-turn action selected before hook runtime locking.
+    /// 在锁定 Hook 运行时前选择的互斥逻辑回合操作。
+    action: TerminalConversationHookAction,
+}
+
+/// Commits the exact terminal conversation-hook action before workspace state becomes visible.
+/// 在工作区状态可见前提交精确的终态会话 Hook 操作。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` owns the retained hook runtime and `request` contains authoritative terminal facts.
+/// `agent_runtime` 持有保留 Hook 运行时，`request` 包含权威终态事实。
+///
+/// # Returns
+/// 返回值
+/// Returns the strongly typed committed action, or an explicit hook-runtime lock diagnostic.
+/// 返回强类型已提交操作，或明确的 Hook 运行时锁诊断。
+fn commit_terminal_conversation_hook(
+    agent_runtime: &AgentRuntimeBridge,
+    request: TerminalConversationHookRequest<'_>,
+) -> Result<TerminalConversationHookCommit, String> {
+    if request.action == TerminalConversationHookAction::Complete {
+        // hook_runtime must commit logical-turn ownership before workspace terminal state is published.
+        // hook_runtime 必须在工作区终态发布前提交逻辑回合所有权。
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        // turn_id and completion_request are produced atomically from the same retained logical turn.
+        // turn_id 与 completion_request 由同一个保留逻辑回合原子地产生。
+        let (turn_id, completion_request) = hook_runtime
+            .prepare_turn_completion_dispatch_with_status(
+                request.session_id,
+                request.project_id,
+                request.assistant_content,
+                request.provider_request_count,
+                request.conversation_state,
+                request.completion_status,
+                request.pending_subagent_count,
+            );
+        return Ok(TerminalConversationHookCommit::Completion {
+            turn_id,
+            request: completion_request,
+        });
+    }
+    if request.action == TerminalConversationHookAction::Terminate {
+        // hook_runtime termination is part of the same terminal ownership commit, never best-effort cleanup.
+        // hook_runtime 终止属于同一终态所有权提交，绝不是尽力而为的清理。
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        hook_runtime.terminate_turn(
+            request.session_id,
+            request.project_id,
+            "execution_failed",
+            request.provider_request_count,
+        );
+        return Ok(TerminalConversationHookCommit::Terminated);
+    }
+    Ok(TerminalConversationHookCommit::None)
 }
 
 /// Applies a TaskSession terminal report without rebuilding the full WebUI workbench.
@@ -420,52 +569,45 @@ pub(super) fn apply_execution_report_to_memory(
                 &report,
             )?;
             let conversation_state = runtime_state.conversation_state.clone();
-            let should_dispatch_completion_hook = is_main_session
-                && apply_result.is_success
-                && (runs_completed_turn_hooks || completion_gate.has_active_hook_turn);
-            let should_terminate_completion_hook = is_main_session
-                && !apply_result.is_success
-                && (runs_completed_turn_hooks || completion_gate.has_active_hook_turn);
+            // hook_action encodes the only legal logical-turn transition for this terminal report.
+            // hook_action 编码此终态报告唯一合法的逻辑回合转换。
+            let hook_action = TerminalConversationHookAction::from_terminal_facts(
+                is_main_session,
+                apply_result.is_success,
+                runs_completed_turn_hooks || completion_gate.has_active_hook_turn,
+            );
+            // completion_status freezes the inspected gate decision for hook commit and context consumption.
+            // completion_status 固化已检查的闸门决策，供 Hook 提交与上下文消费共同使用。
             let completion_status = completion_gate.completion_status();
-            if should_dispatch_completion_hook {
-                let hook_turn_id =
-                    if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
-                        let (hook_turn_id, request) = hook_runtime
-                        .prepare_turn_completion_dispatch_with_status(
-                        session_id,
-                        project_id.clone(),
-                        report.assistant_output.as_deref().unwrap_or(
-                            "The model completed the run but did not return visible text output.",
-                        ),
-                        report.provider_request_count,
-                        &conversation_state,
-                        completion_status,
-                        completion_gate.pending_subagent_count,
-                    );
-                        completion_request = Some(request);
-                        hook_turn_id
-                    } else {
-                        String::new()
-                    };
+            // hook_commit makes logical-turn ownership explicit before any workspace mutation is installed.
+            // hook_commit 在安装任何工作区变更前显式提交逻辑回合所有权。
+            let hook_commit = commit_terminal_conversation_hook(
+                agent_runtime,
+                TerminalConversationHookRequest {
+                    session_id,
+                    project_id,
+                    assistant_content: report.assistant_output.as_deref().unwrap_or(
+                        "The model completed the run but did not return visible text output.",
+                    ),
+                    provider_request_count: report.provider_request_count,
+                    conversation_state: &conversation_state,
+                    completion_status,
+                    pending_subagent_count: completion_gate.pending_subagent_count,
+                    action: hook_action,
+                },
+            )?;
+            if let TerminalConversationHookCommit::Completion { turn_id, request } = hook_commit {
+                completion_request = Some(request);
                 if completion_status.is_final() {
                     runtime_state
                         .context_injection_state
-                        .consume_turn(&hook_turn_id, &now);
+                        .consume_turn(&turn_id, &now);
                     runtime_state.vmm_profile_sync.record_completed_turn();
                     let profile_sync = runtime_state.vmm_profile_sync.clone();
                     agent_runtime
                         .vmm_hook_runtime
-                        .store_profile_sync_state(session_id, profile_sync);
+                        .store_profile_sync_state(session_id, profile_sync)?;
                 }
-            } else if should_terminate_completion_hook
-                && let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock()
-            {
-                hook_runtime.terminate_turn(
-                    session_id,
-                    project_id,
-                    "execution_failed",
-                    report.provider_request_count,
-                );
             }
             if let Some(session) =
                 active_session_summary_for_session_mut(&mut workspace.sessions, session_id)
@@ -504,7 +646,7 @@ pub(super) fn apply_execution_report_to_memory(
                     .replace_snapshot(build_vmm_hook_config_snapshot(
                         &agent_runtime.provider_configuration,
                         workspace,
-                    ));
+                    ))?;
             }
             let terminal_run_phase = if apply_result.is_success {
                 SessionRunPhase::Ready
@@ -772,12 +914,20 @@ pub(super) fn spawn_conversation_completion_hook_task(
                 );
                 runtime_state.updated_at = now;
             }
-            agent_runtime
-                .vmm_hook_runtime
-                .replace_snapshot(build_vmm_hook_config_snapshot(
-                    &agent_runtime.provider_configuration,
-                    workspace,
-                ));
+            // snapshotRefreshError must not discard already-applied Hook effects or skip persistence.
+            // snapshotRefreshError 不得丢弃已应用的 Hook 副作用，也不得跳过持久化。
+            if let Err(snapshot_refresh_error) =
+                agent_runtime
+                    .vmm_hook_runtime
+                    .replace_snapshot(build_vmm_hook_config_snapshot(
+                        &agent_runtime.provider_configuration,
+                        workspace,
+                    ))
+            {
+                eprintln!(
+                    "[webui-service] failed to refresh VMM hook runtime after completed-turn effects for session {session_id}: {snapshot_refresh_error}"
+                );
+            }
             workspace.clone()
         };
         if let Err(error) = persist_workspace_session_update(
@@ -791,4 +941,31 @@ pub(super) fn spawn_conversation_completion_hook_task(
             eprintln!("[webui-service] persist completed-turn hook effects failed: {error}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies terminal hook ownership selects one exclusive action for every outcome.
+    /// 验证终态 Hook 所有权为每种结果选择唯一互斥操作。
+    #[test]
+    fn terminal_conversation_hook_action_is_exclusive() {
+        assert_eq!(
+            TerminalConversationHookAction::from_terminal_facts(true, true, true),
+            TerminalConversationHookAction::Complete
+        );
+        assert_eq!(
+            TerminalConversationHookAction::from_terminal_facts(true, false, true),
+            TerminalConversationHookAction::Terminate
+        );
+        assert_eq!(
+            TerminalConversationHookAction::from_terminal_facts(true, true, false),
+            TerminalConversationHookAction::None
+        );
+        assert_eq!(
+            TerminalConversationHookAction::from_terminal_facts(false, true, true),
+            TerminalConversationHookAction::None
+        );
+    }
 }

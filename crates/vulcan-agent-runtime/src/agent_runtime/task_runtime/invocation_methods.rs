@@ -8,8 +8,10 @@ impl TaskRuntime {
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
+        // backend is the exact handler registered for the current controller session.
+        // backend 是为当前控制器会话注册的精确处理器。
         let backend = self
-            .backend_for_session(current_session_id)
+            .backend_for_session(current_session_id)?
             .ok_or_else(|| {
                 format!(
                     "The current session `{}` does not have a task backend installed, so the subtask cannot run.",
@@ -66,8 +68,10 @@ impl TaskRuntime {
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
+        // backend is the exact handler registered for the current controller session.
+        // backend 是为当前控制器会话注册的精确处理器。
         let backend = self
-            .backend_for_session(current_session_id)
+            .backend_for_session(current_session_id)?
             .ok_or_else(|| {
                 format!(
                     "The current session `{}` does not have a task backend installed, so the subagent cannot run.",
@@ -421,7 +425,9 @@ impl TaskRuntime {
         let include_models = request.includes("models");
         let include_modes = request.includes("modes");
         let include_runtime = request.includes("runtime");
-        let model_context = self.execution_context_for_session(current_session_id);
+        // model_context is the exact registered runtime context used by every model-facing section.
+        // model_context 是全部模型相关分区共同使用的精确已注册运行时上下文。
+        let model_context = self.execution_context_for_session(current_session_id)?;
         let agents = if include_agents {
             self.agent_orchestration_info_agents(&request, model_context.as_ref())?
         } else {

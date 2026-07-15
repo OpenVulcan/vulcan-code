@@ -27,6 +27,7 @@ use reqwest::header::HeaderMap;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::task::AbortHandle;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::provider::VulcanStreamingProviderAdapter;
 use vulcan_core::tool::AllowAllToolPolicy;
@@ -51,6 +52,45 @@ pub(crate) struct PreparedProviderTransportAdapterInputs {
     /// Mirrored provider-visible tool definitions reused by the concrete Provider adapter.
     /// 被具体 Provider 适配器复用的镜像 Provider 可见工具定义集合。
     pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
+}
+
+/// Aborts one spawned Provider controller task when its owning output stream disappears.
+/// 当持有输出流消失时，中止对应已派生 Provider 控制器任务。
+struct AbortProviderControllerOnDrop {
+    /// Exact abort authority for the controller task owned by the current stream instance.
+    /// 当前流实例所持控制器任务的精确中止权限。
+    handle: AbortHandle,
+}
+
+impl AbortProviderControllerOnDrop {
+    /// Creates one stream-scoped abort owner for a spawned Provider controller task.
+    /// 为已派生 Provider 控制器任务创建一个流作用域中止所有者。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `handle` identifies the exact controller task whose lifetime must not outlive the output stream.
+    /// `handle` 标识生命周期不得超过输出流的精确控制器任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A guard that aborts the task when the owning stream scope is dropped.
+    /// 返回在持有流作用域被丢弃时中止任务的守卫。
+    fn new(handle: AbortHandle) -> Self {
+        Self { handle }
+    }
+}
+
+impl Drop for AbortProviderControllerOnDrop {
+    /// Aborts the owned controller task when stream execution leaves its scope.
+    /// 当流执行离开其作用域时中止所持控制器任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value; aborting an already completed task is a harmless no-op.
+    /// 不返回值；中止已经完成的任务是无害的空操作。
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
 }
 
 /// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the workbench layer.
@@ -206,13 +246,22 @@ where
                         }
                     }
                 };
-                drop(task_backend_guard);
+                // backendReleaseResult is authoritative cleanup evidence required before retry or completion handling.
+                // backendReleaseResult 是进入重试或完成处理前所需的权威清理证据。
+                let backend_release_result = task_backend_guard.release();
 
                 while let Ok(item) = attempt_receiver.try_recv() {
                     if let Ok(delta) = &item {
                         unsafe_delta_seen |= provider_delta_makes_retry_unsafe(delta);
                     }
                     let _ = task_sender.send(item);
+                }
+
+                if let Err(error) = backend_release_result {
+                    let _ = task_sender.send(Err(format!(
+                        "The task backend could not be released after the provider attempt: {error}"
+                    )));
+                    break;
                 }
 
                 match attempt_result {
@@ -317,6 +366,10 @@ where
                 }
             }
         });
+        // controllerTaskAbortGuard binds the spawned controller lifetime to this exact output stream.
+        // controllerTaskAbortGuard 将已派生控制器生命周期绑定到当前精确输出流。
+        let _controller_task_abort_guard =
+            AbortProviderControllerOnDrop::new(controller_task.abort_handle());
         drop(live_sender);
 
         while let Some(item) = live_receiver.recv().await {
@@ -405,4 +458,49 @@ where
         tool_request_rejection_all_tools,
         tool_request_rejection_tool_ids,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    //! Provider controller stream-ownership tests.
+    //! Provider 控制器流所有权测试。
+
+    use super::*;
+    use tokio::sync::Notify;
+
+    /// Verifies dropping the stream-scoped guard cancels its still-running controller task.
+    /// 验证丢弃流作用域守卫会取消其仍在运行的控制器任务。
+    ///
+    /// # Returns
+    /// 返回值
+    /// This test returns no value and fails if the controller task survives owner teardown.
+    /// 此测试无返回值；若控制器任务在所有者销毁后仍存活则测试失败。
+    #[tokio::test]
+    async fn provider_controller_abort_guard_cancels_owned_task_on_drop() {
+        // taskStarted confirms the spawned controller reached its pending body before cancellation.
+        // taskStarted 确认已派生控制器在取消前已经进入等待主体。
+        let task_started = Arc::new(Notify::new());
+        // taskStartedSignal transfers the exact start notification into the spawned task.
+        // taskStartedSignal 将精确启动通知转移到已派生任务中。
+        let task_started_signal = Arc::clone(&task_started);
+        // controllerTask models a controller that would run forever without stream-owned cancellation.
+        // controllerTask 模拟在没有流所有权取消时会永久运行的控制器。
+        let controller_task = tokio::spawn(async move {
+            task_started_signal.notify_one();
+            std::future::pending::<()>().await;
+        });
+        // controllerTaskAbortGuard owns cancellation for the exact spawned task.
+        // controllerTaskAbortGuard 持有精确已派生任务的取消责任。
+        let controller_task_abort_guard =
+            AbortProviderControllerOnDrop::new(controller_task.abort_handle());
+        task_started.notified().await;
+
+        drop(controller_task_abort_guard);
+        // joinError proves the owned task terminated through cancellation rather than normal completion.
+        // joinError 证明所持任务通过取消终止，而不是正常完成。
+        let join_error = controller_task
+            .await
+            .expect_err("dropping the stream owner must cancel the controller task");
+        assert!(join_error.is_cancelled());
+    }
 }

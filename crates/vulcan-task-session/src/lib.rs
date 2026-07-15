@@ -357,7 +357,7 @@ mod tests {
             store
                 .load_context(task_session_id)
                 .expect("task context should load"),
-            Some(context)
+            Some(context.clone())
         );
 
         let compacted_context = SessionContextDocument {
@@ -373,14 +373,37 @@ mod tests {
             tool_catalog_snapshot: json!({ "tools": ["task"] }),
             provider_request_preview: None,
         };
-        store
-            .save_compacted_context(compacted_context.clone())
-            .expect("compacted task context should save");
+        assert!(
+            store
+                .save_compacted_context_if_current(&context, compacted_context.clone())
+                .expect("current compacted task context should save")
+        );
         assert_eq!(
             store
                 .load_context(task_session_id)
                 .expect("compacted task context should load"),
-            Some(compacted_context)
+            Some(compacted_context.clone())
+        );
+        // newerContext represents a resumed task write that supersedes the completed run being compacted.
+        // newerContext 表示一次已替代当前待压缩完成运行的续跑写入。
+        let newer_context = SessionContextDocument {
+            conversation_state: json!({ "messages": [{ "role": "user", "content": "new run" }] }),
+            compaction_anchor: None,
+            ..compacted_context.clone()
+        };
+        store
+            .save_context(newer_context.clone())
+            .expect("newer task context should save");
+        assert!(
+            !store
+                .save_compacted_context_if_current(&compacted_context, compacted_context.clone(),)
+                .expect("stale compaction should be rejected without a storage error")
+        );
+        assert_eq!(
+            store
+                .load_context(task_session_id)
+                .expect("newer task context should remain loadable"),
+            Some(newer_context)
         );
         let checkpoint = vulcan_session_core::SessionCompactionCheckpoint {
             checkpoint_id: "checkpoint-1".to_string(),

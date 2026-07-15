@@ -211,6 +211,9 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
     )
     .expect("plan execution prompt should start");
     let precheck_outcome = start.precheck_request.clone().skip();
+    // expected_hook_turn_id is the validated precheck correlation that must survive request construction.
+    // expected_hook_turn_id 是必须在请求构建后保留的已验证预检关联。
+    let expected_hook_turn_id = precheck_outcome.turn_id.clone();
     let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
         &mut runtime_state,
         SharedPromptTurnContinueInput {
@@ -231,6 +234,10 @@ fn hidden_model_guidance_stays_out_of_visible_transcript() {
         .join("\n");
 
     assert_eq!(transcript_text, "执行计划");
+    assert_eq!(
+        continuation.request.conversation_hook_turn_id.as_deref(),
+        Some(expected_hook_turn_id.as_str())
+    );
     assert!(continuation.request.prompt.contains("执行计划"));
     assert!(
         continuation

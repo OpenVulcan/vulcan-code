@@ -376,24 +376,66 @@ fn mailbox_event_payload_text(mailbox_event: &Value) -> String {
     serde_json::to_string_pretty(mailbox_event).unwrap_or_else(|_| mailbox_event.to_string())
 }
 
-/// Updates the parent-session wait_agent guard from provider runtime tool events.
-/// 根据 Provider 运行时工具事件更新父会话 wait_agent 等待闸门。
+/// Describes whether one wait-agent runtime event changed retained coordination state.
+/// 描述单条 wait-agent 运行时事件是否修改了保留协调状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WaitAgentRuntimeStateCommit {
+    /// The event is unrelated to wait-agent coordination.
+    /// 该事件与 wait-agent 协调无关。
+    Ignored,
+    /// The exact active root task committed the coordination update.
+    /// 精确活跃根任务已提交协调更新。
+    Committed,
+    /// A replacement root task owns the session, so the stale event was rejected.
+    /// 替代根任务已持有会话，因此旧事件被拒绝。
+    Superseded,
+}
+
+/// Updates retained wait-agent coordination state for one exact active root task.
+/// 为单个精确活跃根任务更新保留的 wait-agent 协调状态。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the active-stream registry, wait-agent coordination, kernels, and workspace mirror.
+/// `state` 持有活跃流注册表、wait-agent 协调状态、内核与工作区镜像。
+/// `session_id` identifies the root session receiving the runtime event.
+/// `session_id` 标识接收运行时事件的根会话。
+/// `active_stream_task_id` identifies the exact root task allowed to commit coordination state.
+/// `active_stream_task_id` 标识获准提交协调状态的精确根任务。
+/// `event` is the authoritative runtime tool lifecycle event emitted by that task.
+/// `event` 是该任务发出的权威运行时工具生命周期事件。
+///
+/// # Returns
+/// # 返回值
+/// Returns an explicit commit outcome, or an error when the shared state lock is unavailable.
+/// 返回明确的提交结果；共享状态锁不可用时返回错误。
 pub(crate) fn update_webui_wait_agent_runtime_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
+    active_stream_task_id: Uuid,
     event: &RuntimeEvent,
-) {
+) -> Result<WaitAgentRuntimeStateCommit, String> {
     let Some(tool_name) = runtime_event_tool_name(event) else {
-        return;
+        return Ok(WaitAgentRuntimeStateCommit::Ignored);
     };
-    let Ok(mut guard) = state.lock() else {
-        return;
-    };
+    if tool_name != "wait_agent"
+        || !matches!(
+            event.kind,
+            RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished
+        )
+    {
+        return Ok(WaitAgentRuntimeStateCommit::Ignored);
+    }
+    // The guard keeps exact task ownership stable across every coordination and workspace mutation.
+    // 该锁守卫保证精确任务所有权在全部协调状态与工作区变更期间保持稳定。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if !active_stream_task_matches_id(&guard, session_id, active_stream_task_id) {
+        return Ok(WaitAgentRuntimeStateCommit::Superseded);
+    }
     match (tool_name, event.kind) {
         ("wait_agent", RuntimeEventKind::ToolStarted) => {
-            guard
-                .parent_sessions_waiting_for_subagents
-                .insert(session_id);
             let scope_id = wait_agent_scope_id(event);
             let kernel = session_runtime_kernel_mut(&mut guard, session_id);
             let removed_stale_wait_scopes = kernel.clear_wait_scopes();
@@ -403,19 +445,17 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
                     format!("session={session_id} removed_wait_scopes={removed_stale_wait_scopes}"),
                 );
             }
-            if let Err(error) = kernel.register_wait_scope(
-                scope_id,
-                Vec::<String>::new(),
-                current_unix_millis_u64(),
-            ) {
-                webui_trace(
-                    "wait_agent_scope_register_failed",
-                    format!("session={session_id} error={}", error.message),
-                );
-            }
+            // Clearing every prior scope guarantees the replacement identifier is unique under the kernel contract.
+            // 清空全部旧范围可依据内核契约保证替代标识唯一。
+            kernel
+                .register_wait_scope(scope_id, Vec::<String>::new(), current_unix_millis_u64())
+                .expect("cleared wait scopes guarantee a unique replacement scope identifier");
             kernel
                 .input_queue_mut()
                 .accept_mailbox_delivery_for_current_turn();
+            guard
+                .parent_sessions_waiting_for_subagents
+                .insert(session_id);
             sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
         }
         ("wait_agent", RuntimeEventKind::ToolFinished) => {
@@ -428,8 +468,9 @@ pub(crate) fn update_webui_wait_agent_runtime_state(
             }
             sync_webui_session_runtime_kernel_to_workspace_state(&mut guard, session_id);
         }
-        _ => {}
+        _ => unreachable!("wait-agent event kind was validated before acquiring state"),
     }
+    Ok(WaitAgentRuntimeStateCommit::Committed)
 }
 
 /// Returns the stable kernel wait-scope id for one wait_agent runtime event.

@@ -3,9 +3,34 @@
 
 use super::*;
 
+mod content_delta;
+mod conversation_checkpoint;
+mod finished;
+mod launch_failure;
 mod prepared;
+mod request_phase;
+mod request_trace;
+mod runtime_event;
+mod stream_exit;
 
+use conversation_checkpoint::handle_conversation_checkpoint_stream_event;
+use finished::{FinishedStreamEventOutcome, handle_finished_stream_event};
+pub(crate) use launch_failure::StreamTaskLaunchFailureCommit;
+#[cfg(test)]
+pub(crate) use launch_failure::StreamTaskLaunchFailureOutcome;
+pub(crate) use launch_failure::{
+    commit_stream_task_registration_failure, handle_pre_registration_stream_task_launch_failure,
+    handle_stream_task_registration_failure,
+};
 use prepared::{PreparedStreamEventAction, handle_prepared_stream_event};
+#[cfg(test)]
+pub(crate) use prepared::{PreparedStreamFailureCommit, commit_prepared_stream_failure};
+use request_phase::{RequestPhaseStreamEvent, handle_request_phase_stream_event};
+use request_trace::StreamRequestTraceState;
+use runtime_event::{handle_runtime_stream_event, runtime_event_hook_policy_for_execution_scope};
+#[cfg(test)]
+pub(crate) use stream_exit::StreamTaskExitOutcome;
+pub(crate) use stream_exit::{StreamTaskExitReason, handle_stream_task_exit};
 
 /// Spawns one background task that forwards agent runtime stream events into the WebUI state.
 /// 启动一个后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
@@ -52,6 +77,43 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
     auto_compaction_already_attempted: bool,
 ) {
     let session_id = request.session_id;
+    // expected_kernel_generation binds any pre-registration contract failure to the exact active turn.
+    // expected_kernel_generation 将任意预注册契约失败绑定到精确活动回合。
+    let expected_kernel_generation = state
+        .lock()
+        .ok()
+        .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
+    // runtime_event_hook_policy captures the request-authoritative Hook scope before the request moves into the task.
+    // runtime_event_hook_policy 在请求移入任务前捕获由请求权威确定的 Hook 范围。
+    let runtime_event_hook_policy = runtime_event_hook_policy_for_execution_scope(
+        &request.execution_scope,
+        request.runtime_policy.hooks_enabled,
+        request.conversation_hook_turn_id.as_deref(),
+    );
+    let runtime_event_hook_policy = match runtime_event_hook_policy {
+        Ok(policy) => policy,
+        Err(error) => {
+            eprintln!("[webui-service] runtime event Hook correlation rejected: {error}");
+            // cleanup_outcome records how the pre-registration contract failure terminalized the session.
+            // cleanup_outcome 记录预注册契约失败如何终态化该会话。
+            let cleanup_outcome = handle_pre_registration_stream_task_launch_failure(
+                &app,
+                &state,
+                session_id,
+                expected_kernel_generation,
+            );
+            match cleanup_outcome {
+                Ok(outcome) => webui_trace(
+                    "stream_hook_correlation_rejected",
+                    format!("session={session_id} cleanup={outcome:?} error={error}"),
+                ),
+                Err(cleanup_error) => eprintln!(
+                    "[webui-service] runtime event Hook correlation cleanup failed: {cleanup_error}; original error: {error}"
+                ),
+            }
+            return;
+        }
+    };
     let session_goal_id = request
         .session_goal_context
         .as_ref()
@@ -62,10 +124,6 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         format!("session={session_id}"),
     );
     webui_trace("stream_task_spawn", format!("session={session_id}"));
-    let expected_kernel_generation = state
-        .lock()
-        .ok()
-        .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
     let task_state = state.clone();
     let registration_failure_app = app.clone();
     let registration_failure_state = state.clone();
@@ -77,7 +135,6 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         );
         webui_trace("stream_task_entered", format!("session={session_id}"));
         let mut record_ids = SessionStreamingRecordIds::default();
-        let mut reached_finished_event = false;
         // providerTelemetryGuard closes an active physical request even when this task future is aborted.
         // providerTelemetryGuard 即使当前任务 Future 被中止，也会关闭活动真实请求。
         let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(task_state.clone());
@@ -142,12 +199,17 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 current_unix_millis_value().saturating_sub(stream_task_started_at)
             ),
         );
-        // These request-local timers isolate provider latency from UI persistence latency.
-        // 这些请求局部计时器用于区分 provider 延迟和界面持久化延迟。
-        let mut current_provider_request_started_at: Option<i128> = None;
-        let mut first_event_after_request_logged = false;
-        let mut first_visible_delta_logged = false;
-        while let Some(event) = stream.next().await {
+        // This request-local state machine keeps latency markers consistent across every stream event kind.
+        // 该请求局部状态机用于确保所有流事件类型的延迟标记保持一致。
+        let mut request_trace_state = StreamRequestTraceState::new(stream_task_started_at);
+        // stream_exit_reason makes every polling-loop terminal path explicit without a shadow completion boolean.
+        // stream_exit_reason 显式表达每条轮询循环终止路径，不再使用影子完成布尔值。
+        let stream_exit_reason = loop {
+            // event is the next ordered runtime item owned by this exact stream generation.
+            // event 是当前精确流代际拥有的下一条有序运行时事件。
+            let Some(event) = stream.next().await else {
+                break StreamTaskExitReason::StreamExhausted;
+            };
             if !webui_stream_event_matches_kernel_generation(
                 &task_state,
                 &event,
@@ -163,7 +225,7 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                             .unwrap_or_else(|| String::from("<none>"))
                     ),
                 );
-                break;
+                break StreamTaskExitReason::StaleKernelGeneration;
             }
             match event {
                 ExecutionStreamEvent::Prepared(preparation) => {
@@ -190,11 +252,13 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                 }
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
                     session_id,
+                    provider_family,
                     snapshot,
                 } => {
                     if let Err(error) = record_webui_provider_request_checkpoint(
                         &controller_runtime,
                         session_id,
+                        &provider_family,
                         &snapshot,
                     ) {
                         eprintln!("[webui-service] provider request checkpoint failed: {error}");
@@ -213,634 +277,138 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
                     }
                 }
                 ExecutionStreamEvent::RequestReady { session_id } => {
-                    webui_after_precheck_trace(
-                        "after_precheck_30_request_ready",
-                        format!(
-                            "session={session_id} elapsed_ms_since_task={}",
-                            current_unix_millis_value().saturating_sub(stream_task_started_at)
-                        ),
-                    );
-                    webui_trace(
-                        "stream_provider_request_ready",
-                        format!(
-                            "session={session_id} elapsed_ms_since_task={}",
-                            current_unix_millis_value().saturating_sub(stream_task_started_at)
-                        ),
-                    );
-                    if let Err(error) = apply_session_phase(
+                    handle_request_phase_stream_event(
                         &app,
                         &task_state,
+                        &mut request_trace_state,
                         session_id,
-                        SessionRunPhase::Requesting,
-                    ) {
-                        eprintln!("[webui-service] apply request-ready phase failed: {error}");
-                    }
+                        active_stream_task_id,
+                        stream_task_started_at,
+                        RequestPhaseStreamEvent::RequestReady,
+                    );
                 }
                 ExecutionStreamEvent::WireRequestReady { session_id } => {
-                    webui_after_precheck_trace(
-                        "after_precheck_31_wire_request_ready",
-                        format!(
-                            "session={session_id} elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                            current_provider_request_started_at
-                                .map(|started_at| current_unix_millis_value()
-                                    .saturating_sub(started_at)
-                                    .to_string())
-                                .unwrap_or_else(|| String::from("<unknown>")),
-                            current_unix_millis_value().saturating_sub(stream_task_started_at)
-                        ),
-                    );
-                    webui_trace(
-                        "stream_wire_request_ready",
-                        format!(
-                            "session={session_id} elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                            current_provider_request_started_at
-                                .map(|started_at| current_unix_millis_value()
-                                    .saturating_sub(started_at)
-                                    .to_string())
-                                .unwrap_or_else(|| String::from("<unknown>")),
-                            current_unix_millis_value().saturating_sub(stream_task_started_at)
-                        ),
-                    );
-                    if let Err(error) = apply_session_phase(
+                    handle_request_phase_stream_event(
                         &app,
                         &task_state,
+                        &mut request_trace_state,
                         session_id,
-                        SessionRunPhase::Requesting,
-                    ) {
-                        eprintln!("[webui-service] apply wire-request-ready phase failed: {error}");
-                    }
+                        active_stream_task_id,
+                        stream_task_started_at,
+                        RequestPhaseStreamEvent::WireRequestReady,
+                    );
                 }
                 ExecutionStreamEvent::RequestStarted { session_id } => {
-                    current_provider_request_started_at = Some(current_unix_millis_value());
-                    first_event_after_request_logged = false;
-                    first_visible_delta_logged = false;
-                    webui_after_precheck_trace(
-                        "after_precheck_32_request_started",
-                        format!(
-                            "session={session_id} elapsed_ms_since_task={}",
-                            current_unix_millis_value().saturating_sub(stream_task_started_at)
-                        ),
-                    );
-                    webui_trace("stream_request_started", format!("session={session_id}"));
-                    if let Err(error) = apply_session_phase(
+                    handle_request_phase_stream_event(
                         &app,
                         &task_state,
+                        &mut request_trace_state,
                         session_id,
-                        SessionRunPhase::Requesting,
-                    ) {
-                        eprintln!("[webui-service] apply request-started failed: {error}");
-                    }
+                        active_stream_task_id,
+                        stream_task_started_at,
+                        RequestPhaseStreamEvent::RequestStarted,
+                    );
                 }
                 ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
-                    if !first_event_after_request_logged {
-                        first_event_after_request_logged = true;
-                        webui_after_precheck_trace(
-                            "after_precheck_33_first_event_after_request",
-                            format!(
-                                "session={session_id} event=thinking_delta elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                current_unix_millis_value().saturating_sub(stream_task_started_at)
-                            ),
-                        );
-                        webui_trace(
-                            "stream_first_event_after_request",
-                            format!(
-                                "session={session_id} event=thinking_delta elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                current_unix_millis_value().saturating_sub(stream_task_started_at)
-                            ),
-                        );
-                    }
-                    if !first_visible_delta_logged {
-                        first_visible_delta_logged = true;
-                        webui_after_precheck_trace(
-                            "after_precheck_34_first_visible_delta",
-                            format!(
-                                "session={session_id} kind=thinking elapsed_ms_since_request={} chars={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                delta.chars().count()
-                            ),
-                        );
-                        webui_trace(
-                            "stream_first_visible_delta",
-                            format!(
-                                "session={session_id} kind=thinking elapsed_ms_since_request={} chars={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                delta.chars().count()
-                            ),
-                        );
-                    }
-                    if let Err(error) = append_stream_delta_record(
+                    handle_content_delta_stream_event(
                         &app,
                         &task_state,
+                        &mut request_trace_state,
+                        &mut record_ids,
                         session_id,
-                        &mut record_ids.thinking_record_id,
-                        SessionMessageRecordKind::ThinkingOutput,
-                        "思考",
-                        &delta,
-                        true,
-                    ) {
-                        eprintln!("[webui-service] append thinking delta failed: {error}");
-                    }
+                        StreamContentKind::Thinking,
+                        delta,
+                    );
                 }
                 ExecutionStreamEvent::ThinkingCompleted { session_id } => {
-                    if let Err(error) =
-                        collapse_streaming_thinking(&app, &task_state, session_id, &record_ids)
-                    {
-                        eprintln!("[webui-service] complete thinking failed: {error}");
-                    }
-                    if let Err(error) = apply_session_phase(
+                    if let Err(error) = complete_streaming_thinking_phase(
                         &app,
                         &task_state,
                         session_id,
-                        SessionRunPhase::Requesting,
+                        &record_ids,
                     ) {
-                        eprintln!("[webui-service] restore request phase failed: {error}");
+                        eprintln!("[webui-service] complete thinking phase failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::OutputDelta { session_id, delta } => {
-                    if !first_event_after_request_logged {
-                        first_event_after_request_logged = true;
-                        webui_after_precheck_trace(
-                            "after_precheck_33_first_event_after_request",
-                            format!(
-                                "session={session_id} event=output_delta elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                current_unix_millis_value().saturating_sub(stream_task_started_at)
-                            ),
-                        );
-                        webui_trace(
-                            "stream_first_event_after_request",
-                            format!(
-                                "session={session_id} event=output_delta elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                current_unix_millis_value().saturating_sub(stream_task_started_at)
-                            ),
-                        );
-                    }
-                    if !first_visible_delta_logged {
-                        first_visible_delta_logged = true;
-                        webui_after_precheck_trace(
-                            "after_precheck_34_first_visible_delta",
-                            format!(
-                                "session={session_id} kind=output elapsed_ms_since_request={} chars={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                delta.chars().count()
-                            ),
-                        );
-                        webui_trace(
-                            "stream_first_visible_delta",
-                            format!(
-                                "session={session_id} kind=output elapsed_ms_since_request={} chars={}",
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                delta.chars().count()
-                            ),
-                        );
-                    }
-                    if let Err(error) = append_stream_delta_record(
+                    handle_content_delta_stream_event(
                         &app,
                         &task_state,
+                        &mut request_trace_state,
+                        &mut record_ids,
                         session_id,
-                        &mut record_ids.output_record_id,
-                        SessionMessageRecordKind::AssistantOutput,
-                        "输出",
-                        &delta,
-                        false,
-                    ) {
-                        eprintln!("[webui-service] append output delta failed: {error}");
-                    }
+                        StreamContentKind::Output,
+                        delta,
+                    );
                 }
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
-                    if current_provider_request_started_at.is_some()
-                        && !first_event_after_request_logged
-                    {
-                        first_event_after_request_logged = true;
-                        webui_after_precheck_trace(
-                            "after_precheck_33_first_event_after_request",
-                            format!(
-                                "session={session_id} event=runtime.{:?} elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                                event.kind,
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                current_unix_millis_value().saturating_sub(stream_task_started_at)
-                            ),
-                        );
-                        webui_trace(
-                            "stream_first_event_after_request",
-                            format!(
-                                "session={session_id} event=runtime.{:?} elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                                event.kind,
-                                current_provider_request_started_at
-                                    .map(|started_at| current_unix_millis_value()
-                                        .saturating_sub(started_at)
-                                        .to_string())
-                                    .unwrap_or_else(|| String::from("<unknown>")),
-                                current_unix_millis_value().saturating_sub(stream_task_started_at)
-                            ),
-                        );
-                    }
-                    if matches!(
-                        event.kind,
-                        RuntimeEventKind::ToolStarted
-                            | RuntimeEventKind::ToolFinished
-                            | RuntimeEventKind::DelegateStarted
-                            | RuntimeEventKind::DelegateFinished
-                    ) {
-                        webui_trace(
-                            "stream_runtime_event",
-                            format!(
-                                "session={session_id} kind={:?} {}",
-                                event.kind,
-                                runtime_event_trace_detail(&event)
-                            ),
-                        );
-                    }
-                    if is_provider_tool_boundary_runtime_event(&event) {
-                        record_ids.thinking_record_id = None;
-                        record_ids.output_record_id = None;
-                    }
-                    update_webui_wait_agent_runtime_state(&task_state, session_id, &event);
-                    if matches!(event.kind, RuntimeEventKind::ToolStarted)
-                        && let Err(error) = apply_session_phase(
-                            &app,
-                            &task_state,
-                            session_id,
-                            SessionRunPhase::ToolRunning,
-                        )
-                    {
-                        eprintln!("[webui-service] apply tool phase failed: {error}");
-                    }
-                    if matches!(event.kind, RuntimeEventKind::ToolFinished)
-                        && let Err(error) = apply_session_phase(
-                            &app,
-                            &task_state,
-                            session_id,
-                            SessionRunPhase::Requesting,
-                        )
-                    {
-                        eprintln!(
-                            "[webui-service] restore request phase after tool failed: {error}"
-                        );
-                    }
-                    let event_is_main_session = task_state.lock().ok().is_some_and(|guard| {
-                        guard.workspace_snapshot.as_ref().is_some_and(|workspace| {
-                            workspace_session_summary_for_session(workspace, session_id).is_some()
-                        })
-                    });
-                    if event_is_main_session
-                        && let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock()
-                    {
-                        hook_runtime.record_tool_runtime_event(session_id, &event);
-                    }
-                    if let Err(error) = maybe_start_webui_detached_subagent_task_listener(
-                        app.clone(),
-                        task_state.clone(),
-                        controller_runtime.clone(),
-                        agent_runtime.clone(),
-                        session_id,
-                        &event,
-                    ) {
-                        eprintln!(
-                            "[webui-service] start detached subagent listener failed: {error}"
-                        );
-                    }
-                    let subagent_event_consumed = match ingest_webui_subagent_runtime_event(
-                        &app,
-                        &task_state,
-                        &agent_runtime,
-                        session_id,
-                        &event,
-                    ) {
-                        Ok(consumed) => consumed,
-                        Err(error) => {
-                            eprintln!("[webui-service] ingest subagent event failed: {error}");
-                            false
-                        }
-                    };
-                    if !subagent_event_consumed
-                        && let Err(error) =
-                            append_runtime_event_projection(&app, &task_state, session_id, &event)
-                    {
-                        eprintln!("[webui-service] append runtime event failed: {error}");
-                    }
-                    acknowledge_runtime_event_projection_barrier(&event);
-                    let pending_after_runtime_event_started_at = current_unix_millis_value();
-                    match maybe_prepare_next_webui_pending_prompt(
+                    handle_runtime_stream_event(
                         &app,
                         &task_state,
                         &controller_runtime,
                         &agent_runtime,
+                        &mut request_trace_state,
+                        &mut record_ids,
+                        &runtime_event_hook_policy,
                         session_id,
-                        false,
+                        active_stream_task_id,
+                        event,
                     )
-                    .await
-                    {
-                        Ok(started) => {
-                            webui_trace_if_slow(
-                                "pending_prompt_after_runtime_event_slow",
-                                pending_after_runtime_event_started_at,
-                                format!(
-                                    "session={session_id} kind={:?} started={started}",
-                                    event.kind
-                                ),
-                            );
-                            if started {
-                                webui_trace(
-                                    "pending_prompt_started_after_runtime_event",
-                                    format!("session={session_id} kind={:?}", event.kind),
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            eprintln!(
-                                "[webui-service] prepare pending prompt after runtime event failed: {error}"
-                            );
-                        }
-                    }
+                    .await;
                 }
                 ExecutionStreamEvent::ConversationCheckpoint {
                     session_id,
                     conversation_state,
                     last_successful_provider_usage,
                     provider_request_count,
-                } => {
-                    if let Some(usage) = last_successful_provider_usage.as_ref()
-                        && let Err(error) =
-                            cache_live_context_budget_observed_usage(&task_state, session_id, usage)
-                    {
-                        eprintln!(
-                            "[webui-service] live context budget usage update failed: {error}"
-                        );
-                    }
-                    if let Some(goal_context) = request.session_goal_context.as_ref()
-                        && let Err(error) = cache_session_goal_live_usage_from_checkpoint(
-                            &task_state,
-                            session_id,
-                            &conversation_state,
-                            provider_request_count,
-                            true,
-                            &goal_context.goal_id,
-                        )
-                    {
-                        eprintln!("[webui-service] session goal live usage update failed: {error}");
-                    }
-                    if let Err(error) = apply_conversation_checkpoint(
+                } => handle_conversation_checkpoint_stream_event(
+                    &app,
+                    &task_state,
+                    &controller_runtime,
+                    session_id,
+                    conversation_state,
+                    last_successful_provider_usage,
+                    provider_request_count,
+                    request
+                        .session_goal_context
+                        .as_ref()
+                        .map(|goal_context| goal_context.goal_id.as_str()),
+                ),
+                ExecutionStreamEvent::Finished(report) => {
+                    match handle_finished_stream_event(
                         &app,
                         &task_state,
                         &controller_runtime,
-                        session_id,
-                        conversation_state,
-                        last_successful_provider_usage,
-                        provider_request_count,
-                    ) {
-                        eprintln!("[webui-service] apply checkpoint failed: {error}");
-                    }
-                }
-                ExecutionStreamEvent::Finished(report) => {
-                    reached_finished_event = true;
-                    let finished_session_id = report.session_id;
-                    webui_trace(
-                        "stream_finished",
-                        format!(
-                            "session={finished_session_id} provider_requests={} error={} output_chars={}",
-                            report.provider_request_count,
-                            report.error.is_some(),
-                            report
-                                .assistant_output
-                                .as_deref()
-                                .map(str::len)
-                                .unwrap_or(0)
-                        ),
-                    );
-                    let owns_active_stream_entry = match task_state.lock() {
-                        Ok(mut guard) => {
-                            let owns_entry = remove_active_stream_task_if_id(
-                                &mut guard,
-                                finished_session_id,
-                                active_stream_task_id,
-                            )
-                            .is_some();
-                            if owns_entry {
-                                finish_webui_session_kernel_turn(
-                                    &mut guard,
-                                    finished_session_id,
-                                    if report.error.is_some() {
-                                        TurnTerminalStatus::Failed
-                                    } else {
-                                        TurnTerminalStatus::Completed
-                                    },
-                                );
-                            }
-                            owns_entry
-                        }
-                        Err(error) => {
-                            eprintln!(
-                                "[webui-service] finish stream ownership check failed: {error}"
-                            );
-                            false
-                        }
-                    };
-                    if !owns_active_stream_entry {
-                        webui_trace(
-                            "stream_finished_skipped_stale_owner",
-                            format!(
-                                "session={finished_session_id} task_id={active_stream_task_id}"
-                            ),
-                        );
-                        break;
-                    }
-                    if let Err(error) =
-                        record_webui_provider_response_checkpoint(&controller_runtime, &report)
-                    {
-                        eprintln!(
-                            "[webui-service] provider response checkpoint write failed: {error}"
-                        );
-                    }
-                    let goal_elapsed_seconds = current_unix_millis_value()
-                        .saturating_sub(stream_task_started_at)
-                        .checked_div(1_000)
-                        .and_then(|value| i64::try_from(value).ok())
-                        .unwrap_or_default();
-                    if let Err(error) = account_session_goal_from_report(
-                        &task_state,
-                        &controller_runtime,
-                        &report,
-                        goal_elapsed_seconds,
+                        &agent_runtime,
+                        active_stream_task_id,
+                        stream_task_started_at,
+                        report,
                     )
                     .await
                     {
-                        eprintln!("[webui-service] session goal accounting failed: {error}");
-                    }
-                    let terminal_lifecycle = report
-                        .turn_completed_boundary_event(
-                            u64::try_from(current_unix_millis_value()).unwrap_or_default(),
-                        )
-                        .map(|terminal_boundary_event| {
-                            let final_boundary_events = report
-                                .final_assistant_boundary_event(
-                                    u64::try_from(current_unix_millis_value()).unwrap_or_default(),
-                                )
-                                .into_iter()
-                                .collect::<Vec<_>>();
-                            let session_title = report
-                                .preparation
-                                .as_ref()
-                                .map(|preparation| preparation.session_title.clone())
-                                .unwrap_or_else(|| String::from("Untitled"));
-                            (
-                                final_boundary_events,
-                                terminal_boundary_event,
-                                session_title,
-                            )
-                        });
-                    // Measures terminal report projection, including turn stats and final session state.
-                    // 衡量终态报告投影耗时，包括统计行与最终会话状态。
-                    let final_report_apply_started_at = current_unix_millis_value();
-                    let final_report_apply = match apply_execution_report_to_memory(
-                        &app,
-                        &task_state,
-                        &agent_runtime,
-                        report,
-                    ) {
-                        Ok(apply) => Some(apply),
-                        Err(error) => {
-                            eprintln!("[webui-service] apply final report failed: {error}");
-                            None
+                        FinishedStreamEventOutcome::Handled
+                        | FinishedStreamEventOutcome::StaleOwner
+                        | FinishedStreamEventOutcome::OwnershipUnavailable => {
+                            break StreamTaskExitReason::FinishedEventHandled;
                         }
-                    };
-                    webui_trace_if_slow(
-                        "stream_final_report_apply_slow",
-                        final_report_apply_started_at,
-                        format!(
-                            "session={finished_session_id} applied={}",
-                            final_report_apply.is_some()
-                        ),
-                    );
-                    if let (
-                        Some(apply),
-                        Some((final_boundary_events, terminal_boundary_event, session_title)),
-                    ) = (final_report_apply.as_ref(), terminal_lifecycle)
-                        && let Some(project_id) = owning_project_id_for_session(
-                            &apply.workspace_snapshot,
-                            finished_session_id,
-                        )
-                    {
-                        let controller_runtime_for_lifecycle = controller_runtime.clone();
-                        spawn_service_task(async move {
-                            let lifecycle_started_at = current_unix_millis_value();
-                            if let Err(error) = finish_session_external_turn_lifecycle(
-                                &controller_runtime_for_lifecycle,
-                                &project_id,
-                                finished_session_id,
-                                &session_title,
-                                final_boundary_events,
-                                terminal_boundary_event,
-                            ) {
-                                eprintln!(
-                                    "[webui-service] append session terminal boundary failed: {error}"
-                                );
-                            }
-                            webui_trace_if_slow(
-                                "stream_terminal_lifecycle_finish_slow",
-                                lifecycle_started_at,
-                                format!("session={finished_session_id}"),
-                            );
-                        });
                     }
-                    let started_next_prompt = maybe_start_webui_turn_chain_after_finished(
-                        &app,
-                        &task_state,
-                        &controller_runtime,
-                        &agent_runtime,
-                        finished_session_id,
-                    )
-                    .await;
-                    if let Some(completion_request) = final_report_apply
-                        .as_ref()
-                        .and_then(|apply| apply.completion_request.clone())
-                    {
-                        spawn_conversation_completion_hook_task(
-                            app.clone(),
-                            task_state.clone(),
-                            controller_runtime.clone(),
-                            agent_runtime.clone(),
-                            completion_request,
-                        );
-                    }
-                    if !started_next_prompt && let Some(apply) = final_report_apply {
-                        // Measures final session persistence only when no chained turn starts immediately.
-                        // 仅在没有立即链式启动下一回合时衡量最终会话持久化耗时。
-                        let final_persist_started_at = current_unix_millis_value();
-                        if let Err(error) = persist_workspace_session_update(
-                            Some(&task_state),
-                            controller_runtime.clone(),
-                            &apply.workspace_snapshot,
-                            finished_session_id,
-                        )
-                        .await
-                        {
-                            eprintln!("[webui-service] persist final report failed: {error}");
-                        }
-                        webui_trace_if_slow(
-                            "stream_final_persist_slow",
-                            final_persist_started_at,
-                            format!("session={finished_session_id}"),
-                        );
-                    }
-                    break;
                 }
             }
-        }
-        if !reached_finished_event && let Ok(mut guard) = task_state.lock() {
-            webui_trace(
-                "stream_task_ended_without_finished",
-                format!("session={session_id}"),
-            );
-            if remove_active_stream_task_if_id(&mut guard, session_id, active_stream_task_id)
-                .is_some()
-            {
-                finish_webui_session_kernel_turn(
-                    &mut guard,
-                    session_id,
-                    TurnTerminalStatus::Stopped,
-                );
-            }
-        }
+        };
+        // stream_exit_outcome records the exact ownership decision made after polling stops.
+        // stream_exit_outcome 记录轮询停止后作出的精确所有权决策。
+        let stream_exit_outcome = handle_stream_task_exit(
+            &task_state,
+            session_id,
+            active_stream_task_id,
+            stream_exit_reason,
+        );
+        webui_trace(
+            "stream_task_exit_handled",
+            format!(
+                "session={session_id} reason={stream_exit_reason:?} outcome={stream_exit_outcome:?}"
+            ),
+        );
     };
     if let Err(error) = spawn_registered_active_stream_task(
         &state,
@@ -850,14 +418,21 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
         task_future,
     ) {
         eprintln!("[webui-service] register stream task failed: {error}");
-        if let Ok(mut guard) = registration_failure_state.lock() {
-            finish_webui_session_kernel_turn(&mut guard, session_id, TurnTerminalStatus::Failed);
-        }
-        let _ = apply_session_phase(
+        match handle_stream_task_registration_failure(
             &registration_failure_app,
             &registration_failure_state,
             session_id,
-            SessionRunPhase::Failed,
-        );
+            expected_kernel_generation,
+            &error,
+        ) {
+            Ok(outcome) => webui_trace(
+                "stream_task_registration_failure_handled",
+                format!("session={session_id} outcome={outcome:?}"),
+            ),
+            Err(cleanup_error) => eprintln!(
+                "[webui-service] register stream task failure projection failed: {cleanup_error}"
+            ),
+        }
     }
 }
+use content_delta::handle_content_delta_stream_event;

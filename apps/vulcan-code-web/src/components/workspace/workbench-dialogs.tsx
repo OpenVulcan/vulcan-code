@@ -78,6 +78,9 @@ export interface WorkbenchDialogsProps {
   // Current project settings dialog target.
   // 当前项目设置对话框目标。
   projectSettingsTarget: ProjectSettingsDialogTarget | null;
+  // Latest accepted settings invalidation revisions for the current project target.
+  // 当前项目目标已接收的最新设置失效版本。
+  projectSettingsRevision: React.ComponentProps<typeof ProjectSettingsDialog>["settingsRevision"];
   // Closes the project settings dialog.
   // 关闭项目设置对话框。
   onCancelProjectSettings: () => void;
@@ -170,6 +173,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
       />
       <ProjectSettingsDialog
         target={props.projectSettingsTarget}
+        settingsRevision={props.projectSettingsRevision}
         workbench={props.workbench}
         onCancel={props.onCancelProjectSettings}
         onExecuteAttachmentCleanup={props.onExecuteAttachmentCleanup}

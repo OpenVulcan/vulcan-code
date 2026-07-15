@@ -89,6 +89,16 @@ impl ProjectPromptFileCache {
 
 /// Return one file metadata marker when the prompt file exists.
 /// 当提示词文件存在时返回一个文件元数据标记。
+///
+/// # Parameters
+/// # 参数
+/// - `path`: Exact project-prompt file whose metadata identifies the cached snapshot.
+/// - `path`：其元数据用于标识缓存快照的精确项目提示词文件。
+///
+/// # Returns
+/// # 返回值
+/// Returns `None` only for a confirmed missing or non-file path, and preserves all metadata failures.
+/// 仅在确认路径缺失或不是文件时返回 `None`，并保留全部元数据失败。
 fn project_prompt_file_marker(
     path: &Path,
 ) -> Result<Option<ProjectPromptFileMarker>, PromptComposerError> {
@@ -105,14 +115,23 @@ fn project_prompt_file_marker(
     if !metadata.is_file() {
         return Ok(None);
     }
+    // modified_at is required to distinguish cached content from a changed source file.
+    // modified_at 是区分缓存内容与已变化来源文件所必需的时间戳。
+    let modified_at = metadata.modified().map_err(|error| {
+        PromptComposerError::ResourceLoad(format!(
+            "{}: failed to read project-prompt modification time: {error}",
+            vulcan_runtime_assets::native_host_path_text_from_path(path)
+        ))
+    })?;
+    // modified_nanos treats pre-epoch filesystem timestamps as the oldest stable marker.
+    // modified_nanos 将早于纪元的文件系统时间戳视为最早的稳定标记。
+    let modified_nanos = modified_at
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
     Ok(Some(ProjectPromptFileMarker {
         len: metadata.len(),
-        modified_nanos: metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default(),
+        modified_nanos,
     }))
 }
 

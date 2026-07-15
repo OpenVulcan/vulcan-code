@@ -191,7 +191,7 @@ async fn execute_luaskills_dispatch_tool(
         Some(&entry.skill_id),
         &result,
         workspace_root.as_deref(),
-    ));
+    )?);
     let invocation_result = if let Some(host_result) = result.host_result.as_ref() {
         VulcanToolInvocationResult::from_model_output(model_output).with_host_result(
             VulcanToolHostResult {

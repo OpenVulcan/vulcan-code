@@ -472,7 +472,8 @@ fn live_pending_question_workbench_keeps_messages_on_selected_surface() {
         );
     }
 
-    let workbench = workbench_with_live_pending_question(&service_state);
+    let workbench = workbench_with_live_pending_question(&service_state)
+        .expect("live pending question projection should succeed");
     let conversation_ids = workbench
         .messages
         .iter()

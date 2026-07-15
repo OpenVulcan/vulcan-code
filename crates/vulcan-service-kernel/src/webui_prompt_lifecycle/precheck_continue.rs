@@ -1,8 +1,14 @@
 //! WebUI prompt lifecycle precheck continue helpers.
 //! WebUI 提示词生命周期 precheck continue 辅助逻辑。
 
+use vulcan_service_api::ServiceEvent;
+
 use super::*;
-use crate::emit_context_injection_changed_delta;
+use crate::{
+    apply_session_phase_to_state, emit_context_injection_changed_delta,
+    emit_service_event_with_trace, owning_project_id_for_session,
+    retain_hydrated_conversation_windows_for_workspace,
+};
 
 /// Builds the shared precheck plan for a WebUI session using the service VMM layering rules.
 /// 使用服务运行时的 VMM 分层规则为一个 WebUI 会话构建共享 precheck 计划。
@@ -223,7 +229,7 @@ pub(crate) fn continue_webui_prompt_turn_after_precheck_from_state(
         .replace_snapshot(build_vmm_hook_config_snapshot(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
-        ));
+        ))?;
     webui_trace(
         "precheck_continue_hook_snapshot_ready",
         format!(
@@ -573,6 +579,7 @@ pub(crate) fn spawn_webui_precheck_continue_task(
                     &app,
                     &state,
                     &controller_runtime,
+                    &agent_runtime,
                     session_id,
                     &error,
                 ) {
@@ -629,14 +636,38 @@ pub(crate) fn start_webui_precheck_or_continue(
     if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
         let skipped_continue_started_at = current_unix_millis_value();
         let precheck_outcome = start.precheck_request.clone().skip();
-        if let Some(request) = continue_webui_prompt_turn_after_precheck_from_state(
+        // continuation is resolved explicitly so the synchronous skip path shares terminal cleanup with async precheck.
+        // continuation 被显式解析，使同步跳过路径与异步 precheck 共享终态清理。
+        let continuation = continue_webui_prompt_turn_after_precheck_from_state(
             app,
             state,
             controller_runtime,
             agent_runtime,
             start,
             precheck_outcome,
-        )? {
+        );
+        // continuation now carries only a successfully prepared request or an intentional no-stream result.
+        // continuation 现在只携带成功准备的请求或有意不启动流的结果。
+        let continuation = match continuation {
+            Ok(continuation) => continuation,
+            Err(error) => {
+                mark_webui_precheck_continuation_failed(
+                    app,
+                    state,
+                    controller_runtime,
+                    agent_runtime,
+                    session_id,
+                    &error,
+                )
+                .map_err(|cleanup_error| {
+                    format!(
+                        "{error}; failed to clean rejected prompt continuation: {cleanup_error}"
+                    )
+                })?;
+                return Err(error);
+            }
+        };
+        if let Some(request) = continuation {
             webui_after_precheck_trace(
                 "after_precheck_18_stream_spawn_call",
                 format!(
@@ -729,12 +760,12 @@ pub(crate) fn mark_webui_precheck_continuation_failed(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     error: &str,
 ) -> Result<(), String> {
-    if let Ok(mut guard) = state.lock() {
-        stop_webui_session_kernel_generation(&mut guard, session_id);
-    }
+    // workspace_snapshot is a detached failure draft validated before terminal runtime side effects.
+    // workspace_snapshot 是在运行时终态副作用前完成校验的分离失败草稿。
     let mut workspace_snapshot = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -771,13 +802,37 @@ pub(crate) fn mark_webui_precheck_continuation_failed(
         session.focus = String::from("Precheck 结果无法应用，已停止本轮请求。");
         session.last_updated_label = String::from("刚刚");
     }
-    commit_workspace_snapshot_and_emit_session_phase_delta(
+    // owning_project_id is derived from the validated failure draft before ownership is terminated.
+    // owning_project_id 在终止所有权前从已校验失败草稿派生。
+    let owning_project_id = owning_project_id_for_session(&workspace_snapshot, session_id);
+    {
+        // hook_runtime termination removes the logical turn before any later submission can reuse it.
+        // hook_runtime 终止会在后续提交复用前移除逻辑回合。
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        hook_runtime.terminate_turn(session_id, owning_project_id, error, 0);
+    }
+    // event is built from the same lock transaction that stops the kernel and commits the failure draft.
+    // event 从停止 kernel 并提交失败草稿的同一锁事务构建。
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        retain_hydrated_conversation_windows_for_workspace(
+            &mut guard.hydrated_conversation_windows,
+            &workspace_snapshot,
+        );
+        guard.workspace_snapshot = Some(workspace_snapshot);
+        stop_webui_session_kernel_generation(&mut guard, session_id);
+        apply_session_phase_to_state(&mut guard, session_id, SessionRunPhase::Stopped)?
+    };
+    emit_service_event_with_trace(
         app,
-        state,
-        workspace_snapshot,
-        session_id,
-        SessionRunPhase::Stopped,
-    )?;
+        "workbench_phase_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
     let state_for_persist = state.clone();
     let controller_runtime_for_persist = controller_runtime.clone();
     spawn_service_task(async move {

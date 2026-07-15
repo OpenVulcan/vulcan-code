@@ -11,9 +11,12 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::runtime::Handle;
+#[cfg(test)]
+use vulcan_hooks::HookFailurePolicy;
 use vulcan_hooks::{
-    HookActor, HookContext, HookDispatchReport, HookDispatchRequest, HookDispatcher, HookMode,
-    HookPayload, HookPointDescriptor, HookRegistrationSnapshot, HookScope, SystemPromptHookPhase,
+    HookActor, HookContext, HookDispatchReport, HookDispatchRequest, HookDispatcher, HookError,
+    HookFailure, HookMode, HookPayload, HookPointDescriptor, HookRegistrationSnapshot, HookScope,
+    SystemPromptHookPhase,
 };
 use vulcan_vmm::PostActionRequest;
 
@@ -84,6 +87,5 @@ pub use types::{
     VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
 };
 
-use completion::vmm_writeback_effects_from_report;
 use helpers::*;
 use types::ActiveConversationTurn;

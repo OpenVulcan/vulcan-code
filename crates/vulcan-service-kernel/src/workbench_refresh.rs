@@ -243,7 +243,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
         subagent_navigation,
         pending_questions: pending_question_snapshots_from_agent_runtime(
             agent_runtime_for_status.as_ref(),
-        ),
+        )?,
         logs: &logs,
         live_context_budgets: &live_context_budgets,
         session_goal_summaries: &session_goal_summaries,
@@ -268,8 +268,29 @@ async fn refresh_workbench_snapshot_with_selected_session(
     Ok(workbench)
 }
 
-/// Preserves focused Skills and Agents domains when a generic refresh crossed a newer commit.
-/// 当通用刷新跨越了较新的提交时，保留聚焦的 Skills 与 Agents 领域。
+/// Copies retained project-settings revisions into a newly rebuilt workbench.
+/// 将保留的项目设置版本复制到新重建的工作台中。
+///
+/// # Parameters
+/// 参数
+/// `workbench` is the rebuilt snapshot that does not derive settings revisions from workspace files.
+/// `workbench` 是不会从工作区文件派生设置版本的重建快照。
+/// `retained_workbench` is the latest committed in-memory workbench.
+/// `retained_workbench` 是最新提交的内存工作台。
+///
+/// # Returns
+/// 返回值
+/// This function returns nothing and replaces only the project-settings revision snapshot.
+/// 本函数无返回值，仅替换项目设置版本快照。
+pub(crate) fn preserve_project_settings_revisions(
+    workbench: &mut WorkbenchSnapshot,
+    retained_workbench: &WorkbenchSnapshot,
+) {
+    workbench.project_settings_revisions = retained_workbench.project_settings_revisions.clone();
+}
+
+/// Preserves retained focused domains when a generic refresh crossed a newer commit.
+/// 当通用刷新跨越了较新的提交时，保留已留存的聚焦领域。
 ///
 /// # Parameters
 /// 参数
@@ -292,6 +313,7 @@ fn preserve_focused_catalog_domains_after_concurrent_refresh(
     captured_generation: u64,
     current_generation: u64,
 ) {
+    preserve_project_settings_revisions(workbench, retained_workbench);
     if captured_generation == current_generation {
         return;
     }
@@ -333,6 +355,30 @@ pub(crate) fn is_active_session_run_phase(phase: SessionRunPhase) -> bool {
             | SessionRunPhase::Thinking
             | SessionRunPhase::ToolRunning
     )
+}
+
+/// Maps one session run phase to its authoritative compact session state.
+/// 将单个会话运行阶段映射为权威的紧凑会话状态。
+///
+/// # Parameters
+/// 参数
+/// `phase` is the exact backend lifecycle phase being projected.
+/// `phase` 是正在投影的精确后端生命周期阶段。
+///
+/// # Returns
+/// 返回值
+/// The single sidebar and workspace state corresponding to the supplied phase.
+/// 返回与给定阶段对应的唯一侧栏及工作区状态。
+pub(crate) fn session_state_for_run_phase(phase: SessionRunPhase) -> SessionState {
+    match phase {
+        SessionRunPhase::Failed | SessionRunPhase::Stopped => SessionState::Blocked,
+        SessionRunPhase::Idle | SessionRunPhase::Ready => SessionState::Completed,
+        SessionRunPhase::Preparing
+        | SessionRunPhase::MemoryRecall
+        | SessionRunPhase::Requesting
+        | SessionRunPhase::Thinking
+        | SessionRunPhase::ToolRunning => SessionState::Running,
+    }
 }
 
 /// Returns whether a runtime event closes the current streamed thinking segment.
@@ -833,6 +879,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             })
             .collect(),
         expanded_project_ids: workspace.expanded_task_projects.iter().cloned().collect(),
+        project_settings_revisions: vulcan_service_api::ProjectSettingsRevisionSnapshot::default(),
         conversations: workspace
             .sessions
             .iter()

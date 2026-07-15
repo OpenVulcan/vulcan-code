@@ -189,11 +189,25 @@ impl McpRuntimeServerDiagnostic {
 
     /// Returns the recommended runtime event title for UI projection.
     /// 返回供界面投影使用的建议运行时事件标题。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A title derived from connectivity status; refresh warnings do not misclassify connected servers as offline.
+    /// 返回根据连接状态派生的标题；刷新警告不会把已连接服务器误判为离线。
     pub fn runtime_event_title(&self) -> String {
-        if self.last_error.is_some() {
-            format!("MCP 服务器离线 · {}", self.server_name())
-        } else {
-            format!("MCP 服务器在线 · {}", self.server_name())
+        match self.status() {
+            McpRuntimeServerStatus::Disabled => {
+                format!("MCP 服务器已停用 · {}", self.server_name())
+            }
+            McpRuntimeServerStatus::Connecting => {
+                format!("MCP 服务器连接中 · {}", self.server_name())
+            }
+            McpRuntimeServerStatus::Connected => {
+                format!("MCP 服务器在线 · {}", self.server_name())
+            }
+            McpRuntimeServerStatus::Disconnected => {
+                format!("MCP 服务器离线 · {}", self.server_name())
+            }
         }
     }
 }

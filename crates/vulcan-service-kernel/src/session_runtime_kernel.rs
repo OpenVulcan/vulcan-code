@@ -302,7 +302,46 @@ pub(crate) fn start_webui_session_kernel_user_turn(
     session_id: SessionId,
     turn_id: &str,
 ) -> Result<(), String> {
-    start_webui_session_kernel_turn(state, session_id, turn_id, ActiveTurnKind::UserPrompt)
+    start_webui_session_kernel_turn_with_admission(
+        state,
+        session_id,
+        turn_id,
+        ActiveTurnKind::UserPrompt,
+        None,
+    )
+}
+
+/// Starts one reserved WebUI user-prompt turn using exact submission admission ownership.
+/// 使用精确提交准入所有权启动一个已预留的 WebUI 用户提示词回合。
+///
+/// # Parameters
+/// 参数
+/// `state` owns runtime kernels and the authoritative reservation row.
+/// `state` 持有运行时 kernel 与权威预留行。
+/// `session_id` identifies the reserved existing session.
+/// `session_id` 标识已预留的已有会话。
+/// `turn_id` is the shared turn id produced by the prompt reducer.
+/// `turn_id` 是提示词归约器生成的共享回合标识。
+/// `reservation_id` is the exact submission owner allowed through the admission gate.
+/// `reservation_id` 是允许通过准入闸门的精确提交所有者。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` only when the reservation is current and the session kernel is idle.
+/// 仅当预留仍为当前所有者且会话 kernel 空闲时返回 `Ok(())`。
+pub(crate) fn start_reserved_webui_session_kernel_user_turn(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    turn_id: &str,
+    reservation_id: Uuid,
+) -> Result<(), String> {
+    start_webui_session_kernel_turn_with_admission(
+        state,
+        session_id,
+        turn_id,
+        ActiveTurnKind::UserPrompt,
+        Some(reservation_id),
+    )
 }
 
 /// Returns whether one parent session is actively waiting inside wait_agent.
@@ -343,27 +382,28 @@ fn webui_session_wait_agent_is_waiting(state: &ServiceBridgeState, session_id: S
 ///
 /// # Returns
 /// 返回值
-/// `true` when a currently waiting wait_agent invocation was notified.
-/// 当当前等待中的 wait_agent 调用已被通知时返回 `true`。
+/// Returns `Ok(true)` when a current wait_agent invocation was notified, `Ok(false)` when no
+/// notification target exists, or an Agent Runtime diagnostic when the interruption fact fails.
+/// 当前 wait_agent 调用已通知时返回 `Ok(true)`，不存在通知目标时返回 `Ok(false)`，中断事实写入失败时返回智能体运行时诊断。
 pub(crate) fn notify_webui_wait_agent_parent_interruption_if_waiting(
     state: &ServiceBridgeState,
     session_id: SessionId,
     reason: &str,
-) -> bool {
+) -> Result<bool, String> {
     if !webui_session_wait_agent_is_waiting(state, session_id) {
-        return false;
+        return Ok(false);
     }
     if let Some(agent_runtime) = state.agent_runtime.as_ref() {
         agent_runtime
             .task_runtime
-            .notify_wait_agent_parent_interruption(SessionNodeId::from(session_id));
+            .notify_wait_agent_parent_interruption(SessionNodeId::from(session_id))?;
         webui_trace(
             "wait_agent_parent_interruption_notified",
             format!("session={session_id} reason={reason}"),
         );
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 /// Starts one WebUI turn in the session runtime kernel.
@@ -390,11 +430,55 @@ pub(crate) fn start_webui_session_kernel_turn(
     turn_id: &str,
     kind: ActiveTurnKind,
 ) -> Result<(), String> {
-    if let Some(reservation) = state.session_turn_admission_reservations.get(&session_id) {
-        return Err(format!(
-            "Session `{session_id}` is reserved by {}; a new runtime kernel turn cannot start",
-            reservation.kind.diagnostic_label()
-        ));
+    start_webui_session_kernel_turn_with_admission(state, session_id, turn_id, kind, None)
+}
+
+/// Starts one WebUI turn after validating optional exact admission ownership.
+/// 校验可选精确准入所有权后启动一个 WebUI 回合。
+///
+/// # Parameters
+/// 参数
+/// `state` owns reservation rows, wait coordination, and runtime kernels.
+/// `state` 持有预留行、等待协调状态与运行时 kernel。
+/// `session_id` identifies the session whose turn should start.
+/// `session_id` 标识需要启动回合的会话。
+/// `turn_id` is the unique logical turn identifier.
+/// `turn_id` 是唯一逻辑回合标识。
+/// `kind` classifies the runtime turn semantics.
+/// `kind` 对运行时回合语义进行分类。
+/// `allowed_reservation_id` optionally names the exact PromptSubmission owner allowed through the gate.
+/// `allowed_reservation_id` 可选指定允许通过闸门的精确 PromptSubmission 所有者。
+///
+/// # Returns
+/// 返回值
+/// The started idle kernel turn, or an ownership, reservation, or active-turn diagnostic.
+/// 返回已启动的空闲 kernel 回合，或所有权、预留、活动回合诊断。
+fn start_webui_session_kernel_turn_with_admission(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+    turn_id: &str,
+    kind: ActiveTurnKind,
+    allowed_reservation_id: Option<Uuid>,
+) -> Result<(), String> {
+    match (
+        state.session_turn_admission_reservations.get(&session_id),
+        allowed_reservation_id,
+    ) {
+        (Some(reservation), Some(allowed_reservation_id))
+            if reservation.reservation_id == allowed_reservation_id
+                && reservation.kind == SessionTurnAdmissionReservationKind::PromptSubmission => {}
+        (Some(reservation), _) => {
+            return Err(format!(
+                "Session `{session_id}` is reserved by {}; a new runtime kernel turn cannot start",
+                reservation.kind.diagnostic_label()
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(format!(
+                "Submission admission for session `{session_id}` is no longer current"
+            ));
+        }
+        (None, None) => {}
     }
     if kind == ActiveTurnKind::UserPrompt {
         clear_webui_session_wait_agent_coordination(state, session_id, "new_user_turn");
@@ -563,22 +647,34 @@ pub(crate) fn stop_webui_session_kernel_generation(
             ),
         );
         if notify_wait_agent {
-            notify_webui_wait_agent_parent_interruption_if_waiting(
+            // notificationError preserves stop as the primary operation while exposing signal failure.
+            // notificationError 保持停止为主操作，同时显式暴露信号失败。
+            if let Err(notification_error) = notify_webui_wait_agent_parent_interruption_if_waiting(
                 state,
                 session_id,
                 "stop_generation",
-            );
+            ) {
+                eprintln!(
+                    "[webui-service] failed to notify wait_agent parent interruption for session {session_id} reason=stop_generation: {notification_error}"
+                );
+            }
         }
         clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation");
         sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);
         true
     } else {
         if notify_wait_agent {
-            notify_webui_wait_agent_parent_interruption_if_waiting(
+            // notificationError exposes an idle-stop signal failure without changing stop semantics.
+            // notificationError 显式暴露空闲停止信号失败，同时不改变停止语义。
+            if let Err(notification_error) = notify_webui_wait_agent_parent_interruption_if_waiting(
                 state,
                 session_id,
                 "stop_generation_idle",
-            );
+            ) {
+                eprintln!(
+                    "[webui-service] failed to notify wait_agent parent interruption for session {session_id} reason=stop_generation_idle: {notification_error}"
+                );
+            }
         }
         clear_webui_session_wait_agent_coordination(state, session_id, "stop_generation_idle");
         sync_webui_session_runtime_kernel_to_workspace_state(state, session_id);

@@ -9,14 +9,21 @@ pub(super) fn publish_task_finished_to_parent(
     detail: &str,
 ) {
     let event = build_task_finished_parent_runtime_event(request, outcome, detail);
-    task_runtime.publish_detached_task_event(
+    // error is the terminal delivery failure that cannot propagate beyond the detached background owner.
+    // error 是无法越过分离后台所有者继续传播的终态投递失败。
+    if let Err(error) = task_runtime.publish_detached_task_event(
         request.task_id,
         &request.execution_id,
         DetachedTaskRuntimeEvent::ParentRuntime {
             parent_session_id: request.current_session_id,
             event,
         },
-    );
+    ) {
+        eprintln!(
+            "[task-runtime] completed task parent-event publication failed for task {} execution {}: {error}",
+            request.task_id, request.execution_id
+        );
+    }
 }
 
 /// Builds a terminal child-task lifecycle event for the parent session.
@@ -52,14 +59,21 @@ pub(super) fn publish_task_failure_to_parent(
     error: &str,
 ) {
     let event = build_task_failure_parent_runtime_event(request, error);
-    task_runtime.publish_detached_task_event(
+    // publish_error is the failed terminal delivery that cannot propagate beyond the detached background owner.
+    // publish_error 是无法越过分离后台所有者继续传播的失败终态投递错误。
+    if let Err(publish_error) = task_runtime.publish_detached_task_event(
         request.task_id,
         &request.execution_id,
         DetachedTaskRuntimeEvent::ParentRuntime {
             parent_session_id: request.current_session_id,
             event,
         },
-    );
+    ) {
+        eprintln!(
+            "[task-runtime] failed task parent-event publication failed for task {} execution {}: {publish_error}",
+            request.task_id, request.execution_id
+        );
+    }
 }
 
 /// Builds a failed child-task lifecycle event for the parent session.
@@ -98,8 +112,10 @@ pub(crate) fn build_task_execution_handler(
         let base_controller_config = base_controller_config.clone();
         let parent_live_sender = parent_live_sender.clone();
         Box::pin(async move {
+            // runtime_context is the exact shared parent context required by the task backend.
+            // runtime_context 是任务后端所需的精确共享父级上下文。
             if let Some(runtime_context) =
-                task_runtime.execution_context_for_session(request.current_session_id)
+                task_runtime.execution_context_for_session(request.current_session_id)?
             {
                 return run_task_with_shared_runtime_context(
                     Arc::clone(&task_runtime),

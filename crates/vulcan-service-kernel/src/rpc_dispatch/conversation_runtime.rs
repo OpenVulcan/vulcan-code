@@ -1,0 +1,266 @@
+//! Conversation runtime RPC routing.
+//! 会话运行时 RPC 路由。
+
+use super::*;
+
+/// Exact public RPC wire names owned by this domain router.
+/// 本领域路由持有的精确公开 RPC 线协议名称。
+#[cfg(test)]
+pub(super) const RPC_METHODS: &[&str] = &[
+    "service_session_messages",
+    "service_session_history_page",
+    "service_session_tool_detail",
+    "service_submit_conversation_prompt",
+    "service_stop_conversation_run",
+    "service_stop_command_session",
+    "service_get_command_session_snapshot",
+    "service_send_command_session_input",
+    "service_resize_command_session",
+    "service_get_user_prompt_edit_draft",
+    "service_submit_user_prompt_edit",
+    "service_fork_conversation",
+    "service_save_session_goal",
+    "service_resume_session_goal",
+    "service_clear_session_goal",
+    "service_update_session_goal_status",
+    "service_set_session_plan_mode",
+    "service_set_session_vmm_policy",
+    "service_compact_selected_conversation_context",
+    "service_reply_pending_question",
+    "service_reject_pending_question",
+    "service_open_subagent_panel",
+    "service_close_subagent_panel",
+    "service_stop_subagent_task",
+    "service_close_subagent_task",
+    "service_edit_pending_prompt",
+    "service_insert_pending_prompt",
+    "service_remove_pending_prompt",
+    "service_reorder_pending_prompts",
+    "service_pick_composer_attachments",
+    "service_stage_composer_attachment_paths",
+    "service_stage_composer_attachment_bytes",
+];
+
+/// Dispatches one RPC method owned by this domain.
+/// 分发本领域持有的单个 RPC 方法。
+///
+/// # Parameters
+/// 参数
+/// `state` owns service data, `app` emits frontend effects, `method` is the exact wire name, and `params` is the normalized object.
+/// `state` 持有服务数据，`app` 发出前端副作用，`method` 是精确线协议名称，`params` 是归一化对象。
+///
+/// # Returns
+/// 返回值
+/// Returns `Handled` with the service result, `Unknown` for another domain, or a parameter parsing error.
+/// 返回携带服务结果的 `Handled`、表示其他领域的 `Unknown`，或参数解析错误。
+pub(super) async fn dispatch(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    method: &str,
+    params: &Value,
+) -> Result<ServiceRpcDispatch, String> {
+    // result preserves service failures inside Handled so the top-level return trace still runs.
+    // result 把服务失败保留在 Handled 内，使顶层返回追踪仍会执行。
+    let result = match method {
+        "service_session_messages" => rpc_json_result(
+            service_session_messages(app, state, rpc_required_param(params, "sessionId")?).await,
+        ),
+        "service_session_history_page" => rpc_json_result(
+            service_session_history_page(
+                app,
+                state,
+                rpc_required_param(params, "sessionId")?,
+                rpc_required_param(params, "beforeOrdinal")?,
+            )
+            .await,
+        ),
+        "service_session_tool_detail" => rpc_json_result(
+            service_session_tool_detail(
+                state,
+                rpc_required_param(params, "sessionId")?,
+                rpc_optional_param(params, "recordId")?,
+                rpc_optional_param(params, "toolCallId")?,
+                rpc_optional_param(params, "seq")?,
+                rpc_optional_param(params, "messageIndex")?,
+            )
+            .await,
+        ),
+        "service_submit_conversation_prompt" => rpc_json_result(
+            service_submit_conversation_prompt(
+                app,
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "prompt")?,
+                rpc_optional_param(params, "hiddenModelGuidance")?,
+                rpc_optional_param(params, "executionMode")?,
+                rpc_optional_param(params, "reasoningEffort")?,
+                rpc_optional_param(params, "attachments")?,
+                rpc_optional_param(params, "disabledAiCapabilityKinds")?,
+                rpc_optional_param(params, "disabledAiCapabilityTargetSelectors")?,
+                rpc_optional_param(params, "aiCapabilityTargetOrderOverrides")?,
+            )
+            .await,
+        ),
+        "service_stop_conversation_run" => rpc_json_result(
+            service_stop_conversation_run(
+                app,
+                state,
+                rpc_required_param(params, "conversationId")?,
+                rpc_optional_param(params, "mode")?,
+            )
+            .await,
+        ),
+        "service_stop_command_session" => rpc_json_result(
+            service_stop_command_session(
+                app,
+                state,
+                rpc_required_param(params, "commandSessionId")?,
+                rpc_optional_param(params, "ownerSessionId")?,
+            )
+            .await,
+        ),
+        "service_get_command_session_snapshot" => rpc_json_result(
+            service_get_command_session_snapshot(
+                state,
+                rpc_required_param(params, "commandSessionId")?,
+                rpc_optional_param(params, "ownerSessionId")?,
+            )
+            .await,
+        ),
+        "service_send_command_session_input" => rpc_json_result(
+            service_send_command_session_input(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_resize_command_session" => rpc_json_result(
+            service_resize_command_session(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_get_user_prompt_edit_draft" => rpc_json_result(
+            service_get_user_prompt_edit_draft(
+                state,
+                rpc_required_param(params, "conversationId")?,
+                rpc_required_param(params, "messageId")?,
+            )
+            .await,
+        ),
+        "service_submit_user_prompt_edit" => rpc_json_result(
+            service_submit_user_prompt_edit(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_fork_conversation" => rpc_json_result(
+            service_fork_conversation(app, state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_save_session_goal" => rpc_json_result(
+            service_save_session_goal(app, state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_resume_session_goal" => rpc_json_result(
+            service_resume_session_goal(app, state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_clear_session_goal" => rpc_json_result(
+            service_clear_session_goal(app, state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_update_session_goal_status" => rpc_json_result(
+            service_update_session_goal_status(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_set_session_plan_mode" => rpc_json_result(
+            service_set_session_plan_mode(app, state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_set_session_vmm_policy" => rpc_json_result(
+            service_set_session_vmm_policy(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_compact_selected_conversation_context" => {
+            rpc_json_result(service_compact_selected_conversation_context(app, state).await)
+        }
+        "service_reply_pending_question" => rpc_json_result(service_reply_pending_question(
+            state,
+            rpc_required_param(params, "requestId")?,
+            rpc_required_param(params, "answers")?,
+        )),
+        "service_reject_pending_question" => rpc_json_result(service_reject_pending_question(
+            state,
+            rpc_required_param(params, "requestId")?,
+        )),
+        "service_open_subagent_panel" => rpc_json_result(
+            service_open_subagent_panel(
+                state,
+                rpc_required_param(params, "parentConversationId")?,
+                rpc_required_param(params, "taskId")?,
+            )
+            .await,
+        ),
+        "service_close_subagent_panel" => {
+            rpc_json_result(service_close_subagent_panel(app, state).await)
+        }
+        "service_stop_subagent_task" => rpc_json_result(
+            service_stop_subagent_task(
+                app,
+                state,
+                rpc_required_param(params, "parentConversationId")?,
+                rpc_required_param(params, "taskId")?,
+            )
+            .await,
+        ),
+        "service_close_subagent_task" => rpc_json_result(
+            service_close_subagent_task(
+                app,
+                state,
+                rpc_required_param(params, "parentConversationId")?,
+                rpc_required_param(params, "taskId")?,
+            )
+            .await,
+        ),
+        "service_edit_pending_prompt" => rpc_json_result(
+            service_edit_pending_prompt(app, state, rpc_required_param(params, "entryId")?).await,
+        ),
+        "service_insert_pending_prompt" => rpc_json_result(
+            service_insert_pending_prompt(app, state, rpc_required_param(params, "entryId")?).await,
+        ),
+        "service_remove_pending_prompt" => rpc_json_result(
+            service_remove_pending_prompt(app, state, rpc_required_param(params, "entryId")?).await,
+        ),
+        "service_reorder_pending_prompts" => rpc_json_result(
+            service_reorder_pending_prompts(
+                app,
+                state,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "draggedEntryId")?,
+                rpc_optional_param(params, "targetEntryId")?,
+            )
+            .await,
+        ),
+        "service_pick_composer_attachments" => rpc_json_result(
+            service_pick_composer_attachments(
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_optional_param(params, "kind")?,
+            )
+            .await,
+        ),
+        "service_stage_composer_attachment_paths" => rpc_json_result(
+            service_stage_composer_attachment_paths(
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "paths")?,
+            )
+            .await,
+        ),
+        "service_stage_composer_attachment_bytes" => rpc_json_result(
+            service_stage_composer_attachment_bytes(
+                state,
+                rpc_optional_param(params, "projectId")?,
+                rpc_optional_param(params, "conversationId")?,
+                rpc_required_param(params, "fileName")?,
+                rpc_required_param(params, "mimeType")?,
+                rpc_required_param(params, "dataBase64")?,
+            )
+            .await,
+        ),
+        _ => return Ok(ServiceRpcDispatch::Unknown),
+    };
+    Ok(ServiceRpcDispatch::Handled(result))
+}

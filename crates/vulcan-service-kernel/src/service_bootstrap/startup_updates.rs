@@ -156,6 +156,7 @@ pub(crate) fn update_service_failure(
         startup.ui_locale = guard.startup.ui_locale.clone();
         workbench.ui_locale = guard.startup.ui_locale.clone();
         guard.startup = startup.clone();
+        crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();

@@ -5,8 +5,21 @@ use super::*;
 
 /// Submits answers for the oldest visible ask-tool request and resumes the blocked tool call.
 /// 提交当前可见 ask 工具请求的答案，并恢复被阻塞的工具调用。
+///
+/// # Parameters
+/// 参数
+/// `state` contains the authoritative shared question runtime.
+/// `state` 包含权威共享问题运行时。
+/// `request_id` identifies the exact pending Ask request.
+/// `request_id` 标识精确的待回答 Ask 请求。
+/// `answers` contains ordered answers aligned with the registered prompts.
+/// `answers` 包含与已注册问题对齐的有序答案。
+///
+/// # Returns
+/// 返回值
+/// `true` after the runtime commits the reply; otherwise an explicit service error.
+/// 运行时提交回答后返回 `true`；否则返回明确的服务错误。
 pub(crate) fn service_reply_pending_question(
-    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request_id: String,
     answers: Vec<Vec<String>>,
@@ -28,14 +41,24 @@ pub(crate) fn service_reply_pending_question(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    emit_pending_question_changed_delta(&app, &state)?;
     Ok(true)
 }
 
 /// Rejects the visible ask-tool request after explicit user confirmation.
 /// 在用户明确确认后拒绝当前可见 ask 工具请求。
+///
+/// # Parameters
+/// 参数
+/// `state` contains the authoritative shared question runtime.
+/// `state` 包含权威共享问题运行时。
+/// `request_id` identifies the exact pending Ask request.
+/// `request_id` 标识精确的待回答 Ask 请求。
+///
+/// # Returns
+/// 返回值
+/// `true` after the runtime commits the rejection; otherwise an explicit service error.
+/// 运行时提交拒绝后返回 `true`；否则返回明确的服务错误。
 pub(crate) fn service_reject_pending_question(
-    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request_id: String,
 ) -> Result<bool, String> {
@@ -56,7 +79,6 @@ pub(crate) fn service_reject_pending_question(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    emit_pending_question_changed_delta(&app, &state)?;
     Ok(true)
 }
 
@@ -194,7 +216,7 @@ pub(crate) fn emit_pending_question_changed_delta(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let pending_questions =
-            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
         let pending_question = pending_questions.first().cloned();
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
@@ -244,6 +266,20 @@ pub(crate) fn emit_pending_question_changed_delta(
 
 /// Installs the WebUI projection callback used by the ask-question runtime.
 /// 安装 ask 提问运行时使用的 WebUI 投影回调。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts authoritative projection events to every registered client sink.
+/// `app` 向每个已注册客户端 sink 广播权威投影事件。
+/// `state` owns the retained workbench projection updated by the callback.
+/// `state` 持有由回调更新的保留工作台投影。
+/// `question_runtime` owns all pending Ask state transitions.
+/// `question_runtime` 持有全部待回答 Ask 状态转换。
+///
+/// # Returns
+/// 返回值
+/// Success after installing the single projection callback, or a callback-registry error.
+/// 安装唯一投影回调后返回成功；失败时返回回调注册表错误。
 pub(crate) fn install_webui_question_runtime_event_bridge(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -251,29 +287,35 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
 ) -> Result<(), String> {
     let app = app.clone();
     let state = Arc::clone(state);
+    // callback is the sole projection publisher for Ask registration, completion, and cancellation.
+    // callback 是 Ask 注册、完成与取消的唯一投影发布者。
     let callback: PendingQuestionChangeCallback = Arc::new(move || {
-        if let Err(error) = emit_pending_question_changed_delta(&app, &state) {
+        // projectionResult preserves explicit publication failures for runtime transaction handling.
+        // projectionResult 为运行时事务处理保留明确的发布失败。
+        let projection_result = emit_pending_question_changed_delta(&app, &state);
+        if let Err(error) = &projection_result {
             webui_trace(
                 "pending_question_projection_failed",
                 format!("error={error}"),
             );
         }
+        projection_result
     });
     question_runtime.set_change_callback(Some(callback))
 }
 
-/// Returns the retained workbench with the latest live ask-runtime pending request attached.
-/// 返回附加最新实时 ask 运行时待处理请求的保留工作台。
+/// Returns the retained workbench with live ask requests, or a pending-registry projection error.
+/// 返回附加实时 ask 请求的保留工作台，失败时返回 pending 注册表投影错误。
 pub(crate) fn workbench_with_live_pending_question(
     guard: &ServiceBridgeState,
-) -> WorkbenchSnapshot {
+) -> Result<WorkbenchSnapshot, String> {
     let mut workbench = guard.workbench.clone();
     workbench.hydrated_conversation_windows = hydrated_conversation_window_summaries(
         &guard.hydrated_conversation_windows,
         &guard.webui_preloaded_unclosed_subagent_roots,
     );
     workbench.pending_questions =
-        pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
+        pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
     workbench.pending_question =
         workbench
             .selected_conversation_id
@@ -285,5 +327,5 @@ pub(crate) fn workbench_with_live_pending_question(
                     .find(|question| question.session_id == *conversation_id)
                     .cloned()
             });
-    workbench
+    Ok(workbench)
 }

@@ -4,9 +4,180 @@
 use super::*;
 use vulcan_service_api::ConversationMessagesPatchedDelta;
 
+/// Semantic kind of one provider content delta projected into a streaming transcript record.
+/// 投影到流式转录记录中的单个 Provider 内容增量语义类型。
+#[derive(Clone, Copy)]
+pub(crate) enum StreamContentKind {
+    /// Provider reasoning content stored in a collapsed thinking record.
+    /// 存储在折叠思考记录中的 Provider 推理内容。
+    Thinking,
+    /// Provider assistant content stored in a visible output record.
+    /// 存储在可见输出记录中的 Provider 助手内容。
+    Output,
+}
+
+impl StreamContentKind {
+    /// Returns the stable first-event trace label for this content kind.
+    /// 返回当前内容类型的稳定首事件追踪标签。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This method has no parameters beyond the content kind.
+    /// 此方法除内容类型外没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// The trace label used by provider-stream latency diagnostics.
+    /// 返回 Provider 流延迟诊断使用的追踪标签。
+    pub(crate) fn trace_event_label(self) -> &'static str {
+        match self {
+            Self::Thinking => "thinking_delta",
+            Self::Output => "output_delta",
+        }
+    }
+
+    /// Returns the stable visible-delta kind label for this content kind.
+    /// 返回当前内容类型的稳定可见增量类型标签。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This method has no parameters beyond the content kind.
+    /// 此方法除内容类型外没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// The label written to first-visible-delta diagnostics.
+    /// 返回写入首个可见增量诊断的标签。
+    pub(crate) fn visible_delta_label(self) -> &'static str {
+        match self {
+            Self::Thinking => "thinking",
+            Self::Output => "output",
+        }
+    }
+
+    /// Returns the stable append failure context for this content kind.
+    /// 返回当前内容类型的稳定追加失败上下文。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This method has no parameters beyond the content kind.
+    /// 此方法除内容类型外没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// The existing diagnostic prefix associated with the content kind.
+    /// 返回与当前内容类型关联的既有诊断前缀。
+    pub(crate) fn append_failure_context(self) -> &'static str {
+        match self {
+            Self::Thinking => "append thinking delta failed",
+            Self::Output => "append output delta failed",
+        }
+    }
+
+    /// Selects the streaming record identifier slot owned by this content kind.
+    /// 选择当前内容类型拥有的流式记录标识槽位。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// `record_ids` owns independent thinking and output record identifiers.
+    /// `record_ids` 持有相互独立的思考与输出记录标识。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// A mutable reference to the exact identifier slot for this content kind.
+    /// 返回当前内容类型精确标识槽位的可变引用。
+    fn record_id_slot(self, record_ids: &mut SessionStreamingRecordIds) -> &mut Option<String> {
+        match self {
+            Self::Thinking => &mut record_ids.thinking_record_id,
+            Self::Output => &mut record_ids.output_record_id,
+        }
+    }
+
+    /// Returns the transcript record kind, title, and default collapse state for this content kind.
+    /// 返回当前内容类型的转录记录类型、标题与默认折叠状态。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This method has no parameters beyond the content kind.
+    /// 此方法除内容类型外没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// The exact projection tuple consumed by the low-level record appender.
+    /// 返回底层记录追加器消费的精确投影元组。
+    fn projection_spec(self) -> (SessionMessageRecordKind, &'static str, bool) {
+        match self {
+            Self::Thinking => (SessionMessageRecordKind::ThinkingOutput, "思考", true),
+            Self::Output => (SessionMessageRecordKind::AssistantOutput, "输出", false),
+        }
+    }
+}
+
+/// Appends one typed provider content delta to its exact streaming transcript record.
+/// 将单个强类型 Provider 内容增量追加到其精确流式转录记录。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits the lightweight workbench message delta.
+/// `app` 发送轻量工作台消息增量。
+/// `state` owns retained workspace and runtime transcript state.
+/// `state` 持有保留工作区与运行时转录状态。
+/// `session_id` identifies the session receiving the content delta.
+/// `session_id` 标识接收内容增量的会话。
+/// `record_ids` owns the current streaming record identifiers.
+/// `record_ids` 持有当前流式记录标识。
+/// `kind` selects the exact record semantics for the delta.
+/// `kind` 选择当前增量的精确记录语义。
+/// `delta` is the provider content fragment to append.
+/// `delta` 是需要追加的 Provider 内容片段。
+///
+/// # Returns
+/// # 返回值
+/// Success after retained state and the emitted delta are aligned, or an explicit projection error.
+/// 保留状态与发送增量对齐后返回成功，否则返回显式投影错误。
+pub(crate) fn append_stream_content_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_ids: &mut SessionStreamingRecordIds,
+    kind: StreamContentKind,
+    delta: &str,
+) -> Result<(), String> {
+    // The immutable projection specification is captured before borrowing its mutable record slot.
+    // 不可变投影规格在借用可变记录槽位前完成捕获。
+    let (record_kind, title, collapsed_by_default) = kind.projection_spec();
+    append_stream_delta_record(
+        app,
+        state,
+        session_id,
+        kind.record_id_slot(record_ids),
+        record_kind,
+        title,
+        delta,
+        collapsed_by_default,
+    )
+}
+
+/// Clears both streaming record identifiers at one provider tool boundary.
+/// 在单个 Provider 工具边界清除两个流式记录标识。
+///
+/// # Parameters
+/// # 参数
+/// `record_ids` owns the request-local thinking and output record identifiers.
+/// `record_ids` 持有请求局部的思考与输出记录标识。
+///
+/// # Returns
+/// # 返回值
+/// This function returns no value and leaves both identifier slots empty.
+/// 此函数无返回值，并将两个标识槽位都置为空。
+pub(crate) fn reset_stream_content_record_ids(record_ids: &mut SessionStreamingRecordIds) {
+    record_ids.thinking_record_id = None;
+    record_ids.output_record_id = None;
+}
+
 /// Appends or extends one streaming transcript record.
 /// 追加或扩展单条流式转录记录。
-pub(crate) fn append_stream_delta_record(
+fn append_stream_delta_record(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
@@ -117,6 +288,70 @@ pub(crate) fn append_stream_delta_record(
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod stream_content_tests {
+    use super::*;
+
+    /// Verifies that typed content kinds select independent record slots and exact projection specs.
+    /// 验证强类型内容类型会选择独立记录槽位与精确投影规格。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails through assertions.
+    /// 此测试无返回值，并通过断言报告失败。
+    #[test]
+    fn content_kinds_select_exact_record_semantics() {
+        // Independent identifiers prove that selecting one kind cannot overwrite the other slot.
+        // 独立标识证明选择一种类型不会覆盖另一种类型的槽位。
+        let mut record_ids = SessionStreamingRecordIds::default();
+        *StreamContentKind::Thinking.record_id_slot(&mut record_ids) = Some(String::from("think"));
+        *StreamContentKind::Output.record_id_slot(&mut record_ids) = Some(String::from("output"));
+
+        assert_eq!(record_ids.thinking_record_id.as_deref(), Some("think"));
+        assert_eq!(record_ids.output_record_id.as_deref(), Some("output"));
+        assert!(matches!(
+            StreamContentKind::Thinking.projection_spec(),
+            (SessionMessageRecordKind::ThinkingOutput, "思考", true)
+        ));
+        assert!(matches!(
+            StreamContentKind::Output.projection_spec(),
+            (SessionMessageRecordKind::AssistantOutput, "输出", false)
+        ));
+    }
+
+    /// Verifies that provider tool boundaries clear both streaming record slots.
+    /// 验证 Provider 工具边界会清除两个流式记录槽位。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails through assertions.
+    /// 此测试无返回值，并通过断言报告失败。
+    #[test]
+    fn provider_tool_boundary_clears_all_content_record_ids() {
+        // Populated identifiers model an active thinking and output phase before a tool boundary.
+        // 已填充标识模拟工具边界前活跃的思考与输出阶段。
+        let mut record_ids = SessionStreamingRecordIds {
+            thinking_record_id: Some(String::from("think")),
+            output_record_id: Some(String::from("output")),
+        };
+
+        reset_stream_content_record_ids(&mut record_ids);
+
+        assert!(record_ids.thinking_record_id.is_none());
+        assert!(record_ids.output_record_id.is_none());
+    }
 }
 
 /// Emits one already-materialized visible session message through the lightweight workbench delta channel.
@@ -289,6 +524,57 @@ pub(crate) fn emit_context_injection_changed_delta(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<(), String> {
+    emit_context_injection_changed_delta_internal(app, state, session_id, true)
+}
+
+/// Emits one exact session context-injection projection even when another session is selected locally.
+/// 即使本地选中了其他会话，也发送一个准确会话的上下文注入投影。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the delta event to every connected WebUI client.
+/// `app` 将增量事件广播给每个已连接 WebUI 客户端。
+/// `state` owns the retained workspace and workbench projections.
+/// `state` 持有保留的工作区与工作台投影。
+/// `session_id` is the exact persisted session changed by the initiating request.
+/// `session_id` 是发起请求所修改的准确持久化会话。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the exact session projection is committed and emitted.
+/// 准确会话投影提交并发送后返回 `Ok(())`。
+pub(crate) fn emit_context_injection_changed_delta_for_session(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    emit_context_injection_changed_delta_internal(app, state, session_id, false)
+}
+
+/// Commits and emits one context-injection delta with an explicit selection policy.
+/// 按明确的选中策略提交并发送一条上下文注入增量。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the committed delta.
+/// `app` 广播已提交增量。
+/// `state` owns the retained workspace and workbench projections.
+/// `state` 持有保留的工作区与工作台投影。
+/// `session_id` selects the exact session projection to rebuild.
+/// `session_id` 选择需要重建的准确会话投影。
+/// `require_selected_session` skips background sessions for selected-surface-only callers.
+/// `require_selected_session` 为仅处理选中界面的调用方跳过后台会话。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after emission, or after an allowed selected-session skip.
+/// 发送完成后返回 `Ok(())`；允许跳过非选中会话时也返回该值。
+fn emit_context_injection_changed_delta_internal(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    require_selected_session: bool,
+) -> Result<(), String> {
     let event = {
         let mut guard = state
             .lock()
@@ -296,15 +582,30 @@ pub(crate) fn emit_context_injection_changed_delta(
         let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
             return Ok(());
         };
-        let Some(delta) =
-            context_injection_changed_delta_from_workspace_snapshot(workspace_snapshot, session_id)
-        else {
-            return Ok(());
+        // delta is rebuilt from the exact session runtime entry instead of one client's mutable selection.
+        // delta 从准确的会话运行态条目重建，而不是依赖某个客户端的可变选中项。
+        let delta = if require_selected_session {
+            let Some(delta) = context_injection_changed_delta_from_workspace_snapshot(
+                workspace_snapshot,
+                session_id,
+            ) else {
+                return Ok(());
+            };
+            delta
+        } else {
+            context_injection_changed_delta_from_runtime_state(
+                session_id,
+                workspace_snapshot.session_runtime_state.get(&session_id),
+            )
         };
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let generation = guard.workbench_generation;
         guard.workbench.revision = generation;
-        guard.workbench.context_injection = delta.context_injection.clone();
+        if guard.workbench.selected_conversation_id.as_deref()
+            == Some(delta.conversation_id.as_str())
+        {
+            guard.workbench.context_injection = delta.context_injection.clone();
+        }
         replace_conversation_scoped_projection_entry(
             &mut guard.workbench.context_injection_by_conversation,
             delta.conversation_id.as_str(),
@@ -349,20 +650,6 @@ fn context_injection_changed_delta_from_workspace_snapshot(
         session_id,
         workspace_snapshot.session_runtime_state.get(&session_id),
     ))
-}
-
-/// Maps one execution phase to the compact sidebar session status.
-/// 将单个执行阶段映射为侧栏使用的紧凑会话状态。
-fn session_state_for_run_phase(run_phase: SessionRunPhase) -> SessionState {
-    match run_phase {
-        SessionRunPhase::Failed | SessionRunPhase::Stopped => SessionState::Blocked,
-        SessionRunPhase::Idle | SessionRunPhase::Ready => SessionState::Completed,
-        SessionRunPhase::Preparing
-        | SessionRunPhase::MemoryRecall
-        | SessionRunPhase::Requesting
-        | SessionRunPhase::Thinking
-        | SessionRunPhase::ToolRunning => SessionState::Running,
-    }
 }
 
 /// Returns whether the retained workbench currently displays one conversation surface.
@@ -591,30 +878,64 @@ pub(crate) fn replace_conversation_messages_in_workbench_window(
     }
 }
 
-/// Keeps the thinking row collapsed after its streaming phase completes.
-/// 在思考流阶段完成后保持思考行折叠。
-pub(crate) fn collapse_streaming_thinking(
-    _app: &ServiceEventEmitter,
+/// Completes one visible thinking phase by collapsing its active row and restoring the requesting phase.
+/// 通过折叠当前活动思考行并恢复请求阶段，完成一个可见思考阶段。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits the requesting-phase workbench delta after retained thinking state is sealed.
+/// `app` 在保留思考状态封口后发送请求阶段工作台增量。
+/// `state` owns the retained runtime record UI state and session phase.
+/// `state` 持有保留运行时记录界面状态与会话阶段。
+/// `session_id` identifies the session whose thinking phase completed.
+/// `session_id` 标识思考阶段已经完成的会话。
+/// `record_ids` owns the active thinking record identifier selected by prior thinking deltas.
+/// `record_ids` 持有先前思考增量选定的活动思考记录标识。
+///
+/// # Returns
+/// # 返回值
+/// Success after both retained collapse state and requesting phase are applied, or an explicit step-specific error.
+/// 在保留折叠状态与请求阶段均应用后返回成功，否则返回带明确步骤的错误。
+pub(crate) fn complete_streaming_thinking_phase(
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     record_ids: &SessionStreamingRecordIds,
 ) -> Result<(), String> {
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
-        String::from("service is still starting; workspace snapshot is not ready")
-    })?;
-    let now = current_unix_millis_text();
-    let runtime_state = workspace
-        .session_runtime_state
-        .entry(session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
-            updated_at: now.clone(),
-            ..SessionRuntimeStateEntry::default()
-        });
-    collapse_streaming_thinking_in_state(runtime_state, &now, record_ids);
-    Ok(())
+    // This scope releases the service-state mutex before apply_session_phase reacquires it, preventing same-thread self-deadlock.
+    // 此作用域会在 apply_session_phase 再次获取服务状态互斥锁前释放锁，防止同线程自锁。
+    {
+        // guard serializes the retained collapse mutation before the phase delta becomes visible.
+        // guard 在阶段增量可见前串行化保留折叠状态变更。
+        let mut guard = state.lock().map_err(|error| {
+            format!("failed to collapse completed thinking: failed to lock service state: {error}")
+        })?;
+        // workspace is the authoritative owner of streamed runtime record UI state.
+        // workspace 是流式运行时记录界面状态的权威所有者。
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from(
+                "failed to collapse completed thinking: service is still starting; workspace snapshot is not ready",
+            )
+        })?;
+        // now timestamps the exact retained-state mutation performed by this completion event.
+        // now 为当前完成事件执行的精确保留状态变更提供时间戳。
+        let now = current_unix_millis_text();
+        // runtime_state is the exact session entry that owns the active thinking row UI state.
+        // runtime_state 是持有活动思考行界面状态的精确会话条目。
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        collapse_streaming_thinking_in_state(runtime_state, &now, record_ids);
+    }
+
+    // Requesting becomes visible only after the retained thinking row is sealed, preserving event order for every consumer.
+    // 仅在保留思考行完成封口后才显示请求阶段，从而为所有消费者保持事件顺序。
+    apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
+        .map_err(|error| format!("failed to restore request phase after thinking: {error}"))
 }
 
 /// Detached workspace fields changed by one runtime tool event.
@@ -816,12 +1137,304 @@ fn build_runtime_event_workspace_draft(
     })
 }
 
-/// Projects runtime events that have user-facing transcript cards into the retained session state.
-/// 将具备用户可见转录卡片的运行时事件投影到保留的会话状态中。
+/// Runs one runtime-event projection attempt and releases its barrier before returning.
+/// 执行一次运行时事件投影尝试，并在返回前释放对应屏障。
+///
+/// # Parameters
+/// # 参数
+/// `projection` performs the fallible derived-state projection.
+/// `projection` 执行可能失败的派生状态投影。
+/// `release_barrier` attempts to release the Agent Runtime wait boundary exactly once.
+/// `release_barrier` 严格尝试一次 Agent Runtime 等待边界释放。
+///
+/// # Returns
+/// # 返回值
+/// Success when both operations succeed, otherwise a diagnostic preserving every failure.
+/// 两项操作都成功时返回成功，否则返回保留全部失败的诊断。
+fn finish_runtime_event_projection_attempt(
+    projection: impl FnOnce() -> Result<(), String>,
+    release_barrier: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    // projectionResult preserves the derived-state outcome while barrier release is attempted independently.
+    // projectionResult 保留派生状态结果，同时独立尝试释放屏障。
+    let projection_result = projection();
+    // barrierReleaseResult preserves the runtime wait-boundary outcome for combined diagnostics.
+    // barrierReleaseResult 保留运行时等待边界结果以生成合并诊断。
+    let barrier_release_result = release_barrier();
+    match (projection_result, barrier_release_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(projection_error), Err(barrier_error)) => Err(format!(
+            "{projection_error} Runtime-event projection barrier release also failed: {barrier_error}"
+        )),
+    }
+}
+
+/// Verifies that a rejected projection still releases its barrier after the projection attempt.
+/// 验证被拒绝的投影仍会在投影尝试结束后释放屏障。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if ordering, release, or error propagation changes.
+/// 此测试无返回值；顺序、释放动作或错误传播发生变化时测试失败。
+#[cfg(test)]
+#[test]
+fn rejected_runtime_event_projection_still_releases_barrier() {
+    // Track whether the fallible projection closure has executed.
+    // 跟踪可失败投影闭包是否已经执行。
+    let projection_attempted = std::cell::Cell::new(false);
+    // Track whether the independent barrier release closure has executed.
+    // 跟踪独立屏障释放闭包是否已经执行。
+    let barrier_released = std::cell::Cell::new(false);
+    // Capture the original error returned after the mandatory release boundary.
+    // 捕获强制释放边界完成后返回的原始错误。
+    let result = finish_runtime_event_projection_attempt(
+        || {
+            projection_attempted.set(true);
+            Err(String::from("projection rejected"))
+        },
+        || {
+            assert!(projection_attempted.get());
+            barrier_released.set(true);
+            Ok(())
+        },
+    );
+
+    assert_eq!(result, Err(String::from("projection rejected")));
+    assert!(barrier_released.get());
+}
+
+/// Verifies that a successful projection releases its barrier after the projection attempt.
+/// 验证成功投影会在投影尝试结束后释放屏障。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if success propagation or release ordering changes.
+/// 此测试无返回值；成功传播或释放顺序发生变化时测试失败。
+#[cfg(test)]
+#[test]
+fn successful_runtime_event_projection_releases_barrier_after_projection() {
+    // Track whether the successful projection closure has executed.
+    // 跟踪成功投影闭包是否已经执行。
+    let projection_attempted = std::cell::Cell::new(false);
+    // Track whether the independent barrier release closure has executed.
+    // 跟踪独立屏障释放闭包是否已经执行。
+    let barrier_released = std::cell::Cell::new(false);
+    // Capture the successful result returned after the mandatory release boundary.
+    // 捕获强制释放边界完成后返回的成功结果。
+    let result = finish_runtime_event_projection_attempt(
+        || {
+            projection_attempted.set(true);
+            Ok(())
+        },
+        || {
+            assert!(projection_attempted.get());
+            barrier_released.set(true);
+            Ok(())
+        },
+    );
+
+    assert_eq!(result, Ok(()));
+    assert!(barrier_released.get());
+}
+
+/// Verifies simultaneous projection and barrier-release failures remain visible together.
+/// 验证投影与屏障释放同时失败时，两项错误都会保持可见。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if either independent error is discarded.
+/// 此测试无返回值；任一独立错误被丢弃时测试失败。
+#[cfg(test)]
+#[test]
+fn runtime_event_projection_preserves_projection_and_barrier_failures() {
+    // error is the combined diagnostic returned after both independent operations fail.
+    // error 是两项独立操作均失败后返回的合并诊断。
+    let error = finish_runtime_event_projection_attempt(
+        || Err(String::from("projection failed")),
+        || Err(String::from("barrier release failed")),
+    )
+    .expect_err("dual projection failures must remain observable");
+
+    assert!(error.contains("projection failed"));
+    assert!(error.contains("barrier release failed"));
+}
+
+/// Identifies the concrete runtime authority allowed to commit one event projection.
+/// 标识获准提交单次事件投影的具体运行时权限来源。
+#[derive(Clone, Copy)]
+pub(crate) enum RuntimeEventProjectionAuthority {
+    /// A detached or compaction runtime owns the event independently of the root stream registry.
+    /// 分离运行时或压缩运行时独立于根流注册表持有该事件。
+    IndependentRuntime,
+    /// The exact registered root stream task owns the event.
+    /// 已精确注册的根流任务持有该事件。
+    ActiveStreamTask(Uuid),
+}
+
+/// Executes one runtime-event projection mutation under its exact authority and state lock.
+/// 在精确权限与状态锁保护下执行单次运行时事件投影变更。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the active-stream registry and all retained projection state.
+/// `state` 持有活跃流注册表与全部保留投影状态。
+/// `session_id` identifies the session whose projection is being committed.
+/// `session_id` 标识正在提交投影的会话。
+/// `authority` identifies whether the event belongs to an independent runtime or one exact root task.
+/// `authority` 标识事件属于独立运行时还是某个精确根任务。
+/// `projection` performs all validated in-memory mutations while the ownership decision remains stable.
+/// `projection` 在所有权判定保持稳定期间执行全部已验证的内存变更。
+///
+/// # Returns
+/// # 返回值
+/// Returns the projection result, or an explicit error before mutation when root-task ownership was superseded.
+/// 返回投影结果；根任务所有权已被替换时会在变更前返回明确错误。
+pub(crate) fn commit_runtime_event_projection_state<T>(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    authority: RuntimeEventProjectionAuthority,
+    projection: impl FnOnce(&mut ServiceBridgeState) -> Result<T, String>,
+) -> Result<T, String> {
+    // The guard makes exact-owner validation and every following mutation one atomic transaction.
+    // 该锁守卫将精确所有者校验与后续全部变更合并为一个原子事务。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let RuntimeEventProjectionAuthority::ActiveStreamTask(task_id) = authority
+        && !active_stream_task_matches_id(&guard, session_id, task_id)
+    {
+        return Err(format!(
+            "runtime event projection ownership was superseded: session={session_id} task={task_id}"
+        ));
+    }
+    projection(&mut guard)
+}
+
+/// Projects one runtime event and always releases its Agent Runtime projection barrier.
+/// 投影单条运行时事件，并始终释放其 Agent Runtime 投影屏障。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits the resulting WebUI deltas.
+/// `app` 发出生成的 WebUI 增量。
+/// `state` owns the shared retained projection state.
+/// `state` 持有共享的保留投影状态。
+/// `session_id` identifies the session that owns the projection.
+/// `session_id` 标识拥有该投影的会话。
+/// `event` is the authoritative runtime event to project and release.
+/// `event` 是需要投影并释放屏障的权威运行时事件。
+///
+/// # Returns
+/// # 返回值
+/// Returns the projection result; the barrier is released before either success or failure is returned.
+/// 返回投影结果；无论成功或失败，屏障都会在返回前释放。
+pub(crate) fn append_runtime_event_projection_and_release_barrier(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    event: &RuntimeEvent,
+) -> Result<(), String> {
+    finish_runtime_event_projection_attempt(
+        || append_runtime_event_projection(app, state, session_id, event),
+        || release_runtime_event_projection_barrier_after_attempt(event).map(|_| ()),
+    )
+}
+
+/// Projects one active root stream event through its exact registered task authority.
+/// 通过精确注册的任务权限投影单条活跃根流事件。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits WebUI deltas produced after the atomic projection commit.
+/// `app` 发出原子投影提交后生成的 WebUI 增量。
+/// `state` owns the root stream registry and retained projection state.
+/// `state` 持有根流注册表与保留投影状态。
+/// `session_id` identifies the root session that owns the event.
+/// `session_id` 标识持有该事件的根会话。
+/// `active_stream_task_id` identifies the exact registered task allowed to mutate the session.
+/// `active_stream_task_id` 标识获准修改该会话的精确注册任务。
+/// `event` is the authoritative runtime event emitted by that task.
+/// `event` 是该任务发出的权威运行时事件。
+///
+/// # Returns
+/// # 返回值
+/// Returns `Ok(())` after projection, or an explicit error when task ownership or projection validation fails.
+/// 投影完成后返回 `Ok(())`；任务所有权或投影验证失败时返回明确错误。
+pub(crate) fn append_active_stream_runtime_event_projection(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    active_stream_task_id: Uuid,
+    event: &RuntimeEvent,
+) -> Result<(), String> {
+    append_runtime_event_projection_with_authority(
+        app,
+        state,
+        session_id,
+        RuntimeEventProjectionAuthority::ActiveStreamTask(active_stream_task_id),
+        event,
+    )
+}
+
+/// Projects an event owned by a detached or compaction runtime into retained session state.
+/// 将分离运行时或压缩运行时持有的事件投影到保留会话状态中。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits WebUI deltas produced after projection commit.
+/// `app` 发出投影提交后生成的 WebUI 增量。
+/// `state` owns the retained projection state.
+/// `state` 持有保留投影状态。
+/// `session_id` identifies the session that owns the independent runtime event.
+/// `session_id` 标识持有独立运行时事件的会话。
+/// `event` is the authoritative detached or compaction runtime event.
+/// `event` 是权威的分离运行时或压缩运行时事件。
+///
+/// # Returns
+/// # 返回值
+/// Returns `Ok(())` after projection, or a validation or state error before partial commit.
+/// 投影完成后返回 `Ok(())`；验证或状态错误会在局部提交前返回。
 pub(crate) fn append_runtime_event_projection(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
+    event: &RuntimeEvent,
+) -> Result<(), String> {
+    append_runtime_event_projection_with_authority(
+        app,
+        state,
+        session_id,
+        RuntimeEventProjectionAuthority::IndependentRuntime,
+        event,
+    )
+}
+
+/// Projects one runtime event under the caller's verified authority contract.
+/// 根据调用方已验证的权限契约投影单条运行时事件。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits WebUI deltas produced after projection commit.
+/// `app` 发出投影提交后生成的 WebUI 增量。
+/// `state` owns all retained state and runtime ownership registries.
+/// `state` 持有全部保留状态与运行时所有权注册表。
+/// `session_id` identifies the session receiving the event projection.
+/// `session_id` 标识接收事件投影的会话。
+/// `authority` carries the concrete ownership rule for this event source.
+/// `authority` 携带该事件来源的具体所有权规则。
+/// `event` is the authoritative runtime event to validate and project.
+/// `event` 是需要验证并投影的权威运行时事件。
+///
+/// # Returns
+/// # 返回值
+/// Returns `Ok(())` after a complete projection, or an error before any fallible partial commit.
+/// 完整投影后返回 `Ok(())`；任何可失败的局部提交前会返回错误。
+fn append_runtime_event_projection_with_authority(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    authority: RuntimeEventProjectionAuthority,
     event: &RuntimeEvent,
 ) -> Result<(), String> {
     if !matches!(
@@ -857,21 +1470,18 @@ pub(crate) fn append_runtime_event_projection(
         }
     }
     let controller_runtime = controller_runtime_from_state(state)?;
-    let changed_todolist: Option<SessionTodolistState>;
-    let changed_plan_mode: Option<SessionPlanModeState>;
     let mut changed_addon_session_id: Option<SessionId> = None;
     let mut subagent_navigation_changed = false;
-    let transcript_changed: bool;
     let (
+        changed_todolist,
+        changed_plan_mode,
+        transcript_changed,
         transcript_messages_for_persistence,
         addon_task_projects,
         addon_session,
         message_window_deltas,
-    ) = {
+    ) = commit_runtime_event_projection_state(state, session_id, authority, |guard| {
         let conversation_id = session_id.to_string();
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
         let before_visible_messages: Vec<ConversationMessage> = guard
             .workbench
             .messages
@@ -890,9 +1500,9 @@ pub(crate) fn append_runtime_event_projection(
             child_send_message,
         )?;
         let mut projected_messages = workspace_draft.projected_parent_messages.clone();
-        transcript_changed = workspace_draft.parent_messages.is_some();
-        changed_todolist = workspace_draft.changed_todolist.clone();
-        changed_plan_mode = workspace_draft.changed_plan_mode.clone();
+        let transcript_changed = workspace_draft.parent_messages.is_some();
+        let changed_todolist = workspace_draft.changed_todolist.clone();
+        let changed_plan_mode = workspace_draft.changed_plan_mode.clone();
         if changed_todolist.is_some() || changed_plan_mode.is_some() {
             changed_addon_session_id = Some(session_id);
         }
@@ -958,7 +1568,7 @@ pub(crate) fn append_runtime_event_projection(
         }
         if let Some((child_task_id, execution_id)) = subagent_send_message_resume {
             consume_webui_subagent_mailbox_input_for_execution(
-                &mut guard,
+                guard,
                 session_id,
                 child_task_id,
                 execution_id.as_str(),
@@ -966,7 +1576,7 @@ pub(crate) fn append_runtime_event_projection(
         }
         for (child_task_id, execution_id) in subagent_wait_consumed_executions {
             consume_webui_subagent_mailbox_input_for_execution(
-                &mut guard,
+                guard,
                 session_id,
                 child_task_id,
                 execution_id.as_str(),
@@ -974,16 +1584,16 @@ pub(crate) fn append_runtime_event_projection(
         }
         if let Some((child_task_id, execution_id)) = running_subagent_send_message_resume {
             mark_webui_subagent_completion_gate_ignored(
-                &mut guard,
+                guard,
                 child_task_id,
                 execution_id.as_str(),
             );
         }
-        if remove_webui_closed_subagent_tasks_in_state(&mut guard, &closed_subagent_task_ids) {
+        if remove_webui_closed_subagent_tasks_in_state(guard, &closed_subagent_task_ids) {
             subagent_navigation_changed = true;
         }
         let surface_matches =
-            workbench_should_emit_runtime_event_message_patch(&guard, &conversation_id, session_id);
+            workbench_should_emit_runtime_event_message_patch(guard, &conversation_id, session_id);
         let mut message_window_deltas = Vec::new();
         if surface_matches && transcript_changed {
             projected_messages = merge_visible_streaming_rows_with_runtime_projection(
@@ -1045,13 +1655,16 @@ pub(crate) fn append_runtime_event_projection(
                 });
             }
         }
-        (
+        Ok((
+            changed_todolist,
+            changed_plan_mode,
+            transcript_changed,
             transcript_messages_for_persistence,
             addon_task_projects,
             addon_session,
             message_window_deltas,
-        )
-    };
+        ))
+    })?;
     for event in message_window_deltas {
         emit_service_event_with_trace(
             app,

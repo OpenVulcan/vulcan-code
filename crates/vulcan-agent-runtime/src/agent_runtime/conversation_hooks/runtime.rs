@@ -271,28 +271,15 @@ impl ConversationHookRuntime {
         );
     }
 
-    /// Records a tool runtime event when it belongs to a conversation turn.
-    /// 当工具运行时事件属于会话回合时记录该事件。
-    pub fn record_tool_runtime_event(&mut self, session_id: SessionId, event: &RuntimeEvent) {
-        let Some(turn_id) = self
-            .active_turns
-            .get(&session_id)
-            .map(|turn| turn.turn_id.clone())
-        else {
-            return;
-        };
-        self.record_tool_runtime_event_for_execution(session_id, &turn_id, event);
-    }
-
-    /// Dispatches a tool hook for an explicit execution without creating a conversation turn.
-    /// 为显式执行派发工具 hook，且不创建会话回合。
+    /// Dispatches a tool hook for one immutable request or execution correlation without creating a turn.
+    /// 为一个不可变请求或执行关联派发工具 hook，且不创建回合。
     ///
     /// # Parameters
     /// 参数
-    /// `session_id` identifies the child or standalone execution session that emitted the event.
-    /// `session_id` 标识发出事件的子代理或独立执行会话。
-    /// `execution_id` identifies the exact execution generation used as the hook turn correlation id.
-    /// `execution_id` 标识作为 hook 回合关联标识的精确执行代次。
+    /// `session_id` identifies the main, child, or standalone execution session that emitted the event.
+    /// `session_id` 标识发出事件的主会话、子任务或独立执行会话。
+    /// `execution_id` identifies the exact request turn or execution generation used for Hook correlation.
+    /// `execution_id` 标识用于 Hook 关联的精确请求回合或执行代次。
     /// `event` is the runtime event; non-tool boundaries are ignored.
     /// `event` 是运行时事件；非工具边界事件会被忽略。
     ///
@@ -333,58 +320,6 @@ impl ConversationHookRuntime {
             }),
             HookScope::Session,
         );
-    }
-
-    /// Completes one logical turn and fires the completed hook payload.
-    /// 完成一个逻辑回合并触发 completed hook payload。
-    pub fn complete_turn(
-        &mut self,
-        session_id: SessionId,
-        project_id: Option<String>,
-        assistant_content: &str,
-        provider_request_count: usize,
-        conversation_state: &SessionConversationState,
-    ) -> (String, Vec<VmmWritebackHookEffect>) {
-        self.complete_turn_with_status(
-            session_id,
-            project_id,
-            assistant_content,
-            provider_request_count,
-            conversation_state,
-            ConversationTurnCompletionStatus::Completed,
-            0,
-        )
-    }
-
-    /// Dispatches a completed-turn hook payload with an explicit logical completion state.
-    /// 使用显式逻辑完成状态调度完成回合 hook 载荷。
-    pub fn complete_turn_with_status(
-        &mut self,
-        session_id: SessionId,
-        project_id: Option<String>,
-        assistant_content: &str,
-        provider_request_count: usize,
-        conversation_state: &SessionConversationState,
-        completion_status: ConversationTurnCompletionStatus,
-        pending_subagent_count: usize,
-    ) -> (String, Vec<VmmWritebackHookEffect>) {
-        let (completed_turn_id, request) = self.prepare_turn_completion_dispatch_with_status(
-            session_id,
-            project_id,
-            assistant_content,
-            provider_request_count,
-            conversation_state,
-            completion_status,
-            pending_subagent_count,
-        );
-        let report = request.run_blocking();
-        (
-            completed_turn_id,
-            report
-                .as_ref()
-                .map(vmm_writeback_effects_from_report)
-                .unwrap_or_default(),
-        )
     }
 
     /// Completes one logical turn locally and returns a dispatch request that can run off the critical path.
@@ -458,22 +393,6 @@ impl ConversationHookRuntime {
                 payload,
                 completed_turn_id,
             ),
-        )
-    }
-
-    /// Dispatches one prepared completed-turn payload synchronously for legacy callers.
-    /// 为旧调用方同步调度一条已准备的完成回合 payload。
-    pub(super) fn dispatch_completion_blocking(
-        dispatcher: HookDispatcher,
-        session_id: SessionId,
-        payload: Value,
-    ) -> Option<HookDispatchReport> {
-        Self::dispatch_json_blocking_with_dispatcher(
-            dispatcher,
-            session_id,
-            payload,
-            HOOK_CONVERSATION_TURN_COMPLETED,
-            COMPLETION_DISPATCH_TIMEOUT_MS,
         )
     }
 
@@ -592,48 +511,5 @@ impl ConversationHookRuntime {
         };
         let request = HookDispatchRequest::new(context, HookPayload { value: payload });
         spawn_hook_dispatch(dispatcher, request);
-    }
-
-    /// Dispatches one JSON hook payload synchronously through the provided dispatcher.
-    /// 通过给定调度器同步调度一条 JSON hook payload。
-    fn dispatch_json_blocking_with_dispatcher(
-        dispatcher: HookDispatcher,
-        session_id: SessionId,
-        payload: Value,
-        point: &'static str,
-        timeout_ms: u64,
-    ) -> Option<HookDispatchReport> {
-        let context = HookContext {
-            run_id: format!("{point}:{session_id}"),
-            point: point.to_string(),
-            scope: HookScope::Session,
-            actor: HookActor::new("vulcan-code-runtime"),
-            workspace_id: None,
-            project_id: None,
-            session_id: Some(session_id.to_string()),
-            conversation_id: Some(session_id.to_string()),
-            user_id: None,
-            capabilities: Default::default(),
-            metadata: BTreeMap::new(),
-        };
-        let request = HookDispatchRequest::new(context, HookPayload { value: payload });
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .ok()?;
-            runtime.block_on(async move {
-                tokio::time::timeout(
-                    Duration::from_millis(timeout_ms),
-                    dispatcher.dispatch(request),
-                )
-                .await
-                .ok()
-                .and_then(Result::ok)
-            })
-        })
-        .join()
-        .ok()
-        .flatten()
     }
 }

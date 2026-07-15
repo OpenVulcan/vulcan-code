@@ -3,6 +3,7 @@
 
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -20,7 +21,7 @@ use vulcan_agent_runtime::{
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::bootstrap_mcp_runtime_access,
-    runtime_assets,
+    project_temp_maintenance, runtime_assets,
     tooling::CommandSessionRuntime,
 };
 use vulcan_provider_config::config::ProviderConfigurationFile;
@@ -591,7 +592,14 @@ fn run_service_bootstrap(
         conversation_hook_runtime: Arc::new(Mutex::new(conversation_hook_runtime)),
         vmm_hook_runtime,
     };
-    vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true);
+    vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true)
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "service-process",
+                "Core Service",
+                format!("启用运行时事件投影屏障失败：{error}"),
+            )
+        })?;
     install_webui_question_runtime_event_bridge(
         event_emitter,
         state,
@@ -656,15 +664,39 @@ fn run_service_bootstrap(
         "workspace",
         "Workspace",
     )?;
+    // project_paths contains the exact persisted roots for both visible and archived projects.
+    // project_paths 包含可见项目与归档项目各自持久化的精确根目录。
+    let project_paths = workspace_snapshot
+        .task_projects
+        .iter()
+        .chain(workspace_snapshot.archived_task_projects.iter())
+        .map(|project| PathBuf::from(&project.path))
+        .collect::<Vec<_>>();
+    match project_temp_maintenance::maintain_project_temp_dirs(&project_paths) {
+        Ok(()) => logs.push(String::from(
+            "[webui-service] project temp maintenance completed",
+        )),
+        Err(error) => logs.push(format!(
+            "[webui-service] project temp maintenance warning: {error}"
+        )),
+    }
     let selected_session_id = workspace_snapshot.selected_session;
     let vmm_hook_snapshot =
         build_vmm_hook_config_snapshot(&provider_configuration, &workspace_snapshot);
-    agent_runtime
-        .vmm_hook_runtime
-        .seed_profile_cache(vmm_hook_snapshot.profile_sync.clone());
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(vmm_hook_snapshot);
+    bootstrap_step(
+        agent_runtime
+            .vmm_hook_runtime
+            .seed_profile_sync(vmm_hook_snapshot.profile_sync.clone()),
+        "workspace",
+        "Workspace",
+    )?;
+    bootstrap_step(
+        agent_runtime
+            .vmm_hook_runtime
+            .replace_snapshot(vmm_hook_snapshot),
+        "workspace",
+        "Workspace",
+    )?;
     logs.push(format!(
         "[webui-service] workspace loaded: projects={} sessions={} selected={}",
         workspace_snapshot.task_projects.len(),
@@ -738,13 +770,15 @@ fn run_service_bootstrap(
             workspace: &workspace_snapshot,
             surface_messages: surface_messages.as_slice(),
             subagent_navigation,
-            pending_questions: pending_question_snapshots_from_agent_runtime(Some(&agent_runtime)),
+            pending_questions: pending_question_snapshots_from_agent_runtime(Some(&agent_runtime))
+                .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?,
             logs: &logs,
             live_context_budgets: &BTreeMap::new(),
             session_goal_summaries: &BTreeMap::new(),
             hydrated_conversation_windows: &hydrated_conversation_windows,
             native_tools: native_tool_summaries_from_agent_runtime(Some(&agent_runtime)),
         });
+        crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         workbench.revision = guard.workbench_generation;
         guard.workbench = workbench.clone();

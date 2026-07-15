@@ -3,715 +3,110 @@
 
 use super::*;
 
+mod configuration;
+mod conversation_runtime;
+mod extensibility;
+mod project_conversation;
+mod workspace_io;
+
+/// Typed ownership result returned by one domain RPC router.
+/// 单个领域 RPC 路由返回的强类型所有权结果。
+#[derive(Debug)]
+pub(super) enum ServiceRpcDispatch {
+    /// The domain owns the method and produced its serialized service result.
+    /// 该领域持有此方法并产生了序列化服务结果。
+    Handled(Result<Value, String>),
+    /// The method belongs to another domain or is unknown.
+    /// 此方法属于其他领域或未知。
+    Unknown,
+}
+
+impl ServiceRpcDispatch {
+    /// Returns whether a domain claimed exact ownership of the method.
+    /// 返回某个领域是否声明了该方法的精确所有权。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns true only for a handled service result, including service failures.
+    /// 仅对已处理的服务结果返回 true，包括服务失败。
+    fn is_handled(&self) -> bool {
+        matches!(self, Self::Handled(_))
+    }
+}
+
+/// Dispatches one normalized RPC through the ordered domain routers.
+/// 通过有序领域路由分发单个归一化 RPC。
+///
+/// # Parameters
+/// `app` emits frontend effects, `state` owns service data, `method` is the wire name, and `params` is normalized JSON.
+/// `app` 发出前端副作用，`state` 持有服务数据，`method` 是线协议名称，`params` 是归一化 JSON。
+///
+/// # Returns
+/// 返回值
+/// Returns the first exact domain ownership result or `Unknown` after every router declines it.
+/// 返回首个精确领域所有权结果，或在全部路由拒绝后返回 `Unknown`。
+async fn dispatch_known_service_rpc(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    method: &str,
+    params: &Value,
+) -> Result<ServiceRpcDispatch, String> {
+    // outcome is reused because each router either claims exact ownership or leaves it untouched.
+    // outcome 被复用，因为每个路由要么声明精确所有权，要么保持未处理。
+    let outcome = workspace_io::dispatch(state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = extensibility::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome =
+        conversation_runtime::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = configuration::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    project_conversation::dispatch(app, state, method, params).await
+}
+
+/// Dispatches one browser-facing service RPC while preserving submit tracing.
+/// 在保留提交追踪的同时分发单个浏览器侧服务 RPC。
+///
+/// # Parameters
+/// `app` emits frontend effects, `state` owns service data, `method` is the exact wire name, and `params` is optional raw JSON.
+/// `app` 发出前端副作用，`state` 持有服务数据，`method` 是精确线协议名称，`params` 是可选原始 JSON。
+///
+/// # Returns
+/// 返回值
+/// Returns the serialized domain response or the canonical parameter, service, or unknown-method error.
+/// 返回序列化领域响应，或标准参数、服务及未知方法错误。
 pub(super) async fn dispatch_service_rpc(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     method: String,
     params: Option<Value>,
 ) -> Result<Value, String> {
+    // params normalizes an omitted payload to the established empty object contract.
+    // params 把缺失载荷归一化为既有空对象契约。
     let params = params.unwrap_or_else(|| json!({}));
-    // Measures one service RPC from dispatch entry to serialized result handoff.
-    // 衡量单个 service RPC 从分发入口到序列化结果交接的耗时。
+    // rpc_started_at measures dispatch entry through serialized result handoff.
+    // rpc_started_at 衡量从分发入口到序列化结果交接的耗时。
     let rpc_started_at = current_unix_millis_value();
+    // traces_submit_rpc identifies the only RPC with detailed submission trace events.
+    // traces_submit_rpc 标识唯一具有详细提交追踪事件的 RPC。
     let traces_submit_rpc = method == "service_submit_conversation_prompt";
     if traces_submit_rpc {
         webui_submit_trace("rpc_received", format!("method={method}"));
     }
-    let rpc_result = match method.as_str() {
-        "startup.snapshot" | "service_startup_snapshot" => {
-            rpc_json_result(service_startup_snapshot(state))
-        }
-        "workbench.snapshot" | "service_workbench_snapshot" => {
-            rpc_json_result(service_workbench_snapshot(state))
-        }
-        "workspace.diff.snapshot" | "service_workspace_diff_snapshot" => rpc_json_result(
-            service_workspace_diff_snapshot(
-                state,
-                rpc_optional_param(&params, "workspacePath")?,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_optional_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "workspace.diff.fileDetail" | "service_workspace_diff_file_detail" => rpc_json_result(
-            service_workspace_diff_file_detail(
-                state,
-                rpc_optional_param(&params, "workspacePath")?,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_optional_param(&params, "request")?,
-                rpc_required_param(&params, "file")?,
-            )
-            .await,
-        ),
-        "workspace.diff.search" | "service_workspace_diff_search" => rpc_json_result(
-            service_workspace_diff_search(
-                state,
-                rpc_optional_param(&params, "workspacePath")?,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_optional_param(&params, "request")?,
-                rpc_required_param(&params, "search")?,
-            )
-            .await,
-        ),
-        "workspace.git.fileAction" | "service_workspace_git_file_action" => rpc_json_result(
-            service_workspace_git_file_action(
-                state,
-                rpc_optional_param(&params, "workspacePath")?,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "workspace.files.list" | "service_workspace_files_list" => rpc_json_result(
-            service_workspace_files_list(
-                rpc_required_param(&params, "workspacePath")?,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_optional_param(&params, "directoryPath")?,
-                rpc_optional_param(&params, "filters")?,
-            )
-            .await,
-        ),
-        "workspace.files.read" | "service_workspace_files_read" => rpc_json_result(
-            service_workspace_files_read(
-                rpc_required_param(&params, "workspacePath")?,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_required_param(&params, "filePath")?,
-                rpc_optional_param(&params, "filters")?,
-            )
-            .await,
-        ),
-        "service_refresh_luaskills_catalog" => {
-            rpc_json_result(service_refresh_luaskills_catalog(state).await)
-        }
-        "service_inspect_local_plugin" => rpc_json_result(
-            service_inspect_local_plugin(state, rpc_required_param(&params, "sourcePath")?).await,
-        ),
-        "service_install_local_plugin" => rpc_json_result(
-            service_install_local_plugin(
-                state,
-                rpc_required_param(&params, "sourcePath")?,
-                rpc_required_param(&params, "approvedCapabilities")?,
-                rpc_required_param(&params, "allowRegistryDependencies")?,
-            )
-            .await,
-        ),
-        "service_uninstall_user_plugin" => rpc_json_result(
-            service_uninstall_user_plugin(state, rpc_required_param(&params, "pluginId")?).await,
-        ),
-        "service_load_plugin_ui_module" => rpc_json_result(service_load_plugin_ui_module(
-            state,
-            rpc_required_param(&params, "pluginId")?,
-            rpc_required_param(&params, "mountId")?,
-        )),
-        "service_read_plugin_text_asset" => rpc_json_result(service_read_plugin_text_asset(
-            state,
-            rpc_required_param(&params, "pluginId")?,
-            rpc_required_param(&params, "path")?,
-        )),
-        "service_invoke_plugin_action" => rpc_json_result(
-            service_invoke_plugin_action(
-                state,
-                rpc_required_param(&params, "pluginId")?,
-                rpc_required_param(&params, "actionId")?,
-                rpc_required_param(&params, "arguments")?,
-                rpc_optional_param(&params, "workspacePath")?,
-            )
-            .await,
-        ),
-        "service_save_luaskills_runtime_settings" => rpc_json_result(
-            service_save_luaskills_runtime_settings(
-                state,
-                rpc_required_param(&params, "settings")?,
-            )
-            .await,
-        ),
-        "service_retry_luaskills_managed_runtimes" => rpc_json_result(
-            service_retry_luaskills_managed_runtimes(
-                app,
-                state,
-                rpc_required_param(&params, "target")?,
-            )
-            .await,
-        ),
-        "service_install_luaskill" => rpc_json_result(
-            service_install_luaskill(
-                state,
-                rpc_optional_param(&params, "skillId")?,
-                rpc_required_param(&params, "source")?,
-                rpc_required_param(&params, "sourceType")?,
-            )
-            .await,
-        ),
-        "service_update_luaskill" => rpc_json_result(
-            service_update_luaskill(state, rpc_required_param(&params, "skillId")?).await,
-        ),
-        "service_set_luaskill_enabled" => rpc_json_result(
-            service_set_luaskill_enabled(
-                state,
-                rpc_required_param(&params, "skillId")?,
-                rpc_required_param(&params, "enabled")?,
-            )
-            .await,
-        ),
-        "service_set_luaskills_system_plugin_enabled" => rpc_json_result(
-            service_set_luaskills_system_plugin_enabled(
-                state,
-                rpc_required_param(&params, "pluginId")?,
-                rpc_required_param(&params, "enabled")?,
-            )
-            .await,
-        ),
-        "service_uninstall_luaskill" => rpc_json_result(
-            service_uninstall_luaskill(state, rpc_required_param(&params, "skillId")?).await,
-        ),
-        "service_set_luaskill_tool_registration_state" => rpc_json_result(
-            service_set_luaskill_tool_registration_state(
-                state,
-                rpc_required_param(&params, "skillId")?,
-                rpc_required_param(&params, "localName")?,
-                rpc_required_param(&params, "registrationState")?,
-            )
-            .await,
-        ),
-        "service_refresh_agent_skills_catalog" => {
-            rpc_json_result(service_refresh_agent_skills_catalog(state).await)
-        }
-        "service_open_agent_skills_user_directory" => {
-            rpc_json_result(service_open_agent_skills_user_directory(state).await)
-        }
-        "service_save_agent_skill" => rpc_json_result(
-            service_save_agent_skill(state, rpc_required_param(&params, "skill")?).await,
-        ),
-        "service_delete_agent_skill" => rpc_json_result(
-            service_delete_agent_skill(state, rpc_required_param(&params, "name")?).await,
-        ),
-        "service_restore_agent_skill_default" => rpc_json_result(
-            service_restore_agent_skill_default(state, rpc_required_param(&params, "name")?).await,
-        ),
-        "service_save_agent_skill_category" => rpc_json_result(
-            service_save_agent_skill_category(state, rpc_required_param(&params, "category")?)
-                .await,
-        ),
-        "service_delete_agent_skill_category" => rpc_json_result(
-            service_delete_agent_skill_category(state, rpc_required_param(&params, "categoryId")?)
-                .await,
-        ),
-        "service_set_agent_skill_category" => rpc_json_result(
-            service_set_agent_skill_category(
-                state,
-                rpc_required_param(&params, "name")?,
-                rpc_required_param(&params, "categoryId")?,
-            )
-            .await,
-        ),
-        "service_refresh_subagent_catalog" => {
-            rpc_json_result(service_refresh_subagent_catalog(state).await)
-        }
-        "service_open_subagent_user_directory" => {
-            rpc_json_result(service_open_subagent_user_directory(state).await)
-        }
-        "service_set_subagent_definition_enabled" => rpc_json_result(
-            service_set_subagent_definition_enabled(
-                state,
-                rpc_required_param(&params, "agentId")?,
-                rpc_required_param(&params, "enabled")?,
-            )
-            .await,
-        ),
-        "service_save_subagent_definition" => rpc_json_result(
-            service_save_subagent_definition(state, rpc_required_param(&params, "definition")?)
-                .await,
-        ),
-        "service_delete_subagent_definition" => rpc_json_result(
-            service_delete_subagent_definition(state, rpc_required_param(&params, "agentId")?)
-                .await,
-        ),
-        "service_restore_subagent_definition_default" => rpc_json_result(
-            service_restore_subagent_definition_default(
-                state,
-                rpc_required_param(&params, "agentId")?,
-            )
-            .await,
-        ),
-        "service_set_agent_skill_enabled" => rpc_json_result(
-            service_set_agent_skill_enabled(
-                state,
-                rpc_required_param(&params, "name")?,
-                rpc_required_param(&params, "enabled")?,
-            )
-            .await,
-        ),
-        "service_load_project_agent_skill_overrides" => {
-            rpc_json_result(service_load_project_agent_skill_overrides(
-                state,
-                rpc_required_param(&params, "projectId")?,
-            ))
-        }
-        "service_set_agent_skill_project_state" => rpc_json_result(
-            service_set_agent_skill_project_state(
-                state,
-                rpc_required_param(&params, "projectId")?,
-                rpc_required_param(&params, "name")?,
-                rpc_required_param(&params, "stateKey")?,
-            )
-            .await,
-        ),
-        "service_run_vmm_memory_action" => rpc_json_result(
-            service_run_vmm_memory_action(state, rpc_required_param(&params, "request")?).await,
-        ),
-        "service_load_project_vmm_config" => rpc_json_result(service_load_project_vmm_config(
-            state,
-            rpc_required_param(&params, "projectId")?,
-        )),
-        "service_preview_project_attachment_cleanup" => rpc_json_result(
-            service_preview_project_attachment_cleanup(
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_execute_project_attachment_cleanup" => rpc_json_result(
-            service_execute_project_attachment_cleanup(
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_save_vmm_memory_config" => rpc_json_result(
-            service_save_vmm_memory_config(state, rpc_required_param(&params, "request")?).await,
-        ),
-        "service_session_messages" => rpc_json_result(
-            service_session_messages(app, state, rpc_required_param(&params, "sessionId")?).await,
-        ),
-        "service_session_history_page" => rpc_json_result(
-            service_session_history_page(
-                app,
-                state,
-                rpc_required_param(&params, "sessionId")?,
-                rpc_required_param(&params, "beforeOrdinal")?,
-            )
-            .await,
-        ),
-        "service_session_tool_detail" => rpc_json_result(
-            service_session_tool_detail(
-                state,
-                rpc_required_param(&params, "sessionId")?,
-                rpc_optional_param(&params, "recordId")?,
-                rpc_optional_param(&params, "toolCallId")?,
-                rpc_optional_param(&params, "seq")?,
-                rpc_optional_param(&params, "messageIndex")?,
-            )
-            .await,
-        ),
-        "service_submit_conversation_prompt" => rpc_json_result(
-            service_submit_conversation_prompt(
-                app,
-                state,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_required_param(&params, "prompt")?,
-                rpc_optional_param(&params, "hiddenModelGuidance")?,
-                rpc_optional_param(&params, "executionMode")?,
-                rpc_optional_param(&params, "reasoningEffort")?,
-                rpc_optional_param(&params, "attachments")?,
-                rpc_optional_param(&params, "disabledAiCapabilityKinds")?,
-                rpc_optional_param(&params, "disabledAiCapabilityTargetSelectors")?,
-                rpc_optional_param(&params, "aiCapabilityTargetOrderOverrides")?,
-            )
-            .await,
-        ),
-        "service_stop_conversation_run" => rpc_json_result(
-            service_stop_conversation_run(
-                app,
-                state,
-                rpc_required_param(&params, "conversationId")?,
-                rpc_optional_param(&params, "mode")?,
-            )
-            .await,
-        ),
-        "service_stop_command_session" => rpc_json_result(
-            service_stop_command_session(
-                app,
-                state,
-                rpc_required_param(&params, "commandSessionId")?,
-                rpc_optional_param(&params, "ownerSessionId")?,
-            )
-            .await,
-        ),
-        "service_get_command_session_snapshot" => rpc_json_result(
-            service_get_command_session_snapshot(
-                state,
-                rpc_required_param(&params, "commandSessionId")?,
-                rpc_optional_param(&params, "ownerSessionId")?,
-            )
-            .await,
-        ),
-        "service_send_command_session_input" => rpc_json_result(
-            service_send_command_session_input(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_resize_command_session" => rpc_json_result(
-            service_resize_command_session(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_get_user_prompt_edit_draft" => rpc_json_result(
-            service_get_user_prompt_edit_draft(
-                state,
-                rpc_required_param(&params, "conversationId")?,
-                rpc_required_param(&params, "messageId")?,
-            )
-            .await,
-        ),
-        "service_submit_user_prompt_edit" => rpc_json_result(
-            service_submit_user_prompt_edit(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_fork_conversation" => rpc_json_result(
-            service_fork_conversation(app, state, rpc_required_param(&params, "request")?).await,
-        ),
-        "service_save_session_goal" => rpc_json_result(
-            service_save_session_goal(app, state, rpc_required_param(&params, "request")?).await,
-        ),
-        "service_resume_session_goal" => rpc_json_result(
-            service_resume_session_goal(app, state, rpc_required_param(&params, "request")?).await,
-        ),
-        "service_clear_session_goal" => rpc_json_result(
-            service_clear_session_goal(app, state, rpc_required_param(&params, "request")?).await,
-        ),
-        "service_update_session_goal_status" => rpc_json_result(
-            service_update_session_goal_status(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_set_session_plan_mode" => rpc_json_result(
-            service_set_session_plan_mode(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_set_session_vmm_policy" => rpc_json_result(
-            service_set_session_vmm_policy(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_compact_selected_conversation_context" => {
-            rpc_json_result(service_compact_selected_conversation_context(app, state).await)
-        }
-        "service_reply_pending_question" => rpc_json_result(service_reply_pending_question(
-            app,
-            state,
-            rpc_required_param(&params, "requestId")?,
-            rpc_required_param(&params, "answers")?,
-        )),
-        "service_reject_pending_question" => rpc_json_result(service_reject_pending_question(
-            app,
-            state,
-            rpc_required_param(&params, "requestId")?,
-        )),
-        "service_open_subagent_panel" => rpc_json_result(
-            service_open_subagent_panel(
-                state,
-                rpc_required_param(&params, "parentConversationId")?,
-                rpc_required_param(&params, "taskId")?,
-            )
-            .await,
-        ),
-        "service_close_subagent_panel" => {
-            rpc_json_result(service_close_subagent_panel(app, state).await)
-        }
-        "service_stop_subagent_task" => rpc_json_result(
-            service_stop_subagent_task(
-                app,
-                state,
-                rpc_required_param(&params, "parentConversationId")?,
-                rpc_required_param(&params, "taskId")?,
-            )
-            .await,
-        ),
-        "service_close_subagent_task" => rpc_json_result(
-            service_close_subagent_task(
-                app,
-                state,
-                rpc_required_param(&params, "parentConversationId")?,
-                rpc_required_param(&params, "taskId")?,
-            )
-            .await,
-        ),
-        "service_edit_pending_prompt" => rpc_json_result(
-            service_edit_pending_prompt(app, state, rpc_required_param(&params, "entryId")?).await,
-        ),
-        "service_insert_pending_prompt" => rpc_json_result(
-            service_insert_pending_prompt(app, state, rpc_required_param(&params, "entryId")?)
-                .await,
-        ),
-        "service_remove_pending_prompt" => rpc_json_result(
-            service_remove_pending_prompt(app, state, rpc_required_param(&params, "entryId")?)
-                .await,
-        ),
-        "service_reorder_pending_prompts" => rpc_json_result(
-            service_reorder_pending_prompts(
-                app,
-                state,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_required_param(&params, "draggedEntryId")?,
-                rpc_optional_param(&params, "targetEntryId")?,
-            )
-            .await,
-        ),
-        "service_pick_composer_attachments" => rpc_json_result(
-            service_pick_composer_attachments(
-                state,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_optional_param(&params, "kind")?,
-            )
-            .await,
-        ),
-        "service_stage_composer_attachment_paths" => rpc_json_result(
-            service_stage_composer_attachment_paths(
-                state,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_required_param(&params, "paths")?,
-            )
-            .await,
-        ),
-        "service_stage_composer_attachment_bytes" => rpc_json_result(
-            service_stage_composer_attachment_bytes(
-                state,
-                rpc_optional_param(&params, "projectId")?,
-                rpc_optional_param(&params, "conversationId")?,
-                rpc_required_param(&params, "fileName")?,
-                rpc_required_param(&params, "mimeType")?,
-                rpc_required_param(&params, "dataBase64")?,
-            )
-            .await,
-        ),
-        "service_select_workbench_model" => rpc_json_result(
-            service_select_workbench_model(
-                app,
-                state,
-                rpc_required_param(&params, "providerId")?,
-                rpc_required_param(&params, "modelId")?,
-            )
-            .await,
-        ),
-        "service_list_workbench_model_secondary_routes" => rpc_json_result(
-            service_list_workbench_model_secondary_routes(
-                state,
-                rpc_required_param(&params, "providerId")?,
-                rpc_required_param(&params, "modelId")?,
-            )
-            .await,
-        ),
-        "service_select_workbench_model_secondary_route" => rpc_json_result(
-            service_select_workbench_model_secondary_route(
-                app,
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_select_workbench_reasoning_effort" => rpc_json_result(
-            service_select_workbench_reasoning_effort(
-                app,
-                state,
-                rpc_required_param(&params, "effort")?,
-            )
-            .await,
-        ),
-        "service_select_workbench_thinking_display_mode" => rpc_json_result(
-            service_select_workbench_thinking_display_mode(
-                app,
-                state,
-                rpc_required_param(&params, "mode")?,
-            )
-            .await,
-        ),
-        "service_select_webui_locale" => rpc_json_result(
-            service_select_webui_locale(app, state, rpc_required_param(&params, "locale")?).await,
-        ),
-        "service_save_provider_configuration" => rpc_json_result(
-            service_save_provider_configuration(
-                app,
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_remove_provider_configuration" => rpc_json_result(
-            service_remove_provider_configuration(
-                app,
-                state,
-                rpc_required_param(&params, "providerId")?,
-            )
-            .await,
-        ),
-        "service_save_provider_enabled_models" => rpc_json_result(
-            service_save_provider_enabled_models(
-                app,
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_save_provider_model_override" => rpc_json_result(
-            service_save_provider_model_override(
-                app,
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_save_git_commit_settings" => rpc_json_result(
-            service_save_git_commit_settings(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_generate_git_commit_message" => rpc_json_result(
-            service_generate_git_commit_message(state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_run_git_commit_action" => rpc_json_result(
-            service_run_git_commit_action(state, rpc_required_param(&params, "request")?).await,
-        ),
-        "service_save_ai_capability_vendor" => rpc_json_result(
-            service_save_ai_capability_vendor(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_remove_ai_capability_vendor" => rpc_json_result(
-            service_remove_ai_capability_vendor(
-                app,
-                state,
-                rpc_required_param(&params, "vendorId")?,
-            )
-            .await,
-        ),
-        "service_set_ai_capability_target_enabled" => rpc_json_result(
-            service_set_ai_capability_target_enabled(
-                app,
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_save_ai_capability_targets" => rpc_json_result(
-            service_save_ai_capability_targets(app, state, rpc_required_param(&params, "request")?)
-                .await,
-        ),
-        "service_save_session_ai_capability_configuration" => rpc_json_result(
-            service_save_session_ai_capability_configuration(
-                app,
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_save_mcp_server_configuration" => rpc_json_result(
-            service_save_mcp_server_configuration(
-                app,
-                state,
-                rpc_required_param(&params, "request")?,
-            )
-            .await,
-        ),
-        "service_remove_mcp_server_configuration" => rpc_json_result(
-            service_remove_mcp_server_configuration(
-                app,
-                state,
-                rpc_required_param(&params, "serverId")?,
-            )
-            .await,
-        ),
-        "service_open_project_directory_path" => rpc_json_result(
-            service_open_project_directory_path(state, rpc_required_param(&params, "path")?),
-        ),
-        "service_open_project_directory" => rpc_json_result(service_open_project_directory(
-            state,
-            rpc_required_param(&params, "projectId")?,
-        )),
-        "service_browse_project_directories" => rpc_json_result(
-            service_browse_project_directories(state, rpc_optional_param(&params, "path")?),
-        ),
-        "service_add_project_from_path" => rpc_json_result(
-            service_add_project_from_path(
-                state,
-                PathBuf::from(rpc_required_param::<String>(&params, "path")?),
-            )
-            .await,
-        ),
-        "service_toggle_project_pinned" => rpc_json_result(
-            service_toggle_project_pinned(state, rpc_required_param(&params, "projectId")?).await,
-        ),
-        "service_reorder_projects" => rpc_json_result(
-            service_reorder_projects(state, rpc_required_param(&params, "projectIds")?).await,
-        ),
-        "service_rename_project" => rpc_json_result(
-            service_rename_project(
-                state,
-                rpc_required_param(&params, "projectId")?,
-                rpc_required_param(&params, "name")?,
-            )
-            .await,
-        ),
-        "service_set_project_icon" => rpc_json_result(
-            service_set_project_icon(
-                state,
-                rpc_required_param(&params, "projectId")?,
-                rpc_required_param(&params, "iconPack")?,
-                rpc_required_param(&params, "iconKey")?,
-            )
-            .await,
-        ),
-        "service_reset_project_icon" => rpc_json_result(
-            service_reset_project_icon(state, rpc_required_param(&params, "projectId")?).await,
-        ),
-        "service_set_expanded_task_projects" => rpc_json_result(
-            service_set_expanded_task_projects(state, rpc_required_param(&params, "projectIds")?)
-                .await,
-        ),
-        "service_archive_project_conversations" => rpc_json_result(
-            service_archive_project_conversations(
-                app,
-                state,
-                rpc_required_param(&params, "projectId")?,
-            )
-            .await,
-        ),
-        "service_remove_project" => rpc_json_result(
-            service_remove_project(app, state, rpc_required_param(&params, "projectId")?).await,
-        ),
-        "service_rename_conversation" => rpc_json_result(
-            service_rename_conversation(
-                state,
-                rpc_required_param(&params, "conversationId")?,
-                rpc_required_param(&params, "name")?,
-            )
-            .await,
-        ),
-        "service_archive_conversation" => rpc_json_result(
-            service_archive_conversation(
-                app,
-                state,
-                rpc_required_param(&params, "conversationId")?,
-            )
-            .await,
-        ),
-        "service_mark_conversation_read" => rpc_json_result(
-            service_mark_conversation_read(state, rpc_required_param(&params, "conversationId")?)
-                .await,
-        ),
-        "service_select_conversation" => rpc_json_result(
-            service_select_conversation(state, rpc_required_param(&params, "conversationId")?)
-                .await,
-        ),
-        "service_open_external_url" => rpc_json_result(service_open_external_url(
-            state,
-            rpc_required_param(&params, "url")?,
-            rpc_optional_param(&params, "userConfirmed")?.unwrap_or(false),
-        )),
-        _ => Err(format!("unknown service RPC method: {method}")),
+    // rpc_result preserves service and unknown-method failures for the returning trace.
+    // rpc_result 为返回追踪保留服务失败与未知方法失败。
+    let rpc_result = match dispatch_known_service_rpc(app, state, &method, &params).await? {
+        ServiceRpcDispatch::Handled(result) => result,
+        ServiceRpcDispatch::Unknown => Err(unknown_service_rpc_error(&method)),
     };
     if traces_submit_rpc {
         webui_submit_trace(
@@ -724,4 +119,78 @@ pub(super) async fn dispatch_service_rpc(
         );
     }
     rpc_result
+}
+
+/// Builds the canonical error for a method that no domain router owns.
+/// 为没有任何领域路由持有的方法构建标准错误。
+///
+/// # Parameters
+/// 参数
+/// `method` is the exact unrecognized wire name supplied by the caller.
+/// `method` 是调用方提供的精确未识别线协议名称。
+///
+/// # Returns
+/// 返回值
+/// Returns the stable unknown-method diagnostic used by the HTTP bridge.
+/// 返回 HTTP 桥使用的稳定未知方法诊断。
+fn unknown_service_rpc_error(method: &str) -> String {
+    format!("unknown service RPC method: {method}")
+}
+
+/// Returns the complete unique RPC wire contract owned by all domain routers.
+/// 返回全部领域路由持有的完整唯一 RPC 线协议契约。
+///
+/// # Returns
+/// 返回值
+/// Returns every exact public method name for protocol conformance tests.
+/// 返回协议一致性测试使用的每个精确公开方法名称。
+#[cfg(test)]
+pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
+    [
+        workspace_io::RPC_METHODS,
+        extensibility::RPC_METHODS,
+        conversation_runtime::RPC_METHODS,
+        configuration::RPC_METHODS,
+        project_conversation::RPC_METHODS,
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
+    .collect()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies every migrated RPC wire name has one and only one domain owner.
+    /// 验证每个迁移后的 RPC 线协议名称都有且仅有一个领域所有者。
+    #[test]
+    fn domain_rpc_method_ownership_is_complete_and_unique() {
+        // methods combines all domain contracts without deriving ownership from implementation fallbacks.
+        // methods 合并全部领域契约，不从实现兜底中推导所有权。
+        let methods = service_rpc_method_names();
+        assert_eq!(methods.len(), 122);
+        // unique_methods proves no earlier router can shadow a later domain branch.
+        // unique_methods 证明前置路由不会遮蔽后续领域分支。
+        let declared_method_count = workspace_io::RPC_METHODS.len()
+            + extensibility::RPC_METHODS.len()
+            + conversation_runtime::RPC_METHODS.len()
+            + configuration::RPC_METHODS.len()
+            + project_conversation::RPC_METHODS.len();
+        assert_eq!(methods.len(), declared_method_count);
+        assert!(methods.contains("service_submit_conversation_prompt"));
+        assert!(methods.contains("service_set_luaskills_system_plugin_enabled"));
+        assert!(methods.contains("workspace.diff.snapshot"));
+        assert!(methods.contains("service_remove_project"));
+    }
+
+    /// Verifies unknown methods retain the browser bridge's canonical diagnostic.
+    /// 验证未知方法保留浏览器桥的标准诊断。
+    #[test]
+    fn unknown_rpc_method_error_remains_stable() {
+        assert_eq!(
+            unknown_service_rpc_error("service_missing_method"),
+            "unknown service RPC method: service_missing_method"
+        );
+    }
 }

@@ -338,8 +338,6 @@ impl TaskRuntime {
         Ok(task_ids)
     }
 
-    /// Subscribes to one detached child-task event stream, replaying any buffered early events before switching to live delivery.
-    /// 订阅某条分离子任务事件流，并在切换到实时投递之前先回放已经缓冲的早期事件。
     /// Subscribes to one exact detached execution stream and replays only that execution's buffer.
     /// 订阅一条精确的分离执行流，并且仅回放该执行的缓冲事件。
     ///
@@ -352,60 +350,61 @@ impl TaskRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// A static asynchronous stream isolated from every other execution of the same task.
-    /// 返回一条与同一任务其他执行完全隔离的静态异步流。
+    /// A static asynchronous stream isolated from every other execution of the same task, or an explicit registry-lock error.
+    /// 返回与同一任务其他执行完全隔离的静态异步流，或返回明确的注册表锁错误。
     pub fn subscribe_detached_task_events(
         &self,
         task_id: SessionId,
         execution_id: &str,
-    ) -> impl futures_util::Stream<Item = DetachedTaskRuntimeEvent> + Send + 'static {
+    ) -> Result<impl futures_util::Stream<Item = DetachedTaskRuntimeEvent> + Send + 'static, String>
+    {
         // stream_key identifies the only execution this subscriber may consume.
         // stream_key 标识本订阅者唯一允许消费的执行。
         let stream_key = DetachedTaskExecutionKey::new(task_id, execution_id);
         // sender and receiver form the subscriber-local delivery channel.
         // sender 与 receiver 组成订阅者本地投递通道。
         let (sender, mut receiver) = unbounded_channel::<DetachedTaskRuntimeEvent>();
-        // buffered_events and closed are derived only from the exact execution stream state.
-        // buffered_events 与 closed 仅从精确执行流状态派生。
-        let (buffered_events, closed) = {
-            match self.detached_task_event_streams.write() {
-                Ok(mut streams) => {
-                    let result = if let Some(state) = streams.get_mut(&stream_key) {
-                        let buffered_events = std::mem::take(&mut state.buffered_events);
-                        let closed = state.closed;
-                        if !closed {
-                            state.subscribers.push(sender.clone());
-                        }
-                        (buffered_events, closed)
-                    } else {
-                        (Vec::new(), true)
-                    };
-                    if result.1 {
-                        streams.remove(&stream_key);
-                    }
-                    result
+        // closed is derived only after buffered replay and live-subscriber registration are serialized under the registry lock.
+        // closed 仅在注册表锁内串行完成缓冲回放与实时订阅者注册后派生。
+        let closed = {
+            // streams provides exclusive access for subscriber registration and buffered-event transfer.
+            // streams 为订阅者注册与缓冲事件转移提供独占访问。
+            let mut streams = self.detached_task_event_streams.write().map_err(|_| {
+                format!(
+                    "The detached task stream registry is locked and cannot subscribe task `{task_id}` execution `{execution_id}`."
+                )
+            })?;
+            // closed records whether this exact execution has already reached terminal state.
+            // closed 记录当前精确执行是否已经到达终态。
+            let closed = if let Some(state) = streams.get_mut(&stream_key) {
+                let buffered_events = std::mem::take(&mut state.buffered_events);
+                let closed = state.closed;
+                // Buffered events enter the subscriber channel before the sender becomes visible to concurrent live publishers.
+                // 缓冲事件先进入订阅者通道，随后 sender 才对并发实时发布者可见。
+                for event in buffered_events {
+                    let _ = sender.send(event);
                 }
-                Err(_) => {
-                    eprintln!(
-                        "[task-runtime] detached task stream registry is locked; returning an empty stream for task {task_id} execution {execution_id}"
-                    );
-                    (Vec::new(), true)
+                if !closed {
+                    state.subscribers.push(sender.clone());
                 }
+                closed
+            } else {
+                true
+            };
+            if closed {
+                streams.remove(&stream_key);
             }
+            closed
         };
-
-        for event in buffered_events {
-            let _ = sender.send(event);
-        }
         if closed {
             drop(sender);
         }
 
-        stream! {
+        Ok(stream! {
             while let Some(event) = receiver.recv().await {
                 yield event;
             }
-        }
+        })
     }
 
     /// Opens one execution-scoped detached event stream before the parent announces DelegateStarted.
@@ -444,35 +443,65 @@ impl TaskRuntime {
 
     /// Returns one backend handler for the given controller session identifier when it exists.
     /// 当给定控制器会话标识存在时，返回对应的后端处理器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the controller session whose exact task backend is requested.
+    /// `session_id` 标识需要读取精确任务后端的控制器会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the registered backend when present, `None` when genuinely absent, or an explicit registry-read error.
+    /// 已注册时返回后端，确实不存在时返回 `None`，注册表读取失败时返回明确错误。
     pub(super) fn backend_for_session(
         &self,
         session_id: SessionId,
-    ) -> Option<TaskExecutionHandler> {
-        self.backends
-            .read()
-            .map_err(|_| {
-                eprintln!(
-                    "[task-runtime] task backend registry is locked; backend lookup failed for session {session_id}"
-                );
-            })
-            .ok()?
+    ) -> Result<Option<TaskExecutionHandler>, String> {
+        // backends is the only authoritative controller-session task backend registry.
+        // backends 是唯一权威的控制器会话任务后端注册表。
+        let backends = self.backends.read().map_err(|_| {
+            format!(
+                "The task backend registry is locked and cannot inspect session `{session_id}`."
+            )
+        })?;
+        Ok(backends
             .get(&session_id)
-            .cloned()
+            .map(|registration| Arc::clone(&registration.value)))
     }
 
-    /// Removes one backend handler from the registry.
-    /// 从注册表中移除一个后端处理器。
-    pub(super) fn remove_backend(&self, session_id: SessionId) {
-        match self.backends.write() {
-            Ok(mut backends) => {
-                backends.remove(&session_id);
-            }
-            Err(_) => {
-                eprintln!(
-                    "[task-runtime] task backend registry is locked; backend removal failed for session {session_id}"
-                );
-            }
+    /// Removes one backend handler only when the caller owns the current registration generation.
+    /// 仅当调用方拥有当前注册世代时，从注册表中移除一个后端处理器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the controller-session registry key.
+    /// `session_id` 标识控制器会话注册表键。
+    /// `registration_id` identifies the exact backend generation owned by the dropping guard.
+    /// `registration_id` 标识正在销毁的守卫所拥有的精确后端世代。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the owned generation is absent or removed, otherwise a registry-lock error.
+    /// 所属世代已不存在或已移除时返回成功，否则返回注册表锁错误。
+    pub(super) fn remove_backend(
+        &self,
+        session_id: SessionId,
+        registration_id: Uuid,
+    ) -> Result<(), String> {
+        let mut backends = self.backends.write().map_err(|_| {
+            format!(
+                "The task backend registry is locked and cannot remove the backend for session `{session_id}`."
+            )
+        })?;
+        // ownsCurrentRegistration prevents a stale guard from deleting a newer replacement.
+        // ownsCurrentRegistration 防止过期守卫删除更新的替代注册项。
+        let owns_current_registration = backends
+            .get(&session_id)
+            .is_some_and(|registration| registration.registration_id == registration_id);
+        if owns_current_registration {
+            backends.remove(&session_id);
         }
+        Ok(())
     }
 
     /// Returns the transaction lock serializing mutable execution state for one stable task.
@@ -601,6 +630,7 @@ impl TaskRuntime {
             runtime: Arc::clone(self),
             task_id,
             run_id,
+            released: false,
         })
     }
 
@@ -785,36 +815,67 @@ impl TaskRuntime {
             .is_some_and(|entry| entry.execution_id == execution_id))
     }
 
-    /// Removes one active child-task abort handle from the registry.
-    /// 从注册表中移除一条活动子任务中止句柄。
-    pub(super) fn remove_active_task_run(&self, task_id: SessionId, run_id: Uuid) {
-        let Ok(mut active_task_runs) = self.active_task_runs.write() else {
-            eprintln!(
-                "[task-runtime] active task registry is locked; active-run removal failed for task {task_id}"
-            );
-            return;
-        };
+    /// Removes one active child-task run only when the caller owns the current reservation generation.
+    /// 仅当调用方拥有当前预留世代时移除一条活动子任务运行。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` identifies the stable child task.
+    /// `task_id` 标识稳定子任务。
+    /// `run_id` identifies the exact reservation generation owned by the guard.
+    /// `run_id` 标识守卫拥有的精确预留世代。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the owned generation is absent or removed, otherwise a registry-lock error.
+    /// 所属世代已不存在或已移除时返回成功，否则返回注册表锁错误。
+    pub(super) fn remove_active_task_run(
+        &self,
+        task_id: SessionId,
+        run_id: Uuid,
+    ) -> Result<(), String> {
+        let mut active_task_runs = self.active_task_runs.write().map_err(|_| {
+            format!(
+                "The active task registry is locked and cannot remove the run for task `{task_id}`."
+            )
+        })?;
         let should_remove = active_task_runs
             .get(&task_id)
             .is_some_and(|entry| entry.run_id == run_id);
         if should_remove {
             active_task_runs.remove(&task_id);
         }
+        Ok(())
     }
 
     /// Returns whether any known descendant task still has an active provider run.
     /// 返回任一已知后代任务是否仍持有活动 Provider 运行。
-    pub(super) fn task_has_active_descendant_runs(&self, task_id: SessionId) -> bool {
-        let Ok(task_ids) = self.task_subtree_ids(task_id) else {
-            return false;
-        };
-        let Ok(active_runs) = self.active_task_runs.read() else {
-            return true;
-        };
-        task_ids
+    ///
+    /// # Parameters
+    /// 参数
+    /// `task_id` is the completed parent task whose descendant runs control detached-stream lifetime.
+    /// `task_id` 是已完成的父任务，其后代运行决定分离流生命周期。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the authoritative descendant-run fact, or an explicit registry-read error when that fact is unavailable.
+    /// 返回权威后代运行事实；事实不可用时返回明确的注册表读取错误。
+    pub(super) fn task_has_active_descendant_runs(
+        &self,
+        task_id: SessionId,
+    ) -> Result<bool, String> {
+        // task_ids is the authoritative subtree snapshot used for the descendant-only query.
+        // task_ids 是仅查询后代运行时使用的权威子树快照。
+        let task_ids = self.task_subtree_ids(task_id)?;
+        // active_runs is the authoritative set of child provider runs still owned by the runtime.
+        // active_runs 是运行时仍持有的子 Provider 运行权威集合。
+        let active_runs = self.active_task_runs.read().map_err(|_| {
+            String::from("The active task registry is locked and cannot inspect descendant runs.")
+        })?;
+        Ok(task_ids
             .into_iter()
             .filter(|candidate_task_id| *candidate_task_id != task_id)
-            .any(|candidate_task_id| active_runs.contains_key(&candidate_task_id))
+            .any(|candidate_task_id| active_runs.contains_key(&candidate_task_id)))
     }
 
     /// Publishes one detached event to the exact execution stream, buffering it before subscription.
@@ -828,27 +889,42 @@ impl TaskRuntime {
     /// `execution_id` 是产出事件的唯一执行尝试。
     /// `event` is the child or parent runtime event to deliver.
     /// `event` 是要投递的子级或父级运行时事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after buffering or delivering the event, or an explicit registry or unopened-stream error.
+    /// 事件完成缓冲或投递后返回成功；注册表失败或流未打开时返回明确错误。
     pub(super) fn publish_detached_task_event(
         &self,
         task_id: SessionId,
         execution_id: &str,
         event: DetachedTaskRuntimeEvent,
-    ) {
-        let Ok(mut streams) = self.detached_task_event_streams.write() else {
-            eprintln!(
-                "[task-runtime] detached task stream registry is locked; dropping detached event for task {task_id}"
-            );
-            return;
+    ) -> Result<(), String> {
+        // streams provides exclusive authority for buffering and live delivery to the exact execution.
+        // streams 为精确执行的缓冲与实时投递提供独占权限。
+        let mut streams = self.detached_task_event_streams.write().map_err(|_| {
+            format!(
+                "The detached task stream registry is locked and cannot publish task `{task_id}` execution `{execution_id}`."
+            )
+        })?;
+        // streamKey identifies the exact stream that must already have passed the explicit open boundary.
+        // streamKey 标识必须已经通过显式打开边界的精确事件流。
+        let stream_key = DetachedTaskExecutionKey::new(task_id, execution_id);
+        // state is the existing execution stream; publication never creates lifecycle state implicitly.
+        // state 是已有的执行流；发布操作绝不会隐式创建生命周期状态。
+        let Some(state) = streams.get_mut(&stream_key) else {
+            return Err(format!(
+                "The detached task stream for task `{task_id}` execution `{execution_id}` is not open and cannot accept events."
+            ));
         };
-        let state = streams
-            .entry(DetachedTaskExecutionKey::new(task_id, execution_id))
-            .or_default();
         if state.closed {
-            return;
+            return Err(format!(
+                "The detached task stream for task `{task_id}` execution `{execution_id}` is closed and cannot accept events."
+            ));
         }
         if state.subscribers.is_empty() {
             state.buffered_events.push(event);
-            return;
+            return Ok(());
         }
 
         let mut delivered = false;
@@ -862,6 +938,7 @@ impl TaskRuntime {
         if !delivered {
             state.buffered_events.push(event);
         }
+        Ok(())
     }
 
     /// Closes only one exact detached execution stream and drops its active senders.
@@ -873,14 +950,28 @@ impl TaskRuntime {
     /// `task_id` 是稳定子任务会话。
     /// `execution_id` is the unique execution attempt reaching terminal state.
     /// `execution_id` 是到达终态的唯一执行尝试。
-    pub(super) fn close_detached_task_event_stream(&self, task_id: SessionId, execution_id: &str) {
-        let Ok(mut streams) = self.detached_task_event_streams.write() else {
-            eprintln!(
-                "[task-runtime] detached task stream registry is locked; stream close failed for task {task_id}"
-            );
-            return;
-        };
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the exact stream is closed or already absent, or an explicit registry-lock error.
+    /// 精确流关闭或已经不存在时返回成功；注册表锁失败时返回明确错误。
+    pub(super) fn close_detached_task_event_stream(
+        &self,
+        task_id: SessionId,
+        execution_id: &str,
+    ) -> Result<(), String> {
+        // streams provides exclusive authority for the exact stream terminal transition.
+        // streams 为精确流终态转换提供独占权限。
+        let mut streams = self.detached_task_event_streams.write().map_err(|_| {
+            format!(
+                "The detached task stream registry is locked and cannot close task `{task_id}` execution `{execution_id}`."
+            )
+        })?;
+        // stream_key isolates the exact execution whose terminal state may change.
+        // stream_key 隔离允许变更终态的精确执行。
         let stream_key = DetachedTaskExecutionKey::new(task_id, execution_id);
+        // should_remove records whether no buffered terminal replay state must remain in the registry.
+        // should_remove 记录注册表中是否无需继续保留缓冲终态回放状态。
         let should_remove = if let Some(state) = streams.get_mut(&stream_key) {
             state.closed = true;
             !state.subscribers.is_empty() || state.buffered_events.is_empty()
@@ -890,5 +981,6 @@ impl TaskRuntime {
         if should_remove {
             streams.remove(&stream_key);
         }
+        Ok(())
     }
 }

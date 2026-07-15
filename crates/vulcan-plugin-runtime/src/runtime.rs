@@ -1611,6 +1611,29 @@ impl SystemPluginRuntimeManager {
         )
     }
 
+    /// Re-enters enabling from an uncommitted draining transition during service rollback.
+    /// 在服务回滚期间从尚未提交的排空转换重新进入启用中状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `plugin_id` is the exact plugin whose disable transaction must be compensated.
+    /// `plugin_id` 是必须补偿其停用事务的精确插件标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success only after atomically replacing `Draining` with `Enabling`.
+    /// 仅在原子地以 `Enabling` 替换 `Draining` 后返回成功。
+    pub fn rollback_draining_to_enabling(
+        &self,
+        plugin_id: &str,
+    ) -> Result<(), SystemPluginRuntimeError> {
+        self.begin_lifecycle_transition(
+            plugin_id,
+            SystemPluginRuntimeState::Enabling,
+            &[SystemPluginRuntimeState::Draining],
+        )
+    }
+
     /// Clears a transient lifecycle transition and rebuilds the catalog from persisted policy.
     /// 清除临时生命周期转换，并根据持久化策略重建目录。
     ///
@@ -6617,8 +6640,6 @@ return M
 
     /// Verifies enable rollback invokes the disable callback while runtime state remains enabling.
     /// 验证启用回滚会在运行时仍处于启用中状态时调用停用回调。
-    /// Verifies hook calls reuse persistent Lua state and draining rejects stale generations.
-    /// 验证 hook 调用会复用持久 Lua 状态，且 draining 会拒绝陈旧代次。
     #[test]
     fn enable_rollback_uses_declared_disable_callback_in_enabling_scope() {
         // temp owns the isolated bundled plugin and bridge fixture.
@@ -6659,6 +6680,49 @@ return M
         assert!(error.to_string().contains("enable-rollback-marker"));
     }
 
+    /// Verifies disable compensation can re-enter the only state authorized for enable probing.
+    /// 验证停用补偿能够重新进入唯一允许启用探测的状态。
+    #[test]
+    fn draining_rollback_reenters_enabling_before_probe() {
+        // temp owns the isolated plugin package and fixed bridge runtime.
+        // temp 持有隔离的插件包与固定桥接运行时。
+        let temp = tempfile::tempdir().expect("create draining rollback directory");
+        // runtime_root is the deterministic root for every test-owned runtime asset.
+        // runtime_root 是所有测试自有运行时资产的确定性根目录。
+        let runtime_root = temp.path().join("runtime");
+        // system_plugin_root contains the enabled hook fixture selected by the transition.
+        // system_plugin_root 包含转换选择的已启用 Hook 测试插件。
+        let system_plugin_root = runtime_root.join("plugins");
+        fs::create_dir_all(&system_plugin_root).expect("create System Plugin root");
+        write_hook_package(&system_plugin_root);
+        // manager owns the exact Enabled -> Draining -> Enabling sequence under test.
+        // manager 持有本测试的精确 Enabled -> Draining -> Enabling 序列。
+        let manager = test_manager(&runtime_root, system_plugin_root);
+        manager
+            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+            .expect("load enabled lifecycle fixture");
+        manager
+            .begin_draining("hook-plugin")
+            .expect("begin draining transition");
+        manager
+            .rollback_draining_to_enabling("hook-plugin")
+            .expect("re-enter enabling transition");
+        assert_eq!(
+            manager.snapshot().plugins["hook-plugin"].runtime_state,
+            SystemPluginRuntimeState::Enabling
+        );
+        // runtime proves the enabling probe lease is accepted after the reverse transition.
+        // runtime 证明反向转换后允许创建启用探测租约。
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("create lifecycle Tokio runtime");
+        runtime
+            .block_on(manager.probe_plugin("hook-plugin"))
+            .expect("probe plugin while re-entering enabling");
+    }
+
+    /// Verifies hook calls reuse persistent Lua state and draining rejects stale generations.
+    /// 验证 hook 调用会复用持久 Lua 状态，且 draining 会拒绝陈旧代次。
     #[test]
     fn hook_runtime_reuses_state_and_drains_by_plugin_generation() {
         let temp = tempfile::tempdir().expect("create temp directory");

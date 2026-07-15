@@ -551,7 +551,18 @@ struct QueuedInterAgentMessage {
     created_at_ms: u64,
 }
 
-/// Guard that unregisters one backend when it goes out of scope.
+/// One generation-owned runtime registry value.
+/// 一条由注册世代拥有的运行时注册表值。
+struct TaskRuntimeRegistration<T> {
+    /// Unique generation that distinguishes this value from replacements under the same key.
+    /// 区分同一键下当前值与替代值的唯一世代。
+    registration_id: Uuid,
+    /// Runtime value owned by this registration generation.
+    /// 由本注册世代拥有的运行时值。
+    value: T,
+}
+
+/// Guard that unregisters one exact backend generation when it goes out of scope.
 /// 作用域结束时自动注销某个后端的守卫对象。
 pub struct TaskBackendGuard {
     /// Shared runtime registry that owns the backend map.
@@ -560,13 +571,46 @@ pub struct TaskBackendGuard {
     /// Session identifier whose backend should be removed on drop.
     /// 在 Drop 时应移除其后端的会话标识。
     session_id: SessionId,
+    /// Exact backend registration generation owned by this guard.
+    /// 本守卫拥有的精确后端注册世代。
+    registration_id: Uuid,
+    /// Whether this guard has already released its owned registration successfully.
+    /// 本守卫是否已经成功释放其拥有的注册项。
+    released: bool,
+}
+
+impl TaskBackendGuard {
+    /// Explicitly releases the exact backend generation owned by this guard.
+    /// 显式释放本守卫拥有的精确后端注册世代。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the owned generation is absent or removed, otherwise a registry-lock error.
+    /// 所属世代已不存在或已移除时返回成功，否则返回注册表锁错误。
+    pub(crate) fn release(mut self) -> Result<(), String> {
+        self.runtime
+            .remove_backend(self.session_id, self.registration_id)?;
+        self.released = true;
+        Ok(())
+    }
 }
 
 impl Drop for TaskBackendGuard {
-    /// Removes the installed backend as soon as the guard leaves scope.
-    /// 在守卫离开作用域时立即移除已安装的后端。
+    /// Removes only this guard's backend generation as soon as the guard leaves scope.
+    /// 在守卫离开作用域时仅移除本守卫拥有的后端世代。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value; a replacement generation remains registered.
+    /// 不返回值；替代注册世代会继续保留。
     fn drop(&mut self) {
-        self.runtime.remove_backend(self.session_id);
+        if !self.released
+            && let Err(error) = self
+                .runtime
+                .remove_backend(self.session_id, self.registration_id)
+        {
+            eprintln!("[task-runtime] backend guard fallback release failed: {error}");
+        }
     }
 }
 
@@ -582,18 +626,40 @@ pub struct ActiveTaskRunGuard {
     /// Run generation that this guard installed.
     /// 该守卫安装的运行世代标识。
     run_id: Uuid,
+    /// Whether this guard has already released its owned active-run reservation successfully.
+    /// 本守卫是否已经成功释放其拥有的活动运行预留。
+    released: bool,
 }
 
 impl Drop for ActiveTaskRunGuard {
     /// Removes the installed active child-task run entry as soon as the guard leaves scope.
     /// 在守卫离开作用域时立即移除已安装的活动子任务运行条目。
     fn drop(&mut self) {
-        self.runtime
-            .remove_active_task_run(self.task_id, self.run_id);
+        if !self.released
+            && let Err(error) = self
+                .runtime
+                .remove_active_task_run(self.task_id, self.run_id)
+        {
+            eprintln!("[task-runtime] active-run guard fallback release failed: {error}");
+        }
     }
 }
 
 impl ActiveTaskRunGuard {
+    /// Explicitly releases the exact active-run reservation owned by this guard.
+    /// 显式释放本守卫拥有的精确活动运行预留。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the owned reservation is absent or removed, otherwise a registry-lock error.
+    /// 所属预留已不存在或已移除时返回成功，否则返回注册表锁错误。
+    pub(crate) fn release(mut self) -> Result<(), String> {
+        self.runtime
+            .remove_active_task_run(self.task_id, self.run_id)?;
+        self.released = true;
+        Ok(())
+    }
+
     /// Attaches the provider abort handle to this exact reserved run.
     /// 将 Provider 中止句柄附加到本守卫对应的精确预留运行。
     ///
@@ -715,13 +781,46 @@ pub(crate) struct TaskExecutionRuntimeContextGuard {
     /// Session identifier whose context should be removed on drop.
     /// 在 Drop 时应移除其上下文的会话标识。
     session_id: SessionId,
+    /// Exact execution-context registration generation owned by this guard.
+    /// 本守卫拥有的精确执行上下文注册世代。
+    registration_id: Uuid,
+    /// Whether this guard has already released its owned execution-context registration successfully.
+    /// 本守卫是否已经成功释放其拥有的执行上下文注册项。
+    released: bool,
+}
+
+impl TaskExecutionRuntimeContextGuard {
+    /// Explicitly releases the exact execution-context generation owned by this guard.
+    /// 显式释放本守卫拥有的精确执行上下文注册世代。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success when the owned generation is absent or removed, otherwise a registry-lock error.
+    /// 所属世代已不存在或已移除时返回成功，否则返回注册表锁错误。
+    pub(crate) fn release(mut self) -> Result<(), String> {
+        self.runtime
+            .remove_execution_context(self.session_id, self.registration_id)?;
+        self.released = true;
+        Ok(())
+    }
 }
 
 impl Drop for TaskExecutionRuntimeContextGuard {
-    /// Removes the installed execution context as soon as the guard leaves scope.
-    /// 在守卫离开作用域时立即移除已安装的执行上下文。
+    /// Removes only this guard's execution-context generation when the guard leaves scope.
+    /// 在守卫离开作用域时仅移除本守卫拥有的执行上下文世代。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns no value; a replacement generation remains registered.
+    /// 不返回值；替代注册世代会继续保留。
     fn drop(&mut self) {
-        self.runtime.remove_execution_context(self.session_id);
+        if !self.released
+            && let Err(error) = self
+                .runtime
+                .remove_execution_context(self.session_id, self.registration_id)
+        {
+            eprintln!("[task-runtime] execution-context guard fallback release failed: {error}");
+        }
     }
 }
 
@@ -965,10 +1064,11 @@ pub struct TaskRuntime {
     sessions: RwLock<HashMap<SessionId, TaskSessionRecord>>,
     /// Backend handlers keyed by the invoking controller session identifier.
     /// 按执行中控制器会话标识索引存储的后端处理器。
-    backends: RwLock<HashMap<SessionId, TaskExecutionHandler>>,
+    backends: RwLock<HashMap<SessionId, TaskRuntimeRegistration<TaskExecutionHandler>>>,
     /// Shared execution contexts keyed by controller session identifier for normal-preparation child task launches.
     /// 按控制器会话标识索引的共享执行上下文，用于普通准备链子任务启动。
-    execution_contexts: RwLock<HashMap<SessionId, TaskExecutionRuntimeContext>>,
+    execution_contexts:
+        RwLock<HashMap<SessionId, TaskRuntimeRegistration<TaskExecutionRuntimeContext>>>,
     /// Active child-task abort handles keyed by stable task identifier.
     /// 按稳定任务标识索引存储的活动子任务中止句柄。
     active_task_runs: RwLock<HashMap<SessionId, ActiveTaskRunEntry>>,

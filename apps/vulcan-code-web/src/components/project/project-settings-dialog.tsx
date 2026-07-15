@@ -26,6 +26,7 @@ import type {
   ProjectAttachmentCleanupReportSummary,
   ProjectAttachmentCleanupRequest,
   ProjectSettingsDialogTarget,
+  ProjectSettingsRevision,
   ProjectSettingsSectionId,
 } from "./project-settings-types";
 import {
@@ -43,12 +44,43 @@ export type {
   ProjectAttachmentCleanupReportSummary,
   ProjectAttachmentCleanupRequest,
   ProjectSettingsDialogTarget,
+  ProjectSettingsRevision,
 } from "./project-settings-types";
 export {
   projectAgentSkillSaveMessage,
   projectAttachmentPreviewFallback,
   projectConversationCount,
 } from "./project-settings-utils";
+
+// PROJECT_SETTINGS_RETRY_BASE_DELAY_MS is the first reconnect recovery delay.
+// PROJECT_SETTINGS_RETRY_BASE_DELAY_MS 是首次连接恢复重试的等待时间。
+const PROJECT_SETTINGS_RETRY_BASE_DELAY_MS = 1_000;
+
+// PROJECT_SETTINGS_RETRY_MAX_DELAY_MS caps background recovery traffic during a prolonged outage.
+// PROJECT_SETTINGS_RETRY_MAX_DELAY_MS 限制长时间故障期间的后台恢复流量。
+const PROJECT_SETTINGS_RETRY_MAX_DELAY_MS = 30_000;
+
+// projectSettingsRetryDelayMs calculates the capped exponential delay after a failed domain read.
+// projectSettingsRetryDelayMs 计算领域读取失败后的有上限指数退避时间。
+//
+// Parameters:
+// 参数：
+// failureCount is the consecutive failure count for the exact project and settings domain.
+// failureCount 是准确项目和设置领域的连续失败次数。
+//
+// Returns:
+// 返回值：
+// The retry delay in milliseconds, capped at the prolonged-outage interval.
+// 以毫秒表示的重试延迟，最大不超过长时间故障间隔。
+function projectSettingsRetryDelayMs(failureCount: number): number {
+  // exponent starts at zero and remains bounded before exponentiation.
+  // exponent 从零开始，并在指数运算前保持有界。
+  const exponent = Math.min(Math.max(failureCount - 1, 0), 5);
+  return Math.min(
+    PROJECT_SETTINGS_RETRY_BASE_DELAY_MS * (2 ** exponent),
+    PROJECT_SETTINGS_RETRY_MAX_DELAY_MS,
+  );
+}
 
 // ProjectSettingsDialog renders project-level settings owned by the WebUI workbench.
 // ProjectSettingsDialog 渲染由 WebUI 工作台持有的项目级设置。
@@ -59,6 +91,9 @@ export function ProjectSettingsDialog(props: {
   // Workbench snapshot supplying catalogs and counters.
   // 提供目录与计数的工作台快照。
   workbench: WorkbenchSnapshot;
+  // Latest accepted invalidation revisions for this project's independently loaded settings.
+  // 当前项目独立加载设置的最新已接收失效版本。
+  settingsRevision: ProjectSettingsRevision;
   // Closes the dialog without forcing a save.
   // 关闭弹窗且不强制保存。
   onCancel: () => void;
@@ -85,6 +120,9 @@ export function ProjectSettingsDialog(props: {
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   const project = props.target?.project ?? null;
+  // projectId is the stable dialog identity and does not change with locale or snapshot object identity.
+  // projectId 是稳定的弹窗标识，不随语言或快照对象身份变化。
+  const projectId = project?.id ?? null;
   // activeSection stores the selected settings category.
   // activeSection 保存当前选中的设置分类。
   const [activeSection, setActiveSection] = React.useState<ProjectSettingsSectionId>("overview");
@@ -94,6 +132,12 @@ export function ProjectSettingsDialog(props: {
   // vmmBusy stores the current VMM load or save phase.
   // vmmBusy 保存当前 VMM 加载或保存阶段。
   const [vmmBusy, setVmmBusy] = React.useState<"idle" | "loading" | "saving">("idle");
+  // vmmDirty records whether the visible draft contains unsaved local edits.
+  // vmmDirty 记录可见草稿是否包含未保存的本地编辑。
+  const [vmmDirty, setVmmDirty] = React.useState(false);
+  // vmmSaveInFlight prevents a save-triggered invalidation from racing the active save response.
+  // vmmSaveInFlight 防止保存触发的失效通知与当前保存响应竞争。
+  const [vmmSaveInFlight, setVmmSaveInFlight] = React.useState(false);
   // agentOverrides stores project-local Agent Skill override states.
   // agentOverrides 保存项目本地 Agent Skill 覆盖状态。
   const [agentOverrides, setAgentOverrides] = React.useState<Record<string, string>>({});
@@ -114,9 +158,9 @@ export function ProjectSettingsDialog(props: {
   // cleanupCutoffDate stores the project cleanup cutoff date text.
   // cleanupCutoffDate 保存项目清理截止日期文本。
   const [cleanupCutoffDate, setCleanupCutoffDate] = React.useState("");
-  // cleanupNotice stores the modal-local attachment cleanup status.
-  // cleanupNotice 保存弹窗内的附件清理状态。
-  const [cleanupNotice, setCleanupNotice] = React.useState(t("projectSettings.cleanup.initialNotice"));
+  // cleanupNotice stores an explicit cleanup result; null delegates the initial copy to the active locale.
+  // cleanupNotice 保存明确的清理结果；null 表示初始文案跟随当前语言。
+  const [cleanupNotice, setCleanupNotice] = React.useState<string | null>(null);
   // cleanupBusy stores the current attachment cleanup phase.
   // cleanupBusy 保存当前附件清理阶段。
   const [cleanupBusy, setCleanupBusy] = React.useState<"idle" | "preview" | "execute">("idle");
@@ -126,63 +170,210 @@ export function ProjectSettingsDialog(props: {
   // cleanupReport stores the latest successful cleanup execution report.
   // cleanupReport 保存最近一次成功的清理执行报告。
   const [cleanupReport, setCleanupReport] = React.useState<ProjectAttachmentCleanupReportSummary | null>(null);
+  // loadedVmmRevisionByProjectRef advances only after one VMM read succeeds.
+  // loadedVmmRevisionByProjectRef 仅在一次 VMM 读取成功后推进。
+  const loadedVmmRevisionByProjectRef = React.useRef<Map<string, number>>(new Map());
+  // loadedAgentRevisionByProjectRef advances only after one Agent Skill read succeeds.
+  // loadedAgentRevisionByProjectRef 仅在一次 Agent Skill 读取成功后推进。
+  const loadedAgentRevisionByProjectRef = React.useRef<Map<string, number>>(new Map());
+  // vmmLoadFailureCountByProjectRef tracks consecutive VMM failures for reconnect backoff.
+  // vmmLoadFailureCountByProjectRef 跟踪 VMM 连续失败次数以执行重连退避。
+  const vmmLoadFailureCountByProjectRef = React.useRef<Map<string, number>>(new Map());
+  // agentLoadFailureCountByProjectRef tracks consecutive Agent Skill failures for reconnect backoff.
+  // agentLoadFailureCountByProjectRef 跟踪 Agent Skill 连续失败次数以执行重连退避。
+  const agentLoadFailureCountByProjectRef = React.useRef<Map<string, number>>(new Map());
+  // vmmLoadSequenceRef prevents an older VMM read from overwriting a newer domain read.
+  // vmmLoadSequenceRef 防止较旧 VMM 读取覆盖较新的领域读取。
+  const vmmLoadSequenceRef = React.useRef(0);
+  // agentLoadSequenceRef prevents an older Agent Skill read from overwriting a newer domain read.
+  // agentLoadSequenceRef 防止较旧 Agent Skill 读取覆盖较新的领域读取。
+  const agentLoadSequenceRef = React.useRef(0);
+  // vmmLoadRetryNonce triggers a fresh authoritative VMM read after a backoff delay.
+  // vmmLoadRetryNonce 在退避结束后触发新的权威 VMM 读取。
+  const [vmmLoadRetryNonce, setVmmLoadRetryNonce] = React.useState(0);
+  // agentLoadRetryNonce triggers a fresh authoritative Agent Skill read after a backoff delay.
+  // agentLoadRetryNonce 在退避结束后触发新的权威 Agent Skill 读取。
+  const [agentLoadRetryNonce, setAgentLoadRetryNonce] = React.useState(0);
+  // projectActionOwnerRef identifies the exact dialog-open lifetime that owns asynchronous writes.
+  // projectActionOwnerRef 标识拥有异步状态写入权的准确弹窗打开周期。
+  const projectActionOwnerRef = React.useRef<{ projectId: string | null }>({ projectId });
+  // vmmSaveSequenceRef ensures only the latest VMM save in one dialog lifetime can finalize state.
+  // vmmSaveSequenceRef 确保同一弹窗周期内仅最新 VMM 保存可以收尾状态。
+  const vmmSaveSequenceRef = React.useRef(0);
+  // vmmEditSequenceRef preserves edits made while an earlier VMM save is still running.
+  // vmmEditSequenceRef 保留较早 VMM 保存仍在运行时产生的新编辑。
+  const vmmEditSequenceRef = React.useRef(0);
+  // vmmSaveInFlightRef synchronously rejects duplicate save clicks before React commits busy state.
+  // vmmSaveInFlightRef 在 React 提交忙碌状态前同步拒绝重复保存点击。
+  const vmmSaveInFlightRef = React.useRef(false);
+  // agentSaveInFlightRef serializes project Agent Skill writes and prevents cross-skill rollback races.
+  // agentSaveInFlightRef 串行化项目 Agent Skill 写入并防止跨技能回滚竞态。
+  const agentSaveInFlightRef = React.useRef(false);
+  // cleanupOperationSequenceRef invalidates cleanup results when project identity or inputs change.
+  // cleanupOperationSequenceRef 在项目身份或输入变化时使清理结果失效。
+  const cleanupOperationSequenceRef = React.useRef(0);
+  // cleanupOperationInFlightRef synchronously rejects duplicate preview or execute requests.
+  // cleanupOperationInFlightRef 同步拒绝重复的预览或执行请求。
+  const cleanupOperationInFlightRef = React.useRef(false);
 
-  React.useEffect(() => {
-    if (!project) {
+  React.useLayoutEffect(() => {
+    // A fresh object distinguishes closing and reopening the same project from the previous dialog lifetime.
+    // 新对象可区分同一项目关闭后重开与之前的弹窗周期。
+    projectActionOwnerRef.current = { projectId };
+    vmmSaveSequenceRef.current += 1;
+    vmmEditSequenceRef.current = 0;
+    vmmSaveInFlightRef.current = false;
+    agentSaveInFlightRef.current = false;
+    cleanupOperationSequenceRef.current += 1;
+    cleanupOperationInFlightRef.current = false;
+  }, [projectId]);
+
+  React.useLayoutEffect(() => {
+    if (projectId === null) {
+      loadedVmmRevisionByProjectRef.current.clear();
+      loadedAgentRevisionByProjectRef.current.clear();
+      vmmLoadFailureCountByProjectRef.current.clear();
+      agentLoadFailureCountByProjectRef.current.clear();
       return;
     }
-    let cancelled = false;
+    loadedVmmRevisionByProjectRef.current.delete(projectId);
+    loadedAgentRevisionByProjectRef.current.delete(projectId);
+    vmmLoadFailureCountByProjectRef.current.delete(projectId);
+    agentLoadFailureCountByProjectRef.current.delete(projectId);
+    vmmLoadSequenceRef.current += 1;
+    agentLoadSequenceRef.current += 1;
+    setVmmLoadRetryNonce(0);
+    setAgentLoadRetryNonce(0);
     setActiveSection("overview");
     setVmmDraft(null);
-    setVmmBusy("loading");
+    setVmmBusy("idle");
+    setVmmDirty(false);
+    setVmmSaveInFlight(false);
     setAgentOverrides({});
-    setAgentLoading(true);
+    setAgentLoading(false);
     setAgentBusySkill(null);
     setCleanupKinds({ image: true, audio: true, video: true, pdf: true });
     setCleanupCutoffDate(new Date().toISOString().slice(0, 10));
-    setCleanupNotice(t("projectSettings.cleanup.initialNotice"));
+    setCleanupNotice(null);
     setCleanupBusy("idle");
     setCleanupPreview(null);
     setCleanupReport(null);
+  }, [projectId]);
 
-    void props.onLoadVmmDraft(project.id)
+  React.useEffect(() => {
+    if (projectId === null || vmmDirty || vmmSaveInFlight) {
+      return;
+    }
+    // targetRevision includes zero so the first dialog open always loads authoritative state.
+    // targetRevision 包含零版本，使弹窗首次打开时始终加载权威状态。
+    const targetRevision = props.settingsRevision.vmm;
+    const loadedRevision = loadedVmmRevisionByProjectRef.current.get(projectId);
+    if (loadedRevision !== undefined && targetRevision <= loadedRevision) {
+      return;
+    }
+    let cancelled = false;
+    // loadSequence immediately supersedes every earlier VMM read.
+    // loadSequence 立即取代所有更早的 VMM 读取。
+    const loadSequence = vmmLoadSequenceRef.current + 1;
+    vmmLoadSequenceRef.current = loadSequence;
+    // retryTimer schedules recovery without requiring a new settings revision.
+    // retryTimer 在无需新设置版本的情况下安排恢复读取。
+    let retryTimer: number | null = null;
+    setVmmBusy("loading");
+    void props.onLoadVmmDraft(projectId)
       .then((draft) => {
-        if (!cancelled) {
+        if (!cancelled && vmmLoadSequenceRef.current === loadSequence) {
           setVmmDraft(draft);
+          setVmmDirty(false);
+          loadedVmmRevisionByProjectRef.current.set(projectId, targetRevision);
+          vmmLoadFailureCountByProjectRef.current.delete(projectId);
         }
       })
       .catch((error) => {
-        if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : String(error));
+        if (!cancelled && vmmLoadSequenceRef.current === loadSequence) {
+          // failureCount is scoped to this exact domain and resets only after a successful read.
+          // failureCount 仅属于当前准确领域，并且只在成功读取后重置。
+          const failureCount = (vmmLoadFailureCountByProjectRef.current.get(projectId) ?? 0) + 1;
+          vmmLoadFailureCountByProjectRef.current.set(projectId, failureCount);
+          if (failureCount === 1) {
+            toast.error(error instanceof Error ? error.message : String(error));
+          }
+          retryTimer = window.setTimeout(() => {
+            if (!cancelled && vmmLoadSequenceRef.current === loadSequence) {
+              setVmmLoadRetryNonce((current) => current + 1);
+            }
+          }, projectSettingsRetryDelayMs(failureCount));
         }
       })
       .finally(() => {
-        if (!cancelled) {
+        if (!cancelled && vmmLoadSequenceRef.current === loadSequence) {
           setVmmBusy("idle");
         }
       });
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [projectId, props.onLoadVmmDraft, props.settingsRevision.vmm, vmmDirty, vmmSaveInFlight, vmmLoadRetryNonce]);
 
-    void props.onLoadAgentSkillOverrides(project.id)
+  React.useEffect(() => {
+    if (projectId === null) {
+      return;
+    }
+    // targetRevision includes zero so the first dialog open always loads authoritative state.
+    // targetRevision 包含零版本，使弹窗首次打开时始终加载权威状态。
+    const targetRevision = props.settingsRevision.agentSkills;
+    const loadedRevision = loadedAgentRevisionByProjectRef.current.get(projectId);
+    if (loadedRevision !== undefined && targetRevision <= loadedRevision) {
+      return;
+    }
+    let cancelled = false;
+    // loadSequence immediately supersedes every earlier Agent Skill read.
+    // loadSequence 立即取代所有更早的 Agent Skill 读取。
+    const loadSequence = agentLoadSequenceRef.current + 1;
+    agentLoadSequenceRef.current = loadSequence;
+    // retryTimer schedules recovery without requiring a new settings revision.
+    // retryTimer 在无需新设置版本的情况下安排恢复读取。
+    let retryTimer: number | null = null;
+    setAgentLoading(true);
+    void props.onLoadAgentSkillOverrides(projectId)
       .then((overrides) => {
-        if (!cancelled) {
+        if (!cancelled && agentLoadSequenceRef.current === loadSequence) {
           setAgentOverrides(overrides);
+          loadedAgentRevisionByProjectRef.current.set(projectId, targetRevision);
+          agentLoadFailureCountByProjectRef.current.delete(projectId);
         }
       })
       .catch((error) => {
-        if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : String(error));
+        if (!cancelled && agentLoadSequenceRef.current === loadSequence) {
+          // failureCount is scoped to this exact domain and resets only after a successful read.
+          // failureCount 仅属于当前准确领域，并且只在成功读取后重置。
+          const failureCount = (agentLoadFailureCountByProjectRef.current.get(projectId) ?? 0) + 1;
+          agentLoadFailureCountByProjectRef.current.set(projectId, failureCount);
+          if (failureCount === 1) {
+            toast.error(error instanceof Error ? error.message : String(error));
+          }
+          retryTimer = window.setTimeout(() => {
+            if (!cancelled && agentLoadSequenceRef.current === loadSequence) {
+              setAgentLoadRetryNonce((current) => current + 1);
+            }
+          }, projectSettingsRetryDelayMs(failureCount));
         }
       })
       .finally(() => {
-        if (!cancelled) {
+        if (!cancelled && agentLoadSequenceRef.current === loadSequence) {
           setAgentLoading(false);
         }
       });
-
     return () => {
       cancelled = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
     };
-  }, [project, props.onLoadAgentSkillOverrides, props.onLoadVmmDraft, t]);
+  }, [projectId, props.onLoadAgentSkillOverrides, props.settingsRevision.agentSkills, agentLoadRetryNonce]);
 
   if (!project) {
     return null;
@@ -195,28 +386,70 @@ export function ProjectSettingsDialog(props: {
   // updateVmmDraft applies a partial edit to the current VMM draft.
   // updateVmmDraft 将局部编辑应用到当前 VMM 草稿。
   const updateVmmDraft = (patch: Partial<VmmConfigDraftSummary>) => {
+    if (!vmmDraft) {
+      return;
+    }
+    vmmEditSequenceRef.current += 1;
+    setVmmDirty(true);
     setVmmDraft((current) => current ? { ...current, ...patch } : current);
   };
 
   // saveVmmDraft persists the current VMM draft through the host.
   // saveVmmDraft 通过宿主持久化当前 VMM 草稿。
   const saveVmmDraft = async () => {
-    if (!vmmDraft) {
+    if (!vmmDraft || vmmSaveInFlightRef.current) {
       return;
     }
+    vmmSaveInFlightRef.current = true;
+    // actionOwner and saveSequence bind every completion path to this exact visible draft.
+    // actionOwner 与 saveSequence 将所有完成路径绑定到当前准确的可见草稿。
+    const actionOwner = projectActionOwnerRef.current;
+    const saveSequence = vmmSaveSequenceRef.current + 1;
+    const savedEditSequence = vmmEditSequenceRef.current;
+    vmmSaveSequenceRef.current = saveSequence;
     try {
+      setVmmSaveInFlight(true);
       setVmmBusy("saving");
       await props.onSaveVmmDraft(project.id, vmmDraft);
+      if (
+        projectActionOwnerRef.current !== actionOwner
+        || vmmSaveSequenceRef.current !== saveSequence
+      ) {
+        return;
+      }
+      if (vmmEditSequenceRef.current === savedEditSequence) {
+        setVmmDirty(false);
+      }
     } catch (error) {
+      if (
+        projectActionOwnerRef.current !== actionOwner
+        || vmmSaveSequenceRef.current !== saveSequence
+      ) {
+        return;
+      }
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      setVmmBusy("idle");
+      if (
+        projectActionOwnerRef.current === actionOwner
+        && vmmSaveSequenceRef.current === saveSequence
+      ) {
+        vmmSaveInFlightRef.current = false;
+        setVmmSaveInFlight(false);
+        setVmmBusy("idle");
+      }
     }
   };
 
   // setProjectAgentSkill persists one Agent Skill project tri-state override optimistically.
   // setProjectAgentSkill 乐观持久化单个 Agent Skill 项目三态覆盖。
   const setProjectAgentSkill = async (name: string, stateKey: ProjectAgentSkillState) => {
+    if (agentSaveInFlightRef.current) {
+      return;
+    }
+    agentSaveInFlightRef.current = true;
+    // actionOwner prevents a request from one project dialog lifetime from mutating another.
+    // actionOwner 防止一个项目弹窗周期的请求修改另一个周期。
+    const actionOwner = projectActionOwnerRef.current;
     const previousOverrides = agentOverrides;
     setAgentOverrides((current) => {
       const next = { ...current };
@@ -231,10 +464,16 @@ export function ProjectSettingsDialog(props: {
     try {
       await props.onSetAgentSkillState(project.id, name, stateKey);
     } catch (error) {
+      if (projectActionOwnerRef.current !== actionOwner) {
+        return;
+      }
       setAgentOverrides(previousOverrides);
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      setAgentBusySkill(null);
+      if (projectActionOwnerRef.current === actionOwner) {
+        agentSaveInFlightRef.current = false;
+        setAgentBusySkill(null);
+      }
     }
   };
 
@@ -249,36 +488,92 @@ export function ProjectSettingsDialog(props: {
   // previewCleanup loads the current project attachment cleanup preview.
   // previewCleanup 加载当前项目附件清理预览。
   const previewCleanup = async () => {
+    if (cleanupOperationInFlightRef.current) {
+      return;
+    }
+    cleanupOperationInFlightRef.current = true;
+    // request and operationSequence bind the response to the exact project, date, and kind selection.
+    // request 与 operationSequence 将响应绑定到准确的项目、日期及类型选择。
+    const request = cleanupRequest();
+    const actionOwner = projectActionOwnerRef.current;
+    const operationSequence = cleanupOperationSequenceRef.current + 1;
+    cleanupOperationSequenceRef.current = operationSequence;
     try {
       setCleanupBusy("preview");
-      const preview = await props.onPreviewAttachmentCleanup(cleanupRequest());
+      const preview = await props.onPreviewAttachmentCleanup(request);
+      if (
+        projectActionOwnerRef.current !== actionOwner
+        || cleanupOperationSequenceRef.current !== operationSequence
+      ) {
+        return;
+      }
       setCleanupPreview(preview);
       setCleanupReport(null);
       setCleanupNotice(preview.summary);
     } catch (error) {
+      if (
+        projectActionOwnerRef.current !== actionOwner
+        || cleanupOperationSequenceRef.current !== operationSequence
+      ) {
+        return;
+      }
       setCleanupPreview(null);
       setCleanupNotice(error instanceof Error ? error.message : String(error));
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      setCleanupBusy("idle");
+      if (
+        projectActionOwnerRef.current === actionOwner
+        && cleanupOperationSequenceRef.current === operationSequence
+      ) {
+        cleanupOperationInFlightRef.current = false;
+        setCleanupBusy("idle");
+      }
     }
   };
 
   // executeCleanup executes the cleanup represented by the latest matching preview.
   // executeCleanup 执行最近一次匹配预览代表的清理。
   const executeCleanup = async () => {
+    if (cleanupOperationInFlightRef.current) {
+      return;
+    }
+    cleanupOperationInFlightRef.current = true;
+    // request and operationSequence prevent a destructive result from crossing dialog ownership.
+    // request 与 operationSequence 防止破坏性操作结果跨越弹窗归属边界。
+    const request = cleanupRequest();
+    const actionOwner = projectActionOwnerRef.current;
+    const operationSequence = cleanupOperationSequenceRef.current + 1;
+    cleanupOperationSequenceRef.current = operationSequence;
     try {
       setCleanupBusy("execute");
-      const report = await props.onExecuteAttachmentCleanup(cleanupRequest());
+      const report = await props.onExecuteAttachmentCleanup(request);
+      if (
+        projectActionOwnerRef.current !== actionOwner
+        || cleanupOperationSequenceRef.current !== operationSequence
+      ) {
+        return;
+      }
       setCleanupReport(report);
       setCleanupPreview(null);
       setCleanupNotice(report.summary);
       toast.success(t("projectSettings.cleanupCompleted"));
     } catch (error) {
+      if (
+        projectActionOwnerRef.current !== actionOwner
+        || cleanupOperationSequenceRef.current !== operationSequence
+      ) {
+        return;
+      }
       setCleanupNotice(error instanceof Error ? error.message : String(error));
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
-      setCleanupBusy("idle");
+      if (
+        projectActionOwnerRef.current === actionOwner
+        && cleanupOperationSequenceRef.current === operationSequence
+      ) {
+        cleanupOperationInFlightRef.current = false;
+        setCleanupBusy("idle");
+      }
     }
   };
 
@@ -348,15 +643,23 @@ export function ProjectSettingsDialog(props: {
                 cleanupBusy={cleanupBusy}
                 cleanupCutoffDate={cleanupCutoffDate}
                 cleanupKinds={cleanupKinds}
-                cleanupNotice={cleanupNotice}
+                cleanupNotice={cleanupNotice ?? t("projectSettings.cleanup.initialNotice")}
                 cleanupPreview={cleanupPreview}
                 cleanupPreviewMatchesCurrent={Boolean(cleanupPreviewMatchesCurrent)}
                 cleanupReport={cleanupReport}
                 onChangeCleanupCutoffDate={(cutoffDate) => {
+                  if (cleanupOperationInFlightRef.current) {
+                    return;
+                  }
+                  cleanupOperationSequenceRef.current += 1;
                   setCleanupCutoffDate(cutoffDate);
                   setCleanupPreview(null);
                 }}
                 onChangeCleanupKinds={(kinds) => {
+                  if (cleanupOperationInFlightRef.current) {
+                    return;
+                  }
+                  cleanupOperationSequenceRef.current += 1;
                   setCleanupKinds(kinds);
                   setCleanupPreview(null);
                 }}

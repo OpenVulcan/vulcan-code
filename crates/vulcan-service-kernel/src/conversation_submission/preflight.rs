@@ -1,0 +1,367 @@
+//! Retained workspace preflight for conversation submission.
+//! 会话提交的保留工作区预检。
+
+use vulcan_workspace_store::workspace_store::WorkspaceSnapshot;
+
+use super::*;
+use crate::{
+    MaterializedPromptSession, ProjectAdmissionReservation, ProjectAdmissionReservationKind,
+    ProjectAdmissionScope, PromptSessionMaterializationKind, PromptSessionTarget, SessionId,
+    SessionTurnAdmissionReservation, SessionTurnAdmissionReservationKind,
+    lock_service_state_for_admission_cleanup, session_hydration::PreservedWorkspaceRunState,
+    workspace_session_summary_for_session,
+};
+
+/// Submission-scoped admission ownership retained until one materialized kernel turn starts.
+/// 保留到一个已物化 kernel 回合启动为止的提交级准入所有权。
+pub(crate) enum SubmissionTurnAdmission {
+    /// A new-session submission needs no reservation because materialization generates a unique id.
+    /// 新会话提交无需预留，因为物化阶段会生成唯一标识。
+    Unreserved,
+    /// An existing-session submission owns one exact reservation row.
+    /// 已有会话提交拥有一个精确预留行。
+    Existing(ExistingSubmissionTurnAdmission),
+}
+
+/// Owned existing-session reservation released only when this submission leaves scope.
+/// 仅在本次提交离开作用域时释放的已有会话有所有权预留。
+pub(crate) struct ExistingSubmissionTurnAdmission {
+    /// Shared state containing the authoritative reservation row.
+    /// 包含权威预留行的共享状态。
+    state: SharedServiceBridgeState,
+    /// Exact existing session reserved by this submission.
+    /// 本次提交预留的精确已有会话。
+    session_id: SessionId,
+    /// Unique owner identity protecting against stale-guard deletion.
+    /// 防止过期守卫删除替代预留的唯一所有者身份。
+    reservation_id: Uuid,
+}
+
+impl SubmissionTurnAdmission {
+    /// Resolves the reservation id that may authorize the materialized session's kernel start.
+    /// 解析可授权已物化会话启动 kernel 的预留标识。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `materialized_session` is the authoritative existing-or-created materialization result.
+    /// `materialized_session` 是权威的已有或新建物化结果。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact existing-session reservation id, no reservation for a created session, or an ownership error.
+    /// 返回精确的已有会话预留标识；新建会话返回无预留；所有权不一致时返回错误。
+    pub(crate) fn kernel_reservation_id(
+        &self,
+        materialized_session: &MaterializedPromptSession,
+    ) -> Result<Option<Uuid>, String> {
+        match (self, materialized_session.kind) {
+            (Self::Unreserved, PromptSessionMaterializationKind::Created) => Ok(None),
+            (Self::Existing(_), PromptSessionMaterializationKind::Created) => Ok(None),
+            (Self::Existing(admission), PromptSessionMaterializationKind::Existing)
+                if admission.session_id == materialized_session.session_id =>
+            {
+                Ok(Some(admission.reservation_id))
+            }
+            (Self::Unreserved, PromptSessionMaterializationKind::Existing) => Err(format!(
+                "Existing session `{}` was materialized without submission admission ownership",
+                materialized_session.session_id
+            )),
+            (Self::Existing(admission), PromptSessionMaterializationKind::Existing) => {
+                Err(format!(
+                    "Submission admission owns session `{}`, but materialization selected `{}`",
+                    admission.session_id, materialized_session.session_id
+                ))
+            }
+        }
+    }
+}
+
+impl Drop for ExistingSubmissionTurnAdmission {
+    /// Releases only the reservation row still owned by this exact submission.
+    /// 仅释放仍由本次精确提交拥有的预留行。
+    fn drop(&mut self) {
+        // guard recovers poisoned state only to remove this exact submission-owned reservation.
+        // guard 仅为删除当前提交精确拥有的预留而恢复中毒状态。
+        let mut guard =
+            lock_service_state_for_admission_cleanup(&self.state, "existing-submission-turn guard");
+        guard
+            .session_turn_admission_reservations
+            .retain(|session_id, reservation| {
+                *session_id != self.session_id || reservation.reservation_id != self.reservation_id
+            });
+    }
+}
+
+/// Submission-scoped project ownership retained through materialization and workspace commit.
+/// 跨物化与工作区提交保留的提交级项目所有权。
+pub(crate) struct SubmissionProjectAdmission {
+    /// Shared state containing the authoritative project reservation row.
+    /// 包含权威项目预留行的共享状态。
+    state: SharedServiceBridgeState,
+    /// Exact or unresolved project scope owned by this submission.
+    /// 本次提交拥有的精确或未解析项目作用域。
+    scope: ProjectAdmissionScope,
+    /// Unique owner identity protecting successor rows from stale cleanup.
+    /// 保护后继行不被过期清理删除的唯一所有者身份。
+    reservation_id: Uuid,
+}
+
+impl SubmissionProjectAdmission {
+    /// Returns the exact preflight project selected for new-session materialization, when known.
+    /// 返回预检为新会话物化选择的精确项目（若已知）。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The exact project id, or `None` while selection remains globally unresolved.
+    /// 返回精确项目标识；选择仍为全局未解析时返回 `None`。
+    pub(crate) fn exact_project_id(&self) -> Option<&str> {
+        match &self.scope {
+            ProjectAdmissionScope::Exact(project_id) => Some(project_id.as_str()),
+            ProjectAdmissionScope::UnresolvedSubmission => None,
+        }
+    }
+
+    /// Verifies that materialization did not escape the project scope reserved by preflight.
+    /// 校验物化结果没有逃逸预检预留的项目作用域。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `materialized_session` carries the authoritative project selected by materialization.
+    /// `materialized_session` 携带物化阶段选择的权威项目。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success for the reserved exact project or globally unresolved scope; otherwise an ownership error.
+    /// 精确项目匹配或全局未解析作用域时成功，否则返回所有权错误。
+    pub(crate) fn validate_materialized_session(
+        &self,
+        materialized_session: &MaterializedPromptSession,
+    ) -> Result<(), String> {
+        match (&self.scope, materialized_session.project_id.as_deref()) {
+            (ProjectAdmissionScope::Exact(expected), Some(actual)) if expected == actual => Ok(()),
+            (ProjectAdmissionScope::UnresolvedSubmission, _) => Ok(()),
+            (ProjectAdmissionScope::Exact(expected), actual) => Err(format!(
+                "Submission admission owns project `{expected}`, but materialization selected `{}`",
+                actual.unwrap_or("<none>")
+            )),
+        }
+    }
+}
+
+impl Drop for SubmissionProjectAdmission {
+    /// Releases only the project reservation row still owned by this exact submission.
+    /// 仅释放仍由本次精确提交拥有的项目预留行。
+    fn drop(&mut self) {
+        // guard recovers poisoned state only to remove this exact submission-owned project reservation.
+        // guard 仅为删除当前提交精确拥有的项目预留而恢复中毒状态。
+        let mut guard =
+            lock_service_state_for_admission_cleanup(&self.state, "submission-project guard");
+        guard
+            .project_admission_reservations
+            .retain(|scope, reservation| {
+                scope != &self.scope || reservation.reservation_id != self.reservation_id
+            });
+    }
+}
+
+/// Single-lock retained-state result used before submission workspace loading or hydration.
+/// 在提交工作区加载或水合前使用的单锁保留状态结果。
+pub(crate) struct RetainedSubmissionPreflight {
+    /// Turn-admission ownership retained across workspace load and materialization.
+    /// 跨工作区加载与物化阶段保留的回合准入所有权。
+    pub(crate) turn_admission: SubmissionTurnAdmission,
+    /// Project ownership retained across workspace loading, materialization, and commit.
+    /// 跨工作区加载、物化与提交保留的项目所有权。
+    pub(crate) project_admission: SubmissionProjectAdmission,
+    /// Minimal live-only state that must survive a fallback disk workspace reload.
+    /// 回退到磁盘工作区重载时必须保留的最小仅内存状态。
+    pub(crate) preserved_workspace_run_state: Option<PreservedWorkspaceRunState>,
+    /// Whether the retained target session already owns concrete provider dialogue context.
+    /// 保留目标会话是否已拥有具体 Provider 对话上下文。
+    pub(crate) retained_dialogue_context_available: bool,
+    /// Retained workspace clone accepted as the submission base, when structurally usable.
+    /// 结构可用时接受为提交基础的保留工作区克隆。
+    pub(crate) retained_workspace_snapshot: Option<WorkspaceSnapshot>,
+}
+
+/// Validates retained admission gates and captures one coherent submission snapshot under a single state lock.
+/// 在单个状态锁内校验保留准入闸门并捕获一致的提交快照。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns admission reservations, lifecycle reservations, kernels, and the retained workspace.
+/// `state` 持有准入预留、生命周期预留、内核与保留工作区。
+/// `project_id` is the request project candidate used for draft submissions or explicit targeting; lifecycle matching trims it locally.
+/// `project_id` 是草稿提交或显式目标选择使用的请求项目候选；生命周期匹配会在本地裁剪它。
+/// `target` is the already-validated create-or-existing submission target.
+/// `target` 是已完成校验的新建或已有会话提交目标。
+///
+/// # Returns
+/// # 返回值
+/// One coherent retained preflight result, or the exact admission/lifecycle rejection.
+/// 返回一致的保留预检结果，或精确的准入/生命周期拒绝错误。
+pub(crate) fn prepare_retained_submission_preflight(
+    state: &SharedServiceBridgeState,
+    project_id: Option<&str>,
+    target: PromptSessionTarget,
+) -> Result<RetainedSubmissionPreflight, String> {
+    // submission_session_id is derived once from the strong target for retained-state lookups.
+    // submission_session_id 从强类型目标一次性派生，用于保留状态查找。
+    let submission_session_id = target.existing_session_id();
+    // guard guarantees every admission decision and retained snapshot field observes the same service-state revision.
+    // guard 保证每项准入决策与保留快照字段观察同一个服务状态版本。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(session_id) = submission_session_id
+        && let Some(reservation) = guard.session_turn_admission_reservations.get(&session_id)
+    {
+        return Err(format!(
+            "会话 `{session_id}` 已由 {} 预留，无法提交新的提示词。",
+            reservation.kind.diagnostic_label()
+        ));
+    }
+    if let Some(session_id) = submission_session_id
+        && let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref()
+        && workspace_session_summary_for_session(workspace_snapshot, session_id).is_none()
+        && workspace_snapshot
+            .archived_sessions
+            .iter()
+            .any(|session| session.id == session_id)
+    {
+        return Err(format!("Conversation `{session_id}` is archived"));
+    }
+
+    // retained_owner_project_id is the authoritative owner only when an existing retained session was selected.
+    // retained_owner_project_id 仅在选择已有保留会话时表示其权威所属项目。
+    let retained_owner_project_id = submission_session_id.and_then(|session_id| {
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace_snapshot| {
+                owning_project_id_for_session(workspace_snapshot, session_id)
+            })
+    });
+    // requested_project_id is the normalized explicit project candidate for a new-session submission.
+    // requested_project_id 是新会话提交的标准化显式项目候选。
+    let requested_project_id = project_id
+        .map(str::trim)
+        .filter(|project_id| !project_id.is_empty());
+    // project_scope locks the existing owner, explicit new target, retained default, or global unresolved selection.
+    // project_scope 锁定已有所属项目、显式新目标、保留默认项目或全局未解析选择。
+    let project_scope = if submission_session_id.is_some() {
+        retained_owner_project_id
+            .map(ProjectAdmissionScope::Exact)
+            .unwrap_or(ProjectAdmissionScope::UnresolvedSubmission)
+    } else if let Some(requested_project_id) = requested_project_id {
+        ProjectAdmissionScope::Exact(requested_project_id.to_string())
+    } else if let Some(default_project_id) = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace_snapshot| workspace_snapshot.task_projects.first())
+        .map(|project| project.id.clone())
+    {
+        ProjectAdmissionScope::Exact(default_project_id)
+    } else {
+        ProjectAdmissionScope::UnresolvedSubmission
+    };
+    // project_reservation_id uniquely owns project admission independently from the session row.
+    // project_reservation_id 独立于会话行唯一拥有项目准入。
+    let project_reservation_id = Uuid::new_v4();
+    match &project_scope {
+        ProjectAdmissionScope::Exact(project_id) => {
+            if let Some(reservation) = guard
+                .project_admission_reservations
+                .get(&ProjectAdmissionScope::UnresolvedSubmission)
+                .or_else(|| guard.project_admission_reservations.get(&project_scope))
+            {
+                return Err(format!(
+                    "项目 `{project_id}` 已由 {} 预留，无法提交新的提示词。",
+                    reservation.kind.diagnostic_label()
+                ));
+            }
+        }
+        ProjectAdmissionScope::UnresolvedSubmission => {
+            if let Some((reserved_scope, reservation)) =
+                guard.project_admission_reservations.iter().next()
+            {
+                return Err(format!(
+                    "项目选择已与作用域 `{reserved_scope:?}` 的 {} 冲突，无法提交新的提示词。",
+                    reservation.kind.diagnostic_label()
+                ));
+            }
+        }
+    }
+    guard.project_admission_reservations.insert(
+        project_scope.clone(),
+        ProjectAdmissionReservation {
+            reservation_id: project_reservation_id,
+            kind: ProjectAdmissionReservationKind::PromptSubmission,
+        },
+    );
+
+    // active_kernel_sessions defines the live-only run state that a disk fallback must not erase.
+    // active_kernel_sessions 定义磁盘回退不得清除的仅内存运行状态。
+    let active_kernel_sessions = active_kernel_session_ids(&guard);
+    // retained_dialogue_context_available records whether later hydration can remain on the retained fast path.
+    // retained_dialogue_context_available 记录后续水合是否可以保持在保留态快速路径。
+    let retained_dialogue_context_available = submission_session_id.is_some_and(|session_id| {
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .is_some_and(|workspace_snapshot| {
+                retained_submission_snapshot_has_session_context(workspace_snapshot, session_id)
+            })
+    });
+    // retained_workspace_snapshot is cloned only when it is a structurally valid submission base.
+    // retained_workspace_snapshot 仅在结构上可作为提交基础时克隆。
+    let retained_workspace_snapshot = guard.workspace_snapshot.as_ref().and_then(|snapshot| {
+        retained_submission_snapshot_is_usable(snapshot, project_id, submission_session_id)
+            .then(|| snapshot.clone())
+    });
+    // preserved_workspace_run_state captures live state from the same revision as the selected base snapshot.
+    // preserved_workspace_run_state 从与所选基础快照相同的版本捕获实时状态。
+    let preserved_workspace_run_state = capture_preserved_workspace_run_state(
+        guard.workspace_snapshot.as_ref(),
+        &active_kernel_sessions,
+        submission_session_id,
+    );
+
+    // turn_admission closes every competing start after this coherent preflight revision.
+    // turn_admission 关闭此一致预检版本之后的全部竞争启动。
+    let turn_admission = if let Some(session_id) = submission_session_id {
+        // reservation_id uniquely owns the row so stale request cleanup cannot remove a successor.
+        // reservation_id 唯一拥有该行，使过期请求清理无法删除后继预留。
+        let reservation_id = Uuid::new_v4();
+        guard.session_turn_admission_reservations.insert(
+            session_id,
+            SessionTurnAdmissionReservation {
+                reservation_id,
+                kind: SessionTurnAdmissionReservationKind::PromptSubmission,
+            },
+        );
+        SubmissionTurnAdmission::Existing(ExistingSubmissionTurnAdmission {
+            state: state.clone(),
+            session_id,
+            reservation_id,
+        })
+    } else {
+        SubmissionTurnAdmission::Unreserved
+    };
+    // project_admission retains the row inserted in the same coherent preflight transaction.
+    // project_admission 保留在同一个一致预检事务中插入的项目行。
+    let project_admission = SubmissionProjectAdmission {
+        state: state.clone(),
+        scope: project_scope,
+        reservation_id: project_reservation_id,
+    };
+    drop(guard);
+
+    Ok(RetainedSubmissionPreflight {
+        turn_admission,
+        project_admission,
+        preserved_workspace_run_state,
+        retained_dialogue_context_available,
+        retained_workspace_snapshot,
+    })
+}

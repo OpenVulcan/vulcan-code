@@ -1,7 +1,11 @@
 import type {
   AgentSkillsCatalogSummary,
   ComposerAttachmentSummary,
+  LuaSkillsCatalogSummary,
+  LuaSkillsManagedRuntimeProgressSummary,
   PendingPromptSummary,
+  PluginSummary,
+  SubagentCatalogSummary,
 } from "./composer-skills";
 import type {
   PendingQuestionSnapshot,
@@ -412,9 +416,9 @@ export type WorkbenchDelta =
   | { kind: "updateConversationRunPhase"; payload: UpdateConversationRunPhaseDelta }
   | { kind: "pendingPromptsChanged"; payload: PendingPromptsChangedDelta }
   | { kind: "conversationSummaryChanged"; payload: ConversationSummaryChangedDelta }
-| { kind: "conversationArchived"; payload: ConversationArchivedDelta }
-| { kind: "conversationsArchived"; payload: ConversationsArchivedDelta }
-| { kind: "projectRemoved"; payload: ProjectRemovedDelta }
+  | { kind: "conversationArchived"; payload: ConversationArchivedDelta }
+  | { kind: "conversationsArchived"; payload: ConversationsArchivedDelta }
+  | { kind: "projectRemoved"; payload: ProjectRemovedDelta }
   | { kind: "pendingQuestionChanged"; payload: PendingQuestionChangedDelta }
   | { kind: "commandSessionsChanged"; payload: CommandSessionsChangedDelta }
   | { kind: "subagentNavigationChanged"; payload: SubagentNavigationChangedDelta }
@@ -424,7 +428,14 @@ export type WorkbenchDelta =
   | { kind: "conversationMessagesPatched"; payload: ConversationMessagesPatchedDelta }
   | { kind: "sessionAddonsChanged"; payload: SessionAddonsChangedDelta }
   | { kind: "conversationHydrationChanged"; payload: ConversationHydrationChangedDelta }
-  | { kind: "agentSkillsCatalogChanged"; payload: AgentSkillsCatalogChangedDelta };
+  | { kind: "agentSkillsCatalogChanged"; payload: AgentSkillsCatalogChangedDelta }
+  | { kind: "luaSkillsCatalogChanged"; payload: LuaSkillsCatalogChangedDelta }
+  | { kind: "subagentCatalogChanged"; payload: SubagentCatalogChangedDelta }
+  | { kind: "projectSettingsChanged"; payload: ProjectSettingsChangedDelta }
+  | {
+    kind: "luaSkillsManagedRuntimeProgressChanged";
+    payload: LuaSkillsManagedRuntimeProgressChangedDelta;
+  };
 
 // AgentSkillsCatalogChangedDelta replaces only the Agent Skills workbench domain.
 // AgentSkillsCatalogChangedDelta 仅替换工作台中的 Agent Skills 领域。
@@ -432,6 +443,44 @@ export interface AgentSkillsCatalogChangedDelta {
   // Complete Agent Skills catalog committed at the envelope generation.
   // 在信封版本提交的完整 Agent Skills 目录。
   agentSkills: AgentSkillsCatalogSummary;
+}
+
+// LuaSkillsCatalogChangedDelta replaces the LuaSkills catalog and matching plugin rows atomically.
+// LuaSkillsCatalogChangedDelta 原子替换 LuaSkills 目录及其匹配的插件行。
+export interface LuaSkillsCatalogChangedDelta {
+  // Complete LuaSkills catalog committed at the envelope generation.
+  // 在信封版本提交的完整 LuaSkills 目录。
+  luaSkills: LuaSkillsCatalogSummary;
+  // Plugin rows derived from the same committed catalog.
+  // 从同一份已提交目录派生的插件行。
+  plugins: PluginSummary[];
+}
+
+// SubagentCatalogChangedDelta replaces only the complete subagent catalog domain.
+// SubagentCatalogChangedDelta 仅替换完整的智能体目录领域。
+export interface SubagentCatalogChangedDelta {
+  // Complete subagent catalog committed at the envelope generation.
+  // 在信封版本提交的完整智能体目录。
+  subagentCatalog: SubagentCatalogSummary;
+}
+
+// ProjectSettingsChangedDelta invalidates independently loaded settings for one exact project.
+// ProjectSettingsChangedDelta 使单个准确项目独立加载的设置失效。
+export interface ProjectSettingsChangedDelta {
+  // Stable project identifier whose settings changed, or null when a global setting invalidates every project.
+  // 设置发生变化的稳定项目标识；全局设置使所有项目失效时为 null。
+  projectId: string | null;
+  // Exact independently loaded settings domain that changed.
+  // 发生变化的准确独立加载设置领域。
+  domain: "vmm" | "agentSkills";
+}
+
+// LuaSkillsManagedRuntimeProgressChangedDelta replaces only the active managed-runtime progress.
+// LuaSkillsManagedRuntimeProgressChangedDelta 仅替换当前受管运行时进度。
+export interface LuaSkillsManagedRuntimeProgressChangedDelta {
+  // Current native runtime installation progress, or null after the operation reaches a terminal state.
+  // 当前原生运行时安装进度；操作到达终态后为 null。
+  progress: LuaSkillsManagedRuntimeProgressSummary | null;
 }
 
 // ConversationHydrationChangedDelta replaces conversation hydration progress without a full snapshot.

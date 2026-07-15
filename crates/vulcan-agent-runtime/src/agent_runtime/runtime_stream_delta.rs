@@ -20,6 +20,7 @@ use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
 };
+use vulcan_provider_config::provider_config::ProviderApiFamily;
 
 /// Owns the mutable runtime-stream loop state that changes while provider deltas are consumed.
 /// 持有在消费 Provider 增量期间持续变化的运行时流式循环状态。
@@ -27,6 +28,9 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Host-owned controller used to persist streamed reasoning, outputs, and runtime events.
     /// 负责持久化流式思考、输出与运行时事件的宿主自有控制器。
     core_controller: VulcanCoreController,
+    /// Canonical provider API family resolved before the runtime stream starts.
+    /// 运行时流启动前解析出的规范 Provider API 协议族。
+    provider_api_family: ProviderApiFamily,
     /// Raw provider reasoning buffer used before synthetic preamble normalization.
     /// 在合成前导语规范化之前累计的 Provider 原始思考缓冲区。
     thinking_raw_output: String,
@@ -69,11 +73,27 @@ pub(crate) struct RuntimeStreamDeltaState {
 }
 
 impl RuntimeStreamDeltaState {
-    /// Creates a new mutable runtime-stream state seeded with one host-owned controller.
-    /// 使用一个宿主自有控制器创建新的可变运行时流式状态。
-    pub(crate) fn new(core_controller: VulcanCoreController) -> Self {
+    /// Creates a new mutable runtime-stream state from exact controller and provider facts.
+    /// 使用精确的控制器与 Provider 事实创建新的可变运行时流式状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `core_controller` owns canonical conversation projection for the stream.
+    /// `core_controller` 持有当前流的规范会话投影。
+    /// `provider_api_family` is the canonical typed API family resolved during execution preparation.
+    /// `provider_api_family` 是执行准备期间解析出的规范强类型 API 协议族。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns a fresh stream state that preserves the immutable provider family.
+    /// 返回保留不可变 Provider 协议族的新流状态。
+    pub(crate) fn new(
+        core_controller: VulcanCoreController,
+        provider_api_family: ProviderApiFamily,
+    ) -> Self {
         Self {
             core_controller,
+            provider_api_family,
             thinking_raw_output: String::new(),
             thinking_visible_output: String::new(),
             assistant_output: String::new(),
@@ -382,6 +402,7 @@ pub(crate) fn process_provider_stream_delta(
             events.extend([
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
                     session_id,
+                    provider_family: state.provider_api_family.key().to_string(),
                     snapshot,
                 },
                 ExecutionStreamEvent::RequestReady { session_id },
@@ -490,7 +511,36 @@ mod tests {
                 ConversationSnapshot::default(),
             )
             .expect("valid core conversation snapshot"),
+            ProviderApiFamily::OpenAiChatCompatible,
         )
+    }
+
+    /// Preserves the prepared API family when emitting one provider request checkpoint.
+    /// 发出 Provider 请求检查点时保留执行准备阶段解析出的 API 协议族。
+    #[test]
+    fn request_checkpoint_uses_prepared_provider_family() {
+        // session_id identifies the stream whose first physical request is observed.
+        // session_id 标识观测到首个真实请求的运行时流。
+        let session_id = Uuid::nil();
+        // checkpoint_events captures the ordered telemetry, checkpoint, and phase markers.
+        // checkpoint_events 捕获有序的遥测、检查点与阶段标记。
+        let checkpoint_events = process_provider_stream_delta(
+            session_id,
+            &mut build_delta_state(),
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            )),
+        );
+
+        assert!(checkpoint_events.iter().any(|event| matches!(
+            event,
+            ExecutionStreamEvent::ProviderRequestCheckpoint {
+                provider_family,
+                snapshot,
+                ..
+            } if provider_family == "openai-chat-compatible"
+                && snapshot.provider_id == "mock-provider"
+        )));
     }
 
     /// Builds one minimal request snapshot so provider-request counting uses the real event shape.

@@ -48,6 +48,62 @@ pub(super) struct PendingPromptQueueStatus {
     pub(super) run_phase: Option<SessionRunPhase>,
 }
 
+/// Queued-prompt Hook facts dispatched only after the authoritative workspace commit.
+/// 仅在权威工作区提交后分发的排队提示词 Hook 事实。
+pub(super) struct QueuedPendingPromptHookEvent {
+    /// Session whose logical turn receives the queued timeline item.
+    /// 逻辑回合接收排队时间线条目的会话。
+    session_id: SessionId,
+    /// Stable queued prompt identity used for timeline deduplication.
+    /// 用于时间线去重的稳定排队提示词标识。
+    prompt_entry_id: String,
+    /// Authoritative project ownership captured with the workspace draft.
+    /// 随工作区草稿捕获的权威项目归属。
+    project_id: Option<String>,
+    /// Authoritative workspace path included in the Hook payload.
+    /// 包含在 Hook 载荷中的权威工作区路径。
+    workspace_path: String,
+    /// Exact queue source controlling the user-event kind.
+    /// 控制用户事件类型的精确队列来源。
+    source: PendingSessionPromptSource,
+    /// User-visible queued prompt content.
+    /// 用户可见的排队提示词内容。
+    prompt: String,
+}
+
+/// Records one queued prompt in the conversation Hook runtime after workspace commit.
+/// 在工作区提交后把单条排队提示词记录到会话 Hook 运行时。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` owns the Hook runtime and `event` contains committed queue facts.
+/// `agent_runtime` 持有 Hook 运行时，`event` 包含已提交队列事实。
+///
+/// # Returns
+/// 返回值
+/// Success after timeline mutation and notification dispatch, or an explicit Hook lock error.
+/// 时间线修改与通知分发后返回成功，或返回显式 Hook 锁错误。
+pub(super) fn dispatch_queued_pending_prompt_hook(
+    agent_runtime: &AgentRuntimeBridge,
+    event: QueuedPendingPromptHookEvent,
+) -> Result<(), String> {
+    // hook_runtime may create or extend a logical turn only after the queue is authoritative.
+    // hook_runtime 仅在队列成为权威状态后创建或扩展逻辑回合。
+    let mut hook_runtime = agent_runtime
+        .conversation_hook_runtime
+        .lock()
+        .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+    hook_runtime.record_queued_user_prompt(
+        event.session_id,
+        &event.prompt_entry_id,
+        event.project_id,
+        event.workspace_path,
+        event.source,
+        &event.prompt,
+    );
+    Ok(())
+}
+
 /// Returns whether a runtime state has queued pending prompt work.
 /// 返回运行态是否存在已排队的待发送提示词工作。
 pub(super) fn runtime_state_has_queued_pending_prompt_work(
@@ -137,6 +193,18 @@ pub(super) fn pending_prompt_queue_status(
 
 /// Appends one submitted prompt to the visible pending queue using the current service runtime options.
 /// 使用当前服务运行时选项将单条提交提示词追加到可见待发送队列。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the detached queue draft, `agent_runtime` supplies runtime options, and `session_id` selects the session.
+/// `workspace_snapshot` 是分离队列草稿，`agent_runtime` 提供运行时选项，`session_id` 选择会话。
+/// The remaining parameters contain the authoritative workspace path, prompt content, attachments, and execution controls.
+/// 其余参数包含权威工作区路径、提示词内容、附件与执行控制。
+///
+/// # Returns
+/// 返回值
+/// Returns committed-candidate Hook facts that must be dispatched only after the workspace draft is stored.
+/// 返回候选提交 Hook 事实，必须仅在工作区草稿存储后分发。
 pub(super) fn enqueue_webui_pending_prompt_from_submission(
     workspace_snapshot: &mut WorkspaceSnapshot,
     agent_runtime: &AgentRuntimeBridge,
@@ -147,7 +215,7 @@ pub(super) fn enqueue_webui_pending_prompt_from_submission(
     attachments: Vec<ConversationAttachment>,
     reasoning_effort: Option<&str>,
     disabled_ai_capability_kinds: Option<&[String]>,
-) -> Result<(), String> {
+) -> Result<QueuedPendingPromptHookEvent, String> {
     let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
         workspace_snapshot,
         session_id,
@@ -165,13 +233,7 @@ pub(super) fn enqueue_webui_pending_prompt_from_submission(
             disabled_ai_capability_kinds,
         )?,
     );
-    enqueue_webui_pending_prompt_panel_entry(
-        workspace_snapshot,
-        agent_runtime,
-        session_id,
-        workspace_path,
-        entry,
-    )
+    enqueue_webui_pending_prompt_panel_entry(workspace_snapshot, session_id, workspace_path, entry)
 }
 
 /// Builds one WebUI-originated visible pending prompt entry.
@@ -197,15 +259,26 @@ fn build_webui_pending_prompt_panel_entry(
     }
 }
 
-/// Appends one visible pending prompt entry to the selected session queue and mirrors the queued user event.
-/// 将一条可见待发送提示词追加到选中会话队列，并镜像已排队用户事件。
+/// Appends one visible pending prompt entry to the selected session queue and produces queued user-event facts.
+/// 将一条可见待发送提示词追加到选中会话队列，并生成排队用户事件事实。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the detached queue draft, `session_id` selects the session, and `workspace_path` is its authoritative path.
+/// `workspace_snapshot` 持有分离队列草稿，`session_id` 选择会话，`workspace_path` 是其权威路径。
+/// `entry` is the fully resolved visible prompt row to append.
+/// `entry` 是要追加的完整可见提示词行。
+///
+/// # Returns
+/// 返回值
+/// Returns the Hook event facts aligned with the appended entry, or a queue-capacity error.
+/// 返回与已追加条目对齐的 Hook 事件事实，或队列容量错误。
 fn enqueue_webui_pending_prompt_panel_entry(
     workspace_snapshot: &mut WorkspaceSnapshot,
-    agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     workspace_path: &str,
     entry: PendingPromptPanelEntry,
-) -> Result<(), String> {
+) -> Result<QueuedPendingPromptHookEvent, String> {
     let now = current_unix_millis_text();
     let project_id = owning_project_id_for_session(workspace_snapshot, session_id);
     let runtime_state = workspace_snapshot
@@ -227,17 +300,14 @@ fn enqueue_webui_pending_prompt_panel_entry(
         .pending_prompt_panel_queue
         .push(entry);
     runtime_state.updated_at = now;
-    if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
-        hook_runtime.record_queued_user_prompt(
-            session_id,
-            &entry_id,
-            project_id,
-            workspace_path.to_string(),
-            PendingSessionPromptSource::UserFollowup,
-            &prompt,
-        );
-    }
-    Ok(())
+    Ok(QueuedPendingPromptHookEvent {
+        session_id,
+        prompt_entry_id: entry_id,
+        project_id,
+        workspace_path: workspace_path.to_string(),
+        source: PendingSessionPromptSource::UserFollowup,
+        prompt,
+    })
 }
 
 /// Captures the active provider/model identity for one queued WebUI prompt.
@@ -480,13 +550,24 @@ pub(super) fn remove_dispatched_pending_prompt_panel_entry(
 
 /// Inserts one visible WebUI queue row into the internal session prompt queue.
 /// 将一条 WebUI 可见队列行插入内部会话提示词队列。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` owns the detached routing draft, `session_id` selects the session, and `workspace_path` is its authoritative path.
+/// `workspace_snapshot` 持有分离路由草稿，`session_id` 选择会话，`workspace_path` 是其权威路径。
+/// `entry_id` identifies the exact visible row routed into the internal queue.
+/// `entry_id` 标识路由进内部队列的精确可见行。
+///
+/// # Returns
+/// 返回值
+/// Returns one post-commit Hook event for a new insertion, `None` for an idempotent route, or a routing error.
+/// 新插入时返回一条提交后 Hook 事件，幂等路由时返回 `None`，失败时返回路由错误。
 pub(super) fn insert_webui_pending_prompt_into_internal_queue(
     workspace_snapshot: &mut WorkspaceSnapshot,
-    agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     workspace_path: &str,
     entry_id: &str,
-) -> Result<(), String> {
+) -> Result<Option<QueuedPendingPromptHookEvent>, String> {
     let project_id = owning_project_id_for_session(workspace_snapshot, session_id);
     let runtime_state = workspace_snapshot
         .session_runtime_state
@@ -511,20 +592,17 @@ pub(super) fn insert_webui_pending_prompt_into_internal_queue(
     })?;
     runtime_state.updated_at = current_unix_millis_text();
     let PendingPromptQueueRouteOutcome::Inserted(internal_entry) = route_outcome else {
-        return Ok(());
+        return Ok(None);
     };
     let internal_entry = *internal_entry;
-    if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
-        hook_runtime.record_queued_user_prompt(
-            session_id,
-            entry_id,
-            project_id,
-            workspace_path.to_string(),
-            PendingSessionPromptSource::UserInterrupt,
-            &internal_entry.prompt,
-        );
-    }
-    Ok(())
+    Ok(Some(QueuedPendingPromptHookEvent {
+        session_id,
+        prompt_entry_id: entry_id.to_string(),
+        project_id,
+        workspace_path: workspace_path.to_string(),
+        source: PendingSessionPromptSource::UserInterrupt,
+        prompt: internal_entry.prompt,
+    }))
 }
 
 /// Clears stale session-mailbox entries from the old WebUI pending-prompt queue.

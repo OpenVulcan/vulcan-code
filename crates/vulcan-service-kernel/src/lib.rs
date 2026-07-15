@@ -72,7 +72,6 @@ use vulcan_agent_runtime::{
     turn_stats::build_session_turn_stats_from_state_with_segments,
     workbench_ai_capability_router::{
         WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS, effective_ai_tool_configuration_for_prompt_overrides,
-        effective_workbench_disabled_ai_capability_kinds,
     },
 };
 use vulcan_context::{
@@ -467,15 +466,15 @@ pub fn create_service_bridge_state(
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_turn_admission_reservations: BTreeMap::new(),
-        project_lifecycle_transition_reservations: BTreeMap::new(),
+        project_admission_reservations: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
         session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     }))
 }
 
-/// Stops active child-agent work before the host application exits.
-/// 在宿主应用退出前停止活动子代理工作。
+/// Stops the live MCP runtime and active child-agent work before the host application exits.
+/// 在宿主应用退出前停止实时 MCP 运行时与活动子代理工作。
 ///
 /// # Parameters
 /// 参数
@@ -489,12 +488,25 @@ pub fn create_service_bridge_state(
 pub fn service_prepare_for_app_shutdown(
     state: &SharedServiceBridgeState,
 ) -> Result<Vec<Uuid>, String> {
-    let task_runtime = state
-        .lock()
-        .map_err(|_| String::from("The service bridge state is locked during shutdown."))?
-        .agent_runtime
-        .as_ref()
-        .map(|agent_runtime| Arc::clone(&agent_runtime.task_runtime));
+    // taskRuntime and mcpRuntime are cloned under one state observation, then stopped outside the service lock.
+    // taskRuntime 与 mcpRuntime 在同一次状态观察中完成克隆，随后在服务锁外停止。
+    let (task_runtime, mcp_runtime) = {
+        // guard provides the single authoritative shutdown snapshot of runtime handles.
+        // guard 提供运行时句柄的单次权威关闭快照。
+        let guard = state
+            .lock()
+            .map_err(|_| String::from("The service bridge state is locked during shutdown."))?;
+        match guard.agent_runtime.as_ref() {
+            Some(agent_runtime) => (
+                Some(Arc::clone(&agent_runtime.task_runtime)),
+                agent_runtime.mcp_runtime.clone(),
+            ),
+            None => (None, None),
+        }
+    };
+    if let Some(mcp_runtime) = mcp_runtime {
+        mcp_runtime.shutdown();
+    }
     let Some(task_runtime) = task_runtime else {
         return Ok(Vec::new());
     };

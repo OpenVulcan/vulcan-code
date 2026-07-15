@@ -401,6 +401,11 @@ where
             progress(event);
         },
     );
+    // retained_progress clears before the first fallible terminal-state write so later refreshes cannot resurrect stale progress.
+    // retained_progress 在首个可能失败的终态写入前清空，避免后续刷新复活过期进度。
+    if let Ok(mut retained_progress) = handle.managed_runtime_progress.lock() {
+        *retained_progress = None;
+    }
     // retained_report updates the shared handle before any catalog snapshot is rebuilt.
     // retained_report 在重建任何目录快照前更新共享句柄。
     let mut retained_report = handle
@@ -409,9 +414,6 @@ where
         .map_err(|_| String::from("受管 Python/Node 初始化状态锁已损坏，无法保存重试结果。"))?;
     *retained_report = report;
     drop(retained_report);
-    if let Ok(mut retained_progress) = handle.managed_runtime_progress.lock() {
-        *retained_progress = None;
-    }
     load_luaskills_catalog(handle)
 }
 

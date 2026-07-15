@@ -319,7 +319,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             guard.workbench.session_vmm_policy = session_vmm_policy.clone();
         }
         let pending_questions =
-            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
         replace_conversation_scoped_projection_entry(
             &mut guard.workbench.session_addons_by_conversation,
             conversation_id.as_str(),
@@ -524,15 +524,28 @@ pub(crate) fn plan_artifact_state_from_tool_finished_event(
     })
 }
 
-/// Acknowledges that one runtime event has been projected into the emitted WebUI snapshot.
-/// 确认单条运行时事件已经投影进已发送的 WebUI 快照。
-pub(crate) fn acknowledge_runtime_event_projection_barrier(event: &RuntimeEvent) {
+/// Releases one runtime-event barrier after the host finishes its projection attempt.
+/// 在宿主完成运行时事件投影尝试后释放对应屏障。
+///
+/// # Parameters
+/// # 参数
+/// `event` carries the stable barrier identity attached by the Agent runtime.
+/// `event` 携带 Agent 运行时附加的稳定屏障标识。
+///
+/// # Returns
+/// # 返回值
+/// Returns whether an active barrier was acknowledged, or an explicit registry-lock error.
+/// 返回是否确认了活跃屏障，或返回明确的注册表锁错误。
+pub(crate) fn release_runtime_event_projection_barrier_after_attempt(
+    event: &RuntimeEvent,
+) -> Result<bool, String> {
     let acknowledged =
-        vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::acknowledge_runtime_event_projection_barrier_from_event(event);
+        vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::acknowledge_runtime_event_projection_barrier_from_event(event)?;
     if acknowledged {
         webui_trace(
             "runtime_event_projection_barrier_ack",
             runtime_event_trace_detail(event),
         );
     }
+    Ok(acknowledged)
 }

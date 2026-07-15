@@ -801,6 +801,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             session_id: vulcan_session_core::SessionNodeId::from(session_id),
         },
         runtime_policy,
+        conversation_hook_turn_id: Some(expected_turn_id),
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         subagent_prompt_context: None,

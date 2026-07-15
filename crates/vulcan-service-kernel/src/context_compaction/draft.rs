@@ -15,9 +15,6 @@ pub(crate) struct WebuiContextCompactionDraft {
     /// Checkpoint that should be appended only after the runtime state is accepted.
     /// 仅在运行时状态被接受后追加的检查点。
     pub(crate) checkpoint: vulcan_context::SessionCompactionEntry,
-    /// Visible terminal record id that closes the committed compaction section.
-    /// 闭合已提交压缩分段的可见终态记录标识。
-    pub(crate) terminal_record_id: String,
     /// Optional runtime audit event produced when persistent injections are folded.
     /// 持久注入被折叠时产出的可选运行时审计事件。
     pub(crate) injection_merge_event: Option<vulcan_context::RuntimeInjectionMergedEvent>,
@@ -496,6 +493,22 @@ pub(crate) fn build_webui_context_compaction_draft(
         provider_request_count,
         execution.input_prune_report.as_ref(),
     )?;
+    if trigger != AUTO_CONTEXT_COMPACTION_TRIGGER {
+        // usage_segment retains the exact manual compaction execution cost inside the candidate state.
+        // usage_segment 在候选状态内部保留手动压缩执行的精确成本。
+        let usage_segment = context_compaction_usage_segment_from_execution(trigger, execution);
+        append_webui_session_turn_stats_to_state(
+            &mut draft_runtime_state,
+            session_id,
+            &terminal_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+            SessionTurnStatsKind::ContextCompaction,
+            vec![usage_segment],
+        )
+        .map_err(|error| format!("无法在上下文压缩候选状态中追加轮次统计：{error}"))?
+        .ok_or_else(|| String::from("上下文压缩候选状态未生成轮次统计，已拒绝提交。"))?;
+    }
     if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
         draft_runtime_state.auto_compaction_consecutive_failures = 0;
     }
@@ -504,7 +517,6 @@ pub(crate) fn build_webui_context_compaction_draft(
         baseline,
         runtime_state: draft_runtime_state,
         checkpoint,
-        terminal_record_id,
         injection_merge_event,
         injection_merge_timestamp: now,
         ttl_prune_report,

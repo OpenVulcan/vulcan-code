@@ -127,7 +127,9 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let system_preamble = launch.system_preamble;
         let core_snapshot = launch.core_snapshot;
         let mut stream_state = launch.stream_state;
-        let _task_execution_context_guard = if let Some(context) = task_execution_context {
+        // taskExecutionContextGuard owns the exact context generation used by this provider loop.
+        // taskExecutionContextGuard 拥有本 Provider 循环使用的精确上下文注册世代。
+        let task_execution_context_guard = if let Some(context) = task_execution_context {
             match task_runtime.install_execution_context(session_id, context) {
                 Ok(guard) => Some(guard),
                 Err(error) => {
@@ -221,6 +223,38 @@ pub(crate) fn drive_runtime_stream_provider_loop(
 
         for event in delta_coalescer.flush() {
             yield event;
+        }
+
+        // executionContextReleaseResult must succeed before any terminal event claims the loop is closed.
+        // executionContextReleaseResult 必须成功，终态事件才能宣称本循环已经关闭。
+        let execution_context_release_result = match task_execution_context_guard {
+            Some(guard) => guard.release(),
+            None => Ok(()),
+        };
+        if let Err(release_error) = execution_context_release_result {
+            // terminalError preserves an existing provider failure while appending the cleanup failure.
+            // terminalError 保留既有 Provider 失败，并追加清理失败。
+            let terminal_error = match stream_state.take_terminal_error() {
+                Some(provider_error) => format!(
+                    "{provider_error} Additionally, the task execution context could not be released: {release_error}"
+                ),
+                None => format!(
+                    "The task execution context could not be released after the provider stream ended: {release_error}"
+                ),
+            };
+            for event in build_failure_terminal_events(
+                session_id,
+                preparation,
+                discovery_rows,
+                discovery_errors,
+                warnings,
+                &mut stream_state,
+                token_budget_runtime.estimator(),
+                terminal_error,
+            ) {
+                yield event;
+            }
+            return;
         }
 
         if let Some(error) = stream_state.take_terminal_error() {

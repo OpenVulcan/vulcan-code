@@ -1193,6 +1193,124 @@ fn hydrated_session_selection_recovers_after_late_run_state_preservation() {
     assert_eq!(hydrated_snapshot.selected_session, hydrated_session_id);
 }
 
+/// Verifies transport conversation identifiers resolve to explicit targets without draft fallbacks.
+/// 验证传输层会话标识会解析为显式目标，不会回退为草稿。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if blank, malformed, or nil identifiers become create targets.
+/// 此测试无返回值；若空白、畸形或 nil 标识变成新建目标则失败。
+#[test]
+fn prompt_session_target_parser_rejects_ambiguous_existing_identifiers() {
+    // session_id is the valid persisted identity used by the successful continue case.
+    // session_id 是成功继续场景使用的有效持久化身份。
+    let session_id = SessionId::new_v4();
+    // session_id_text is the exact transport representation of the valid identity.
+    // session_id_text 是有效身份的精确传输层表示。
+    let session_id_text = session_id.to_string();
+
+    assert_eq!(
+        parse_prompt_session_target(None).expect("absent id should explicitly create"),
+        PromptSessionTarget::Create
+    );
+    assert_eq!(
+        parse_prompt_session_target(Some(&session_id_text))
+            .expect("valid id should explicitly continue"),
+        PromptSessionTarget::Existing(session_id)
+    );
+    assert!(parse_prompt_session_target(Some("   ")).is_err());
+    assert!(parse_prompt_session_target(Some("draft-local-id")).is_err());
+    assert!(parse_prompt_session_target(Some(&SessionId::nil().to_string())).is_err());
+}
+
+/// Verifies archived and missing explicit targets cannot materialize replacement sessions.
+/// 验证已归档和缺失的显式目标不能物化替代新会话。
+///
+/// # Parameters
+/// 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// 返回值
+/// This test returns no value and fails if either rejected target mutates active session state.
+/// 此测试无返回值；若任一被拒绝目标修改活动会话状态则失败。
+#[test]
+fn materialize_prompt_session_rejects_archived_and_missing_targets_without_creation() {
+    // archived_session_id identifies the archived row that must never be revived by submission.
+    // archived_session_id 标识不得被提交复活的归档行。
+    let archived_session_id = SessionId::new_v4();
+    // workspace_snapshot contains only one archived regular session and no active session rows.
+    // workspace_snapshot 只包含一个归档普通会话，不包含活动会话行。
+    let mut workspace_snapshot = WorkspaceSnapshot {
+        task_projects: vec![TaskProjectSummary::new(
+            "project-a",
+            "Project A",
+            "D:/project-a",
+            false,
+            0,
+            None,
+            None,
+            Vec::new(),
+        )],
+        archived_task_projects: Vec::new(),
+        sessions: Vec::new(),
+        archived_sessions: vec![SessionSummary::new(
+            archived_session_id,
+            Some(String::from("project-a")),
+            "归档会话",
+            "",
+            SessionState::Completed,
+            0,
+            0,
+            "刚刚",
+        )],
+        session_messages: BTreeMap::new(),
+        archived_session_messages: BTreeMap::new(),
+        session_compactions: BTreeMap::new(),
+        archived_session_compactions: BTreeMap::new(),
+        session_runtime_state: BTreeMap::new(),
+        archived_session_runtime_state: BTreeMap::new(),
+        session_run_phases: BTreeMap::new(),
+        expanded_task_projects: BTreeSet::new(),
+        selected_session: SessionId::nil(),
+        hydrated_session_ids: BTreeSet::new(),
+    };
+
+    // archived_error proves an explicit archived target remains archived.
+    // archived_error 证明显式归档目标保持归档状态。
+    let archived_error = materialize_prompt_session(
+        &mut workspace_snapshot,
+        Some("project-a"),
+        PromptSessionTarget::Existing(archived_session_id),
+        "不得创建替代会话",
+    )
+    .err()
+    .expect("archived target should be rejected");
+    assert!(archived_error.contains("archived"));
+    // missing_session_id identifies a valid UUID that owns no active or archived row.
+    // missing_session_id 标识不拥有任何活动或归档行的有效 UUID。
+    let missing_session_id = SessionId::new_v4();
+    // missing_error proves a syntactically valid but absent target cannot become a draft.
+    // missing_error 证明语法有效但缺失的目标不能变成草稿。
+    let missing_error = materialize_prompt_session(
+        &mut workspace_snapshot,
+        Some("project-a"),
+        PromptSessionTarget::Existing(missing_session_id),
+        "不得创建替代会话",
+    )
+    .err()
+    .expect("missing target should be rejected");
+    assert!(missing_error.contains("not found"));
+    assert!(workspace_snapshot.sessions.is_empty());
+    assert!(workspace_snapshot.task_projects[0].session_ids.is_empty());
+}
+
 /// Verifies existing prompt sessions ignore blank project ids during materialization.
 /// 验证已有提示词会话在物化时会忽略空白项目标识。
 #[test]
@@ -1200,9 +1318,6 @@ fn materialize_prompt_session_ignores_blank_existing_session_project_id() {
     // session_id identifies the existing conversation selected by the WebUI.
     // session_id 标识 WebUI 选择的既有会话。
     let session_id = SessionId::new_v4();
-    // conversation_id stores the existing conversation id text passed by the WebUI.
-    // conversation_id 保存 WebUI 传入的既有会话标识文本。
-    let conversation_id = session_id.to_string();
     // workspace_snapshot contains a blank-id project that must not be treated as an owner.
     // workspace_snapshot 包含不应被当作所属项目的空白标识项目。
     let mut workspace_snapshot = WorkspaceSnapshot {
@@ -1240,15 +1355,31 @@ fn materialize_prompt_session_ignores_blank_existing_session_project_id() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let (resolved_session_id, session_title, workspace_path) = materialize_prompt_session(
+    // materialized_session carries the authoritative existing-or-created outcome.
+    // materialized_session 携带权威的已有或新建结果。
+    let materialized_session = materialize_prompt_session(
         &mut workspace_snapshot,
         None,
-        Some(&conversation_id),
+        PromptSessionTarget::Existing(session_id),
         "继续这个会话",
     )
     .expect("existing conversation should materialize");
+    assert!(materialized_session.project_id.is_none());
+    // resolved_session_id is the exact existing session selected by materialization.
+    // resolved_session_id 是物化阶段选择的精确已有会话。
+    let resolved_session_id = materialized_session.session_id;
+    // session_title is the authoritative existing summary title.
+    // session_title 是权威已有摘要标题。
+    let session_title = materialized_session.session_title;
+    // workspace_path is derived only from the existing session's owning project.
+    // workspace_path 仅从已有会话所属项目派生。
+    let workspace_path = materialized_session.workspace_path;
 
     assert_eq!(resolved_session_id, session_id);
+    assert_eq!(
+        materialized_session.kind,
+        PromptSessionMaterializationKind::Existing
+    );
     assert_eq!(session_title, "既有会话");
     assert_eq!(workspace_path, "");
     assert_eq!(workspace_snapshot.selected_session, session_id);
@@ -1299,12 +1430,29 @@ fn materialize_prompt_session_uses_first_project_when_project_id_is_missing() {
         hydrated_session_ids: BTreeSet::new(),
     };
 
-    let (session_id, session_title, workspace_path) =
-        materialize_prompt_session(&mut workspace_snapshot, None, None, "首次启动后创建会话")
-            .expect("missing project id should use first active project");
+    // materialized_session carries the authoritative created-session result.
+    // materialized_session 携带权威的新建会话结果。
+    let materialized_session = materialize_prompt_session(
+        &mut workspace_snapshot,
+        None,
+        PromptSessionTarget::Create,
+        "首次启动后创建会话",
+    )
+    .expect("missing project id should use first active project");
+    // session_id identifies the newly created session inserted into the first project.
+    // session_id 标识插入第一个项目的新建会话。
+    let session_id = materialized_session.session_id;
 
-    assert_eq!(session_title, "首次启动后创建会话");
-    assert_eq!(workspace_path, "D:/project-a");
+    assert_eq!(materialized_session.session_title, "首次启动后创建会话");
+    assert_eq!(
+        materialized_session.project_id.as_deref(),
+        Some("project-a")
+    );
+    assert_eq!(materialized_session.workspace_path, "D:/project-a");
+    assert_eq!(
+        materialized_session.kind,
+        PromptSessionMaterializationKind::Created
+    );
     assert_eq!(workspace_snapshot.selected_session, session_id);
     assert_eq!(
         workspace_snapshot.task_projects[0].session_ids,

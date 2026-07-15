@@ -3,7 +3,9 @@
 
 use super::*;
 use vulcan_luaskills_config::LuaSkillsRuntimeSettings;
-use vulcan_service_api::LuaSkillsManagedRuntimeProgressSummary;
+use vulcan_service_api::{LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsDomain};
+
+mod system_plugin_lifecycle;
 
 /// Serializes user-agent catalog file mutations across concurrent service requests.
 /// 串行化并发服务请求之间的用户智能体目录文件变更。
@@ -43,77 +45,104 @@ async fn lock_luaskills_management_mutation() -> tokio::sync::MutexGuard<'static
     LUASKILLS_MANAGEMENT_MUTATION_LOCK.lock().await
 }
 
-/// Drains transient work and invokes the declared disable callback to compensate a failed enable.
-/// 排空临时任务并调用声明的停用回调，以补偿失败的启用操作。
-///
-/// # Parameters
-/// 参数
-/// `runtime` owns the active transition and `plugin_id` selects the exact enabling plugin.
-/// `runtime` 持有活动转换，`plugin_id` 选择精确的启用中插件。
-///
-/// # Returns
-/// 返回值
-/// Returns every cleanup failure that prevents the rollback from being considered complete.
-/// 返回所有导致回滚无法视为完整的清理失败。
-async fn compensate_failed_system_plugin_enable(
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    plugin_id: &str,
-) -> Vec<String> {
-    // failures accumulates both lease-drain and lifecycle compensation diagnostics.
-    // failures 同时累积租约排空与生命周期补偿诊断。
-    let mut failures = match runtime.drain_plugin_sessions(plugin_id).await {
-        Ok(report) => report.failures,
-        Err(error) => vec![error.to_string()],
-    };
-    if let Err(error) = runtime
-        .invoke_lifecycle(
-            plugin_id,
-            vulcan_plugin_runtime::SystemPluginLifecycleEvent::EnableRollback,
-        )
-        .await
-    {
-        failures.push(format!("插件启用补偿回调失败：{error}"));
-    }
-    failures
-}
-
-/// Finishes one transient plugin state and synchronizes its exact final hook surface.
-/// 完成一个临时插件状态并同步其精确最终 Hook 能力面。
-///
-/// # Parameters
-/// 参数
-/// Runtime and service state own publication; policy sets and failures define the final projection.
-/// 运行时与服务状态持有发布过程；策略集合与失败信息定义最终投影。
-///
-/// # Returns
-/// 返回值
-/// Returns success only when both catalog publication and hook replacement complete.
-/// 仅当目录发布与 Hook 替换均完成时返回成功。
-fn finish_system_plugin_transition_and_sync(
-    state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::SystemPluginRuntimeManager,
-    plugin_id: &str,
-    disabled_plugin_ids: &BTreeSet<String>,
-    enabled_plugin_ids: &BTreeSet<String>,
-    cleanup_failures: Vec<String>,
-) -> Result<(), String> {
-    // catalog is the exact immutable post-transition surface supplied to hook replacement.
-    // catalog 是提供给 Hook 替换的精确不可变转换后能力面。
-    let catalog = runtime
-        .finish_lifecycle_transition(
-            plugin_id,
-            disabled_plugin_ids,
-            enabled_plugin_ids,
-            cleanup_failures,
-        )
-        .map_err(|error| error.to_string())?;
-    synchronize_service_system_plugin_hooks(state, runtime.clone(), &catalog)
-}
-
 /// Acquires the complete Agent Skills catalog transaction guard.
 /// 获取完整 Agent Skills 目录事务守卫。
 pub(crate) async fn lock_agent_skills_catalog_mutation() -> tokio::sync::MutexGuard<'static, ()> {
     AGENT_SKILLS_CATALOG_MUTATION_LOCK.lock().await
+}
+
+/// Refreshes the committed LuaSkills projection and broadcasts it through the sole service publisher.
+/// 刷新已提交的 LuaSkills 投影，并通过唯一服务发布出口广播。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the committed domain update to every connected endpoint.
+/// `app` 将已提交领域更新广播给每个已连接端点。
+/// `state` owns the authoritative LuaSkills catalog and workbench generation.
+/// `state` 持有权威 LuaSkills 目录与工作台版本。
+///
+/// # Returns
+/// 返回值
+/// Returns the same revisioned update delivered to subscribers, or the projection error.
+/// 返回与订阅端收到内容相同的带版本更新，或投影错误。
+async fn refresh_luaskills_local_state_and_emit(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // update is created once so the RPC response and broadcast share one exact revision.
+    // update 只创建一次，使 RPC 响应与广播共享同一个精确版本。
+    let update = refresh_luaskills_local_state(state).await?;
+    emit_luaskills_catalog_delta(app, update.clone());
+    Ok(update)
+}
+
+/// Refreshes the committed Agent Skills projection and broadcasts it through the sole service publisher.
+/// 刷新已提交的 Agent Skills 投影，并通过唯一服务发布出口广播。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the committed domain update to every connected endpoint.
+/// `app` 将已提交领域更新广播给每个已连接端点。
+/// `state` owns the authoritative Agent Skills projection and workbench generation.
+/// `state` 持有权威 Agent Skills 投影与工作台版本。
+///
+/// # Returns
+/// 返回值
+/// Returns the same revisioned update delivered to subscribers, or the projection error.
+/// 返回与订阅端收到内容相同的带版本更新，或投影错误。
+async fn refresh_agent_skills_local_state_and_emit(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+) -> Result<AgentSkillsCatalogUpdate, String> {
+    // update is created once so RPC response and broadcast share one exact revision.
+    // update 只创建一次，使 RPC 响应与广播共享同一个精确版本。
+    let update = refresh_agent_skills_local_state(state).await?;
+    emit_agent_skills_catalog_delta(app, update.clone());
+    Ok(update)
+}
+
+/// Publishes one already committed subagent catalog update and returns the identical response value.
+/// 发布一份已提交的智能体目录更新，并返回完全相同的响应值。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the committed update to every connected endpoint.
+/// `app` 将已提交更新广播给每个已连接端点。
+/// `update` is the exact catalog revision already committed to shared state.
+/// `update` 是已经提交到共享状态的精确目录版本。
+///
+/// # Returns
+/// 返回值
+/// Returns the unchanged update after one authoritative broadcast.
+/// 在执行一次权威广播后返回未改变的更新。
+fn publish_subagent_catalog_update(
+    app: &ServiceEventEmitter,
+    update: SubagentCatalogUpdate,
+) -> SubagentCatalogUpdate {
+    emit_subagent_catalog_delta(app, update.clone());
+    update
+}
+
+/// Refreshes and publishes one subagent catalog projection through the sole service publisher.
+/// 通过唯一服务发布出口刷新并发布一份智能体目录投影。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the committed update to every connected endpoint.
+/// `app` 将已提交更新广播给每个已连接端点。
+/// `state` owns the authoritative subagent catalog projection.
+/// `state` 持有权威智能体目录投影。
+///
+/// # Returns
+/// 返回值
+/// Returns the committed update after broadcasting it exactly once.
+/// 在恰好一次广播后返回已提交更新。
+fn refresh_subagent_catalog_local_state_and_emit(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+) -> Result<SubagentCatalogUpdate, String> {
+    let update = refresh_subagent_catalog_local_state(state)?;
+    Ok(publish_subagent_catalog_update(app, update))
 }
 
 pub(crate) async fn run_luaskills_management_blocking<T, F>(
@@ -132,6 +161,7 @@ where
 /// Refreshes the LuaSkills catalog used by the WebUI skill page.
 /// 刷新 WebUI 技能页面使用的 LuaSkills 目录。
 pub(crate) async fn service_refresh_luaskills_catalog(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     // Keep the runtime refresh and its returned catalog projection in one ordered transaction.
@@ -166,7 +196,7 @@ pub(crate) async fn service_refresh_luaskills_catalog(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, system_plugin_runtime, &system_plugin_catalog)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Inspects one local user plugin package and returns its complete authorization preview.
@@ -190,6 +220,7 @@ pub(crate) async fn service_inspect_local_plugin(
 /// Installs one explicitly authorized local user plugin and leaves it disabled for review.
 /// 安装一个经过明确授权的本地用户插件，并使其保持停用以供复核。
 pub(crate) async fn service_install_local_plugin(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     source_path: String,
     approved_capabilities: Vec<String>,
@@ -345,12 +376,13 @@ pub(crate) async fn service_install_local_plugin(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, runtime, &catalog)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Uninstalls one disabled user plugin after its declared lifecycle callback completes.
 /// 在声明的生命周期回调完成后卸载一个已停用的用户插件。
 pub(crate) async fn service_uninstall_user_plugin(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     plugin_id: String,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
@@ -460,7 +492,7 @@ pub(crate) async fn service_uninstall_user_plugin(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, runtime, &catalog)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Saves Vulcan-owned LuaSkills startup settings and refreshes the WebUI projection.
@@ -476,6 +508,7 @@ pub(crate) async fn service_uninstall_user_plugin(
 /// Returns the committed LuaSkills catalog including the restart-required comparison.
 /// 返回已提交的 LuaSkills 目录，其中包含是否需要重启的比较结果。
 pub(crate) async fn service_save_luaskills_runtime_settings(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     settings: LuaSkillsRuntimeSettings,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
@@ -513,7 +546,7 @@ pub(crate) async fn service_save_luaskills_runtime_settings(
         .await?;
     }
     store_luaskills_catalog(&state, catalog)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Retries the packaged managed Python and Node bootstrap and reprojects its exact outcome.
@@ -553,32 +586,40 @@ pub(crate) async fn service_retry_luaskills_managed_runtimes(
     let progress_app = app.clone();
     // catalog contains the committed result even when the optional runtimes remain unavailable.
     // catalog 即使在可选运行时仍不可用时也包含已提交结果。
-    let catalog = run_luaskills_management_blocking("retry managed runtimes", move || {
+    let catalog = match run_luaskills_management_blocking("retry managed runtimes", move || {
         vulcan_service_runtime::luaskills_bridge::retry_managed_runtimes(
             &handle,
             install_target,
             |progress| {
-                let workbench = if let Ok(mut guard) = progress_state.lock() {
-                    guard.workbench.lua_skills.managed_runtime_progress =
-                        Some(LuaSkillsManagedRuntimeProgressSummary {
-                            phase: progress.phase.clone(),
-                            component: progress.component.clone(),
-                            message: progress.message.clone(),
-                            completed_bytes: progress.completed_bytes,
-                            total_bytes: progress.total_bytes,
-                            overall_percent: progress.overall_percent,
-                        });
-                    Some(guard.workbench.clone())
-                } else {
-                    None
+                // progress_summary is the exact focused domain value compared before revision allocation.
+                // progress_summary 是分配版本前用于比较的精确聚焦领域值。
+                let progress_summary = LuaSkillsManagedRuntimeProgressSummary {
+                    phase: progress.phase.clone(),
+                    component: progress.component.clone(),
+                    message: progress.message.clone(),
+                    completed_bytes: progress.completed_bytes,
+                    total_bytes: progress.total_bytes,
+                    overall_percent: progress.overall_percent,
                 };
-                if let Some(workbench) = workbench {
-                    emit_workbench_event(&progress_app, &workbench);
-                }
+                // progress_commit deliberately ignores callback-only diagnostics because terminal error handling clears retained UI state.
+                // progress_commit 有意忽略仅回调诊断，因为终态错误处理会清理保留的界面状态。
+                let _progress_commit = commit_and_emit_luaskills_managed_runtime_progress(
+                    &progress_app,
+                    &progress_state,
+                    Some(progress_summary),
+                );
             },
         )
     })
-    .await?;
+    .await
+    {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return Err(luaskills_retry_error_after_progress_clear(
+                &app, &state, error,
+            ));
+        }
+    };
     // message persists the exact retry outcome after transient UI progress is gone.
     // message 在临时界面进度消失后持久记录精确重试结果。
     let message = format!(
@@ -586,13 +627,52 @@ pub(crate) async fn service_retry_luaskills_managed_runtimes(
         catalog.managed_runtime_report.status.as_key(),
         catalog.managed_runtime_report.diagnostic,
     );
-    store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state(&state).await
+    if let Err(error) = store_luaskills_catalog_with_log(&state, catalog, message) {
+        return Err(luaskills_retry_error_after_progress_clear(
+            &app, &state, error,
+        ));
+    }
+    match refresh_luaskills_local_state_and_emit(&app, &state).await {
+        Ok(update) => Ok(update),
+        Err(error) => Err(luaskills_retry_error_after_progress_clear(
+            &app, &state, error,
+        )),
+    }
+}
+
+/// Clears transient LuaSkills progress after a retry failure while preserving the primary error.
+/// 在重试失败后清理临时 LuaSkills 进度，同时保留主要错误。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the terminal progress clear to every connected client.
+/// `app` 将终态进度清理广播给每个已连接客户端。
+/// `state` owns the retained workbench progress projection.
+/// `state` 持有保留的工作台进度投影。
+/// `error` is the primary retry, persistence, or projection failure.
+/// `error` 是主要的重试、持久化或投影失败。
+///
+/// # Returns
+/// 返回值
+/// The primary error, augmented only when committing the terminal clear also fails.
+/// 返回主要错误；仅当提交终态清理也失败时追加诊断。
+fn luaskills_retry_error_after_progress_clear(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    error: String,
+) -> String {
+    match commit_and_emit_luaskills_managed_runtime_progress(app, state, None) {
+        Ok(_) => error,
+        Err(clear_error) => {
+            format!("{error}; additionally failed to clear managed runtime progress: {clear_error}")
+        }
+    }
 }
 
 /// Installs one LuaSkill package into the USER layer and refreshes the WebUI snapshot.
 /// 将单个 LuaSkill 包安装到 USER 层并刷新 WebUI 快照。
 pub(crate) async fn service_install_luaskill(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     skill_id: Option<String>,
     source: String,
@@ -612,12 +692,13 @@ pub(crate) async fn service_install_luaskill(
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Updates one managed LuaSkill package and refreshes the WebUI snapshot.
 /// 更新单个受管 LuaSkill 包并刷新 WebUI 快照。
 pub(crate) async fn service_update_luaskill(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     skill_id: String,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
@@ -630,12 +711,13 @@ pub(crate) async fn service_update_luaskill(
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Enables or disables one LuaSkill package and refreshes the WebUI snapshot.
 /// 启用或停用单个 LuaSkill 包并刷新 WebUI 快照。
 pub(crate) async fn service_set_luaskill_enabled(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     skill_id: String,
     enabled: bool,
@@ -649,7 +731,7 @@ pub(crate) async fn service_set_luaskill_enabled(
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Enables or disables one known host-owned LuaSkills System Plugin.
@@ -665,400 +747,22 @@ pub(crate) async fn service_set_luaskill_enabled(
 /// A revisioned LuaSkills domain projection after persistence succeeds.
 /// 持久化成功后的带版本 LuaSkills 领域投影。
 pub(crate) async fn service_set_luaskills_system_plugin_enabled(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     plugin_id: String,
     enabled: bool,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    // stable_plugin_id is the exact persisted and projected System Plugin identifier.
-    // stable_plugin_id 是持久化与投影使用的精确 System Plugin 标识。
-    let stable_plugin_id = plugin_id.trim();
-    if stable_plugin_id.is_empty() {
-        return Err(String::from("LuaSkills System Plugin 标识不能为空。"));
-    }
-    // management_guard serializes this switch with package lifecycle and tool registration mutations.
-    // management_guard 使该开关与包生命周期及工具注册变更保持串行。
-    let _management_guard = lock_luaskills_management_mutation().await;
-    let provider_configuration = provider_configuration_from_state(&state)?;
-    let system_plugin_runtime = service_system_plugin_runtime(&state)?;
-    let plugin_catalog = system_plugin_runtime
-        .refresh_catalog(
-            &provider_configuration.luaskills.disabled_system_plugins,
-            &provider_configuration.luaskills.enabled_system_plugins,
-        )
-        .map_err(|error| error.to_string())?;
-    let plugin = plugin_catalog
-        .plugins
-        .get(stable_plugin_id)
-        .ok_or_else(|| format!("未发现 LuaSkills System Plugin：{stable_plugin_id}"))?;
-    // plugin_default_enabled records the manifest baseline so persistence can store only an explicit override.
-    // plugin_default_enabled 记录清单基线，使持久化层只保存显式覆盖。
-    let plugin_default_enabled = plugin
-        .manifest
-        .as_ref()
-        .map(|manifest| manifest.default_enabled)
-        .ok_or_else(|| {
-            format!("LuaSkills System Plugin `{stable_plugin_id}` 缺少有效清单，无法变更状态")
-        })?;
-    // previous_enabled is the exact effective state restored if any later transaction phase fails.
-    // previous_enabled 是后续任一事务阶段失败时需要恢复的精确有效状态。
-    let previous_enabled = plugin.desired_enabled;
-    // already_settled avoids probing or draining an unchanged healthy lifecycle state.
-    // already_settled 避免对未变化且健康的生命周期状态重复探测或排空。
-    let already_settled = matches!(
-        (enabled, plugin.runtime_state),
-        (
-            true,
-            vulcan_plugin_runtime::SystemPluginRuntimeState::Enabled
-        ) | (
-            false,
-            vulcan_plugin_runtime::SystemPluginRuntimeState::Disabled
-        )
-    );
-    // requires_cleanup_retry prevents re-enabling a plugin while an older retained lease still consumes capacity.
-    // requires_cleanup_retry 防止旧保留租约仍占用容量时重新启用插件。
-    let requires_cleanup_retry = plugin.runtime_state
-        == vulcan_plugin_runtime::SystemPluginRuntimeState::DisabledWithCleanupWarning;
-    if !matches!(
-        plugin.availability,
-        vulcan_plugin_runtime::SystemPluginAvailability::Enabled
-            | vulcan_plugin_runtime::SystemPluginAvailability::Disabled
-    ) {
-        return Err(format!(
-            "LuaSkills System Plugin `{stable_plugin_id}` 当前不可管理：{}",
-            plugin.diagnostics.join("；")
-        ));
-    }
-    if previous_enabled == enabled && already_settled {
-        return refresh_luaskills_local_state(&state).await;
-    }
-    // prospective_luaskills applies the requested override without mutating persisted configuration.
-    // prospective_luaskills 在不修改持久化配置的前提下应用请求覆盖。
-    let mut prospective_luaskills = provider_configuration.luaskills.clone();
-    prospective_luaskills.set_system_plugin_enabled_with_default(
-        stable_plugin_id,
-        enabled,
-        plugin_default_enabled,
-    );
-    // prospective_catalog validates global identifiers, package assets, schemas, hooks, and target state before persistence.
-    // prospective_catalog 在持久化前校验全局标识、包资产、Schema、Hook 与目标状态。
-    let prospective_catalog = vulcan_plugin_runtime::load_vulcan_plugin_catalog(
-        system_plugin_runtime.system_plugin_root(),
-        Some(system_plugin_runtime.user_plugin_root()),
-        &prospective_luaskills.disabled_system_plugins,
-        &prospective_luaskills.enabled_system_plugins,
-        0,
-    );
-    let prospective_plugin = prospective_catalog
-        .plugins
-        .get(stable_plugin_id)
-        .ok_or_else(|| format!("目标目录未发现 LuaSkills System Plugin：{stable_plugin_id}"))?;
-    let expected_availability = if enabled {
-        vulcan_plugin_runtime::SystemPluginAvailability::Enabled
-    } else {
-        vulcan_plugin_runtime::SystemPluginAvailability::Disabled
-    };
-    if prospective_plugin.availability != expected_availability {
-        return Err(format!(
-            "LuaSkills System Plugin `{stable_plugin_id}` 无法进入请求状态：{}",
-            prospective_plugin.diagnostics.join("；")
-        ));
-    }
-    if enabled {
-        if requires_cleanup_retry {
-            let cleanup_report = system_plugin_runtime
-                .drain_plugin_sessions(stable_plugin_id)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "LuaSkills System Plugin `{stable_plugin_id}` 重新启用前清理失败：{error}"
-                    )
-                })?;
-            if !cleanup_report.failures.is_empty() {
-                finish_system_plugin_transition_and_sync(
-                    &state,
-                    &system_plugin_runtime,
-                    stable_plugin_id,
-                    &provider_configuration.luaskills.disabled_system_plugins,
-                    &provider_configuration.luaskills.enabled_system_plugins,
-                    cleanup_report.failures.clone(),
-                )?;
-                return Err(format!(
-                    "LuaSkills System Plugin `{stable_plugin_id}` 仍有未清理资源：{}",
-                    cleanup_report.failures.join("；")
-                ));
-            }
-        }
-        validate_service_system_plugin_hooks(&state, &prospective_plugin.hooks).map_err(
-            |error| format!("LuaSkills System Plugin `{stable_plugin_id}` Hook 声明无效：{error}"),
-        )?;
-        system_plugin_runtime
-            .begin_enabling(stable_plugin_id)
-            .map_err(|error| error.to_string())?;
-        if let Err(error) = synchronize_service_system_plugin_hooks(
-            &state,
-            system_plugin_runtime.clone(),
-            &system_plugin_runtime.snapshot(),
-        ) {
-            finish_system_plugin_transition_and_sync(
-                &state,
-                &system_plugin_runtime,
-                stable_plugin_id,
-                &provider_configuration.luaskills.disabled_system_plugins,
-                &provider_configuration.luaskills.enabled_system_plugins,
-                Vec::new(),
-            )
-            .map_err(|rollback_error| {
-                format!("{error}; System Plugin hook 回滚失败：{rollback_error}")
-            })?;
-            return Err(format!("System Plugin hook 同步失败：{error}"));
-        }
-        let prepare_runtime = system_plugin_runtime.clone();
-        let prepare_plugin_id = stable_plugin_id.to_string();
-        let environment_preparation =
-            run_luaskills_management_blocking("prepare plugin environment", move || {
-                prepare_runtime
-                    .prepare_plugin_environment(&prepare_plugin_id)
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-            })
-            .await;
-        if let Err(error) = environment_preparation {
-            // rollbackResult must report both lifecycle publication and hook restoration failures.
-            // rollbackResult 必须同时上报生命周期发布与 Hook 恢复失败。
-            let rollback_result = finish_system_plugin_transition_and_sync(
-                &state,
-                &system_plugin_runtime,
-                stable_plugin_id,
-                &provider_configuration.luaskills.disabled_system_plugins,
-                &provider_configuration.luaskills.enabled_system_plugins,
-                Vec::new(),
-            );
-            return match rollback_result {
-                Ok(()) => Err(format!(
-                    "LuaSkills System Plugin `{stable_plugin_id}` 环境准备失败：{error}"
-                )),
-                Err(rollback_error) => Err(format!(
-                    "LuaSkills System Plugin `{stable_plugin_id}` 环境准备失败：{error}；回滚失败：{rollback_error}"
-                )),
-            };
-        }
-        // enableCallbackResult is separated so any partial lifecycle side effect is compensated.
-        // enableCallbackResult 被单独处理，以便补偿任何部分生命周期副作用。
-        let enable_callback_result = system_plugin_runtime
-            .invoke_lifecycle(
-                stable_plugin_id,
-                vulcan_plugin_runtime::SystemPluginLifecycleEvent::Enable,
-            )
-            .await;
-        if let Err(error) = enable_callback_result {
-            // cleanupFailures records whether the declared disable compensation was complete.
-            // cleanupFailures 记录声明的停用补偿是否完整。
-            let cleanup_failures =
-                compensate_failed_system_plugin_enable(&system_plugin_runtime, stable_plugin_id)
-                    .await;
-            // rollbackResult preserves compensation and hook restoration diagnostics.
-            // rollbackResult 保留补偿与 Hook 恢复诊断。
-            let rollback_result = finish_system_plugin_transition_and_sync(
-                &state,
-                &system_plugin_runtime,
-                stable_plugin_id,
-                &provider_configuration.luaskills.disabled_system_plugins,
-                &provider_configuration.luaskills.enabled_system_plugins,
-                cleanup_failures,
-            );
-            return match rollback_result {
-                Ok(()) => Err(format!(
-                    "LuaSkills System Plugin `{stable_plugin_id}` 启用回调失败：{error}"
-                )),
-                Err(rollback_error) => Err(format!(
-                    "LuaSkills System Plugin `{stable_plugin_id}` 启用回调失败：{error}；回滚失败：{rollback_error}"
-                )),
-            };
-        }
-        if let Err(error) = system_plugin_runtime.probe_plugin(stable_plugin_id).await {
-            // cleanupFailures records compensation after a successful callback but failed probe.
-            // cleanupFailures 记录启用回调成功但探测失败后的补偿结果。
-            let cleanup_failures =
-                compensate_failed_system_plugin_enable(&system_plugin_runtime, stable_plugin_id)
-                    .await;
-            // rollbackResult preserves compensation and hook restoration diagnostics.
-            // rollbackResult 保留补偿与 Hook 恢复诊断。
-            let rollback_result = finish_system_plugin_transition_and_sync(
-                &state,
-                &system_plugin_runtime,
-                stable_plugin_id,
-                &provider_configuration.luaskills.disabled_system_plugins,
-                &provider_configuration.luaskills.enabled_system_plugins,
-                cleanup_failures,
-            );
-            return match rollback_result {
-                Ok(()) => Err(format!(
-                    "LuaSkills System Plugin `{stable_plugin_id}` 启用探测失败：{error}"
-                )),
-                Err(rollback_error) => Err(format!(
-                    "LuaSkills System Plugin `{stable_plugin_id}` 启用探测失败：{error}；回滚失败：{rollback_error}"
-                )),
-            };
-        }
-    } else {
-        system_plugin_runtime
-            .begin_draining(stable_plugin_id)
-            .map_err(|error| error.to_string())?;
-        if let Err(error) = synchronize_service_system_plugin_hooks(
-            &state,
-            system_plugin_runtime.clone(),
-            &system_plugin_runtime.snapshot(),
-        ) {
-            finish_system_plugin_transition_and_sync(
-                &state,
-                &system_plugin_runtime,
-                stable_plugin_id,
-                &provider_configuration.luaskills.disabled_system_plugins,
-                &provider_configuration.luaskills.enabled_system_plugins,
-                Vec::new(),
-            )
-            .map_err(|rollback_error| {
-                format!("{error}; System Plugin hook 回滚失败：{rollback_error}")
-            })?;
-            return Err(format!("System Plugin hook 同步失败：{error}"));
-        }
-    }
-    let persistence_result = mutate_provider_configuration(
-        &state,
-        "保存 LuaSkills System Plugin 状态失败",
-        |configuration| {
-            configuration
-                .luaskills
-                .set_system_plugin_enabled_with_default(
-                    stable_plugin_id,
-                    enabled,
-                    plugin_default_enabled,
-                );
-            Ok(())
-        },
-        |_, _| (),
-    )
-    .await;
-    if let Err(error) = persistence_result {
-        // cleanupFailures captures lifecycle compensation only for a prepared enable transition.
-        // cleanupFailures 仅针对已准备的启用转换捕获生命周期补偿结果。
-        let cleanup_failures = if enabled {
-            compensate_failed_system_plugin_enable(&system_plugin_runtime, stable_plugin_id).await
-        } else {
-            Vec::new()
-        };
-        // rollbackResult must not hide a failed catalog or hook restoration.
-        // rollbackResult 不得隐藏目录或 Hook 恢复失败。
-        let rollback_result = finish_system_plugin_transition_and_sync(
-            &state,
-            &system_plugin_runtime,
-            stable_plugin_id,
-            &provider_configuration.luaskills.disabled_system_plugins,
-            &provider_configuration.luaskills.enabled_system_plugins,
-            cleanup_failures,
-        );
-        return match rollback_result {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(format!("{error}；运行时回滚失败：{rollback_error}")),
-        };
-    }
-    let mut cleanup_failures = if enabled {
-        Vec::new()
-    } else {
-        match system_plugin_runtime
-            .drain_plugin_sessions(stable_plugin_id)
-            .await
-        {
-            Ok(report) => report.failures,
-            Err(error) => vec![error.to_string()],
-        }
-    };
-    if !enabled
-        && let Err(error) = system_plugin_runtime
-            .invoke_lifecycle(
-                stable_plugin_id,
-                vulcan_plugin_runtime::SystemPluginLifecycleEvent::Disable,
-            )
-            .await
-    {
-        cleanup_failures.push(format!("插件停用生命周期回调失败：{error}"));
-    }
-    let effective_configuration = provider_configuration_from_state(&state)?;
-    let final_catalog = system_plugin_runtime
-        .finish_lifecycle_transition(
-            stable_plugin_id,
-            &effective_configuration.luaskills.disabled_system_plugins,
-            &effective_configuration.luaskills.enabled_system_plugins,
-            cleanup_failures,
-        )
-        .map_err(|error| error.to_string())?;
-    let hook_activation_error = synchronize_service_system_plugin_hooks(
-        &state,
-        system_plugin_runtime.clone(),
-        &final_catalog,
-    )
-    .err()
-    .map(|error| error.to_string());
-    // A newly enabled plugin is not reported as ready until its persistent hook runtime has completed cold initialization.
-    // 新启用插件只有在持久 Hook 运行时完成冷初始化后才会被报告为就绪。
-    let hook_activation_error = if hook_activation_error.is_none() && enabled {
-        system_plugin_runtime
-            .prewarm_plugin_runtime(stable_plugin_id)
-            .await
-            .err()
-            .map(|error| format!("插件 Hook 运行时预热失败：{error}"))
-    } else {
-        hook_activation_error
-    };
-    if let Some(sync_error) = hook_activation_error {
-        let rollback_persistence = mutate_provider_configuration(
-            &state,
-            "回滚 LuaSkills System Plugin 状态失败",
-            |configuration| {
-                configuration
-                    .luaskills
-                    .set_system_plugin_enabled_with_default(
-                        stable_plugin_id,
-                        previous_enabled,
-                        plugin_default_enabled,
-                    );
-                Ok(())
-            },
-            |_, _| (),
-        )
-        .await;
-        if let Err(rollback_error) = rollback_persistence {
-            return Err(format!(
-                "System Plugin hook 最终同步失败：{sync_error}；配置回滚失败：{rollback_error}"
-            ));
-        }
-        let rollback_configuration = provider_configuration_from_state(&state)?;
-        let rollback_catalog = system_plugin_runtime
-            .finish_lifecycle_transition(
-                stable_plugin_id,
-                &rollback_configuration.luaskills.disabled_system_plugins,
-                &rollback_configuration.luaskills.enabled_system_plugins,
-                Vec::new(),
-            )
-            .map_err(|rollback_error| {
-                format!(
-                    "System Plugin hook 最终同步失败：{sync_error}；运行时回滚失败：{rollback_error}"
-                )
-            })?;
-        synchronize_service_system_plugin_hooks(&state, system_plugin_runtime, &rollback_catalog)
-            .map_err(|rollback_error| {
-            format!(
-                "System Plugin hook 最终同步失败：{sync_error}；Hook 回滚失败：{rollback_error}"
-            )
-        })?;
-        return Err(format!("System Plugin hook 最终同步失败：{sync_error}"));
-    }
-    refresh_luaskills_local_state(&state).await
+    // update is emitted here so the lifecycle module remains a pure transaction without a second publisher.
+    // update 在此发送，使生命周期模块保持为不包含第二发布出口的纯事务。
+    let update =
+        system_plugin_lifecycle::set_system_plugin_enabled(state, plugin_id, enabled).await?;
+    emit_luaskills_catalog_delta(&app, update.clone());
+    Ok(update)
 }
-
 /// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
 /// 卸载单个普通 LuaSkill 包并刷新 WebUI 快照。
 pub(crate) async fn service_uninstall_luaskill(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     skill_id: String,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
@@ -1071,12 +775,13 @@ pub(crate) async fn service_uninstall_luaskill(
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Persists one LuaSkill tool registration state and refreshes the WebUI snapshot.
 /// 持久化单个 LuaSkill 工具注册状态并刷新 WebUI 快照。
 pub(crate) async fn service_set_luaskill_tool_registration_state(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     skill_id: String,
     local_name: String,
@@ -1098,21 +803,23 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
         |_guard, _configuration| (),
     )
     .await?;
-    refresh_luaskills_local_state(&state).await
+    refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
 /// Refreshes only the Agent Skills domain and returns its committed revision.
 /// 仅刷新 Agent Skills 领域并返回其已提交版本。
 pub(crate) async fn service_refresh_agent_skills_catalog(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Opens the configured user Agent Skills directory and returns the refreshed catalog.
 /// 打开配置后的用户 Agent Skills 目录并返回刷新后的目录。
 pub(crate) async fn service_open_agent_skills_user_directory(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
@@ -1123,12 +830,14 @@ pub(crate) async fn service_open_agent_skills_user_directory(
     shell_host_from_state(&state)?.open_path(
         &vulcan_runtime_assets::native_host_path_text_from_path(&user_root),
     )?;
+    emit_agent_skills_catalog_delta(&app, update.clone());
     Ok(update)
 }
 
 /// Saves one canonical user Agent Skill package and its per-skill state.
 /// 保存一个规范用户 Agent Skill 技能包及其单技能状态。
 pub(crate) async fn service_save_agent_skill(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: AgentSkillSaveRequest,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
@@ -1275,12 +984,13 @@ pub(crate) async fn service_save_agent_skill(
             )),
         };
     }
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Deletes one user Agent Skill package and removes its obsolete per-skill state.
 /// 删除一个用户 Agent Skill 技能包并移除其过期单技能状态。
 pub(crate) async fn service_delete_agent_skill(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     name: String,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
@@ -1330,12 +1040,13 @@ pub(crate) async fn service_delete_agent_skill(
             )),
         };
     }
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Restores a system Agent Skill by deleting its exact user override package.
 /// 通过删除精确用户覆盖技能包恢复系统 Agent Skill。
 pub(crate) async fn service_restore_agent_skill_default(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     name: String,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
@@ -1350,12 +1061,13 @@ pub(crate) async fn service_restore_agent_skill_default(
         return Err(format!("Agent Skill `{name}` 没有可恢复的系统版本。"));
     }
     vulcan_prompt_skills::delete_user_prompt_skill_package(&user_root, &name)?;
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Saves one user-defined logical Agent Skills category.
 /// 保存一个用户定义逻辑 Agent Skills 分类。
 pub(crate) async fn service_save_agent_skill_category(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: AgentSkillCategorySaveRequest,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
@@ -1386,12 +1098,13 @@ pub(crate) async fn service_save_agent_skill_category(
                 .collect(),
         },
     )?;
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Deletes one user-defined Agent Skills category and unassigns its skills.
 /// 删除一个用户定义 Agent Skills 分类并解除其技能归属。
 pub(crate) async fn service_delete_agent_skill_category(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     category_id: String,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
@@ -1402,12 +1115,13 @@ pub(crate) async fn service_delete_agent_skill_category(
         &user_root,
         &category_id,
     )?;
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Assigns one effective Agent Skill to one exact logical category.
 /// 将一个有效 Agent Skill 归入一个精确逻辑分类。
 pub(crate) async fn service_set_agent_skill_category(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     name: String,
     category_id: String,
@@ -1420,7 +1134,7 @@ pub(crate) async fn service_set_agent_skill_category(
         &name,
         &category_id,
     )?;
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Resolves the exact configured user and system Agent Skills roots.
@@ -1490,17 +1204,19 @@ fn managed_agent_skill_origin(
 /// Refreshes the agent catalog and updates the shared task runtime snapshot.
 /// 刷新智能体目录并更新共享任务运行时快照。
 pub(crate) async fn service_refresh_subagent_catalog(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
 ) -> Result<SubagentCatalogUpdate, String> {
     // Prevent refresh from committing a catalog loaded between another request's file mutation and projection.
     // 防止刷新提交在其他请求文件变更与投影之间加载到的目录。
     let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
-    refresh_subagent_catalog_local_state(&state)
+    refresh_subagent_catalog_local_state_and_emit(&app, &state)
 }
 
 /// Opens the user-owned subagent definition directory in the host file manager.
 /// 在宿主文件管理器中打开用户拥有的智能体定义目录。
 pub(crate) async fn service_open_subagent_user_directory(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
 ) -> Result<SubagentCatalogUpdate, String> {
     let user_definition_root = user_subagent_definition_root();
@@ -1520,12 +1236,13 @@ pub(crate) async fn service_open_subagent_user_directory(
     shell_host_from_state(&state)?.open_path(
         &vulcan_runtime_assets::native_host_path_text_from_path(&user_definition_root),
     )?;
-    Ok(snapshot)
+    Ok(publish_subagent_catalog_update(&app, snapshot))
 }
 
 /// Persists one agent definition enabled state through the sidecar configuration layer.
 /// 通过 sidecar 配置层持久化单个智能体定义启停状态。
 pub(crate) async fn service_set_subagent_definition_enabled(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     agent_id: String,
     enabled: bool,
@@ -1586,15 +1303,18 @@ pub(crate) async fn service_set_subagent_definition_enabled(
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.subagent_catalog.notice = notice;
-    Ok(SubagentCatalogUpdate {
+    let update = SubagentCatalogUpdate {
         revision: guard.workbench_generation,
         subagent_catalog: guard.workbench.subagent_catalog.clone(),
-    })
+    };
+    drop(guard);
+    Ok(publish_subagent_catalog_update(&app, update))
 }
 
 /// Saves one user-authored agent definition into the user catalog.
 /// 将单个用户编写的智能体定义保存到用户目录。
 pub(crate) async fn service_save_subagent_definition(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: SubagentDefinitionSaveRequest,
 ) -> Result<SubagentCatalogUpdate, String> {
@@ -1660,7 +1380,7 @@ pub(crate) async fn service_save_subagent_definition(
                 existing_definition.id, error.message
             )
         })?;
-        return refresh_subagent_catalog_local_state(&state);
+        return refresh_subagent_catalog_local_state_and_emit(&app, &state);
     }
     let target_agent_id = target_agent_id_for_save(
         &requested_agent_id,
@@ -1787,12 +1507,13 @@ pub(crate) async fn service_save_subagent_definition(
             &written_user_file,
         )?;
     }
-    refresh_subagent_catalog_local_state(&state)
+    refresh_subagent_catalog_local_state_and_emit(&app, &state)
 }
 
 /// Deletes one user-owned agent definition from the user catalog.
 /// 从用户目录删除单个用户拥有的智能体定义。
 pub(crate) async fn service_delete_subagent_definition(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     agent_id: String,
 ) -> Result<SubagentCatalogUpdate, String> {
@@ -1828,12 +1549,13 @@ pub(crate) async fn service_delete_subagent_definition(
     if !deleted_any {
         return Err(format!("未找到可删除的用户智能体文件：{agent_id}"));
     }
-    refresh_subagent_catalog_local_state(&state)
+    refresh_subagent_catalog_local_state_and_emit(&app, &state)
 }
 
 /// Restores one system-backed agent definition by deleting its user override.
 /// 通过删除用户覆盖来恢复单个系统集成智能体定义。
 pub(crate) async fn service_restore_subagent_definition_default(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     agent_id: String,
 ) -> Result<SubagentCatalogUpdate, String> {
@@ -1869,12 +1591,13 @@ pub(crate) async fn service_restore_subagent_definition_default(
     for path in restore_candidates {
         remove_user_subagent_file_if_inside_root(&path)?;
     }
-    refresh_subagent_catalog_local_state(&state)
+    refresh_subagent_catalog_local_state_and_emit(&app, &state)
 }
 
 /// Persists one Agent Skill state and refreshes only the Agent Skills catalog.
 /// 持久化单个 Agent Skill 状态并仅刷新 Agent Skills 目录。
 pub(crate) async fn service_set_agent_skill_enabled(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     name: String,
     enabled: bool,
@@ -1898,7 +1621,7 @@ pub(crate) async fn service_set_agent_skill_enabled(
         |_guard, _configuration| (),
     )
     .await?;
-    refresh_agent_skills_local_state(&state).await
+    refresh_agent_skills_local_state_and_emit(&app, &state).await
 }
 
 /// Requires one exact canonical Agent Skills identity without rewriting caller input.
@@ -1966,9 +1689,28 @@ pub(crate) fn service_load_project_agent_skill_overrides(
         .collect())
 }
 
-/// Persists one project-level Agent Skill tri-state override without rebuilding the full snapshot.
-/// 持久化单个项目级 Agent Skill 三态覆盖，但不重建完整快照。
+/// Persists one project-level Agent Skill tri-state override and broadcasts its invalidation.
+/// 持久化单个项目级 Agent Skill 三态覆盖并广播其失效通知。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the project-scoped invalidation to every connected client.
+/// `app` 将项目级失效通知广播给每个已连接客户端。
+/// `state` resolves the exact project path and owns the workbench generation.
+/// `state` 解析准确项目路径并持有工作台版本。
+/// `project_id` identifies the project configuration to mutate.
+/// `project_id` 标识需要修改的项目配置。
+/// `name` identifies the exact Agent Skill override.
+/// `name` 标识准确的 Agent Skill 覆盖项。
+/// `state_key` is the requested inherit, enabled, or disabled state.
+/// `state_key` 是请求的继承、启用或禁用状态。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after persistence and cross-client invalidation both succeed.
+/// 持久化与跨客户端失效通知均成功后返回 `Ok(())`。
 pub(crate) async fn service_set_agent_skill_project_state(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     project_id: String,
     name: String,
@@ -2002,7 +1744,13 @@ pub(crate) async fn service_set_agent_skill_project_state(
         },
         |_project_configuration| Ok(()),
     )
-    .await
+    .await?;
+    commit_and_emit_project_settings_changed_delta(
+        &app,
+        &state,
+        Some(project_id),
+        ProjectSettingsDomain::AgentSkills,
+    )
 }
 
 /// Reprojects agent catalog after a focused catalog write or refresh.

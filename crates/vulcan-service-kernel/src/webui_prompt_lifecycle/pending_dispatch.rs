@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::notify_webui_wait_agent_parent_interruption_if_waiting;
-use crate::pending_prompts::clear_stale_session_goal_pending_prompts;
+use crate::pending_prompts::{
+    clear_stale_session_goal_pending_prompts, dispatch_queued_pending_prompt_hook,
+};
 use crate::session_goal_dispatch_version;
 use vulcan_workspace_store::workspace_store::VulcanGoalStore;
 
@@ -39,9 +41,10 @@ pub(crate) async fn service_insert_pending_prompt(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
     let workspace_path = workspace_path_for_session(&workspace_snapshot, selected_session_id);
-    insert_webui_pending_prompt_into_internal_queue(
+    // queued_hook_event is dispatched only after the routed internal queue becomes authoritative.
+    // queued_hook_event 仅在路由后的内部队列成为权威状态后分发。
+    let queued_hook_event = insert_webui_pending_prompt_into_internal_queue(
         &mut workspace_snapshot,
-        &agent_runtime,
         selected_session_id,
         &workspace_path,
         &entry_id,
@@ -54,13 +57,21 @@ pub(crate) async fn service_insert_pending_prompt(
             &guard,
             selected_session_id,
             "user_interrupt_prompt",
-        );
+        )?;
     }
     mark_webui_session_waiting_for_guided_prompt_dispatch(
         &mut workspace_snapshot,
         selected_session_id,
     );
     store_workspace_snapshot_without_workbench_rebuild(&state, workspace_snapshot)?;
+    if let Some(queued_hook_event) = queued_hook_event
+        && let Err(error) = dispatch_queued_pending_prompt_hook(&agent_runtime, queued_hook_event)
+    {
+        webui_trace(
+            "guided_pending_prompt_hook_failed_after_commit",
+            format!("session={selected_session_id} error={error}"),
+        );
+    }
     emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
     let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
         String::from("service is still starting; workspace snapshot is not ready")
@@ -170,14 +181,12 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
         return Ok(false);
     }
     let mailbox_workspace_started_at = current_unix_millis_value();
-    let session_id_text = session_id.to_string();
     let (mut workspace_snapshot, workspace_source) =
         if let Some(workspace_snapshot) = retained_workspace_snapshot {
             (workspace_snapshot, "retained")
         } else {
             (
-                load_workspace_for_submission(controller_runtime.clone(), Some(&session_id_text))
-                    .await?,
+                load_workspace_for_submission(controller_runtime.clone(), Some(session_id)).await?,
                 "disk",
             )
         };
@@ -260,7 +269,7 @@ pub(crate) async fn maybe_start_webui_mailbox_turn_if_ready(
         .replace_snapshot(build_vmm_hook_config_snapshot(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
-        ));
+        ))?;
     commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,

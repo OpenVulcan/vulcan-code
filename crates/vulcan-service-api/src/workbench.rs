@@ -1,4 +1,31 @@
 use super::*;
+use std::collections::BTreeMap;
+
+/// Stores independent invalidation revisions for reloadable project-settings domains.
+/// 保存可重载项目设置领域各自独立的失效版本。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettingsDomainRevisions {
+    /// Latest VMM settings invalidation revision.
+    /// 最新 VMM 设置失效版本。
+    pub vmm: u64,
+    /// Latest Agent Skill override invalidation revision.
+    /// 最新 Agent Skill 覆盖失效版本。
+    pub agent_skills: u64,
+}
+
+/// Stores authoritative global and project-owned settings revisions in a full workbench snapshot.
+/// 在完整工作台快照中保存权威的全局及项目级设置版本。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettingsRevisionSnapshot {
+    /// Revisions that invalidate the matching domain for every project.
+    /// 使所有项目对应领域失效的全局版本。
+    pub global: ProjectSettingsDomainRevisions,
+    /// Revisions owned by each exact project identifier.
+    /// 由每个准确项目标识持有的领域版本。
+    pub by_project: BTreeMap<String, ProjectSettingsDomainRevisions>,
+}
 
 /// Provides the first WebUI workbench snapshot.
 /// 提供第一版 WebUI 工作台快照。
@@ -26,6 +53,9 @@ pub struct WorkbenchSnapshot {
     /// 侧栏树中当前展开的项目标识集合。
     #[serde(default)]
     pub expanded_project_ids: Vec<String>,
+    /// Authoritative invalidation revisions for independently loaded project settings.
+    /// 独立加载项目设置所使用的权威失效版本。
+    pub project_settings_revisions: ProjectSettingsRevisionSnapshot,
     /// Conversation summaries shown in the sidebar.
     /// 侧栏展示的会话摘要。
     pub conversations: Vec<ConversationSummary>,

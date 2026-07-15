@@ -113,7 +113,8 @@ pub(crate) async fn execute_terminal_session_read_like_action(
             template_skill_roots: Vec::new(),
             template_resources_root: None,
         },
-    );
+    )
+    .map_err(NativeToolError::new)?;
     Ok(
         VulcanToolInvocationResult::from_model_output(Value::String(model_output))
             .with_host_result(VulcanToolHostResult {
@@ -402,7 +403,8 @@ pub(crate) async fn execute_terminal_session_send_action(
             template_skill_roots: Vec::new(),
             template_resources_root: None,
         },
-    );
+    )
+    .map_err(NativeToolError::new)?;
     Ok(
         VulcanToolInvocationResult::from_model_output(Value::String(model_output))
             .with_host_result(VulcanToolHostResult {

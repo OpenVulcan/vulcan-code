@@ -24,6 +24,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
             session_id: SessionNodeId::from(session_id),
         },
         runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
+        conversation_hook_turn_id: Some(String::from("test-hook-turn")),
         execution_agent_id: Some(String::from("main")),
         agent_prompt_snapshot: None,
         subagent_prompt_context: None,
@@ -132,6 +133,177 @@ fn install_execution_context_reports_poisoned_registry() {
         Err(error) => error,
     };
     assert!(error.contains("task execution context registry is locked"));
+}
+
+/// Verifies explicit execution-context release returns the authoritative registry-lock failure.
+/// 验证显式释放执行上下文会返回权威的注册表锁失败。
+#[test]
+fn execution_context_guard_release_reports_poisoned_registry() {
+    // taskRuntime owns the execution-context registration and the registry poisoned after installation.
+    // taskRuntime 持有执行上下文注册项，以及安装后被中毒的注册表。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // sessionId identifies the exact context generation under test.
+    // sessionId 标识待测试的精确上下文世代。
+    let session_id = Uuid::new_v4();
+    // providerConfig supplies the runtime state captured by the registered context.
+    // providerConfig 提供注册上下文捕获的运行时状态。
+    let provider_config = ProviderConfigurationFile::default();
+    // foundation supplies the shared dependencies required by the context constructor.
+    // foundation 提供上下文构造器所需的共享依赖。
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    // context is the exact runtime value installed before the registry becomes unavailable.
+    // context 是注册表不可用前安装的精确运行时值。
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        test_parent_execution_request(session_id),
+    );
+    // guard owns the installed context generation whose release result must be observable.
+    // guard 拥有已安装的上下文世代，其释放结果必须可观测。
+    let guard = task_runtime
+        .install_execution_context(session_id, context)
+        .expect("execution context should install before poisoning");
+    // poisonResult proves the authoritative write registry is unavailable during release.
+    // poisonResult 证明释放时权威写注册表不可用。
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = task_runtime
+            .execution_contexts
+            .write()
+            .expect("execution-context registry should lock before poisoning");
+        panic!("poison execution-context registry before explicit release");
+    }));
+    assert!(poison_result.is_err());
+
+    // error is the explicit cleanup failure returned to the normal execution path.
+    // error 是返回给正常执行路径的显式清理失败。
+    let error = guard
+        .release()
+        .expect_err("poisoned execution-context registry must reject release");
+
+    assert!(error.contains("task execution context registry is locked"));
+    assert!(error.contains(&session_id.to_string()));
+}
+
+/// Verifies execution-context lookup reports registry lock poisoning instead of returning a fabricated missing context.
+/// 验证执行上下文查询会报告注册表锁中毒，而不是返回伪造的上下文缺失。
+#[test]
+fn execution_context_for_session_reports_poisoned_registry() {
+    // taskRuntime owns the execution-context registry deliberately poisoned below.
+    // taskRuntime 持有下方刻意中毒的执行上下文注册表。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // poisonResult proves the authoritative lookup registry is unavailable.
+    // poisonResult 证明权威查询注册表已经不可用。
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // guard keeps the write lock held until the deliberate panic poisons it.
+        // guard 将写锁保持到刻意 panic，使其进入中毒状态。
+        let _guard = task_runtime
+            .execution_contexts
+            .write()
+            .expect("task execution context registry should lock before poisoning");
+        panic!("poison task execution context registry for lookup test");
+    }));
+    assert!(poison_result.is_err());
+    // sessionId identifies the lookup that must fail rather than resolve to None.
+    // sessionId 标识必须失败而不能解析为 None 的查询。
+    let session_id = Uuid::new_v4();
+
+    // lookupResult retains the runtime-context success type for explicit result matching.
+    // lookupResult 保留运行时上下文成功类型，供显式结果匹配。
+    let lookup_result = task_runtime.execution_context_for_session(session_id);
+    // error is the authoritative registry-read failure returned to the caller.
+    // error 是返回给调用方的权威注册表读取失败。
+    let error = match lookup_result {
+        Ok(_) => panic!("poisoned execution-context registry must reject lookup"),
+        Err(error) => error,
+    };
+
+    assert!(error.contains("task execution context registry is locked"));
+    assert!(error.contains(&session_id.to_string()));
+}
+
+/// Verifies an obsolete execution-context guard cannot remove a newer registration under the same session key.
+/// 验证过期执行上下文守卫无法移除同一会话键下更新的注册项。
+#[test]
+fn execution_context_guard_preserves_replacement_registration() {
+    // taskRuntime owns both context generations used by this ownership test.
+    // taskRuntime 持有本所有权测试使用的两代上下文。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // sessionId is the shared registry key whose context is deliberately replaced.
+    // sessionId 是刻意替换其上下文的共享注册表键。
+    let session_id = Uuid::new_v4();
+    // providerConfig supplies identical provider state to both context generations.
+    // providerConfig 为两代上下文提供相同的供应商状态。
+    let provider_config = ProviderConfigurationFile::default();
+    // foundation supplies the shared runtime dependencies captured by both contexts.
+    // foundation 提供两代上下文共同捕获的运行时依赖。
+    let foundation = Arc::new(RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    ));
+    // originalRequest identifies the context generation owned by the stale guard.
+    // originalRequest 标识由过期守卫拥有的上下文世代。
+    let mut original_request = test_parent_execution_request(session_id);
+    original_request.prompt = String::from("original context");
+    // replacementRequest identifies the context generation that must remain registered.
+    // replacementRequest 标识必须继续注册的替代上下文世代。
+    let mut replacement_request = test_parent_execution_request(session_id);
+    replacement_request.prompt = String::from("replacement context");
+    // originalContext is the first value installed under the session key.
+    // originalContext 是在会话键下安装的第一个值。
+    let original_context = TaskExecutionRuntimeContext::new(
+        provider_config.clone(),
+        Arc::clone(&foundation),
+        None,
+        original_request,
+    );
+    // replacementContext is the newer value that must survive stale cleanup.
+    // replacementContext 是必须在过期清理后继续存在的新值。
+    let replacement_context =
+        TaskExecutionRuntimeContext::new(provider_config, foundation, None, replacement_request);
+    // originalGuard owns only the first context registration generation.
+    // originalGuard 只拥有第一代上下文注册项。
+    let original_guard = task_runtime
+        .install_execution_context(session_id, original_context)
+        .expect("original execution context should install");
+    // replacementGuard owns the current context registration generation.
+    // replacementGuard 拥有当前上下文注册世代。
+    let replacement_guard = task_runtime
+        .install_execution_context(session_id, replacement_context)
+        .expect("replacement execution context should install");
+
+    original_guard
+        .release()
+        .expect("stale execution-context generation should release idempotently");
+
+    // currentContext is the value that must remain after the stale guard drops.
+    // currentContext 是过期守卫销毁后必须保留的当前值。
+    let current_context = task_runtime
+        .execution_context_for_session(session_id)
+        .expect("execution-context registry should remain readable")
+        .expect("replacement execution context should remain registered");
+    assert_eq!(
+        current_context.request_template.prompt,
+        "replacement context"
+    );
+
+    replacement_guard
+        .release()
+        .expect("current execution-context generation should release");
+
+    assert!(
+        task_runtime
+            .execution_context_for_session(session_id)
+            .expect("execution-context registry should remain readable")
+            .is_none()
+    );
 }
 
 /// Verifies child execution requests use the resolved TaskSession runtime policy exactly.
@@ -720,6 +892,90 @@ fn task_runtime_preparation_request_carries_subagent_prompt_context() {
     assert!(subagent_prompt_context.functional_system_prompt.is_none());
 }
 
+/// Verifies preparation reports a poisoned task registry instead of replacing the stored prompt snapshot with a fallback.
+/// 验证准备阶段会报告中毒的任务注册表，而不是用回退值替换已存储的提示词快照。
+#[test]
+fn task_runtime_preparation_request_reports_poisoned_prompt_snapshot_registry() {
+    // parentSessionId identifies the main execution context that provides the fallback snapshot.
+    // parentSessionId 标识提供回退快照的主执行上下文。
+    let parent_session_id = Uuid::new_v4();
+    // taskId identifies the child whose authoritative task record cannot be read.
+    // taskId 标识权威任务记录无法读取的子任务。
+    let task_id = Uuid::new_v4();
+    // providerConfig supplies the minimal runtime foundation required by request preparation.
+    // providerConfig 提供请求准备所需的最小运行时基础配置。
+    let provider_config = ProviderConfigurationFile::default();
+    // foundation owns the task registry deliberately poisoned below.
+    // foundation 持有下方刻意中毒的任务注册表。
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &provider_config,
+        &AgentProfileCatalog::default(),
+        None,
+        None,
+    );
+    // taskRuntime is the shared handle used by the preparation request to read task records.
+    // taskRuntime 是准备请求读取任务记录时使用的共享句柄。
+    let task_runtime = foundation.task_runtime();
+    // poisonResult proves the task registry can no longer provide authoritative snapshot facts.
+    // poisonResult 证明任务注册表已无法提供权威快照事实。
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // guard keeps the registry locked until the deliberate panic poisons it.
+        // guard 将注册表保持加锁到刻意 panic，使其进入中毒状态。
+        let _guard = task_runtime
+            .sessions
+            .write()
+            .expect("task-session registry should lock before poisoning");
+        panic!("poison task-session registry for prompt snapshot preparation test");
+    }));
+    assert!(poison_result.is_err());
+    // parentRequest contains a valid fallback that must not hide the failed authoritative lookup.
+    // parentRequest 包含合法回退值，但它不得掩盖权威查询失败。
+    let mut parent_request = test_parent_execution_request(parent_session_id);
+    parent_request.agent_prompt_snapshot =
+        ExecutionAgentPromptSnapshot::fixed_parent_runtime("Fallback parent agent prompt");
+    // context carries the poisoned foundation into child request preparation.
+    // context 将已中毒的运行时基础传入子请求准备流程。
+    let context = TaskExecutionRuntimeContext::new(
+        provider_config,
+        Arc::new(foundation),
+        None,
+        parent_request,
+    );
+    // invocation describes the child execution whose stored prompt identity is authoritative.
+    // invocation 描述已存储提示词身份具有权威性的子任务执行。
+    let invocation = TaskExecutionRequest {
+        current_session_id: parent_session_id,
+        root_session_id: parent_session_id,
+        task_id,
+        execution_id: String::from("test-execution"),
+        public_task_id: String::from("agent-review"),
+        prompt: String::from("review this change"),
+        description: Some(String::from("Review code")),
+        subagent: Some(String::from("reviewer")),
+        invocation_config: TaskInvocationConfig::main("review this change"),
+        display_title: String::from("Review code (reviewer)"),
+        parent_task_id: None,
+        depth: 1,
+        snapshot: CoreConversationSnapshot::default(),
+        controller_config: None,
+        is_resumed: false,
+    };
+    // resolvedConfig supplies the effective child execution settings.
+    // resolvedConfig 提供子任务执行的生效配置。
+    let resolved_config = test_resolved_config(
+        &build_test_controller_config("Base prompt"),
+        &invocation.invocation_config,
+    );
+
+    // error is the explicit registry diagnostic returned before any fallback can be selected.
+    // error 是选择任何回退值之前返回的明确注册表诊断。
+    let error = build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
+        .expect_err("poisoned task-session registry should reject request preparation");
+
+    assert!(error.contains("task-session registry is locked"));
+    assert!(error.contains(&task_id.to_string()));
+}
+
 /// Verifies child execution requests do not inherit provider context injection from the parent turn.
 /// 验证子智能体执行请求不会继承父回合的 Provider 上下文注入。
 #[test]
@@ -873,6 +1129,7 @@ fn task_runtime_preparation_request_clears_parent_transient_runtime_state() {
         build_task_runtime_preparation_request(&context, &invocation, &resolved_config)
             .expect("valid task runtime preparation");
 
+    assert!(child_request.conversation_hook_turn_id.is_none());
     assert!(child_request.tool_request_rejection_reason.is_none());
     assert!(!child_request.tool_request_rejection_all_tools);
     assert!(child_request.tool_request_rejection_tool_ids.is_empty());

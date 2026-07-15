@@ -9,7 +9,7 @@ use crate::agent_runtime::conversation_hooks::{
 use crate::model::{SessionId, VmmProfileSyncState, VmmWritebackOutboxEntry};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use vulcan_context_injection::{
     InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem, InjectionKind,
 };
@@ -75,119 +75,187 @@ pub struct VmmHookConfigSnapshot {
 /// 内置 VMM hook 处理器使用的共享运行时句柄。
 #[derive(Clone)]
 pub struct VmmHookRuntimeHandle {
-    /// Latest configuration snapshot visible to hook handlers.
-    /// hook 处理器可见的最新配置快照。
+    /// Authoritative configuration and runtime profile snapshot visible to hook handlers.
+    /// hook 处理器可见的权威配置与运行时画像快照。
     state: Arc<RwLock<VmmHookConfigSnapshot>>,
-    /// Runtime-owned profile sync cache keyed by session id string.
-    /// 按会话标识索引且由运行时持有的画像同步缓存。
-    profile_cache: Arc<RwLock<BTreeMap<String, VmmProfileSyncState>>>,
 }
 
 impl VmmHookRuntimeHandle {
     /// Builds a shared VMM hook runtime handle.
     /// 构建共享 VMM hook 运行时句柄。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `snapshot` is the initial authoritative configuration and profile state.
+    /// `snapshot` 是初始权威配置与画像状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns a cloneable handle backed by one atomic runtime snapshot.
+    /// 返回由单一原子运行时快照支撑的可克隆句柄。
     pub fn new(snapshot: VmmHookConfigSnapshot) -> Self {
-        let profile_cache = snapshot.profile_sync.clone();
         Self {
             state: Arc::new(RwLock::new(snapshot)),
-            profile_cache: Arc::new(RwLock::new(profile_cache)),
         }
     }
 
-    /// Replaces the configuration snapshot while preserving runtime-owned profile cache.
-    /// 替换配置快照，同时保留运行时持有的画像缓存。
-    pub fn replace_snapshot(&self, snapshot: VmmHookConfigSnapshot) {
-        let profile_sync = self
-            .profile_cache
-            .read()
-            .map(|cache| cache.clone())
-            .unwrap_or_default();
-        if let Ok(mut state) = self.state.write() {
-            let mut snapshot = snapshot;
-            snapshot.profile_sync = profile_sync;
-            *state = snapshot;
-        }
-    }
-
-    /// Returns a cloned VMM hook configuration snapshot for UI projection.
-    /// 返回一份克隆的 VMM hook 配置快照供 UI 投影使用。
-    pub fn config_snapshot(&self) -> VmmHookConfigSnapshot {
+    /// Acquires the authoritative VMM runtime state for a read operation.
+    /// 为读取操作获取权威 VMM 运行时状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation` describes the rejected operation when the lock is poisoned.
+    /// `operation` 描述锁中毒时被拒绝的操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the read guard or an explicit state-lock diagnostic.
+    /// 返回读守卫或明确的状态锁诊断。
+    fn read_state(
+        &self,
+        operation: &str,
+    ) -> Result<RwLockReadGuard<'_, VmmHookConfigSnapshot>, String> {
         self.state
             .read()
-            .map(|state| state.clone())
-            .unwrap_or_default()
+            .map_err(|_| format!("The VMM hook runtime state is locked and cannot {operation}."))
     }
 
-    /// Seeds the runtime profile cache from persisted state during startup or session load.
-    /// 在启动或会话加载时用持久化状态初始化运行时画像缓存。
-    pub fn seed_profile_cache(&self, profile_sync: BTreeMap<String, VmmProfileSyncState>) {
-        if let Ok(mut cache) = self.profile_cache.write() {
-            *cache = profile_sync.clone();
-        }
-        if let Ok(mut state) = self.state.write() {
-            state.profile_sync = profile_sync;
-        }
+    /// Acquires the authoritative VMM runtime state for a write operation.
+    /// 为写入操作获取权威 VMM 运行时状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `operation` describes the rejected operation when the lock is poisoned.
+    /// `operation` 描述锁中毒时被拒绝的操作。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the write guard or an explicit state-lock diagnostic.
+    /// 返回写守卫或明确的状态锁诊断。
+    fn write_state(
+        &self,
+        operation: &str,
+    ) -> Result<RwLockWriteGuard<'_, VmmHookConfigSnapshot>, String> {
+        self.state
+            .write()
+            .map_err(|_| format!("The VMM hook runtime state is locked and cannot {operation}."))
     }
 
-    /// Stores a freshly produced profile sync state in the runtime cache.
-    /// 将刚产生的画像同步状态写入运行时缓存。
-    fn store_profile_sync_for_session(&self, session_id: &str, profile_sync: VmmProfileSyncState) {
-        if let Ok(mut cache) = self.profile_cache.write() {
-            if profile_sync.is_empty() {
-                cache.remove(session_id);
-            } else {
-                cache.insert(session_id.to_string(), profile_sync.clone());
-            }
-        }
-        if let Ok(mut state) = self.state.write() {
-            if profile_sync.is_empty() {
-                state.profile_sync.remove(session_id);
-            } else {
-                state
-                    .profile_sync
-                    .insert(session_id.to_string(), profile_sync);
-            }
-        }
+    /// Replaces the configuration snapshot while preserving runtime-owned profile state.
+    /// 替换配置快照，同时保留运行时持有的画像状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `snapshot` contains the latest configuration, outbox and compaction projection.
+    /// `snapshot` 包含最新配置、outbox 与压缩投影。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after one atomic replacement, or a state-lock diagnostic.
+    /// 单次原子替换完成后返回成功，失败时返回状态锁诊断。
+    pub fn replace_snapshot(&self, mut snapshot: VmmHookConfigSnapshot) -> Result<(), String> {
+        // state is the only authority for both configuration and runtime-produced profile state.
+        // state 是配置与运行时生成画像状态的唯一权威来源。
+        let mut state = self.write_state("replace the configuration snapshot")?;
+        snapshot.profile_sync = std::mem::take(&mut state.profile_sync);
+        *state = snapshot;
+        Ok(())
     }
 
-    /// Stores a freshly produced profile sync state in the runtime cache.
-    /// 将刚产生的画像同步状态写入运行时缓存。
+    /// Seeds runtime profile synchronization state from persisted workspace data.
+    /// 使用持久化工作区数据播种运行时画像同步状态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `profile_sync` is the complete persisted session-to-profile-state mapping.
+    /// `profile_sync` 是完整的持久化会话到画像状态映射。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the authoritative snapshot is updated, or a lock diagnostic.
+    /// 权威快照更新后返回成功，失败时返回锁诊断。
+    pub fn seed_profile_sync(
+        &self,
+        profile_sync: BTreeMap<String, VmmProfileSyncState>,
+    ) -> Result<(), String> {
+        self.write_state("seed persisted profile synchronization state")?
+            .profile_sync = profile_sync;
+        Ok(())
+    }
+
+    /// Stores a freshly produced profile sync state in the authoritative runtime snapshot.
+    /// 将刚产生的画像同步状态写入权威运行时快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the exact session profile entry to replace or remove.
+    /// `session_id` 标识需要替换或移除的精确会话画像项。
+    /// `profile_sync` is the new profile state; an empty state removes the entry.
+    /// `profile_sync` 是新的画像状态；空状态会移除该项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after one authoritative write, or a state-lock diagnostic.
+    /// 单次权威写入完成后返回成功，失败时返回状态锁诊断。
+    fn store_profile_sync_for_session(
+        &self,
+        session_id: &str,
+        profile_sync: VmmProfileSyncState,
+    ) -> Result<(), String> {
+        // state owns the exact session entry and prevents a second cache from diverging.
+        // state 持有精确会话项，避免第二份缓存发生分叉。
+        let mut state = self.write_state("store session profile synchronization state")?;
+        if profile_sync.is_empty() {
+            state.profile_sync.remove(session_id);
+        } else {
+            state
+                .profile_sync
+                .insert(session_id.to_string(), profile_sync);
+        }
+        Ok(())
+    }
+
+    /// Stores a freshly produced profile sync state in the authoritative runtime snapshot.
+    /// 将刚产生的画像同步状态写入权威运行时快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` identifies the session whose profile state changed.
+    /// `session_id` 标识画像状态发生变化的会话。
+    /// `profile_sync` is the complete replacement profile state for that session.
+    /// `profile_sync` 是该会话完整的替代画像状态。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns success after the state is stored, or a state-lock diagnostic.
+    /// 状态存储后返回成功，失败时返回状态锁诊断。
     pub fn store_profile_sync_state(
         &self,
         session_id: SessionId,
         profile_sync: VmmProfileSyncState,
-    ) {
-        self.store_profile_sync_for_session(&session_id.to_string(), profile_sync);
-    }
-
-    /// Builds read-only cached profile system blocks for a request preview.
-    /// 为请求预览构建只读缓存画像系统提示词块。
-    pub fn cached_profile_system_prompt_blocks_for_session(
-        &self,
-        session_id: SessionId,
-        config: &VmmEffectiveConfig,
-        phase: SystemPromptHookPhase,
-    ) -> Vec<SystemPromptHookBlock> {
-        if config.diagnose_precheck_flow(true) != VmmConfigDiagnostic::Ready {
-            return Vec::new();
-        }
-        self.profile_cache
-            .read()
-            .ok()
-            .and_then(|cache| cache.get(&session_id.to_string()).cloned())
-            .and_then(|state| base_profile_block(&state, phase, "cached-preview"))
-            .into_iter()
-            .collect()
+    ) -> Result<(), String> {
+        self.store_profile_sync_for_session(&session_id.to_string(), profile_sync)
     }
 
     /// Resolves the effective VMM configuration for one hook invocation payload.
     /// 为一次 hook 调用载荷解析最终 VMM 配置。
-    fn resolve_effective_config(&self, invocation: &HookInvocation) -> VmmEffectiveConfig {
-        let snapshot = self
-            .state
-            .read()
-            .map(|state| state.clone())
-            .unwrap_or_default();
+    ///
+    /// # Parameters
+    /// 参数
+    /// `invocation` provides workspace and session identity for layered resolution.
+    /// `invocation` 提供分层解析所需的工作区与会话身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the resolved configuration, or a state-lock diagnostic.
+    /// 返回解析后的配置，失败时返回状态锁诊断。
+    fn resolve_effective_config(
+        &self,
+        invocation: &HookInvocation,
+    ) -> Result<VmmEffectiveConfig, String> {
+        // snapshot keeps all layer references valid during one coherent resolution.
+        // snapshot 在一次一致解析期间保持所有配置层引用有效。
+        let snapshot = self.read_state("resolve effective configuration")?;
         let workspace_path = payload_string(&invocation.payload.value, "workspace_path");
         let project = workspace_path
             .as_deref()
@@ -200,57 +268,88 @@ impl VmmHookRuntimeHandle {
         let session = session_id
             .as_deref()
             .and_then(|session_id| snapshot.sessions.get(session_id));
-        VmmEffectiveConfig::resolve(&snapshot.global, project, session)
+        Ok(VmmEffectiveConfig::resolve(
+            &snapshot.global,
+            project,
+            session,
+        ))
     }
 
     /// Loads the pending writeback outbox for one hook invocation.
     /// 为一次 hook 调用读取待处理写回 outbox。
-    fn outbox_for_invocation(&self, invocation: &HookInvocation) -> Vec<VmmWritebackOutboxEntry> {
-        let snapshot = self
-            .state
-            .read()
-            .map(|state| state.clone())
-            .unwrap_or_default();
+    ///
+    /// # Parameters
+    /// 参数
+    /// `invocation` provides the session identity owning the outbox.
+    /// `invocation` 提供拥有 outbox 的会话身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the exact session outbox, an empty outbox when genuinely absent, or a lock error.
+    /// 返回精确会话 outbox，确实不存在时返回空 outbox，锁失败时返回错误。
+    fn outbox_for_invocation(
+        &self,
+        invocation: &HookInvocation,
+    ) -> Result<Vec<VmmWritebackOutboxEntry>, String> {
+        let snapshot = self.read_state("load the session writeback outbox")?;
         let session_id = invocation
             .context
             .session_id
             .clone()
             .or_else(|| payload_string(&invocation.payload.value, "session_id"));
-        session_id
+        Ok(session_id
             .as_deref()
             .and_then(|session_id| snapshot.outboxes.get(session_id))
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// Loads the profile sync state for one hook invocation.
     /// 为一次 hook 调用读取画像同步状态。
-    fn profile_sync_for_invocation(&self, invocation: &HookInvocation) -> VmmProfileSyncState {
-        self.profile_cache
-            .read()
-            .ok()
-            .and_then(|cache| {
-                invocation_session_id(invocation)
-                    .as_deref()
-                    .and_then(|session_id| cache.get(session_id))
-                    .cloned()
-            })
-            .unwrap_or_default()
+    ///
+    /// # Parameters
+    /// 参数
+    /// `invocation` provides the session identity owning the profile state.
+    /// `invocation` 提供拥有画像状态的会话身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the exact profile state, an empty state when genuinely absent, or a lock error.
+    /// 返回精确画像状态，确实不存在时返回空状态，锁失败时返回错误。
+    fn profile_sync_for_invocation(
+        &self,
+        invocation: &HookInvocation,
+    ) -> Result<VmmProfileSyncState, String> {
+        let snapshot = self.read_state("load the session profile synchronization state")?;
+        Ok(invocation_session_id(invocation)
+            .as_deref()
+            .and_then(|session_id| snapshot.profile_sync.get(session_id))
+            .cloned()
+            .unwrap_or_default())
     }
 
     /// Loads the latest compaction id for one hook invocation.
     /// 为一次 hook 调用读取最近压缩标识。
-    fn last_compaction_id_for_invocation(&self, invocation: &HookInvocation) -> Option<String> {
-        let snapshot = self
-            .state
-            .read()
-            .map(|state| state.clone())
-            .unwrap_or_default();
-        invocation_session_id(invocation)
+    ///
+    /// # Parameters
+    /// 参数
+    /// `invocation` provides the session identity owning the compaction marker.
+    /// `invocation` 提供拥有压缩标识的会话身份。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the exact optional compaction id, or a state-lock diagnostic.
+    /// 返回精确的可选压缩标识，失败时返回状态锁诊断。
+    fn last_compaction_id_for_invocation(
+        &self,
+        invocation: &HookInvocation,
+    ) -> Result<Option<String>, String> {
+        let snapshot = self.read_state("load the latest session compaction identifier")?;
+        Ok(invocation_session_id(invocation)
             .as_deref()
             .and_then(|session_id| snapshot.last_compaction_ids.get(session_id))
             .cloned()
-            .flatten()
+            .flatten())
     }
 }
 
@@ -347,7 +446,9 @@ async fn handle_vmm_precheck(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
-    let config = runtime.resolve_effective_config(&invocation);
+    let config = runtime
+        .resolve_effective_config(&invocation)
+        .map_err(HookError::handler)?;
     if !should_run_vmm_precheck(&config) {
         return Ok(HookResult::default());
     }
@@ -366,7 +467,9 @@ async fn handle_vmm_precheck(
     let mut injections = injection.into_iter().collect::<Vec<_>>();
     if let Some(profile_sync) = profile_sync {
         if let Some(session_id) = invocation_session_id(&invocation) {
-            runtime.store_profile_sync_for_session(&session_id, profile_sync.state.clone());
+            runtime
+                .store_profile_sync_for_session(&session_id, profile_sync.state.clone())
+                .map_err(HookError::handler)?;
         }
         metadata.insert(
             HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_string(),
@@ -396,7 +499,9 @@ async fn handle_vmm_post_action(
     if !vmm_post_action_payload_is_final(&invocation.payload.value) {
         return Ok(HookResult::default());
     }
-    let config = runtime.resolve_effective_config(&invocation);
+    let config = runtime
+        .resolve_effective_config(&invocation)
+        .map_err(HookError::handler)?;
     if config.diagnose_writeback_flow(true) != VmmConfigDiagnostic::Ready {
         return Ok(HookResult::default());
     }
@@ -413,8 +518,12 @@ async fn handle_vmm_post_action(
             ]));
         }
     };
-    let mut effects =
-        flush_vmm_writeback_outbox(&client, runtime.outbox_for_invocation(&invocation)).await;
+    // outbox is loaded from the same authoritative snapshot used for configuration resolution.
+    // outbox 从与配置解析相同的权威快照读取。
+    let outbox = runtime
+        .outbox_for_invocation(&invocation)
+        .map_err(HookError::handler)?;
+    let mut effects = flush_vmm_writeback_outbox(&client, outbox).await;
     if effects
         .iter()
         .any(|effect| matches!(effect, VmmWritebackHookEffect::Failed { .. }))
@@ -455,7 +564,9 @@ async fn handle_vmm_chat_compact(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
-    let config = runtime.resolve_effective_config(&invocation);
+    let config = runtime
+        .resolve_effective_config(&invocation)
+        .map_err(HookError::handler)?;
     ensure_vmm_ready(&config)?;
     let request = chat_compact_request_from_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
@@ -509,8 +620,12 @@ async fn maybe_sync_vmm_profile(
     invocation: &HookInvocation,
     config: &VmmEffectiveConfig,
 ) -> Result<Option<VmmProfileSyncOutput>, HookError> {
-    let mut state = runtime.profile_sync_for_invocation(invocation);
-    let latest_compaction_id = runtime.last_compaction_id_for_invocation(invocation);
+    let mut state = runtime
+        .profile_sync_for_invocation(invocation)
+        .map_err(HookError::handler)?;
+    let latest_compaction_id = runtime
+        .last_compaction_id_for_invocation(invocation)
+        .map_err(HookError::handler)?;
     let sync_phase = vmm_profile_sync_phase(&state, latest_compaction_id.as_deref());
     let placement_phase = invocation_system_prompt_hook_phase(invocation).unwrap_or(sync_phase);
 
@@ -1039,6 +1154,135 @@ fn invocation_session_id(invocation: &HookInvocation) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_hooks::{HookContext, HookPayload};
+
+    /// Verifies snapshot replacement preserves runtime profile state inside one authoritative lock.
+    /// 验证快照替换会在单一权威锁内保留运行时画像状态。
+    #[test]
+    fn vmm_snapshot_replacement_preserves_runtime_profile_state_atomically() {
+        // runtime owns the only VMM configuration and profile snapshot used by the test.
+        // runtime 持有测试使用的唯一 VMM 配置与画像快照。
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
+        // sessionId identifies the runtime-produced profile entry that must survive refresh.
+        // sessionId 标识必须在刷新后保留的运行时画像项。
+        let session_id = SessionId::new_v4();
+        // runtimeProfile is the authoritative state produced after the persisted snapshot was built.
+        // runtimeProfile 是持久化快照构建后生成的权威运行时状态。
+        let runtime_profile = VmmProfileSyncState {
+            base_profile_content: Some(String::from("runtime profile")),
+            ..VmmProfileSyncState::default()
+        };
+        runtime
+            .store_profile_sync_state(session_id, runtime_profile.clone())
+            .expect("runtime profile state should be stored");
+        // staleProfile simulates an older workspace projection that must not replace runtime state.
+        // staleProfile 模拟不得覆盖运行时状态的旧工作区投影。
+        let stale_profile = VmmProfileSyncState {
+            base_profile_content: Some(String::from("stale persisted profile")),
+            ..VmmProfileSyncState::default()
+        };
+        // replacement supplies the newest configuration while carrying stale profile projection.
+        // replacement 提供最新配置，同时携带旧画像投影。
+        let mut replacement = VmmHookConfigSnapshot::default();
+        replacement.global.enabled = Some(true);
+        replacement
+            .profile_sync
+            .insert(session_id.to_string(), stale_profile);
+
+        runtime
+            .replace_snapshot(replacement)
+            .expect("configuration snapshot should replace atomically");
+
+        // state proves configuration replacement and profile preservation committed together.
+        // state 证明配置替换与画像保留已共同提交。
+        let state = runtime
+            .state
+            .read()
+            .expect("VMM runtime state should remain readable");
+        assert_eq!(state.global.enabled, Some(true));
+        assert_eq!(
+            state.profile_sync.get(&session_id.to_string()),
+            Some(&runtime_profile)
+        );
+    }
+
+    /// Verifies poisoned VMM runtime state rejects every authoritative read and write operation.
+    /// 验证 VMM 运行时状态锁中毒时会拒绝所有权威读写操作。
+    #[test]
+    fn vmm_runtime_state_lock_failure_is_explicit() {
+        // runtime owns the single state lock deliberately poisoned below.
+        // runtime 持有下方刻意中毒的单一状态锁。
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
+        // poisonResult proves the sole authoritative VMM snapshot is unavailable.
+        // poisonResult 证明唯一权威 VMM 快照已经不可用。
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // guard keeps the state write lock held until the deliberate panic poisons it.
+            // guard 将状态写锁保持到刻意 panic，使其进入中毒状态。
+            let _guard = runtime
+                .state
+                .write()
+                .expect("VMM runtime state should lock before poisoning");
+            panic!("poison VMM runtime state for explicit failure test");
+        }));
+        assert!(poison_result.is_err());
+        // sessionId identifies the rejected profile-state write.
+        // sessionId 标识被拒绝的画像状态写入。
+        let session_id = SessionId::new_v4();
+        // invocation supplies a valid identity so only lock failure can reject runtime reads.
+        // invocation 提供合法身份，确保运行时读取只会因锁失败而被拒绝。
+        let invocation = HookInvocation {
+            registration: vmm_hook_registration(
+                "test.vmm.lock_failure",
+                HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Transform,
+            ),
+            context: HookContext::new("test-run", HOOK_CONVERSATION_TURN_PRECHECK),
+            payload: HookPayload { value: json!({}) },
+        };
+
+        assert!(
+            runtime
+                .replace_snapshot(VmmHookConfigSnapshot::default())
+                .expect_err("poisoned state should reject snapshot replacement")
+                .contains("VMM hook runtime state is locked")
+        );
+        assert!(
+            runtime
+                .seed_profile_sync(BTreeMap::new())
+                .expect_err("poisoned state should reject profile seeding")
+                .contains("VMM hook runtime state is locked")
+        );
+        assert!(
+            runtime
+                .store_profile_sync_state(session_id, VmmProfileSyncState::default())
+                .expect_err("poisoned state should reject profile storage")
+                .contains("VMM hook runtime state is locked")
+        );
+        assert!(
+            runtime
+                .resolve_effective_config(&invocation)
+                .expect_err("poisoned state should reject configuration resolution")
+                .contains("VMM hook runtime state is locked")
+        );
+        assert!(
+            runtime
+                .outbox_for_invocation(&invocation)
+                .expect_err("poisoned state should reject outbox lookup")
+                .contains("VMM hook runtime state is locked")
+        );
+        assert!(
+            runtime
+                .profile_sync_for_invocation(&invocation)
+                .expect_err("poisoned state should reject profile lookup")
+                .contains("VMM hook runtime state is locked")
+        );
+        assert!(
+            runtime
+                .last_compaction_id_for_invocation(&invocation)
+                .expect_err("poisoned state should reject compaction lookup")
+                .contains("VMM hook runtime state is locked")
+        );
+    }
 
     /// Verifies VMM post-action skips unfinished delegated subagent turns.
     /// 验证 VMM post-action 会跳过尚未完成的委派子代理回合。

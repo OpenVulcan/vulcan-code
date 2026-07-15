@@ -606,6 +606,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
             session_id: SessionNodeId::from(session_id),
         },
         runtime_policy: ExecutionRuntimePolicy::main_session(),
+        conversation_hook_turn_id: Some(String::from("test-hook-turn")),
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         subagent_prompt_context: None,

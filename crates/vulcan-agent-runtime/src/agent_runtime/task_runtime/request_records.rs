@@ -202,7 +202,7 @@ pub(super) fn prepare_task_execution_request(
                 initial_context_source,
             )?;
             let agent_prompt_snapshot =
-                parent_agent_prompt_snapshot_for_spawn(task_runtime, current_session_id);
+                parent_agent_prompt_snapshot_for_spawn(task_runtime, current_session_id)?;
             attach_subagent_runtime_debug_extra(&mut invocation_config);
             sessions.insert(
                 task_id,
@@ -426,8 +426,10 @@ fn parent_snapshot_for_spawn(
     task_runtime: &TaskRuntime,
     current_session_id: SessionId,
 ) -> Result<CoreConversationSnapshot, String> {
-    task_runtime
-        .execution_context_for_session(current_session_id)
+    // parent_context is the exact registered context whose snapshot belongs to this fork.
+    // parent_context 是本次 fork 所属快照对应的精确已注册上下文。
+    let parent_context = task_runtime.execution_context_for_session(current_session_id)?;
+    parent_context
         .map(|context| context.parent_snapshot)
         .ok_or_else(|| {
             format!(
@@ -448,15 +450,15 @@ fn parent_snapshot_for_spawn(
 ///
 /// # Returns
 /// 返回值
-/// The fixed agent prompt snapshot when the parent runtime context has registered one.
-/// 父级运行时上下文已注册时返回固定代理提示词快照。
+/// The optional fixed agent prompt snapshot, or an explicit execution-context registry error.
+/// 返回可选固定代理提示词快照，或明确的执行上下文注册表错误。
 fn parent_agent_prompt_snapshot_for_spawn(
     task_runtime: &TaskRuntime,
     current_session_id: SessionId,
-) -> Option<ExecutionAgentPromptSnapshot> {
-    task_runtime
-        .execution_context_for_session(current_session_id)
-        .and_then(|context| context.agent_prompt_snapshot)
+) -> Result<Option<ExecutionAgentPromptSnapshot>, String> {
+    Ok(task_runtime
+        .execution_context_for_session(current_session_id)?
+        .and_then(|context| context.agent_prompt_snapshot))
 }
 
 /// Initialization fields for creating one fresh task-session record.

@@ -54,6 +54,28 @@ import type {
 } from "./settings-providers";
 import type { RuntimeModuleSnapshot } from "./startup";
 
+// ProjectSettingsRevision stores independent invalidation revisions for reloadable settings domains.
+// ProjectSettingsRevision 保存可重载设置领域各自独立的失效版本。
+export interface ProjectSettingsRevision {
+  // Latest VMM settings invalidation revision.
+  // 最新 VMM 设置失效版本。
+  vmm: number;
+  // Latest Agent Skill override invalidation revision.
+  // 最新 Agent Skill 覆盖失效版本。
+  agentSkills: number;
+}
+
+// ProjectSettingsRevisionSnapshot stores authoritative global and project-owned settings revisions.
+// ProjectSettingsRevisionSnapshot 保存权威的全局及项目级设置版本。
+export interface ProjectSettingsRevisionSnapshot {
+  // Revisions that invalidate the matching domain for every project.
+  // 使所有项目对应领域失效的全局版本。
+  global: ProjectSettingsRevision;
+  // Revisions owned by each exact project identifier.
+  // 由每个准确项目标识持有的领域版本。
+  byProject: Record<string, ProjectSettingsRevision>;
+}
+
 export interface WorkbenchSnapshot {
   // Monotonic workbench revision shared by full snapshots and delta events.
   // 全量快照与增量事件共享的工作台单调版本号。
@@ -73,6 +95,9 @@ export interface WorkbenchSnapshot {
   // Expanded project identifiers shown in the workspace sidebar.
   // 工作台侧栏中当前展开的项目标识集合。
   expandedProjectIds?: string[];
+  // Authoritative invalidation revisions for independently loaded project settings.
+  // 独立加载项目设置所使用的权威失效版本。
+  projectSettingsRevisions: ProjectSettingsRevisionSnapshot;
   // Conversation summaries.
   // 会话摘要。
   conversations: ConversationSummary[];

@@ -31,12 +31,25 @@ pub struct TaskSessionCompactionJob {
 /// Store contract for task-session compaction artifacts.
 /// 子代理会话压缩产物的存储契约。
 pub trait TaskSessionCompactionStore: Send + Sync {
-    /// Saves a compacted context document for a task session.
-    /// 保存子代理会话的压缩后上下文文档。
-    fn save_compacted_context(
+    /// Saves a compacted context only when the persisted source document still matches exactly.
+    /// 仅当持久化源文档仍精确匹配时保存压缩后上下文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `expected_context` is the authoritative source document used to produce the compaction.
+    /// `expected_context` 是生成压缩结果时使用的权威源文档。
+    /// `context` is the compacted replacement document derived from that exact source.
+    /// `context` 是从该精确源文档派生的压缩后替代文档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` after committing, `false` when newer context superseded the source, or a storage error.
+    /// 提交完成后返回 `true`，较新上下文已替代源文档时返回 `false`，存储失败时返回错误。
+    fn save_compacted_context_if_current(
         &self,
+        expected_context: &SessionContextDocument,
         context: SessionContextDocument,
-    ) -> Result<(), SessionStoreError>;
+    ) -> Result<bool, SessionStoreError>;
 
     /// Saves a compaction checkpoint for a task session.
     /// 保存子代理会话的压缩检查点。

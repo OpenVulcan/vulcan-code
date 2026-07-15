@@ -38,6 +38,31 @@ fn test_mailbox_controller() -> vulcan_core::controller::VulcanCoreController {
     .expect("valid core conversation snapshot")
 }
 
+/// Registers the exact root stream task used by wait-agent runtime-event tests.
+/// 注册 wait-agent 运行时事件测试使用的精确根流任务。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the active-stream registry receiving the test task.
+/// `state` 持有接收测试任务的活跃流注册表。
+/// `session_id` identifies the root session owned by the test task.
+/// `session_id` 标识测试任务持有的根会话。
+///
+/// # Returns
+/// # 返回值
+/// Returns the exact task identifier required by wait-agent state commits.
+/// 返回 wait-agent 状态提交所需的精确任务标识。
+fn register_wait_agent_test_stream(state: &mut ServiceBridgeState, session_id: SessionId) -> Uuid {
+    // task_id is the unique root-stream authority installed for this test.
+    // task_id 是为当前测试安装的唯一根流权限标识。
+    let task_id = Uuid::new_v4();
+    state.active_stream_tasks.insert(
+        session_id,
+        ActiveStreamTask::new(task_id, spawn_service_task(async {}), None),
+    );
+    task_id
+}
+
 /// Verifies guided prompt intervention removes the consumed visible queue row immediately.
 /// 验证引导提示词干预会立即移除已消费的可见队列行。
 #[test]
@@ -1229,8 +1254,8 @@ fn terminal_wait_agent_event_parser_resolves_consumed_child_executions() {
 
 /// Verifies wait_agent completion leaves matching mailbox input for parent delivery.
 /// 验证 wait_agent 完成后保留匹配 mailbox 输入供父会话投递。
-#[test]
-fn wait_agent_completion_leaves_matching_mailbox_input() {
+#[tokio::test]
+async fn wait_agent_completion_leaves_matching_mailbox_input() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -1257,6 +1282,10 @@ fn wait_agent_completion_leaves_matching_mailbox_input() {
         )
         .is_queued()
     );
+    // active_stream_task_id authorizes both wait-agent lifecycle events in this test.
+    // active_stream_task_id 授权当前测试中的两个 wait-agent 生命周期事件。
+    let active_stream_task_id =
+        register_wait_agent_test_stream(&mut service_state, parent_session_id);
     let state = Arc::new(Mutex::new(service_state));
     let started_event = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
@@ -1270,7 +1299,16 @@ fn wait_agent_completion_leaves_matching_mailbox_input() {
             "task_name": "agent-review"
         }
     })));
-    update_webui_wait_agent_runtime_state(&state, parent_session_id, &started_event);
+    assert_eq!(
+        update_webui_wait_agent_runtime_state(
+            &state,
+            parent_session_id,
+            active_stream_task_id,
+            &started_event,
+        )
+        .expect("wait-agent start should commit"),
+        WaitAgentRuntimeStateCommit::Committed
+    );
     let finished_event = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "wait_agent finished",
@@ -1292,7 +1330,16 @@ fn wait_agent_completion_leaves_matching_mailbox_input() {
         }
     })));
 
-    update_webui_wait_agent_runtime_state(&state, parent_session_id, &finished_event);
+    assert_eq!(
+        update_webui_wait_agent_runtime_state(
+            &state,
+            parent_session_id,
+            active_stream_task_id,
+            &finished_event,
+        )
+        .expect("wait-agent finish should commit"),
+        WaitAgentRuntimeStateCommit::Committed
+    );
 
     let guard = state.lock().expect("state lock");
     let kernel = guard
@@ -1308,8 +1355,8 @@ fn wait_agent_completion_leaves_matching_mailbox_input() {
 
 /// Verifies wait_agent completion leaves mailbox input when host result selectors are absent.
 /// 验证 wait_agent 完成且宿主结果无选择器时仍保留 mailbox 输入。
-#[test]
-fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
+#[tokio::test]
+async fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
     let parent_session_id = SessionId::new_v4();
     let task_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
@@ -1336,6 +1383,10 @@ fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
         )
         .is_queued()
     );
+    // active_stream_task_id authorizes both wait-agent lifecycle events in this test.
+    // active_stream_task_id 授权当前测试中的两个 wait-agent 生命周期事件。
+    let active_stream_task_id =
+        register_wait_agent_test_stream(&mut service_state, parent_session_id);
     let state = Arc::new(Mutex::new(service_state));
     let started_event = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
@@ -1346,7 +1397,16 @@ fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
         "tool_name": "wait_agent",
         "tool_call_id": "wait-call-no-selectors"
     })));
-    update_webui_wait_agent_runtime_state(&state, parent_session_id, &started_event);
+    assert_eq!(
+        update_webui_wait_agent_runtime_state(
+            &state,
+            parent_session_id,
+            active_stream_task_id,
+            &started_event,
+        )
+        .expect("wait-agent start should commit"),
+        WaitAgentRuntimeStateCommit::Committed
+    );
     let finished_event = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
         "wait_agent finished",
@@ -1363,7 +1423,16 @@ fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
         }
     })));
 
-    update_webui_wait_agent_runtime_state(&state, parent_session_id, &finished_event);
+    assert_eq!(
+        update_webui_wait_agent_runtime_state(
+            &state,
+            parent_session_id,
+            active_stream_task_id,
+            &finished_event,
+        )
+        .expect("wait-agent finish should commit"),
+        WaitAgentRuntimeStateCommit::Committed
+    );
 
     let guard = state.lock().expect("state lock");
     let kernel = guard
@@ -1379,13 +1448,17 @@ fn wait_agent_completion_leaves_mailbox_input_without_selectors() {
 
 /// Verifies a fresh wait_agent invocation replaces stale wait scopes before finishing.
 /// 验证新的 wait_agent 调用会先替换旧等待范围，再在结束时清干净。
-#[test]
-fn wait_agent_start_replaces_stale_wait_scope() {
+#[tokio::test]
+async fn wait_agent_start_replaces_stale_wait_scope() {
     let parent_session_id = SessionId::new_v4();
     let mut service_state = test_service_state_with_parent_session(parent_session_id);
     session_runtime_kernel_mut(&mut service_state, parent_session_id)
         .register_wait_scope("stale-wait-scope", Vec::<String>::new(), 10)
         .expect("stale wait scope should register");
+    // active_stream_task_id authorizes replacement and completion of the stale wait scope.
+    // active_stream_task_id 授权替换并完成旧等待范围。
+    let active_stream_task_id =
+        register_wait_agent_test_stream(&mut service_state, parent_session_id);
     let state = Arc::new(Mutex::new(service_state));
     let started_event = RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
@@ -1397,7 +1470,16 @@ fn wait_agent_start_replaces_stale_wait_scope() {
         "tool_call_id": "fresh-wait-call"
     })));
 
-    update_webui_wait_agent_runtime_state(&state, parent_session_id, &started_event);
+    assert_eq!(
+        update_webui_wait_agent_runtime_state(
+            &state,
+            parent_session_id,
+            active_stream_task_id,
+            &started_event,
+        )
+        .expect("wait-agent start should replace the stale scope"),
+        WaitAgentRuntimeStateCommit::Committed
+    );
 
     {
         let guard = state.lock().expect("state lock");
@@ -1423,7 +1505,16 @@ fn wait_agent_start_replaces_stale_wait_scope() {
         "tool_call_id": "fresh-wait-call"
     })));
 
-    update_webui_wait_agent_runtime_state(&state, parent_session_id, &finished_event);
+    assert_eq!(
+        update_webui_wait_agent_runtime_state(
+            &state,
+            parent_session_id,
+            active_stream_task_id,
+            &finished_event,
+        )
+        .expect("wait-agent finish should clear the replacement scope"),
+        WaitAgentRuntimeStateCommit::Committed
+    );
 
     let guard = state.lock().expect("state lock");
     let kernel = guard
@@ -1436,6 +1527,156 @@ fn wait_agent_start_replaces_stale_wait_scope() {
             .parent_sessions_waiting_for_subagents
             .contains(&parent_session_id)
     );
+}
+
+/// Verifies a superseded root task cannot modify wait-agent coordination state.
+/// 验证已被替换的根任务无法修改 wait-agent 协调状态。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if a stale event changes retained wait-agent state.
+/// 此测试无返回值；若旧事件修改保留的 wait-agent 状态则失败。
+#[tokio::test]
+async fn superseded_wait_agent_start_preserves_replacement_coordination_state() {
+    // parent_session_id identifies the root session now owned by a replacement stream.
+    // parent_session_id 标识当前由替代流持有的根会话。
+    let parent_session_id = SessionId::new_v4();
+    // stale_task_id identifies the obsolete wait-agent event producer.
+    // stale_task_id 标识已过期的 wait-agent 事件生产者。
+    let stale_task_id = Uuid::new_v4();
+    // service_state retains one replacement-owned scope before the stale event arrives.
+    // service_state 在旧事件到达前保留一个由替代任务持有的等待范围。
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    session_runtime_kernel_mut(&mut service_state, parent_session_id)
+        .register_wait_scope(
+            "replacement-wait-scope",
+            vec![String::from("replacement-agent")],
+            10,
+        )
+        .expect("replacement wait scope should register");
+    // replacement_task_id is the only current authority for wait-agent state.
+    // replacement_task_id 是当前 wait-agent 状态的唯一权限标识。
+    let replacement_task_id =
+        register_wait_agent_test_stream(&mut service_state, parent_session_id);
+    // state exposes the replacement registry and retained kernel to the stale event.
+    // state 向旧事件暴露替代任务注册表与保留内核。
+    let state = Arc::new(Mutex::new(service_state));
+    // stale_started_event attempts to replace the authoritative wait scope.
+    // stale_started_event 尝试替换权威等待范围。
+    let stale_started_event = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "wait_agent started",
+        "waiting",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "tool_name": "wait_agent",
+        "tool_call_id": "stale-wait-call"
+    })));
+
+    assert_eq!(
+        update_webui_wait_agent_runtime_state(
+            &state,
+            parent_session_id,
+            stale_task_id,
+            &stale_started_event,
+        )
+        .expect("stale wait-agent event should be classified"),
+        WaitAgentRuntimeStateCommit::Superseded
+    );
+
+    // guard proves every replacement-owned coordination surface remains unchanged.
+    // guard 证明替代任务持有的全部协调状态表面保持不变。
+    let guard = state.lock().expect("state lock");
+    assert!(active_stream_task_matches_id(
+        &guard,
+        parent_session_id,
+        replacement_task_id
+    ));
+    assert!(
+        !guard
+            .parent_sessions_waiting_for_subagents
+            .contains(&parent_session_id)
+    );
+    let kernel = guard
+        .session_runtime_kernels
+        .get(&parent_session_id)
+        .expect("replacement kernel should remain");
+    assert_eq!(kernel.wait_scope_count(), 1);
+    assert!(kernel.wait_scope_targets_agent("replacement-agent"));
+    assert!(
+        guard
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace snapshot")
+            .session_runtime_state
+            .is_empty()
+    );
+}
+
+/// Verifies wait-agent state lock failure is returned explicitly.
+/// 验证 wait-agent 状态锁失败会被明确返回。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if a poisoned state lock is silently ignored.
+/// 此测试无返回值；若中毒状态锁被静默忽略则失败。
+#[tokio::test]
+async fn wait_agent_state_lock_failure_is_explicit() {
+    // parent_session_id identifies the session whose shared state lock will be poisoned.
+    // parent_session_id 标识共享状态锁将被中毒的会话。
+    let parent_session_id = SessionId::new_v4();
+    // service_state receives an exact active task before lock poisoning.
+    // service_state 在状态锁中毒前接收一个精确活跃任务。
+    let mut service_state = test_service_state_with_parent_session(parent_session_id);
+    // active_stream_task_id would authorize the event if the state lock remained available.
+    // active_stream_task_id 在状态锁仍可用时会授权该事件。
+    let active_stream_task_id =
+        register_wait_agent_test_stream(&mut service_state, parent_session_id);
+    // state is the exact shared mutex acquired by the wait-agent transaction.
+    // state 是 wait-agent 事务获取的精确共享互斥锁。
+    let state = Arc::new(Mutex::new(service_state));
+    // poisoned_state shares the mutex deliberately poisoned below.
+    // poisoned_state 共享下方将被刻意中毒的互斥锁。
+    let poisoned_state = Arc::clone(&state);
+    // poison_result proves the deliberate panic poisoned the shared state mutex.
+    // poison_result 证明刻意 panic 已使共享状态互斥锁中毒。
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // _guard keeps the state mutex held until the deliberate panic occurs.
+        // _guard 将持续持有状态互斥锁直到刻意 panic 发生。
+        let _guard = poisoned_state.lock().expect("state lock before poisoning");
+        panic!("poison wait-agent service state");
+    }));
+    assert!(poison_result.is_err());
+    // started_event requires the poisoned state lock and therefore must return an error.
+    // started_event 需要获取已中毒的状态锁，因此必须返回错误。
+    let started_event = RuntimeEvent::new(
+        RuntimeEventKind::ToolStarted,
+        "wait_agent started",
+        "waiting",
+    )
+    .with_metadata(Some(serde_json::json!({
+        "tool_name": "wait_agent",
+        "tool_call_id": "poisoned-wait-call"
+    })));
+
+    let error = update_webui_wait_agent_runtime_state(
+        &state,
+        parent_session_id,
+        active_stream_task_id,
+        &started_event,
+    )
+    .expect_err("poisoned wait-agent state lock should fail explicitly");
+    assert!(error.contains("failed to lock service state"));
 }
 
 /// Verifies a late delegate-finished mailbox input is queued after wait_agent already completed.

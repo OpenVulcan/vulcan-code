@@ -101,6 +101,9 @@ pub enum ExecutionStreamEvent {
         /// Session identifier owning the provider request checkpoint.
         /// 拥有该 Provider 请求检查点的会话标识。
         session_id: SessionId,
+        /// Canonical provider API family resolved by execution preparation.
+        /// 执行准备解析出的规范 Provider API 协议族。
+        provider_family: String,
         /// Provider-neutral request snapshot captured before wire lowering.
         /// 线协议转换前捕获的 Provider 中立请求快照。
         snapshot: CoreProviderRequestSnapshot,

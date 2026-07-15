@@ -466,7 +466,7 @@ async fn execute_runlua_tool(
     let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
     // model_output applies the RunLua-specific inline budget and project spill policy.
     // model_output 应用 RunLua 专用内联预算与项目分页策略。
-    let model_output = render_runlua_text(&markdown, workspace_root.as_deref());
+    let model_output = render_runlua_text(&markdown, workspace_root.as_deref())?;
     // host_payload excludes the full code and output because they already exist in trusted transcript blocks.
     // host_payload 排除完整代码与输出，因为它们已存在于可信转录块中。
     let host_payload = json!({
@@ -590,7 +590,7 @@ async fn execute_runlua_session_tool(
         .map_err(|error| format!("Failed to encode runlua_session result: {error}"))?;
     // model_output applies the same bounded result policy as one-shot RunLua.
     // model_output 应用与一次性 RunLua 相同的有界结果策略。
-    let model_output = render_runlua_text(&pretty_response, workspace_root.as_deref());
+    let model_output = render_runlua_text(&pretty_response, workspace_root.as_deref())?;
     // host_payload is intentionally compact and never duplicates a potentially large eval result.
     // host_payload 刻意保持紧凑，绝不复制可能很大的 eval 结果。
     let host_payload =
@@ -1179,7 +1179,19 @@ fn runlua_session_host_payload(
 
 /// Applies the RunLua-specific inline budget and existing project page spill mechanism.
 /// 应用 RunLua 专用内联预算与现有项目分页落盘机制。
-fn render_runlua_text(content: &str, workspace_root: Option<&Path>) -> String {
+///
+/// # Parameters
+/// # 参数
+/// - `content`: Canonical RunLua result text to render.
+/// - `content`：需要渲染的规范 RunLua 结果文本。
+/// - `workspace_root`: Optional project root used to derive the lazy spill path.
+/// - `workspace_root`：用于派生延迟超限路径的可选项目根目录。
+///
+/// # Returns
+/// # 返回值
+/// Returns inline text or a page pointer, or the exact rendering failure.
+/// 返回内联文本或分页指针，或精确的渲染失败。
+fn render_runlua_text(content: &str, workspace_root: Option<&Path>) -> Result<String, String> {
     let render_input = HostTextRenderInput {
         content: content.to_string(),
         overflow_mode: Some(HostToolOverflowMode::Page),
@@ -1199,7 +1211,7 @@ fn render_runlua_text(content: &str, workspace_root: Option<&Path>) -> String {
     };
     let spill_root = workspace_root
         .filter(|path| !path.as_os_str().is_empty())
-        .and_then(|path| project_temp_maintenance::ensure_project_temp_dir(path).ok());
+        .map(project_temp_maintenance::resolve_project_temp_dir);
     let render_options = HostRenderOptions {
         spill_root,
         template_skill_roots: Vec::new(),

@@ -30,28 +30,30 @@ pub(super) struct SessionTurnAdmissionGuard {
     /// Exact session identities reserved by this admission transaction.
     /// 本次准入事务预留的精确会话标识集合。
     session_ids: BTreeSet<SessionId>,
-    /// Exact project identities additionally reserved by a project lifecycle transaction.
-    /// 项目生命周期事务额外预留的精确项目标识集合。
-    project_ids: BTreeSet<String>,
+    /// Exact project scopes additionally reserved by a project lifecycle transaction.
+    /// 项目生命周期事务额外预留的精确项目作用域集合。
+    project_scopes: BTreeSet<ProjectAdmissionScope>,
 }
 
 impl Drop for SessionTurnAdmissionGuard {
     /// Clears every session reservation still owned by this guard and its project reservations.
     /// 清理仍由此守卫持有的全部会话预留及其项目预留。
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.state.lock() {
-            guard
-                .session_turn_admission_reservations
-                .retain(|session_id, reservation| {
-                    !self.session_ids.contains(session_id)
-                        || reservation.reservation_id != self.reservation_id
-                });
-            guard
-                .project_lifecycle_transition_reservations
-                .retain(|project_id, reservation_id| {
-                    !self.project_ids.contains(project_id) || *reservation_id != self.reservation_id
-                });
-        }
+        // guard recovers poisoned state only to remove reservations still owned by this exact transaction.
+        // guard 仅为删除仍由当前精确事务拥有的预留而恢复中毒状态。
+        let mut guard = lock_service_state_for_admission_cleanup(&self.state, "session-turn guard");
+        guard
+            .session_turn_admission_reservations
+            .retain(|session_id, reservation| {
+                !self.session_ids.contains(session_id)
+                    || reservation.reservation_id != self.reservation_id
+            });
+        guard
+            .project_admission_reservations
+            .retain(|project_scope, reservation| {
+                !self.project_scopes.contains(project_scope)
+                    || reservation.reservation_id != self.reservation_id
+            });
     }
 }
 
@@ -121,7 +123,7 @@ pub(super) fn begin_session_turn_start_exclusion(
         state: state.clone(),
         reservation_id,
         session_ids: reserved_session_ids,
-        project_ids: BTreeSet::new(),
+        project_scopes: BTreeSet::new(),
     })
 }
 
@@ -179,9 +181,14 @@ fn begin_lifecycle_transition(
     // reserved_session_ids deduplicates project membership before validation and reservation.
     // reserved_session_ids 在校验与预留前去重项目成员关系。
     let reserved_session_ids = session_ids.into_iter().collect::<BTreeSet<_>>();
-    // reserved_project_ids deduplicates project targets before validation and reservation.
-    // reserved_project_ids 在校验与预留前去重项目目标。
-    let reserved_project_ids = project_ids.into_iter().collect::<BTreeSet<_>>();
+    // reserved_project_scopes deduplicates exact project targets before validation and reservation.
+    // reserved_project_scopes 在校验与预留前去重精确项目目标。
+    let reserved_project_scopes = project_ids
+        .into_iter()
+        .map(ProjectAdmissionScope::Exact)
+        .collect::<BTreeSet<_>>();
+    // reservation_id uniquely owns both session and project rows in this lifecycle transaction.
+    // reservation_id 唯一拥有本次生命周期事务中的会话行与项目行。
     let reservation_id = Uuid::new_v4();
     let mut guard = state
         .lock()
@@ -195,13 +202,25 @@ fn begin_lifecycle_transition(
             ));
         }
     }
-    for project_id in &reserved_project_ids {
-        if guard
-            .project_lifecycle_transition_reservations
-            .contains_key(project_id)
-        {
+    if let Some(reservation) = guard
+        .project_admission_reservations
+        .get(&ProjectAdmissionScope::UnresolvedSubmission)
+    {
+        return Err(format!(
+            "Project selection is reserved by {}; cannot {action_label} project lifecycle state",
+            reservation.kind.diagnostic_label()
+        ));
+    }
+    for project_scope in &reserved_project_scopes {
+        if let Some(reservation) = guard.project_admission_reservations.get(project_scope) {
+            // project_id is extracted only from exact lifecycle scopes constructed above.
+            // project_id 仅从上方构造的精确生命周期作用域中提取。
+            let ProjectAdmissionScope::Exact(project_id) = project_scope else {
+                unreachable!("lifecycle project scopes are always exact")
+            };
             return Err(format!(
-                "项目 `{project_id}` 正在执行生命周期转换，无法重复{action_label}。"
+                "Project `{project_id}` is reserved by {}; cannot {action_label}",
+                reservation.kind.diagnostic_label()
             ));
         }
     }
@@ -212,18 +231,28 @@ fn begin_lifecycle_transition(
         SessionTurnAdmissionReservationKind::LifecycleTransition,
         action_label,
     )?;
-    guard.project_lifecycle_transition_reservations.extend(
-        reserved_project_ids
-            .iter()
-            .cloned()
-            .map(|project_id| (project_id, reservation_id)),
-    );
+    guard
+        .project_admission_reservations
+        .extend(
+            reserved_project_scopes
+                .iter()
+                .cloned()
+                .map(|project_scope| {
+                    (
+                        project_scope,
+                        ProjectAdmissionReservation {
+                            reservation_id,
+                            kind: ProjectAdmissionReservationKind::LifecycleTransition,
+                        },
+                    )
+                }),
+        );
     drop(guard);
     Ok(SessionTurnAdmissionGuard {
         state: state.clone(),
         reservation_id,
         session_ids: reserved_session_ids,
-        project_ids: reserved_project_ids,
+        project_scopes: reserved_project_scopes,
     })
 }
 
@@ -364,10 +393,10 @@ mod tests {
             let mut guard = state.lock().expect("service state should lock");
             assert_eq!(
                 guard
-                    .project_lifecycle_transition_reservations
-                    .get(&project_id)
-                    .copied(),
-                Some(transition_guard.reservation_id)
+                    .project_admission_reservations
+                    .get(&ProjectAdmissionScope::Exact(project_id.clone()))
+                    .map(|reservation| reservation.reservation_id),
+                Some(transition_guard.reservation_id),
             );
             assert_eq!(
                 guard
@@ -390,8 +419,8 @@ mod tests {
             .expect("service state should lock after release");
         assert!(
             !guard
-                .project_lifecycle_transition_reservations
-                .contains_key(&project_id)
+                .project_admission_reservations
+                .contains_key(&ProjectAdmissionScope::Exact(project_id.clone()))
         );
         start_webui_session_kernel_user_turn(&mut guard, session_id, "accepted-turn")
             .expect("released lifecycle reservation should allow a turn");
@@ -461,9 +490,13 @@ mod tests {
             // guard seeds the authoritative conflicting project owner.
             // guard 写入权威的冲突项目所有者。
             let mut guard = state.lock().expect("service state should lock");
-            guard
-                .project_lifecycle_transition_reservations
-                .insert(project_id.clone(), Uuid::new_v4());
+            guard.project_admission_reservations.insert(
+                ProjectAdmissionScope::Exact(project_id.clone()),
+                ProjectAdmissionReservation {
+                    reservation_id: Uuid::new_v4(),
+                    kind: ProjectAdmissionReservationKind::LifecycleTransition,
+                },
+            );
         }
 
         let result = begin_project_lifecycle_transition(&state, &project_id, [session_id], "归档");
@@ -511,9 +544,13 @@ mod tests {
                     kind: SessionTurnAdmissionReservationKind::LifecycleTransition,
                 },
             );
-            guard
-                .project_lifecycle_transition_reservations
-                .insert(project_id.clone(), replacement_id);
+            guard.project_admission_reservations.insert(
+                ProjectAdmissionScope::Exact(project_id.clone()),
+                ProjectAdmissionReservation {
+                    reservation_id: replacement_id,
+                    kind: ProjectAdmissionReservationKind::PromptSubmission,
+                },
+            );
         }
 
         drop(stale_guard);
@@ -528,10 +565,124 @@ mod tests {
         );
         assert_eq!(
             guard
-                .project_lifecycle_transition_reservations
-                .get(&project_id)
-                .copied(),
+                .project_admission_reservations
+                .get(&ProjectAdmissionScope::Exact(project_id))
+                .map(|reservation| reservation.reservation_id),
             Some(replacement_id)
+        );
+    }
+
+    /// Verifies a lifecycle Guard recovers a poisoned state lock, removes its rows, and preserves unrelated owners.
+    /// 验证生命周期 Guard 会恢复中毒状态锁、删除自身行并保留无关所有者。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// This test has no parameters.
+    /// 此测试没有参数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// This test returns no value and fails if poisoned cleanup leaks owned rows or deletes unrelated reservations.
+    /// 此测试无返回值；中毒清理泄漏自身行或删除无关预留时测试失败。
+    #[test]
+    fn lifecycle_guard_recovers_poisoned_lock_for_exact_cleanup() {
+        // owned_session_id identifies the session reservation owned by the tested Guard.
+        // owned_session_id 标识被测 Guard 拥有的会话预留。
+        let owned_session_id = SessionId::from_u128(0x99);
+        // unrelated_session_id identifies a reservation owned by a different transaction.
+        // unrelated_session_id 标识由其他事务拥有的预留。
+        let unrelated_session_id = SessionId::from_u128(0x9a);
+        // owned_project_id identifies the project reservation owned by the tested Guard.
+        // owned_project_id 标识被测 Guard 拥有的项目预留。
+        let owned_project_id = String::from("project-poison-owned");
+        // unrelated_project_scope identifies a project reservation outside the tested Guard target set.
+        // unrelated_project_scope 标识被测 Guard 目标集合之外的项目预留。
+        let unrelated_project_scope =
+            ProjectAdmissionScope::Exact(String::from("project-poison-unrelated"));
+        // unrelated_reservation_id identifies the transaction that must survive cleanup.
+        // unrelated_reservation_id 标识必须在清理后保留的事务。
+        let unrelated_reservation_id = Uuid::new_v4();
+        // state owns the poisoned reservation tables exercised by Drop recovery.
+        // state 持有 Drop 恢复所操作的中毒预留表。
+        let state = create_service_bridge_state(Arc::new(LifecycleTransitionTestShellHost));
+        // lifecycle_guard owns the exact session and project rows that must be removed after poisoning.
+        // lifecycle_guard 拥有中毒后必须删除的精确会话与项目行。
+        let lifecycle_guard = begin_project_lifecycle_transition(
+            &state,
+            &owned_project_id,
+            [owned_session_id],
+            "归档",
+        )
+        .expect("lifecycle reservation should succeed before poisoning");
+        {
+            // guard installs unrelated reservation owners before the mutex is poisoned.
+            // guard 在互斥锁中毒前安装无关预留所有者。
+            let mut guard = state.lock().expect("service state should lock");
+            guard.session_turn_admission_reservations.insert(
+                unrelated_session_id,
+                SessionTurnAdmissionReservation {
+                    reservation_id: unrelated_reservation_id,
+                    kind: SessionTurnAdmissionReservationKind::LifecycleTransition,
+                },
+            );
+            guard.project_admission_reservations.insert(
+                unrelated_project_scope.clone(),
+                ProjectAdmissionReservation {
+                    reservation_id: unrelated_reservation_id,
+                    kind: ProjectAdmissionReservationKind::LifecycleTransition,
+                },
+            );
+        }
+        // poisoned_state shares the exact mutex later recovered by the Guard Drop.
+        // poisoned_state 共享随后由 Guard Drop 恢复的精确互斥锁。
+        let poisoned_state = Arc::clone(&state);
+        // poison_result proves the deliberate panic poisoned the service-state mutex.
+        // poison_result 证明刻意 panic 已使服务状态互斥锁中毒。
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // _guard keeps the mutex held until the deliberate panic poisons it.
+            // _guard 将互斥锁保持到刻意 panic，使其被标记为中毒。
+            let _guard = poisoned_state
+                .lock()
+                .expect("service state should lock before deliberate panic");
+            panic!("poison lifecycle admission cleanup state");
+        }));
+        assert!(poison_result.is_err());
+
+        drop(lifecycle_guard);
+
+        // recovered_guard inspects the still-poisoned mutex contents after exact Drop cleanup.
+        // recovered_guard 在精确 Drop 清理后检查仍标记中毒的互斥锁内容。
+        let recovered_guard = match state.lock() {
+            Ok(_) => panic!("service state should remain poison-marked"),
+            Err(poisoned) => {
+                // poisoned carries the post-cleanup state retained by the intentionally poisoned mutex.
+                // poisoned 携带刻意中毒互斥锁保留的清理后状态。
+                poisoned.into_inner()
+            }
+        };
+        assert!(
+            !recovered_guard
+                .session_turn_admission_reservations
+                .contains_key(&owned_session_id)
+        );
+        assert!(
+            !recovered_guard
+                .project_admission_reservations
+                .contains_key(&ProjectAdmissionScope::Exact(owned_project_id))
+        );
+        assert_eq!(
+            recovered_guard
+                .session_turn_admission_reservations
+                .get(&unrelated_session_id)
+                .map(|reservation| reservation.reservation_id),
+            Some(unrelated_reservation_id)
+        );
+        assert_eq!(
+            recovered_guard
+                .project_admission_reservations
+                .get(&unrelated_project_scope)
+                .map(|reservation| reservation.reservation_id),
+            Some(unrelated_reservation_id)
         );
     }
 }

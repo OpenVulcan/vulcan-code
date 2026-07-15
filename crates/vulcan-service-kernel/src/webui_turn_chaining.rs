@@ -235,14 +235,12 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         return Ok(false);
     }
     cache_session_goal_summary(state, session_id, Some(goal))?;
-    let session_id_text = session_id.to_string();
     let (mut workspace_snapshot, workspace_source) =
         if let Some(workspace_snapshot) = retained_workspace_snapshot {
             (workspace_snapshot, "retained")
         } else {
             (
-                load_workspace_for_submission(controller_runtime.clone(), Some(&session_id_text))
-                    .await?,
+                load_workspace_for_submission(controller_runtime.clone(), Some(session_id)).await?,
                 "disk",
             )
         };
@@ -317,7 +315,7 @@ pub(super) async fn maybe_start_session_goal_continuation_if_idle(
         .replace_snapshot(build_vmm_hook_config_snapshot(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
-        ));
+        ))?;
     commit_workspace_snapshot_and_emit_session_phase_delta(
         app,
         state,

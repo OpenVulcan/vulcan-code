@@ -1,5 +1,56 @@
 use super::*;
 
+impl SegmentedTaskSessionStore {
+    /// Publishes one context document under the shared state-file transaction and optional exact precondition.
+    /// 在共享状态文件事务与可选精确前置条件下发布一份上下文文档。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `required_current_context` requires the persisted context to match exactly when present; `None` performs an unconditional save.
+    /// `required_current_context` 存在时要求持久化上下文精确匹配；`None` 执行无条件保存。
+    /// `context` is the complete replacement context to derive and publish into `state.json`.
+    /// `context` 是需要派生并发布到 `state.json` 的完整替代上下文。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` after publication, `false` when the exact precondition is stale, or a storage error.
+    /// 发布完成后返回 `true`，精确前置条件已陈旧时返回 `false`，存储失败时返回错误。
+    fn save_context_transaction(
+        &self,
+        required_current_context: Option<&SessionContextDocument>,
+        context: SessionContextDocument,
+    ) -> Result<bool, SessionStoreError> {
+        // taskDir is the authoritative directory containing the target task state document.
+        // taskDir 是包含目标子任务状态文档的权威目录。
+        let task_dir = self.indexed_task_dir(context.node_id)?;
+        // statePath is shared by context and runtime-checkpoint transactions.
+        // statePath 由上下文事务与运行时检查点事务共同使用。
+        let state_path = task_dir.join(SEGMENTED_STATE_FILE);
+        // transactionLock serializes the exact comparison and complete atomic publication.
+        // transactionLock 将精确比较与完整原子发布串行化。
+        let transaction_lock = json_file_transaction_lock(&state_path)?;
+        // transactionGuard prevents any competing context writer from entering between comparison and publication.
+        // transactionGuard 防止其他上下文写入者在比较与发布之间进入。
+        let _transaction_guard = transaction_lock.lock().map_err(to_store_error)?;
+        // state is the latest authoritative document observed inside the transaction boundary.
+        // state 是在事务边界内观察到的最新权威文档。
+        let mut state = read_task_state(&task_dir)?.unwrap_or_else(|| {
+            SegmentedTaskStateDocument::new(context.node_id, current_unix_millis_u64())
+        });
+        if let Some(required_current_context) = required_current_context
+            && state.task_context.as_ref() != Some(required_current_context)
+        {
+            return Ok(false);
+        }
+        state.updated_at = current_unix_millis_u64().to_string();
+        state.runtime_state = task_main_runtime_state_from_context(&context, &state.updated_at);
+        state.current_context = task_main_current_context_from_context(&context, &state.updated_at);
+        state.task_context = Some(context);
+        write_json_file(&state_path, &state)?;
+        Ok(true)
+    }
+}
+
 impl SessionNodeStore for SegmentedTaskSessionStore {
     /// Appends one event record to a segmented task-session stream.
     /// 向分段子任务会话流追加一条事件记录。
@@ -36,25 +87,19 @@ impl SessionNodeStore for SegmentedTaskSessionStore {
 
     /// Saves the current API-facing context document into state.json.
     /// 将当前 API 实际上下文文档保存到 state.json。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `context` is the complete authoritative document that unconditionally replaces the persisted context.
+    /// `context` 是无条件替换持久化上下文的完整权威文档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Success after atomic publication, or an explicit lookup, lock, read, derivation, or write error.
+    /// 原子发布完成后返回成功，否则返回明确的查找、锁、读取、派生或写入错误。
     fn save_context(&self, context: SessionContextDocument) -> Result<(), SessionStoreError> {
-        let task_dir = self.indexed_task_dir(context.node_id)?;
-        // state_path is the shared document containing both context and runtime checkpoint fields.
-        // state_path 是同时包含上下文与运行时检查点字段的共享文档。
-        let state_path = task_dir.join(SEGMENTED_STATE_FILE);
-        // transaction_lock serializes this complete read-modify-write with checkpoint saves.
-        // transaction_lock 将该完整读改写周期与检查点保存串行化。
-        let transaction_lock = json_file_transaction_lock(&state_path)?;
-        // transaction_guard remains held until the merged state document is atomically published.
-        // transaction_guard 保持到合并后的状态文档完成原子发布。
-        let _transaction_guard = transaction_lock.lock().map_err(to_store_error)?;
-        let mut state = read_task_state(&task_dir)?.unwrap_or_else(|| {
-            SegmentedTaskStateDocument::new(context.node_id, current_unix_millis_u64())
-        });
-        state.updated_at = current_unix_millis_u64().to_string();
-        state.runtime_state = task_main_runtime_state_from_context(&context, &state.updated_at);
-        state.current_context = task_main_current_context_from_context(&context, &state.updated_at);
-        state.task_context = Some(context);
-        write_json_file(&state_path, &state)
+        self.save_context_transaction(None, context)?;
+        Ok(())
     }
 
     /// Loads the current API-facing context document from state.json.
@@ -381,13 +426,26 @@ impl TaskSessionStore for SegmentedTaskSessionStore {
 }
 
 impl TaskSessionCompactionStore for SegmentedTaskSessionStore {
-    /// Saves a compacted context document for a task session.
-    /// 保存子任务会话的压缩后上下文文档。
-    fn save_compacted_context(
+    /// Saves a compacted context only while its exact source remains authoritative.
+    /// 仅在压缩结果的精确源上下文仍具权威性时保存压缩后上下文。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `expected_context` is the exact persisted source that authorized the compaction request.
+    /// `expected_context` 是授权本次压缩请求的精确持久化源文档。
+    /// `context` is the compacted replacement derived from that source.
+    /// `context` 是从该源文档派生的压缩后替代文档。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` after commit, `false` when the source is stale, or an explicit storage error.
+    /// 提交完成后返回 `true`，源文档已陈旧时返回 `false`，存储失败时返回明确错误。
+    fn save_compacted_context_if_current(
         &self,
+        expected_context: &SessionContextDocument,
         context: SessionContextDocument,
-    ) -> Result<(), SessionStoreError> {
-        self.save_context(context)
+    ) -> Result<bool, SessionStoreError> {
+        self.save_context_transaction(Some(expected_context), context)
     }
 
     /// Saves a compaction checkpoint for a task session.

@@ -63,6 +63,45 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
         );
         return Ok(());
     }
+    // detached_stream is created before the background task so subscription failure can roll back the just-committed service registration synchronously.
+    // detached_stream 在后台任务创建前完成订阅，使订阅失败可以同步回滚刚提交的服务侧注册。
+    let detached_stream = match agent_runtime
+        .task_runtime
+        .subscribe_detached_task_events(task_id, &execution_id)
+    {
+        Ok(stream) => stream,
+        Err(subscription_error) => {
+            // rollback_result clears only this exact execution and therefore cannot delete a replacement listener.
+            // rollback_result 仅清理当前精确执行，因此不会误删替代监听器。
+            let rollback_result = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))
+                .map(|mut guard| {
+                    clear_webui_detached_listener_execution_if_current(
+                        &mut guard,
+                        task_id,
+                        &execution_id,
+                        true,
+                    )
+                });
+            return match rollback_result {
+                // cleared reports whether the failed subscription still owned and removed its service registration.
+                // cleared 表示失败订阅是否仍拥有并移除了自身的服务侧注册。
+                Ok(cleared) => {
+                    webui_trace(
+                        "detached_listener_subscription_rollback",
+                        format!(
+                            "parent={parent_session_id} task={task_id} execution_id={execution_id} cleared={cleared}"
+                        ),
+                    );
+                    Err(subscription_error)
+                }
+                Err(rollback_error) => Err(format!(
+                    "{subscription_error} The detached listener registration rollback also failed: {rollback_error}"
+                )),
+            };
+        }
+    };
     webui_trace(
         "detached_listener_spawn",
         format!("parent={parent_session_id} task={task_id} execution_id={execution_id}"),
@@ -72,11 +111,7 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
         // providerTelemetryGuard survives for the complete detached child-event subscription.
         // providerTelemetryGuard 在完整分离子事件订阅期间保持存活。
         let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new(state.clone());
-        let mut stream = Box::pin(
-            agent_runtime
-                .task_runtime
-                .subscribe_detached_task_events(task_id, &execution_id),
-        );
+        let mut stream = Box::pin(detached_stream);
         while let Some(event) = stream.next().await {
             webui_trace(
                 "detached_listener_event",
@@ -211,9 +246,15 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                 ),
             );
             if !consumed {
-                append_runtime_event_projection(app, state, parent_session_id, &event)?;
+                append_runtime_event_projection_and_release_barrier(
+                    app,
+                    state,
+                    parent_session_id,
+                    &event,
+                )?;
+            } else {
+                release_runtime_event_projection_barrier_after_attempt(&event)?;
             }
-            acknowledge_runtime_event_projection_barrier(&event);
             let mut mailbox_delivery_error: Option<String> = None;
             if is_finished {
                 if let Err(error) = enqueue_webui_session_mailbox_input_if_needed(
@@ -592,44 +633,35 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         ExecutionStreamEvent::RequestStarted { session_id } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
         }
-        ExecutionStreamEvent::ThinkingDelta { session_id, delta } => append_stream_delta_record(
+        ExecutionStreamEvent::ThinkingDelta { session_id, delta } => append_stream_content_delta(
             app,
             state,
             session_id,
-            &mut record_ids.thinking_record_id,
-            SessionMessageRecordKind::ThinkingOutput,
-            "思考",
+            record_ids,
+            StreamContentKind::Thinking,
             &delta,
-            true,
         ),
         ExecutionStreamEvent::ThinkingCompleted { session_id } => {
-            collapse_streaming_thinking(app, state, session_id, record_ids)?;
-            apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
+            complete_streaming_thinking_phase(app, state, session_id, record_ids)
         }
-        ExecutionStreamEvent::OutputDelta { session_id, delta } => append_stream_delta_record(
+        ExecutionStreamEvent::OutputDelta { session_id, delta } => append_stream_content_delta(
             app,
             state,
             session_id,
-            &mut record_ids.output_record_id,
-            SessionMessageRecordKind::AssistantOutput,
-            "输出",
+            record_ids,
+            StreamContentKind::Output,
             &delta,
-            false,
         ),
         ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
-            if let Ok(hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
-                hook_runtime.record_tool_runtime_event_for_execution(
-                    session_id,
-                    execution_id,
-                    &event,
-                );
+            if let Err(error) =
+                dispatch_runtime_event_hook(agent_runtime, session_id, &event, execution_id)
+            {
+                eprintln!("[webui-service] detached runtime event Hook dispatch failed: {error}");
             }
             if is_provider_tool_boundary_runtime_event(&event) {
-                record_ids.thinking_record_id = None;
-                record_ids.output_record_id = None;
+                reset_stream_content_record_ids(record_ids);
             }
-            append_runtime_event_projection(app, state, session_id, &event)?;
-            acknowledge_runtime_event_projection_barrier(&event);
+            append_runtime_event_projection_and_release_barrier(app, state, session_id, &event)?;
             Ok(())
         }
         ExecutionStreamEvent::ConversationCheckpoint {
@@ -860,7 +892,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_turn_admission_reservations: BTreeMap::new(),
-            project_lifecycle_transition_reservations: BTreeMap::new(),
+            project_admission_reservations: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
             session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),

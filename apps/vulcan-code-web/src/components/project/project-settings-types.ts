@@ -9,6 +9,8 @@ export interface ProjectSettingsDialogTarget {
   project: ProjectSummary;
 }
 
+export type { ProjectSettingsRevision } from "@/types";
+
 // ProjectSettingsSectionId names the left-side categories in the project settings dialog.
 // ProjectSettingsSectionId 命名项目设置弹窗左侧分类。
 export type ProjectSettingsSectionId = "overview" | "vmm" | "agent-skills" | "attachments";

@@ -564,6 +564,31 @@ pub(crate) fn store_workspace_snapshot_without_workbench_rebuild(
     Ok(())
 }
 
+/// Commits one cold-path workspace and workbench projection under the caller's state lock.
+/// 在调用方持有的状态锁下提交一次冷路径工作区与工作台投影。
+///
+/// # Parameters
+/// 参数
+/// `state` is the exclusively locked retained state, `workspace_snapshot` is authoritative, and `workbench` is its matching projection.
+/// `state` 是独占锁定的保留状态，`workspace_snapshot` 是权威工作区，`workbench` 是与其匹配的投影。
+///
+/// # Returns
+/// 返回值
+/// Returns the committed workbench with the newly allocated revision.
+/// 返回带有新分配修订号的已提交工作台。
+fn commit_cold_workbench_projection(
+    state: &mut ServiceBridgeState,
+    workspace_snapshot: WorkspaceSnapshot,
+    mut workbench: WorkbenchSnapshot,
+) -> WorkbenchSnapshot {
+    crate::preserve_project_settings_revisions(&mut workbench, &state.workbench);
+    state.workbench_generation = state.workbench_generation.wrapping_add(1);
+    workbench.revision = state.workbench_generation;
+    state.workspace_snapshot = Some(workspace_snapshot);
+    state.workbench = workbench.clone();
+    workbench
+}
+
 /// Stores and emits one rebuilt workbench snapshot after a cold-path workspace mutation.
 /// 在冷路径工作区变更后存储并发送一份重建后的工作台快照。
 ///
@@ -594,6 +619,11 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
     } = request;
     let trace_started_at = current_unix_millis_value();
     let trace_lock_wait_started_at = current_unix_millis_value();
+    // guard owns one uninterrupted capture, projection, and commit transaction.
+    // guard 持有不中断的捕获、投影与提交事务。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
     let (
         live_context_budgets,
         surface_messages,
@@ -605,9 +635,6 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         hydrated_window_summaries,
         system_plugin_catalog,
     ) = {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
         retain_hydrated_conversation_windows_for_workspace(
             &mut guard.hydrated_conversation_windows,
             &workspace_snapshot,
@@ -671,7 +698,7 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
             ),
         );
         let pending_questions =
-            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
         let session_goal_summaries = guard.session_goal_summaries.clone();
         let command_session_runtime = guard
             .agent_runtime
@@ -737,15 +764,10 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         ),
     );
     let trace_commit_started_at = current_unix_millis_value();
-    {
-        let mut guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
-        workbench.revision = guard.workbench_generation;
-        guard.workspace_snapshot = Some(workspace_snapshot);
-        guard.workbench = workbench.clone();
-    }
+    workbench = commit_cold_workbench_projection(&mut guard, workspace_snapshot, workbench);
+    // Releasing the transaction before event serialization prevents emitter callbacks from observing the state lock.
+    // 在事件序列化前释放事务，避免事件发射回调观察到状态锁仍被持有。
+    drop(guard);
     webui_trace(
         "store_workbench_committed",
         format!(
@@ -813,6 +835,60 @@ mod tests {
         fn open_url(&self, _url: &str) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    /// Verifies cold projection commit advances the current generation and stores one matching pair.
+    /// 验证冷投影提交会推进当前代次并存储一组相互匹配的快照。
+    #[test]
+    fn cold_workbench_projection_commits_workspace_and_revision_together() {
+        // state owns the exact generation and retained snapshots under test.
+        // state 持有本测试的精确代次与保留快照。
+        let state =
+            create_service_bridge_state(std::sync::Arc::new(PersistenceVersionTestShellHost));
+        // workspace_snapshot is the authoritative cold-path mutation result.
+        // workspace_snapshot 是权威冷路径变更结果。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: SessionId::nil(),
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        // workbench starts without a revision because commit owns revision allocation.
+        // workbench 初始没有修订号，因为修订号由提交阶段分配。
+        let workbench = fallback_workbench_snapshot(&[]);
+        let mut guard = state.lock().expect("lock isolated service state");
+        guard.workbench_generation = 41;
+
+        let committed =
+            commit_cold_workbench_projection(&mut guard, workspace_snapshot.clone(), workbench);
+
+        assert_eq!(committed.revision, 42);
+        assert_eq!(guard.workbench_generation, 42);
+        assert_eq!(guard.workbench.revision, 42);
+        // retained_workspace proves the authoritative workspace was stored in the same critical section.
+        // retained_workspace 证明权威工作区已在同一临界区内存储。
+        let retained_workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .expect("workspace snapshot should commit with workbench");
+        assert_eq!(
+            retained_workspace.selected_session,
+            workspace_snapshot.selected_session
+        );
+        assert_eq!(
+            retained_workspace.sessions.len(),
+            workspace_snapshot.sessions.len()
+        );
     }
 
     /// Verifies one lifecycle fence invalidates whole-session, transcript, and allocated addon writers only for its target session.

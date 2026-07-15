@@ -5,7 +5,7 @@ use super::*;
 
 pub(crate) async fn load_workspace_for_submission(
     controller_runtime: ControllerRuntimeHandle,
-    conversation_id: Option<&str>,
+    session_id: Option<SessionId>,
 ) -> Result<WorkspaceSnapshot, String> {
     // Measures lightweight workspace index loading for prompt submission.
     // 衡量提示词提交时轻量工作区索引载入耗时。
@@ -18,9 +18,15 @@ pub(crate) async fn load_workspace_for_submission(
     webui_trace_if_slow(
         "submit_prompt_workspace_snapshot_load_slow",
         workspace_load_started_at,
-        format!("conversation_id={}", conversation_id.unwrap_or("<draft>")),
+        format!(
+            "conversation_id={}",
+            session_id
+                .map(|session_id| session_id.to_string())
+                .as_deref()
+                .unwrap_or("<draft>")
+        ),
     );
-    if let Some(session_id) = conversation_id.and_then(parse_session_id) {
+    if let Some(session_id) = session_id {
         // Measures selected session hydration when retained context cannot be reused.
         // 衡量无法复用保留上下文时的选中会话水合耗时。
         let hydration_started_at = current_unix_millis_value();
@@ -94,8 +100,8 @@ fn session_project_created_at_for_hydration(
 ///
 /// # Returns
 /// 返回值
-/// `true` for a draft submission or when the existing session is present in the retained snapshot.
-/// 草稿提交或既有会话存在于保留快照中时返回 `true`。
+/// `true` for a draft submission or when the existing session is active in the retained snapshot.
+/// 草稿提交或既有会话在保留快照中处于活动列表时返回 `true`。
 pub(crate) fn retained_submission_snapshot_is_usable(
     workspace_snapshot: &WorkspaceSnapshot,
     project_id: Option<&str>,
@@ -103,7 +109,7 @@ pub(crate) fn retained_submission_snapshot_is_usable(
 ) -> bool {
     match session_id {
         Some(session_id) => {
-            workspace_snapshot_contains_regular_session(workspace_snapshot, session_id)
+            workspace_session_summary_for_session(workspace_snapshot, session_id).is_some()
         }
         None => project_id.map_or_else(
             || !workspace_snapshot.task_projects.is_empty(),

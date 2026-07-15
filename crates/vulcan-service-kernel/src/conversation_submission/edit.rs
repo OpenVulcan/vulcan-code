@@ -124,7 +124,7 @@ pub(crate) async fn service_submit_user_prompt_edit(
             &conversation_id,
             retained_conversation_messages,
         );
-        guard.workbench = workbench_with_live_pending_question(&guard);
+        guard.workbench = workbench_with_live_pending_question(&guard)?;
         message_patch.map(|message_patch| {
             guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
             let generation = guard.workbench_generation;

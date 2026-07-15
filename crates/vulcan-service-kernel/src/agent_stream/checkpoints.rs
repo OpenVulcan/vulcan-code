@@ -8,28 +8,12 @@ use super::*;
 pub(crate) fn record_webui_provider_request_checkpoint(
     controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
+    provider_family: &str,
     snapshot: &ProviderRequestSnapshot,
 ) -> Result<(), String> {
-    let event = vulcan_context::RuntimeLogEvent::ProviderRequestCheckpoint(
-        vulcan_context::RuntimeProviderRequestCheckpointEvent {
-            turn_id: None,
-            checkpoint_id: format!(
-                "provider-request-{}-{}",
-                session_id,
-                stable_provider_request_snapshot_hash(snapshot)
-            ),
-            provider_id: snapshot.provider_id.clone(),
-            model_id: snapshot.model_id.clone(),
-            provider_family: snapshot.provider_id.clone(),
-            capability_fingerprint: None,
-            prompt_fingerprint: Some(stable_provider_prompt_fingerprint(snapshot)),
-            injection_fingerprint: None,
-            request_fingerprint: Some(stable_provider_request_snapshot_hash(snapshot)),
-            cache_policy_fingerprint: Some(stable_provider_cache_policy_fingerprint(snapshot)),
-            cache_policy_diagnostic: provider_cache_policy_diagnostic(snapshot),
-            converter_version: 1,
-        },
-    );
+    // event retains the exact API family resolved before the provider request was lowered.
+    // event 保留 Provider 请求转换前解析出的精确 API 协议族。
+    let event = provider_request_checkpoint_event(session_id, provider_family, snapshot);
     vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
         &controller_runtime.data_root,
         session_id,
@@ -37,6 +21,48 @@ pub(crate) fn record_webui_provider_request_checkpoint(
         &current_unix_millis_text(),
     )
     .map(|_| ())
+}
+
+/// Builds one provider request checkpoint from exact stream and snapshot facts.
+/// 使用精确的运行时流与请求快照事实构建单个 Provider 请求检查点。
+///
+/// # Parameters
+/// 参数
+/// `session_id` identifies the session that owns the physical request.
+/// `session_id` 标识拥有该真实请求的会话。
+/// `provider_family` is the canonical API family resolved during execution preparation.
+/// `provider_family` 是执行准备期间解析出的规范 API 协议族。
+/// `snapshot` is the provider-neutral request captured before wire lowering.
+/// `snapshot` 是线协议转换前捕获的 Provider 中立请求。
+///
+/// # Returns
+/// 返回值
+/// Returns the runtime-only audit event ready for segmented-log persistence.
+/// 返回可写入分段日志的仅运行时审计事件。
+fn provider_request_checkpoint_event(
+    session_id: SessionId,
+    provider_family: &str,
+    snapshot: &ProviderRequestSnapshot,
+) -> vulcan_context::RuntimeLogEvent {
+    // request_fingerprint is computed once so the checkpoint identity and audit field cannot diverge.
+    // request_fingerprint 仅计算一次，确保检查点身份与审计字段不会产生分歧。
+    let request_fingerprint = stable_provider_request_snapshot_hash(snapshot);
+    vulcan_context::RuntimeLogEvent::ProviderRequestCheckpoint(
+        vulcan_context::RuntimeProviderRequestCheckpointEvent {
+            turn_id: None,
+            checkpoint_id: format!("provider-request-{}-{}", session_id, request_fingerprint),
+            provider_id: snapshot.provider_id.clone(),
+            model_id: snapshot.model_id.clone(),
+            provider_family: provider_family.to_string(),
+            capability_fingerprint: None,
+            prompt_fingerprint: Some(stable_provider_prompt_fingerprint(snapshot)),
+            injection_fingerprint: None,
+            request_fingerprint: Some(request_fingerprint),
+            cache_policy_fingerprint: Some(stable_provider_cache_policy_fingerprint(snapshot)),
+            cache_policy_diagnostic: provider_cache_policy_diagnostic(snapshot),
+            converter_version: 1,
+        },
+    )
 }
 
 /// Records one provider lowering repair into the segmented session runtime audit log.
@@ -307,5 +333,51 @@ pub(crate) fn legacy_vmm_injection_cancelled_event(
         previous_persistent_fingerprint,
         previous_transient_fingerprint: None,
         reason: Some(reason.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Provider checkpoint audit-event contract tests.
+    //! Provider 检查点审计事件契约测试。
+
+    use super::*;
+
+    /// Keeps the prepared API family distinct from the provider identifier in persisted audit input.
+    /// 在持久化审计输入中保持执行准备 API 协议族与 Provider 标识互相独立。
+    #[test]
+    fn provider_request_checkpoint_preserves_explicit_api_family() {
+        // snapshot models a routed provider whose identity intentionally differs from its transport family.
+        // snapshot 模拟 Provider 身份与其传输协议族刻意不同的路由场景。
+        let snapshot = ProviderRequestSnapshot {
+            provider_id: String::from("openrouter"),
+            model_id: String::from("google/gemini-test"),
+            system_prompt: String::from("system"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                String::from("system"),
+            ),
+            prompt: String::from("prompt"),
+            history: Vec::new(),
+            temperature: None,
+            max_turns: 2,
+            tool_schemas: Vec::new(),
+            additional_params: None,
+            request_headers: None,
+            continuation: vulcan_core::types::ProviderContinuation::default(),
+        };
+        // event is the exact runtime audit value handed to segmented-log persistence.
+        // event 是交给分段日志持久化的精确运行时审计值。
+        let event = provider_request_checkpoint_event(
+            SessionId::nil(),
+            "openai-chat-compatible",
+            &snapshot,
+        );
+
+        assert!(matches!(
+            event,
+            vulcan_context::RuntimeLogEvent::ProviderRequestCheckpoint(event)
+                if event.provider_family == "openai-chat-compatible"
+                    && event.provider_id == "openrouter"
+        ));
     }
 }

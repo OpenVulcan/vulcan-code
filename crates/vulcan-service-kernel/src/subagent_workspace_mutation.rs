@@ -283,7 +283,7 @@ where
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
         let pending_questions =
-            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref());
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
         let command_session_runtime = guard
             .agent_runtime
             .as_ref()
@@ -423,6 +423,7 @@ where
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let is_current_generation = guard.workbench_generation == rebuild_generation;
         if is_current_generation {
+            crate::preserve_project_settings_revisions(&mut workbench, &guard.workbench);
             workbench.revision = rebuild_generation;
             guard.workbench = workbench.clone();
         }

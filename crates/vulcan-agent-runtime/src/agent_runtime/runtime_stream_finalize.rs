@@ -377,6 +377,7 @@ mod tests {
                 ConversationSnapshot::default(),
             )
             .expect("valid core conversation snapshot"),
+            vulcan_provider_config::provider_config::ProviderApiFamily::OpenAiChatCompatible,
         )
     }
 

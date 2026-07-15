@@ -38,21 +38,6 @@ fn turn_completion_keeps_supplement_inside_timeline() {
     assert_eq!(turn.timeline[0].content, "supplement");
 }
 
-/// Verifies orphan tool events do not synthesize empty user turns.
-/// 验证孤立工具事件不会合成空用户回合。
-#[test]
-fn orphan_tool_runtime_event_does_not_create_user_turn() {
-    let mut runtime = ConversationHookRuntime::new();
-    let session_id = SessionId::from_u128(143);
-
-    runtime.record_tool_runtime_event(
-        session_id,
-        &RuntimeEvent::new(RuntimeEventKind::ToolStarted, "tool", "started"),
-    );
-
-    assert!(!runtime.active_turns.contains_key(&session_id));
-}
-
 /// Verifies an explicit child execution dispatches tool hooks without creating memory lifecycle turns.
 /// 验证显式子代理执行会派发工具 hook，但不会创建记忆生命周期回合。
 #[test]
@@ -118,7 +103,9 @@ fn tool_runtime_event_stays_out_of_completed_timeline() {
     let session_id = SessionId::from_u128(144);
     let state = SessionConversationState::default();
 
-    runtime.prepare_user_prompt_precheck(
+    // precheck_request owns the immutable turn correlation used by the tool event.
+    // precheck_request 持有工具事件使用的不可变回合关联。
+    let precheck_request = runtime.prepare_user_prompt_precheck(
         session_id,
         "entry-1",
         Some(String::from("project")),
@@ -128,8 +115,9 @@ fn tool_runtime_event_stays_out_of_completed_timeline() {
         "first",
         &state,
     );
-    runtime.record_tool_runtime_event(
+    runtime.record_tool_runtime_event_for_execution(
         session_id,
+        precheck_request.turn_id(),
         &RuntimeEvent::new(RuntimeEventKind::ToolFinished, "tool", "finished"),
     );
 
@@ -351,8 +339,20 @@ async fn precheck_hook_timeout_records_failure_without_hanging() {
     assert!(started_at.elapsed() < Duration::from_millis(TEST_HOOK_TIMEOUT_MS + 1_500));
 }
 
-#[test]
-fn effect_hook_dispatch_runs_without_ambient_tokio_runtime() {
+/// Verifies completed-turn effect Hooks execute successfully through the private worker runtime.
+/// 验证完成回合 effect Hook 可通过私有工作线程运行时成功执行。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if the asynchronous completion path cannot run an effect Hook.
+/// 此测试无返回值；若异步完成路径无法执行 effect Hook 则失败。
+#[tokio::test]
+async fn effect_hook_dispatch_runs_on_private_worker_runtime() {
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
     use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
@@ -396,12 +396,18 @@ fn effect_hook_dispatch_runs_without_ambient_tokio_runtime() {
         "hello",
         &SessionConversationState::default(),
     );
-    let _ = runtime.complete_turn(
+    let (_, request) = runtime.prepare_turn_completion_dispatch(
         session_id,
         None,
         "done",
         1,
         &SessionConversationState::default(),
+    );
+    let outcome = request.run().await;
+
+    assert!(
+        outcome.report.is_ok(),
+        "effect hook dispatch should succeed"
     );
 
     assert_eq!(
@@ -410,4 +416,120 @@ fn effect_hook_dispatch_runs_without_ambient_tokio_runtime() {
             .expect("effect hook should run"),
         "done"
     );
+}
+
+/// Verifies completed-turn Stop failures retain a dispatcher-stage diagnostic.
+/// 验证完成回合 Stop 失败保留调度器阶段诊断。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if dispatcher errors collapse into a missing-report error.
+/// 此测试无返回值；若调度器错误退化为缺失报告错误则失败。
+#[tokio::test]
+async fn completion_hook_dispatch_preserves_dispatcher_failure_stage() {
+    use std::sync::Arc;
+    use vulcan_hooks::{
+        FnHookHandler, HookFailurePolicy, HookInvocation, HookMode, HookRegistration,
+    };
+
+    let mut runtime = ConversationHookRuntime::new();
+    // registration models a handler whose declared Stop policy must surface as a dispatch error.
+    // registration 模拟声明 Stop 策略且必须显式产生调度错误的处理器。
+    let mut registration = HookRegistration::new(
+        "completion-stopper",
+        HOOK_CONVERSATION_TURN_COMPLETED,
+        HookMode::Effect,
+    );
+    registration.failure_policy = HookFailurePolicy::Stop;
+    runtime
+        .dispatcher_mut()
+        .register(
+            registration,
+            Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                Err(HookError::handler("completion handler rejected"))
+            })),
+        )
+        .expect("completion hook registration should succeed");
+
+    let session_id = SessionId::from_u128(146);
+    runtime.prepare_user_prompt_precheck(
+        session_id,
+        "entry-1",
+        None,
+        String::from("D:/workspace"),
+        PendingSessionPromptSource::UserFollowup,
+        SystemPromptHookPhase::FirstSession,
+        "hello",
+        &SessionConversationState::default(),
+    );
+    let (_, request) = runtime.prepare_turn_completion_dispatch(
+        session_id,
+        None,
+        "done",
+        1,
+        &SessionConversationState::default(),
+    );
+    let outcome = request.run().await;
+    let error = outcome
+        .report
+        .expect_err("Stop-policy completion hook should fail dispatch");
+
+    assert!(error.starts_with("completed-turn hook dispatch failed:"));
+    assert!(error.contains("hook dispatch stopped after 1 failure(s)"));
+    assert!(!error.contains("produced no report"));
+}
+/// Verifies asynchronous effect Hook diagnostics preserve continued and stopped failure identities.
+/// 验证异步 effect Hook 诊断保留继续执行与停止失败的身份信息。
+///
+/// # Parameters
+/// # 参数
+/// This test has no parameters.
+/// 此测试没有参数。
+///
+/// # Returns
+/// # 返回值
+/// This test returns no value and fails if correlation or failure-policy formatting regresses.
+/// 此测试无返回值；关联信息或失败策略格式退化时测试失败。
+#[test]
+fn async_hook_failure_diagnostics_preserve_dispatch_context() {
+    // failure models one Continue-policy handler failure returned inside a successful report.
+    // failure 模拟成功报告内返回的单个 Continue 策略处理器失败。
+    let failure = HookFailure {
+        hook_id: String::from("hook-28"),
+        policy: HookFailurePolicy::Continue,
+        message: String::from("handler rejected"),
+    };
+    // handler_diagnostic captures the exact continued-handler diagnostic contract.
+    // handler_diagnostic 捕获继续执行处理器的精确诊断契约。
+    let handler_diagnostic =
+        async_hook_handler_failure_diagnostic("conversation.user.event", "run-28", &failure);
+    assert!(handler_diagnostic.contains("hook_id=hook-28"));
+    assert!(handler_diagnostic.contains("policy=Continue"));
+    assert!(handler_diagnostic.contains("run_id=run-28"));
+
+    // stopped_failure models the exact handler failure that terminates a Stop-policy dispatch.
+    // stopped_failure 模拟终结停止策略调度的精确处理器失败。
+    let stopped_failure = HookFailure {
+        hook_id: String::from("hook-stop-28"),
+        policy: HookFailurePolicy::Stop,
+        message: String::from("stop handler rejected"),
+    };
+    // stopped_error models the top-level error returned by a Stop-policy dispatch.
+    // stopped_error 模拟停止策略调度返回的顶层错误。
+    let stopped_error = HookError::dispatch_stopped(vec![stopped_failure]);
+    // stopped_diagnostics capture nested handler identity before the top-level dispatch summary.
+    // stopped_diagnostics 在顶层调度摘要前捕获嵌套处理器身份。
+    let stopped_diagnostics =
+        async_hook_dispatch_error_diagnostics("conversation.user.event", "run-28", &stopped_error);
+    assert_eq!(stopped_diagnostics.len(), 2);
+    assert!(stopped_diagnostics[0].contains("hook_id=hook-stop-28"));
+    assert!(stopped_diagnostics[0].contains("policy=Stop"));
+    assert!(stopped_diagnostics[0].contains("error=stop handler rejected"));
+    assert!(stopped_diagnostics[1].contains("hook dispatch stopped after 1 failure(s)"));
+    assert!(stopped_diagnostics[1].contains("point=conversation.user.event"));
 }

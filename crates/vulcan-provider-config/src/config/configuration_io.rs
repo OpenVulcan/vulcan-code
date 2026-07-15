@@ -191,17 +191,37 @@ pub fn project_configuration_file_path(workspace_path: &Path) -> PathBuf {
 
 /// Loads one project-local Vulcan Code configuration file from disk.
 /// 从磁盘加载单个项目级 Vulcan Code 配置文件。
+///
+/// # Parameters
+/// # 参数
+/// - `workspace_path`: Exact workspace directory that owns `.vulcan/code/config.json`.
+/// - `workspace_path`：拥有 `.vulcan/code/config.json` 的精确工作区目录。
+///
+/// # Returns
+/// # 返回值
+/// Returns defaults only for a confirmed missing file, and preserves probing, reading, and parsing failures with the exact path.
+/// 仅在确认文件缺失时返回默认值，并以精确路径保留探测、读取与解析失败。
 pub fn load_project_configuration_file(
     workspace_path: &Path,
 ) -> Result<ProjectVulcanCodeConfigurationFile, String> {
+    // path is the sole project-local configuration source defined by the persistence contract.
+    // path 是持久化契约定义的唯一项目本地配置来源。
     let path = project_configuration_file_path(workspace_path);
-    if !path.exists() {
+    // path_exists distinguishes a missing optional configuration from an inaccessible path.
+    // path_exists 区分缺失的可选配置与不可访问路径。
+    let path_exists = path
+        .try_exists()
+        .map_err(|error| format!("探测项目配置文件失败（{}）：{}。", path.display(), error))?;
+    if !path_exists {
         return Ok(ProjectVulcanCodeConfigurationFile::default());
     }
 
-    let text =
-        fs::read_to_string(&path).map_err(|error| format!("读取项目配置文件失败：{}。", error))?;
-    serde_json::from_str(&text).map_err(|error| format!("解析项目配置文件失败：{}。", error))
+    // text is the exact persisted JSON document parsed below.
+    // text 是下方执行解析的精确持久化 JSON 文档。
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("读取项目配置文件失败（{}）：{}。", path.display(), error))?;
+    serde_json::from_str(&text)
+        .map_err(|error| format!("解析项目配置文件失败（{}）：{}。", path.display(), error))
 }
 
 /// Saves one project-local Vulcan Code configuration file back to disk.

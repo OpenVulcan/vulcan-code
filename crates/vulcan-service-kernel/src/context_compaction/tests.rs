@@ -5,6 +5,7 @@ use super::*;
 use vulcan_agent_runtime::agent_runtime::prompt_compaction::PromptCompactionExecutionProfile;
 use vulcan_agent_runtime::conversation_protocol::conversation_state_from_session_messages;
 use vulcan_context_injection::{InjectionInsert, InjectionKind};
+use vulcan_workbench_model::SessionTurnStats;
 
 /// Returns whether text contains CJK characters.
 /// 返回文本是否包含 CJK 字符。
@@ -223,10 +224,10 @@ fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
     }));
 }
 
-/// Verifies only automatic compaction appends one runtime-only continuation note.
-/// 验证只有自动压缩会追加一条仅存在于运行态的续接提示。
+/// Verifies manual compaction owns draft statistics while automatic compaction owns continuation state.
+/// 验证手动压缩在候选状态中持有统计记录，而自动压缩持有续接状态。
 #[test]
-fn webui_context_compaction_draft_appends_auto_continuation_only_for_auto_trigger() {
+fn webui_context_compaction_draft_separates_manual_stats_and_auto_continuation() {
     let session_id = SessionId::new_v4();
     let messages = vec![
         SessionMessageEntry::new(SessionMessageKind::User, "User", "Old question")
@@ -293,6 +294,29 @@ fn webui_context_compaction_draft_appends_auto_continuation_only_for_auto_trigge
             )),
         "manual compaction must not append the automatic continuation note"
     );
+    // manual_turn_stats is materialized inside the draft before any active-state replacement occurs.
+    // manual_turn_stats 在替换任何活动状态前已物化于候选状态内部。
+    let manual_turn_stats = manual_draft
+        .runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .find(|record| record.record_kind == SessionMessageRecordKind::TurnStats)
+        .and_then(|record| record.metadata.as_ref())
+        .and_then(|metadata| metadata.get("turn_stats"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<SessionTurnStats>(value).ok())
+        .expect("manual compaction draft should contain canonical turn statistics");
+    assert_eq!(
+        manual_turn_stats.turn_kind,
+        SessionTurnStatsKind::ContextCompaction
+    );
+    assert_eq!(manual_turn_stats.provider_call_count, 1);
+    assert_eq!(manual_turn_stats.usage_segments.len(), 1);
+    assert_eq!(
+        manual_turn_stats.usage_segments[0].kind,
+        SessionTurnUsageSegmentKind::ContextCompaction
+    );
 
     let auto_execution = PromptCompactionExecution {
         compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
@@ -318,6 +342,15 @@ fn webui_context_compaction_draft_appends_auto_continuation_only_for_auto_trigge
         &auto_execution,
     )
     .expect("automatic draft should be built from a valid summary");
+    assert!(
+        auto_draft
+            .runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .all(|record| record.record_kind != SessionMessageRecordKind::TurnStats),
+        "automatic compaction must not append an independent turn statistics record"
+    );
     let continuation_messages = auto_draft
         .runtime_state
         .conversation_state

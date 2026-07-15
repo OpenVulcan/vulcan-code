@@ -354,13 +354,25 @@ pub(crate) fn service_startup_snapshot(
 
 /// Returns the current workbench snapshot.
 /// 返回当前工作台快照。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained workbench and live question runtime projection.
+/// `state` 持有保留工作台与实时问题运行时投影。
+///
+/// # Returns
+/// 返回值
+/// Returns the live workbench snapshot, or a service-state or question-projection error.
+/// 返回实时工作台快照，失败时返回服务状态或问题投影错误。
 pub(crate) fn service_workbench_snapshot(
     state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
-    state
+    // guard keeps the retained workbench stable while live pending questions are attached.
+    // guard 在附加实时待回答问题期间保持保留工作台稳定。
+    let guard = state
         .lock()
-        .map(|guard| workbench_with_live_pending_question(&guard))
-        .map_err(|error| format!("failed to lock service workbench state: {error}"))
+        .map_err(|error| format!("failed to lock service workbench state: {error}"))?;
+    workbench_with_live_pending_question(&guard)
 }
 
 #[cfg(test)]

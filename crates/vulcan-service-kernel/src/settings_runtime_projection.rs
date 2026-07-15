@@ -2,6 +2,11 @@
 //! settings runtime projection 辅助逻辑。
 
 use super::*;
+use vulcan_service_api::{
+    LuaSkillsCatalogChangedDelta, LuaSkillsManagedRuntimeProgressChangedDelta,
+    LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsChangedDelta, ProjectSettingsDomain,
+    SubagentCatalogChangedDelta,
+};
 
 /// Emits one workbench snapshot to the WebUI event stream.
 /// 向 WebUI 事件流发送单份工作台快照。
@@ -32,6 +37,246 @@ pub(crate) fn emit_agent_skills_catalog_delta(
         "agent_skills_catalog_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(envelope)),
     );
+}
+
+/// Emits one ordered LuaSkills domain delta to every connected WebUI client.
+/// 向每个已连接 WebUI 客户端发送一条有序的 LuaSkills 领域增量。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the event to all registered service sinks.
+/// `app` 将事件广播给所有已注册的服务接收端。
+/// `update` contains one committed revision, LuaSkills catalog, and matching plugin rows.
+/// `update` 包含一个已提交版本、LuaSkills 目录及其匹配的插件行。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value and emits exactly one domain event per sink.
+/// 此函数无返回值，并向每个接收端恰好发送一条领域事件。
+pub(crate) fn emit_luaskills_catalog_delta(
+    app: &ServiceEventEmitter,
+    update: LuaSkillsCatalogUpdate,
+) {
+    // envelope keeps LuaSkills and plugin rows on the same committed generation.
+    // envelope 使 LuaSkills 与插件行保持在同一个已提交版本上。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation: update.revision,
+        delta: WorkbenchDelta::LuaSkillsCatalogChanged(Box::new(LuaSkillsCatalogChangedDelta {
+            lua_skills: update.lua_skills,
+            plugins: update.plugins,
+        })),
+    };
+    emit_service_event_with_trace(
+        app,
+        "luaskills_catalog_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+}
+
+/// Emits one ordered subagent-catalog delta to every connected WebUI client.
+/// 向每个已连接 WebUI 客户端发送一条有序的智能体目录增量。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the event to every registered service sink.
+/// `app` 将事件广播给每个已注册的服务接收端。
+/// `update` contains the committed revision and complete subagent catalog.
+/// `update` 包含已提交版本与完整智能体目录。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value and emits exactly one domain event per sink.
+/// 此函数无返回值，并向每个接收端恰好发送一条领域事件。
+pub(crate) fn emit_subagent_catalog_delta(
+    app: &ServiceEventEmitter,
+    update: SubagentCatalogUpdate,
+) {
+    // envelope owns the exact revision returned to the initiating RPC caller.
+    // envelope 持有返回给发起 RPC 调用端的精确版本。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation: update.revision,
+        delta: WorkbenchDelta::SubagentCatalogChanged(Box::new(SubagentCatalogChangedDelta {
+            subagent_catalog: update.subagent_catalog,
+        })),
+    };
+    emit_service_event_with_trace(
+        app,
+        "subagent_catalog_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+}
+
+/// Emits one project-settings invalidation delta to every connected WebUI client.
+/// 向每个已连接 WebUI 客户端发送一条项目设置失效增量。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the invalidation to every registered service sink.
+/// `app` 将失效通知广播给每个已注册的服务接收端。
+/// `generation` is the workbench revision committed for this invalidation.
+/// `generation` 是为本次失效通知提交的工作台版本。
+/// `project_id` selects one exact project, or every project when absent.
+/// `project_id` 选择一个准确项目；为空时选择所有项目。
+/// `domain` identifies the only independently loaded settings domain that changed.
+/// `domain` 标识唯一发生变化的独立加载设置领域。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value and emits exactly one focused event per sink.
+/// 此函数无返回值，并向每个接收端恰好发送一条聚焦事件。
+pub(crate) fn emit_project_settings_changed_delta(
+    app: &ServiceEventEmitter,
+    generation: u64,
+    project_id: Option<String>,
+    domain: ProjectSettingsDomain,
+) {
+    // envelope carries exact target and domain ownership so consumers never reload unrelated drafts.
+    // envelope 携带准确目标与领域归属，避免消费端重载无关草稿。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation,
+        delta: WorkbenchDelta::ProjectSettingsChanged(ProjectSettingsChangedDelta {
+            project_id,
+            domain,
+        }),
+    };
+    emit_service_event_with_trace(
+        app,
+        "project_settings_changed_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+}
+
+/// Commits and broadcasts one project-settings invalidation generation.
+/// 提交并广播一个项目设置失效版本。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the focused invalidation event.
+/// `app` 广播聚焦的失效事件。
+/// `state` owns the monotonic workbench generation.
+/// `state` 持有单调递增的工作台版本。
+/// `project_id` is one exact project, or a global invalidation target when absent.
+/// `project_id` 是一个准确项目；为空时表示全局失效目标。
+/// `domain` identifies the only independently loaded settings domain that changed.
+/// `domain` 标识唯一发生变化的独立加载设置领域。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the revision is committed and the event is emitted.
+/// 版本提交且事件发送完成后返回 `Ok(())`。
+pub(crate) fn commit_and_emit_project_settings_changed_delta(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    project_id: Option<String>,
+    domain: ProjectSettingsDomain,
+) -> Result<(), String> {
+    // generation orders this invalidation against every other service-side workbench mutation.
+    // generation 将本次失效通知与其他所有服务端工作台变更排序。
+    let generation = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
+        let generation = guard.workbench_generation;
+        // revisions stores the exact ownership boundary represented by the emitted delta.
+        // revisions 保存所发送增量代表的准确归属边界。
+        let revisions = match project_id.as_ref() {
+            Some(project_id) => guard
+                .workbench
+                .project_settings_revisions
+                .by_project
+                .entry(project_id.clone())
+                .or_default(),
+            None => &mut guard.workbench.project_settings_revisions.global,
+        };
+        match domain {
+            ProjectSettingsDomain::Vmm => revisions.vmm = generation,
+            ProjectSettingsDomain::AgentSkills => revisions.agent_skills = generation,
+        }
+        generation
+    };
+    emit_project_settings_changed_delta(app, generation, project_id, domain);
+    Ok(())
+}
+
+/// Emits one revisioned LuaSkills managed-runtime progress delta.
+/// 发送一条带版本的 LuaSkills 受管运行时进度增量。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the event to every registered service sink.
+/// `app` 将事件广播给每个已注册的服务接收端。
+/// `generation` is the workbench revision committed with this progress value.
+/// `generation` 是与当前进度值一并提交的工作台版本。
+/// `progress` is the current native installation progress or terminal absence.
+/// `progress` 是当前原生安装进度或终态空值。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value and emits one focused progress event per sink.
+/// 此函数无返回值，并向每个接收端发送一条聚焦进度事件。
+pub(crate) fn emit_luaskills_managed_runtime_progress_delta(
+    app: &ServiceEventEmitter,
+    generation: u64,
+    progress: Option<LuaSkillsManagedRuntimeProgressSummary>,
+) {
+    // envelope replaces only progress and leaves the remaining LuaSkills catalog untouched.
+    // envelope 仅替换进度，并保持 LuaSkills 目录其余内容不变。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation,
+        delta: WorkbenchDelta::LuaSkillsManagedRuntimeProgressChanged(
+            LuaSkillsManagedRuntimeProgressChangedDelta { progress },
+        ),
+    };
+    emit_service_event_with_trace(
+        app,
+        "luaskills_managed_runtime_progress_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+}
+
+/// Commits and broadcasts a changed LuaSkills managed-runtime progress value.
+/// 提交并广播发生变化的 LuaSkills 受管运行时进度值。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the focused progress event.
+/// `app` 广播聚焦的进度事件。
+/// `state` owns the retained workbench projection and monotonic generation.
+/// `state` 持有保留的工作台投影与单调版本。
+/// `progress` is the current progress value or terminal absence.
+/// `progress` 是当前进度值或终态空值。
+///
+/// # Returns
+/// 返回值
+/// `Ok(true)` when a changed value was committed, or `Ok(false)` for an identical value.
+/// 发生变化并提交时返回 `Ok(true)`，值相同时返回 `Ok(false)`。
+pub(crate) fn commit_and_emit_luaskills_managed_runtime_progress(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    progress: Option<LuaSkillsManagedRuntimeProgressSummary>,
+) -> Result<bool, String> {
+    // committed_generation remains absent when the retained progress already equals the requested value.
+    // committed_generation 在保留进度已等于请求值时保持为空。
+    let committed_generation = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if guard.workbench.lua_skills.managed_runtime_progress == progress {
+            None
+        } else {
+            guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+            guard.workbench.revision = guard.workbench_generation;
+            guard.workbench.lua_skills.managed_runtime_progress = progress.clone();
+            Some(guard.workbench_generation)
+        }
+    };
+    let Some(generation) = committed_generation else {
+        return Ok(false);
+    };
+    emit_luaskills_managed_runtime_progress_delta(app, generation, progress);
+    Ok(true)
 }
 
 /// Emits one session-addon namespace change event to connected UI clients.
@@ -573,7 +818,7 @@ pub(crate) fn parse_luaskill_tool_registration_state(
 }
 
 #[cfg(test)]
-mod agent_skills_catalog_delta_tests {
+mod skills_catalog_delta_tests {
     use super::*;
     use vulcan_service_api::ServiceEventSink;
 
@@ -650,6 +895,161 @@ mod agent_skills_catalog_delta_tests {
             WorkbenchDelta::AgentSkillsCatalogChanged(AgentSkillsCatalogChangedDelta {
                 agent_skills: summary,
             })
+        );
+    }
+
+    /// Verifies one LuaSkills update reaches every connected sink exactly once.
+    /// 验证单次 LuaSkills 更新会恰好一次到达每个已连接接收端。
+    #[test]
+    fn luaskills_catalog_update_broadcasts_once_per_connected_sink() {
+        // first_events captures the first connected client independently.
+        // first_events 独立捕获第一个已连接客户端收到的事件。
+        let first_events = Arc::new(Mutex::new(Vec::new()));
+        // second_events captures the second connected client independently.
+        // second_events 独立捕获第二个已连接客户端收到的事件。
+        let second_events = Arc::new(Mutex::new(Vec::new()));
+        // emitter owns both client sinks for one broadcast operation.
+        // emitter 为单次广播操作持有两个客户端接收端。
+        let emitter = ServiceEventEmitter::new(vec![
+            Arc::new(CapturingServiceEventSink {
+                events: Arc::clone(&first_events),
+            }),
+            Arc::new(CapturingServiceEventSink {
+                events: Arc::clone(&second_events),
+            }),
+        ]);
+        // lua_skills identifies the exact catalog payload shared by both clients.
+        // lua_skills 标识两个客户端共享的精确目录载荷。
+        let lua_skills = LuaSkillsCatalogSummary {
+            notice: String::from("updated"),
+            ..LuaSkillsCatalogSummary::default()
+        };
+        // plugins identifies the plugin projection committed with the same revision.
+        // plugins 标识与同一版本一并提交的插件投影。
+        let plugins = Vec::new();
+
+        emit_luaskills_catalog_delta(
+            &emitter,
+            LuaSkillsCatalogUpdate {
+                revision: 11,
+                lua_skills: lua_skills.clone(),
+                plugins: plugins.clone(),
+            },
+        );
+
+        for events in [&first_events, &second_events] {
+            // captured locks one client's ordered event list for exact-once verification.
+            // captured 锁定单个客户端的有序事件列表以验证恰好一次语义。
+            let captured = events
+                .lock()
+                .expect("captured service events should remain lockable");
+            assert_eq!(captured.len(), 1);
+            let ServiceEvent::WorkbenchDelta(envelope) = &captured[0] else {
+                panic!("LuaSkills update must not emit a full workbench snapshot");
+            };
+            assert_eq!(envelope.generation, 11);
+            assert_eq!(
+                envelope.delta,
+                WorkbenchDelta::LuaSkillsCatalogChanged(Box::new(LuaSkillsCatalogChangedDelta {
+                    lua_skills: lua_skills.clone(),
+                    plugins: plugins.clone(),
+                }))
+            );
+        }
+    }
+
+    /// Verifies one subagent catalog update reaches every connected sink exactly once.
+    /// 验证单次智能体目录更新会恰好一次到达每个已连接接收端。
+    #[test]
+    fn subagent_catalog_update_broadcasts_once_per_connected_sink() {
+        // first_events captures one connected client independently.
+        // first_events 独立捕获一个已连接客户端收到的事件。
+        let first_events = Arc::new(Mutex::new(Vec::new()));
+        // second_events captures the other connected client independently.
+        // second_events 独立捕获另一个已连接客户端收到的事件。
+        let second_events = Arc::new(Mutex::new(Vec::new()));
+        // emitter owns both service sinks for one authoritative publication.
+        // emitter 为单次权威发布持有两个服务接收端。
+        let emitter = ServiceEventEmitter::new(vec![
+            Arc::new(CapturingServiceEventSink {
+                events: Arc::clone(&first_events),
+            }),
+            Arc::new(CapturingServiceEventSink {
+                events: Arc::clone(&second_events),
+            }),
+        ]);
+        // subagent_catalog is the exact complete payload shared by both clients.
+        // subagent_catalog 是两个客户端共享的精确完整载荷。
+        let subagent_catalog = SubagentCatalogSummary {
+            notice: String::from("updated"),
+            ..SubagentCatalogSummary::default()
+        };
+
+        emit_subagent_catalog_delta(
+            &emitter,
+            SubagentCatalogUpdate {
+                revision: 13,
+                subagent_catalog: subagent_catalog.clone(),
+            },
+        );
+
+        for events in [&first_events, &second_events] {
+            // captured locks one client's ordered events for exact-once verification.
+            // captured 锁定单个客户端的有序事件以验证恰好一次语义。
+            let captured = events
+                .lock()
+                .expect("captured service events should remain lockable");
+            assert_eq!(captured.len(), 1);
+            let ServiceEvent::WorkbenchDelta(envelope) = &captured[0] else {
+                panic!("subagent catalog update must use a focused delta");
+            };
+            assert_eq!(envelope.generation, 13);
+            assert_eq!(
+                envelope.delta,
+                WorkbenchDelta::SubagentCatalogChanged(Box::new(SubagentCatalogChangedDelta {
+                    subagent_catalog: subagent_catalog.clone(),
+                }))
+            );
+        }
+    }
+
+    /// Verifies managed-runtime progress uses one focused revisioned event.
+    /// 验证受管运行时进度使用一条聚焦且带版本的事件。
+    #[test]
+    fn luaskills_managed_runtime_progress_emits_focused_delta() {
+        // events captures the single connected client's progress event.
+        // events 捕获单个已连接客户端的进度事件。
+        let events = Arc::new(Mutex::new(Vec::new()));
+        // emitter owns the focused test sink.
+        // emitter 持有聚焦测试接收端。
+        let emitter = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
+            events: Arc::clone(&events),
+        })]);
+        // progress is the exact native progress payload expected by the client.
+        // progress 是客户端预期收到的精确原生进度载荷。
+        let progress = LuaSkillsManagedRuntimeProgressSummary {
+            phase: String::from("download"),
+            overall_percent: Some(50),
+            ..LuaSkillsManagedRuntimeProgressSummary::default()
+        };
+
+        emit_luaskills_managed_runtime_progress_delta(&emitter, 17, Some(progress.clone()));
+
+        let captured = events
+            .lock()
+            .expect("captured service events should remain lockable");
+        assert_eq!(captured.len(), 1);
+        let ServiceEvent::WorkbenchDelta(envelope) = &captured[0] else {
+            panic!("managed-runtime progress must use a focused delta");
+        };
+        assert_eq!(envelope.generation, 17);
+        assert_eq!(
+            envelope.delta,
+            WorkbenchDelta::LuaSkillsManagedRuntimeProgressChanged(
+                LuaSkillsManagedRuntimeProgressChangedDelta {
+                    progress: Some(progress),
+                }
+            )
         );
     }
 }

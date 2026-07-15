@@ -265,7 +265,7 @@ pub(super) fn refresh_service_vmm_hook_snapshot(
         .as_ref()
         .map(|runtime| runtime.provider_configuration.clone());
     if let Some(configuration) = configuration {
-        refresh_guard_vmm_hook_snapshot(&mut guard, &configuration);
+        refresh_guard_vmm_hook_snapshot(&mut guard, &configuration)?;
     }
     Ok(())
 }
@@ -282,12 +282,12 @@ pub(super) fn refresh_service_vmm_hook_snapshot(
 ///
 /// # Returns
 /// 返回值
-/// This function updates the hook runtime in place and returns no value.
-/// 该函数会原地更新 hook 运行时且不返回值。
+/// Returns success after updating or legitimately skipping the runtime, or a VMM state-lock error.
+/// 更新或合法跳过运行时后返回成功，VMM 状态锁失败时返回错误。
 pub(super) fn refresh_guard_vmm_hook_snapshot(
     guard: &mut ServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
-) {
+) -> Result<(), String> {
     if let (Some(agent_runtime), Some(workspace_snapshot)) = (
         guard.agent_runtime.as_ref(),
         guard.workspace_snapshot.as_ref(),
@@ -297,8 +297,9 @@ pub(super) fn refresh_guard_vmm_hook_snapshot(
             .replace_snapshot(build_vmm_hook_config_snapshot(
                 provider_configuration,
                 workspace_snapshot,
-            ));
+            ))?;
     }
+    Ok(())
 }
 
 /// Builds the shared VMM hook snapshot from the current Tauri workspace state.

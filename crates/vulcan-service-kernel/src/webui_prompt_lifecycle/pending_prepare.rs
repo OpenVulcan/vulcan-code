@@ -295,7 +295,7 @@ pub(crate) async fn maybe_prepare_next_webui_pending_prompt(
         .replace_snapshot(build_vmm_hook_config_snapshot(
             &entry_agent_runtime.provider_configuration,
             &workspace_snapshot,
-        ));
+        ))?;
     let precheck_plan = if entry.source.runs_user_prompt_precheck() {
         webui_shared_prompt_precheck_plan(
             &entry_agent_runtime,

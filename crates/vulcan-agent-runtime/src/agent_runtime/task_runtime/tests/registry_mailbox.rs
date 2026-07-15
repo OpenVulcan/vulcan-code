@@ -1815,20 +1815,34 @@ async fn targeted_wait_agent_retains_unrelated_stale_feedback() {
 /// 验证父会话发出显式打断时 wait_agent 会被唤醒。
 #[tokio::test]
 async fn wait_agent_wakes_when_parent_interruption_arrives() {
+    // taskRuntime owns the waiter and the explicit parent-interruption channel.
+    // taskRuntime 持有等待方与显式父级中断通道。
     let task_runtime = Arc::new(TaskRuntime::new());
+    // rootSessionId identifies the parent wait that the notifier interrupts.
+    // rootSessionId 标识通知方要打断的父级等待。
     let root_session_id = Uuid::new_v4();
+    // notifierRuntime lets the asynchronous notifier share the same interruption registry.
+    // notifierRuntime 让异步通知方共享同一中断注册表。
     let notifier_runtime = Arc::clone(&task_runtime);
 
-    tokio::spawn(async move {
+    // notifierTask reports notification failures to the test instead of detaching a hidden panic.
+    // notifierTask 将通知失败报告给测试，避免分离任务中的隐藏 panic。
+    let notifier_task = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(25)).await;
         notifier_runtime
-            .notify_wait_agent_parent_interruption(SessionNodeId::from(root_session_id));
+            .notify_wait_agent_parent_interruption(SessionNodeId::from(root_session_id))
+            .expect("parent interruption should be recorded before notification");
     });
 
+    // result contains the wait_agent response emitted after consuming the interruption fact.
+    // result 包含消费中断事实后 wait_agent 发出的响应。
     let result = task_runtime
         .invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 }))
         .await
         .expect("wait_agent should wake on parent interruption");
+    notifier_task
+        .await
+        .expect("parent interruption notifier task should finish");
 
     assert_eq!(
         result.model_output["message"],
@@ -1836,6 +1850,52 @@ async fn wait_agent_wakes_when_parent_interruption_arrives() {
     );
     assert_eq!(result.model_output["timed_out"], false);
     assert_eq!(result.model_output["interrupted"], true);
+}
+
+/// Verifies a poisoned interruption registry rejects notification without publishing a watch change.
+/// 验证中断注册表中毒时会拒绝通知，且不会发布 watch 变化。
+#[test]
+fn wait_agent_parent_interruption_notification_reports_poisoned_registry() {
+    // taskRuntime owns both the authoritative interruption registry and its wake-only watch channel.
+    // taskRuntime 同时持有权威中断注册表及仅用于唤醒的 watch 通道。
+    let task_runtime = Arc::new(TaskRuntime::new());
+    // interruptionReceiver observes whether the failed registry write incorrectly emits a wake signal.
+    // interruptionReceiver 用于观察失败的注册表写入是否错误发出唤醒信号。
+    let interruption_receiver = task_runtime.subscribe_wait_agent_parent_interruption();
+    // versionBefore captures the unchanged watch state required by the fact-before-notification protocol.
+    // versionBefore 捕获“事实先于通知”协议要求保持不变的 watch 状态。
+    let version_before = *interruption_receiver.borrow();
+    // poisonResult proves the authoritative interruption registry is unavailable.
+    // poisonResult 证明权威中断注册表已经不可用。
+    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // guard keeps the registry locked until the deliberate panic poisons it.
+        // guard 将注册表保持加锁到刻意 panic，使其进入中毒状态。
+        let _guard = task_runtime
+            .wait_agent_parent_interruption_sessions
+            .write()
+            .expect("wait-agent interruption registry should lock before poisoning");
+        panic!("poison wait-agent interruption registry for notification test");
+    }));
+    assert!(poison_result.is_err());
+    // parentThreadId identifies the interruption fact that must be rejected rather than fabricated.
+    // parentThreadId 标识必须被拒绝而不能伪造的中断事实。
+    let parent_thread_id = SessionNodeId::from(Uuid::new_v4());
+
+    // error is the explicit registry failure returned to the notification caller.
+    // error 是返回给通知调用方的明确注册表失败。
+    let error = task_runtime
+        .notify_wait_agent_parent_interruption(parent_thread_id)
+        .expect_err("poisoned interruption registry should reject notification");
+
+    assert!(error.contains("wait-agent interruption registry is locked"));
+    assert!(error.contains(&parent_thread_id.to_string()));
+    assert_eq!(*interruption_receiver.borrow(), version_before);
+    assert!(
+        !interruption_receiver
+            .has_changed()
+            .expect("interruption watch should remain open"),
+        "failed interruption storage must not publish a watch change"
+    );
 }
 
 /// Verifies wait_agent times out instead of reporting completion when no mailbox event exists.

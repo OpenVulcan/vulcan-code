@@ -220,7 +220,7 @@ export function ProjectAgentSkillsSection(props: {
                   {(["inherit", "enabled", "disabled"] as ProjectAgentSkillState[]).map((stateKey) => (
                     <button
                       className={cn("project-settings-segmented-button", projectState === stateKey && "active")}
-                      disabled={props.agentBusySkill === skill.name}
+                      disabled={props.agentBusySkill !== null}
                       key={stateKey}
                       onClick={() => props.onSetProjectAgentSkill(skill.name, stateKey)}
                       type="button"
@@ -296,6 +296,7 @@ export function ProjectAttachmentCleanupSection(props: {
         <label className="project-settings-field">
           <span>{t("projectSettings.cutoffDate")}</span>
           <Input
+            disabled={props.cleanupBusy !== "idle"}
             value={props.cleanupCutoffDate}
             onChange={(event) => props.onChangeCleanupCutoffDate(event.target.value)}
             type="date"
@@ -306,6 +307,7 @@ export function ProjectAttachmentCleanupSection(props: {
             <label className="project-settings-check-row" key={kind}>
               <input
                 checked={props.cleanupKinds[kind]}
+                disabled={props.cleanupBusy !== "idle"}
                 onChange={(event) => props.onChangeCleanupKinds({ ...props.cleanupKinds, [kind]: event.target.checked })}
                 type="checkbox"
               />

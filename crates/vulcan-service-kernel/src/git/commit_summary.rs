@@ -535,6 +535,7 @@ async fn run_git_commit_summary_model(
             node_id: SessionNodeId::from(session_id),
         },
         runtime_policy: ExecutionRuntimePolicy::context_compaction(),
+        conversation_hook_turn_id: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
         subagent_prompt_context: None,
