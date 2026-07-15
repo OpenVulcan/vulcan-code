@@ -4,6 +4,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Check, Copy, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
+import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
   highlightedDiffLineSpansForLanguage,
@@ -119,6 +120,7 @@ function StreamingMarkdownMessage(props: {
     <MarkdownContentRenderer
       content={normalizedContent}
       onOpenMedia={props.onOpenMedia}
+      renderMermaid={false}
       workspacePath={props.workspacePath}
     />
   );
@@ -136,6 +138,9 @@ function MarkdownContentRenderer(props: {
   // Optional media opener used by Markdown images.
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+  // Whether finalized Mermaid fences should render as diagrams.
+  // 最终确定的 Mermaid 围栏代码是否应渲染为图表。
+  renderMermaid: boolean;
 }) {
   const components = React.useMemo(() => ({
     a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
@@ -177,9 +182,11 @@ function MarkdownContentRenderer(props: {
         />
       );
     },
-    pre: ({ children }: { children?: React.ReactNode }) => <MarkdownCodeBlock>{children}</MarkdownCodeBlock>,
+    pre: ({ children }: { children?: React.ReactNode }) => (
+      <MarkdownPreBlock renderMermaid={props.renderMermaid}>{children}</MarkdownPreBlock>
+    ),
     table: ({ children }: { children?: React.ReactNode }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
-  }), [props.onOpenMedia, props.workspacePath]);
+  }), [props.onOpenMedia, props.renderMermaid, props.workspacePath]);
   return (
     <ReactMarkdown
       components={components}
@@ -211,9 +218,50 @@ function LazyMarkdownMessage(props: {
     <MarkdownContentRenderer
       content={props.content}
       onOpenMedia={props.onOpenMedia}
+      renderMermaid
       workspacePath={props.workspacePath}
     />
   );
+}
+
+// MarkdownPreBlock routes finalized Mermaid fences to the diagram renderer and preserves other code blocks.
+// MarkdownPreBlock 将最终 Mermaid 围栏路由到图表渲染器，并保留其他代码块。
+//
+// Parameters:
+// 参数：
+// - props: ReactMarkdown code children and the finalized-render permission.
+// - props：ReactMarkdown 代码子节点与最终渲染许可。
+//
+// Returns:
+// 返回值：
+// A Mermaid diagram or the standard fenced-code presentation.
+// Mermaid 图表或标准围栏代码展示。
+function MarkdownPreBlock(props: {
+  // ReactMarkdown code element children wrapped by the pre component.
+  // ReactMarkdown 中由 pre 包裹的 code 元素子节点。
+  children?: React.ReactNode;
+  // Whether Mermaid rendering is allowed for this stable Markdown document.
+  // 当前稳定 Markdown 文档是否允许 Mermaid 渲染。
+  renderMermaid: boolean;
+}) {
+  // codeElement is the fenced code node emitted by ReactMarkdown.
+  // codeElement 是 ReactMarkdown 生成的围栏代码节点。
+  const codeElement = markdownCodeElement(props.children);
+  // language is the normalized information string attached to the fenced block.
+  // language 是围栏代码块携带的规范化信息字符串。
+  const language = markdownCodeLanguage(codeElement?.props.className)?.toLowerCase();
+  if (props.renderMermaid && language === "mermaid") {
+    // source is the complete finalized Mermaid definition without ReactMarkdown's trailing newline.
+    // source 是移除 ReactMarkdown 尾随换行后的完整最终 Mermaid 定义。
+    const source = markdownCodeText(codeElement?.props.children ?? props.children).replace(/\n$/u, "");
+    return (
+      <MermaidDiagram
+        fallback={<MarkdownCodeBlock>{props.children}</MarkdownCodeBlock>}
+        source={source}
+      />
+    );
+  }
+  return <MarkdownCodeBlock>{props.children}</MarkdownCodeBlock>;
 }
 
 // MarkdownCodeBlock renders fenced code with language chrome, copy, wrap, and syntax highlighting.

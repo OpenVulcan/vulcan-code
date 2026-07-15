@@ -1,45 +1,16 @@
-//! Provider base prompt loading helpers for the execution runtime.
-//! 执行运行时使用的 Provider 基础提示词加载辅助模块。
+//! Default base prompt loading helpers for the execution runtime.
+//! 执行运行时使用的默认基础提示词加载辅助模块。
 
-use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::runtime_assets;
 use std::{fs, path::Path};
 
-/// Relative resource directory name that stores provider base system prompts.
-/// 存放 Provider 基础系统提示词的相对资源目录名称。
+/// Relative resource directory name that stores the default base system prompt.
+/// 存放默认基础系统提示词的相对资源目录名称。
 const SYSTEM_PROMPTS_DIR_NAME: &str = "system-prompts";
 
-/// Default provider prompt file name.
-/// 默认 Provider 提示词文件名。
+/// Default system prompt file name shared by every model.
+/// 所有模型共享的默认系统提示词文件名。
 const DEFAULT_SYSTEM_PROMPT_FILE_NAME: &str = "default.txt";
-
-/// GPT-family provider prompt file name.
-/// GPT 家族 Provider 提示词文件名。
-const GPT_SYSTEM_PROMPT_FILE_NAME: &str = "gpt.txt";
-
-/// Codex-family provider prompt file name.
-/// Codex 家族 Provider 提示词文件名。
-const CODEX_SYSTEM_PROMPT_FILE_NAME: &str = "codex.txt";
-
-/// Beast-style provider prompt file name.
-/// Beast 风格 Provider 提示词文件名。
-const BEAST_SYSTEM_PROMPT_FILE_NAME: &str = "beast.txt";
-
-/// Anthropic provider prompt file name.
-/// Anthropic Provider 提示词文件名。
-const ANTHROPIC_SYSTEM_PROMPT_FILE_NAME: &str = "anthropic.txt";
-
-/// Gemini provider prompt file name.
-/// Gemini Provider 提示词文件名。
-const GEMINI_SYSTEM_PROMPT_FILE_NAME: &str = "gemini.txt";
-
-/// Kimi-family provider prompt file name.
-/// Kimi 家族 Provider 提示词文件名。
-const KIMI_SYSTEM_PROMPT_FILE_NAME: &str = "kimi.txt";
-
-/// Trinity-family provider prompt file name.
-/// Trinity 家族 Provider 提示词文件名。
-const TRINITY_SYSTEM_PROMPT_FILE_NAME: &str = "trinity.txt";
 
 /// Loaded provider base system prompt and its source label.
 /// 已加载的 Provider 基础系统提示词及其来源标签。
@@ -53,71 +24,52 @@ pub(crate) struct LoadedProviderBaseSystemPrompt {
     pub source_label: String,
 }
 
-/// Loads one provider-family base system prompt from the editable resource directory.
-/// 从可编辑资源目录中加载对应 Provider 家族的基础系统提示词。
-///
-/// # Parameters
-/// # 参数
-/// - `blueprint`: Resolved provider blueprint whose model id selects the exact resource file.
-/// - `blueprint`：其模型标识选择精确资源文件的已解析 Provider 蓝图。
+/// Loads the model-independent default base system prompt from the editable resource directory.
+/// 从可编辑资源目录加载与模型无关的默认基础系统提示词。
 ///
 /// # Returns
 /// # 返回值
-/// Returns sanitized prompt text, or an exact resource-path failure.
-/// 返回清洗后的提示词文本，或带精确资源路径的失败。
-pub(crate) fn load_provider_base_system_prompt(
-    blueprint: &ProviderRuntimeBlueprint,
-) -> Result<String, String> {
-    load_provider_base_system_prompt_with_source(blueprint).map(|prompt| prompt.text)
+/// Returns sanitized prompt text, or a default-resource-path failure.
+/// 返回清洗后的提示词文本，或带默认资源路径的失败。
+pub(crate) fn load_provider_base_system_prompt() -> Result<String, String> {
+    load_provider_base_system_prompt_with_source().map(|prompt| prompt.text)
 }
 
-/// Loads one provider-family base system prompt with source information.
-/// 加载一份带来源信息的 Provider 家族基础系统提示词。
-///
-/// # Parameters
-/// # 参数
-/// - `blueprint`: Resolved provider blueprint whose model id selects the exact resource file.
-/// - `blueprint`：其模型标识选择精确资源文件的已解析 Provider 蓝图。
+/// Loads the model-independent default base system prompt with source information.
+/// 加载一份带来源信息且与模型无关的默认基础系统提示词。
 ///
 /// # Returns
 /// # 返回值
-/// Returns sanitized prompt text with its unique source label, or an exact resource failure.
-/// 返回带唯一来源标签的清洗后提示词文本，或精确资源失败。
-pub(crate) fn load_provider_base_system_prompt_with_source(
-    blueprint: &ProviderRuntimeBlueprint,
-) -> Result<LoadedProviderBaseSystemPrompt, String> {
+/// Returns sanitized prompt text with its source label, or a default-resource failure.
+/// 返回带来源标签的清洗后提示词文本，或默认资源失败。
+pub(crate) fn load_provider_base_system_prompt_with_source()
+-> Result<LoadedProviderBaseSystemPrompt, String> {
     // resources_directory is the single effective root selected by the runtime-assets domain.
     // resources_directory 是 runtime-assets 领域选择的唯一生效资源根目录。
     let resources_directory = runtime_assets::resolve_app_resources_directory();
-    load_provider_base_system_prompt_from_directory(&blueprint.model_id, &resources_directory)
+    load_provider_base_system_prompt_from_directory(&resources_directory)
 }
 
-/// Loads the exact model-mapped provider prompt below one already selected resource directory.
-/// 从一个已选定资源目录下加载模型精确映射的 Provider 提示词。
+/// Loads the fixed default prompt below one already selected resource directory.
+/// 从一个已选定资源目录下加载固定的默认提示词。
 ///
 /// # Parameters
 /// # 参数
-/// - `model_id`: Stable model identifier used by the static file mapping.
-/// - `model_id`：静态文件映射使用的稳定模型标识。
 /// - `resources_directory`: Effective application resource root selected by the caller.
 /// - `resources_directory`：调用方选择的生效应用资源根目录。
 ///
 /// # Returns
 /// # 返回值
-/// Returns the sanitized prompt and exact source label, or the selected file's failure.
-/// 返回清洗后的提示词及精确来源标签，或所选文件的失败。
+/// Returns the sanitized default prompt and source label, or the default file's failure.
+/// 返回清洗后的默认提示词及来源标签，或默认文件的失败。
 fn load_provider_base_system_prompt_from_directory(
-    model_id: &str,
     resources_directory: &Path,
 ) -> Result<LoadedProviderBaseSystemPrompt, String> {
-    // file_name is the unique static resource selected for the model family.
-    // file_name 是为模型家族选择的唯一静态资源文件名。
-    let file_name = resolve_provider_base_prompt_file_name(model_id);
-    // prompt_path is the sole file allowed by the effective resource contract.
-    // prompt_path 是生效资源契约允许的唯一文件。
+    // prompt_path is the single product-owned default prompt resource.
+    // prompt_path 是产品持有的唯一默认提示词资源。
     let prompt_path = resources_directory
         .join(SYSTEM_PROMPTS_DIR_NAME)
-        .join(file_name);
+        .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
     // prompt is valid only after UTF-8 decoding, sanitization, and nonempty validation.
     // prompt 仅在完成 UTF-8 解码、清洗与非空校验后才有效。
     let prompt = read_non_empty_system_prompt_file(&prompt_path)?;
@@ -127,60 +79,21 @@ fn load_provider_base_system_prompt_from_directory(
     })
 }
 
-/// Resolves one provider/model combination into the matching base prompt file name.
-/// 将单个 Provider/模型组合解析为对应的基础提示词文件名。
-///
-/// # Parameters
-/// # 参数
-/// - `model_id`: Stable model identifier whose family selects one packaged prompt file.
-/// - `model_id`：其家族选择单个打包提示词文件的稳定模型标识。
-///
-/// # Returns
-/// # 返回值
-/// Returns the unique static file name assigned to the model family.
-/// 返回分配给该模型家族的唯一静态文件名。
-fn resolve_provider_base_prompt_file_name(model_id: &str) -> &'static str {
-    let model_id = model_id.to_ascii_lowercase();
-
-    if model_id.contains("gpt-4") || model_id.contains("o1") || model_id.contains("o3") {
-        return BEAST_SYSTEM_PROMPT_FILE_NAME;
-    }
-    if model_id.contains("gpt") {
-        if model_id.contains("codex") {
-            return CODEX_SYSTEM_PROMPT_FILE_NAME;
-        }
-        return GPT_SYSTEM_PROMPT_FILE_NAME;
-    }
-    if model_id.contains("gemini-") {
-        return GEMINI_SYSTEM_PROMPT_FILE_NAME;
-    }
-    if model_id.contains("claude") {
-        return ANTHROPIC_SYSTEM_PROMPT_FILE_NAME;
-    }
-    if model_id.contains("trinity") {
-        return TRINITY_SYSTEM_PROMPT_FILE_NAME;
-    }
-    if model_id.contains("kimi") {
-        return KIMI_SYSTEM_PROMPT_FILE_NAME;
-    }
-    DEFAULT_SYSTEM_PROMPT_FILE_NAME
-}
-
 /// Reads one prompt text file, removes duplicated legacy tool guidance, and trims the outer blank region.
 /// 读取单个提示词文本文件，移除重复的旧工具引导段，并裁剪外围空白区域。
 ///
 /// # Parameters
 /// # 参数
-/// - `path`: Exact model-mapped resource file selected by the effective resource root.
-/// - `path`：由生效资源根选择的精确模型映射资源文件。
+/// - `path`: Exact default resource file selected by the effective resource root.
+/// - `path`：由生效资源根选择的精确默认资源文件。
 ///
 /// # Returns
 /// # 返回值
 /// Returns sanitized nonempty UTF-8 prompt text, or an exact read or content-validation failure.
 /// 返回清洗后的非空 UTF-8 提示词文本，或精确的读取与内容校验失败。
 fn read_non_empty_system_prompt_file(path: &Path) -> Result<String, String> {
-    // content is the exact UTF-8 resource body selected for the current model.
-    // content 是为当前模型选择的精确 UTF-8 资源正文。
+    // content is the exact UTF-8 body of the shared default resource.
+    // content 是共享默认资源的精确 UTF-8 正文。
     let content = fs::read_to_string(path).map_err(|error| {
         format!(
             "Failed to read provider prompt resource `{}`: {error}",
@@ -330,8 +243,8 @@ mod tests {
         ))
     }
 
-    /// Verifies every supported model family maps to one deterministic resource file.
-    /// 验证每个受支持模型家族都会映射到一个确定的资源文件。
+    /// Verifies the loader reads only the fixed default resource and preserves its source label.
+    /// 验证加载器只读取固定的默认资源，并保留其来源标签。
     ///
     /// # Parameters
     /// # 参数
@@ -340,55 +253,18 @@ mod tests {
     ///
     /// # Returns
     /// # 返回值
-    /// This test returns no value and fails if a model family selects the wrong file.
-    /// 此测试无返回值；若模型家族选择错误文件则失败。
+    /// This test returns no value and fails if loading changes the default file or skips sanitization.
+    /// 此测试无返回值；若加载过程改变默认文件或跳过清洗则失败。
     #[test]
-    fn model_families_map_to_exact_prompt_files() {
-        // cases captures the complete precedence order implemented by the static mapping.
-        // cases 捕获静态映射实现的完整优先级顺序。
-        let cases = [
-            ("gpt-4o", BEAST_SYSTEM_PROMPT_FILE_NAME),
-            ("o1-pro", BEAST_SYSTEM_PROMPT_FILE_NAME),
-            ("o3-mini", BEAST_SYSTEM_PROMPT_FILE_NAME),
-            ("gpt-5-codex", CODEX_SYSTEM_PROMPT_FILE_NAME),
-            ("gpt-5", GPT_SYSTEM_PROMPT_FILE_NAME),
-            ("gemini-2.5-pro", GEMINI_SYSTEM_PROMPT_FILE_NAME),
-            ("claude-sonnet-4", ANTHROPIC_SYSTEM_PROMPT_FILE_NAME),
-            ("trinity-large", TRINITY_SYSTEM_PROMPT_FILE_NAME),
-            ("kimi-k2", KIMI_SYSTEM_PROMPT_FILE_NAME),
-            ("deepseek-v4", DEFAULT_SYSTEM_PROMPT_FILE_NAME),
-        ];
-
-        for (model_id, expected_file_name) in cases {
-            assert_eq!(
-                resolve_provider_base_prompt_file_name(model_id),
-                expected_file_name
-            );
-        }
-    }
-
-    /// Verifies the loader reads only the exact model-mapped resource and preserves its source label.
-    /// 验证加载器只读取精确的模型映射资源，并保留其来源标签。
-    ///
-    /// # Parameters
-    /// # 参数
-    /// This test has no parameters.
-    /// 此测试没有参数。
-    ///
-    /// # Returns
-    /// # 返回值
-    /// This test returns no value and fails if loading changes the selected file or skips sanitization.
-    /// 此测试无返回值；若加载过程改变所选文件或跳过清洗则失败。
-    #[test]
-    fn loader_reads_exact_model_resource() {
-        // resource_root isolates the selected-resource fixture from every other test.
-        // resource_root 将所选资源夹具与其他所有测试隔离。
+    fn loader_reads_default_resource() {
+        // resource_root isolates the default-resource fixture from every other test.
+        // resource_root 将默认资源夹具与其他所有测试隔离。
         let resource_root = unique_test_resource_root("exact");
-        // prompt_path is the unique Codex resource selected by the model mapping.
-        // prompt_path 是模型映射选择的唯一 Codex 资源。
+        // prompt_path is the single default resource selected by the loader.
+        // prompt_path 是加载器选择的唯一默认资源。
         let prompt_path = resource_root
             .join(SYSTEM_PROMPTS_DIR_NAME)
-            .join(CODEX_SYSTEM_PROMPT_FILE_NAME);
+            .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
         fs::create_dir_all(
             prompt_path
                 .parent()
@@ -403,8 +279,8 @@ mod tests {
 
         // loaded is the validated prompt and source identity returned by the loader.
         // loaded 是加载器返回的已验证提示词与来源身份。
-        let loaded = load_provider_base_system_prompt_from_directory("gpt-5-codex", &resource_root)
-            .expect("exact provider prompt should load");
+        let loaded = load_provider_base_system_prompt_from_directory(&resource_root)
+            .expect("default provider prompt should load");
 
         assert!(loaded.text.contains("Keep this."));
         assert!(!loaded.text.contains("Remove this."));
@@ -416,8 +292,8 @@ mod tests {
         fs::remove_dir_all(resource_root).expect("remove exact-resource fixture");
     }
 
-    /// Verifies a missing family resource does not fall back to an existing default resource.
-    /// 验证家族资源缺失时不会回退到现有默认资源。
+    /// Verifies an obsolete model-specific resource cannot replace a missing default resource.
+    /// 验证旧模型专用资源不能替代缺失的默认资源。
     ///
     /// # Parameters
     /// # 参数
@@ -429,32 +305,32 @@ mod tests {
     /// This test returns no value and fails if a damaged resource set still loads successfully.
     /// 此测试无返回值；若损坏资源集仍成功加载则失败。
     #[test]
-    fn loader_rejects_missing_exact_resource_without_default_fallback() {
-        // resource_root contains a valid default file but deliberately omits the selected Codex file.
-        // resource_root 包含有效默认文件，但刻意缺失所选 Codex 文件。
+    fn loader_rejects_missing_default_resource_without_model_fallback() {
+        // resource_root contains an obsolete model-specific file but deliberately omits default.txt.
+        // resource_root 包含旧模型专用文件，但刻意缺失 default.txt。
         let resource_root = unique_test_resource_root("missing");
-        // default_path proves the old cross-file fallback would otherwise have succeeded.
-        // default_path 证明旧跨文件回退原本会成功。
-        let default_path = resource_root
+        // obsolete_path proves an old model-specific prompt cannot become an implicit fallback.
+        // obsolete_path 证明旧模型专用提示词不能成为隐式回退。
+        let obsolete_path = resource_root
             .join(SYSTEM_PROMPTS_DIR_NAME)
-            .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
+            .join("codex.txt");
         fs::create_dir_all(
-            default_path
+            obsolete_path
                 .parent()
-                .expect("default prompt should have a parent"),
+                .expect("obsolete prompt should have a parent"),
         )
         .expect("create provider prompt directory");
-        fs::write(&default_path, "Default prompt").expect("write default prompt");
-        // expected_path is the missing resource that must own the diagnostic.
-        // expected_path 是必须拥有诊断的缺失资源。
+        fs::write(&obsolete_path, "Obsolete model prompt").expect("write obsolete prompt");
+        // expected_path is the missing default resource that must own the diagnostic.
+        // expected_path 是必须拥有诊断的缺失默认资源。
         let expected_path = resource_root
             .join(SYSTEM_PROMPTS_DIR_NAME)
-            .join(CODEX_SYSTEM_PROMPT_FILE_NAME);
+            .join(DEFAULT_SYSTEM_PROMPT_FILE_NAME);
 
-        // error must name the selected Codex file rather than loading the default file.
-        // error 必须指明所选 Codex 文件，而不是加载默认文件。
-        let error = load_provider_base_system_prompt_from_directory("gpt-5-codex", &resource_root)
-            .expect_err("missing exact provider prompt should fail");
+        // error must name default.txt rather than loading an obsolete model-specific file.
+        // error 必须指明 default.txt，而不是加载旧模型专用文件。
+        let error = load_provider_base_system_prompt_from_directory(&resource_root)
+            .expect_err("missing default provider prompt should fail");
 
         assert!(error.contains(&expected_path.display().to_string()));
         fs::remove_dir_all(resource_root).expect("remove missing-resource fixture");

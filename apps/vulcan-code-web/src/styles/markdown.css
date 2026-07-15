@@ -209,6 +209,46 @@
   white-space: pre-wrap;
 }
 
+/* Mermaid blocks isolate generated SVG images inside a responsive scroll boundary. */
+/* Mermaid 图表块将生成的 SVG 图片隔离在响应式滚动边界内。 */
+.markdown-mermaid-block {
+  max-width: 100%;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 96%, var(--muted));
+}
+
+.markdown-message .markdown-mermaid-block {
+  margin: 0 0 11px;
+}
+
+.markdown-message .markdown-mermaid-image {
+  display: block;
+  width: auto;
+  max-width: min(88%, 760px);
+  height: auto;
+  max-height: min(72vh, 760px);
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+/* Mermaid loading frames reserve stable transcript space while the lazy chunk renders. */
+/* Mermaid 加载框在按需代码块渲染期间保留稳定的会话空间。 */
+.markdown-mermaid-loading {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+}
+
+.markdown-mermaid-loading-bar {
+  width: min(180px, 45%);
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
+}
+
 .markdown-table-wrap {
   max-width: 100%;
   overflow: auto;

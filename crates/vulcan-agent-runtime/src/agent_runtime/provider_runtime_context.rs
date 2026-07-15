@@ -166,8 +166,7 @@ fn build_runtime_prompt_assembly_input(
 ) -> Result<PromptAssemblyInput, String> {
     // provider_prompt is loaded from the single effective model-mapped resource file.
     // provider_prompt 从唯一生效的模型映射资源文件加载。
-    let provider_prompt =
-        load_provider_base_system_prompt_with_source(&preparation.model_blueprint)?;
+    let provider_prompt = load_provider_base_system_prompt_with_source()?;
     let agent_prompt = build_request_agent_prompt_snapshot(preparation)
         .or_else(|| active_agent.and_then(build_agent_prompt_snapshot));
     let environment_context = EnvironmentContextSnapshot::new(format!(
@@ -681,7 +680,7 @@ fn build_legacy_runtime_system_preamble(
 ) -> Result<String, String> {
     // provider_prompt comes from the same unique resource contract as structured composition.
     // provider_prompt 来自与结构化组合相同的唯一资源契约。
-    let provider_prompt = load_provider_base_system_prompt(&preparation.model_blueprint)?;
+    let provider_prompt = load_provider_base_system_prompt()?;
     // sections preserves legacy transport ordering without supplying compatibility content.
     // sections 保留旧传输顺序，但不提供兼容性内容。
     let mut sections = vec![
