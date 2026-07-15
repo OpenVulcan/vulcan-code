@@ -209,22 +209,26 @@
   white-space: pre-wrap;
 }
 
-/* Mermaid blocks isolate generated SVG images inside a responsive scroll boundary. */
-/* Mermaid 图表块将生成的 SVG 图片隔离在响应式滚动边界内。 */
-.markdown-mermaid-block {
+/* Diagram blocks isolate generated SVG images inside a responsive scroll boundary. */
+/* 图表块将生成的 SVG 图片隔离在响应式滚动边界内。 */
+.markdown-diagram-block {
   max-width: 100%;
-  overflow: auto;
-  padding: 14px;
+  overflow: hidden;
   border: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
   border-radius: 8px;
   background: color-mix(in oklch, var(--card) 96%, var(--muted));
 }
 
-.markdown-message .markdown-mermaid-block {
+.markdown-message .markdown-diagram-block {
   margin: 0 0 11px;
 }
 
-.markdown-message .markdown-mermaid-image {
+.markdown-diagram-stage {
+  overflow: auto;
+  padding: 14px;
+}
+
+.markdown-message .markdown-diagram-image {
   display: block;
   width: auto;
   max-width: min(88%, 760px);
@@ -234,15 +238,15 @@
   object-fit: contain;
 }
 
-/* Mermaid loading frames reserve stable transcript space while the lazy chunk renders. */
-/* Mermaid 加载框在按需代码块渲染期间保留稳定的会话空间。 */
-.markdown-mermaid-loading {
+/* Diagram loading frames reserve stable transcript space while the preview renders. */
+/* 图表加载框在预览渲染期间保留稳定的会话空间。 */
+.markdown-diagram-loading {
   min-height: 120px;
   display: grid;
   place-items: center;
 }
 
-.markdown-mermaid-loading-bar {
+.markdown-diagram-loading-bar {
   width: min(180px, 45%);
   height: 5px;
   border-radius: 999px;

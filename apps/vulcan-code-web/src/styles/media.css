@@ -203,6 +203,11 @@
 }
 
 .generated-media-player-window {
+  /* Keep the dialog box inside the live viewport even when header children have long intrinsic widths. */
+  /* 即使标题栏子元素具有较长固有宽度，也将弹窗限制在实时视口内。 */
+  width: min(1120px, calc(100vw - 32px));
+  min-width: 0;
+  max-width: calc(100vw - 32px);
   max-height: min(90vh, 860px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -227,22 +232,36 @@
 .generated-media-player-header {
   position: relative;
   z-index: 2;
-  display: flex;
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
+  box-sizing: border-box;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
 }
 
 .generated-media-player-title {
   min-width: 0;
+  width: 100%;
+  max-width: 640px;
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  overflow: hidden;
+}
+
+/* Keep the media icon visible while long stream-backed file names are truncated. */
+/* 长文件流名称被截断时保持媒体图标始终可见。 */
+.generated-media-player-title > svg {
+  flex: 0 0 auto;
 }
 
 .generated-media-player-title h2 {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   font-size: 15px;
   text-overflow: ellipsis;
@@ -250,7 +269,7 @@
 }
 
 .generated-media-player-actions {
-  flex: 0 0 auto;
+  justify-self: end;
   display: inline-flex;
   align-items: center;
   gap: 10px;

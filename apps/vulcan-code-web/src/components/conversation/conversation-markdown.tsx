@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { Check, Copy, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
+import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
   highlightedDiffLineSpansForLanguage,
@@ -120,7 +121,7 @@ function StreamingMarkdownMessage(props: {
     <MarkdownContentRenderer
       content={normalizedContent}
       onOpenMedia={props.onOpenMedia}
-      renderMermaid={false}
+      renderDiagrams={false}
       workspacePath={props.workspacePath}
     />
   );
@@ -138,9 +139,9 @@ function MarkdownContentRenderer(props: {
   // Optional media opener used by Markdown images.
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
-  // Whether finalized Mermaid fences should render as diagrams.
-  // 最终确定的 Mermaid 围栏代码是否应渲染为图表。
-  renderMermaid: boolean;
+  // Whether finalized Mermaid and SVG fences should render as diagrams.
+  // 最终确定的 Mermaid 与 SVG 围栏代码是否应渲染为图表。
+  renderDiagrams: boolean;
 }) {
   const components = React.useMemo(() => ({
     a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
@@ -183,10 +184,10 @@ function MarkdownContentRenderer(props: {
       );
     },
     pre: ({ children }: { children?: React.ReactNode }) => (
-      <MarkdownPreBlock renderMermaid={props.renderMermaid}>{children}</MarkdownPreBlock>
+      <MarkdownPreBlock renderDiagrams={props.renderDiagrams}>{children}</MarkdownPreBlock>
     ),
     table: ({ children }: { children?: React.ReactNode }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
-  }), [props.onOpenMedia, props.renderMermaid, props.workspacePath]);
+  }), [props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   return (
     <ReactMarkdown
       components={components}
@@ -218,14 +219,14 @@ function LazyMarkdownMessage(props: {
     <MarkdownContentRenderer
       content={props.content}
       onOpenMedia={props.onOpenMedia}
-      renderMermaid
+      renderDiagrams
       workspacePath={props.workspacePath}
     />
   );
 }
 
-// MarkdownPreBlock routes finalized Mermaid fences to the diagram renderer and preserves other code blocks.
-// MarkdownPreBlock 将最终 Mermaid 围栏路由到图表渲染器，并保留其他代码块。
+// MarkdownPreBlock routes finalized Mermaid and SVG fences to diagram renderers and preserves other code blocks.
+// MarkdownPreBlock 将最终 Mermaid 与 SVG 围栏路由到图表渲染器，并保留其他代码块。
 //
 // Parameters:
 // 参数：
@@ -234,15 +235,15 @@ function LazyMarkdownMessage(props: {
 //
 // Returns:
 // 返回值：
-// A Mermaid diagram or the standard fenced-code presentation.
-// Mermaid 图表或标准围栏代码展示。
+// A rendered diagram or the standard fenced-code presentation.
+// 渲染后的图表或标准围栏代码展示。
 function MarkdownPreBlock(props: {
   // ReactMarkdown code element children wrapped by the pre component.
   // ReactMarkdown 中由 pre 包裹的 code 元素子节点。
   children?: React.ReactNode;
-  // Whether Mermaid rendering is allowed for this stable Markdown document.
-  // 当前稳定 Markdown 文档是否允许 Mermaid 渲染。
-  renderMermaid: boolean;
+  // Whether diagram rendering is allowed for this stable Markdown document.
+  // 当前稳定 Markdown 文档是否允许图表渲染。
+  renderDiagrams: boolean;
 }) {
   // codeElement is the fenced code node emitted by ReactMarkdown.
   // codeElement 是 ReactMarkdown 生成的围栏代码节点。
@@ -250,13 +251,23 @@ function MarkdownPreBlock(props: {
   // language is the normalized information string attached to the fenced block.
   // language 是围栏代码块携带的规范化信息字符串。
   const language = markdownCodeLanguage(codeElement?.props.className)?.toLowerCase();
-  if (props.renderMermaid && language === "mermaid") {
-    // source is the complete finalized Mermaid definition without ReactMarkdown's trailing newline.
-    // source 是移除 ReactMarkdown 尾随换行后的完整最终 Mermaid 定义。
+  if (props.renderDiagrams && (language === "mermaid" || language === "svg")) {
+    // source is the complete finalized diagram definition without ReactMarkdown's trailing newline.
+    // source 是移除 ReactMarkdown 尾随换行后的完整最终图表定义。
     const source = markdownCodeText(codeElement?.props.children ?? props.children).replace(/\n$/u, "");
-    return (
+    // fallback preserves the ordinary fenced-code presentation when preview rendering fails.
+    // fallback 在预览渲染失败时保留普通围栏代码展示。
+    const fallback = <MarkdownCodeBlock>{props.children}</MarkdownCodeBlock>;
+    return language === "mermaid" ? (
       <MermaidDiagram
-        fallback={<MarkdownCodeBlock>{props.children}</MarkdownCodeBlock>}
+        copySource={() => copyMarkdownCode(source)}
+        fallback={fallback}
+        source={source}
+      />
+    ) : (
+      <SvgPreview
+        copySource={() => copyMarkdownCode(source)}
+        fallback={fallback}
         source={source}
       />
     );

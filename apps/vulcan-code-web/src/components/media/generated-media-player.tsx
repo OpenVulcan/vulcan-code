@@ -270,7 +270,7 @@ export function GeneratedMediaPlayerWindow(props: {
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent
         className={cn(
-          "generated-media-player-window sm:max-w-[min(1120px,96vw)]",
+          "generated-media-player-window",
           isMaximized && "maximized",
         )}
         showCloseButton={false}
@@ -278,7 +278,7 @@ export function GeneratedMediaPlayerWindow(props: {
         <header className="generated-media-player-header">
           <span className="generated-media-player-title">
             <MediaIcon size={18} />
-            <DialogTitle>{props.attachment.fileName}</DialogTitle>
+            <DialogTitle title={props.attachment.fileName}>{props.attachment.fileName}</DialogTitle>
           </span>
           <span className="generated-media-player-actions">
             {isImage ? (

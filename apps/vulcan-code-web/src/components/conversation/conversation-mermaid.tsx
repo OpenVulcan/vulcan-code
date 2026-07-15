@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { Mermaid } from "mermaid";
 
+import { MarkdownDiagramFrame } from "@/components/conversation/conversation-diagram-frame";
 import { useDiffShikiTheme } from "@/diff/diff-highlight";
 import {
   DIFF_SHIKI_DARK_THEME,
@@ -10,6 +11,9 @@ import {
 // MermaidDiagramProps describes one rendered Mermaid source block and its failure fallback.
 // MermaidDiagramProps 描述单个 Mermaid 源码块及其失败回退内容。
 interface MermaidDiagramProps {
+  // Copies the complete Mermaid source through the shared Markdown clipboard path.
+  // 通过共享 Markdown 剪贴板路径复制完整 Mermaid 源码。
+  copySource: () => Promise<void>;
   // Markdown code-block fallback rendered when Mermaid rejects the source.
   // Mermaid 拒绝源码时渲染的 Markdown 代码块回退内容。
   fallback: React.ReactNode;
@@ -100,22 +104,16 @@ export function MermaidDiagram(props: MermaidDiagramProps) {
   if (state.status === "failed") {
     return props.fallback;
   }
-  if (state.status === "ready") {
-    return (
-      <figure className="markdown-mermaid-block">
-        <img
-          alt={props.source}
-          className="markdown-mermaid-image"
-          draggable={false}
-          src={state.imageUrl}
-        />
-      </figure>
-    );
-  }
   return (
-    <figure aria-busy="true" className="markdown-mermaid-block markdown-mermaid-loading">
-      <div className="markdown-mermaid-loading-bar" />
-    </figure>
+    <MarkdownDiagramFrame
+      alt={props.source}
+      copySource={props.copySource}
+      iconPath="diagram.mermaid"
+      imageUrl={state.status === "ready" ? state.imageUrl : null}
+      loading={state.status === "loading"}
+      onImageError={() => setState({ status: "failed" })}
+      title="Mermaid"
+    />
   );
 }
 
