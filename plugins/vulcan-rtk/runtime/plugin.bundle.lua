@@ -518,7 +518,7 @@ local function parse_gain_by_command(stdout)
         end
     end
     if #rows == 0 then
-        return vulcan.json.decode("[]")
+        return vulcan.json.array()
     end
     return rows
 end
@@ -540,11 +540,11 @@ function M.statistics_get(args)
     if not result.success then
         return success({
             available = false,
-            summary = vulcan.json.decode("{}"),
-            daily = vulcan.json.decode("[]"),
-            weekly = vulcan.json.decode("[]"),
-            monthly = vulcan.json.decode("[]"),
-            byCommand = vulcan.json.decode("[]"),
+            summary = vulcan.json.object(),
+            daily = vulcan.json.array(),
+            weekly = vulcan.json.array(),
+            monthly = vulcan.json.array(),
+            byCommand = vulcan.json.array(),
             error = result.error or result.stderr or "RTK gain statistics failed",
         })
     end
@@ -557,8 +557,8 @@ function M.statistics_get(args)
     statistics.available = true
     statistics.byCommand = by_command_result.success
         and parse_gain_by_command(by_command_result.stdout)
-        or vulcan.json.decode("[]")
-    statistics.error = vulcan.json.decode("null")
+        or vulcan.json.array()
+    statistics.error = vulcan.json.null
     return success(statistics)
 end
 
@@ -577,7 +577,7 @@ function M.self_check(args)
         return success({
             available = true,
             version = first_non_empty_line(result.stdout) or "rtk",
-            error = vulcan.json.decode("null"),
+            error = vulcan.json.null,
         })
     end
     return success({

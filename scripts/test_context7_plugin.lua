@@ -349,6 +349,9 @@ local plugin_vulcan = {
     json = {
         encode = runtime_vulcan.json.encode,
         decode = runtime_vulcan.json.decode,
+        object = runtime_vulcan.json.object,
+        array = runtime_vulcan.json.array,
+        null = runtime_vulcan.json.null,
     },
     runtime = {
         -- Return one exact allowlisted module and reject undeclared names.

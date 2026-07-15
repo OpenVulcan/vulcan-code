@@ -36,7 +36,7 @@ fn packaged_runlua_skill_requires_native_skill_lookup() {
     assert!(content.contains("{\"name\":\"runlua\"}"));
     assert!(content.contains("The tool id is `skill`, singular."));
     assert!(content.contains("Do not call `luaskill`"));
-    assert!(content.contains("LuaSkills: `0.5.2`"));
+    assert!(content.contains("LuaSkills: `0.5.3`"));
 }
 
 /// Builds one complete user prompt skill fixture for policy and rendering tests.

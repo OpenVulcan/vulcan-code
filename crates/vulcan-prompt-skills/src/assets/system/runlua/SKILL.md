@@ -22,7 +22,7 @@ The tool id is `skill`, singular. It reads prompt Skills. Do not call `luaskill`
 
 ## Runtime Versions
 
-- LuaSkills: `0.5.2`.
+- LuaSkills: `0.5.3`.
 - mlua: `0.12.0-rc.1`.
 - LuaJIT: `LuaJIT 2.1.ROLLING`.
 - LuaJIT source: `luajit-src 210.7.1+18b087c`.
@@ -40,7 +40,7 @@ The runtime also registers these Vulcan API groups:
 - `vulcan.io`: managed open, text read/write/append, lines, popen, and tmpfile operations.
 - `vulcan.path`: join, dirname, basename, stem, extname, normalize, and absolute-path checks.
 - `vulcan.process`: launcher discovery, process execution, and executable lookup.
-- `vulcan.json`: JSON encoding and decoding.
+- `vulcan.json`: JSON encoding and decoding, typed `object()` / `array()` constructors, and the `null` sentinel. Use the typed values when empty containers or JSON null must survive a Lua round trip.
 - `vulcan.runtime.python`: Python status, one-shot invoke, and persistent sessions.
 - `vulcan.runtime.node`: Node.js status, one-shot invoke, and persistent sessions.
 - `vulcan.host`: host tool discovery and invocation.

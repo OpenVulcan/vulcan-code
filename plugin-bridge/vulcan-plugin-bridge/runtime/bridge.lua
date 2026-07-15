@@ -20,6 +20,17 @@ local host_is_windows = package.config:sub(1, 1) == "\\"
 -- 在构建受限插件环境前捕获可信 package 表。
 local host_package = package
 
+-- Report whether one decoded value is the explicit LuaSkills JSON null sentinel.
+-- 判断一个解码值是否为 LuaSkills 的显式 JSON null 哨兵。
+--
+-- value is any trusted-runtime Lua value.
+-- value 是可信运行时中的任意 Lua 值。
+-- Returns true only for JSON null and never for ordinary Lua nil.
+-- 仅对 JSON null 返回 true，普通 Lua nil 不会命中。
+local function is_json_null(value)
+    return value == host_vulcan.json.null
+end
+
 -- Remove Windows verbatim prefixes from every Lua package-search template entry.
 -- 从每个 Lua 包搜索模板条目中移除 Windows verbatim 前缀。
 --
@@ -129,11 +140,14 @@ local function build_plugin_environment(plugin_id, runtime_id, lease_scope, lua_
             error("Vulcan plugin host tool name must be a non-empty string")
         end
         if payload == nil then
-            payload = {}
+            payload = host_vulcan.json.object()
         end
         if type(payload) ~= "table" then
             error("Vulcan plugin host tool payload must be a table")
         end
+        -- payload becomes an explicit JSON object before crossing the trusted host boundary.
+        -- payload 在跨越可信宿主边界前转换为显式 JSON 对象。
+        payload = host_vulcan.json.object(payload)
         -- response is the fixed LuaSkills host-call envelope, never the tool value itself.
         -- response 是固定 LuaSkills 宿主调用信封，绝不是工具值本身。
         local response = host_vulcan.host.call(tool_name, {
@@ -147,7 +161,10 @@ local function build_plugin_environment(plugin_id, runtime_id, lease_scope, lua_
             -- message preserves the explicit host diagnostic without exposing envelope internals.
             -- message 保留明确的宿主诊断，同时不暴露信封内部结构。
             local message = "Vulcan plugin host tool call failed"
-            if type(response) == "table" and type(response.error) == "table" and response.error.message ~= nil then
+            if type(response) == "table"
+                and type(response.error) == "table"
+                and type(response.error.message) == "string"
+            then
                 message = tostring(response.error.message)
             end
             error(message)
@@ -161,11 +178,14 @@ local function build_plugin_environment(plugin_id, runtime_id, lease_scope, lua_
             error("Vulcan plugin process entry_id must be a non-empty string")
         end
         if options == nil then
-            options = {}
+            options = host_vulcan.json.object()
         end
         if type(options) ~= "table" then
             error("Vulcan plugin process options must be a table")
         end
+        -- options remains an object even when the plugin supplies no process options.
+        -- 即使插件未提供进程选项，options 也保持对象类型。
+        options = host_vulcan.json.object(options)
         return host_call("vulcan.plugin.process.resolve", {
             mode = mode,
             entry_id = entry_id,
@@ -218,6 +238,19 @@ local function build_plugin_environment(plugin_id, runtime_id, lease_scope, lua_
             decode = function(value)
                 return host_vulcan.json.decode(value)
             end,
+            -- Create one explicit JSON object while preserving zero-argument semantics.
+            -- 创建一个显式 JSON 对象，同时保留零参数调用语义。
+            object = function(...)
+                return host_vulcan.json.object(...)
+            end,
+            -- Create one explicit JSON array while preserving zero-argument semantics.
+            -- 创建一个显式 JSON 数组，同时保留零参数调用语义。
+            array = function(...)
+                return host_vulcan.json.array(...)
+            end,
+            -- Expose the immutable JSON null sentinel without converting it through Lua nil.
+            -- 暴露不可变 JSON null 哨兵，避免经过 Lua nil 转换。
+            null = host_vulcan.json.null,
         },
         runtime = {
             -- Load and return one exact declared module without exposing Lua package discovery.
@@ -338,7 +371,7 @@ function M.load(args)
     end
     require_plugin_function(plugin, require_string(args, "invoke_function"))
     require_plugin_function(plugin, require_string(args, "shutdown_function"))
-    if args.hook_shutdown_function ~= nil then
+    if args.hook_shutdown_function ~= nil and not is_json_null(args.hook_shutdown_function) then
         require_plugin_function(plugin, args.hook_shutdown_function)
     end
     if type(args.hook_functions) ~= "table" then
@@ -389,7 +422,7 @@ function M.invoke(args)
     -- previous_workspace_root restores the persistent lease context after this exact call.
     -- previous_workspace_root 在当前精确调用后恢复持久租约上下文。
     local previous_workspace_root = active_workspace_root
-    if args.workspace_root ~= nil then
+    if args.workspace_root ~= nil and not is_json_null(args.workspace_root) then
         active_workspace_root = require_string(args, "workspace_root")
     end
     -- call_ok and call_result ensure restoration also happens when plugin code raises an error.

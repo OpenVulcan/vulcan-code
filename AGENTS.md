@@ -76,7 +76,7 @@
 
 ### 10. LuaSkills 当前版本与对接约定
 - LuaSkills 版本判断必须先读取根 `Cargo.toml` 的 workspace dependency 与根 `Cargo.lock` 中 `name = "luaskills"` 的锁定项，不得依据本节标题、历史计划、完成文档或会话记录推断当前版本。
-- 截至 2026-07-15，当前仓库实际锁定 `luaskills = 0.5.2`；后续版本升级后必须同步更新本条，但任何任务仍应以 `Cargo.toml` 与 `Cargo.lock` 的实时内容为唯一事实来源。
+- 截至 2026-07-16，当前仓库实际锁定 `luaskills = 0.5.3`；后续版本升级后必须同步更新本条，但任何任务仍应以 `Cargo.toml` 与 `Cargo.lock` 的实时内容为唯一事实来源。
 - 当前版本已经采用 `input_schema` 契约，不要再按早期版本的旧扁平参数推导逻辑修改宿主。
 - `LuaSkills` 工具参数 schema 当前应优先直接复用 `RuntimeEntryDescriptor.input_schema`；实现位于 `crates/vulcan-agent-runtime/src/luaskills_runtime.rs` 的 `luaskills_entry_args_schema`。
 - `LUASKILL_SID` 仍然是宿主管理字段，但处理方式是：

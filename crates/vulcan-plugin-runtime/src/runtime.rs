@@ -17,7 +17,6 @@ use luaskills::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -102,13 +101,9 @@ const VULCAN_PLUGIN_STORAGE_LANCEDB_DROP_TABLE_TOOL: &str =
 /// 用于使当前插件界面数据失效的固定宿主工具名称。
 const VULCAN_PLUGIN_UI_INVALIDATE_TOOL: &str = "vulcan.plugin.ui.invalidate";
 
-/// Borrowed or normalized object payload received through the fixed plugin bridge.
-/// 通过固定插件桥接层收到的借用或规范化对象载荷。
-type SystemPluginBridgePayload<'a> = Cow<'a, Map<String, Value>>;
-
 /// Authenticated plugin identity paired with its validated bridge payload.
 /// 经过认证的插件身份及其已校验桥接载荷。
-type SystemPluginBridgeIdentityPayload<'a> = (&'a str, SystemPluginBridgePayload<'a>);
+type SystemPluginBridgeIdentityPayload<'a> = (&'a str, &'a Map<String, Value>);
 
 /// Process-wide manager registry used by the single LuaSkills host-tool callback.
 /// 单一 LuaSkills 宿主工具回调使用的进程级管理器注册表。
@@ -4379,7 +4374,7 @@ fn dispatch_plugin_storage_request(
     storage_service.execute(SystemPluginStorageRequest {
         plugin_id: plugin_identity.to_string(),
         operation: storage_operation,
-        payload: Value::Object(payload.into_owned()),
+        payload: Value::Object(payload.clone()),
     })
 }
 
@@ -4609,15 +4604,12 @@ fn bridge_request_identity_and_payload(
         .as_object()
         .ok_or_else(|| "Vulcan plugin host request must be an object.".to_string())?;
     let plugin_id = required_json_string(request, "plugin_id")?;
-    // payload borrows ordinary objects and normalizes only Lua's ambiguous empty-table encoding.
-    // payload 借用普通对象，并且仅规范化 Lua 存在歧义的空表编码。
-    let payload = match request.get("payload") {
-        Some(Value::Object(payload)) => Cow::Borrowed(payload),
-        Some(Value::Array(payload)) if payload.is_empty() => Cow::Owned(Map::new()),
-        _ => {
-            return Err("Vulcan plugin host request requires object field `payload`.".to_string());
-        }
-    };
+    // payload must preserve the object type guaranteed by the LuaSkills typed JSON boundary.
+    // payload 必须保留 LuaSkills 强类型 JSON 边界保证的对象类型。
+    let payload = request
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Vulcan plugin host request requires object field `payload`.".to_string())?;
     Ok((plugin_id, payload))
 }
 
@@ -6374,6 +6366,33 @@ mod tests {
         HookScope,
     };
 
+    /// Verifies fixed bridge requests preserve strict JSON object payload semantics.
+    /// 验证固定桥请求严格保留 JSON 对象载荷语义。
+    #[test]
+    fn bridge_request_requires_object_payload() {
+        // objectRequest represents the typed object emitted by LuaSkills 0.5.3.
+        // objectRequest 表示 LuaSkills 0.5.3 发出的强类型对象。
+        let object_request = json!({"plugin_id": "fixture", "payload": {}});
+        // extracted is the exact borrowed identity and object payload.
+        // extracted 是精确借用的身份与对象载荷。
+        let (plugin_id, payload) = bridge_request_identity_and_payload(&object_request)
+            .expect("accept object bridge payload");
+        assert_eq!(plugin_id, "fixture");
+        assert!(payload.is_empty());
+
+        // arrayRequest proves the removed Lua empty-table compatibility path cannot return.
+        // arrayRequest 证明已移除的 Lua 空表兼容路径不会重新出现。
+        let array_request = json!({"plugin_id": "fixture", "payload": []});
+        // error is the stable protocol rejection for a non-object payload.
+        // error 是非对象载荷对应的稳定协议拒绝信息。
+        let error = bridge_request_identity_and_payload(&array_request)
+            .expect_err("reject array bridge payload");
+        assert_eq!(
+            error,
+            "Vulcan plugin host request requires object field `payload`."
+        );
+    }
+
     /// RecordingStorageService simulates the host database boundary for real plugin Lua tests.
     /// RecordingStorageService 为真实插件 Lua 测试模拟宿主数据库边界。
     #[derive(Default)]
@@ -7255,7 +7274,8 @@ return M
             .expect("query recent usage statistics requests");
         assert!(recent["requests"].is_array());
         assert_eq!(recent["requests"][0]["requestId"], "request-1");
-        assert!(recent["requests"][0].get("errorCategory").is_none());
+        assert!(recent["requests"][0]["errorCategory"].is_null());
+        assert!(recent["requests"][0]["errorCode"].is_null());
         // dashboard validates the real aggregate SQL path and strict action output schema.
         // dashboard 验证真实聚合 SQL 路径与严格 Action 输出 Schema。
         let dashboard = runtime
@@ -7470,6 +7490,40 @@ return M
         assert_eq!(flush_request.payload, json!({}));
     }
 
+    /// Verifies the repository Context7 bundle loads through the LuaSkills typed JSON surface.
+    /// 验证仓库 Context7 Bundle 通过 LuaSkills 强类型 JSON 表面完成加载。
+    #[test]
+    fn bundled_context7_plugin_loads_with_typed_json_surface() {
+        // temp owns the isolated fixed bridge lease used by this load-only check.
+        // temp 持有当前仅加载检查使用的隔离固定桥租约。
+        let temp = tempfile::tempdir().expect("create Context7 plugin test directory");
+        // runtimeRoot is the deterministic System Plugin runtime directory.
+        // runtimeRoot 是确定性的 System Plugin 运行时目录。
+        let runtime_root = temp.path().join("runtime");
+        fs::create_dir_all(&runtime_root).expect("create Context7 test runtime root");
+        // repositoryRoot identifies the real checked-in Context7 package.
+        // repositoryRoot 标识仓库内真实的 Context7 插件包。
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("resolve repository root");
+        // manager loads the production catalog and fixed bridge sources.
+        // manager 加载生产插件目录与固定桥源码。
+        let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+        manager
+            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+            .expect("load repository plugin catalog");
+        // runtime executes the real Context7 module initialization under LuaSkills 0.5.3.
+        // runtime 在 LuaSkills 0.5.3 下执行真实 Context7 模块初始化。
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("create Context7 Tokio runtime");
+        runtime
+            .block_on(manager.prewarm_plugin_runtime("context7"))
+            .expect("prewarm Context7 plugin runtime");
+    }
+
     /// Verifies the repository RTK plugin executes its actions, shell transform, and Git context transform through the fixed bridge.
     /// 验证仓库 RTK 插件通过固定桥接层执行 Action、Shell 转换与 Git 上下文转换。
     #[cfg(target_os = "windows")]
@@ -7585,6 +7639,10 @@ return M
         );
         assert_eq!(transformed["binary_path_requests"][0]["binary_id"], "rtk");
         assert_eq!(transformed["contributions"][0]["badge"], "RTK");
+        assert!(
+            transformed["environment"].is_object(),
+            "LuaSkills must preserve an empty shell environment as a JSON object"
+        );
         // git_invocation uses the exact strict service-kernel payload contract for commit-summary context transforms.
         // git_invocation 使用提交摘要上下文转换的精确严格 Service Kernel 载荷契约。
         let git_invocation = HookInvocation {

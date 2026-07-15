@@ -11,7 +11,18 @@ local SCHEMA_VERSION = 2
 
 -- EMPTY_ARRAY preserves JSON array semantics when a query has no rows.
 -- EMPTY_ARRAY 在查询无结果时保留 JSON 数组语义。
-local EMPTY_ARRAY = vulcan.json.decode("[]")
+local EMPTY_ARRAY = vulcan.json.array()
+
+-- Report whether one decoded value represents JSON null.
+-- 判断一个解码值是否表示 JSON null。
+--
+-- value is any value received from a JSON or host boundary.
+-- value 是从 JSON 或宿主边界接收的任意值。
+-- Returns true only for the explicit LuaSkills null sentinel.
+-- 仅对 LuaSkills 显式 null 哨兵返回 true。
+local function is_json_null(value)
+    return value == vulcan.json.null
+end
 
 -- active_requests holds ephemeral request phases until their terminal event arrives.
 -- active_requests 在请求终态事件到达前保存临时阶段。
@@ -61,7 +72,7 @@ end
 -- Convert an optional telemetry scalar into the exact tagged SQLite protocol.
 -- 将可选遥测标量转换为精确的 SQLite 标签协议。
 local function sql_optional(value, value_kind)
-    if value == nil then
+    if value == nil or is_json_null(value) then
         return sql_null()
     end
     if value_kind == "integer" then
@@ -397,7 +408,7 @@ function M.provider_request_started(args)
         first_token_at_ms = nil,
         retrying = false,
     }
-    return success({})
+    return success(vulcan.json.object())
 end
 
 -- Track the first visible token phase without writing a high-frequency fact row.
@@ -412,7 +423,7 @@ function M.provider_response_first_token(args)
     if active_request ~= nil then
         active_request.first_token_at_ms = payload.first_token_at_ms
     end
-    return success({})
+    return success(vulcan.json.object())
 end
 
 -- Track the retry decision in ephemeral Hook-runtime memory.
@@ -427,7 +438,7 @@ function M.provider_request_retrying(args)
     if active_request ~= nil then
         active_request.retrying = true
     end
-    return success({})
+    return success(vulcan.json.object())
 end
 
 -- Persist one idempotent terminal Provider request fact and notify mounted UI subscribers.
@@ -444,7 +455,7 @@ function M.provider_request_completed(args)
     -- config 决定是否采集新事实，以及原始事实的保留期限。
     local config = read_config()
     if not config.enabled then
-        return success({})
+        return success(vulcan.json.object())
     end
     ensure_schema(payload.completed_at_ms)
     -- model_ref points to the permanent provider-and-model dimension record.

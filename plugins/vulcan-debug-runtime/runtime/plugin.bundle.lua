@@ -38,8 +38,8 @@ function M.dispatch(args)
     if type(args.payload_json) ~= "string" or args.payload_json == "" then
         error("debug sidecar payload_json is required")
     end
-    -- The host owns JSON encoding so empty objects never collapse into Lua arrays.
-    -- JSON 编码由宿主持有，避免空对象退化为 Lua 数组。
+    -- The host owns the canonical protocol frame and Lua must forward it without parsing.
+    -- 宿主持有规范协议帧，Lua 必须原样转发而不解析。
     active:write(args.payload_json .. "\n")
     local timeout_ms = tonumber(args.host_timeout_ms) or 30000
     local output = active:read({
@@ -57,8 +57,8 @@ function M.dispatch(args)
     if frame == nil or frame == "" then
         error("debug sidecar response did not contain one complete frame")
     end
-    -- Return the exact frame for host-side decoding without a lossy Lua table round trip.
-    -- 原样返回帧并交由宿主解码，避免有损的 Lua 表往返转换。
+    -- Return the exact frame so protocol validation remains at the owning host boundary.
+    -- 原样返回帧，使协议校验继续位于所属宿主边界。
     return frame
 end
 

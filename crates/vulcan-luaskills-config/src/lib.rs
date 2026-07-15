@@ -273,8 +273,8 @@ fn default_enabled_ai_tool() -> bool {
 }
 
 impl Default for LuaSkillsManagedRuntimeSettings {
-    /// Return the stable LuaSkills 0.5.2 managed-runtime defaults.
-    /// 返回 LuaSkills 0.5.2 的稳定受管运行时默认值。
+    /// Return the stable LuaSkills 0.5.3 managed-runtime defaults.
+    /// 返回 LuaSkills 0.5.3 的稳定受管运行时默认值。
     fn default() -> Self {
         Self {
             worker_pool_max_size_per_environment: 4,

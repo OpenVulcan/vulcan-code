@@ -78,6 +78,9 @@ function M.dispatch(args)
         result = {
             bytes = #bytes,
             windows = vulcan.runtime.is_windows(),
+            emptyObject = vulcan.json.object(),
+            emptyArray = vulcan.json.array(),
+            nullValue = vulcan.json.null,
         },
     })
 end
@@ -119,6 +122,9 @@ local decoded = runtime_vulcan.json.decode(raw)
 assert(decoded.ok == true)
 assert(decoded.result.bytes == 8)
 assert(type(decoded.result.windows) == "boolean")
+assert(runtime_vulcan.json.encode(decoded.result.emptyObject) == "{}")
+assert(runtime_vulcan.json.encode(decoded.result.emptyArray) == "[]")
+assert(decoded.result.nullValue == runtime_vulcan.json.null)
 
 return {
     loaded = true,

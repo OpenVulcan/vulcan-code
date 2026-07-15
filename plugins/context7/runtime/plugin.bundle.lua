@@ -69,7 +69,21 @@ local MAX_SAFE_INTEGER = 9007199254740991
 
 -- EMPTY_ARRAY preserves JSON array semantics for parameterless SQLite statements.
 -- EMPTY_ARRAY 为无参数 SQLite 语句保留 JSON 数组语义。
-local EMPTY_ARRAY = vulcan.json.decode("[]")
+local EMPTY_ARRAY = vulcan.json.array()
+
+-- Convert an explicit JSON null sentinel into an absent Lua value.
+-- 把显式 JSON null 哨兵转换为缺失的 Lua 值。
+--
+-- value is any value received from a JSON, SQLite, or host boundary.
+-- value 是从 JSON、SQLite 或宿主边界接收的任意值。
+-- Returns nil for JSON null and otherwise returns the original value.
+-- 对 JSON null 返回 nil，否则返回原值。
+local function json_optional(value)
+    if value == vulcan.json.null then
+        return nil
+    end
+    return value
+end
 
 -- schema_ready avoids repeated migration work inside one persistent action lease.
 -- schema_ready 避免在单个持久 Action 租约内重复执行迁移。
@@ -125,7 +139,7 @@ end
 -- Returns a tagged SQLite parameter including explicit null.
 -- 返回一个包含显式空值的 SQLite 标签参数。
 local function sql_optional(value, value_kind)
-    if value == nil then
+    if json_optional(value) == nil then
         return sql_null()
     end
     if value_kind == "integer" then
@@ -478,13 +492,13 @@ end
 local function credential_is_configured(row)
     -- nonce_present records the exact nonce-column presence.
     -- nonce_present 记录精确 Nonce 列是否存在。
-    local nonce_present = row.apiKeyNonceHex ~= nil
+    local nonce_present = json_optional(row.apiKeyNonceHex) ~= nil
     -- ciphertext_present records the exact ciphertext-column presence.
     -- ciphertext_present 记录精确 Ciphertext 列是否存在。
-    local ciphertext_present = row.apiKeyCiphertextHex ~= nil
+    local ciphertext_present = json_optional(row.apiKeyCiphertextHex) ~= nil
     -- tag_present records the exact authentication-tag-column presence.
     -- tag_present 记录精确认证标签列是否存在。
-    local tag_present = row.apiKeyTagHex ~= nil
+    local tag_present = json_optional(row.apiKeyTagHex) ~= nil
     -- present_count distinguishes a complete envelope from corruption without fallback paths.
     -- present_count 区分完整信封与损坏状态，不使用回退路径。
     local present_count = (nonce_present and 1 or 0)
@@ -529,10 +543,10 @@ LIMIT 1
     local configured = credential_is_configured(row)
     -- status is meaningful only for a configured key.
     -- status 仅对已配置 Key 有意义。
-    local status = configured and row.validationStatus or "unknown"
+    local status = configured and json_optional(row.validationStatus) or "unknown"
     -- validated_text is an optional persisted Unix millisecond string.
     -- validated_text 是一个可选持久化 Unix 毫秒字符串。
-    local validated_text = configured and row.validatedAtText or ""
+    local validated_text = configured and json_optional(row.validatedAtText) or ""
     -- result contains only fields allowed by the action output schema.
     -- result 仅包含 Action 输出 Schema 允许的字段。
     local result = {
@@ -1698,7 +1712,7 @@ LEFT JOIN current_quota ON 1 = 1
             queryRequests = row.queryRequests,
         },
     }
-    if row.quotaAuthMode ~= nil then
+    if json_optional(row.quotaAuthMode) ~= nil then
         result.quotaSnapshot = {
             authMode = row.quotaAuthMode,
             credentialGeneration = row.quotaCredentialGeneration,
