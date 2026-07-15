@@ -337,7 +337,7 @@ impl VmmEffectiveConfig {
         if self.session_compact_recall {
             PreCheckRecallMode::PreCheckRecallModeSessionCompact
         } else {
-            PreCheckRecallMode::PreCheckRecallModeLegacy
+            PreCheckRecallMode::PreCheckRecallModeFull
         }
     }
 

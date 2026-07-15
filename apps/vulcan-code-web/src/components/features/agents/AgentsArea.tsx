@@ -1,10 +1,11 @@
 import * as React from "react"
-import { Bot, ExternalLink, FolderOpen, Github, Maximize2, Minimize2, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
+import { Bot, FolderOpen, Maximize2, Minimize2, Pencil, Plus, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { ModelPickerControl, modelPickerChoiceKey } from "@/components/composer/model-picker-control"
 import { formatSkillText } from "@/components/features/featureText"
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
+import { SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import {
   Dialog,
@@ -16,8 +17,7 @@ import {
 } from "@/components/ui/dialog"
 import { StatusPill } from "@/components/shared/status"
 import { useI18n } from "@/i18n"
-import { openExternalUrl } from "@/service/project-actions-service"
-import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, SubagentOriginSummary, WorkbenchSnapshot } from "@/types"
+import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
 
 export type { AgentActionProps } from "./agent-area-types"
@@ -1036,60 +1036,6 @@ function policySelectionLabel(mode: CapabilityPolicyMode, locale: string): strin
   return localizedAgentLiteral(locale, "全部", "All")
 }
 
-// AgentSourceOriginLink renders a display-only provenance link for an agent.
-// AgentSourceOriginLink 渲染智能体展示专用的来源链接。
-function AgentSourceOriginLink(props: {
-  // Display-only source metadata.
-  // 仅用于展示的来源元数据。
-  origin?: SubagentOriginSummary | null
-  // Whether this link is rendered inside the detail dialog.
-  // 当前链接是否渲染在详情弹窗内。
-  detail?: boolean
-}) {
-  const origin = props.origin
-  const url = origin?.url?.trim()
-  if (!origin || !url) {
-    return null
-  }
-  const iconKey = agentSourceOriginIconKey(origin)
-  const label = iconKey === "github" ? "Github" : origin.kind?.trim() || "source"
-  const className = props.detail ? "agent-source-origin-detail-link" : "agent-source-origin-link"
-  // handleClick opens the source URL through the same host shell path as the status bar repository link.
-  // handleClick 通过与状态栏仓库链接相同的宿主壳路径打开来源地址。
-  const handleClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
-    event.preventDefault()
-    event.stopPropagation()
-    void openExternalUrl(url).catch((error) => {
-      toast.error(`打开来源失败：${error instanceof Error ? error.message : String(error)}`)
-    })
-  }, [url])
-  return (
-    <a aria-label={url} className={className} href={url} onClick={handleClick} rel="noreferrer" target="_blank" title={url}>
-      {agentSourceOriginIcon(origin)}
-      <span>{label}</span>
-    </a>
-  )
-}
-
-// agentSourceOriginIconKey normalizes the source icon key.
-// agentSourceOriginIconKey 归一化来源图标键。
-function agentSourceOriginIconKey(origin: SubagentOriginSummary): string {
-  return (origin.icon || origin.kind || "").trim().toLowerCase()
-}
-
-// agentSourceOriginIcon chooses the compact icon for display-only source metadata.
-// agentSourceOriginIcon 为展示专用来源元数据选择紧凑图标。
-function agentSourceOriginIcon(origin: SubagentOriginSummary): React.ReactNode {
-  const iconKey = agentSourceOriginIconKey(origin)
-  if (iconKey === "github") {
-    return <Github size={13} />
-  }
-  if (iconKey === "system") {
-    return <Bot size={13} />
-  }
-  return <ExternalLink size={13} />
-}
-
 // AgentDefinitionCard renders one agent definition row.
 // AgentDefinitionCard 渲染单个智能体定义行。
 function AgentDefinitionCard(props: {
@@ -1155,7 +1101,7 @@ function AgentDefinitionCard(props: {
                 {fixedModelUnavailable ? text("固定模型不可用", "Fixed model unavailable") : text("固定模型", "Fixed model")}
               </Badge>
             ) : null}
-            <AgentSourceOriginLink origin={definition.sourceOrigin} />
+            <SourceOriginLink origin={definition.sourceOrigin} />
           </div>
         </div>
         <p>{displayDescription || text("未填写描述。", "No description provided.")}</p>
@@ -1257,7 +1203,7 @@ function AgentDefinitionDetailDialog(props: {
                 <div className="wide">
                   <span>{text("展示来源", "Display source")}</span>
                   <strong>
-                    <AgentSourceOriginLink detail origin={definition.sourceOrigin} />
+                    <SourceOriginLink detail origin={definition.sourceOrigin} />
                   </strong>
                 </div>
               ) : null}

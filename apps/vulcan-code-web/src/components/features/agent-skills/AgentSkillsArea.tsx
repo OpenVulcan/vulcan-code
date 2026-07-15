@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm"
 
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
+import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -309,7 +310,9 @@ export function AgentSkillsArea(props: {
                   <div className="agent-definition-row-badges">
                     <Badge variant="outline">{localizedAgentSkillScope(record, locale)}</Badge>
                     <Badge variant="outline">{localizedAgentSkillCategory(categoryById.get(record.categoryId), locale)}</Badge>
-                    <Badge variant="outline">{localizedAgentSkillOrigin(record, locale)}</Badge>
+                    {hasLinkedGitHubSourceOrigin(record.origin)
+                      ? <SourceOriginLink origin={record.origin} />
+                      : <Badge variant="outline">{localizedAgentSkillOrigin(record, locale)}</Badge>}
                     {record.overrideOf ? <Badge variant="outline">{locale.startsWith("zh") ? "用户覆盖" : "Override"}</Badge> : null}
                     {!record.effective ? <Badge variant="outline">{locale.startsWith("zh") ? "非生效来源" : "Inactive source"}</Badge> : null}
                   </div>
@@ -491,7 +494,9 @@ function AgentSkillDetailDialog(props: {
               <div><span>{chinese ? "当前状态" : "Status"}</span><strong>{record.enabled ? (chinese ? "已启用" : "Enabled") : (chinese ? "已停用" : "Disabled")}</strong></div>
               <div><span>{chinese ? "来源" : "Scope"}</span><strong>{localizedAgentSkillScope(record, props.locale)}</strong></div>
               <div><span>{chinese ? "分类" : "Category"}</span><strong>{localizedAgentSkillCategory(category, props.locale)}</strong></div>
-              <div><span>{chinese ? "来源类型" : "Origin"}</span><strong>{localizedAgentSkillOrigin(record, props.locale)}</strong></div>
+              <div><span>{chinese ? "来源类型" : "Origin"}</span><strong>{hasLinkedGitHubSourceOrigin(record.origin)
+                ? <SourceOriginLink detail origin={record.origin} />
+                : localizedAgentSkillOrigin(record, props.locale)}</strong></div>
               <div><span>{chinese ? "许可证" : "License"}</span><strong>{record.standard.license ?? "—"}</strong></div>
               <div><span>{chinese ? "兼容性" : "Compatibility"}</span><strong>{record.standard.compatibility ?? "—"}</strong></div>
               <div className="wide"><span>{chinese ? "资源" : "Resources"}</span><strong>{chinese

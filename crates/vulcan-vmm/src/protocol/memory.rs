@@ -8,13 +8,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PreCheckRecallMode {
-    /// Legacy recall that ignores compact boundaries.
-    /// 忽略压缩边界的旧版召回。
+    /// Server-selected safe default used when callers omit the recall mode.
+    /// 调用方省略召回模式时，由服务端选择安全默认策略。
     #[default]
-    PreCheckRecallModeLegacy,
+    PreCheckRecallModeUnspecified,
     /// Session compact-aware recall that respects the latest ChatCompact anchor.
     /// 感知当前会话 ChatCompact 锚点的压缩召回。
     PreCheckRecallModeSessionCompact,
+    /// Full recall that explicitly disables the current-session compact boundary.
+    /// 显式关闭当前会话压缩边界的完整召回。
+    PreCheckRecallModeFull,
 }
 
 impl PreCheckRecallMode {
@@ -22,8 +25,9 @@ impl PreCheckRecallMode {
     /// 返回当前 proto 枚举标签。
     pub const fn proto_label(self) -> &'static str {
         match self {
-            Self::PreCheckRecallModeLegacy => "PRE_CHECK_RECALL_MODE_LEGACY",
+            Self::PreCheckRecallModeUnspecified => "PRE_CHECK_RECALL_MODE_UNSPECIFIED",
             Self::PreCheckRecallModeSessionCompact => "PRE_CHECK_RECALL_MODE_SESSION_COMPACT",
+            Self::PreCheckRecallModeFull => "PRE_CHECK_RECALL_MODE_FULL",
         }
     }
 }

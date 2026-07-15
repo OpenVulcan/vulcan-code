@@ -650,10 +650,11 @@ fn grpc_write_memory_item(item: WriteMemoryItem) -> GrpcWriteMemoryItem {
 /// 将协议召回模式转换为生成的 protobuf 枚举。
 fn grpc_recall_mode(recall_mode: PreCheckRecallMode) -> GrpcPreCheckRecallMode {
     match recall_mode {
-        PreCheckRecallMode::PreCheckRecallModeLegacy => GrpcPreCheckRecallMode::Legacy,
+        PreCheckRecallMode::PreCheckRecallModeUnspecified => GrpcPreCheckRecallMode::Unspecified,
         PreCheckRecallMode::PreCheckRecallModeSessionCompact => {
             GrpcPreCheckRecallMode::SessionCompact
         }
+        PreCheckRecallMode::PreCheckRecallModeFull => GrpcPreCheckRecallMode::Full,
     }
 }
 
@@ -723,6 +724,24 @@ mod tests {
         ProfileNodeSourceKind as GrpcProfileNodeSourceKind,
     };
     use crate::protocol::{PostActionTimelineType, ProfileNodeSourceKind};
+
+    /// Verifies that protocol recall modes retain the updated gRPC wire values, especially the active compact-aware value 1.
+    /// 验证协议召回模式保持更新后的 gRPC 线协议数值，尤其锁定当前启用的压缩感知模式值 1。
+    #[test]
+    fn grpc_recall_modes_match_updated_wire_contract() {
+        assert_eq!(
+            grpc_recall_mode(PreCheckRecallMode::PreCheckRecallModeUnspecified) as i32,
+            0
+        );
+        assert_eq!(
+            grpc_recall_mode(PreCheckRecallMode::PreCheckRecallModeSessionCompact) as i32,
+            1
+        );
+        assert_eq!(
+            grpc_recall_mode(PreCheckRecallMode::PreCheckRecallModeFull) as i32,
+            2
+        );
+    }
 
     #[test]
     fn normalize_endpoint_adds_http_scheme_to_bare_target() {
