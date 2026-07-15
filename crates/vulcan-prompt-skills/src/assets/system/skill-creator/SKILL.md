@@ -299,8 +299,8 @@ scripts/init_skill.py <skill-name> --path <output-directory> [--resources script
 Examples:
 
 ```bash
-scripts/init_skill.py my-skill --path "${VULCAN_HOME:-$HOME/.vulcan}/skills"
-scripts/init_skill.py my-skill --path "${VULCAN_HOME:-$HOME/.vulcan}/skills" --resources scripts,references
+scripts/init_skill.py my-skill --path "${VULCAN_HOME:-$HOME/.vulcan}/code/skills"
+scripts/init_skill.py my-skill --path "${VULCAN_HOME:-$HOME/.vulcan}/code/skills" --resources scripts,references
 scripts/init_skill.py my-skill --path ~/work/skills --resources scripts --examples
 ```
 

@@ -100,12 +100,12 @@ pub(super) async fn set_system_plugin_enabled(
     state: SharedServiceBridgeState,
     plugin_id: String,
     enabled: bool,
-) -> Result<LuaSkillsCatalogUpdate, String> {
+) -> Result<PluginCatalogProjectionUpdate, String> {
     // stable_plugin_id is owned because every asynchronous compensation path uses the same identity.
     // stable_plugin_id 采用所有权字符串，因为所有异步补偿路径都使用同一标识。
     let stable_plugin_id = plugin_id.trim().to_owned();
     if stable_plugin_id.is_empty() {
-        return Err(String::from("LuaSkills System Plugin 标识不能为空。"));
+        return Err(String::from("系统插件标识不能为空。"));
     }
     // management_guard serializes catalog, lifecycle, persistence, and hook ownership transfer.
     // management_guard 串行化目录、生命周期、持久化与 Hook 所有权交接。
@@ -129,16 +129,14 @@ pub(super) async fn set_system_plugin_enabled(
     let current_plugin = current_catalog
         .plugins
         .get(&stable_plugin_id)
-        .ok_or_else(|| format!("未发现 LuaSkills System Plugin：{stable_plugin_id}"))?;
+        .ok_or_else(|| format!("未发现系统插件：{stable_plugin_id}"))?;
     // default_enabled is the manifest baseline required by configuration normalization.
     // default_enabled 是配置归一化所需的清单基线。
     let default_enabled = current_plugin
         .manifest
         .as_ref()
         .map(|manifest| manifest.default_enabled)
-        .ok_or_else(|| {
-            format!("LuaSkills System Plugin `{stable_plugin_id}` 缺少有效清单，无法变更状态")
-        })?;
+        .ok_or_else(|| format!("系统插件 `{stable_plugin_id}` 缺少有效清单，无法变更状态"))?;
     // previous_enabled is the exact effective state restored by every failed transaction.
     // previous_enabled 是每个失败事务都要恢复的精确生效状态。
     let previous_enabled = current_plugin.desired_enabled;
@@ -167,12 +165,12 @@ pub(super) async fn set_system_plugin_enabled(
             | vulcan_plugin_runtime::SystemPluginAvailability::Disabled
     ) {
         return Err(format!(
-            "LuaSkills System Plugin `{stable_plugin_id}` 当前不可管理：{}",
+            "系统插件 `{stable_plugin_id}` 当前不可管理：{}",
             current_plugin.diagnostics.join("；")
         ));
     }
     if previous_enabled == target.is_enabled() && already_settled {
-        return refresh_luaskills_local_state(&state).await;
+        return refresh_plugin_catalog_local_state(&state).await;
     }
 
     // target_luaskills applies the requested override without mutating retained state.
@@ -197,7 +195,7 @@ pub(super) async fn set_system_plugin_enabled(
     let target_plugin = target_catalog
         .plugins
         .get(&stable_plugin_id)
-        .ok_or_else(|| format!("目标目录未发现 LuaSkills System Plugin：{stable_plugin_id}"))?;
+        .ok_or_else(|| format!("目标目录未发现系统插件：{stable_plugin_id}"))?;
     // expected_availability is the only availability accepted for the requested target.
     // expected_availability 是请求目标唯一允许的可用性。
     let expected_availability = if target.is_enabled() {
@@ -207,7 +205,7 @@ pub(super) async fn set_system_plugin_enabled(
     };
     if target_plugin.availability != expected_availability {
         return Err(format!(
-            "LuaSkills System Plugin `{stable_plugin_id}` 无法进入请求状态：{}",
+            "系统插件 `{stable_plugin_id}` 无法进入请求状态：{}",
             target_plugin.diagnostics.join("；")
         ));
     }
@@ -266,7 +264,7 @@ pub(super) async fn set_system_plugin_enabled(
             commit_disable_transition(&state, &runtime, &transition).await?;
         }
     }
-    refresh_luaskills_local_state(&state).await
+    refresh_plugin_catalog_local_state(&state).await
 }
 
 /// Prepares an enable transition through validation, lifecycle callback, and probe.
@@ -296,7 +294,7 @@ async fn prepare_enable_transition(
             .await
             .map_err(|error| {
                 format!(
-                    "LuaSkills System Plugin `{}` 重新启用前清理失败：{error}",
+                    "系统插件 `{}` 重新启用前清理失败：{error}",
                     transition.plugin_id
                 )
             })?;
@@ -309,18 +307,14 @@ async fn prepare_enable_transition(
                 cleanup_report.failures.clone(),
             )?;
             return Err(format!(
-                "LuaSkills System Plugin `{}` 仍有未清理资源：{}",
+                "系统插件 `{}` 仍有未清理资源：{}",
                 transition.plugin_id,
                 cleanup_report.failures.join("；")
             ));
         }
     }
-    validate_service_system_plugin_hooks(state, target_hooks).map_err(|error| {
-        format!(
-            "LuaSkills System Plugin `{}` Hook 声明无效：{error}",
-            transition.plugin_id
-        )
-    })?;
+    validate_service_system_plugin_hooks(state, target_hooks)
+        .map_err(|error| format!("系统插件 `{}` Hook 声明无效：{error}", transition.plugin_id))?;
     runtime
         .begin_enabling(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
@@ -336,7 +330,7 @@ async fn prepare_enable_transition(
     // preparation_plugin_id preserves the exact transaction identity in the blocking task.
     // preparation_plugin_id 在阻塞任务中保留精确事务标识。
     let preparation_plugin_id = transition.plugin_id.clone();
-    if let Err(error) = run_luaskills_management_blocking("prepare plugin environment", move || {
+    if let Err(error) = run_extension_management_blocking("prepare plugin environment", move || {
         preparation_runtime
             .prepare_plugin_environment(&preparation_plugin_id)
             .map(|_| ())
@@ -345,10 +339,7 @@ async fn prepare_enable_transition(
     .await
     {
         return Err(append_rollback_error(
-            format!(
-                "LuaSkills System Plugin `{}` 环境准备失败：{error}",
-                transition.plugin_id
-            ),
+            format!("系统插件 `{}` 环境准备失败：{error}", transition.plugin_id),
             restore_previous_projection(state, runtime, transition, Vec::new()),
         ));
     }
@@ -363,10 +354,7 @@ async fn prepare_enable_transition(
         // cleanup_failures 通过声明的停用回调捕获部分回调副作用。
         let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
-            format!(
-                "LuaSkills System Plugin `{}` 启用回调失败：{error}",
-                transition.plugin_id
-            ),
+            format!("系统插件 `{}` 启用回调失败：{error}", transition.plugin_id),
             restore_previous_projection(state, runtime, transition, cleanup_failures),
         ));
     }
@@ -375,10 +363,7 @@ async fn prepare_enable_transition(
         // cleanup_failures 补偿回调成功但运行时探测失败的情况。
         let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
-            format!(
-                "LuaSkills System Plugin `{}` 启用探测失败：{error}",
-                transition.plugin_id
-            ),
+            format!("系统插件 `{}` 启用探测失败：{error}", transition.plugin_id),
             restore_previous_projection(state, runtime, transition, cleanup_failures),
         ));
     }
@@ -433,7 +418,7 @@ async fn persist_transition_target(
         state,
         transition,
         transition.target.is_enabled(),
-        "保存 LuaSkills System Plugin 状态失败",
+        "保存系统插件状态失败",
     )
     .await
 }
@@ -513,7 +498,7 @@ async fn commit_enable_transition(
                     state,
                     transition,
                     transition.previous_enabled,
-                    "回滚 LuaSkills System Plugin 状态失败",
+                    "回滚系统插件状态失败",
                 )
                 .await;
                 if let Err(rollback_error) = persistence_rollback {
@@ -669,13 +654,8 @@ async fn rollback_finalized_enable_to_policy(
     restored_enabled: bool,
     restored_policy: &SystemPluginPolicySnapshot,
 ) -> Result<(), String> {
-    persist_transition_enabled_state(
-        state,
-        transition,
-        restored_enabled,
-        "回滚 LuaSkills System Plugin 状态失败",
-    )
-    .await?;
+    persist_transition_enabled_state(state, transition, restored_enabled, "回滚系统插件状态失败")
+        .await?;
     runtime
         .begin_draining(&transition.plugin_id)
         .map_err(|error| error.to_string())?;
@@ -778,7 +758,7 @@ async fn rollback_uncommitted_disable(
         state,
         transition,
         transition.previous_enabled,
-        "回滚 LuaSkills System Plugin 状态失败",
+        "回滚系统插件状态失败",
     )
     .await
     {
@@ -808,7 +788,7 @@ async fn rollback_uncommitted_disable(
                     state,
                     transition,
                     transition.target.is_enabled(),
-                    "恢复 LuaSkills System Plugin 停用状态失败",
+                    "恢复系统插件停用状态失败",
                 )
                 .await?;
                 return Err(append_rollback_error(

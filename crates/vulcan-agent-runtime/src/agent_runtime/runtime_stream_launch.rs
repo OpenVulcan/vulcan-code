@@ -32,10 +32,40 @@ pub async fn prepare_runtime_stream_launch(
     token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
+    prepare_runtime_stream_launch_with_plugins(
+        config,
+        agent_profile_catalog,
+        luaskills_runtime,
+        None,
+        mcp_runtime_access,
+        task_runtime,
+        question_runtime,
+        command_session_runtime,
+        token_budget_runtime,
+        request,
+    )
+    .await
+}
+
+/// Builds one runtime-stream launch with an independently owned System Plugin runtime.
+/// 使用独立持有的系统插件运行时构建一次运行时流启动载荷。
+pub async fn prepare_runtime_stream_launch_with_plugins(
+    config: &ProviderConfigurationFile,
+    agent_profile_catalog: &AgentProfileCatalog,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    mcp_runtime_access: McpRuntimeAccess,
+    task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
+    request: ExecutionPreparationRequest,
+) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     let prepared_launch_input = prepare_runtime_launch_input(
         config,
         agent_profile_catalog,
         luaskills_runtime,
+        system_plugin_runtime,
         mcp_runtime_access,
         task_runtime,
         question_runtime,

@@ -27,7 +27,9 @@ use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
 };
-use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot};
+use vulcan_session_core::{
+    CapabilityPolicySnapshot, ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot,
+};
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 use vulcan_vmm::VmmConfigLayer;
 use vulcan_workbench_model::SessionTurnUsageSegment;
@@ -240,6 +242,9 @@ pub struct ExecutionPreparationRequest {
     /// Prompt purpose used to choose runtime prompt assembly and tool exposure.
     /// 用于选择运行时提示词装配与工具暴露策略的提示词用途。
     pub prompt_purpose: ExecutionPromptPurpose,
+    /// Request-scoped prompt-skill visibility policy applied after lifecycle state resolution.
+    /// 在生命周期状态解析后应用的请求级提示词技能可见性策略。
+    pub prompt_skill_policy_override: CapabilityPolicySnapshot,
     /// Project-level prompt-skill overrides captured for the current workspace.
     /// 为当前工作区捕获的项目级提示词技能覆盖。
     pub project_prompt_skills: ProjectPromptSkillsConfiguration,

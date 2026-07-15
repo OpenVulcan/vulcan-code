@@ -60,6 +60,7 @@ pub struct SystemPluginManifest {
     pub platforms: SystemPluginPlatformManifest,
     /// Managed Lua runtime declaration.
     /// 受管 Lua 运行时声明。
+    #[serde(default)]
     pub runtime: SystemPluginRuntimeManifest,
     /// Dependency installation policy owned by the Vulcan host.
     /// 由 Vulcan 宿主持有的依赖安装策略。
@@ -113,6 +114,46 @@ pub struct SystemPluginManifest {
     /// 以语言标识为键的本地化文件路径。
     #[serde(default)]
     pub locales: BTreeMap<String, String>,
+}
+
+impl SystemPluginManifest {
+    /// Returns whether this package declares an executable Lua runtime.
+    /// 返回当前插件包是否声明了可执行 Lua 运行时。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the runtime section is present and complete after deserialization.
+    /// 当反序列化后存在完整运行时段时返回 `true`。
+    pub fn has_runtime(&self) -> bool {
+        !self.runtime.bundle.is_empty()
+    }
+
+    /// Returns whether a content-only package declares an execution-owned feature.
+    /// 返回内容型插件包是否声明了执行侧能力。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when any declaration requires an executable runtime or host capability.
+    /// 任一声明需要可执行运行时或宿主能力时返回 `true`。
+    pub fn has_execution_declarations(&self) -> bool {
+        !self.capabilities.is_empty()
+            || !self.actions.is_empty()
+            || !self.ui.mounts.is_empty()
+            || self.config.is_some()
+            || !self.binaries.is_empty()
+            || !self.node_entries.is_empty()
+            || !self.python_entries.is_empty()
+            || !self.tools.is_empty()
+            || !self.hooks.is_empty()
+            || !self.prompt_contributions.is_empty()
+            || self.lifecycle.install.is_some()
+            || self.lifecycle.enable.is_some()
+            || self.lifecycle.disable.is_some()
+            || self.lifecycle.uninstall.is_some()
+            || !self.runtime.required_files.is_empty()
+            || !self.runtime.lua_modules.is_empty()
+            || self.runtime.hook_shutdown_function.is_some()
+    }
 }
 
 /// Dependency installation source policy for one plugin package.
@@ -211,7 +252,7 @@ pub enum SystemPluginCapability {
 
 /// One plugin business action callable through the generic service boundary.
 /// 一个可通过通用服务边界调用的插件业务 action。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SystemPluginActionManifest {
     /// Stable plugin-local action identifier.
@@ -419,7 +460,7 @@ pub struct SystemPluginPlatformManifest {
 
 /// Managed Lua runtime entry declaration.
 /// 受管 Lua 运行时入口声明。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SystemPluginRuntimeManifest {
     /// Dependency manifest relative to the package root.

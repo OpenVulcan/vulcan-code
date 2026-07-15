@@ -34,10 +34,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command as TokioCommand;
 use tokio::time::{Duration, Instant, timeout};
 use uuid::Uuid;
-use vulcan_prompt_skills::{
-    PromptSkillState, PromptSkillsGlobalConfig, PromptSkillsProjectConfig,
-    PromptSkillsSessionConfig, render_skill_tool_output, resolve_prompt_skills,
-};
+use vulcan_prompt_skills::{PromptSkill, render_skill_tool_output};
 use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
 use vulcan_vmm::{
     DeleteMemoriesRequest, GetTurnDetailsRequest, SearchMemoryEventsRequest, TonicVmmClient,
@@ -207,6 +204,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional prompt-skill names enabled for the current execution turn.
     /// 当前执行回合启用的可选提示词技能名称集合。
     pub enabled_prompt_skill_names: Vec<String>,
+    /// Parsed prompt skills captured for the current execution turn.
+    /// 当前执行回合捕获的已解析提示词技能集合。
+    pub prepared_prompt_skills: Vec<PromptSkill>,
     /// Optional prompt-skill user root captured for the current execution turn.
     /// 当前执行回合捕获的可选提示词技能用户根目录。
     pub prompt_skill_user_root: Option<PathBuf>,

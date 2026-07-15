@@ -76,6 +76,18 @@ pub struct PluginExtensionSummary {
     /// Dynamic host UI mounts.
     /// 动态宿主界面挂载项。
     pub ui_mounts: Vec<PluginUiMountSummary>,
+    /// Read-only Agent Skill identifiers contributed by this plugin.
+    /// 当前插件贡献的只读 Agent Skill 标识。
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Read-only subagent identifiers contributed by this plugin.
+    /// 当前插件贡献的只读子代理标识。
+    #[serde(default)]
+    pub agents: Vec<String>,
+    /// Whether this plugin owns an executable Lua runtime.
+    /// 当前插件是否拥有可执行 Lua 运行时。
+    #[serde(default)]
+    pub has_runtime: bool,
 }
 
 /// Summarizes one plugin or LuaSkill package.
@@ -136,6 +148,14 @@ pub struct PluginSummary {
     /// 插件包声明的宿主 hook 处理器数量。
     #[serde(default)]
     pub hook_count: usize,
+    /// Number of read-only Agent Skills contributed by the plugin package.
+    /// 插件包贡献的只读 Agent Skills 数量。
+    #[serde(default)]
+    pub skill_count: usize,
+    /// Number of read-only subagents contributed by the plugin package.
+    /// 插件包贡献的只读子代理数量。
+    #[serde(default)]
+    pub agent_count: usize,
     /// Number of currently retained managed sessions.
     /// 当前保留的受管会话数量。
     #[serde(default)]
@@ -561,7 +581,7 @@ mod plugin_summary_tests {
             id: String::from("hook-only-plugin"),
             version: Some(String::from("1.0.0")),
             name: String::from("Hook-only Plugin"),
-            kind: String::from("LuaSkills System Plugin"),
+            kind: String::from("System Plugin"),
             status: String::from("已启用"),
             runtime_state: String::from("enabled"),
             capability: String::from("Host hook integration"),
@@ -571,6 +591,8 @@ mod plugin_summary_tests {
             desired_enabled: true,
             available: true,
             tool_count: 0,
+            skill_count: 0,
+            agent_count: 0,
             tools: Vec::new(),
             hook_count: 1,
             active_session_count: 0,

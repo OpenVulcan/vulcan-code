@@ -111,7 +111,10 @@ pub use execution_models::{
     ExecutionProviderVisibleAgentMessage, ExecutionRunReport, ExecutionSessionGoalContext,
 };
 pub use runtime::RuntimeFoundation;
-pub use runtime_stream::{stream_runtime_run, stream_runtime_run_with_intervention};
+pub use runtime_stream::{
+    stream_runtime_run, stream_runtime_run_with_intervention,
+    stream_runtime_run_with_intervention_and_plugins,
+};
 pub use runtime_stream_intervention::{RuntimePromptIntervention, RuntimePromptInterventionError};
 
 #[cfg(test)]

@@ -365,8 +365,8 @@ fn service_workbench_paths_stay_on_mcp_runtime_access() {
         service_kernel_root.display()
     );
     assert!(
-        service_kernel_source.contains("stream_runtime_run_with_intervention("),
-        "service kernel should pass the stable McpRuntimeAccess surface into the agent stream entrypoint under: {}",
+        service_kernel_source.contains("stream_runtime_run_with_intervention_and_plugins("),
+        "service kernel should pass stable MCP and plugin runtime surfaces into the agent stream entrypoint under: {}",
         service_kernel_root.display()
     );
     assert!(

@@ -46,6 +46,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         tool_request_rejection_tool_ids: Vec::new(),
         tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
+        prompt_skill_policy_override: Default::default(),
         project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
         session_prompt_skill_overrides: BTreeMap::new(),
         context_injection: None,
@@ -96,6 +97,31 @@ fn child_forbidden_tool_ids_include_parent_owned_tools() {
             "child-agent hard-disabled tools must include {tool_id}"
         );
     }
+}
+
+/// Verifies child preparation receives the complete prompt-skill capability policy instead of only legacy lists.
+/// 验证子执行准备会收到完整提示词技能能力策略，而不只是旧版列表。
+#[test]
+fn task_prompt_skill_snapshot_propagates_allow_only_policy() {
+    let mut request = test_parent_execution_request(Uuid::new_v4());
+    let snapshot = PromptSkillSnapshot {
+        policy: CapabilityPolicySnapshot {
+            mode: CapabilityPolicyMode::AllowOnly,
+            selectors: vec![String::from("content-plugin:review-helper")],
+        },
+        enabled: vec![String::from("content-plugin:review-helper")],
+        disabled: Vec::new(),
+    };
+
+    apply_task_prompt_skill_snapshot(&mut request, &snapshot);
+
+    assert_eq!(request.prompt_skill_policy_override, snapshot.policy);
+    assert_eq!(
+        request
+            .session_prompt_skill_overrides
+            .get("content-plugin:review-helper"),
+        Some(&PersistedPromptSkillState::Enabled)
+    );
 }
 
 /// Verifies execution-context registration returns a diagnostic instead of panicking on lock poisoning.

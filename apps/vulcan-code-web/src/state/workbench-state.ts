@@ -658,6 +658,7 @@ export function applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
     || envelope.delta.kind === "agentSkillsCatalogChanged"
     || envelope.delta.kind === "luaSkillsCatalogChanged"
     || envelope.delta.kind === "subagentCatalogChanged"
+    || envelope.delta.kind === "pluginCatalogChanged"
     || envelope.delta.kind === "projectSettingsChanged"
     || envelope.delta.kind === "luaSkillsManagedRuntimeProgressChanged";
   if (!ownsIndependentLifecycleDomain && envelope.generation <= (workbench.revision ?? 0)) {
@@ -787,6 +788,14 @@ function applyWorkbenchDeltaPayloadWithSubagentSurfaceMessageCache(
     case "subagentCatalogChanged":
       return {
         ...workbench,
+        subagentCatalog: envelope.delta.payload.subagentCatalog,
+      };
+    case "pluginCatalogChanged":
+      return {
+        ...workbench,
+        luaSkills: envelope.delta.payload.luaSkills,
+        plugins: envelope.delta.payload.plugins,
+        agentSkills: envelope.delta.payload.agentSkills,
         subagentCatalog: envelope.delta.payload.subagentCatalog,
       };
     case "projectSettingsChanged":

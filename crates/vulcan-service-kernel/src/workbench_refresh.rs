@@ -225,8 +225,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
     };
     let system_plugin_catalog = agent_runtime_for_status
         .as_ref()
-        .and_then(|agent_runtime| agent_runtime.luaskills_runtime.as_ref())
-        .map(|runtime| runtime.system_plugin_runtime.snapshot());
+        .map(|agent_runtime| agent_runtime.system_plugin_runtime.snapshot());
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &controller_runtime,
         command_session_runtime: agent_runtime_for_status
@@ -539,10 +538,7 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
             .as_deref(),
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
         agent_runtime.provider_configuration.vmm.clone(),
-        agent_runtime
-            .luaskills_runtime
-            .as_ref()
-            .map(|runtime| runtime.system_plugin_runtime.clone()),
+        Some(agent_runtime.system_plugin_runtime.clone()),
     );
     native_catalog
         .descriptors
@@ -962,14 +958,20 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         subagent_navigation,
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
-        plugins: plugins_from_luaskills(
+        plugins: plugins_from_catalogs(
             luaskills_catalog,
             provider_configuration,
             system_plugin_catalog,
         ),
         lua_skills: lua_skills_catalog_summary(luaskills_catalog, provider_configuration),
-        agent_skills: agent_skills_catalog_summary(provider_configuration),
-        subagent_catalog: subagent_catalog_summary(provider_configuration),
+        agent_skills: agent_skills_catalog_summary(
+            provider_configuration,
+            input.system_plugin_catalog,
+        ),
+        subagent_catalog: subagent_catalog_summary(
+            provider_configuration,
+            input.system_plugin_catalog,
+        ),
         settings: settings(),
         providers: providers(provider_configuration),
         mcp_servers: mcp_servers(provider_configuration),
@@ -1117,6 +1119,8 @@ mod tests {
             tool_count: 1,
             tools: Vec::new(),
             hook_count: 0,
+            skill_count: 0,
+            agent_count: 0,
             active_session_count: 0,
             diagnostics: Vec::new(),
             management_kind: String::from("luaSkill"),

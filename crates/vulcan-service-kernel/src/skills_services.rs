@@ -76,6 +76,29 @@ async fn refresh_luaskills_local_state_and_emit(
     Ok(update)
 }
 
+/// Refreshes every plugin-owned catalog domain and publishes one atomic replacement event.
+/// 刷新全部插件所有目录领域，并发布一条原子替换事件。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the committed event and `state` owns the authoritative plugin snapshot.
+/// `app` 广播已提交事件，`state` 持有权威插件快照。
+///
+/// # Returns
+/// 返回值
+/// Returns the legacy LuaSkills response projected at the same revision as the atomic event.
+/// 返回与原子事件使用同一版本投影的兼容 LuaSkills 响应。
+async fn refresh_plugin_catalog_local_state_and_emit(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    // update is created once so the event and RPC response cannot observe different plugin snapshots.
+    // update 只创建一次，确保事件与 RPC 响应不会观察到不同插件快照。
+    let update = refresh_plugin_catalog_local_state(state).await?;
+    emit_plugin_catalog_delta(app, &update);
+    Ok(update.lua_skills_update())
+}
+
 /// Refreshes the committed Agent Skills projection and broadcasts it through the sole service publisher.
 /// 刷新已提交的 Agent Skills 投影，并通过唯一服务发布出口广播。
 ///
@@ -145,7 +168,19 @@ fn refresh_subagent_catalog_local_state_and_emit(
     Ok(publish_subagent_catalog_update(app, update))
 }
 
-pub(crate) async fn run_luaskills_management_blocking<T, F>(
+/// Runs one blocking extension-management operation outside the asynchronous service executor.
+/// 在异步服务执行器之外运行单个阻塞式扩展管理操作。
+///
+/// # Parameters
+/// 参数
+/// `label` identifies the operation in diagnostics and `operation` performs the blocking work.
+/// `label` 在诊断中标识操作，`operation` 执行阻塞工作。
+///
+/// # Returns
+/// 返回值
+/// Returns the operation value or a contextual task/join error.
+/// 返回操作结果，或带上下文的任务及联接错误。
+pub(crate) async fn run_extension_management_blocking<T, F>(
     label: &'static str,
     operation: F,
 ) -> Result<T, String>
@@ -155,7 +190,7 @@ where
 {
     spawn_service_blocking_task(operation)
         .await
-        .map_err(|error| format!("LuaSkills 管理操作 `{label}` 任务异常结束：{error}"))?
+        .map_err(|error| format!("扩展管理操作 `{label}` 任务异常结束：{error}"))?
 }
 
 /// Refreshes the LuaSkills catalog used by the WebUI skill page.
@@ -184,7 +219,7 @@ pub(crate) async fn service_refresh_luaskills_catalog(
         .collect::<Vec<_>>();
     validate_service_system_plugin_hooks(&state, &preview_hooks)
         .map_err(|error| format!("System Plugin hook 刷新预检失败：{error}"))?;
-    let catalog = run_luaskills_management_blocking("refresh catalog", move || {
+    let catalog = run_extension_management_blocking("refresh catalog", move || {
         vulcan_service_runtime::luaskills_bridge::refresh_luaskills_catalog(&handle)
     })
     .await?;
@@ -196,7 +231,7 @@ pub(crate) async fn service_refresh_luaskills_catalog(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, system_plugin_runtime, &system_plugin_catalog)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    refresh_plugin_catalog_local_state_and_emit(&app, &state).await
 }
 
 /// Inspects one local user plugin package and returns its complete authorization preview.
@@ -209,7 +244,7 @@ pub(crate) async fn service_inspect_local_plugin(
     // source_path 是用户选择的精确目录，并由运行时执行规范化。
     let source_path = PathBuf::from(source_path);
     let runtime = service_system_plugin_runtime(&state)?;
-    run_luaskills_management_blocking("inspect local plugin", move || {
+    run_extension_management_blocking("inspect local plugin", move || {
         runtime
             .inspect_local_user_plugin(&source_path)
             .map_err(|error| error.to_string())
@@ -232,7 +267,7 @@ pub(crate) async fn service_install_local_plugin(
     let runtime = service_system_plugin_runtime(&state)?;
     let install_runtime = runtime.clone();
     let source_path = PathBuf::from(source_path);
-    let installation = run_luaskills_management_blocking("install local plugin", move || {
+    let installation = run_extension_management_blocking("install local plugin", move || {
         install_runtime
             .install_local_user_plugin(
                 &source_path,
@@ -284,7 +319,7 @@ pub(crate) async fn service_install_local_plugin(
     }
     let prepare_runtime = runtime.clone();
     let prepare_plugin_id = installation.plugin_id.clone();
-    let preparation_result = run_luaskills_management_blocking("prepare local plugin", move || {
+    let preparation_result = run_extension_management_blocking("prepare local plugin", move || {
         prepare_runtime
             .prepare_plugin_environment(&prepare_plugin_id)
             .map(|_| ())
@@ -376,7 +411,7 @@ pub(crate) async fn service_install_local_plugin(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, runtime, &catalog)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    refresh_plugin_catalog_local_state_and_emit(&app, &state).await
 }
 
 /// Uninstalls one disabled user plugin after its declared lifecycle callback completes.
@@ -447,7 +482,7 @@ pub(crate) async fn service_uninstall_user_plugin(
     let uninstall_plugin_id = plugin_id.clone();
     // uninstallResult is handled explicitly so provider overrides can be restored transactionally.
     // uninstallResult 被显式处理，以便事务化恢复 Provider 覆盖。
-    let uninstall_result = run_luaskills_management_blocking("uninstall user plugin", move || {
+    let uninstall_result = run_extension_management_blocking("uninstall user plugin", move || {
         uninstall_runtime
             .uninstall_user_plugin(&uninstall_plugin_id)
             .map_err(|error| error.to_string())
@@ -492,7 +527,7 @@ pub(crate) async fn service_uninstall_user_plugin(
         )
         .map_err(|error| error.to_string())?;
     synchronize_service_system_plugin_hooks(&state, runtime, &catalog)?;
-    refresh_luaskills_local_state_and_emit(&app, &state).await
+    refresh_plugin_catalog_local_state_and_emit(&app, &state).await
 }
 
 /// Saves Vulcan-owned LuaSkills startup settings and refreshes the WebUI projection.
@@ -520,7 +555,7 @@ pub(crate) async fn service_save_luaskills_runtime_settings(
     // AI 工具开关在完整设置文档移入阻塞保存前完成复制。
     let runlua_enabled = settings.ai_tools.enable_run_lua;
     let runlua_session_enabled = settings.ai_tools.enable_run_lua_session;
-    let catalog = run_luaskills_management_blocking("save runtime settings", move || {
+    let catalog = run_extension_management_blocking("save runtime settings", move || {
         vulcan_service_runtime::luaskills_bridge::save_luaskills_runtime_settings(
             &handle, &settings,
         )
@@ -586,7 +621,7 @@ pub(crate) async fn service_retry_luaskills_managed_runtimes(
     let progress_app = app.clone();
     // catalog contains the committed result even when the optional runtimes remain unavailable.
     // catalog 即使在可选运行时仍不可用时也包含已提交结果。
-    let catalog = match run_luaskills_management_blocking("retry managed runtimes", move || {
+    let catalog = match run_extension_management_blocking("retry managed runtimes", move || {
         vulcan_service_runtime::luaskills_bridge::retry_managed_runtimes(
             &handle,
             install_target,
@@ -682,7 +717,7 @@ pub(crate) async fn service_install_luaskill(
     // 将安装及其返回的目录投影保持在同一个有序事务中。
     let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_luaskills_management_blocking("install skill", move || {
+    let (message, catalog) = run_extension_management_blocking("install skill", move || {
         vulcan_service_runtime::luaskills_bridge::install_luaskill(
             &handle,
             skill_id,
@@ -706,7 +741,7 @@ pub(crate) async fn service_update_luaskill(
     // 将更新及其返回的目录投影保持在同一个有序事务中。
     let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_luaskills_management_blocking("update skill", move || {
+    let (message, catalog) = run_extension_management_blocking("update skill", move || {
         vulcan_service_runtime::luaskills_bridge::update_luaskill(&handle, skill_id)
     })
     .await?;
@@ -726,7 +761,7 @@ pub(crate) async fn service_set_luaskill_enabled(
     // 将生命周期状态变更及其返回的目录投影保持在同一个有序事务中。
     let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_luaskills_management_blocking("set skill enabled", move || {
+    let (message, catalog) = run_extension_management_blocking("set skill enabled", move || {
         vulcan_service_runtime::luaskills_bridge::set_luaskill_enabled(&handle, skill_id, enabled)
     })
     .await?;
@@ -734,8 +769,8 @@ pub(crate) async fn service_set_luaskill_enabled(
     refresh_luaskills_local_state_and_emit(&app, &state).await
 }
 
-/// Enables or disables one known host-owned LuaSkills System Plugin.
-/// 启用或停用单个已知的宿主自有 LuaSkills System Plugin。
+/// Enables or disables one known host-owned System Plugin.
+/// 启用或停用单个已知的宿主自有系统插件。
 ///
 /// # Parameters
 /// 参数
@@ -756,8 +791,8 @@ pub(crate) async fn service_set_luaskills_system_plugin_enabled(
     // update 在此发送，使生命周期模块保持为不包含第二发布出口的纯事务。
     let update =
         system_plugin_lifecycle::set_system_plugin_enabled(state, plugin_id, enabled).await?;
-    emit_luaskills_catalog_delta(&app, update.clone());
-    Ok(update)
+    emit_plugin_catalog_delta(&app, &update);
+    Ok(update.lua_skills_update())
 }
 /// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
 /// 卸载单个普通 LuaSkill 包并刷新 WebUI 快照。
@@ -770,7 +805,7 @@ pub(crate) async fn service_uninstall_luaskill(
     // 将卸载及其返回的目录投影保持在同一个有序事务中。
     let _management_guard = lock_luaskills_management_mutation().await;
     let handle = service_luaskills_handle(&state)?;
-    let (message, catalog) = run_luaskills_management_blocking("uninstall skill", move || {
+    let (message, catalog) = run_extension_management_blocking("uninstall skill", move || {
         vulcan_service_runtime::luaskills_bridge::uninstall_luaskill(&handle, skill_id)
     })
     .await?;
@@ -842,6 +877,12 @@ pub(crate) async fn service_save_agent_skill(
     request: AgentSkillSaveRequest,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    if let Some(source_skill_key) = request.source_skill_key.as_deref() {
+        reject_plugin_skill_mutation(&state, source_skill_key)?;
+    }
+    if let Some(original_name) = request.original_name.as_deref() {
+        reject_plugin_skill_mutation(&state, original_name)?;
+    }
     let (user_root, system_root) = configured_agent_skill_roots(&state)?;
     let name = require_canonical_agent_skill_name(&request.name)?.to_string();
     let original_name = request
@@ -995,6 +1036,7 @@ pub(crate) async fn service_delete_agent_skill(
     name: String,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    reject_plugin_skill_mutation(&state, &name)?;
     let name = require_canonical_agent_skill_name(&name)?.to_string();
     let (user_root, _) = configured_agent_skill_roots(&state)?;
     // previous_state captures the exact override restored when filesystem deletion fails.
@@ -1072,6 +1114,11 @@ pub(crate) async fn service_save_agent_skill_category(
     request: AgentSkillCategorySaveRequest,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    if request.category_id == vulcan_prompt_skills::PLUGIN_CATEGORY_ID {
+        return Err(String::from(
+            "The `plugins` category is host-owned and cannot be modified.",
+        ));
+    }
     let (user_root, _) = configured_agent_skill_roots(&state)?;
     vulcan_prompt_skills::save_user_prompt_skill_category(
         &user_root,
@@ -1109,6 +1156,11 @@ pub(crate) async fn service_delete_agent_skill_category(
     category_id: String,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    if category_id == vulcan_prompt_skills::PLUGIN_CATEGORY_ID {
+        return Err(String::from(
+            "The `plugins` category is host-owned and cannot be deleted.",
+        ));
+    }
     let (user_root, system_root) = configured_agent_skill_roots(&state)?;
     vulcan_prompt_skills::delete_user_prompt_skill_category(
         &system_root,
@@ -1127,6 +1179,12 @@ pub(crate) async fn service_set_agent_skill_category(
     category_id: String,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    reject_plugin_skill_mutation(&state, &name)?;
+    if category_id == vulcan_prompt_skills::PLUGIN_CATEGORY_ID {
+        return Err(String::from(
+            "The `plugins` category is host-owned and cannot receive manual assignments.",
+        ));
+    }
     let (user_root, system_root) = configured_agent_skill_roots(&state)?;
     vulcan_prompt_skills::set_user_prompt_skill_category(
         &system_root,
@@ -1251,6 +1309,7 @@ pub(crate) async fn service_set_subagent_definition_enabled(
     if agent_id.is_empty() {
         return Err(String::from("智能体定义标识不能为空。"));
     }
+    reject_plugin_agent_mutation(&state, agent_id)?;
     // Keep the filesystem override and both retained runtime projections ordered as one catalog transaction.
     // 将文件系统覆盖与两份保留的运行时投影按同一个目录事务排序。
     let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
@@ -1332,6 +1391,7 @@ pub(crate) async fn service_save_subagent_definition(
     let original_agent_id = submitted_original_agent_id
         .as_deref()
         .unwrap_or(requested_agent_id.as_str());
+    reject_plugin_agent_mutation(&state, original_agent_id)?;
     // Prevent concurrent save, delete, restore, and toggle requests from observing an intermediate catalog.
     // 防止并发保存、删除、恢复与启停请求观察到目录中间态。
     let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
@@ -1387,6 +1447,19 @@ pub(crate) async fn service_save_subagent_definition(
         existing.as_ref(),
         target_package_id.as_deref(),
     )?;
+    // Preserve the host-owned plugin category for immutable plugin contributions only.
+    // 仅为不可变插件贡献保留宿主拥有的插件分类。
+    if vulcan_task_session::display_subagent_category_id(
+        &target_agent_id,
+        target_package_id.as_deref(),
+    )
+    .as_deref()
+        == Some(vulcan_task_session::PLUGIN_SUBAGENT_CATEGORY_ID)
+    {
+        return Err(String::from(
+            "分类 `plugins` 由插件系统保留，普通智能体不能写入该分类。",
+        ));
+    }
     let target_conflicts_with_other_definition = catalog
         .definitions
         .iter()
@@ -1521,6 +1594,7 @@ pub(crate) async fn service_delete_subagent_definition(
     if agent_id.is_empty() {
         return Err(String::from("智能体定义标识不能为空。"));
     }
+    reject_plugin_agent_mutation(&state, agent_id)?;
     // Keep catalog discovery and deletion under the same process-wide mutation guard.
     // 在同一个进程级变更守卫下完成目录发现与删除。
     let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
@@ -1563,6 +1637,7 @@ pub(crate) async fn service_restore_subagent_definition_default(
     if agent_id.is_empty() {
         return Err(String::from("智能体定义标识不能为空。"));
     }
+    reject_plugin_agent_mutation(&state, agent_id)?;
     // Keep restore eligibility checks and override deletion in one serialized catalog transaction.
     // 将恢复资格检查与覆盖删除保持在同一个串行目录事务中。
     let _catalog_mutation_guard = lock_subagent_catalog_mutation()?;
@@ -1603,6 +1678,7 @@ pub(crate) async fn service_set_agent_skill_enabled(
     enabled: bool,
 ) -> Result<AgentSkillsCatalogUpdate, String> {
     let _catalog_guard = lock_agent_skills_catalog_mutation().await;
+    reject_plugin_skill_mutation(&state, &name)?;
     let name = require_existing_agent_skill_name(&state, &name)?;
     let state_override = if enabled {
         PersistedPromptSkillState::Enabled
@@ -1633,6 +1709,142 @@ fn require_canonical_agent_skill_name(name: &str) -> Result<&str, String> {
         ));
     }
     Ok(name)
+}
+
+/// Rejects every direct mutation targeting a plugin-owned Agent Skill.
+/// 拒绝所有指向插件自有 Agent Skill 的直接变更。
+///
+/// # Parameters
+/// 参数
+/// - `state`: Shared service state containing the authoritative plugin catalog.
+/// - `state`：包含权威插件目录的共享服务状态。
+/// - `skill_identity`: Canonical skill name or source-aware `plugin:` key.
+/// - `skill_identity`：规范技能名称或带来源的 `plugin:` 键。
+///
+/// # Returns
+/// 返回值
+/// Returns unit for non-plugin identities, otherwise an ownership diagnostic.
+/// 非插件标识返回空值，否则返回所有权诊断。
+fn reject_plugin_skill_mutation(
+    state: &SharedServiceBridgeState,
+    skill_identity: &str,
+) -> Result<(), String> {
+    // Plugin skill names always contain the manifest-defined namespace separator after any source-key prefix.
+    // 插件技能名称在可选来源键前缀之后始终包含清单定义的命名空间分隔符。
+    let canonical_name = skill_identity
+        .strip_prefix("plugin:")
+        .unwrap_or(skill_identity);
+    if !canonical_name.contains(':') {
+        return Ok(());
+    }
+    // A plugin-namespaced mutation must fail closed when ownership cannot be resolved.
+    // 插件命名空间变更在无法解析所有权时必须以失败关闭。
+    let runtime = service_system_plugin_runtime(state)?;
+    let snapshot = runtime.snapshot();
+    reject_plugin_skill_mutation_in_catalog(snapshot.as_ref(), skill_identity)
+}
+
+/// Rejects one direct skill mutation against an exact immutable plugin catalog snapshot.
+/// 根据一份精确不可变插件目录快照拒绝单次直接 Skill 变更。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the authoritative plugin generation and `skill_identity` is a canonical or source-aware key.
+/// `snapshot` 是权威插件代次，`skill_identity` 是规范标识或带来源键。
+///
+/// # Returns
+/// 返回值
+/// Returns unit for non-plugin identities, otherwise a stable ownership diagnostic.
+/// 非插件标识返回空值，否则返回稳定的所有权诊断。
+fn reject_plugin_skill_mutation_in_catalog(
+    snapshot: &vulcan_plugin_runtime::SystemPluginCatalogSnapshot,
+    skill_identity: &str,
+) -> Result<(), String> {
+    // canonical_name removes only the host-owned source-key prefix used by catalog mutation APIs.
+    // canonical_name 仅移除目录变更 API 使用的宿主自有来源键前缀。
+    let canonical_name = skill_identity
+        .strip_prefix("plugin:")
+        .unwrap_or(skill_identity);
+    let owner = snapshot.plugins.values().find(|plugin| {
+        plugin
+            .skills
+            .iter()
+            .any(|skill| skill.name == canonical_name)
+    });
+    if let Some(plugin) = owner {
+        return Err(format!(
+            "Agent Skill `{canonical_name}` is managed by plugin `{}` and is read-only; change it through plugin lifecycle management.",
+            plugin.id
+        ));
+    }
+    if canonical_name.contains(':') {
+        return Err(format!(
+            "Agent Skill `{canonical_name}` uses a plugin namespace that is not present in the committed plugin catalog."
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects every direct mutation targeting a plugin-owned subagent definition.
+/// 拒绝所有指向插件自有子代理定义的直接变更。
+///
+/// # Parameters
+/// 参数
+/// - `state`: Shared service state containing the authoritative plugin catalog.
+/// - `state`：包含权威插件目录的共享服务状态。
+/// - `agent_id`: Canonical namespaced agent identifier.
+/// - `agent_id`：规范命名空间智能体标识。
+///
+/// # Returns
+/// 返回值
+/// Returns unit for non-plugin identities, otherwise an ownership diagnostic.
+/// 非插件标识返回空值，否则返回所有权诊断。
+fn reject_plugin_agent_mutation(
+    state: &SharedServiceBridgeState,
+    agent_id: &str,
+) -> Result<(), String> {
+    if !agent_id.contains(':') {
+        return Ok(());
+    }
+    // A plugin-namespaced mutation must fail closed when ownership cannot be resolved.
+    // 插件命名空间变更在无法解析所有权时必须以失败关闭。
+    let runtime = service_system_plugin_runtime(state)?;
+    let snapshot = runtime.snapshot();
+    reject_plugin_agent_mutation_in_catalog(snapshot.as_ref(), agent_id)
+}
+
+/// Rejects one direct agent mutation against an exact immutable plugin catalog snapshot.
+/// 根据一份精确不可变插件目录快照拒绝单次直接 Agent 变更。
+///
+/// # Parameters
+/// 参数
+/// `snapshot` is the authoritative plugin generation and `agent_id` is the canonical namespaced identity.
+/// `snapshot` 是权威插件代次，`agent_id` 是规范命名空间标识。
+///
+/// # Returns
+/// 返回值
+/// Returns unit for non-plugin identities, otherwise a stable ownership diagnostic.
+/// 非插件标识返回空值，否则返回稳定的所有权诊断。
+fn reject_plugin_agent_mutation_in_catalog(
+    snapshot: &vulcan_plugin_runtime::SystemPluginCatalogSnapshot,
+    agent_id: &str,
+) -> Result<(), String> {
+    let owner = snapshot
+        .plugins
+        .values()
+        .find(|plugin| plugin.agents.iter().any(|agent| agent.id == agent_id));
+    if let Some(plugin) = owner {
+        return Err(format!(
+            "Agent `{agent_id}` is managed by plugin `{}` and is read-only; change it through plugin lifecycle management.",
+            plugin.id
+        ));
+    }
+    if agent_id.contains(':') {
+        return Err(format!(
+            "Agent `{agent_id}` uses a plugin namespace that is not present in the committed plugin catalog."
+        ));
+    }
+    Ok(())
 }
 
 /// Resolves one exact source-aware Agent Skill record without effective-source substitution.
@@ -1721,6 +1933,7 @@ pub(crate) async fn service_set_agent_skill_project_state(
     if stable_name.is_empty() {
         return Err(String::from("项目级 Agent Skill 名称不能为空。"));
     }
+    reject_plugin_skill_mutation(&state, stable_name)?;
     let state_override = parse_agent_skill_project_state(&state_key)?;
     mutate_project_configuration(
         &PathBuf::from(&project_path),
@@ -1768,6 +1981,13 @@ fn refresh_subagent_catalog_local_state_with_errors(
     transient_errors: Vec<vulcan_task_session::SubagentCatalogLoadError>,
 ) -> Result<SubagentCatalogUpdate, String> {
     let mut catalog = load_current_subagent_catalog();
+    let runtime = service_system_plugin_runtime(state)?;
+    // plugin_catalog is captured once so the refresh cannot mix plugin generations.
+    // plugin_catalog 仅捕获一次，确保刷新不会混用不同插件代次。
+    let plugin_catalog = runtime.snapshot();
+    catalog
+        .merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
+        .map_err(|error| format!("合并插件智能体目录失败：{error}"))?;
     catalog.errors.extend(transient_errors);
     let mut guard = state
         .lock()
@@ -2387,6 +2607,101 @@ fn remove_user_subagent_file_if_safe(path: &Path, retained_file: &Path) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Loads one isolated content-plugin catalog for service-side ownership rejection tests.
+    /// 为服务端所有权拒绝测试加载一个隔离的内容插件目录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the temporary root and its fully validated immutable plugin catalog.
+    /// 返回临时根目录及其完整校验后的不可变插件目录。
+    fn test_content_plugin_catalog() -> (PathBuf, vulcan_plugin_runtime::SystemPluginCatalogSnapshot)
+    {
+        // root is unique per test process and is removed explicitly by each caller.
+        // root 在每个测试进程内唯一，并由各调用方显式删除。
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-plugin-readonly-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        // package is the only plugin package in the isolated catalog.
+        // package 是隔离目录中的唯一插件包。
+        let package = root.join("content-plugin");
+        std::fs::create_dir_all(package.join("skills/review-helper"))
+            .expect("create plugin skill directory");
+        std::fs::create_dir_all(package.join("agents")).expect("create plugin agent directory");
+        std::fs::write(
+            package.join("skills/review-helper/SKILL.md"),
+            "---\nname: review-helper\ndescription: Review one change.\n---\n\nReview the exact diff.",
+        )
+        .expect("write plugin skill");
+        std::fs::write(
+            package.join("agents/reviewer.md"),
+            "---\nname: Reviewer\nskills:\n  - review-helper\n---\nReview the exact diff.",
+        )
+        .expect("write plugin agent");
+        std::fs::write(
+            package.join("plugin.yaml"),
+            "schema_version: 1\nid: content-plugin\nversion: 1.0.0\nkind: bundled_system\ndefault_enabled: true\ndisplay:\n  name: Content Plugin\n  capability: Read-only fixture\n",
+        )
+        .expect("write plugin manifest");
+        // catalog is the same validated snapshot consumed by production rejection helpers.
+        // catalog 是生产拒绝辅助函数使用的同类校验快照。
+        let catalog = vulcan_plugin_runtime::load_system_plugin_catalog(
+            &root,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1,
+        );
+        (root, catalog)
+    }
+
+    /// Verifies forged skill mutation identities are rejected by the service ownership boundary.
+    /// 验证伪造的 Skill 变更标识会被服务所有权边界拒绝。
+    #[test]
+    fn forged_plugin_skill_mutations_are_rejected_server_side() {
+        let (root, catalog) = test_content_plugin_catalog();
+
+        assert!(
+            reject_plugin_skill_mutation_in_catalog(&catalog, "content-plugin:review-helper")
+                .expect_err("canonical plugin skill mutation must fail")
+                .contains("read-only")
+        );
+        assert!(
+            reject_plugin_skill_mutation_in_catalog(
+                &catalog,
+                "plugin:content-plugin:review-helper"
+            )
+            .expect_err("source-aware plugin skill mutation must fail")
+            .contains("content-plugin")
+        );
+        assert!(reject_plugin_skill_mutation_in_catalog(&catalog, "ordinary-skill").is_ok());
+        assert!(
+            reject_plugin_skill_mutation_in_catalog(&catalog, "unknown-plugin:review-helper")
+                .expect_err("unknown plugin skill namespace must fail closed")
+                .contains("not present in the committed plugin catalog")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies forged agent mutation identities are rejected by the service ownership boundary.
+    /// 验证伪造的 Agent 变更标识会被服务所有权边界拒绝。
+    #[test]
+    fn forged_plugin_agent_mutations_are_rejected_server_side() {
+        let (root, catalog) = test_content_plugin_catalog();
+
+        assert!(
+            reject_plugin_agent_mutation_in_catalog(&catalog, "content-plugin:reviewer")
+                .expect_err("plugin agent mutation must fail")
+                .contains("read-only")
+        );
+        assert!(reject_plugin_agent_mutation_in_catalog(&catalog, "ordinary-agent").is_ok());
+        assert!(
+            reject_plugin_agent_mutation_in_catalog(&catalog, "unknown-plugin:reviewer")
+                .expect_err("unknown plugin agent namespace must fail closed")
+                .contains("not present in the committed plugin catalog")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     /// Builds one minimal user subagent definition for file-candidate tests.
     /// 为文件候选测试构建一个最小用户智能体定义。

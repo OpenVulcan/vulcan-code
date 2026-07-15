@@ -20,6 +20,7 @@ use vulcan_prompt_skills::{
     PromptSkillsProjectConfig, PromptSkillsSessionConfig, render_prompt_skills_instructions,
     resolve_prompt_skills,
 };
+use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 #[path = "execution_preparation/tool_exposure.rs"]
@@ -90,8 +91,15 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     let prompt_skill_user_root = Some(vulcan_prompt_skills::configured_user_skill_root(
         &prompt_skills_global_config,
     ));
-    let prompt_skill_catalog =
+    let mut prompt_skill_catalog =
         vulcan_prompt_skills::load_prompt_skills(&prompt_skills_global_config);
+    if let Some(plugin_catalog) = foundation.system_plugin_catalog() {
+        // A published plugin snapshot is part of the execution contract; invariant failures must not degrade silently.
+        // 已发布插件快照属于执行契约的一部分；不变量失败不得静默降级。
+        prompt_skill_catalog
+            .merge_plugin_skills(plugin_catalog.enabled_skills.values().cloned())
+            .map_err(|error| format!("合并插件技能目录失败：{error}"))?;
+    }
     for error in &prompt_skill_catalog.errors {
         warnings.push(format!(
             "提示词技能 `{}` 载入失败：{}",
@@ -99,12 +107,20 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             error.message
         ));
     }
-    let prompt_skills = resolve_prompt_skills(
+    let mut prompt_skills = resolve_prompt_skills(
         &prompt_skill_catalog,
         &prompt_skills_global_config,
         &prompt_skills_project_config_from_request(request),
         &prompt_skills_session_config_from_request(request),
     );
+    // Agent-owned visibility policy is independent from plugin lifecycle ownership and user state overrides.
+    // 智能体自有可见性策略独立于插件生命周期归属及用户状态覆盖。
+    prompt_skills.retain(|resolved| {
+        prompt_skill_is_visible_for_policy(
+            resolved.skill.name.as_str(),
+            &request.prompt_skill_policy_override,
+        )
+    });
     let implicit_luaskills = tool_exposure.luaskills_dispatch_tools.clone();
     let implicit_luaskill_prompt_entries = tool_exposure.luaskill_prompt_entries.clone();
     let mut prompt_skill_developer_segment = build_skill_developer_segment(
@@ -113,6 +129,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         &implicit_luaskill_prompt_entries,
     );
     let enabled_prompt_skill_names = vulcan_prompt_skills::enabled_skill_names(&prompt_skills);
+    // prepared_prompt_skills freezes parsed instructions for the complete execution turn.
+    // prepared_prompt_skills 为完整执行回合冻结已解析技能说明。
+    let prepared_prompt_skills = prompt_skills
+        .iter()
+        .filter(|resolved| resolved.is_enabled())
+        .map(|resolved| resolved.skill.clone())
+        .collect::<Vec<_>>();
     let ai_tool_fallback_aliases = resolve_ai_tool_fallback_aliases(&model_blueprint);
     let project_vmm = if request.runtime_policy.vmm_enabled {
         request.project_vmm.clone()
@@ -149,6 +172,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         tool_exposure.ai_tool_configuration.clone(),
         ai_tool_fallback_aliases.clone(),
         enabled_prompt_skill_names,
+        prepared_prompt_skills,
         prompt_skill_user_root.clone(),
         implicit_luaskill_prompt_entries.clone(),
         project_vmm.clone(),
@@ -296,6 +320,30 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         preparation,
         tool_snapshot,
     })
+}
+
+/// Returns whether one resolved prompt skill remains visible under a request-scoped capability policy.
+/// 返回单个已解析提示词技能在请求级能力策略下是否继续可见。
+///
+/// # Parameters
+/// 参数
+/// `skill_name` is the canonical prompt-skill identifier and `policy` is the normalized request snapshot.
+/// `skill_name` 是规范提示词技能标识，`policy` 是已规范化的请求快照。
+///
+/// # Returns
+/// 返回值
+/// `true` when the skill may enter the developer prompt and detail-tool snapshot.
+/// 当技能可以进入开发者提示词与详情工具快照时返回 `true`。
+fn prompt_skill_is_visible_for_policy(skill_name: &str, policy: &CapabilityPolicySnapshot) -> bool {
+    let selected = policy
+        .selectors
+        .iter()
+        .any(|selector| selector == skill_name);
+    match policy.mode {
+        CapabilityPolicyMode::All => true,
+        CapabilityPolicyMode::AllowOnly => selected,
+        CapabilityPolicyMode::DenyOnly => !selected,
+    }
 }
 
 /// Appends plugin-level instructions only when every declared tool dependency remains visible.

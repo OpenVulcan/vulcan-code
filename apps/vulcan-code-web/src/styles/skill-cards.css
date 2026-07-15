@@ -1123,6 +1123,29 @@
   color: var(--destructive);
 }
 
+.system-plugin-component-details {
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.system-plugin-component-details > summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.system-plugin-component-group {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.system-plugin-component-group > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
 /* Local plugin installation remains visually integrated with the current skill management surface. */
 /* 本地插件安装区域在视觉上保持与当前技能管理界面一致。 */
 .system-plugin-install-panel,

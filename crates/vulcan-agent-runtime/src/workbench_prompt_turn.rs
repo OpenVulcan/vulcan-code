@@ -828,6 +828,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         tool_request_rejection_tool_ids: Vec::new(),
         tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose,
+        prompt_skill_policy_override: Default::default(),
         project_prompt_skills: input.project_configuration.prompt_skills,
         session_prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
         context_injection,

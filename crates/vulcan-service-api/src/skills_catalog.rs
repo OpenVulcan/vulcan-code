@@ -124,8 +124,8 @@ pub struct LuaSkillsCatalogUpdate {
     /// Complete LuaSkills catalog after the committed mutation.
     /// 已提交变更后的完整 LuaSkills 目录。
     pub lua_skills: LuaSkillsCatalogSummary,
-    /// Plugin rows derived from the same committed LuaSkills catalog.
-    /// 从同一份已提交 LuaSkills 目录派生的插件行。
+    /// Plugin rows derived from the same committed LuaSkills and System Plugin catalogs.
+    /// 从同一份已提交 LuaSkills 与系统插件目录派生的插件行。
     pub plugins: Vec<PluginSummary>,
 }
 
@@ -366,6 +366,26 @@ pub struct SubagentDefinitionSummary {
     /// Stable source scope key used by UI logic.
     /// UI 逻辑使用的稳定来源作用域键。
     pub scope_key: String,
+    /// Optional owning plugin identifier for plugin-contributed definitions.
+    /// 插件贡献定义的可选所属插件标识。
+    #[serde(default)]
+    pub owning_plugin_id: Option<String>,
+    /// Whether the definition may be edited directly.
+    /// 当前定义是否允许直接编辑。
+    #[serde(default)]
+    pub can_edit: bool,
+    /// Whether the definition may be deleted directly.
+    /// 当前定义是否允许直接删除。
+    #[serde(default)]
+    pub can_delete: bool,
+    /// Whether the definition may be toggled independently.
+    /// 当前定义是否允许独立启停。
+    #[serde(default)]
+    pub can_toggle: bool,
+    /// Whether the definition may be copied into a user record.
+    /// 当前定义是否允许复制为用户记录。
+    #[serde(default)]
+    pub can_copy: bool,
     /// Whether this definition is exposed to models and spawn_agent.
     /// 该定义是否暴露给模型与 spawn_agent。
     pub enabled: bool,
@@ -699,6 +719,30 @@ pub struct AgentSkillRecordSummary {
     /// Stable source scope key.
     /// 稳定来源作用域键。
     pub scope_key: String,
+    /// Optional owning plugin identifier for plugin-contributed skills.
+    /// 插件贡献技能的可选所属插件标识。
+    #[serde(default)]
+    pub owning_plugin_id: Option<String>,
+    /// Whether the skill may be edited directly.
+    /// 当前技能是否允许直接编辑。
+    #[serde(default)]
+    pub can_edit: bool,
+    /// Whether the skill may be deleted directly.
+    /// 当前技能是否允许直接删除。
+    #[serde(default)]
+    pub can_delete: bool,
+    /// Whether the skill may be toggled independently.
+    /// 当前技能是否允许独立启停。
+    #[serde(default)]
+    pub can_toggle: bool,
+    /// Whether the skill may be copied into a user package.
+    /// 当前技能是否允许复制为用户包。
+    #[serde(default)]
+    pub can_copy: bool,
+    /// Whether a user override may be removed to restore its system source.
+    /// 是否允许移除用户覆盖以恢复系统来源。
+    #[serde(default)]
+    pub can_restore_default: bool,
     /// Whether this source record is effective after same-name resolution.
     /// 同名解析后当前来源记录是否生效。
     pub effective: bool,

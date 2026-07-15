@@ -56,6 +56,8 @@ export function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): 
       return null;
     case "subagentCatalogChanged":
       return null;
+    case "pluginCatalogChanged":
+      return null;
     case "projectSettingsChanged":
       return null;
     case "luaSkillsManagedRuntimeProgressChanged":

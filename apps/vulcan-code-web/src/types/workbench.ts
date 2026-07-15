@@ -131,8 +131,8 @@ export interface WorkbenchSnapshot {
   // Main feature areas.
   // 主功能区域。
   featureAreas: FeatureAreaSummary[];
-  // Plugin rows derived from the active LuaSkills catalog.
-  // 从当前 LuaSkills 目录派生的插件行。
+  // Plugin rows projected from the committed LuaSkills and System Plugin catalogs.
+  // 从已提交的 LuaSkills 与系统插件目录投影的插件行。
   plugins: PluginSummary[];
   // Lua Skills catalog.
   // Lua Skills 目录。

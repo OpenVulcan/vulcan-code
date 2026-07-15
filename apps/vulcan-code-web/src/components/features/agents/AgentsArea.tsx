@@ -1075,8 +1075,6 @@ function AgentDefinitionCard(props: {
   const category = definition.categoryId ? props.categoryById.get(definition.categoryId) : undefined
   const categoryLabel = category ? localizedCategoryName(category, locale) : definition.categoryId
   const fallbackIcon = definition.emoji?.trim() || displayName.trim().charAt(0).toUpperCase() || "*"
-  const userOwnedDefinition = (definition.scopeKey === "user" || definition.scopeKey === "package") && !definition.overrideOf
-  const editableDefinition = userOwnedDefinition || definition.scopeKey === "system" || Boolean(definition.overrideOf)
   const toolAccessLabel = agentDefinitionToolAccessLabel(definition, locale)
   const fixedModelSelector = agentDefinitionFixedModelSelector(definition)
   const fixedModelUnavailable = agentDefinitionFixedModelUnavailable(definition)
@@ -1095,6 +1093,7 @@ function AgentDefinitionCard(props: {
             <Badge variant="outline">{toolAccessLabel}</Badge>
             {definition.categoryId ? <Badge variant="outline" title={definition.categoryId}>{categoryLabel}</Badge> : null}
             {definition.packageId ? <Badge variant="outline">{definition.packageId}</Badge> : null}
+            {definition.owningPluginId ? <Badge variant="outline">{definition.owningPluginId}</Badge> : null}
             {definition.remoteUrl ? <Badge variant="outline">Remote</Badge> : null}
             {fixedModelSelector ? (
               <Badge variant={fixedModelUnavailable ? "destructive" : "outline"} title={fixedModelTitle}>
@@ -1105,10 +1104,17 @@ function AgentDefinitionCard(props: {
           </div>
         </div>
         <p>{displayDescription || text("未填写描述。", "No description provided.")}</p>
+        {definition.owningPluginId && definition.promptSkillPolicySkills.length > 0 ? (
+          <div className="agent-definition-row-badges" aria-label={text("附加技能", "Attached skills")}>
+            {definition.promptSkillPolicySkills.map((skillId) => (
+              <Badge key={skillId} variant="secondary">{skillId}</Badge>
+            ))}
+          </div>
+        ) : null}
         <span className="agent-definition-row-path">{definition.definitionFile}</span>
       </div>
       <div className="agent-definition-row-actions">
-        <button
+        {definition.canToggle ? <button
           aria-checked={definition.enabled}
           aria-label={definition.enabled ? t("skills.action.disable") : t("skills.action.enable")}
           className={`agent-definition-switch ${definition.enabled ? "on" : ""}`}
@@ -1119,13 +1125,13 @@ function AgentDefinitionCard(props: {
           type="button"
         >
           <span />
-        </button>
-        {editableDefinition ? (
+        </button> : null}
+        {definition.canEdit ? (
           <button className="agent-definition-icon-button" disabled={props.busy} onClick={props.onEdit} title={text("编辑", "Edit")} type="button">
             <Pencil size={15} />
           </button>
         ) : null}
-        {userOwnedDefinition ? (
+        {definition.canDelete ? (
           <button
             className="agent-definition-icon-button danger"
             disabled={props.busy}
@@ -1177,6 +1183,12 @@ function AgentDefinitionDetailDialog(props: {
                 <span>{text("来源", "Scope")}</span>
                 <strong>{definition.scope}</strong>
               </div>
+              {definition.owningPluginId ? (
+                <div>
+                  <span>{text("所属插件", "Owning plugin")}</span>
+                  <strong>{definition.owningPluginId}</strong>
+                </div>
+              ) : null}
               <div>
                 <span>{text("工具策略", "Tool policy")}</span>
                 <strong>{definition.allowedToolCount} allow / {definition.disabledToolCount} deny</strong>
@@ -1218,6 +1230,16 @@ function AgentDefinitionDetailDialog(props: {
               <div className="skill-tool-row">
                 <strong>{text("能力诊断", "Capability diagnostics")}</strong>
                 <p>{definition.capabilityDiagnostics.join(" ")}</p>
+              </div>
+            ) : null}
+            {definition.promptSkillPolicySkills.length > 0 ? (
+              <div className="skill-tool-row">
+                <strong>{text("附加技能", "Attached skills")}</strong>
+                <div className="agent-definition-row-badges">
+                  {definition.promptSkillPolicySkills.map((skillId) => (
+                    <Badge key={skillId} variant="secondary">{skillId}</Badge>
+                  ))}
+                </div>
               </div>
             ) : null}
             {definition.systemPrompt ? (

@@ -67,7 +67,7 @@ use vulcan_agent_runtime::{
         append_stream_delta_record_to_state, apply_checkpoint_conversation_state,
         apply_terminal_execution_report_to_state, collapse_streaming_thinking_in_state,
     },
-    stream_runtime_run_with_intervention,
+    stream_runtime_run_with_intervention_and_plugins,
     tooling::{CommandSessionRuntime, command_session_runtime::CommandSessionInputEvent},
     turn_stats::build_session_turn_stats_from_state_with_segments,
     workbench_ai_capability_router::{

@@ -64,6 +64,9 @@ pub enum PromptSkillScope {
     /// User-installed skill under the ordinary user skill root.
     /// 位于普通用户技能根目录下的用户安装技能。
     User,
+    /// Read-only skill contributed by an enabled Vulcan plugin.
+    /// 由已启用 Vulcan 插件贡献的只读技能。
+    Plugin,
 }
 
 impl PromptSkillScope {
@@ -73,6 +76,7 @@ impl PromptSkillScope {
         match self {
             Self::System => "系统",
             Self::User => "用户",
+            Self::Plugin => "插件",
         }
     }
 
@@ -82,6 +86,7 @@ impl PromptSkillScope {
         match self {
             Self::System => "system",
             Self::User => "user",
+            Self::Plugin => "plugin",
         }
     }
 }
@@ -123,8 +128,8 @@ pub struct PromptSkill {
     /// Auditable origin metadata resolved for this skill.
     /// 为当前技能解析得到的可审计来源元数据。
     pub origin: PromptSkillOriginMetadata,
-    /// Resource counts discovered below the standard optional resource directories.
-    /// 在标准可选资源目录下发现的资源数量。
+    /// Frozen resource summary discovered while loading the skill package.
+    /// 加载技能包时发现并冻结的资源摘要。
     pub resources: PromptSkillResourceSummary,
     /// Markdown body without YAML frontmatter.
     /// 去除 YAML frontmatter 后的 Markdown 正文。
@@ -137,7 +142,43 @@ impl PromptSkill {
     pub fn has_description(&self) -> bool {
         !self.description.trim().is_empty()
     }
+
+    /// Returns the owning plugin identifier for a plugin-contributed skill.
+    /// 返回插件贡献技能的所属插件标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The stable plugin identifier, or `None` for non-plugin skills.
+    /// 稳定插件标识；非插件技能返回 `None`。
+    pub fn plugin_id(&self) -> Option<&str> {
+        if self.scope != PromptSkillScope::Plugin {
+            return None;
+        }
+        self.name.split_once(':').map(|(plugin_id, _)| plugin_id)
+    }
+
+    /// Returns the package-local skill name without the plugin namespace.
+    /// 返回不含插件命名空间的包内技能名称。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The package-local name for plugin skills or the canonical name for other scopes.
+    /// 插件技能返回包内名称，其他作用域返回规范名称。
+    pub fn local_name(&self) -> &str {
+        if self.scope == PromptSkillScope::Plugin {
+            return self
+                .name
+                .split_once(':')
+                .map(|(_, local_name)| local_name)
+                .unwrap_or(self.name.as_str());
+        }
+        self.name.as_str()
+    }
 }
+
+/// Stable host-owned category identifier for plugin-contributed components.
+/// 插件贡献组件使用的稳定宿主分类标识。
+pub const PLUGIN_CATEGORY_ID: &str = "plugins";
 
 /// Optional UI-facing metadata for one prompt skill.
 /// 单个提示词技能的可选界面展示元数据。
@@ -221,8 +262,8 @@ pub struct PromptSkillOriginMetadata {
     pub updated_at: Option<String>,
 }
 
-/// Resource counts for one standard Agent Skills package.
-/// 单个标准 Agent Skills 技能包的资源数量。
+/// Frozen resource summary for one standard Agent Skills package.
+/// 单个标准 Agent Skills 技能包的冻结资源摘要。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptSkillResourceSummary {
     /// Number of files below `scripts`.
@@ -234,6 +275,10 @@ pub struct PromptSkillResourceSummary {
     /// Number of files below `assets`.
     /// `assets` 目录下的文件数量。
     pub assets: usize,
+    /// Deterministic bounded sample of package-relative support-file paths.
+    /// 确定且有界的包内相对支持文件路径样本。
+    #[serde(default)]
+    pub sampled_files: Vec<PathBuf>,
 }
 
 /// One logical Agent Skills category.
@@ -373,11 +418,83 @@ impl PromptSkillCatalog {
         let scope = match scope {
             "system" => PromptSkillScope::System,
             "user" => PromptSkillScope::User,
+            "plugin" => PromptSkillScope::Plugin,
             _ => return None,
         };
         self.records
             .iter()
             .find(|skill| skill.scope == scope && skill.name == name)
+    }
+
+    /// Merges validated plugin skills into this effective catalog snapshot.
+    /// 将已验证的插件技能合并到当前生效目录快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `skills` contains namespaced plugin records from one immutable plugin catalog.
+    /// `skills` 包含来自同一不可变插件目录的命名空间插件记录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns unit, or a deterministic scope or identifier conflict diagnostic.
+    /// 返回空值，或确定性的作用域及标识冲突诊断。
+    pub fn merge_plugin_skills(
+        &mut self,
+        skills: impl IntoIterator<Item = PromptSkill>,
+    ) -> Result<(), String> {
+        let skills = skills.into_iter().collect::<Vec<_>>();
+        let mut known_names = self
+            .records
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<BTreeSet<_>>();
+        for skill in &skills {
+            if skill.scope != PromptSkillScope::Plugin {
+                return Err(format!(
+                    "Prompt skill `{}` cannot enter the plugin catalog without plugin scope.",
+                    skill.name
+                ));
+            }
+            if skill.catalog.category_id != PLUGIN_CATEGORY_ID {
+                return Err(format!(
+                    "Plugin prompt skill `{}` must belong to category `{PLUGIN_CATEGORY_ID}`.",
+                    skill.name
+                ));
+            }
+            let Some((plugin_id, local_name)) = skill.name.split_once(':') else {
+                return Err(format!(
+                    "Plugin prompt skill `{}` must use a pluginId:localName identifier.",
+                    skill.name
+                ));
+            };
+            if !valid_category_id(plugin_id)
+                || !valid_category_id(local_name)
+                || local_name.contains(':')
+            {
+                return Err(format!(
+                    "Plugin prompt skill `{}` has an invalid plugin namespace or local name.",
+                    skill.name
+                ));
+            }
+            if !known_names.insert(skill.name.clone()) {
+                return Err(format!(
+                    "Plugin prompt skill identifier `{}` conflicts with an existing catalog record.",
+                    skill.name
+                ));
+            }
+        }
+        // Commit only after the complete incoming batch satisfies every invariant.
+        // 仅在完整输入批次满足全部不变量后提交。
+        self.records.extend(skills.iter().cloned());
+        self.skills.extend(skills);
+        self.records.sort_by(|left, right| {
+            left.scope
+                .cmp(&right.scope)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        self.skills
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(())
     }
 }
 
@@ -497,6 +614,9 @@ impl ResolvedPromptSkill {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PromptSkillStateSource {
+    /// The owning plugin lifecycle published this skill as enabled.
+    /// 所属插件生命周期将当前技能发布为启用状态。
+    Plugin,
     /// The session-level override decided the state.
     /// 会话级覆盖决定了该状态。
     Session,
@@ -641,6 +761,57 @@ pub fn load_prompt_skills_from_roots(
     catalog
 }
 
+/// Loads every read-only prompt skill contributed by one plugin package.
+/// 加载单个插件包贡献的全部只读提示词技能。
+///
+/// # Parameters
+/// 参数
+/// - `plugin_id`: Stable owning plugin identifier.
+/// - `plugin_id`：稳定的所属插件标识。
+/// - `plugin_name`: Human-facing owning plugin name.
+/// - `plugin_name`：面向用户的所属插件名称。
+/// - `plugin_version`: Owning plugin version.
+/// - `plugin_version`：所属插件版本。
+/// - `skills_root`: Conventional plugin `skills/` directory.
+/// - `skills_root`：插件约定的 `skills/` 目录。
+///
+/// # Returns
+/// 返回值
+/// Returns the complete namespaced skill set, or every deterministic parse error.
+/// 返回完整的命名空间技能集合，或全部确定性解析错误。
+pub fn load_plugin_prompt_skills(
+    plugin_id: &str,
+    plugin_name: &str,
+    plugin_version: &str,
+    skills_root: &Path,
+) -> Result<Vec<PromptSkill>, Vec<PromptSkillLoadError>> {
+    let mut by_name = BTreeMap::<String, PromptSkill>::new();
+    let mut errors = Vec::new();
+    scan_prompt_skill_root(
+        skills_root,
+        PromptSkillScope::Plugin,
+        &mut by_name,
+        &mut errors,
+    );
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let mut skills = by_name.into_values().collect::<Vec<_>>();
+    for skill in &mut skills {
+        let local_name = skill.name.clone();
+        skill.name = format!("{plugin_id}:{local_name}");
+        skill.catalog.category_id = String::from(PLUGIN_CATEGORY_ID);
+        if skill.origin.kind == "plugin" {
+            skill.origin.label = Some(plugin_name.to_string());
+        }
+        if skill.origin.version.is_none() {
+            skill.origin.version = Some(plugin_version.to_string());
+        }
+        skill.origin.managed = true;
+    }
+    Ok(skills)
+}
+
 /// Returns the immutable default logical Agent Skills categories.
 /// 返回不可变的默认逻辑 Agent Skills 分类。
 pub fn default_prompt_skill_categories() -> Vec<PromptSkillCategory> {
@@ -690,6 +861,7 @@ pub fn default_prompt_skill_categories() -> Vec<PromptSkillCategory> {
         builtin_prompt_skill_category("research", "Research", "研究与检索", "🔎", "#4F46E5", 80),
         builtin_prompt_skill_category("security", "Security", "安全", "🛡️", "#DC2626", 90),
         builtin_prompt_skill_category("integrations", "Integrations", "集成", "🔌", "#0D9488", 100),
+        builtin_prompt_skill_category(PLUGIN_CATEGORY_ID, "Plugins", "插件", "🧩", "#6366F1", 110),
         builtin_prompt_skill_category(
             "uncategorized",
             "Uncategorized",
@@ -779,25 +951,27 @@ pub fn save_user_prompt_skill_package(
     validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), &original_name)
         .map_err(|error| error.message)?;
     validate_prompt_skill_package_input(&input)?;
-    fs::create_dir_all(user_root).map_err(|error| {
-        format!(
-            "Failed to create Agent Skills user root `{}`: {error}",
-            vulcan_runtime_assets::native_host_path_text_from_path(user_root)
-        )
-    })?;
+    ensure_managed_prompt_skill_directory(user_root, "Agent Skills user root")?;
     let target_dir = user_root.join(&target_name);
     let original_dir = user_root.join(&original_name);
-    if submitted_original_name.is_none() && target_dir.exists() {
+    let original_exists =
+        managed_prompt_skill_directory_exists(&original_dir, "original user Agent Skill package")?;
+    let target_exists = if target_dir == original_dir {
+        original_exists
+    } else {
+        managed_prompt_skill_directory_exists(&target_dir, "target user Agent Skill package")?
+    };
+    if submitted_original_name.is_none() && target_exists {
         return Err(format!(
             "Agent Skill `{target_name}` already exists in the user catalog."
         ));
     }
-    if submitted_original_name.is_some() && !original_dir.is_dir() {
+    if submitted_original_name.is_some() && !original_exists {
         return Err(format!(
             "Original user Agent Skill `{original_name}` does not exist."
         ));
     }
-    if target_name != original_name && target_dir.exists() {
+    if target_name != original_name && target_exists {
         return Err(format!(
             "Agent Skill `{target_name}` already exists in the user catalog."
         ));
@@ -828,13 +1002,13 @@ pub fn save_user_prompt_skill_package(
     let assignment = host_catalog.skills.entry(target_name.clone()).or_default();
     assignment.category_id = Some(input.catalog.category_id.clone());
     assignment.tags = Some(normalized_unique_strings(input.catalog.tags.clone()));
-    let transaction_dir = prompt_skill_transaction_dir(user_root);
+    let transaction_dir = prompt_skill_transaction_dir(user_root)?;
     let staged_dir = transaction_dir.join(&target_name);
     let backup_dir = transaction_dir.join(".backup");
-    fs::create_dir_all(&transaction_dir)
+    fs::create_dir(&transaction_dir)
         .map_err(|error| format!("Failed to create Agent Skills transaction directory: {error}"))?;
     let transaction_result = (|| {
-        if original_dir.is_dir() {
+        if original_exists {
             copy_prompt_skill_directory(&original_dir, &staged_dir)?;
         } else if let Some(source_dir) = input.resource_source_dir.as_deref() {
             copy_prompt_skill_directory(source_dir, &staged_dir)?;
@@ -848,12 +1022,13 @@ pub fn save_user_prompt_skill_package(
             PromptSkillScope::User,
         )
         .map_err(|error| error.message)?;
-        if original_dir.exists() {
+        if original_exists {
+            prompt_skill_resource_summary(&original_dir).map_err(|error| error.message)?;
             fs::rename(&original_dir, &backup_dir)
                 .map_err(|error| format!("Failed to stage existing Agent Skill backup: {error}"))?;
         }
         if let Err(error) = fs::rename(&staged_dir, &target_dir) {
-            if backup_dir.exists() {
+            if original_exists {
                 let _ = fs::rename(&backup_dir, &original_dir);
             }
             return Err(format!(
@@ -862,12 +1037,12 @@ pub fn save_user_prompt_skill_package(
         }
         if let Err(error) = write_host_prompt_skill_catalog(user_root, &host_catalog) {
             let _ = fs::remove_dir_all(&target_dir);
-            if backup_dir.exists() {
+            if original_exists {
                 let _ = fs::rename(&backup_dir, &original_dir);
             }
             return Err(error);
         }
-        if backup_dir.exists() {
+        if original_exists {
             let _ = fs::remove_dir_all(&backup_dir);
         }
         parse_prompt_skill_file_with_scope(
@@ -890,18 +1065,21 @@ pub fn delete_user_prompt_skill_package(user_root: &Path, name: &str) -> Result<
     }
     validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), name).map_err(|error| error.message)?;
     let target_dir = user_root.join(name);
-    if !target_dir.is_dir() {
+    if !managed_prompt_skill_directory_exists(user_root, "Agent Skills user root")?
+        || !managed_prompt_skill_directory_exists(&target_dir, "user Agent Skill package")?
+    {
         return Err(format!("User Agent Skill `{name}` does not exist."));
     }
+    prompt_skill_resource_summary(&target_dir).map_err(|error| error.message)?;
     // catalog is the strict assignment table synchronized with package deletion.
     // catalog 是与技能包删除同步的严格归属表。
     let mut catalog = read_host_prompt_skill_catalog_strict(user_root)?;
     catalog.skills.remove(name);
     // transaction_dir retains the package until catalog persistence succeeds.
     // transaction_dir 在目录持久化成功前保留技能包。
-    let transaction_dir = prompt_skill_transaction_dir(user_root);
+    let transaction_dir = prompt_skill_transaction_dir(user_root)?;
     let removed_dir = transaction_dir.join("removed");
-    fs::create_dir_all(&transaction_dir)
+    fs::create_dir(&transaction_dir)
         .map_err(|error| format!("Failed to create Agent Skills transaction directory: {error}"))?;
     fs::rename(&target_dir, &removed_dir)
         .map_err(|error| format!("Failed to remove user Agent Skill `{name}`: {error}"))?;
@@ -920,6 +1098,11 @@ pub fn save_user_prompt_skill_category(
     user_root: &Path,
     mut category: PromptSkillCategory,
 ) -> Result<(), String> {
+    if category.category_id == PLUGIN_CATEGORY_ID {
+        return Err(String::from(
+            "The `plugins` prompt skill category is host-owned and read-only.",
+        ));
+    }
     validate_prompt_skill_category(&category)?;
     if default_prompt_skill_categories()
         .iter()
@@ -949,6 +1132,11 @@ pub fn delete_user_prompt_skill_category(
     user_root: &Path,
     category_id: &str,
 ) -> Result<(), String> {
+    if category_id == PLUGIN_CATEGORY_ID {
+        return Err(String::from(
+            "The `plugins` prompt skill category is host-owned and cannot be deleted.",
+        ));
+    }
     validate_prompt_skill_name(Path::new(VULCAN_SKILL_CATALOG_FILE_NAME), category_id)
         .map_err(|error| error.message)?;
     if default_prompt_skill_categories()
@@ -995,6 +1183,11 @@ pub fn set_user_prompt_skill_category(
     name: &str,
     category_id: &str,
 ) -> Result<(), String> {
+    if category_id == PLUGIN_CATEGORY_ID {
+        return Err(String::from(
+            "The `plugins` prompt skill category cannot receive manual assignments.",
+        ));
+    }
     validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), name).map_err(|error| error.message)?;
     let available =
         load_prompt_skills_from_roots(system_root.to_path_buf(), user_root.to_path_buf());
@@ -1147,6 +1340,14 @@ fn write_prompt_skill_package_files(
 /// Recursively copies one package while rejecting symbolic links.
 /// 递归复制一个技能包并拒绝符号链接。
 fn copy_prompt_skill_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("Failed to inspect existing Agent Skill directory: {error}"))?;
+    if metadata_is_link_like(&source_metadata) || !source_metadata.is_dir() {
+        return Err(format!(
+            "Managed Agent Skill package source must be a regular directory and cannot be a symbolic link or Windows reparse point: {}",
+            vulcan_runtime_assets::native_host_path_text_from_path(source)
+        ));
+    }
     fs::create_dir_all(destination)
         .map_err(|error| format!("Failed to create staged package directory: {error}"))?;
     for entry in fs::read_dir(source)
@@ -1154,34 +1355,121 @@ fn copy_prompt_skill_directory(source: &Path, destination: &Path) -> Result<(), 
     {
         let entry =
             entry.map_err(|error| format!("Failed to inspect existing Agent Skill: {error}"))?;
-        let file_type = entry
-            .file_type()
+        let entry_path = entry.path();
+        let metadata = fs::symlink_metadata(&entry_path)
             .map_err(|error| format!("Failed to inspect package entry: {error}"))?;
-        if file_type.is_symlink() {
+        if metadata_is_link_like(&metadata) {
             return Err(format!(
-                "Symbolic links are not permitted in managed Agent Skill packages: {}",
-                vulcan_runtime_assets::native_host_path_text_from_path(&entry.path())
+                "Symbolic links and Windows reparse points are not permitted in managed Agent Skill packages: {}",
+                vulcan_runtime_assets::native_host_path_text_from_path(&entry_path)
             ));
         }
         let next_destination = destination.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_prompt_skill_directory(&entry.path(), &next_destination)?;
-        } else if file_type.is_file() {
-            fs::copy(entry.path(), next_destination)
+        if metadata.is_dir() {
+            copy_prompt_skill_directory(&entry_path, &next_destination)?;
+        } else if metadata.is_file() {
+            fs::copy(entry_path, next_destination)
                 .map_err(|error| format!("Failed to copy Agent Skill resource: {error}"))?;
+        } else {
+            return Err(String::from(
+                "Managed Agent Skill package entries must be regular files or directories.",
+            ));
         }
     }
     Ok(())
 }
 
-/// Builds one isolated transaction directory below the host-only metadata root.
-/// 在仅宿主使用的元数据根目录下构建一个隔离事务目录。
-fn prompt_skill_transaction_dir(user_root: &Path) -> PathBuf {
+/// Builds one verified isolated transaction directory path below host-only metadata.
+/// 在仅宿主使用的元数据下构建一个经过校验的隔离事务目录路径。
+fn prompt_skill_transaction_dir(user_root: &Path) -> Result<PathBuf, String> {
+    let metadata_root = user_root.join(VULCAN_SKILL_CATALOG_DIR_NAME);
+    ensure_managed_prompt_skill_directory(&metadata_root, "Agent Skills metadata directory")?;
+    let transactions_root = metadata_root.join("transactions");
+    ensure_managed_prompt_skill_directory(
+        &transactions_root,
+        "Agent Skills transactions directory",
+    )?;
     let sequence = PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    user_root
-        .join(VULCAN_SKILL_CATALOG_DIR_NAME)
-        .join("transactions")
-        .join(format!("{}-{sequence}", std::process::id()))
+    let transaction_dir = transactions_root.join(format!("{}-{sequence}", std::process::id()));
+    if fs::symlink_metadata(&transaction_dir).is_ok() {
+        return Err(format!(
+            "Agent Skills transaction path already exists: {}",
+            vulcan_runtime_assets::native_host_path_text_from_path(&transaction_dir)
+        ));
+    }
+    Ok(transaction_dir)
+}
+
+/// Ensures one managed prompt-skill directory is regular and not link-like.
+/// 确保一个受管提示词技能目录为常规目录且不是链接类路径。
+fn ensure_managed_prompt_skill_directory(path: &Path, label: &str) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata_is_link_like(&metadata) || !metadata.is_dir() {
+                return Err(format!(
+                    "{label} must be a regular directory and cannot be a symbolic link or Windows reparse point: {}",
+                    vulcan_runtime_assets::native_host_path_text_from_path(path)
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(path).map_err(|error| {
+                format!(
+                    "Failed to create {label} `{}`: {error}",
+                    vulcan_runtime_assets::native_host_path_text_from_path(path)
+                )
+            })?;
+            let metadata = fs::symlink_metadata(path)
+                .map_err(|error| format!("Failed to verify created {label}: {error}"))?;
+            if metadata_is_link_like(&metadata) || !metadata.is_dir() {
+                return Err(format!(
+                    "Created {label} is not a regular directory: {}",
+                    vulcan_runtime_assets::native_host_path_text_from_path(path)
+                ));
+            }
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to inspect {label} `{}`: {error}",
+                vulcan_runtime_assets::native_host_path_text_from_path(path)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether one managed prompt-skill directory exists after strict inspection.
+/// 在严格检查后返回一个受管提示词技能目录是否存在。
+fn managed_prompt_skill_directory_exists(path: &Path, label: &str) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata_is_link_like(&metadata) || !metadata.is_dir() => Err(format!(
+            "{label} must be a regular directory and cannot be a symbolic link or Windows reparse point: {}",
+            vulcan_runtime_assets::native_host_path_text_from_path(path)
+        )),
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "Failed to inspect {label} `{}`: {error}",
+            vulcan_runtime_assets::native_host_path_text_from_path(path)
+        )),
+    }
+}
+
+/// Returns whether one managed regular file exists after strict no-link inspection.
+/// 在严格无链接检查后返回一个受管常规文件是否存在。
+fn managed_prompt_skill_file_exists(path: &Path, label: &str) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata_is_link_like(&metadata) || !metadata.is_file() => Err(format!(
+            "{label} must be a regular file and cannot be a symbolic link or Windows reparse point: {}",
+            vulcan_runtime_assets::native_host_path_text_from_path(path)
+        )),
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "Failed to inspect {label} `{}`: {error}",
+            vulcan_runtime_assets::native_host_path_text_from_path(path)
+        )),
+    }
 }
 
 /// Reads the strict host catalog or creates an empty current-schema document.
@@ -1189,10 +1477,21 @@ fn prompt_skill_transaction_dir(user_root: &Path) -> PathBuf {
 fn read_host_prompt_skill_catalog_strict(
     user_root: &Path,
 ) -> Result<HostPromptSkillCatalog, String> {
-    let path = user_root
-        .join(VULCAN_SKILL_CATALOG_DIR_NAME)
-        .join(VULCAN_SKILL_CATALOG_FILE_NAME);
-    if !path.exists() {
+    if !managed_prompt_skill_directory_exists(user_root, "Agent Skills user root")? {
+        return Ok(HostPromptSkillCatalog {
+            schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
+            ..HostPromptSkillCatalog::default()
+        });
+    }
+    let directory = user_root.join(VULCAN_SKILL_CATALOG_DIR_NAME);
+    if !managed_prompt_skill_directory_exists(&directory, "Agent Skills metadata directory")? {
+        return Ok(HostPromptSkillCatalog {
+            schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
+            ..HostPromptSkillCatalog::default()
+        });
+    }
+    let path = directory.join(VULCAN_SKILL_CATALOG_FILE_NAME);
+    if !managed_prompt_skill_file_exists(&path, "Agent Skills catalog")? {
         return Ok(HostPromptSkillCatalog {
             schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
             ..HostPromptSkillCatalog::default()
@@ -1225,33 +1524,61 @@ fn write_host_prompt_skill_catalog(
     user_root: &Path,
     catalog: &HostPromptSkillCatalog,
 ) -> Result<(), String> {
+    ensure_managed_prompt_skill_directory(user_root, "Agent Skills user root")?;
     let directory = user_root.join(VULCAN_SKILL_CATALOG_DIR_NAME);
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("Failed to create Agent Skills metadata directory: {error}"))?;
+    ensure_managed_prompt_skill_directory(&directory, "Agent Skills metadata directory")?;
     let target = directory.join(VULCAN_SKILL_CATALOG_FILE_NAME);
+    let target_exists = managed_prompt_skill_file_exists(&target, "Agent Skills catalog")?;
     let temporary = directory.join(format!(
-        "catalog-{}.yaml.tmp",
+        "catalog-{}-{}.yaml.tmp",
+        std::process::id(),
         PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
+    if fs::symlink_metadata(&temporary).is_ok() {
+        return Err(format!(
+            "Agent Skills catalog transaction path already exists: {}",
+            vulcan_runtime_assets::native_host_path_text_from_path(&temporary)
+        ));
+    }
     let yaml = serde_yaml::to_string(catalog)
         .map_err(|error| format!("Failed to serialize Agent Skills catalog: {error}"))?;
-    fs::write(&temporary, yaml)
+    let mut temporary_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| format!("Failed to create Agent Skills catalog transaction: {error}"))?;
+    std::io::Write::write_all(&mut temporary_file, yaml.as_bytes())
         .map_err(|error| format!("Failed to write Agent Skills catalog transaction: {error}"))?;
+    temporary_file
+        .sync_all()
+        .map_err(|error| format!("Failed to flush Agent Skills catalog transaction: {error}"))?;
+    drop(temporary_file);
     let backup = directory.join(format!(
-        "catalog-{}.yaml.backup",
+        "catalog-{}-{}.yaml.backup",
+        std::process::id(),
         PROMPT_SKILL_TRANSACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    if target.exists() {
-        fs::rename(&target, &backup)
-            .map_err(|error| format!("Failed to stage Agent Skills catalog backup: {error}"))?;
+    if fs::symlink_metadata(&backup).is_ok() {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "Agent Skills catalog backup path already exists: {}",
+            vulcan_runtime_assets::native_host_path_text_from_path(&backup)
+        ));
+    }
+    if target_exists && let Err(error) = fs::rename(&target, &backup) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "Failed to stage Agent Skills catalog backup: {error}"
+        ));
     }
     if let Err(error) = fs::rename(&temporary, &target) {
-        if backup.exists() {
+        if target_exists {
             let _ = fs::rename(&backup, &target);
         }
+        let _ = fs::remove_file(&temporary);
         return Err(format!("Failed to commit Agent Skills catalog: {error}"));
     }
-    if backup.exists() {
+    if target_exists {
         let _ = fs::remove_file(backup);
     }
     Ok(())
@@ -1305,12 +1632,58 @@ fn load_host_prompt_skill_catalog(
     user_root: &Path,
     errors: &mut Vec<PromptSkillLoadError>,
 ) -> HostPromptSkillCatalog {
+    let user_root_exists =
+        match managed_prompt_skill_directory_exists(user_root, "Agent Skills user root") {
+            Ok(exists) => exists,
+            Err(message) => {
+                errors.push(PromptSkillLoadError {
+                    path: user_root.to_path_buf(),
+                    message,
+                });
+                return HostPromptSkillCatalog::default();
+            }
+        };
+    if !user_root_exists {
+        return HostPromptSkillCatalog {
+            schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
+            ..HostPromptSkillCatalog::default()
+        };
+    }
     // Resolve the unique host catalog path below the user skill root.
     // 解析用户技能根目录下唯一的宿主目录路径。
-    let catalog_path = user_root
-        .join(VULCAN_SKILL_CATALOG_DIR_NAME)
-        .join(VULCAN_SKILL_CATALOG_FILE_NAME);
-    if !catalog_path.is_file() {
+    let metadata_dir = user_root.join(VULCAN_SKILL_CATALOG_DIR_NAME);
+    let catalog_path = metadata_dir.join(VULCAN_SKILL_CATALOG_FILE_NAME);
+    let metadata_dir_exists = match managed_prompt_skill_directory_exists(
+        &metadata_dir,
+        "Agent Skills metadata directory",
+    ) {
+        Ok(exists) => exists,
+        Err(message) => {
+            errors.push(PromptSkillLoadError {
+                path: metadata_dir,
+                message,
+            });
+            return HostPromptSkillCatalog::default();
+        }
+    };
+    if !metadata_dir_exists {
+        return HostPromptSkillCatalog {
+            schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
+            ..HostPromptSkillCatalog::default()
+        };
+    }
+    let catalog_exists =
+        match managed_prompt_skill_file_exists(&catalog_path, "Agent Skills catalog") {
+            Ok(exists) => exists,
+            Err(message) => {
+                errors.push(PromptSkillLoadError {
+                    path: catalog_path,
+                    message,
+                });
+                return HostPromptSkillCatalog::default();
+            }
+        };
+    if !catalog_exists {
         return HostPromptSkillCatalog {
             schema_version: VULCAN_SKILL_CATALOG_SCHEMA_VERSION,
             ..HostPromptSkillCatalog::default()
@@ -1474,13 +1847,26 @@ fn scan_prompt_skill_root(
     by_name: &mut BTreeMap<String, PromptSkill>,
     errors: &mut Vec<PromptSkillLoadError>,
 ) {
-    if root.as_os_str().is_empty() || !root.exists() {
+    if root.as_os_str().is_empty() {
         return;
     }
-    if !root.is_dir() {
+    let root_metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            errors.push(PromptSkillLoadError {
+                path: root.to_path_buf(),
+                message: format!("Failed to inspect prompt skill root: {error}"),
+            });
+            return;
+        }
+    };
+    if metadata_is_link_like(&root_metadata) || !root_metadata.is_dir() {
         errors.push(PromptSkillLoadError {
             path: root.to_path_buf(),
-            message: String::from("Prompt skill root exists but is not a directory."),
+            message: String::from(
+                "Prompt skill root must be a regular directory and cannot be a symbolic link or Windows reparse point.",
+            ),
         });
         return;
     }
@@ -1496,9 +1882,38 @@ fn scan_prompt_skill_root(
         }
     };
 
-    for entry in entries.flatten() {
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors.push(PromptSkillLoadError {
+                    path: root.to_path_buf(),
+                    message: format!("Failed to enumerate prompt skill root entry: {error}"),
+                });
+                continue;
+            }
+        };
         let skill_dir = entry.path();
-        if !skill_dir.is_dir() {
+        let entry_metadata = match fs::symlink_metadata(&skill_dir) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                errors.push(PromptSkillLoadError {
+                    path: skill_dir,
+                    message: format!("Failed to inspect prompt skill directory entry: {error}"),
+                });
+                continue;
+            }
+        };
+        if metadata_is_link_like(&entry_metadata) {
+            errors.push(PromptSkillLoadError {
+                path: skill_dir,
+                message: String::from(
+                    "Symbolic links and Windows reparse points are not permitted as prompt skill directories.",
+                ),
+            });
+            continue;
+        }
+        if !entry_metadata.is_dir() {
             continue;
         }
         if scope == PromptSkillScope::User
@@ -1534,6 +1949,21 @@ pub fn parse_prompt_skill_file_with_scope(
     skill_file: &Path,
     scope: PromptSkillScope,
 ) -> Result<PromptSkill, PromptSkillLoadError> {
+    // Inspect the instruction file without following package-controlled links.
+    // 在不跟随技能包可控链接的情况下检查指令文件。
+    let skill_metadata =
+        fs::symlink_metadata(skill_file).map_err(|error| PromptSkillLoadError {
+            path: skill_file.to_path_buf(),
+            message: format!("Failed to inspect SKILL.md: {error}"),
+        })?;
+    if metadata_is_link_like(&skill_metadata) || !skill_metadata.is_file() {
+        return Err(PromptSkillLoadError {
+            path: skill_file.to_path_buf(),
+            message: String::from(
+                "SKILL.md must be a regular file and cannot be a symbolic link or Windows reparse point.",
+            ),
+        });
+    }
     let raw = fs::read_to_string(skill_file).map_err(|error| PromptSkillLoadError {
         path: skill_file.to_path_buf(),
         message: format!("Failed to read SKILL.md: {error}"),
@@ -1636,6 +2066,9 @@ pub fn parse_prompt_skill_text_with_scope(
             ),
         });
     }
+    // Validate the complete package and freeze its resource summary before reading optional metadata.
+    // 在读取可选元数据前校验完整技能包并冻结资源摘要。
+    let resources = prompt_skill_resource_summary(&base_dir)?;
     // Load the single strict Vulcan metadata schema when the package declares it.
     // 在技能包声明时加载唯一严格的 Vulcan 元数据结构。
     let package_metadata = load_prompt_skill_metadata(&base_dir)?;
@@ -1664,11 +2097,9 @@ pub fn parse_prompt_skill_text_with_scope(
         origin.kind = match scope {
             PromptSkillScope::System => String::from("builtin"),
             PromptSkillScope::User => String::from("unknown"),
+            PromptSkillScope::Plugin => String::from("plugin"),
         };
     }
-    // Count standard optional package resources for catalog presentation.
-    // 统计用于目录展示的标准可选技能包资源。
-    let resources = prompt_skill_resource_summary(&base_dir);
     Ok(PromptSkill {
         name,
         description,
@@ -1694,8 +2125,23 @@ fn load_prompt_skill_metadata(
     // Build the only supported package-local Vulcan metadata path.
     // 构建唯一支持的技能包内 Vulcan 元数据路径。
     let metadata_path = base_dir.join(VULCAN_SKILL_METADATA_FILE_NAME);
-    if !metadata_path.is_file() {
-        return Ok(None);
+    let metadata = match fs::symlink_metadata(&metadata_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(PromptSkillLoadError {
+                path: metadata_path,
+                message: format!("Failed to inspect Vulcan skill metadata: {error}"),
+            });
+        }
+    };
+    if metadata_is_link_like(&metadata) || !metadata.is_file() {
+        return Err(PromptSkillLoadError {
+            path: metadata_path,
+            message: String::from(
+                "Vulcan skill metadata must be a regular file and cannot be a symbolic link or Windows reparse point.",
+            ),
+        });
     }
     parse_prompt_skill_metadata_file(&metadata_path).map(Some)
 }
@@ -1819,7 +2265,13 @@ pub fn resolve_prompt_skills(
         .iter()
         .cloned()
         .map(|skill| {
-            let (state, source) = resolve_prompt_skill_state(&skill.name, global, project, session);
+            // Enabled plugin skills enter this catalog only through the committed plugin snapshot.
+            // 已启用插件技能只会通过已提交插件快照进入当前目录。
+            let (state, source) = if skill.scope == PromptSkillScope::Plugin {
+                (PromptSkillState::Enabled, PromptSkillStateSource::Plugin)
+            } else {
+                resolve_prompt_skill_state(&skill.name, global, project, session)
+            };
             ResolvedPromptSkill {
                 skill,
                 state,
@@ -2095,46 +2547,149 @@ fn normalized_unique_strings(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-/// Counts standard optional package resources without following symbolic links.
-/// 在不跟随符号链接的前提下统计标准可选技能包资源。
-fn prompt_skill_resource_summary(base_dir: &Path) -> PromptSkillResourceSummary {
-    PromptSkillResourceSummary {
-        scripts: count_regular_files(&base_dir.join("scripts")),
-        references: count_regular_files(&base_dir.join("references")),
-        assets: count_regular_files(&base_dir.join("assets")),
+/// Maximum number of frozen support-file paths exposed in one skill detail response.
+/// 单个技能详情响应中暴露的冻结支持文件路径最大数量。
+const PROMPT_SKILL_RESOURCE_SAMPLE_LIMIT: usize = 12;
+
+/// Inspects one complete skill package and freezes its resource summary without following links.
+/// 检查一个完整技能包并在不跟随链接的情况下冻结其资源摘要。
+fn prompt_skill_resource_summary(
+    base_dir: &Path,
+) -> Result<PromptSkillResourceSummary, PromptSkillLoadError> {
+    let base_metadata = match fs::symlink_metadata(base_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PromptSkillResourceSummary::default());
+        }
+        Err(error) => {
+            return Err(PromptSkillLoadError {
+                path: base_dir.to_path_buf(),
+                message: format!("Failed to inspect prompt skill package: {error}"),
+            });
+        }
+    };
+    if metadata_is_link_like(&base_metadata) || !base_metadata.is_dir() {
+        return Err(PromptSkillLoadError {
+            path: base_dir.to_path_buf(),
+            message: String::from(
+                "Prompt skill package must be a regular directory and cannot be a symbolic link or Windows reparse point.",
+            ),
+        });
     }
+    let mut summary = PromptSkillResourceSummary::default();
+    collect_prompt_skill_resources(base_dir, base_dir, &mut summary)?;
+    summary.sampled_files.sort();
+    summary
+        .sampled_files
+        .truncate(PROMPT_SKILL_RESOURCE_SAMPLE_LIMIT);
+    Ok(summary)
 }
 
-/// Counts regular files recursively below one directory without following symbolic links.
-/// 在不跟随符号链接的前提下递归统计一个目录下的普通文件。
-fn count_regular_files(root: &Path) -> usize {
-    if !root.is_dir() {
-        return 0;
-    }
-    // Read the current directory or return zero for an unreadable optional resource directory.
-    // 读取当前目录；可选资源目录无法读取时返回零。
-    let Ok(entries) = fs::read_dir(root) else {
-        return 0;
-    };
-    // Accumulate regular files from safe non-symlink descendants.
-    // 累加安全且非符号链接后代中的普通文件。
-    entries
-        .flatten()
+/// Recursively validates package entries and accumulates counts plus package-relative samples.
+/// 递归校验技能包目录项并累计数量及包内相对路径样本。
+fn collect_prompt_skill_resources(
+    base_dir: &Path,
+    current_dir: &Path,
+    summary: &mut PromptSkillResourceSummary,
+) -> Result<(), PromptSkillLoadError> {
+    let entries = fs::read_dir(current_dir).map_err(|error| PromptSkillLoadError {
+        path: current_dir.to_path_buf(),
+        message: format!("Failed to read prompt skill package directory: {error}"),
+    })?;
+    let mut entries = entries
         .map(|entry| {
-            // Inspect the directory entry type without following symbolic links.
-            // 在不跟随符号链接的情况下检查目录项类型。
-            let Ok(file_type) = entry.file_type() else {
-                return 0;
-            };
-            if file_type.is_file() {
-                1
-            } else if file_type.is_dir() {
-                count_regular_files(&entry.path())
-            } else {
-                0
-            }
+            entry.map_err(|error| PromptSkillLoadError {
+                path: current_dir.to_path_buf(),
+                message: format!("Failed to enumerate prompt skill package entry: {error}"),
+            })
         })
-        .sum()
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| PromptSkillLoadError {
+            path: path.clone(),
+            message: format!("Failed to inspect prompt skill package entry: {error}"),
+        })?;
+        if metadata_is_link_like(&metadata) {
+            return Err(PromptSkillLoadError {
+                path,
+                message: String::from(
+                    "Symbolic links and Windows reparse points are not permitted in prompt skill packages.",
+                ),
+            });
+        }
+        if metadata.is_dir() {
+            collect_prompt_skill_resources(base_dir, &path, summary)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(PromptSkillLoadError {
+                path,
+                message: String::from(
+                    "Prompt skill package entries must be regular files or directories.",
+                ),
+            });
+        }
+        let relative = path
+            .strip_prefix(base_dir)
+            .map(Path::to_path_buf)
+            .map_err(|error| PromptSkillLoadError {
+                path: path.clone(),
+                message: format!("Prompt skill resource escaped its package root: {error}"),
+            })?;
+        match relative
+            .components()
+            .next()
+            .and_then(|component| match component {
+                std::path::Component::Normal(value) => value.to_str(),
+                _ => None,
+            }) {
+            Some("scripts") => summary.scripts += 1,
+            Some("references") => summary.references += 1,
+            Some("assets") => summary.assets += 1,
+            _ => {}
+        }
+        if relative != Path::new(SKILL_FILE_NAME) && prompt_skill_resource_is_visible(&relative) {
+            summary.sampled_files.push(relative);
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether one package-relative resource path belongs in the model-facing sample.
+/// 返回一个包内相对资源路径是否应进入面向模型的样本。
+fn prompt_skill_resource_is_visible(relative: &Path) -> bool {
+    relative.components().all(|component| match component {
+        std::path::Component::Normal(value) => value
+            .to_str()
+            .is_some_and(|name| !name.starts_with('.') && !name.eq_ignore_ascii_case("target")),
+        _ => false,
+    })
+}
+
+/// Returns whether metadata represents a symbolic link or a Windows reparse point.
+/// 返回元数据是否表示符号链接或 Windows 重解析点。
+fn metadata_is_link_like(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || metadata_is_windows_reparse_point(metadata)
+}
+
+/// Returns whether metadata carries the Windows reparse-point attribute.
+/// 返回元数据是否携带 Windows 重解析点属性。
+#[cfg(windows)]
+fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+/// Reports no Windows reparse point on non-Windows platforms.
+/// 在非 Windows 平台上报告不存在 Windows 重解析点。
+#[cfg(not(windows))]
+fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 /// Splits YAML frontmatter from a markdown file.

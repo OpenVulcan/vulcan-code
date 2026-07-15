@@ -59,7 +59,7 @@ pub(crate) fn update_luaskills_bootstrap_progress(
                         "等待 LuaSkills 就绪",
                     ),
                     ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                    ("plugins", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
+                    ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
@@ -109,7 +109,7 @@ pub(crate) fn update_managed_runtime_bootstrap_progress(
                         "等待 LuaSkills 就绪",
                     ),
                     ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                    ("plugins", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
+                    ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                     (
                         "workspace",
                         StartupStepStatus::Pending,

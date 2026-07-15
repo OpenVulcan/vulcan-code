@@ -2,19 +2,20 @@ use super::{
     CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
     CommandSessionSnapshot, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput,
     TerminalSessionKeyEncoding, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
-    build_mcp_server_list_tool, build_shell_command_tool, build_shell_session_tool,
-    build_skill_list_tool, build_submit_plan_tool, build_terminal_session_tool,
-    build_todolist_tool, build_workspace_describe_tool, coalesce_terminal_output_chunks,
-    display_submit_plan_path, effective_start_append_newline, encode_terminal_inputs,
-    goal_response_value, normalize_terminal_session_name, resolve_session_shell_behavior,
-    resolve_shell_command_launcher, resolve_shell_command_working_directory,
-    shell_command_args_schema, shell_specific_newline, strip_simple_ansi_sequences,
-    strip_terminal_transaction_sentinel, terminal_inputs_request_interrupt,
-    terminal_interrupt_drain_chunk_is_visible, terminal_output_chunks_contain_pattern,
-    terminal_screen_text_from_chunks, terminal_session_args_schema,
-    terminal_transaction_command_text, validate_shell_session_start_stdin_policy,
-    validate_terminal_session_start_shell_policy, validate_terminal_transaction_start,
-    windows_console_input_events_from_inputs, wrap_terminal_transaction_command,
+    build_mcp_server_list_tool, build_prompt_skill_detail_tool, build_shell_command_tool,
+    build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
+    build_terminal_session_tool, build_todolist_tool, build_workspace_describe_tool,
+    coalesce_terminal_output_chunks, display_submit_plan_path, effective_start_append_newline,
+    encode_terminal_inputs, goal_response_value, normalize_terminal_session_name,
+    resolve_session_shell_behavior, resolve_shell_command_launcher,
+    resolve_shell_command_working_directory, shell_command_args_schema, shell_specific_newline,
+    strip_simple_ansi_sequences, strip_terminal_transaction_sentinel,
+    terminal_inputs_request_interrupt, terminal_interrupt_drain_chunk_is_visible,
+    terminal_output_chunks_contain_pattern, terminal_screen_text_from_chunks,
+    terminal_session_args_schema, terminal_transaction_command_text,
+    validate_shell_session_start_stdin_policy, validate_terminal_session_start_shell_policy,
+    validate_terminal_transaction_start, windows_console_input_events_from_inputs,
+    wrap_terminal_transaction_command,
 };
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
@@ -87,6 +88,7 @@ fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionReque
         controller_runtime: None,
         spill_root: None,
         enabled_prompt_skill_names: Vec::new(),
+        prepared_prompt_skills: Vec::new(),
         prompt_skill_user_root: None,
         project_vmm: VmmConfigLayer::default(),
         session_vmm: VmmConfigLayer::default(),
@@ -103,6 +105,62 @@ fn test_native_request_with_workspace(
         workspace_root: Some(workspace_root),
         ..test_native_request(arguments)
     }
+}
+
+/// Verifies the skill detail tool reads the execution-prepared snapshot without rescanning mutable filesystem roots.
+/// 验证技能详情工具读取执行准备阶段的快照，而不会重新扫描可变文件系统根目录。
+#[tokio::test]
+async fn prompt_skill_detail_uses_execution_prepared_snapshot() {
+    // This directory is intentionally never created, proving that metadata and body come from the prepared snapshot.
+    // 此目录刻意不创建，以证明元数据与正文来自已准备快照。
+    let missing_base_dir =
+        std::env::temp_dir().join(format!("vulcan-prepared-prompt-skill-{}", Uuid::new_v4()));
+    // The prepared plugin skill mirrors the namespaced record produced by the plugin catalog loader.
+    // 已准备的插件技能镜像插件目录加载器产出的命名空间记录。
+    let prepared_skill = vulcan_prompt_skills::PromptSkill {
+        name: String::from("fixture-plugin:review"),
+        description: String::from("Review prepared code."),
+        license: None,
+        compatibility: None,
+        metadata: BTreeMap::new(),
+        skill_file: missing_base_dir.join("SKILL.md"),
+        base_dir: missing_base_dir.clone(),
+        scope: vulcan_prompt_skills::PromptSkillScope::Plugin,
+        interface: Default::default(),
+        catalog: Default::default(),
+        origin: Default::default(),
+        resources: vulcan_prompt_skills::PromptSkillResourceSummary {
+            scripts: 1,
+            sampled_files: vec![PathBuf::from("scripts").join("review.ps1")],
+            ..vulcan_prompt_skills::PromptSkillResourceSummary::default()
+        },
+        body: String::from("# Prepared snapshot body"),
+    };
+    // The request contains the immutable turn-level snapshot and no usable user root.
+    // 请求仅携带不可变的回合级快照，不提供可用的用户根目录。
+    let request = NativeToolExecutionRequest {
+        enabled_prompt_skill_names: vec![prepared_skill.name.clone()],
+        prepared_prompt_skills: vec![prepared_skill],
+        ..test_native_request(json!({ "name": "fixture-plugin:review" }))
+    };
+
+    // Direct invocation isolates the detail loader from catalog construction and filesystem discovery.
+    // 直接调用可将详情加载器与目录构建及文件系统发现隔离开来。
+    let result = build_prompt_skill_detail_tool()
+        .invoke(request)
+        .await
+        .expect("prepared plugin skill should load without filesystem discovery");
+    let output = result
+        .model_output
+        .as_str()
+        .expect("skill detail output should be markdown text");
+    assert!(output.contains("# Prepared snapshot body"));
+    assert!(output.contains("fixture-plugin:review"));
+    assert!(output.contains("Base directory for this skill:"));
+    assert!(output.contains(
+        vulcan_runtime_assets::native_host_path_text_from_path(&missing_base_dir).as_str()
+    ));
+    assert!(output.contains("scripts\\review.ps1") || output.contains("scripts/review.ps1"));
 }
 
 mod planning;

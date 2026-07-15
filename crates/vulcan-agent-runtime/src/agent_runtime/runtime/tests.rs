@@ -1,6 +1,7 @@
 use super::{
-    filter_luaskills_entries_by_explicit_registration, filter_luaskills_entries_by_host_dispatch,
-    move_matching_tool_ids, resolve_agent_native_tools, resolve_agent_system_plugin_tool_ids,
+    RuntimeFoundation, filter_luaskills_entries_by_explicit_registration,
+    filter_luaskills_entries_by_host_dispatch, move_matching_tool_ids, resolve_agent_native_tools,
+    resolve_agent_system_plugin_tool_ids,
 };
 use crate::agent_runtime::config::{
     RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
@@ -12,6 +13,7 @@ use crate::tooling::native::{
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// Verifies that referencing one missing tool policy still exposes universal native tools without falling back to a full-open default.
 /// 验证当代理引用缺失的工具策略时仍会暴露通用原生工具，但不会静默退回到完全放开的默认行为。
@@ -307,4 +309,85 @@ fn build_test_luaskills_entry(skill_id: &str, local_name: &str) -> RuntimeEntryD
             "required": ["value"]
         }),
     }
+}
+
+/// Verifies execution foundation construction captures the published plugin snapshot without rescanning files.
+/// 验证执行基础构建只捕获已发布插件快照，不会重新扫描文件。
+#[test]
+fn runtime_foundation_does_not_implicitly_refresh_plugin_catalog() {
+    // temp owns every plugin and runtime path used by this isolated snapshot test.
+    // temp 持有该隔离快照测试使用的全部插件与运行时路径。
+    let temp = tempfile::tempdir().expect("create plugin snapshot test root");
+    // system_root contains one content-only plugin initially published by the manager.
+    // system_root 包含一个最初由管理器发布的纯内容插件。
+    let system_root = temp.path().join("system-plugins");
+    // package_root is the exact package mutated after the first published generation.
+    // package_root 是首个已发布代次之后被修改的精确插件包。
+    let package_root = system_root.join("content-plugin");
+    std::fs::create_dir_all(package_root.join("skills/first-skill"))
+        .expect("create initial plugin skill directory");
+    std::fs::write(
+        package_root.join("skills/first-skill/SKILL.md"),
+        "---\nname: first-skill\ndescription: First published skill.\n---\n\nUse the first skill.",
+    )
+    .expect("write initial plugin skill");
+    std::fs::write(
+        package_root.join("plugin.yaml"),
+        "schema_version: 1\nid: content-plugin\nversion: 1.0.0\nkind: bundled_system\ndefault_enabled: true\ndisplay:\n  name: Content Plugin\n  capability: Snapshot fixture\n",
+    )
+    .expect("write content plugin manifest");
+    // manager owns the sole mutable catalog generation boundary for this test.
+    // manager 持有该测试唯一可变的目录代次边界。
+    let manager = vulcan_plugin_runtime::SystemPluginRuntimeManager::without_runtime(
+        system_root,
+        temp.path().join("user-plugins"),
+        temp.path().join("bridge"),
+        temp.path().join("distribution"),
+        temp.path().join("state"),
+        temp.path().join("runtime"),
+    );
+    // published is the generation execution preparation must continue to observe.
+    // published 是执行准备必须继续观察的代次。
+    let published = manager
+        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+        .expect("publish initial plugin catalog");
+    assert_eq!(published.enabled_skills.len(), 1);
+    std::fs::create_dir_all(package_root.join("skills/unpublished-skill"))
+        .expect("create unpublished plugin skill directory");
+    std::fs::write(
+        package_root.join("skills/unpublished-skill/SKILL.md"),
+        "---\nname: unpublished-skill\ndescription: Unpublished skill.\n---\n\nDo not expose before refresh.",
+    )
+    .expect("write unpublished plugin skill");
+    // foundation represents one execution turn built from the manager's current immutable snapshot.
+    // foundation 表示从管理器当前不可变快照构建的单个执行回合。
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes_and_plugins(
+        &crate::provider_config::ProviderConfigurationFile::default(),
+        &crate::agent_profile::AgentProfileCatalog::default(),
+        None,
+        Some(manager.clone()),
+        None,
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        Arc::new(crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime::pending()),
+    );
+    // captured is the exact generation frozen into this execution foundation.
+    // captured 是冻结到该执行基础中的精确代次。
+    let captured = foundation
+        .system_plugin_catalog()
+        .expect("foundation should capture plugin catalog");
+
+    assert_eq!(manager.snapshot().revision, published.revision);
+    assert_eq!(captured.revision, published.revision);
+    assert!(
+        captured
+            .enabled_skills
+            .contains_key("content-plugin:first-skill")
+    );
+    assert!(
+        !captured
+            .enabled_skills
+            .contains_key("content-plugin:unpublished-skill")
+    );
 }

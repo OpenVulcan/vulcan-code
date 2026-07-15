@@ -22,8 +22,8 @@ export interface SkillActionProps {
   // Toggles one Lua Skill package lifecycle state.
   // 切换单个 Lua Skill 包生命周期状态。
   onSetLuaSkillEnabled: (skillId: string, enabled: boolean) => Promise<void>
-  // Persists one host-owned LuaSkills System Plugin enabled state.
-  // 持久化单个宿主自有 LuaSkills System Plugin 的启用状态。
+  // Persists one host-owned System Plugin enabled state through the compatibility action.
+  // 通过兼容操作持久化单个宿主自有系统插件的启用状态。
   onSetSystemPluginEnabled: (pluginId: string, enabled: boolean) => Promise<void>
   // Inspects one local user plugin before authorization.
   // 在授权前检查单个本地用户插件。

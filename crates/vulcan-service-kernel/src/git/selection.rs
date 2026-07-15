@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use super::diff::{
-    load_webui_current_git_branch, load_webui_default_git_branch, load_webui_recent_commits,
+    load_webui_current_git_branch, load_webui_default_git_branch, load_webui_unpushed_commits,
 };
 use super::model::{
     WebuiGitCommitSummary, WebuiWorkspaceDiffRequest, default_webui_workspace_diff_request,
@@ -22,8 +22,8 @@ pub(crate) struct WebuiWorkspaceDiffSelection {
     /// Default Git branch resolved for comparison selectors.
     /// 为对比选择器解析出的默认 Git 分支。
     pub(crate) default_branch: Option<String>,
-    /// Recent commits used by commit mode selectors.
-    /// 提交模式选择器使用的最近提交列表。
+    /// Unpushed commits used by commit mode selectors.
+    /// 提交模式选择器使用的未推送提交列表。
     pub(crate) recent_commits: Vec<WebuiGitCommitSummary>,
     /// Selected base branch after trimming request text and applying defaults.
     /// 裁剪请求文本并应用默认值后的选中基准分支。
@@ -51,9 +51,9 @@ pub(crate) fn load_webui_workspace_diff_selection(
     // Load the comparison default branch used when the request omits compare_branch.
     // 加载请求省略 compare_branch 时使用的默认对比分支。
     let default_branch = load_webui_default_git_branch(repository_root)?;
-    // Load recent commits used as the commit-mode fallback.
-    // 加载提交模式兜底使用的最近提交。
-    let recent_commits = load_webui_recent_commits(repository_root)?;
+    // Load only unpushed commits used as the commit-mode selector source and fallback.
+    // 仅加载作为提交模式选择器来源与兜底项的未推送提交。
+    let recent_commits = load_webui_unpushed_commits(repository_root)?;
     Ok(webui_workspace_diff_selection(
         request,
         current_branch,
@@ -79,9 +79,17 @@ pub(crate) fn webui_workspace_diff_selection(
     let selected_compare_branch =
         trimmed_webui_diff_request_value(request.compare_branch.as_deref())
             .or_else(|| default_branch.clone());
-    // Prefer a non-empty request commit hash, otherwise use the first recent commit.
-    // 优先使用请求中的非空提交哈希，否则使用最近提交中的第一项。
-    let selected_commit_hash = trimmed_webui_diff_request_value(request.commit_hash.as_deref())
+    // Accept a requested commit only when it is still unpushed; otherwise use the first unpushed commit.
+    // 仅当请求的提交仍未推送时才接受，否则使用第一条未推送提交。
+    let requested_commit_hash = trimmed_webui_diff_request_value(request.commit_hash.as_deref());
+    // Resolve the effective commit from the authoritative unpushed selector list.
+    // 从权威的未推送选择器列表中解析有效提交。
+    let selected_commit_hash = requested_commit_hash
+        .filter(|requested_hash| {
+            recent_commits
+                .iter()
+                .any(|commit| commit.hash.as_str() == requested_hash.as_str())
+        })
         .or_else(|| recent_commits.first().map(|commit| commit.hash.clone()));
     WebuiWorkspaceDiffSelection {
         request,
@@ -147,5 +155,37 @@ mod tests {
         );
         assert_eq!(selection.selected_compare_branch.as_deref(), Some("main"));
         assert_eq!(selection.selected_commit_hash.as_deref(), Some("abc123"));
+    }
+
+    /// Verifies a pushed or stale requested hash cannot escape the authoritative unpushed commit list.
+    /// 验证已推送或过期的请求哈希无法绕过权威的未推送提交列表。
+    #[test]
+    fn webui_workspace_diff_selection_rejects_commit_outside_unpushed_list() {
+        // Build the only commit that remains eligible for commit review.
+        // 构造提交审核中唯一仍然可选的提交。
+        let unpushed_commit = WebuiGitCommitSummary {
+            hash: String::from("unpushed123"),
+            short_hash: String::from("unpushed"),
+            subject: String::from("Unpushed commit"),
+            relative_time: String::from("now"),
+        };
+        // Resolve a request carrying a hash that is absent from the unpushed source list.
+        // 解析一个携带未出现在未推送来源列表中的哈希请求。
+        let selection = webui_workspace_diff_selection(
+            WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Commit,
+                base_branch: None,
+                compare_branch: None,
+                commit_hash: Some(String::from("already-pushed456")),
+            },
+            Some(String::from("feature/source")),
+            Some(String::from("main")),
+            vec![unpushed_commit],
+        );
+
+        assert_eq!(
+            selection.selected_commit_hash.as_deref(),
+            Some("unpushed123")
+        );
     }
 }

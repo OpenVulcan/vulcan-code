@@ -138,6 +138,7 @@ pub fn build_vulcan_tools_manager(
     ai_tool_configuration: PersistedAiToolConfiguration,
     ai_tool_fallback_aliases: Vec<AiToolFallbackAlias>,
     enabled_prompt_skill_names: Vec<String>,
+    prepared_prompt_skills: Vec<vulcan_prompt_skills::PromptSkill>,
     prompt_skill_user_root: Option<PathBuf>,
     implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
     project_vmm: vulcan_vmm::VmmConfigLayer,
@@ -175,6 +176,7 @@ pub fn build_vulcan_tools_manager(
         let workspace_root_for_context = workspace_root.clone();
         let controller_runtime_for_context = controller_runtime.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
+        let prepared_prompt_skills_for_context = prepared_prompt_skills.clone();
         let prompt_skill_user_root_for_context = prompt_skill_user_root.clone();
         let project_vmm_for_context = project_vmm.clone();
         let session_vmm_for_context = session_vmm.clone();
@@ -190,6 +192,7 @@ pub fn build_vulcan_tools_manager(
                 let controller_runtime = controller_runtime_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
+                let prepared_prompt_skills = prepared_prompt_skills_for_context.clone();
                 let project_vmm = project_vmm_for_context.clone();
                 let session_vmm = session_vmm_for_context.clone();
                 Box::pin(async move {
@@ -205,6 +208,7 @@ pub fn build_vulcan_tools_manager(
                                 workspace_root,
                                 controller_runtime,
                                 enabled_prompt_skill_names,
+                                prepared_prompt_skills,
                                 prompt_skill_user_root,
                                 project_vmm,
                                 session_vmm,

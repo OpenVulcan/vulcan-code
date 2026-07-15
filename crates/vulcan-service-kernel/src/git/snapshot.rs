@@ -3,8 +3,9 @@
 
 use super::diff::{
     load_webui_current_branch_unpushed_commit_count, load_webui_current_git_branch,
-    load_webui_default_git_branch, load_webui_git_branches, load_webui_recent_commits,
-    load_webui_selected_workspace_unified_diff, resolve_webui_workspace_git_resolution,
+    load_webui_default_git_branch, load_webui_git_branches,
+    load_webui_selected_workspace_unified_diff, load_webui_unpushed_commits,
+    resolve_webui_workspace_git_resolution,
 };
 use super::diff_text::{
     annotate_webui_diff_file_line_counts_for_selection, webui_large_diff_omitted_file_count,
@@ -39,7 +40,9 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
         load_webui_current_branch_unpushed_commit_count(&repository_root)?;
     let default_branch = load_webui_default_git_branch(&repository_root)?;
     let branches = load_webui_git_branches(&repository_root, current_branch.as_deref())?;
-    let recent_commits = load_webui_recent_commits(&repository_root)?;
+    // Load only current-branch commits that have not reached the relevant remote view.
+    // 仅加载当前分支中尚未进入相关远端视图的提交。
+    let recent_commits = load_webui_unpushed_commits(&repository_root)?;
     let selection =
         webui_workspace_diff_selection(request, current_branch, default_branch, recent_commits);
     let loaded_diff = load_webui_selected_workspace_unified_diff(
@@ -48,7 +51,7 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
         selection.selected_base_branch.as_deref(),
         selection.selected_compare_branch.as_deref(),
         selection.selected_commit_hash.as_deref(),
-        "当前仓库没有可展示的提交记录。",
+        "当前分支没有可展示的未推送提交。",
     )?;
     let mut notices = loaded_diff.notices;
     let complete_unified_diff = loaded_diff.unified_diff;

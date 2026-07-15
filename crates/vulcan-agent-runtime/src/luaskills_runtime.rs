@@ -31,7 +31,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use vulcan_luaskills_config::{LuaSkillsRuntimeSettings, load_runtime_settings};
-use vulcan_plugin_runtime::SystemPluginRuntimeManager;
 
 mod runlua;
 mod schema;
@@ -137,55 +136,6 @@ fn bootstrap_luaskills_runtime_blocking(
     install_luaskills_operation_progress_callback(operation_progress_events.clone());
 
     let engine = Arc::new(Mutex::new(engine));
-    // bundled_plugin_root is the Vulcan-owned package root outside LuaSkills system libraries.
-    // bundled_plugin_root 是位于 LuaSkills 系统库之外的 Vulcan 自有插件包根目录。
-    let bundled_plugin_root = runtime_assets::resolve_bundled_plugin_root()
-        .ok_or_else(|| String::from("未找到 Vulcan 内建插件根目录。"))?;
-    // user_plugin_root is the lower-precedence user installation root.
-    // user_plugin_root 是优先级更低的用户安装根目录。
-    let user_plugin_root = runtime_assets::resolve_user_plugin_root()
-        .ok_or_else(|| String::from("未找到 Vulcan 用户插件根目录。"))?;
-    // plugin_state_root stores Vulcan-owned configuration and authorization outside package roots.
-    // plugin_state_root 在插件包根之外保存 Vulcan 持有的配置与授权。
-    let plugin_state_root = runtime_assets::resolve_user_plugin_state_root()
-        .ok_or_else(|| String::from("未找到 Vulcan 用户插件状态根目录。"))?;
-    // plugin_runtime_root stores Vulcan-owned isolated dependency environments.
-    // plugin_runtime_root 保存 Vulcan 持有的隔离依赖环境。
-    let plugin_runtime_root = runtime_assets::resolve_user_plugin_runtime_root()
-        .ok_or_else(|| String::from("未找到 Vulcan 用户插件运行环境根目录。"))?;
-    fs::create_dir_all(&bundled_plugin_root).map_err(|error| {
-        format!(
-            "创建 Vulcan 内建插件根 `{}` 失败：{error}",
-            bundled_plugin_root.display()
-        )
-    })?;
-    fs::create_dir_all(&user_plugin_root).map_err(|error| {
-        format!(
-            "创建 Vulcan 用户插件根 `{}` 失败：{error}",
-            user_plugin_root.display()
-        )
-    })?;
-    fs::create_dir_all(&plugin_state_root).map_err(|error| {
-        format!(
-            "创建 Vulcan 插件状态根 `{}` 失败：{error}",
-            plugin_state_root.display()
-        )
-    })?;
-    fs::create_dir_all(&plugin_runtime_root).map_err(|error| {
-        format!(
-            "创建 Vulcan 插件运行环境根 `{}` 失败：{error}",
-            plugin_runtime_root.display()
-        )
-    })?;
-    let system_plugin_runtime = SystemPluginRuntimeManager::new(
-        Arc::clone(&engine),
-        bundled_plugin_root,
-        user_plugin_root,
-        system_lua_lib_dir.join("vulcan-plugin-bridge"),
-        managed_runtime_distribution_root,
-        plugin_state_root,
-        plugin_runtime_root,
-    );
     Ok(LuaSkillsBootstrapReport {
         handle: LuaSkillsRuntimeHandle {
             engine,
@@ -195,7 +145,6 @@ fn bootstrap_luaskills_runtime_blocking(
             entry_count,
             tool_entries: Arc::new(Mutex::new(tool_entries)),
             operation_progress_events,
-            system_plugin_runtime,
             runlua_ai_tool_enabled: Arc::new(AtomicBool::new(
                 runtime_settings.ai_tools.enable_run_lua,
             )),

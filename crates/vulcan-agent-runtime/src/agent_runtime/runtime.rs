@@ -153,10 +153,37 @@ impl RuntimeFoundation {
         command_session_runtime: Arc<CommandSessionRuntime>,
         token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
+        Self::build_from_optional_mcp_access_with_runtimes_and_plugins(
+            config,
+            agent_profile_catalog,
+            luaskills_runtime,
+            None,
+            mcp_runtime_access,
+            task_runtime,
+            question_runtime,
+            command_session_runtime,
+            token_budget_runtime,
+        )
+    }
+
+    /// Builds the host runtime foundation with independent LuaSkills and System Plugin runtimes.
+    /// 使用相互独立的 LuaSkills 与系统插件运行时构建宿主运行时基础架构。
+    pub fn build_from_optional_mcp_access_with_runtimes_and_plugins(
+        config: &ProviderConfigurationFile,
+        agent_profile_catalog: &AgentProfileCatalog,
+        luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+        system_plugin_runtime: Option<SystemPluginRuntimeManager>,
+        mcp_runtime_access: Option<McpRuntimeAccess>,
+        task_runtime: Arc<TaskRuntime>,
+        question_runtime: Arc<QuestionRuntime>,
+        command_session_runtime: Arc<CommandSessionRuntime>,
+        token_budget_runtime: Arc<TokenBudgetRuntime>,
+    ) -> Self {
         Self::build_with_task_runtime(
             config,
             agent_profile_catalog,
             luaskills_runtime,
+            system_plugin_runtime,
             mcp_runtime_access.unwrap_or_else(|| configured_mcp_runtime_access(config)),
             task_runtime,
             question_runtime,
@@ -177,6 +204,7 @@ impl RuntimeFoundation {
             config,
             agent_profile_catalog,
             luaskills_runtime,
+            None,
             mcp_runtime_access,
             Arc::new(TaskRuntime::new()),
             Arc::new(QuestionRuntime::new()),
@@ -191,6 +219,7 @@ impl RuntimeFoundation {
         config: &ProviderConfigurationFile,
         agent_profile_catalog: &AgentProfileCatalog,
         luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+        system_plugin_runtime: Option<SystemPluginRuntimeManager>,
         mcp_runtime_access: McpRuntimeAccess,
         task_runtime: Arc<TaskRuntime>,
         question_runtime: Arc<QuestionRuntime>,
@@ -198,13 +227,10 @@ impl RuntimeFoundation {
         token_budget_runtime: Arc<TokenBudgetRuntime>,
     ) -> Self {
         let mut runtime_config = AgentRuntimeConfig::from_sources(config, agent_profile_catalog);
-        let subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
+        let mut subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
             vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
             crate::data_plane::application_data_root().join("agents"),
         );
-        let system_plugin_runtime = luaskills_runtime
-            .as_ref()
-            .map(|handle| handle.system_plugin_runtime.clone());
         let native_tools = build_native_tool_catalog(
             &runtime_config,
             config.default_command_shell.as_deref(),
@@ -223,24 +249,20 @@ impl RuntimeFoundation {
                 )
             })
             .collect::<Vec<_>>();
+        // Capture the manager's already-published immutable generation; service lifecycle owns filesystem refreshes.
+        // 捕获管理器已经发布的不可变代次；文件系统刷新由服务生命周期负责。
+        let system_plugin_catalog = system_plugin_runtime
+            .as_ref()
+            .map(SystemPluginRuntimeManager::snapshot);
+        if let Some(catalog) = system_plugin_catalog.as_ref()
+            && let Err(error) =
+                subagent_catalog.merge_plugin_definitions(catalog.enabled_agents.values().cloned())
+        {
+            warnings.push(format!("合并插件智能体目录失败：{error}"));
+        }
         if let Err(error) = task_runtime.replace_subagent_catalog(subagent_catalog) {
             warnings.push(error);
         }
-        let system_plugin_catalog = match system_plugin_runtime.as_ref() {
-            Some(runtime) => {
-                match runtime.refresh_catalog(
-                    &config.luaskills.disabled_system_plugins,
-                    &config.luaskills.enabled_system_plugins,
-                ) {
-                    Ok(snapshot) => Some(snapshot),
-                    Err(error) => {
-                        warnings.push(format!("加载系统插件目录失败：{error}"));
-                        Some(runtime.snapshot())
-                    }
-                }
-            }
-            None => None,
-        };
         if let Some(catalog) = system_plugin_catalog.as_ref() {
             let plugin_tool_ids = catalog
                 .plugins

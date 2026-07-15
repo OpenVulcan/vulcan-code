@@ -14,7 +14,7 @@ use vulcan_agent_runtime::{
     },
     conversation_protocol::SessionConversationState,
     provider_config::ReasoningEffortLevel,
-    stream_runtime_run_with_intervention,
+    stream_runtime_run_with_intervention_and_plugins,
 };
 use vulcan_context::estimate_mixed_language_text_tokens;
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
@@ -82,10 +82,7 @@ pub(crate) async fn service_generate_git_commit_message(
             .summary_extra_prompt
             .trim()
             .to_string();
-        let plugin_runtime = agent_runtime
-            .luaskills_runtime
-            .as_ref()
-            .map(|runtime| runtime.system_plugin_runtime.clone());
+        let plugin_runtime = Some(agent_runtime.system_plugin_runtime.clone());
         agent_runtime.provider_configuration = summary_provider_configuration;
         (
             agent_runtime,
@@ -557,6 +554,7 @@ async fn run_git_commit_summary_model(
         tool_request_rejection_tool_ids: Vec::new(),
         tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose: ExecutionPromptPurpose::GitCommitSummary,
+        prompt_skill_policy_override: Default::default(),
         project_prompt_skills: Default::default(),
         session_prompt_skill_overrides: Default::default(),
         context_injection: None,
@@ -570,10 +568,11 @@ async fn run_git_commit_summary_model(
         session_plan_context: None,
         embedded_turn_usage_segments: Vec::new(),
     };
-    let mut stream = Box::pin(stream_runtime_run_with_intervention(
+    let mut stream = Box::pin(stream_runtime_run_with_intervention_and_plugins(
         agent_runtime.provider_configuration.clone(),
         agent_runtime.agent_profile_catalog.clone(),
         agent_runtime.luaskills_runtime.clone(),
+        Some(agent_runtime.system_plugin_runtime.clone()),
         agent_runtime.mcp_runtime.clone(),
         Arc::clone(&agent_runtime.task_runtime),
         Arc::clone(&agent_runtime.question_runtime),

@@ -2,11 +2,10 @@
 //! skill catalog projection 辅助逻辑。
 
 use super::*;
-use vulcan_agent_runtime::runtime_assets;
 use vulcan_plugin_runtime::{
     SystemPluginAvailability, SystemPluginCatalogSnapshot, SystemPluginPackageOrigin,
     SystemPluginRuntimeState, SystemPluginUiMountIcon, SystemPluginUiMountPoint,
-    load_vulcan_plugin_catalog, plugin_capability_key,
+    plugin_capability_key,
 };
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
@@ -17,9 +16,9 @@ use vulcan_service_api::{
     SubagentProviderModelSummary,
 };
 
-/// Converts LuaSkills catalog rows into plugin summaries.
-/// 将 LuaSkills 目录行转换为插件摘要。
-pub(crate) fn plugins_from_luaskills(
+/// Combines LuaSkills packages and System Plugins into plugin summaries.
+/// 将 LuaSkills 包与系统插件合并为插件摘要。
+pub(crate) fn plugins_from_catalogs(
     catalog: &TauriLuaSkillsCatalog,
     provider_configuration: &ProviderConfigurationFile,
     system_plugin_catalog: Option<&SystemPluginCatalogSnapshot>,
@@ -62,28 +61,16 @@ pub(crate) fn plugins_from_luaskills(
                 })
                 .collect(),
             hook_count: 0,
+            skill_count: 0,
+            agent_count: 0,
             active_session_count: 0,
             diagnostics: skill.disabled_reason.iter().cloned().collect(),
             management_kind: String::from("luaSkill"),
             extension: None,
         })
         .collect::<Vec<_>>();
-    let fallback_plugin_catalog;
-    let plugin_catalog = match system_plugin_catalog {
-        Some(catalog) => catalog,
-        None => {
-            fallback_plugin_catalog = match runtime_assets::resolve_bundled_plugin_root() {
-                Some(system_root) => load_vulcan_plugin_catalog(
-                    &system_root,
-                    runtime_assets::resolve_user_plugin_root().as_deref(),
-                    &provider_configuration.luaskills.disabled_system_plugins,
-                    &provider_configuration.luaskills.enabled_system_plugins,
-                    0,
-                ),
-                None => SystemPluginCatalogSnapshot::empty(PathBuf::new()),
-            };
-            &fallback_plugin_catalog
-        }
+    let Some(plugin_catalog) = system_plugin_catalog else {
+        return plugins;
     };
     for plugin in plugin_catalog.plugins.values() {
         let enabled = plugin.runtime_state == SystemPluginRuntimeState::Enabled;
@@ -124,7 +111,15 @@ pub(crate) fn plugins_from_luaskills(
             id: plugin.id.clone(),
             version: plugin.version.clone(),
             name: name.to_owned(),
-            kind: String::from("LuaSkills System Plugin"),
+            kind: if plugin
+                .manifest
+                .as_ref()
+                .is_some_and(|manifest| manifest.has_runtime())
+            {
+                String::from("Runtime Plugin")
+            } else {
+                String::from("Content Plugin")
+            },
             status: status.to_owned(),
             runtime_state: runtime_state.to_owned(),
             capability: capability.to_owned(),
@@ -144,6 +139,8 @@ pub(crate) fn plugins_from_luaskills(
                 })
                 .collect(),
             hook_count: plugin.hooks.len(),
+            skill_count: plugin.skills.len(),
+            agent_count: plugin.agents.len(),
             active_session_count: plugin.active_session_count,
             diagnostics: plugin.diagnostics.clone(),
             management_kind: String::from("systemPlugin"),
@@ -215,6 +212,13 @@ pub(crate) fn plugins_from_luaskills(
                             export_name: mount.export.clone(),
                         })
                         .collect(),
+                    skills: plugin
+                        .skills
+                        .iter()
+                        .map(|skill| skill.name.clone())
+                        .collect(),
+                    agents: plugin.agents.iter().map(|agent| agent.id.clone()).collect(),
+                    has_runtime: manifest.has_runtime(),
                 }),
         });
     }
@@ -331,6 +335,7 @@ pub(crate) fn lua_skills_catalog_summary(
 /// 将基于提示词的 Agent Skills 投影为 WebUI service API 结构。
 pub(crate) fn agent_skills_catalog_summary(
     provider_configuration: &ProviderConfigurationFile,
+    system_plugin_catalog: Option<&SystemPluginCatalogSnapshot>,
 ) -> AgentSkillsCatalogSummary {
     // Resolve runtime roots and per-skill states from persisted configuration.
     // 从持久化配置解析运行时根目录与单技能状态。
@@ -339,7 +344,18 @@ pub(crate) fn agent_skills_catalog_summary(
     );
     // Load one complete source-aware Agent Skills catalog transaction.
     // 加载一次完整的来源感知 Agent Skills 目录事务。
-    let catalog = vulcan_prompt_skills::load_prompt_skills(&runtime_config);
+    let mut catalog = vulcan_prompt_skills::load_prompt_skills(&runtime_config);
+    if let Some(plugin_catalog) = system_plugin_catalog
+        && let Err(error) =
+            catalog.merge_plugin_skills(plugin_catalog.enabled_skills.values().cloned())
+    {
+        catalog
+            .errors
+            .push(vulcan_prompt_skills::PromptSkillLoadError {
+                path: plugin_catalog.root.clone(),
+                message: error,
+            });
+    }
     // Build the effective path set without inferring identity from display metadata.
     // 在不从展示元数据推测身份的情况下构建有效路径集合。
     let effective_paths = catalog
@@ -367,7 +383,7 @@ pub(crate) fn agent_skills_catalog_summary(
         user_root: normalized_workspace_path_text_from_path(&catalog.user_root),
         notice: if chinese {
             format!(
-                "系统记录 {}，用户记录 {}，有效技能 {}，目录问题 {}。",
+                "系统记录 {}，用户记录 {}，插件记录 {}，有效技能 {}，目录问题 {}。",
                 catalog
                     .records
                     .iter()
@@ -377,13 +393,18 @@ pub(crate) fn agent_skills_catalog_summary(
                     .records
                     .iter()
                     .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::User)
+                    .count(),
+                catalog
+                    .records
+                    .iter()
+                    .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin)
                     .count(),
                 catalog.skills.len(),
                 catalog.errors.len()
             )
         } else {
             format!(
-                "System records {}, user records {}, effective skills {}, catalog issues {}.",
+                "System records {}, user records {}, plugin records {}, effective skills {}, catalog issues {}.",
                 catalog
                     .records
                     .iter()
@@ -393,6 +414,11 @@ pub(crate) fn agent_skills_catalog_summary(
                     .records
                     .iter()
                     .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::User)
+                    .count(),
+                catalog
+                    .records
+                    .iter()
+                    .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin)
                     .count(),
                 catalog.skills.len(),
                 catalog.errors.len()
@@ -454,11 +480,23 @@ pub(crate) fn agent_skills_catalog_summary(
 /// 将智能体与专家定义投影为 WebUI service API 结构。
 pub(crate) fn subagent_catalog_summary(
     provider_configuration: &ProviderConfigurationFile,
+    system_plugin_catalog: Option<&SystemPluginCatalogSnapshot>,
 ) -> SubagentCatalogSummary {
     let system_root = vulcan_runtime_assets::resolve_system_subagents_resource_directory();
     let user_root = vulcan_workspace_store::data_plane::application_data_root().join("agents");
-    let catalog =
+    let mut catalog =
         vulcan_task_session::load_subagent_catalog_from_roots(system_root.clone(), user_root);
+    if let Some(plugin_catalog) = system_plugin_catalog
+        && let Err(error) =
+            catalog.merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
+    {
+        catalog
+            .errors
+            .push(vulcan_task_session::SubagentCatalogLoadError {
+                path: plugin_catalog.root.clone(),
+                message: error,
+            });
+    }
     subagent_catalog_summary_from_catalog(&catalog, provider_configuration)
 }
 
@@ -541,6 +579,8 @@ fn subagent_definition_summary(
     system_definition_ids: &std::collections::BTreeSet<String>,
     provider_configuration: &ProviderConfigurationFile,
 ) -> SubagentDefinitionSummary {
+    let plugin_owned =
+        definition.source.scope == vulcan_task_session::SubagentDefinitionScope::Plugin;
     SubagentDefinitionSummary {
         agent_id: definition.id.clone(),
         name: definition.name.clone(),
@@ -575,6 +615,15 @@ fn subagent_definition_summary(
         package_id: definition.source.package_id.clone(),
         scope: subagent_definition_scope_label(definition.source.scope).to_string(),
         scope_key: subagent_definition_scope_key(definition.source.scope).to_string(),
+        owning_plugin_id: definition.source.plugin_id().map(str::to_string),
+        can_edit: !plugin_owned,
+        can_delete: matches!(
+            definition.source.scope,
+            vulcan_task_session::SubagentDefinitionScope::User
+                | vulcan_task_session::SubagentDefinitionScope::Package
+        ) && definition.source.override_of.is_none(),
+        can_toggle: !plugin_owned,
+        can_copy: !plugin_owned,
         enabled: definition.enabled,
         definition_file: normalized_workspace_path_text_from_path(&definition.source.file),
         sidecar_file: definition
@@ -584,10 +633,8 @@ fn subagent_definition_summary(
             .map(|path| normalized_workspace_path_text_from_path(path)),
         remote_url: definition.source.remote_url.clone(),
         override_of: definition.source.override_of.clone(),
-        can_restore_default: subagent_definition_can_restore_default(
-            definition,
-            system_definition_ids,
-        ),
+        can_restore_default: !plugin_owned
+            && subagent_definition_can_restore_default(definition, system_definition_ids),
         source_hash: definition.source.source_hash.clone(),
         version: definition.source.version.clone(),
         updated_at: definition.source.updated_at.clone(),
@@ -817,6 +864,7 @@ fn subagent_definition_scope_label(
         vulcan_task_session::SubagentDefinitionScope::System => "系统",
         vulcan_task_session::SubagentDefinitionScope::User => "用户",
         vulcan_task_session::SubagentDefinitionScope::Package => "包",
+        vulcan_task_session::SubagentDefinitionScope::Plugin => "插件",
     }
 }
 
@@ -829,6 +877,7 @@ fn subagent_definition_scope_key(
         vulcan_task_session::SubagentDefinitionScope::System => "system",
         vulcan_task_session::SubagentDefinitionScope::User => "user",
         vulcan_task_session::SubagentDefinitionScope::Package => "package",
+        vulcan_task_session::SubagentDefinitionScope::Plugin => "plugin",
     }
 }
 
@@ -842,13 +891,18 @@ pub(crate) fn agent_skill_record_summary(
 ) -> AgentSkillRecordSummary {
     // Resolve the persisted per-skill state for the standard skill name.
     // 为标准技能名称解析持久化单技能状态。
-    let local_enabled = provider_configuration
-        .prompt_skills
-        .skill_overrides
-        .get(&skill.name)
-        .copied()
-        .unwrap_or(provider_configuration.prompt_skills.default_skill_state)
-        .is_enabled();
+    let local_enabled = if skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin {
+        true
+    } else {
+        provider_configuration
+            .prompt_skills
+            .skill_overrides
+            .get(&skill.name)
+            .copied()
+            .unwrap_or(provider_configuration.prompt_skills.default_skill_state)
+            .is_enabled()
+    };
+    let plugin_owned = skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin;
     AgentSkillRecordSummary {
         skill_key: format!("{}:{}", skill.scope.en_label(), skill.name),
         name: skill.name.clone(),
@@ -869,6 +923,13 @@ pub(crate) fn agent_skill_record_summary(
             })
             .collect(),
         scope_key: skill.scope.en_label().to_string(),
+        owning_plugin_id: skill.plugin_id().map(str::to_string),
+        can_edit: !plugin_owned,
+        can_delete: skill.scope == vulcan_prompt_skills::PromptSkillScope::User
+            && override_of.is_none(),
+        can_toggle: !plugin_owned,
+        can_copy: !plugin_owned,
+        can_restore_default: !plugin_owned && override_of.is_some(),
         effective,
         override_of,
         enabled: effective && local_enabled,
@@ -958,7 +1019,10 @@ pub(crate) fn luaskill_tool_registration_state_help(
 
 #[cfg(test)]
 mod tests {
-    use super::{capability_policy_allowed_selectors, capability_policy_denied_selectors};
+    use super::{
+        ProviderConfigurationFile, capability_policy_allowed_selectors,
+        capability_policy_denied_selectors, empty_luaskills_catalog, plugins_from_catalogs,
+    };
     use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
 
     /// Verifies allow-only policy projection derives only allowed selectors.
@@ -1004,6 +1068,19 @@ mod tests {
 
         assert!(capability_policy_allowed_selectors(&policy).is_empty());
         assert!(capability_policy_denied_selectors(&policy).is_empty());
+    }
+
+    /// Verifies plugin projection never scans package roots when no committed plugin snapshot exists.
+    /// 验证不存在已提交插件快照时，插件投影绝不会自行扫描包目录。
+    #[test]
+    fn plugin_projection_requires_committed_catalog_snapshot() {
+        let plugins = plugins_from_catalogs(
+            &empty_luaskills_catalog(),
+            &ProviderConfigurationFile::default(),
+            None,
+        );
+
+        assert!(plugins.is_empty());
     }
 
     /// Verifies every bundled subagent sidecar satisfies the current strict catalog protocol.

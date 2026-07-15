@@ -90,6 +90,106 @@ fn parses_skill_frontmatter_and_body() {
     assert_eq!(skill.interface, PromptSkillInterfaceMetadata::default());
 }
 
+/// Verifies package loading freezes deterministic relative paths for model-facing detail output.
+/// 验证技能包加载会为面向模型的详情输出冻结确定的相对路径。
+#[test]
+fn freezes_prompt_skill_resource_paths_during_loading() {
+    // root isolates one real package containing a nested script and reference.
+    // root 隔离一个包含嵌套脚本与参考资料的真实技能包。
+    let root = temp_dir();
+    let skill_dir = root.join("resource-helper");
+    fs::create_dir_all(skill_dir.join("scripts/nested"))
+        .expect("nested scripts directory should create");
+    fs::create_dir_all(skill_dir.join("references")).expect("references directory should create");
+    fs::write(
+        skill_dir.join(SKILL_FILE_NAME),
+        "---\nname: resource-helper\ndescription: Use for resource tests.\n---\n\n# Resource helper",
+    )
+    .expect("skill instructions should write");
+    fs::write(skill_dir.join("scripts/nested/run.ps1"), "Write-Output ok")
+        .expect("script should write");
+    fs::write(skill_dir.join("references/guide.md"), "# Guide").expect("reference should write");
+
+    let skill = parse_prompt_skill_file(&skill_dir.join(SKILL_FILE_NAME))
+        .expect("resource-bearing skill should load");
+
+    assert_eq!(skill.resources.scripts, 1);
+    assert_eq!(skill.resources.references, 1);
+    assert_eq!(skill.resources.assets, 0);
+    assert_eq!(
+        skill.resources.sampled_files,
+        vec![
+            PathBuf::from("references/guide.md"),
+            PathBuf::from("scripts/nested/run.ps1"),
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies Unix symbolic-link resources invalidate the package instead of being followed.
+/// 验证 Unix 符号链接资源会使技能包失效而不会被跟随。
+#[cfg(unix)]
+#[test]
+fn rejects_symbolic_link_resources_during_loading() {
+    use std::os::unix::fs::symlink;
+
+    // root isolates the package and an outside file that must never enter its snapshot.
+    // root 隔离技能包及绝不能进入其快照的外部文件。
+    let root = temp_dir();
+    let skill_dir = root.join("linked-helper");
+    fs::create_dir_all(skill_dir.join("scripts")).expect("scripts directory should create");
+    fs::write(
+        skill_dir.join(SKILL_FILE_NAME),
+        "---\nname: linked-helper\ndescription: Use for link tests.\n---\n\n# Linked helper",
+    )
+    .expect("skill instructions should write");
+    let outside = root.join("outside.sh");
+    fs::write(&outside, "echo outside").expect("outside file should write");
+    symlink(&outside, skill_dir.join("scripts/run.sh")).expect("resource symlink should create");
+
+    let error = parse_prompt_skill_file(&skill_dir.join(SKILL_FILE_NAME))
+        .expect_err("linked resource must invalidate the package");
+
+    assert!(error.message.contains("Symbolic links"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies Windows junction resources invalidate the package instead of being traversed.
+/// 验证 Windows 联接点资源会使技能包失效而不会被遍历。
+#[cfg(windows)]
+#[test]
+fn rejects_windows_reparse_point_resources_during_loading() {
+    // root isolates the package and an outside directory behind a junction.
+    // root 隔离技能包及联接点背后的外部目录。
+    let root = temp_dir();
+    let skill_dir = root.join("linked-helper");
+    let outside = root.join("outside-scripts");
+    fs::create_dir_all(&skill_dir).expect("skill directory should create");
+    fs::create_dir_all(&outside).expect("outside directory should create");
+    fs::write(
+        skill_dir.join(SKILL_FILE_NAME),
+        "---\nname: linked-helper\ndescription: Use for link tests.\n---\n\n# Linked helper",
+    )
+    .expect("skill instructions should write");
+    fs::write(outside.join("run.ps1"), "Write-Output outside")
+        .expect("outside script should write");
+    let junction = skill_dir.join("scripts");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .status()
+        .expect("junction command should run");
+    assert!(status.success(), "junction should be created for the test");
+
+    let error = parse_prompt_skill_file(&skill_dir.join(SKILL_FILE_NAME))
+        .expect_err("junction resource must invalidate the package");
+
+    assert!(error.message.contains("reparse points"));
+    fs::remove_dir(&junction).expect("junction should be removed without touching its target");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies package identity whitespace is rejected instead of being silently normalized.
 /// 验证技能包身份空白会被拒绝而不是被静默规范化。
 #[test]
@@ -126,6 +226,65 @@ fn rejects_noncanonical_managed_delete_name() {
     assert!(error.contains("cannot contain surrounding whitespace"));
     assert!(skill_dir.is_dir());
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies managed deletion rejects a Unix symlink package without touching its target.
+/// 验证受管删除会拒绝 Unix 符号链接技能包且不触碰其目标。
+#[cfg(unix)]
+#[test]
+fn rejects_linked_managed_delete_target() {
+    use std::os::unix::fs::symlink;
+
+    // root contains only a linked package name while protected owns the real sentinel.
+    // root 仅包含链接形式的技能包名，protected 持有真实哨兵文件。
+    let root = temp_dir();
+    let protected = temp_dir();
+    fs::write(protected.join("sentinel.txt"), "keep").expect("sentinel should write");
+    symlink(&protected, root.join("demo")).expect("package symlink should create");
+
+    let error = delete_user_prompt_skill_package(&root, "demo")
+        .expect_err("linked package deletion must be rejected");
+
+    assert!(error.contains("cannot be a symbolic link"));
+    assert_eq!(
+        fs::read_to_string(protected.join("sentinel.txt")).expect("sentinel should remain"),
+        "keep"
+    );
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(protected);
+}
+
+/// Verifies managed deletion rejects a Windows junction package without touching its target.
+/// 验证受管删除会拒绝 Windows 联接点技能包且不触碰其目标。
+#[cfg(windows)]
+#[test]
+fn rejects_linked_managed_delete_target() {
+    // root contains only a junction package name while protected owns the real sentinel.
+    // root 仅包含联接点形式的技能包名，protected 持有真实哨兵文件。
+    let root = temp_dir();
+    let protected = temp_dir();
+    fs::write(protected.join("sentinel.txt"), "keep").expect("sentinel should write");
+    let linked_package = root.join("demo");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&linked_package)
+        .arg(&protected)
+        .status()
+        .expect("junction command should run");
+    assert!(status.success(), "junction should be created for the test");
+
+    let error = delete_user_prompt_skill_package(&root, "demo")
+        .expect_err("junction package deletion must be rejected");
+
+    assert!(error.contains("Windows reparse point"));
+    assert_eq!(
+        fs::read_to_string(protected.join("sentinel.txt")).expect("sentinel should remain"),
+        "keep"
+    );
+    fs::remove_dir(&linked_package)
+        .expect("junction should be removed without touching its target");
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(protected);
 }
 
 /// Verifies managed writes reject traversal identities before creating anything outside the root.
@@ -384,6 +543,65 @@ fn installs_embedded_system_prompt_skills_with_marker_skip() {
     assert_eq!(first.fingerprint, second.fingerprint);
 }
 
+/// Verifies a Unix symlink destination cannot redirect managed system-skill replacement.
+/// 验证 Unix 符号链接目标无法重定向受管系统技能替换。
+#[cfg(unix)]
+#[test]
+fn rejects_symbolic_link_system_skill_install_root() {
+    use std::os::unix::fs::symlink;
+
+    // root isolates a protected target and the linked destination presented to the installer.
+    // root 隔离受保护目标及提交给安装器的链接目标。
+    let root = temp_dir();
+    let protected = root.join("protected");
+    fs::create_dir_all(&protected).expect("protected directory should create");
+    fs::write(protected.join("sentinel.txt"), "keep").expect("sentinel should write");
+    let linked_root = root.join("system-link");
+    symlink(&protected, &linked_root).expect("system root symlink should create");
+
+    let error = install_embedded_system_prompt_skills_to_root(linked_root)
+        .expect_err("linked system root must be rejected");
+
+    assert!(error.message.contains("cannot be a symbolic link"));
+    assert_eq!(
+        fs::read_to_string(protected.join("sentinel.txt")).expect("sentinel should remain"),
+        "keep"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a Windows junction destination cannot redirect managed system-skill replacement.
+/// 验证 Windows 联接点目标无法重定向受管系统技能替换。
+#[cfg(windows)]
+#[test]
+fn rejects_windows_reparse_point_system_skill_install_root() {
+    // root isolates a protected target and the junction presented to the installer.
+    // root 隔离受保护目标及提交给安装器的联接点。
+    let root = temp_dir();
+    let protected = root.join("protected");
+    fs::create_dir_all(&protected).expect("protected directory should create");
+    fs::write(protected.join("sentinel.txt"), "keep").expect("sentinel should write");
+    let linked_root = root.join("system-link");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&linked_root)
+        .arg(&protected)
+        .status()
+        .expect("junction command should run");
+    assert!(status.success(), "junction should be created for the test");
+
+    let error = install_embedded_system_prompt_skills_to_root(linked_root.clone())
+        .expect_err("junction system root must be rejected");
+
+    assert!(error.message.contains("Windows reparse point"));
+    assert_eq!(
+        fs::read_to_string(protected.join("sentinel.txt")).expect("sentinel should remain"),
+        "keep"
+    );
+    fs::remove_dir(&linked_root).expect("junction should be removed without touching its target");
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn installs_system_prompt_skills_from_packaged_source() {
     let root = temp_dir();
@@ -444,6 +662,63 @@ fn resolves_session_over_project_over_global() {
     let resolved = resolve_prompt_skills(&catalog, &global, &project, &session);
     assert_eq!(resolved[0].state, PromptSkillState::Disabled);
     assert_eq!(resolved[0].source, PromptSkillStateSource::Session);
+}
+
+/// Verifies committed plugin skills ignore user-configurable skill state layers.
+/// 验证已提交插件技能忽略用户可配置的技能状态层级。
+#[test]
+fn plugin_skill_state_is_owned_only_by_plugin_lifecycle() {
+    let mut skill = prompt_skill_fixture("content-plugin:review-helper", "Review changes.");
+    skill.scope = PromptSkillScope::Plugin;
+    skill.catalog.category_id = String::from(PLUGIN_CATEGORY_ID);
+    let mut catalog = load_prompt_skills_from_roots(PathBuf::new(), PathBuf::new());
+    catalog
+        .merge_plugin_skills([skill])
+        .expect("valid plugin skill should merge");
+    let mut global = PromptSkillsGlobalConfig {
+        default_skill_state: PromptSkillState::Disabled,
+        ..PromptSkillsGlobalConfig::default()
+    };
+    global.skill_overrides.insert(
+        String::from("content-plugin:review-helper"),
+        PromptSkillState::Disabled,
+    );
+    let project = PromptSkillsProjectConfig {
+        skill_overrides: BTreeMap::from([(
+            String::from("content-plugin:review-helper"),
+            PromptSkillState::Disabled,
+        )]),
+    };
+    let session = PromptSkillsSessionConfig {
+        skill_overrides: BTreeMap::from([(
+            String::from("content-plugin:review-helper"),
+            PromptSkillState::Disabled,
+        )]),
+    };
+
+    let resolved = resolve_prompt_skills(&catalog, &global, &project, &session);
+
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].state, PromptSkillState::Enabled);
+    assert_eq!(resolved[0].source, PromptSkillStateSource::Plugin);
+}
+
+/// Verifies a failed plugin-skill batch leaves the target catalog unchanged.
+/// 验证失败的插件技能批次保持目标目录不变。
+#[test]
+fn plugin_skill_merge_is_transactional() {
+    let mut valid = prompt_skill_fixture("first-plugin:review-helper", "Review changes.");
+    valid.scope = PromptSkillScope::Plugin;
+    valid.catalog.category_id = String::from(PLUGIN_CATEGORY_ID);
+    let mut invalid = valid.clone();
+    invalid.name = String::from("invalid-without-namespace");
+    let mut catalog = load_prompt_skills_from_roots(PathBuf::new(), PathBuf::new());
+
+    let result = catalog.merge_plugin_skills([valid, invalid]);
+
+    assert!(result.is_err());
+    assert!(catalog.skills.is_empty());
+    assert!(catalog.records.is_empty());
 }
 
 /// Verifies prompt skill descriptions collapse repeated whitespace for compact instructions.
@@ -765,6 +1040,72 @@ fn deleting_user_category_moves_skills_to_unassigned() {
             .catalog
             .category_id,
         "uncategorized"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies plugin skills retain package metadata while receiving canonical names and the immutable plugin category.
+/// 验证插件技能保留包元数据，同时获得规范名称与不可变插件分类。
+#[test]
+fn plugin_skill_loader_namespaces_and_reclassifies_records() {
+    // root owns one conventional plugin skills directory.
+    // root 持有一个约定式插件技能目录。
+    let root = temp_dir();
+    let skill_dir = root.join("review-helper");
+    fs::create_dir_all(&skill_dir).expect("plugin skill directory should be created");
+    fs::write(
+        skill_dir.join(SKILL_FILE_NAME),
+        "---\nname: review-helper\ndescription: Review one change.\n---\n\n# Review\nUse the repository context.",
+    )
+    .expect("plugin skill should be written");
+    fs::write(
+        skill_dir.join(VULCAN_SKILL_METADATA_FILE_NAME),
+        "schema_version: 3\ncatalog:\n  category_id: engineering\norigin:\n  kind: github\n  url: https://github.com/example/content-plugin\n",
+    )
+    .expect("plugin metadata should be written");
+
+    let skills = load_plugin_prompt_skills("content-plugin", "Content Plugin", "1.2.3", &root)
+        .expect("plugin skills should load");
+    let skill = skills.first().expect("one plugin skill should exist");
+
+    assert_eq!(skill.name, "content-plugin:review-helper");
+    assert_eq!(skill.local_name(), "review-helper");
+    assert_eq!(skill.plugin_id(), Some("content-plugin"));
+    assert_eq!(skill.scope, PromptSkillScope::Plugin);
+    assert_eq!(skill.catalog.category_id, PLUGIN_CATEGORY_ID);
+    assert_eq!(skill.origin.kind, "github");
+    assert_eq!(skill.origin.label, None);
+    assert_eq!(skill.origin.version.as_deref(), Some("1.2.3"));
+    assert_eq!(
+        skill.origin.url.as_deref(),
+        Some("https://github.com/example/content-plugin")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies the host-reserved plugin category cannot be created, deleted, or assigned manually.
+/// 验证宿主保留的插件分类不能被手工创建、删除或分配。
+#[test]
+fn plugin_category_rejects_user_mutations() {
+    let root = temp_dir();
+    let category = PromptSkillCategory {
+        category_id: String::from(PLUGIN_CATEGORY_ID),
+        name: String::from("Shadow Plugins"),
+        ..PromptSkillCategory::default()
+    };
+
+    assert!(save_user_prompt_skill_category(&root, category).is_err());
+    assert!(delete_user_prompt_skill_category(Path::new(""), &root, PLUGIN_CATEGORY_ID).is_err());
+    assert!(
+        save_user_prompt_skill_catalog_assignment(
+            Path::new(""),
+            &root,
+            None,
+            "ordinary-skill",
+            PLUGIN_CATEGORY_ID,
+            Vec::new(),
+        )
+        .is_err()
     );
     let _ = fs::remove_dir_all(root);
 }

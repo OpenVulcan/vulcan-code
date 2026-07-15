@@ -40,9 +40,9 @@ pub(crate) fn write_file_atomically(target: &Path, contents: &[u8]) -> Result<()
         )
     })?;
     let existing_permissions = match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
+        Ok(metadata) if crate::metadata_is_link_or_reparse_point(&metadata) => {
             return Err(format!(
-                "Refusing to replace symbolic-link plugin state `{}`.",
+                "Refusing to replace symbolic-link or reparse-point plugin state `{}`.",
                 target.display()
             ));
         }

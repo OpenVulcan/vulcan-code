@@ -33,6 +33,7 @@ pub(crate) fn build_runtime_preparation_resources(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
@@ -40,10 +41,11 @@ pub(crate) fn build_runtime_preparation_resources(
     token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> RuntimePreparationResources {
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes(
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access_with_runtimes_and_plugins(
         config,
         agent_profile_catalog,
         luaskills_runtime.clone(),
+        system_plugin_runtime,
         Some(mcp_runtime_access),
         task_runtime,
         question_runtime,

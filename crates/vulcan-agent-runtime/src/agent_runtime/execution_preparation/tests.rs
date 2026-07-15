@@ -83,6 +83,36 @@ fn prepare_execution_rejects_missing_request_execution_agent() {
     assert!(error.contains("未能在运行时基础架构中解析到"));
 }
 
+/// Verifies an empty allow-only prompt-skill policy removes every globally available skill from one execution.
+/// 验证空的仅允许提示词技能策略会从单次执行中移除全部全局可用技能。
+#[test]
+fn execution_prompt_skill_policy_blocks_unselected_global_skills() {
+    let config = test_provider_config();
+    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+        &config,
+        &AgentProfileCatalog::default(),
+        None,
+        Some(configured_mcp_runtime_access(&config)),
+    );
+    let mut request = test_execution_preparation_request();
+    request.prompt_skill_policy_override = CapabilityPolicySnapshot {
+        mode: CapabilityPolicyMode::AllowOnly,
+        selectors: Vec::new(),
+    };
+
+    let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        .expect("empty allow-only prompt-skill policy should prepare");
+
+    assert!(prepared.preparation.prompt_skills.is_empty());
+    assert!(
+        prepared
+            .preparation
+            .tool_descriptors
+            .iter()
+            .all(|descriptor| descriptor.id != "skill")
+    );
+}
+
 /// Verifies global request selectors filter native tool identifiers through the shared preparation helper.
 /// 验证全局请求选择器会通过共享准备辅助逻辑过滤原生工具标识。
 #[test]
@@ -628,6 +658,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         tool_request_rejection_tool_ids: Vec::new(),
         tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
+        prompt_skill_policy_override: Default::default(),
         project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
         session_prompt_skill_overrides: BTreeMap::new(),
         context_injection: None,

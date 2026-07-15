@@ -353,11 +353,22 @@ pub(super) fn test_service_state_with_parent_session(
 /// Builds a minimal agent-runtime bridge for lifecycle unit tests.
 /// 为生命周期单元测试构建最小代理运行时桥。
 pub(super) fn test_agent_runtime_bridge() -> AgentRuntimeBridge {
+    // plugin_root provides isolated path identities without requiring a Lua engine.
+    // plugin_root 提供隔离路径身份，且不要求存在 Lua 引擎。
+    let plugin_root = std::env::temp_dir().join(format!("vulcan-plugin-test-{}", Uuid::new_v4()));
     AgentRuntimeBridge {
         provider_configuration: ProviderConfigurationFile::default(),
         ai_tool_configuration: PersistedAiToolConfiguration::default(),
         agent_profile_catalog: AgentProfileCatalog::default(),
         luaskills_runtime: None,
+        system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager::without_runtime(
+            plugin_root.join("system"),
+            plugin_root.join("user"),
+            plugin_root.join("bridge"),
+            plugin_root.join("distributions"),
+            plugin_root.join("state"),
+            plugin_root.join("runtime"),
+        ),
         mcp_runtime: None,
         task_runtime: Arc::new(TaskRuntime::new()),
         question_runtime: Arc::new(QuestionRuntime::new()),

@@ -9,6 +9,7 @@ import type {
   PluginTextAssetSource,
   SystemPluginPermissionPreview,
   SubagentCatalogUpdate,
+  SubagentDefinitionSummary,
   SubagentDefinitionSaveRequest,
   WorkbenchSnapshot,
 } from "@/types";
@@ -192,8 +193,8 @@ export async function setLuaSkillEnabled(skillId: string, enabled: boolean): Pro
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskill_enabled", { skillId, enabled });
 }
 
-// setLuaSkillsSystemPluginEnabled toggles one host-owned LuaSkills System Plugin.
-// setLuaSkillsSystemPluginEnabled 切换单个宿主自有 LuaSkills System Plugin。
+// setLuaSkillsSystemPluginEnabled toggles one host-owned System Plugin through the legacy RPC name.
+// setLuaSkillsSystemPluginEnabled 通过兼容 RPC 名切换单个宿主自有系统插件。
 export async function setLuaSkillsSystemPluginEnabled(pluginId: string, enabled: boolean): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
     return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
@@ -452,7 +453,7 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
         throw new Error(`目标智能体 ${targetAgentId} 已存在。`);
       }
       const locales = definition.locales ?? {};
-      const nextDefinition = {
+      const nextDefinition: SubagentDefinitionSummary = {
         agentId: targetAgentId,
         name: preferredBrowserPreviewLocaleField(locales, "name") ?? (definition.name.trim() || targetAgentId),
         description: preferredBrowserPreviewLocaleField(locales, "description") ?? definition.description ?? null,
@@ -465,6 +466,10 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
         packageId: definition.packageId?.trim() || null,
         scope: "User",
         scopeKey: "user",
+        canEdit: true,
+        canDelete: true,
+        canToggle: true,
+        canCopy: true,
         enabled: definition.enabled,
         definitionFile: browserPreviewAgentDefinitionPath(snapshot.subagentCatalog.userRoot, targetAgentId, "md"),
         sidecarFile: browserPreviewAgentDefinitionPath(snapshot.subagentCatalog.userRoot, targetAgentId, "yaml"),

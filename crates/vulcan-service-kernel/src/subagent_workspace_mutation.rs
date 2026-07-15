@@ -262,7 +262,6 @@ where
         let system_plugin_catalog = guard
             .agent_runtime
             .as_ref()
-            .and_then(|runtime| runtime.luaskills_runtime.as_ref())
             .map(|runtime| runtime.system_plugin_runtime.snapshot());
         let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; token budget runtime is not ready")

@@ -431,6 +431,7 @@ export type WorkbenchDelta =
   | { kind: "agentSkillsCatalogChanged"; payload: AgentSkillsCatalogChangedDelta }
   | { kind: "luaSkillsCatalogChanged"; payload: LuaSkillsCatalogChangedDelta }
   | { kind: "subagentCatalogChanged"; payload: SubagentCatalogChangedDelta }
+  | { kind: "pluginCatalogChanged"; payload: PluginCatalogChangedDelta }
   | { kind: "projectSettingsChanged"; payload: ProjectSettingsChangedDelta }
   | {
     kind: "luaSkillsManagedRuntimeProgressChanged";
@@ -461,6 +462,23 @@ export interface LuaSkillsCatalogChangedDelta {
 export interface SubagentCatalogChangedDelta {
   // Complete subagent catalog committed at the envelope generation.
   // 在信封版本提交的完整智能体目录。
+  subagentCatalog: SubagentCatalogSummary;
+}
+
+// PluginCatalogChangedDelta replaces every plugin-owned catalog domain from one immutable snapshot.
+// PluginCatalogChangedDelta 使用同一份不可变快照替换全部插件所有的目录领域。
+export interface PluginCatalogChangedDelta {
+  // Complete LuaSkills catalog captured during the same plugin transaction.
+  // 在同一插件事务中捕获的完整 LuaSkills 目录。
+  luaSkills: LuaSkillsCatalogSummary;
+  // Plugin rows projected from the committed plugin catalog snapshot.
+  // 从已提交插件目录快照投影出的插件行。
+  plugins: PluginSummary[];
+  // Complete Agent Skills catalog containing the same snapshot's plugin skills.
+  // 包含同一快照插件 Skill 的完整 Agent Skills 目录。
+  agentSkills: AgentSkillsCatalogSummary;
+  // Complete subagent catalog containing the same snapshot's plugin agents.
+  // 包含同一快照插件 Agent 的完整智能体目录。
   subagentCatalog: SubagentCatalogSummary;
 }
 

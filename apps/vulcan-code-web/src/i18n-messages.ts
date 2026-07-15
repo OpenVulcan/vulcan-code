@@ -1174,7 +1174,6 @@ export type TranslationKey =
   | "skills.label.scope"
   | "skills.label.skillFile"
   | "skills.label.skillDir"
-  | "skills.label.iconPath"
   | "skills.source.unknown"
   | "skills.sidebar.luaDetail"
   | "skills.navigation.list"
@@ -1371,7 +1370,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "diffAction.restoreFile": "还原此文件",
     "diff.mode.unstaged": "未暂存",
     "diff.mode.staged": "已暂存",
-    "diff.mode.commit": "提交",
+    "diff.mode.commit": "未推送提交",
     "diff.mode.branch": "分支",
     "diff.branch.current": "当前分支",
     "diff.branch.main": "主分支",
@@ -1395,7 +1394,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "diff.search.previous": "上一条",
     "diff.search.next": "下一条",
     "diff.search.indexUnavailable": "索引不可用",
-    "diff.commit.none": "暂无提交记录",
+    "diff.commit.none": "暂无未推送提交",
     "diff.branch.search": "搜索分支",
     "diff.branch.label": "分支",
     "diff.branch.noMatches": "没有匹配分支",
@@ -2459,7 +2458,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.label.scope": "作用域",
     "skills.label.skillFile": "技能文件",
     "skills.label.skillDir": "技能目录",
-    "skills.label.iconPath": "图标路径",
     "skills.source.unknown": "未记录来源",
     "skills.sidebar.luaDetail": "{count} 个技能包",
     "skills.navigation.list": "LuaSkills 技能",
@@ -2550,7 +2548,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.toolDisabled": "关闭工具",
     "skills.lua.syncing": "同步中",
     "skills.plugins.emptyTitle": "暂无系统插件",
-    "skills.plugins.emptyDetail": "随包的 LuaSkills System Plugin 会显示在这里。",
+    "skills.plugins.emptyDetail": "随包的系统插件会显示在这里。",
     "skills.plugins.loadingPage": "正在加载插件页面…",
     "skills.plugins.externalUrlConfirmation": "此外部链接不在白名单中，确认信任后仍可打开。",
     "skills.plugins.externalUrlOpenAnyway": "仍然打开",
@@ -2653,7 +2651,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "diffAction.restoreFile": "Restore this file",
     "diff.mode.unstaged": "Unstaged",
     "diff.mode.staged": "Staged",
-    "diff.mode.commit": "Commit",
+    "diff.mode.commit": "Unpushed commits",
     "diff.mode.branch": "Branch",
     "diff.branch.current": "Current branch",
     "diff.branch.main": "Main branch",
@@ -2677,7 +2675,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "diff.search.previous": "Previous result",
     "diff.search.next": "Next result",
     "diff.search.indexUnavailable": "Index unavailable",
-    "diff.commit.none": "No commit history",
+    "diff.commit.none": "No unpushed commits",
     "diff.branch.search": "Search branches",
     "diff.branch.label": "Branch",
     "diff.branch.noMatches": "No matching branches",
@@ -3741,7 +3739,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.label.scope": "Scope",
     "skills.label.skillFile": "Skill File",
     "skills.label.skillDir": "Skill Directory",
-    "skills.label.iconPath": "Icon Path",
     "skills.source.unknown": "No source recorded",
     "skills.sidebar.luaDetail": "{count} skill packages",
     "skills.navigation.list": "LuaSkills Skills",
@@ -3832,7 +3829,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.lua.toolDisabled": "Disable",
     "skills.lua.syncing": "Syncing",
     "skills.plugins.emptyTitle": "No system plugins",
-    "skills.plugins.emptyDetail": "Bundled LuaSkills System Plugins appear here.",
+    "skills.plugins.emptyDetail": "Bundled system plugins appear here.",
     "skills.plugins.loadingPage": "Loading plugin page…",
     "skills.plugins.externalUrlConfirmation": "This external link is not allowlisted. You can still open it if you trust it.",
     "skills.plugins.externalUrlOpenAnyway": "Open anyway",

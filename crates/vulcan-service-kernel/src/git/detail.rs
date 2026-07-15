@@ -55,7 +55,7 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
         selection.selected_commit_hash.as_deref(),
         &pathspec,
         context_lines,
-        "当前仓库没有可展示的提交记录。",
+        "当前分支没有可展示的未推送提交。",
     )?;
     let notices = loaded_diff.notices;
     let mut unified_diff = loaded_diff.unified_diff;
@@ -153,7 +153,7 @@ fn webui_diff_detail_hunk_scoped_unified_diff(
         selected_commit_hash,
         pathspec,
         WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
-        "当前仓库没有可展示的提交记录。",
+        "当前分支没有可展示的未推送提交。",
     )?
     .unified_diff;
     Ok(webui_diff_hunk_scoped_unified_diff(

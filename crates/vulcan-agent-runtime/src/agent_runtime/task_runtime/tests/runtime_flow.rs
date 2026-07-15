@@ -59,6 +59,7 @@ fn build_task_start_test_runtime_context(
             tool_request_rejection_tool_ids: Vec::new(),
             tool_request_hidden_tool_ids: Vec::new(),
             prompt_purpose: ExecutionPromptPurpose::UserTurn,
+            prompt_skill_policy_override: Default::default(),
             project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
             session_prompt_skill_overrides: BTreeMap::new(),
             context_injection: None,

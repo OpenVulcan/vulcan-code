@@ -46,7 +46,7 @@ export function SourceOriginLink(props: SourceOriginLinkProps) {
   const iconKey = sourceOriginIconKey(origin)
   // label stores the compact source text shown beside the icon.
   // label 保存显示在图标旁的紧凑来源文本。
-  const label = iconKey === "github" ? "Github" : origin.kind?.trim() || "source"
+  const label = iconKey === "github" ? "GitHub" : origin.kind?.trim() || "source"
   // className selects the compact row style or expanded detail style.
   // className 选择紧凑行样式或展开详情样式。
   const className = props.detail ? "agent-source-origin-detail-link" : "agent-source-origin-link"

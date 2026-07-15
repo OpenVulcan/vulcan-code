@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use vulcan_prompt_skills::{PromptSkill, load_plugin_prompt_skills};
+use vulcan_task_session::{SubagentDefinition, load_plugin_subagent_catalog};
 
 /// Fixed package manifest file name recognized by the host.
 /// 宿主识别的固定插件包清单文件名。
@@ -170,6 +172,9 @@ pub struct SystemPluginDescriptor {
     /// Current host lifecycle state.
     /// 当前宿主生命周期状态。
     pub runtime_state: SystemPluginRuntimeState,
+    /// Whether the optional execution runtime required by this package is attached.
+    /// 当前插件包需要的可选执行运行时是否已经附加。
+    pub runtime_execution_available: bool,
     /// Monotonic generation used to reject stale provider requests.
     /// 用于拒绝陈旧 Provider 请求的单调代次。
     pub generation: u64,
@@ -194,6 +199,12 @@ pub struct SystemPluginDescriptor {
     /// Validated prompt contributions.
     /// 通过校验的提示词贡献集合。
     pub prompt_contributions: Vec<SystemPluginPromptContribution>,
+    /// Validated read-only Agent Skills contributed by this plugin.
+    /// 当前插件贡献并通过校验的只读 Agent Skills 集合。
+    pub skills: Vec<PromptSkill>,
+    /// Validated read-only subagent definitions contributed by this plugin.
+    /// 当前插件贡献并通过校验的只读子代理定义集合。
+    pub agents: Vec<SubagentDefinition>,
     /// Valid manifest used by the generic runtime.
     /// 通用运行时使用的有效清单。
     pub manifest: Option<Arc<SystemPluginManifest>>,
@@ -248,6 +259,12 @@ pub struct SystemPluginCatalogSnapshot {
     /// Enabled plugin-level prompt contributions.
     /// 已启用的插件级提示词贡献集合。
     pub prompt_contributions: Vec<SystemPluginPromptContribution>,
+    /// Enabled plugin Agent Skills keyed by canonical namespaced identifier.
+    /// 以规范命名空间标识索引的已启用插件 Agent Skills。
+    pub enabled_skills: BTreeMap<String, PromptSkill>,
+    /// Enabled plugin subagents keyed by canonical namespaced identifier.
+    /// 以规范命名空间标识索引的已启用插件子代理。
+    pub enabled_agents: BTreeMap<String, SubagentDefinition>,
     /// Catalog-level deterministic diagnostics.
     /// 目录级确定性诊断集合。
     pub diagnostics: Vec<String>,
@@ -275,6 +292,8 @@ impl SystemPluginCatalogSnapshot {
             enabled_tools: BTreeMap::new(),
             enabled_hooks: BTreeMap::new(),
             prompt_contributions: Vec::new(),
+            enabled_skills: BTreeMap::new(),
+            enabled_agents: BTreeMap::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -311,13 +330,49 @@ pub fn load_system_plugin_catalog(
             return snapshot;
         }
     };
-    let mut package_roots = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && path.join(SYSTEM_PLUGIN_MANIFEST_FILE).is_file())
-        .collect::<Vec<_>>();
+    let mut package_roots = Vec::new();
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(error) => {
+                snapshot.diagnostics.push(format!(
+                    "Failed to enumerate a System Plugin root entry: {error}"
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                snapshot.diagnostics.push(format!(
+                    "Failed to inspect System Plugin root entry `{}`: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        // Package-root links are passed to the package validator so their rejection remains observable.
+        // 插件包根链接会交给包校验器处理，确保拒绝原因可观察。
+        if crate::metadata_is_link_or_reparse_point(&metadata) {
+            package_roots.push(path);
+            continue;
+        }
+        if !metadata.is_dir() {
+            continue;
+        }
+        let manifest_path = path.join(SYSTEM_PLUGIN_MANIFEST_FILE);
+        match fs::metadata(&manifest_path) {
+            Ok(metadata) if metadata.is_file() => package_roots.push(path),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => snapshot.diagnostics.push(format!(
+                "Failed to inspect System Plugin manifest `{}`: {error}",
+                manifest_path.display()
+            )),
+        }
+    }
     package_roots.sort();
-    let mut global_tool_ids = BTreeSet::new();
     for package_root in package_roots {
         let descriptor = load_system_plugin_package(
             &canonical_root,
@@ -332,37 +387,9 @@ pub fn load_system_plugin_catalog(
             ));
             continue;
         }
-        if descriptor.availability == SystemPluginAvailability::Enabled {
-            let duplicate_tool = descriptor
-                .tools
-                .iter()
-                .find(|tool| global_tool_ids.contains(&tool.id))
-                .map(|tool| tool.id.clone());
-            if let Some(tool_id) = duplicate_tool {
-                let mut unavailable = descriptor;
-                unavailable.availability = SystemPluginAvailability::Unavailable;
-                unavailable.runtime_state = SystemPluginRuntimeState::Unavailable;
-                unavailable.diagnostics.push(format!(
-                    "Tool id `{tool_id}` conflicts with another enabled System Plugin."
-                ));
-                snapshot.plugins.insert(plugin_id, unavailable);
-                continue;
-            }
-            global_tool_ids.extend(descriptor.tools.iter().map(|tool| tool.id.clone()));
-            for tool in &descriptor.tools {
-                snapshot.enabled_tools.insert(tool.id.clone(), tool.clone());
-            }
-            for hook in &descriptor.hooks {
-                snapshot
-                    .enabled_hooks
-                    .insert(hook.registration_id.clone(), hook.clone());
-            }
-            snapshot
-                .prompt_contributions
-                .extend(descriptor.prompt_contributions.iter().cloned());
-        }
         snapshot.plugins.insert(plugin_id, descriptor);
     }
+    rebuild_catalog_surface(&mut snapshot);
     snapshot
 }
 
@@ -500,6 +527,8 @@ fn rebuild_catalog_surface(snapshot: &mut SystemPluginCatalogSnapshot) {
     snapshot.enabled_tools.clear();
     snapshot.enabled_hooks.clear();
     snapshot.prompt_contributions.clear();
+    snapshot.enabled_skills.clear();
+    snapshot.enabled_agents.clear();
     let mut reserved_tool_ids = BTreeSet::new();
     for descriptor in snapshot.plugins.values_mut() {
         if descriptor.availability != SystemPluginAvailability::Enabled {
@@ -530,6 +559,16 @@ fn rebuild_catalog_surface(snapshot: &mut SystemPluginCatalogSnapshot) {
         snapshot
             .prompt_contributions
             .extend(descriptor.prompt_contributions.iter().cloned());
+        for skill in &descriptor.skills {
+            snapshot
+                .enabled_skills
+                .insert(skill.name.clone(), skill.clone());
+        }
+        for agent in &descriptor.agents {
+            snapshot
+                .enabled_agents
+                .insert(agent.id.clone(), agent.clone());
+        }
     }
 }
 
@@ -558,6 +597,7 @@ fn load_system_plugin_package(
         availability: SystemPluginAvailability::Unavailable,
         desired_enabled: false,
         runtime_state: SystemPluginRuntimeState::Unavailable,
+        runtime_execution_available: false,
         generation: 0,
         active_session_count: 0,
         name: fallback_id.clone(),
@@ -566,9 +606,28 @@ fn load_system_plugin_package(
         tools: Vec::new(),
         hooks: Vec::new(),
         prompt_contributions: Vec::new(),
+        skills: Vec::new(),
+        agents: Vec::new(),
         manifest: None,
         diagnostics: vec![diagnostic],
     };
+    // Inspect the literal catalog entry before using its canonical target so package-root links cannot inherit trust.
+    // 在使用规范化目标前检查目录中的字面条目，避免插件包根链接继承信任。
+    let package_root_metadata = match fs::symlink_metadata(package_root) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return unavailable(format!(
+                "Failed to inspect System Plugin package root: {error}"
+            ));
+        }
+    };
+    if crate::metadata_is_link_or_reparse_point(&package_root_metadata)
+        || !package_root_metadata.is_dir()
+    {
+        return unavailable(String::from(
+            "System Plugin package root must be a regular directory and must not be a symbolic link or reparse point.",
+        ));
+    }
     if !canonical_package_root.starts_with(catalog_root) {
         return unavailable(String::from(
             "System Plugin package root escapes the trusted catalog root.",
@@ -601,6 +660,7 @@ fn load_system_plugin_package(
             manifest.default_enabled
         },
         runtime_state: SystemPluginRuntimeState::Enabled,
+        runtime_execution_available: true,
         generation: 0,
         active_session_count: 0,
         name: manifest.display.name.clone(),
@@ -609,6 +669,8 @@ fn load_system_plugin_package(
         tools: Vec::new(),
         hooks: Vec::new(),
         prompt_contributions: Vec::new(),
+        skills: Vec::new(),
+        agents: Vec::new(),
         manifest: Some(Arc::new(manifest.clone())),
         diagnostics: Vec::new(),
     };
@@ -639,6 +701,75 @@ fn load_system_plugin_package(
             return descriptor;
         }
     };
+    descriptor.skills = match load_plugin_prompt_skills(
+        &manifest.id,
+        &manifest.display.name,
+        &manifest.version,
+        &canonical_package_root.join("skills"),
+    ) {
+        Ok(skills) => skills,
+        Err(errors) => {
+            descriptor.availability = SystemPluginAvailability::Unavailable;
+            descriptor.runtime_state = SystemPluginRuntimeState::Unavailable;
+            descriptor
+                .diagnostics
+                .extend(errors.into_iter().map(|error| {
+                    format!(
+                        "Plugin skill `{}` is invalid: {}",
+                        error.path.display(),
+                        error.message
+                    )
+                }));
+            return descriptor;
+        }
+    };
+    let agent_catalog =
+        load_plugin_subagent_catalog(&manifest.id, canonical_package_root.join("agents"));
+    if !agent_catalog.errors.is_empty() {
+        descriptor.availability = SystemPluginAvailability::Unavailable;
+        descriptor.runtime_state = SystemPluginRuntimeState::Unavailable;
+        descriptor
+            .diagnostics
+            .extend(agent_catalog.errors.into_iter().map(|error| {
+                format!(
+                    "Plugin agent `{}` is invalid: {}",
+                    error.path.display(),
+                    error.message
+                )
+            }));
+        return descriptor;
+    }
+    descriptor.agents = agent_catalog.definitions;
+    let plugin_skill_ids = descriptor
+        .skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<BTreeSet<_>>();
+    for agent in &descriptor.agents {
+        if let Some(missing_skill_id) = agent
+            .prompt_skills
+            .policy
+            .selectors
+            .iter()
+            .find(|skill_id| !plugin_skill_ids.contains(skill_id.as_str()))
+        {
+            descriptor.availability = SystemPluginAvailability::Unavailable;
+            descriptor.runtime_state = SystemPluginRuntimeState::Unavailable;
+            descriptor.diagnostics.push(format!(
+                "Plugin agent `{}` references unavailable same-plugin skill `{missing_skill_id}`.",
+                agent.id
+            ));
+            return descriptor;
+        }
+    }
+    if !manifest.has_runtime() && descriptor.skills.is_empty() && descriptor.agents.is_empty() {
+        descriptor.availability = SystemPluginAvailability::Unavailable;
+        descriptor.runtime_state = SystemPluginRuntimeState::Unavailable;
+        descriptor.diagnostics.push(String::from(
+            "A plugin without `runtime` must contribute at least one skill or agent.",
+        ));
+        return descriptor;
+    }
     let mut tool_ids = BTreeSet::new();
     let mut groups = BTreeSet::new();
     for tool in &manifest.tools {
@@ -822,16 +953,6 @@ fn validate_manifest_identity(
     if manifest.version.trim().is_empty() {
         return Err(String::from("Plugin version must not be empty."));
     }
-    if manifest.runtime.max_active_sessions == 0 {
-        return Err(String::from(
-            "Plugin max_active_sessions must be greater than zero.",
-        ));
-    }
-    if manifest.runtime.session_idle_timeout_sec == Some(0) {
-        return Err(String::from(
-            "Plugin session_idle_timeout_sec must be greater than zero when declared.",
-        ));
-    }
     let unique_excluded_targets = manifest
         .platforms
         .excluded_targets
@@ -844,6 +965,31 @@ fn validate_manifest_identity(
     }
     for target in &manifest.platforms.excluded_targets {
         validate_target_triple(target)?;
+    }
+    if !manifest.has_runtime() {
+        if manifest.has_execution_declarations()
+            || manifest.dependency_policy.install_mode != SystemPluginDependencyInstallMode::Bundled
+            || !manifest.runtime.dependencies_file.is_empty()
+            || !manifest.runtime.invoke_function.is_empty()
+            || !manifest.runtime.shutdown_function.is_empty()
+            || manifest.runtime.max_active_sessions != 0
+            || manifest.runtime.session_idle_timeout_sec.is_some()
+        {
+            return Err(String::from(
+                "A plugin without `runtime` may only declare metadata, locales, skills, and agents.",
+            ));
+        }
+        return Ok(());
+    }
+    if manifest.runtime.max_active_sessions == 0 {
+        return Err(String::from(
+            "Plugin max_active_sessions must be greater than zero.",
+        ));
+    }
+    if manifest.runtime.session_idle_timeout_sec == Some(0) {
+        return Err(String::from(
+            "Plugin session_idle_timeout_sec must be greater than zero when declared.",
+        ));
     }
     validate_lua_identifier(&manifest.runtime.invoke_function, "runtime invoke function")?;
     validate_lua_identifier(
@@ -1322,6 +1468,9 @@ fn validate_runtime_files(
     package_root: &Path,
     manifest: &SystemPluginManifest,
 ) -> Result<(), String> {
+    if !manifest.has_runtime() {
+        return Ok(());
+    }
     let dependency_file = resolve_package_file(
         package_root,
         &manifest.runtime.dependencies_file,
@@ -1626,9 +1775,9 @@ fn resolve_package_directory(
     }
     let metadata = fs::symlink_metadata(&joined)
         .map_err(|error| format!("Failed to inspect System Plugin {label}: {error}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
         return Err(format!(
-            "System Plugin {label} must be a regular directory and must not be a symbolic link."
+            "System Plugin {label} must be a regular directory and must not be a symbolic link or reparse point."
         ));
     }
     Ok(canonical)
@@ -1763,9 +1912,9 @@ fn collect_package_files(
                 path.display()
             )
         })?;
-        if metadata.file_type().is_symlink() {
+        if crate::metadata_is_link_or_reparse_point(&metadata) {
             return Err(format!(
-                "System Plugin package entry `{}` must not be a symbolic link.",
+                "System Plugin package entry `{}` must not be a symbolic link or reparse point.",
                 path.display()
             ));
         }
@@ -1948,6 +2097,48 @@ prompt_contributions:
         .expect("write manifest");
     }
 
+    /// Writes one runtime-free plugin containing a namespaced skill and an agent bound to it.
+    /// 写入一个不含运行时且包含命名空间技能与绑定智能体的插件。
+    fn write_content_package(root: &Path, attached_skill: &str) {
+        write_named_content_package(root, "content-plugin", attached_skill);
+    }
+
+    /// Writes one named runtime-free plugin for namespace-collision tests.
+    /// 为命名空间冲突测试写入一个具名无运行时插件。
+    fn write_named_content_package(root: &Path, plugin_id: &str, attached_skill: &str) {
+        let package = root.join(plugin_id);
+        fs::create_dir_all(package.join("skills/review-helper"))
+            .expect("create content skill directory");
+        fs::create_dir_all(package.join("agents")).expect("create content agent directory");
+        fs::write(
+            package.join("skills/review-helper/SKILL.md"),
+            "---\nname: review-helper\ndescription: Review one code change.\n---\n\n# Review helper\nInspect the exact diff.",
+        )
+        .expect("write content skill");
+        fs::write(
+            package.join("agents/reviewer.md"),
+            format!(
+                "---\nname: Content Reviewer\nskills:\n  - {attached_skill}\n---\nReview the requested change."
+            ),
+        )
+        .expect("write content agent");
+        fs::write(
+            package.join("plugin.yaml"),
+            format!(
+                r#"schema_version: 1
+id: {plugin_id}
+version: 1.0.0
+kind: bundled_system
+default_enabled: true
+display:
+  name: Content Plugin
+  capability: Read-only review guidance
+"#
+            ),
+        )
+        .expect("write content manifest");
+    }
+
     /// Writes one named stateless package with an exact ordered tool set for collision tests.
     /// 为冲突测试写入一个带精确有序工具集合的命名无状态插件包。
     ///
@@ -2003,6 +2194,172 @@ prompt_contributions:
         assert_eq!(
             snapshot.plugins["test-plugin"].availability,
             SystemPluginAvailability::Enabled
+        );
+    }
+
+    /// Verifies a runtime-free package publishes its complete skill and agent surface atomically.
+    /// 验证无运行时插件包会原子发布完整技能与智能体界面。
+    #[test]
+    fn content_package_loads_skills_and_agents_without_runtime() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        write_content_package(temp.path(), "review-helper");
+
+        let snapshot =
+            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 3);
+        let plugin = &snapshot.plugins["content-plugin"];
+
+        assert_eq!(plugin.availability, SystemPluginAvailability::Enabled);
+        assert!(
+            !plugin
+                .manifest
+                .as_ref()
+                .expect("content manifest should exist")
+                .has_runtime()
+        );
+        assert_eq!(plugin.skills.len(), 1);
+        assert_eq!(plugin.agents.len(), 1);
+        assert!(
+            snapshot
+                .enabled_skills
+                .contains_key("content-plugin:review-helper")
+        );
+        assert!(
+            snapshot
+                .enabled_agents
+                .contains_key("content-plugin:reviewer")
+        );
+        assert_eq!(
+            plugin.agents[0].prompt_skills.policy.selectors,
+            vec![String::from("content-plugin:review-helper")]
+        );
+        assert!(snapshot.enabled_tools.is_empty());
+        assert!(snapshot.enabled_hooks.is_empty());
+    }
+
+    /// Verifies different plugins may contribute the same package-local component names.
+    /// 验证不同插件可以贡献相同的包内组件名称。
+    #[test]
+    fn plugin_namespaces_isolate_identical_local_component_names() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        write_named_content_package(temp.path(), "first-plugin", "review-helper");
+        write_named_content_package(temp.path(), "second-plugin", "review-helper");
+
+        let snapshot =
+            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 4);
+
+        assert_eq!(snapshot.plugins.len(), 2);
+        assert!(
+            snapshot
+                .enabled_skills
+                .contains_key("first-plugin:review-helper")
+        );
+        assert!(
+            snapshot
+                .enabled_skills
+                .contains_key("second-plugin:review-helper")
+        );
+        assert!(
+            snapshot
+                .enabled_agents
+                .contains_key("first-plugin:reviewer")
+        );
+        assert!(
+            snapshot
+                .enabled_agents
+                .contains_key("second-plugin:reviewer")
+        );
+    }
+
+    /// Verifies an unresolved plugin-local skill binding rejects the whole package without partial publication.
+    /// 验证无法解析的插件内技能绑定会拒绝整个插件包，且不会部分发布。
+    #[test]
+    fn content_package_rejects_missing_agent_skill_binding() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        write_content_package(temp.path(), "missing-helper");
+
+        let snapshot =
+            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 4);
+        let plugin = &snapshot.plugins["content-plugin"];
+
+        assert_eq!(plugin.availability, SystemPluginAvailability::Unavailable);
+        assert!(snapshot.enabled_skills.is_empty());
+        assert!(snapshot.enabled_agents.is_empty());
+        assert!(
+            plugin
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("missing-helper"))
+        );
+    }
+
+    /// Verifies a runtime-free package cannot smuggle execution capabilities beside content components.
+    /// 验证无运行时插件不能在内容组件旁夹带执行能力。
+    #[test]
+    fn content_package_rejects_execution_declarations() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        write_content_package(temp.path(), "review-helper");
+        fs::write(
+            temp.path().join("content-plugin/plugin.yaml"),
+            r#"schema_version: 1
+id: content-plugin
+version: 1.0.0
+kind: bundled_system
+default_enabled: true
+display:
+  name: Content Plugin
+  capability: Invalid execution declaration fixture
+capabilities:
+  - runtime_lua_modules
+"#,
+        )
+        .expect("write invalid content manifest");
+
+        let snapshot =
+            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 5);
+        let plugin = &snapshot.plugins["content-plugin"];
+
+        assert_eq!(plugin.availability, SystemPluginAvailability::Unavailable);
+        assert!(snapshot.enabled_skills.is_empty());
+        assert!(snapshot.enabled_agents.is_empty());
+        assert!(
+            plugin
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("may only declare metadata"))
+        );
+    }
+
+    /// Verifies a runtime-free package must contribute at least one conventional content component.
+    /// 验证无运行时插件必须至少贡献一个约定式内容组件。
+    #[test]
+    fn empty_content_package_is_unavailable() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let package = temp.path().join("empty-plugin");
+        fs::create_dir_all(&package).expect("create empty content package");
+        fs::write(
+            package.join("plugin.yaml"),
+            r#"schema_version: 1
+id: empty-plugin
+version: 1.0.0
+kind: bundled_system
+default_enabled: true
+display:
+  name: Empty Plugin
+  capability: Empty content fixture
+"#,
+        )
+        .expect("write empty content manifest");
+
+        let snapshot =
+            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 6);
+        let plugin = &snapshot.plugins["empty-plugin"];
+
+        assert_eq!(plugin.availability, SystemPluginAvailability::Unavailable);
+        assert!(
+            plugin
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("at least one skill or agent"))
         );
     }
 
@@ -2317,6 +2674,31 @@ prompt_contributions:
         fs::write(&outside, "outside").expect("write outside file");
         symlink(&outside, temp.path().join("test-plugin/linked.txt"))
             .expect("create package symlink");
+        let snapshot =
+            load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
+        assert_eq!(
+            snapshot.plugins["test-plugin"].availability,
+            SystemPluginAvailability::Unavailable
+        );
+        assert!(snapshot.plugins["test-plugin"].diagnostics[0].contains("symbolic link"));
+    }
+
+    /// Verifies a package-root symbolic link is rejected even when its target remains inside the catalog.
+    /// 验证即使目标仍位于目录内部，插件包根符号链接也会被拒绝。
+    #[cfg(unix)]
+    #[test]
+    fn symbolic_link_package_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let storage_root = temp.path().join("storage");
+        write_valid_package(&storage_root);
+        symlink(
+            storage_root.join("test-plugin"),
+            temp.path().join("test-plugin"),
+        )
+        .expect("create package-root symlink");
+
         let snapshot =
             load_system_plugin_catalog(temp.path(), &BTreeSet::new(), &BTreeSet::new(), 1);
         assert_eq!(

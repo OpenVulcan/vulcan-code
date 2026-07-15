@@ -908,3 +908,77 @@ vulcan-runtime-assets
 - 不允许让插件包自行决定会话所有权、租约 ID或宿主权限。
 - 不允许在 LuaSkills 运行时缺少强制安全边界时，把随包可信模型宣传成第三方安全沙箱。
 - 不允许启停操作只更新 UI 或配置而不刷新 Runtime Foundation。
+
+---
+
+## 18. 内容型插件与内置组件扩展（2026-07-15）
+
+### 18.1 约定目录
+
+插件包现在可以在既有 `plugin.yaml` 旁直接提供只读 Agent Skill 与智能体组件：
+
+```text
+<plugin-root>/
+├── plugin.yaml
+├── skills/
+│   └── <skill-name>/
+│       ├── SKILL.md
+│       └── vulcan.yaml        # 可选
+└── agents/
+    └── <agent-id>.md
+```
+
+- `skills/` 复用现有 Agent Skills 解析器和标准 `SKILL.md` 语义。
+- `agents/` 复用现有子代理定义解析器；子目录会成为智能体本地标识的一部分。
+- 插件组件不复制到用户目录，安装、更新、启停和卸载全部由插件包生命周期统一管理。
+- 插件内文件可以查看，但服务端和 WebUI 都不提供编辑、删除、复制、单项启停、恢复或改分类入口。
+
+### 18.2 内容型插件
+
+`schema_version: 1` 保持兼容。`runtime` 不再是插件成立的必要条件；未声明 Lua bundle 的插件按内容型插件处理：
+
+- 必须至少包含一个有效 Skill 或 Agent。
+- 不需要 `dependencies.yaml`、Lua bundle、桥接包或受管执行环境。
+- 不创建 Lua Lease，不执行生命周期回调，不做运行时探测或预热。
+- 不允许声明 capability、tool、hook、action、UI mount、config、binary、Node/Python entry、Prompt Contribution、生命周期函数或非默认依赖策略。
+- 任一组件解析失败或 Agent 的 Skill 绑定无法解析时，整个插件不可用，不发布部分组件。
+
+LuaSkills 引擎初始化失败时，插件目录管理器仍然启动。内容型插件继续可用；带 Runtime 的插件保留目录与只读组件，但其工具、Hook 和执行入口不会发布，并显示明确的执行运行时不可用诊断。
+
+### 18.3 命名空间与绑定
+
+- 插件 Skill 的规范名称为 `<plugin-id>:<local-skill-name>`。
+- 插件 Agent 的规范标识为 `<plugin-id>:<local-agent-id>`。
+- 插件 Agent frontmatter 可使用 `skills` 简写，但只允许引用同一插件内 Skill 的本地名称。
+- 加载阶段会把本地名称确定性改写为规范名称；跨插件引用、完整外部名称、重复名称和缺失引用全部拒绝。
+
+示例：
+
+```yaml
+---
+name: 代码评审专家
+skills:
+  - review-helper
+---
+```
+
+若所属插件标识为 `review-tools`，最终 Agent 标识为 `review-tools:reviewer`，附加 Skill 为 `review-tools:review-helper`。
+
+### 18.4 分类与只读权限
+
+- Agent Skill 与智能体目录都内建唯一的 `plugins` 分类，名称为“插件”，图标为 `🧩`。
+- 插件包内的分类元数据不会创建、覆盖或重命名宿主分类。
+- `PromptSkillScope::Plugin` 与 `SubagentDefinitionScope::Plugin` 是独立来源，不复用 `System` 或 `Package` 表达所有权。
+- 服务摘要显式携带所属插件、规范标识、附加 Skill 和逐操作权限；插件组件的全部 mutation 权限固定为 `false`。
+- 服务端会根据权威插件快照拒绝伪造的 Skill/Agent mutation 请求，并拒绝修改、删除或手工分配宿主 `plugins` 分类。
+
+### 18.5 原子刷新
+
+每次插件刷新只捕获一份不可变 `SystemPluginCatalogSnapshot`，并在同一次工作台提交中更新：
+
+1. LuaSkills 摘要；
+2. 插件列表；
+3. Agent Skills 目录；
+4. 智能体目录与共享 `TaskRuntime`。
+
+服务端随后发送一条 `pluginCatalogChanged` Delta，四个领域共享同一个 workbench revision。WebUI 以一次 reducer 更新替换全部字段，并同时推进 LuaSkills、Agent Skills 和智能体三个领域版本闸门，避免出现插件状态与组件目录短暂不一致。新的 AI 执行在准备阶段从插件管理器读取最新快照；已启动执行继续使用自身准备阶段快照。

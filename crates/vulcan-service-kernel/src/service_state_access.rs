@@ -295,7 +295,6 @@ pub(crate) fn service_system_plugin_runtime(
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .agent_runtime
         .as_ref()
-        .and_then(|runtime| runtime.luaskills_runtime.as_ref())
         .map(|runtime| runtime.system_plugin_runtime.clone())
         .ok_or_else(|| String::from("System Plugin runtime is not initialized."))
 }

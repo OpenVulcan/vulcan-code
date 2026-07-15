@@ -63,8 +63,8 @@ export interface DiffBranchSummary {
   remote: boolean;
 }
 
-// DiffCommitSummary describes one selectable recent commit.
-// DiffCommitSummary 描述一个可选择的最近提交。
+// DiffCommitSummary describes one selectable unpushed commit.
+// DiffCommitSummary 描述一个可选择的未推送提交。
 export interface DiffCommitSummary {
   // Full commit hash used for Git commands.
   // Git 命令使用的完整提交哈希。
@@ -569,8 +569,8 @@ export interface DiffPanelSnapshot {
   // Branches available for branch comparison.
   // 可用于分支对比的分支列表。
   branches?: DiffBranchSummary[];
-  // Recent commits available for commit review mode.
-  // 可用于提交审核模式的最近提交列表。
+  // Unpushed commits available for commit review mode.
+  // 可用于提交审核模式的未推送提交列表。
   recentCommits?: DiffCommitSummary[];
 }
 
@@ -628,7 +628,7 @@ export interface WorkspaceDiffSnapshotResponse {
   // Branches available for branch comparison.
   // 可用于分支对比的分支列表。
   branches?: DiffBranchSummary[];
-  // Recent commits available for commit review mode.
-  // 可用于提交审核模式的最近提交列表。
+  // Unpushed commits available for commit review mode.
+  // 可用于提交审核模式的未推送提交列表。
   recentCommits?: DiffCommitSummary[];
 }

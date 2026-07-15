@@ -179,8 +179,8 @@ pub(crate) struct WebuiWorkspaceDiffSnapshot {
     /// Branches available for branch comparison.
     /// 可用于分支对比的分支列表。
     pub(crate) branches: Vec<WebuiGitBranchSummary>,
-    /// Recent commits available for commit review mode.
-    /// 可用于提交审核模式的最近提交列表。
+    /// Unpushed commits available for commit review mode.
+    /// 可用于提交审核模式的未推送提交列表。
     pub(crate) recent_commits: Vec<WebuiGitCommitSummary>,
 }
 

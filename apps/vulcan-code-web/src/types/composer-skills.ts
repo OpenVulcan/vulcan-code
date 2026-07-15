@@ -407,6 +407,15 @@ export interface SystemPluginPermissionPreview {
   // Declared Python process identifiers.
   // 声明的 Python 进程标识。
   pythonEntryIds: string[];
+  // Read-only Agent Skill identifiers contained in the package.
+  // 插件包内包含的只读 Agent Skill 标识。
+  skillIds: string[];
+  // Read-only subagent identifiers contained in the package.
+  // 插件包内包含的只读子代理标识。
+  agentIds: string[];
+  // Whether the package declares an executable Lua runtime.
+  // 插件包是否声明了可执行 Lua 运行时。
+  hasRuntime: boolean;
 }
 
 // PluginUiInvalidatedEvent describes one revision-only plugin UI data invalidation.
@@ -423,8 +432,8 @@ export interface PluginUiInvalidatedEvent {
   revision: number;
 }
 
-// PluginSummary describes one plugin or LuaSkills package projected by the service.
-// PluginSummary 描述服务端投影的单个插件或 LuaSkills 包。
+// PluginSummary describes one System Plugin or LuaSkills package projected by the service.
+// PluginSummary 描述服务端投影的单个系统插件或 LuaSkills 包。
 export interface PluginSummary {
   // Stable plugin identifier.
   // 稳定插件标识。
@@ -481,6 +490,12 @@ export interface PluginSummary {
   // Number of host hook handlers declared by the plugin package.
   // 插件包声明的宿主 hook 处理器数量。
   hookCount: number;
+  // Number of read-only Agent Skills contributed by this plugin.
+  // 当前插件贡献的只读 Agent Skills 数量。
+  skillCount: number;
+  // Number of read-only subagents contributed by this plugin.
+  // 当前插件贡献的只读子代理数量。
+  agentCount: number;
   // Number of currently retained managed sessions.
   // 当前保留的受管会话数量。
   activeSessionCount: number;
@@ -527,6 +542,15 @@ export interface PluginSummary {
       // 包含组件工厂的 ESM 命名导出。
       exportName: string;
     }>;
+    // Read-only Agent Skill identifiers contributed by this plugin.
+    // 当前插件贡献的只读 Agent Skill 标识。
+    skills: string[];
+    // Read-only subagent identifiers contributed by this plugin.
+    // 当前插件贡献的只读子代理标识。
+    agents: string[];
+    // Whether this plugin owns an executable Lua runtime.
+    // 当前插件是否拥有可执行 Lua 运行时。
+    hasRuntime: boolean;
   } | null;
 }
 
@@ -573,8 +597,8 @@ export interface LuaSkillsCatalogUpdate {
   // Complete LuaSkills catalog after the committed mutation.
   // 已提交变更后的完整 LuaSkills 目录。
   luaSkills: LuaSkillsCatalogSummary;
-  // Plugin rows derived from the same committed LuaSkills catalog.
-  // 从同一份已提交 LuaSkills 目录派生的插件行。
+  // Plugin rows derived from the same committed LuaSkills and System Plugin catalogs.
+  // 从同一份已提交 LuaSkills 与系统插件目录派生的插件行。
   plugins: PluginSummary[];
 }
 
@@ -598,7 +622,25 @@ export interface AgentSkillRecordSummary {
   locales: Record<string, AgentSkillLocaleSummary>;
   // Stable source scope key.
   // 稳定来源作用域键。
-  scopeKey: "system" | "user";
+  scopeKey: "system" | "user" | "plugin";
+  // Optional owning plugin identifier for plugin-contributed skills.
+  // 插件贡献技能的可选所属插件标识。
+  owningPluginId?: string | null;
+  // Whether the service permits direct editing.
+  // 服务端是否允许直接编辑。
+  canEdit: boolean;
+  // Whether the service permits direct deletion.
+  // 服务端是否允许直接删除。
+  canDelete: boolean;
+  // Whether the service permits direct enablement changes.
+  // 服务端是否允许直接启停。
+  canToggle: boolean;
+  // Whether the service permits copying into a user-owned record.
+  // 服务端是否允许复制为用户记录。
+  canCopy: boolean;
+  // Whether the service permits restoring the default source record.
+  // 服务端是否允许恢复默认来源记录。
+  canRestoreDefault: boolean;
   // Whether this source record is effective after same-name resolution.
   // 同名解析后当前来源记录是否生效。
   effective: boolean;
@@ -927,7 +969,22 @@ export interface SubagentDefinitionSummary {
   scope: string;
   // Stable source scope key used by UI logic.
   // UI 逻辑使用的稳定来源作用域键。
-  scopeKey: "system" | "user" | "package" | string;
+  scopeKey: "system" | "user" | "package" | "plugin";
+  // Optional owning plugin identifier for plugin-contributed definitions.
+  // 插件贡献定义的可选所属插件标识。
+  owningPluginId?: string | null;
+  // Whether the service permits direct editing.
+  // 服务端是否允许直接编辑。
+  canEdit: boolean;
+  // Whether the service permits direct deletion.
+  // 服务端是否允许直接删除。
+  canDelete: boolean;
+  // Whether the service permits direct enablement changes.
+  // 服务端是否允许直接启停。
+  canToggle: boolean;
+  // Whether the service permits copying into a user-owned definition.
+  // 服务端是否允许复制为用户定义。
+  canCopy: boolean;
   // Whether this definition is exposed to models and spawn_agent.
   // 该定义是否暴露给模型与 spawn_agent。
   enabled: boolean;

@@ -6350,7 +6350,9 @@ dependencies = [
  "tokio",
  "uuid",
  "vulcan-hooks",
+ "vulcan-prompt-skills",
  "vulcan-runtime-assets",
+ "vulcan-task-session",
 ]
 
 [[package]]

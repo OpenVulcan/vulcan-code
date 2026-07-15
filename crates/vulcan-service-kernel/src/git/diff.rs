@@ -674,20 +674,27 @@ pub(crate) fn load_webui_git_branches(
     Ok(branches)
 }
 
-/// Loads the latest commits used by commit review mode.
-/// 加载提交审核模式使用的最近提交。
-pub(crate) fn load_webui_recent_commits(
+/// Loads every current-branch commit that has not reached the relevant remote view.
+/// 加载当前分支中尚未进入相关远端视图的全部提交。
+/// Parameters: repository_root is the Git repository root used to resolve branch and remote refs.
+/// 参数：repository_root 是用于解析分支与远端引用的 Git 仓库根目录。
+/// Returns: unpushed commits in reverse chronological order, or an empty list for detached HEAD.
+/// 返回：按时间倒序排列的未推送提交；分离 HEAD 状态下返回空列表。
+pub(crate) fn load_webui_unpushed_commits(
     repository_root: &Path,
 ) -> Result<Vec<WebuiGitCommitSummary>, String> {
-    let output = run_webui_git_command(
-        repository_root,
-        &[
-            "log",
-            "-n",
-            "20",
-            "--pretty=format:%H%x1f%h%x1f%s%x1f%cr%x1e",
-        ],
-    )?;
+    // Resolve the same revision range used by the unpushed counter so the panel list and badge agree.
+    // 解析与未推送计数器相同的修订范围，确保面板列表与徽标语义一致。
+    let Some(revision_args) = webui_unpushed_commit_revision_args(repository_root)? else {
+        return Ok(Vec::new());
+    };
+    // Keep formatting arguments before revisions and intentionally omit a count limit so all unpushed commits are returned.
+    // 将格式参数放在修订范围之前，并刻意不限制数量，从而返回全部未推送提交。
+    let mut args = vec!["log", "--pretty=format:%H%x1f%h%x1f%s%x1f%cr%x1e"];
+    args.extend_from_slice(&revision_args);
+    // Execute the exact unpushed revision query selected for the current branch state.
+    // 执行为当前分支状态选定的精确未推送修订查询。
+    let output = run_webui_git_command(repository_root, &args)?;
     if !output.status.success() {
         return Ok(Vec::new());
     }
@@ -911,13 +918,30 @@ pub(crate) fn webui_current_branch_has_upstream(repository_root: &Path) -> bool 
 pub(crate) fn load_webui_current_branch_unpushed_commit_count(
     repository_root: &Path,
 ) -> Result<usize, String> {
-    if load_webui_current_git_branch(repository_root)?.is_none() {
+    // Resolve the shared unpushed range so counts and selectable commits cannot diverge.
+    // 解析共享的未推送范围，避免计数与可选提交列表产生分歧。
+    let Some(revision_args) = webui_unpushed_commit_revision_args(repository_root)? else {
         return Ok(0);
+    };
+    load_webui_git_revision_count(repository_root, &revision_args)
+}
+
+/// Resolves the Git revision arguments that uniquely define unpushed commits for the current branch.
+/// 解析用于唯一界定当前分支未推送提交的 Git 修订参数。
+/// Parameters: repository_root is the Git repository root whose current branch and upstream are inspected.
+/// 参数：repository_root 是需要检查当前分支与上游配置的 Git 仓库根目录。
+/// Returns: an upstream-relative or all-remotes-relative revision range, or None for detached HEAD.
+/// 返回：相对上游或全部远端的修订范围；分离 HEAD 状态下返回 None。
+fn webui_unpushed_commit_revision_args(
+    repository_root: &Path,
+) -> Result<Option<Vec<&'static str>>, String> {
+    if load_webui_current_git_branch(repository_root)?.is_none() {
+        return Ok(None);
     }
     if webui_current_branch_has_upstream(repository_root) {
-        return load_webui_git_revision_count(repository_root, &["@{u}..HEAD"]);
+        return Ok(Some(vec!["@{u}..HEAD"]));
     }
-    load_webui_git_revision_count(repository_root, &["HEAD", "--not", "--remotes"])
+    Ok(Some(vec!["HEAD", "--not", "--remotes"]))
 }
 
 /// Loads one Git revision count from `git rev-list --count`.

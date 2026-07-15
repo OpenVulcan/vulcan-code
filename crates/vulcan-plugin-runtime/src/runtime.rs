@@ -190,6 +190,15 @@ pub struct SystemPluginPermissionPreview {
     /// Logical Python entry identifiers.
     /// 逻辑 Python 入口标识集合。
     pub python_entry_ids: Vec<String>,
+    /// Read-only Agent Skill identifiers contained in the validated package.
+    /// 已校验插件包内包含的只读 Agent Skill 标识集合。
+    pub skill_ids: Vec<String>,
+    /// Read-only subagent identifiers contained in the validated package.
+    /// 已校验插件包内包含的只读子代理标识集合。
+    pub agent_ids: Vec<String>,
+    /// Whether the package declares an executable Lua runtime.
+    /// 当前插件包是否声明了可执行 Lua 运行时。
+    pub has_runtime: bool,
 }
 
 /// Durable authorization record bound to an exact plugin version and content fingerprint.
@@ -580,7 +589,7 @@ struct SystemPluginManagerState {
     manager_id: String,
     /// Shared LuaSkills engine used for managed System leases.
     /// 用于受管系统租约的共享 LuaSkills 引擎。
-    engine: Arc<Mutex<LuaEngine>>,
+    engine: RwLock<Option<Arc<Mutex<LuaEngine>>>>,
     /// Root containing deployed System Plugin packages.
     /// 包含已部署系统插件包的根目录。
     system_plugin_root: PathBuf,
@@ -693,7 +702,13 @@ impl Drop for SystemPluginManagerState {
             .sessions
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Ok(engine) = self.engine.lock() else {
+        let Ok(engine_slot) = self.engine.get_mut() else {
+            return;
+        };
+        let Some(engine) = engine_slot.as_ref() else {
+            return;
+        };
+        let Ok(engine) = engine.lock() else {
             return;
         };
         for session in sessions.values() {
@@ -789,13 +804,77 @@ impl SystemPluginRuntimeManager {
         plugin_state_root: PathBuf,
         plugin_runtime_root: PathBuf,
     ) -> Self {
+        Self::new_with_optional_engine(
+            Some(engine),
+            system_plugin_root,
+            user_plugin_root,
+            bridge_package_root,
+            managed_runtime_distribution_root,
+            plugin_state_root,
+            plugin_runtime_root,
+        )
+    }
+
+    /// Creates one content-capable plugin manager without a Lua execution engine.
+    /// 创建一个不含 Lua 执行引擎但可加载内容组件的插件管理器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// The directory arguments have the same ownership and isolation semantics as `new`.
+    /// 各目录参数与 `new` 具有相同的所有权及隔离语义。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A manager that can discover and manage content-only plugins immediately.
+    /// 返回可立即发现并管理内容型插件的管理器。
+    pub fn without_runtime(
+        system_plugin_root: PathBuf,
+        user_plugin_root: PathBuf,
+        bridge_package_root: PathBuf,
+        managed_runtime_distribution_root: PathBuf,
+        plugin_state_root: PathBuf,
+        plugin_runtime_root: PathBuf,
+    ) -> Self {
+        Self::new_with_optional_engine(
+            None,
+            system_plugin_root,
+            user_plugin_root,
+            bridge_package_root,
+            managed_runtime_distribution_root,
+            plugin_state_root,
+            plugin_runtime_root,
+        )
+    }
+
+    /// Creates one manager from an optional execution engine and fixed host roots.
+    /// 使用可选执行引擎与固定宿主根目录创建插件管理器。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `engine` is optional while every path keeps the same meaning as the public constructors.
+    /// `engine` 可选，其余路径与公开构造函数含义一致。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A fully initialized shared manager.
+    /// 返回完整初始化的共享管理器。
+    fn new_with_optional_engine(
+        engine: Option<Arc<Mutex<LuaEngine>>>,
+        system_plugin_root: PathBuf,
+        user_plugin_root: PathBuf,
+        bridge_package_root: PathBuf,
+        managed_runtime_distribution_root: PathBuf,
+        plugin_state_root: PathBuf,
+        plugin_runtime_root: PathBuf,
+    ) -> Self {
         let snapshot = Arc::new(SystemPluginCatalogSnapshot::empty(
             system_plugin_root.clone(),
         ));
+        let has_engine = engine.is_some();
         let manager = Self {
             state: Arc::new(SystemPluginManagerState {
                 manager_id: Uuid::new_v4().to_string(),
-                engine,
+                engine: RwLock::new(engine),
                 system_plugin_root,
                 user_plugin_root,
                 bridge_package_root,
@@ -819,8 +898,59 @@ impl SystemPluginRuntimeManager {
                 cleanup_diagnostics: Mutex::new(BTreeMap::new()),
             }),
         };
-        manager.install_host_tool_bridge();
+        if has_engine {
+            manager.install_host_tool_bridge();
+        }
         manager
+    }
+
+    /// Attaches the shared Lua engine used by executable plugins.
+    /// 附加执行型插件使用的共享 Lua 引擎。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `engine` is the initialized LuaSkills engine owned by the host.
+    /// `engine` 是宿主持有的已初始化 LuaSkills 引擎。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns unit after the engine and fixed bridge are published.
+    /// 发布引擎与固定桥接后返回空值。
+    pub fn attach_runtime_engine(&self, engine: Arc<Mutex<LuaEngine>>) -> Result<(), String> {
+        let mut slot = self
+            .state
+            .engine
+            .write()
+            .map_err(|_| String::from("System Plugin runtime engine lock is poisoned."))?;
+        if slot.is_some() {
+            return Err(String::from(
+                "System Plugin runtime engine is already attached.",
+            ));
+        }
+        *slot = Some(engine);
+        drop(slot);
+        self.install_host_tool_bridge();
+        Ok(())
+    }
+
+    /// Returns the attached Lua engine or an explicit content-only diagnostic.
+    /// 返回已附加 Lua 引擎，或明确的内容型模式诊断。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The shared engine required by one executable plugin operation.
+    /// 单次执行型插件操作所需的共享引擎。
+    fn runtime_engine(&self) -> Result<Arc<Mutex<LuaEngine>>, SystemPluginRuntimeError> {
+        self.state
+            .engine
+            .read()
+            .map_err(|_| SystemPluginRuntimeError::new("System Plugin runtime engine lock is poisoned."))?
+            .clone()
+            .ok_or_else(|| {
+                SystemPluginRuntimeError::new(
+                    "System Plugin execution runtime is unavailable; content-only plugins remain available.",
+                )
+            })
     }
 
     /// Installs the current application-owned services used by authorized plugin bridge calls.
@@ -1704,6 +1834,9 @@ impl SystemPluginRuntimeManager {
                 "System Plugin `{plugin_id}` has no valid manifest."
             ))
         })?;
+        if !manifest.has_runtime() {
+            return Ok(());
+        }
         // executionRoot prevents a post-catalog package mutation from changing probe code.
         // executionRoot 防止目录扫描后的插件包变更替换探测代码。
         let execution_root = plugin_execution_package_root(&self.state, plugin)
@@ -1721,7 +1854,7 @@ impl SystemPluginRuntimeManager {
         // code probes the already loaded plugin through the fixed bridge ABI.
         // code 通过固定桥接 ABI 探测已加载插件。
         let code = String::from("local bridge = require('runtime.bridge')\nreturn bridge.probe()");
-        let engine = Arc::clone(&self.state.engine);
+        let engine = self.runtime_engine()?;
         let stable_plugin_id = plugin_id.to_owned();
         let probe_result = call_engine_blocking(Arc::clone(&engine), {
             let lease_id = lease_id.clone();
@@ -2259,6 +2392,13 @@ impl SystemPluginRuntimeManager {
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             SystemPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
         })?;
+        if plugin
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| !manifest.has_runtime())
+        {
+            return Ok(plugin.package_root.clone());
+        }
         ensure_plugin_execution_environment(&self.state, plugin)
             .map_err(SystemPluginRuntimeError::new)
     }
@@ -2700,6 +2840,7 @@ impl SystemPluginRuntimeManager {
             .values()
             .filter(|plugin| {
                 plugin.runtime_state == SystemPluginRuntimeState::Enabled
+                    && plugin.runtime_execution_available
                     && !plugin.hooks.is_empty()
             })
             .map(|plugin| plugin.id.clone())
@@ -2726,8 +2867,9 @@ impl SystemPluginRuntimeManager {
         let Some(plugin) = snapshot.plugins.get(plugin_id) else {
             return Ok(false);
         };
-        let eligible =
-            plugin.runtime_state == SystemPluginRuntimeState::Enabled && !plugin.hooks.is_empty();
+        let eligible = plugin.runtime_state == SystemPluginRuntimeState::Enabled
+            && plugin.runtime_execution_available
+            && !plugin.hooks.is_empty();
         if !eligible {
             return Ok(false);
         }
@@ -2802,7 +2944,7 @@ impl SystemPluginRuntimeManager {
             .manifest
             .timeout_ms
             .unwrap_or(SYSTEM_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS);
-        let engine = Arc::clone(&self.state.engine);
+        let engine = self.runtime_engine()?;
         let sid = runtime.sid.clone();
         let result = call_engine_blocking(engine, move |engine| {
             let raw = engine
@@ -2966,7 +3108,7 @@ impl SystemPluginRuntimeManager {
             let lease_id = runtime.lease_id.clone();
             let sid = runtime.sid.clone();
             let generation = runtime.generation;
-            let engine = Arc::clone(&self.state.engine);
+            let engine = self.runtime_engine()?;
             call_engine_blocking(engine, move |engine| {
                 let raw = engine
                     .eval_system_runtime_lease_json(
@@ -3019,7 +3161,7 @@ impl SystemPluginRuntimeManager {
     ) -> Result<(), SystemPluginRuntimeError> {
         let lease_id = lease_id.to_owned();
         let sid = sid.to_owned();
-        let engine = Arc::clone(&self.state.engine);
+        let engine = self.runtime_engine()?;
         call_engine_blocking(engine, move |engine| {
             let raw = engine
                 .close_system_runtime_lease_json(
@@ -3437,7 +3579,7 @@ impl SystemPluginRuntimeManager {
                 "dependencies_file": "dependencies.yaml",
             },
         });
-        let engine = Arc::clone(&self.state.engine);
+        let engine = self.runtime_engine()?;
         let response = call_engine_blocking(Arc::clone(&engine), move |engine| {
             let raw = engine
                 .create_system_runtime_lease_json(&create_request.to_string())
@@ -3665,7 +3807,25 @@ impl SystemPluginRuntimeManager {
         let mut generations = self.state.plugin_generations.lock().map_err(|_| {
             SystemPluginRuntimeError::new("System Plugin generation lock is poisoned.")
         })?;
+        let runtime_engine_available = self
+            .state
+            .engine
+            .read()
+            .map_err(|_| {
+                SystemPluginRuntimeError::new("System Plugin runtime engine lock is poisoned.")
+            })?
+            .is_some();
         for plugin in snapshot.plugins.values_mut() {
+            let requires_runtime = plugin
+                .manifest
+                .as_ref()
+                .is_some_and(|manifest| manifest.has_runtime());
+            plugin.runtime_execution_available = !requires_runtime || runtime_engine_available;
+            if requires_runtime && !runtime_engine_available {
+                plugin.diagnostics.push(String::from(
+                    "The plugin package is valid, but its Lua execution runtime is unavailable; read-only skills and agents remain active.",
+                ));
+            }
             let generation = generations.entry(plugin.id.clone()).or_insert(1);
             let changed = previous.plugins.get(&plugin.id).is_some_and(|prior| {
                 prior.version != plugin.version
@@ -3811,7 +3971,7 @@ impl SystemPluginRuntimeManager {
         let lease_id = lease_id.to_owned();
         let sid = sid.to_owned();
         let function_name = function_name.to_owned();
-        let engine = Arc::clone(&self.state.engine);
+        let engine = self.runtime_engine()?;
         call_engine_blocking(engine, move |engine| {
             let eval_request = json!({
                 "lease_id": lease_id,
@@ -3898,7 +4058,7 @@ impl SystemPluginRuntimeManager {
         let lease_id = session.lease_id.clone();
         let sid = session.sid.clone();
         let generation = session.generation;
-        let engine = Arc::clone(&self.state.engine);
+        let engine = self.runtime_engine()?;
         call_engine_blocking(engine, move |engine| {
             let raw = engine
                 .close_system_runtime_lease_json(
@@ -5154,21 +5314,21 @@ fn copy_plugin_directory_tree(source: &Path, destination: &Path) -> Result<(), S
             entry.map_err(|error| format!("Failed to read plugin package entry: {error}"))?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|error| {
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
             format!(
                 "Failed to inspect plugin package entry `{}`: {error}",
                 source_path.display()
             )
         })?;
-        if file_type.is_symlink() {
+        if crate::metadata_is_link_or_reparse_point(&metadata) {
             return Err(format!(
-                "Plugin package entry `{}` must not be a symbolic link.",
+                "Plugin package entry `{}` must not be a symbolic link or reparse point.",
                 source_path.display()
             ));
         }
-        if file_type.is_dir() {
+        if metadata.is_dir() {
             copy_plugin_directory_tree(&source_path, &destination_path)?;
-        } else if file_type.is_file() {
+        } else if metadata.is_file() {
             fs::copy(&source_path, &destination_path).map_err(|error| {
                 format!(
                     "Failed to copy plugin package file `{}`: {error}",
@@ -5200,15 +5360,18 @@ fn copy_plugin_directory_tree(source: &Path, destination: &Path) -> Result<(), S
 fn read_optional_plugin_state_file(
     path: &Path,
 ) -> Result<Option<Vec<u8>>, SystemPluginRuntimeError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        SystemPluginRuntimeError::new(format!("Failed to inspect plugin state file: {error}"))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(SystemPluginRuntimeError::new(format!(
+                "Failed to inspect plugin state file: {error}"
+            )));
+        }
+    };
+    if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_file() {
         return Err(SystemPluginRuntimeError::new(format!(
-            "Plugin state path `{}` is not a regular non-symlink file.",
+            "Plugin state path `{}` is not a regular non-symbolic-link or reparse-point file.",
             path.display()
         )));
     }
@@ -5228,15 +5391,18 @@ fn read_optional_plugin_state_file(
 /// `path` is the exact state file owned by the selected plugin identity.
 /// `path` 是所选插件身份拥有的精确状态文件。
 fn remove_plugin_state_file(path: &Path) -> Result<(), SystemPluginRuntimeError> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        SystemPluginRuntimeError::new(format!("Failed to inspect plugin state file: {error}"))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(SystemPluginRuntimeError::new(format!(
+                "Failed to inspect plugin state file: {error}"
+            )));
+        }
+    };
+    if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_file() {
         return Err(SystemPluginRuntimeError::new(format!(
-            "Plugin state path `{}` is not a regular non-symlink file.",
+            "Plugin state path `{}` is not a regular non-symbolic-link or reparse-point file.",
             path.display()
         )));
     }
@@ -5716,6 +5882,13 @@ fn build_permission_preview(
             .iter()
             .map(|entry| entry.id.clone())
             .collect(),
+        skill_ids: plugin
+            .skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect(),
+        agent_ids: plugin.agents.iter().map(|agent| agent.id.clone()).collect(),
+        has_runtime: manifest.has_runtime(),
     })
 }
 
@@ -5788,8 +5961,8 @@ fn plugin_is_authorized(
         && record.capabilities == preview.capabilities)
 }
 
-/// Reads one regular non-symlink plugin JSON document.
-/// 读取一个普通且非符号链接的插件 JSON 文档。
+/// Reads one regular plugin JSON document after rejecting links and reparse points.
+/// 在拒绝链接与重解析点后读取一个普通插件 JSON 文档。
 ///
 /// # Parameters
 /// 参数
@@ -5807,9 +5980,9 @@ fn read_plugin_json_state(path: &Path, label: &str) -> Result<Value, SystemPlugi
             path.display()
         ))
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_file() {
         return Err(SystemPluginRuntimeError::new(format!(
-            "Vulcan plugin {label} `{}` must be a regular non-symlink file.",
+            "Vulcan plugin {label} `{}` must be a regular non-symbolic-link or reparse-point file.",
             path.display()
         )));
     }
@@ -5971,10 +6144,25 @@ fn rebuild_enabled_surface(snapshot: &mut SystemPluginCatalogSnapshot) {
     snapshot.enabled_tools.clear();
     snapshot.enabled_hooks.clear();
     snapshot.prompt_contributions.clear();
+    snapshot.enabled_skills.clear();
+    snapshot.enabled_agents.clear();
     for plugin in snapshot.plugins.values() {
         if plugin.availability != SystemPluginAvailability::Enabled
             || plugin.runtime_state != SystemPluginRuntimeState::Enabled
         {
+            continue;
+        }
+        for skill in &plugin.skills {
+            snapshot
+                .enabled_skills
+                .insert(skill.name.clone(), skill.clone());
+        }
+        for agent in &plugin.agents {
+            snapshot
+                .enabled_agents
+                .insert(agent.id.clone(), agent.clone());
+        }
+        if !plugin.runtime_execution_available {
             continue;
         }
         for tool in &plugin.tools {
@@ -6547,6 +6735,34 @@ return M
         .expect("write user plugin manifest");
     }
 
+    /// Writes one runtime-free bundled plugin with a skill and an agent attached to that skill.
+    /// 写入一个不含运行时、包含 Skill 及绑定该 Skill 的 Agent 的内置插件。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `package` is the exact plugin package root created by the test.
+    /// `package` 是测试创建的精确插件包根目录。
+    fn write_content_plugin_package(package: &Path) {
+        fs::create_dir_all(package.join("skills/review-helper"))
+            .expect("create content skill directory");
+        fs::create_dir_all(package.join("agents")).expect("create content agent directory");
+        fs::write(
+            package.join("skills/review-helper/SKILL.md"),
+            "---\nname: review-helper\ndescription: Review one code change.\n---\n\n# Review helper\nInspect the exact diff.",
+        )
+        .expect("write content skill");
+        fs::write(
+            package.join("agents/reviewer.md"),
+            "---\nname: Content Reviewer\nskills:\n  - review-helper\n---\nReview the requested change.",
+        )
+        .expect("write content agent");
+        fs::write(
+            package.join("plugin.yaml"),
+            "schema_version: 1\nid: content-plugin\nversion: 1.0.0\nkind: bundled_system\ndefault_enabled: true\ndisplay:\n  name: Content Plugin\n  capability: Runtime-free review guidance\n",
+        )
+        .expect("write content plugin manifest");
+    }
+
     /// Builds one minimal real LuaSkills engine for System lease integration tests.
     /// 为系统租约集成测试构建一个最小真实 LuaSkills 引擎。
     fn test_engine(runtime_root: &Path) -> LuaEngine {
@@ -6636,6 +6852,96 @@ return M
             },
             payload: HookPayload::empty_object(),
         }
+    }
+
+    /// Verifies a runtime-free plugin remains fully usable when no Lua engine exists.
+    /// 验证不存在 Lua 引擎时，无运行时插件仍保持完整可用。
+    #[test]
+    fn content_plugin_operates_without_lua_runtime_or_execution_environment() {
+        // temp owns every isolated catalog and runtime directory used by this test.
+        // temp 持有本测试使用的全部隔离目录与运行时目录。
+        let temp = tempfile::tempdir().expect("create content plugin runtime directory");
+        // system_plugin_root contains the only bundled content plugin package.
+        // system_plugin_root 包含唯一的内置内容插件包。
+        let system_plugin_root = temp.path().join("system_plugins");
+        // user_plugin_root is present but intentionally empty.
+        // user_plugin_root 存在但刻意保持为空。
+        let user_plugin_root = temp.path().join("user_plugins");
+        // plugin_runtime_root would receive execution environments if one were incorrectly created.
+        // plugin_runtime_root 会在错误创建执行环境时接收相关文件。
+        let plugin_runtime_root = temp.path().join("plugin_runtime");
+        fs::create_dir_all(&system_plugin_root).expect("create system plugin root");
+        fs::create_dir_all(&user_plugin_root).expect("create user plugin root");
+        write_content_plugin_package(&system_plugin_root.join("content-plugin"));
+        write_hook_package(&system_plugin_root);
+        // manager deliberately has no Lua engine or bridge runtime.
+        // manager 刻意不包含 Lua 引擎或桥接运行时。
+        let manager = SystemPluginRuntimeManager::without_runtime(
+            system_plugin_root,
+            user_plugin_root,
+            temp.path().join("bridge"),
+            temp.path().join("managed_runtime"),
+            temp.path().join("plugin_state"),
+            plugin_runtime_root.clone(),
+        );
+        // catalog proves content components publish even when the execution adapter is absent.
+        // catalog 证明执行适配器缺失时内容组件仍会发布。
+        let catalog = manager
+            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+            .expect("load content plugin without Lua");
+        let plugin = &catalog.plugins["content-plugin"];
+        assert_eq!(plugin.availability, SystemPluginAvailability::Enabled);
+        assert!(plugin.runtime_execution_available);
+        assert!(
+            catalog
+                .enabled_skills
+                .contains_key("content-plugin:review-helper")
+        );
+        assert!(
+            catalog
+                .enabled_agents
+                .contains_key("content-plugin:reviewer")
+        );
+        assert_eq!(plugin.active_session_count, 0);
+        let runtime_plugin = &catalog.plugins["hook-plugin"];
+        assert!(!runtime_plugin.runtime_execution_available);
+        assert!(
+            runtime_plugin
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("Lua execution runtime is unavailable"))
+        );
+        assert!(catalog.enabled_hooks.is_empty());
+        assert_eq!(
+            manager
+                .prepare_plugin_environment("content-plugin")
+                .expect("content plugin preparation should be a no-op"),
+            plugin.package_root
+        );
+        // runtime executes asynchronous no-op lifecycle and probe paths deterministically.
+        // runtime 确定性执行异步空生命周期与探测路径。
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("create content plugin Tokio runtime");
+        runtime
+            .block_on(
+                manager.invoke_lifecycle("content-plugin", SystemPluginLifecycleEvent::Enable),
+            )
+            .expect("content lifecycle should not require Lua");
+        runtime
+            .block_on(manager.probe_plugin("content-plugin"))
+            .expect("content probe should not require Lua");
+        assert!(
+            runtime
+                .block_on(manager.prewarm_enabled_plugin_runtimes())
+                .expect("content prewarm should not require Lua")
+                .is_empty()
+        );
+        assert!(!plugin_runtime_root.exists());
+        assert_eq!(
+            manager.snapshot().plugins["content-plugin"].active_session_count,
+            0
+        );
     }
 
     /// Verifies enable rollback invokes the disable callback while runtime state remains enabling.

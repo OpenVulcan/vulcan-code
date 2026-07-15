@@ -123,7 +123,7 @@ fn run_service_bootstrap(
                     "等待 LuaSkills 就绪",
                 ),
                 ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                ("plugins", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
+                ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                 (
                     "workspace",
                     StartupStepStatus::Pending,
@@ -191,7 +191,7 @@ fn run_service_bootstrap(
                         "等待 LuaSkills 就绪",
                     ),
                     ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                    ("plugins", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
+                    ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
@@ -202,53 +202,75 @@ fn run_service_bootstrap(
         },
     );
 
-    let luaskills_runtime = bootstrap_step(
-        vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
+    // LuaSkills bootstrap is an optional execution adapter; catalog-only plugins must survive its failure.
+    // LuaSkills 引导属于可选执行适配器；仅含内容的插件必须能在其失败时继续工作。
+    let (luaskills_runtime, luaskills_catalog, luaskills_step_status, luaskills_step_message) =
+        match vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
             controller_configuration.clone(),
             |message| update_luaskills_bootstrap_progress(state, event_emitter, &logs, message),
             |progress| {
                 update_managed_runtime_bootstrap_progress(state, event_emitter, &logs, progress)
             },
-        ),
-        "luaskills",
-        "LuaSkills",
-    )?;
-    // Persist the managed-runtime outcome before later startup phases replace the transient progress snapshot.
-    // 在后续启动阶段覆盖临时进度快照前持久记录受管运行时结果。
-    let managed_runtime_report = luaskills_runtime
-        .managed_runtime_report
-        .lock()
-        .map_err(|_| {
-            ServiceBootstrapError::new(
-                "luaskills",
-                "LuaSkills",
-                "受管 Python/Node 初始化状态锁已损坏。",
-            )
-        })?
-        .clone();
-    logs.push(format!(
-        "[webui-service] managed runtimes: status={} platform={} install_attempted={} diagnostic={}",
-        managed_runtime_report.status.as_key(),
-        managed_runtime_report
-            .platform
-            .as_deref()
-            .unwrap_or("unknown"),
-        managed_runtime_report.install_attempted,
-        managed_runtime_report.diagnostic,
-    ));
-    let luaskills_catalog = bootstrap_step(
-        vulcan_service_runtime::luaskills_bridge::load_luaskills_catalog(&luaskills_runtime),
-        "luaskills",
-        "LuaSkills",
-    )?;
-    logs.push(format!(
-        "[webui-service] luaskills ready: root={} skills={} entries={}",
-        luaskills_catalog.runtime_root.display(),
-        luaskills_catalog.skills.len(),
-        luaskills_catalog.entry_count
-    ));
+        ) {
+            Ok(runtime_handle) => {
+                // managed_runtime_report is diagnostic-only and cannot invalidate an otherwise usable engine.
+                // managed_runtime_report 仅用于诊断，不能使原本可用的引擎失效。
+                match runtime_handle.managed_runtime_report.lock() {
+                    Ok(report) => logs.push(format!(
+                        "[webui-service] managed runtimes: status={} platform={} install_attempted={} diagnostic={}",
+                        report.status.as_key(),
+                        report.platform.as_deref().unwrap_or("unknown"),
+                        report.install_attempted,
+                        report.diagnostic,
+                    )),
+                    Err(_) => logs.push(String::from(
+                        "[webui-service] LuaSkills managed-runtime diagnostic lock is poisoned",
+                    )),
+                }
+                match vulcan_service_runtime::luaskills_bridge::load_luaskills_catalog(
+                    &runtime_handle,
+                ) {
+                    Ok(catalog) => {
+                        logs.push(format!(
+                            "[webui-service] luaskills ready: root={} skills={} entries={}",
+                            catalog.runtime_root.display(),
+                            catalog.skills.len(),
+                            catalog.entry_count
+                        ));
+                        (
+                            Some(runtime_handle),
+                            catalog,
+                            StartupStepStatus::Ready,
+                            String::from("LuaSkills 引擎与技能目录已就绪"),
+                        )
+                    }
+                    Err(error) => {
+                        logs.push(format!(
+                            "[webui-service] LuaSkills catalog unavailable; continuing without Lua tools: {error}"
+                        ));
+                        (
+                            Some(runtime_handle),
+                            crate::workspace_persistence_versions::empty_luaskills_catalog(),
+                            StartupStepStatus::Warning,
+                            String::from("LuaSkills 目录不可用，插件内容组件继续运行"),
+                        )
+                    }
+                }
+            }
+            Err(error) => {
+                logs.push(format!(
+                    "[webui-service] LuaSkills unavailable; continuing with content plugins: {error}"
+                ));
+                (
+                    None,
+                    crate::workspace_persistence_versions::empty_luaskills_catalog(),
+                    StartupStepStatus::Warning,
+                    String::from("LuaSkills 不可用，插件内容组件继续运行"),
+                )
+            }
+        };
     let (system_plugin_runtime, system_plugin_catalog) = prepare_system_plugin_runtime(
-        &luaskills_runtime,
+        luaskills_runtime.as_ref(),
         &provider_configuration,
         &controller_runtime,
         runtime.handle().clone(),
@@ -289,8 +311,8 @@ fn run_service_bootstrap(
                     ),
                     (
                         "luaskills",
-                        StartupStepStatus::Ready,
-                        "LuaSkills 引擎与技能目录已就绪",
+                        luaskills_step_status.clone(),
+                        luaskills_step_message.as_str(),
                     ),
                     (
                         "token-budget",
@@ -336,8 +358,8 @@ fn run_service_bootstrap(
                 ),
                 (
                     "luaskills",
-                    StartupStepStatus::Ready,
-                    "LuaSkills 引擎与技能目录已就绪",
+                    luaskills_step_status.clone(),
+                    luaskills_step_message.as_str(),
                 ),
                 (
                     "token-budget",
@@ -405,8 +427,8 @@ fn run_service_bootstrap(
                     ),
                     (
                         "luaskills",
-                        StartupStepStatus::Ready,
-                        "LuaSkills 引擎与技能目录已就绪",
+                        luaskills_step_status.clone(),
+                        luaskills_step_message.as_str(),
                     ),
                     (
                         "token-budget",
@@ -453,44 +475,45 @@ fn run_service_bootstrap(
     ));
     let agent_profile_catalog = load_agent_profile_catalog()
         .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
-    // Cache LuaSkills tool entries once during startup so provider-run preparation never enumerates the engine on the submit hot path.
-    // 启动时缓存一次 LuaSkills 工具入口，避免 Provider 运行准备阶段在发送热路径枚举引擎。
-    let agent_luaskills_tool_entries = {
-        let engine = luaskills_runtime.engine.lock().map_err(|_| {
-            ServiceBootstrapError::new(
-                "luaskills",
-                "LuaSkills",
-                "LuaSkills 引擎锁已损坏，无法构建工具入口缓存。",
-            )
-        })?;
-        engine
-            .list_entries_for_authority(
-                vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
-            )
-            .map_err(|error| {
-                ServiceBootstrapError::new(
-                    "luaskills",
-                    "LuaSkills",
-                    format!("读取 Agent Runtime 工具入口失败：{error}"),
-                )
-            })?
-    };
-    let agent_luaskills_runtime = LuaSkillsRuntimeHandle::from_shared_engine(
-        Arc::clone(&luaskills_runtime.engine),
-        luaskills_runtime.runtime_root.clone(),
-        luaskills_runtime.skill_roots.clone(),
-        luaskills_catalog.entry_count,
-        agent_luaskills_tool_entries,
-        system_plugin_runtime.clone(),
-        luaskills_runtime
-            .effective_runtime_settings
-            .ai_tools
-            .enable_run_lua,
-        luaskills_runtime
-            .effective_runtime_settings
-            .ai_tools
-            .enable_run_lua_session,
-    );
+    // agent_luaskills_runtime is absent in degraded mode while the independent plugin runtime remains mounted.
+    // agent_luaskills_runtime 在降级模式下为空，而独立插件运行时仍保持挂载。
+    let agent_luaskills_runtime = luaskills_runtime.as_ref().and_then(|runtime_handle| {
+        let engine = match runtime_handle.engine.lock() {
+            Ok(engine) => engine,
+            Err(_) => {
+                logs.push(String::from(
+                    "[webui-service] LuaSkills engine lock is poisoned; provider Lua tools are disabled",
+                ));
+                return None;
+            }
+        };
+        let tool_entries = match engine.list_entries_for_authority(
+            vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
+        ) {
+            Ok(tool_entries) => tool_entries,
+            Err(error) => {
+                logs.push(format!(
+                    "[webui-service] LuaSkills provider tool entries are unavailable: {error}"
+                ));
+                return None;
+            }
+        };
+        Some(LuaSkillsRuntimeHandle::from_shared_engine(
+            Arc::clone(&runtime_handle.engine),
+            runtime_handle.runtime_root.clone(),
+            runtime_handle.skill_roots.clone(),
+            tool_entries.len(),
+            tool_entries,
+            runtime_handle
+                .effective_runtime_settings
+                .ai_tools
+                .enable_run_lua,
+            runtime_handle
+                .effective_runtime_settings
+                .ai_tools
+                .enable_run_lua_session,
+        ))
+    });
     update_startup(
         state,
         event_emitter,
@@ -512,8 +535,8 @@ fn run_service_bootstrap(
                     ),
                     (
                         "luaskills",
-                        StartupStepStatus::Ready,
-                        "LuaSkills 引擎与技能目录已就绪",
+                        luaskills_step_status.clone(),
+                        luaskills_step_message.as_str(),
                     ),
                     (
                         "token-budget",
@@ -569,7 +592,7 @@ fn run_service_bootstrap(
     })?;
     synchronize_system_plugin_hooks(
         conversation_hook_runtime.dispatcher_mut(),
-        system_plugin_runtime,
+        system_plugin_runtime.clone(),
         &system_plugin_catalog,
     )
     .map_err(|error| {
@@ -583,7 +606,8 @@ fn run_service_bootstrap(
         provider_configuration: provider_configuration.clone(),
         ai_tool_configuration: ai_tool_configuration.clone(),
         agent_profile_catalog,
-        luaskills_runtime: Some(agent_luaskills_runtime),
+        luaskills_runtime: agent_luaskills_runtime,
+        system_plugin_runtime: system_plugin_runtime.clone(),
         mcp_runtime: Some(agent_mcp_runtime),
         task_runtime: Arc::new(TaskRuntime::new()),
         question_runtime: Arc::new(QuestionRuntime::new()),
@@ -632,8 +656,8 @@ fn run_service_bootstrap(
                 ),
                 (
                     "luaskills",
-                    StartupStepStatus::Ready,
-                    "LuaSkills 引擎与技能目录已就绪",
+                    luaskills_step_status.clone(),
+                    luaskills_step_message.as_str(),
                 ),
                 (
                     "token-budget",
@@ -721,8 +745,8 @@ fn run_service_bootstrap(
                 ),
                 (
                     "luaskills",
-                    StartupStepStatus::Ready,
-                    "LuaSkills 引擎与技能目录已就绪",
+                    luaskills_step_status.clone(),
+                    luaskills_step_message.as_str(),
                 ),
                 (
                     "token-budget",
@@ -787,7 +811,7 @@ fn run_service_bootstrap(
         guard.agent_runtime = Some(agent_runtime);
         guard.service_runtime = Some(runtime.clone());
         guard.controller_runtime = Some(controller_runtime);
-        guard.luaskills_runtime = Some(luaskills_runtime);
+        guard.luaskills_runtime = luaskills_runtime;
         guard.cached_luaskills_catalog = Some(luaskills_catalog);
         guard.token_budget_runtime = Some(token_budget_runtime);
         guard.mcp_runtime = Some(mcp_runtime);
@@ -813,21 +837,20 @@ fn run_service_bootstrap(
     Ok(())
 }
 
-/// Builds the host-owned plugin manager and validated catalog immediately after LuaSkills becomes available.
-/// 在 LuaSkills 就绪后立即构建宿主持有的插件管理器与已校验目录。
+/// Builds the host-owned plugin manager and validated catalog independently from LuaSkills availability.
+/// 独立于 LuaSkills 可用状态构建宿主持有的插件管理器与已校验目录。
 ///
 /// # Parameters
 /// 参数
-/// `luaskills_runtime` supplies the shared engine, `provider_configuration` supplies enable overrides, and `logs` records migration outcomes.
-/// `luaskills_runtime` supplies the shared engine, `provider_configuration` supplies enable overrides, `controller_runtime` supplies storage, `service_runtime` bridges async calls, and `logs` records migration outcomes.
-/// `luaskills_runtime` 提供共享引擎，`provider_configuration` 提供启用覆盖，`controller_runtime` 提供存储，`service_runtime` 桥接异步调用，`logs` 记录迁移结果。
+/// `luaskills_runtime` optionally supplies the execution engine, while the remaining arguments own catalog policy, storage, async bridging, events, and diagnostics.
+/// `luaskills_runtime` 可选提供执行引擎，其余参数分别持有目录策略、存储、异步桥接、事件与诊断。
 ///
 /// # Returns
 /// 返回值
 /// Returns the long-lived manager and immutable catalog used by background Hook prewarming and later runtime projection.
 /// 返回供后台 Hook 预热及后续运行时投影使用的长生命周期管理器与不可变目录。
 fn prepare_system_plugin_runtime(
-    luaskills_runtime: &vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle,
+    luaskills_runtime: Option<&vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle>,
     provider_configuration: &ProviderConfigurationFile,
     controller_runtime: &ControllerRuntimeHandle,
     service_runtime: tokio::runtime::Handle,
@@ -873,14 +896,24 @@ fn prepare_system_plugin_runtime(
     let plugin_state_root = runtime_assets::resolve_user_plugin_state_root().ok_or_else(|| {
         ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件状态根目录。")
     })?;
-    let system_plugin_runtime = vulcan_plugin_runtime::SystemPluginRuntimeManager::new(
-        Arc::clone(&luaskills_runtime.engine),
+    // bridge_package_root is only consumed by execution plugins; content plugins remain independent from this optional adapter path.
+    // bridge_package_root 仅供执行型插件使用；内容型插件不依赖此可选适配器路径。
+    let bridge_package_root = luaskills_runtime
+        .map(|runtime| {
+            runtime
+                .runtime_root
+                .join("system_lua_lib")
+                .join("vulcan-plugin-bridge")
+        })
+        .or_else(|| {
+            runtime_assets::resolve_luaskills_runtime_root()
+                .map(|root| root.join("system_lua_lib").join("vulcan-plugin-bridge"))
+        })
+        .unwrap_or_else(|| plugin_state_root.join("unavailable-plugin-bridge"));
+    let system_plugin_runtime = vulcan_plugin_runtime::SystemPluginRuntimeManager::without_runtime(
         bundled_plugin_root,
         user_plugin_root,
-        luaskills_runtime
-            .runtime_root
-            .join("system_lua_lib")
-            .join("vulcan-plugin-bridge"),
+        bridge_package_root,
         runtime_assets::resolve_managed_runtime_distribution_root().ok_or_else(|| {
             ServiceBootstrapError::new(
                 "plugins",
@@ -897,6 +930,17 @@ fn prepare_system_plugin_runtime(
             )
         })?,
     );
+    if let Some(luaskills_runtime) = luaskills_runtime {
+        system_plugin_runtime
+            .attach_runtime_engine(Arc::clone(&luaskills_runtime.engine))
+            .map_err(|error| {
+                ServiceBootstrapError::new(
+                    "plugins",
+                    "System Plugins",
+                    format!("附加系统插件执行运行时失败：{error}"),
+                )
+            })?;
+    }
     // storageService routes plugin database calls through the already-connected shared Controller client.
     // storageService 通过已连接的共享 Controller 客户端路由插件数据库调用。
     let storage_service = Arc::new(crate::plugin_storage::ControllerPluginStorageService::new(

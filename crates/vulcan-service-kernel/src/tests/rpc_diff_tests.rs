@@ -380,6 +380,116 @@ fn webui_diff_service_paths_cover_real_git_modes() {
     assert!(search.matches[0].first_preview.contains("branch target"));
 }
 
+/// Verifies commit review exposes only current-branch commits that have not reached its upstream.
+/// 验证提交审核仅展示当前分支中尚未进入其上游的提交。
+#[test]
+fn webui_diff_commit_review_lists_only_unpushed_commits() {
+    // Create and configure the temporary repository used for the upstream-relative query.
+    // 创建并配置用于相对上游查询的临时仓库。
+    let repository = WebuiDiffTestRepository::new();
+    run_webui_diff_test_git(repository.path(), &["init"]);
+    run_webui_diff_test_git(
+        repository.path(),
+        &["config", "user.email", "webui@example.test"],
+    );
+    run_webui_diff_test_git(
+        repository.path(),
+        &["config", "user.name", "WebUI Diff Test"],
+    );
+    run_webui_diff_test_git(repository.path(), &["branch", "-M", "main"]);
+    // Commit the baseline that represents content already present on the upstream branch.
+    // 提交代表上游分支中已存在内容的基线。
+    write_webui_diff_test_file(repository.path(), "review.txt", "pushed baseline\n");
+    run_webui_diff_test_git(repository.path(), &["add", "review.txt"]);
+    run_webui_diff_test_git(repository.path(), &["commit", "-m", "pushed baseline"]);
+    // Capture the baseline hash before pushing it to the test upstream.
+    // 在将基线推送到测试上游前记录其哈希。
+    let pushed_commit = webui_diff_test_git_stdout(repository.path(), &["rev-parse", "HEAD"]);
+    // Create a bare remote inside the disposable repository tree so cleanup remains atomic.
+    // 在一次性仓库目录树内创建裸远端，确保清理操作保持原子性。
+    let remote_path = repository.path().join("remote.git");
+    fs::create_dir_all(&remote_path).expect("temporary bare remote directory should be created");
+    run_webui_diff_test_git(&remote_path, &["init", "--bare"]);
+    // Preserve the concrete remote path text for the Git remote configuration command.
+    // 保存具体远端路径文本，供 Git 远端配置命令使用。
+    let remote_path_text = remote_path.to_string_lossy().to_string();
+    run_webui_diff_test_git(
+        repository.path(),
+        &["remote", "add", "origin", &remote_path_text],
+    );
+    run_webui_diff_test_git(
+        repository.path(),
+        &["push", "--set-upstream", "origin", "main"],
+    );
+    // Load once before creating local work to prove the pushed baseline is not selectable.
+    // 在创建本地工作前先加载一次，以证明已推送基线不会成为可选提交。
+    let repository_text = repository.path().to_string_lossy().to_string();
+    // Query commit mode with the pushed hash to verify request-side filtering as well as list filtering.
+    // 使用已推送哈希查询提交模式，同时验证请求侧过滤与列表过滤。
+    let pushed_snapshot = load_webui_workspace_diff_snapshot(
+        &repository_text,
+        Some(WebuiWorkspaceDiffRequest {
+            mode: WebuiWorkspaceDiffMode::Commit,
+            base_branch: None,
+            compare_branch: None,
+            commit_hash: Some(pushed_commit.clone()),
+        }),
+    )
+    .expect("snapshot without unpushed commits should load");
+    assert!(pushed_snapshot.recent_commits.is_empty());
+    assert!(pushed_snapshot.selected_commit_hash.is_none());
+
+    // Create one local commit after the upstream point so it is the only unpushed candidate.
+    // 在上游点之后创建一个本地提交，使其成为唯一未推送候选项。
+    write_webui_diff_test_file(repository.path(), "review.txt", "unpushed change\n");
+    run_webui_diff_test_git(repository.path(), &["add", "review.txt"]);
+    run_webui_diff_test_git(repository.path(), &["commit", "-m", "unpushed change"]);
+    // Capture the expected commit identity returned by the review selector.
+    // 记录审核选择器应返回的提交身份。
+    let unpushed_commit = webui_diff_test_git_stdout(repository.path(), &["rev-parse", "HEAD"]);
+    // Keep requesting the pushed hash; the backend must replace it with the only unpushed commit.
+    // 继续请求已推送哈希；后端必须将其替换为唯一的未推送提交。
+    let unpushed_snapshot = load_webui_workspace_diff_snapshot(
+        &repository_text,
+        Some(WebuiWorkspaceDiffRequest {
+            mode: WebuiWorkspaceDiffMode::Commit,
+            base_branch: None,
+            compare_branch: None,
+            commit_hash: Some(pushed_commit),
+        }),
+    )
+    .expect("snapshot with one unpushed commit should load");
+
+    assert_eq!(unpushed_snapshot.recent_commits.len(), 1);
+    assert_eq!(unpushed_snapshot.recent_commits[0].hash, unpushed_commit);
+    assert_eq!(
+        unpushed_snapshot.selected_commit_hash.as_deref(),
+        Some(unpushed_commit.as_str())
+    );
+    assert_eq!(
+        unpushed_snapshot.recent_commits[0].subject,
+        "unpushed change"
+    );
+
+    // Remove the explicit upstream to exercise the all-remotes fallback against the same repository state.
+    // 移除显式上游，在同一仓库状态下验证相对全部远端的回退逻辑。
+    run_webui_diff_test_git(repository.path(), &["branch", "--unset-upstream"]);
+    // Reload after removing the upstream; the remote-only baseline must remain excluded.
+    // 移除上游后重新加载；仅存在于远端视图中的基线仍必须被排除。
+    let no_upstream_snapshot = load_webui_workspace_diff_snapshot(
+        &repository_text,
+        Some(WebuiWorkspaceDiffRequest {
+            mode: WebuiWorkspaceDiffMode::Commit,
+            base_branch: None,
+            compare_branch: None,
+            commit_hash: None,
+        }),
+    )
+    .expect("snapshot without an explicit upstream should load");
+    assert_eq!(no_upstream_snapshot.recent_commits.len(), 1);
+    assert_eq!(no_upstream_snapshot.recent_commits[0].hash, unpushed_commit);
+}
+
 /// Verifies the WebUI Git command layer preserves UTF-8 paths from real Git output.
 /// 验证 WebUI Git 命令层会保留真实 Git 输出中的 UTF-8 路径。
 #[test]

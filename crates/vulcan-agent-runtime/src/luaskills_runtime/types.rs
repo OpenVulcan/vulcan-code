@@ -66,9 +66,6 @@ pub struct LuaSkillsRuntimeHandle {
     /// Shared FIFO queue holding fine-grained LuaSkills operation progress events for host polling.
     /// 保存细粒度 LuaSkills 操作进度事件并供宿主轮询的共享 FIFO 队列。
     pub operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
-    /// Long-lived generic System Plugin manager sharing this LuaSkills engine.
-    /// 共享当前 LuaSkills 引擎的长生命周期通用系统插件管理器。
-    pub system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager,
     /// Live host-only switch controlling AI visibility of isolated RunLua execution.
     /// 控制隔离 RunLua 执行 AI 可见性的实时宿主开关。
     pub(super) runlua_ai_tool_enabled: Arc<AtomicBool>,
@@ -106,7 +103,6 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .len(),
             )
-            .field("system_plugin_runtime", &self.system_plugin_runtime)
             .field(
                 "runlua_ai_tool_enabled",
                 &self.runlua_ai_tool_enabled.load(Ordering::Acquire),
@@ -137,7 +133,6 @@ impl LuaSkillsRuntimeHandle {
         skill_roots: Vec<RuntimeSkillRoot>,
         entry_count: usize,
         tool_entries: Vec<RuntimeEntryDescriptor>,
-        system_plugin_runtime: vulcan_plugin_runtime::SystemPluginRuntimeManager,
         runlua_ai_tool_enabled: bool,
         runlua_session_ai_tool_enabled: bool,
     ) -> Self {
@@ -152,7 +147,6 @@ impl LuaSkillsRuntimeHandle {
             entry_count,
             tool_entries: Arc::new(Mutex::new(tool_entries)),
             operation_progress_events: Arc::new(Mutex::new(VecDeque::new())),
-            system_plugin_runtime,
             runlua_ai_tool_enabled: Arc::new(AtomicBool::new(runlua_ai_tool_enabled)),
             runlua_session_ai_tool_enabled: Arc::new(AtomicBool::new(
                 runlua_session_ai_tool_enabled,

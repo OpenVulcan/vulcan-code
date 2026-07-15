@@ -629,3 +629,16 @@ AgentSkillRecord
 3. `vulcan.yaml` v2 最终字段命名采用 camelCase 还是延续现有 snake_case。本方案倾向延续 YAML 生态和当前文件的 snake_case，示例中的 camelCase 仅表达领域结构，实施时必须一次定稿。
 
 除这三项外，其余设计可以按阶段推进，不需要改变 Agent Skills 开放标准。
+
+## 16. 插件来源补充（2026-07-15）
+
+Agent Skills 目录现已增加独立的 `Plugin` 来源，用于接收插件包 `skills/` 目录贡献：
+
+- 规范名称固定为 `<plugin-id>:<local-skill-name>`，不会与系统或用户同名覆盖层混淆。
+- 有效分类强制为宿主内建只读 `plugins` 分类，图标统一使用 `🧩`；插件内分类元数据只保留在源文件中，不改变宿主导航。
+- 来源摘要保留插件名称、版本、仓库 URL 和规范标识；GitHub 来源沿用统一可点击来源链接。
+- 插件 Skill 可查看正文、资源与来源详情，但不允许编辑、删除、复制、单项启停、恢复默认或重新分类。
+- 服务端根据插件目录快照执行所有权校验，前端操作权限仅用于展示，不承担安全边界。
+- 插件启停后，Agent Skills 与插件、智能体目录通过同一 `pluginCatalogChanged` revision 原子替换。
+
+插件来源不改变 Agent Skills 开放标准，也不把插件文件复制或转换为用户 Skill；其唯一生命周期所有者始终是插件包。

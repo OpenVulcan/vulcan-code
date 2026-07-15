@@ -158,10 +158,11 @@ pub(crate) fn spawn_agent_stream_task_with_auto_compaction_state(
             "stream_provider_create_start",
             format!("session={session_id}"),
         );
-        let mut stream = Box::pin(stream_runtime_run_with_intervention(
+        let mut stream = Box::pin(stream_runtime_run_with_intervention_and_plugins(
             agent_runtime.provider_configuration.clone(),
             agent_runtime.agent_profile_catalog.clone(),
             agent_runtime.luaskills_runtime.clone(),
+            Some(agent_runtime.system_plugin_runtime.clone()),
             agent_runtime.mcp_runtime.clone(),
             Arc::clone(&agent_runtime.task_runtime),
             Arc::clone(&agent_runtime.question_runtime),

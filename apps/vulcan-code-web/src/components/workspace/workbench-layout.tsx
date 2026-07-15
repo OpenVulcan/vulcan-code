@@ -1375,6 +1375,24 @@ export function WorkbenchLayout(props: {
         }
         continue;
       }
+      if (envelope.delta.kind === "pluginCatalogChanged") {
+        // One plugin catalog event owns all three revision gates so its domains are never applied partially.
+        // 单个插件目录事件同时拥有三个版本闸门，确保其领域绝不被部分应用。
+        const acceptedPluginCatalogRevision = Math.max(
+          acceptedLuaSkillsRevisionRef.current,
+          acceptedAgentSkillsRevisionRef.current,
+          acceptedSubagentCatalogRevisionRef.current,
+        );
+        if (!shouldAcceptWorkbenchRevision(acceptedPluginCatalogRevision, envelope.generation)) {
+          continue;
+        }
+        acceptedLuaSkillsRevisionRef.current = envelope.generation;
+        acceptedAgentSkillsRevisionRef.current = envelope.generation;
+        acceptedSubagentCatalogRevisionRef.current = envelope.generation;
+        acceptedEnvelopes.push(envelope);
+        nextAcceptedRevision = Math.max(nextAcceptedRevision, envelope.generation);
+        continue;
+      }
       if (envelope.delta.kind === "agentSkillsCatalogChanged") {
         // Agent Skills uses its own revision so an unrelated newer domain cannot suppress this catalog.
         // Agent Skills 使用独立版本，避免无关领域的较新版本压掉当前目录。

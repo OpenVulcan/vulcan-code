@@ -913,8 +913,7 @@ pub(super) async fn load_hydrated_session_workbench(
     let system_plugin_catalog = projection_context
         .agent_runtime_for_status
         .as_ref()
-        .and_then(|agent_runtime| agent_runtime.luaskills_runtime.as_ref())
-        .map(|runtime| runtime.system_plugin_runtime.snapshot());
+        .map(|agent_runtime| agent_runtime.system_plugin_runtime.snapshot());
     let mut workbench = workbench_from_runtime(WorkbenchRuntimeProjection {
         controller: &read_context.controller_runtime,
         command_session_runtime: projection_context

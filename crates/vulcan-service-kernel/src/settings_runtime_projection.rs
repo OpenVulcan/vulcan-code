@@ -4,9 +4,41 @@
 use super::*;
 use vulcan_service_api::{
     LuaSkillsCatalogChangedDelta, LuaSkillsManagedRuntimeProgressChangedDelta,
-    LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsChangedDelta, ProjectSettingsDomain,
-    SubagentCatalogChangedDelta,
+    LuaSkillsManagedRuntimeProgressSummary, PluginCatalogChangedDelta, ProjectSettingsChangedDelta,
+    ProjectSettingsDomain, SubagentCatalogChangedDelta,
 };
+
+/// Carries one atomically committed plugin-owned catalog projection and its legacy RPC response.
+/// 携带一份原子提交的插件所有目录投影及其兼容 RPC 响应。
+pub(crate) struct PluginCatalogProjectionUpdate {
+    /// Monotonic workbench revision shared by every projected domain.
+    /// 所有投影领域共享的工作台单调版本号。
+    pub revision: u64,
+    /// Complete LuaSkills catalog captured in the same transaction.
+    /// 在同一事务中捕获的完整 LuaSkills 目录。
+    pub lua_skills: LuaSkillsCatalogSummary,
+    /// Plugin rows projected from the immutable plugin catalog snapshot.
+    /// 从不可变插件目录快照投影出的插件行。
+    pub plugins: Vec<PluginSummary>,
+    /// Complete Agent Skills catalog containing plugin skills from the same snapshot.
+    /// 包含同一快照插件 Skill 的完整 Agent Skills 目录。
+    pub agent_skills: AgentSkillsCatalogSummary,
+    /// Complete subagent catalog containing plugin agents from the same snapshot.
+    /// 包含同一快照插件 Agent 的完整智能体目录。
+    pub subagent_catalog: SubagentCatalogSummary,
+}
+
+impl PluginCatalogProjectionUpdate {
+    /// Converts the atomic projection into the existing plugin-management RPC response.
+    /// 将原子投影转换为现有插件管理 RPC 响应。
+    pub(crate) fn lua_skills_update(&self) -> LuaSkillsCatalogUpdate {
+        LuaSkillsCatalogUpdate {
+            revision: self.revision,
+            lua_skills: self.lua_skills.clone(),
+            plugins: self.plugins.clone(),
+        }
+    }
+}
 
 /// Emits one workbench snapshot to the WebUI event stream.
 /// 向 WebUI 事件流发送单份工作台快照。
@@ -69,6 +101,40 @@ pub(crate) fn emit_luaskills_catalog_delta(
     emit_service_event_with_trace(
         app,
         "luaskills_catalog_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+}
+
+/// Emits one atomic plugin, LuaSkills, Agent Skills, and subagent catalog replacement.
+/// 发送一条原子替换插件、LuaSkills、Agent Skills 与智能体目录的增量。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the event and `update` contains every domain projected from one catalog snapshot.
+/// `app` 广播事件，`update` 包含从同一目录快照投影出的全部领域。
+///
+/// # Returns
+/// 返回值
+/// This function returns no value and emits exactly one ordered event per sink.
+/// 此函数无返回值，并向每个接收端恰好发送一条有序事件。
+pub(crate) fn emit_plugin_catalog_delta(
+    app: &ServiceEventEmitter,
+    update: &PluginCatalogProjectionUpdate,
+) {
+    // envelope applies every plugin-owned domain at one globally ordered revision.
+    // envelope 在同一个全局有序版本上应用全部插件所有领域。
+    let envelope = WorkbenchDeltaEnvelope {
+        generation: update.revision,
+        delta: WorkbenchDelta::PluginCatalogChanged(Box::new(PluginCatalogChangedDelta {
+            lua_skills: update.lua_skills.clone(),
+            plugins: update.plugins.clone(),
+            agent_skills: update.agent_skills.clone(),
+            subagent_catalog: update.subagent_catalog.clone(),
+        })),
+    };
+    emit_service_event_with_trace(
+        app,
+        "plugin_catalog_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(envelope)),
     );
 }
@@ -697,7 +763,8 @@ pub(crate) async fn refresh_agent_skills_local_state(
     // 使配置捕获与领域投影和每次技能配置变更保持有序。
     let _configuration_transaction = begin_provider_configuration_transaction().await;
     let provider_configuration = provider_configuration_from_state(state)?;
-    let summary = agent_skills_catalog_summary(&provider_configuration);
+    let plugin_catalog = service_system_plugin_runtime(state)?.snapshot();
+    let summary = agent_skills_catalog_summary(&provider_configuration, Some(&plugin_catalog));
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -729,7 +796,8 @@ pub(crate) async fn refresh_agent_skills_local_state_if_changed(
     // 使配置捕获和投影与并发设置变更保持有序。
     let _configuration_transaction = begin_provider_configuration_transaction().await;
     let provider_configuration = provider_configuration_from_state(state)?;
-    let summary = agent_skills_catalog_summary(&provider_configuration);
+    let plugin_catalog = service_system_plugin_runtime(state)?.snapshot();
+    let summary = agent_skills_catalog_summary(&provider_configuration, Some(&plugin_catalog));
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -754,6 +822,86 @@ fn agent_skills_catalog_summary_changed(
     current != next
 }
 
+/// Reprojects and commits every plugin-owned catalog domain from one immutable plugin snapshot.
+/// 从同一份不可变插件快照重新投影并提交全部插件所有的目录领域。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the plugin runtime, shared task runtime, and authoritative workbench snapshot.
+/// `state` 持有插件运行时、共享任务运行时与权威工作台快照。
+///
+/// # Returns
+/// 返回值
+/// Returns one revisioned projection containing LuaSkills, plugins, Agent Skills, and subagents.
+/// 返回一份包含 LuaSkills、插件、Agent Skills 与智能体的带版本投影。
+pub(crate) async fn refresh_plugin_catalog_local_state(
+    state: &SharedServiceBridgeState,
+) -> Result<PluginCatalogProjectionUpdate, String> {
+    // configuration_transaction orders the complete projection with concurrent settings mutations.
+    // configuration_transaction 使完整投影与并发设置变更保持有序。
+    let _configuration_transaction = begin_provider_configuration_transaction().await;
+    // provider_configuration is the only persisted policy snapshot used by this projection.
+    // provider_configuration 是本次投影使用的唯一持久化策略快照。
+    let provider_configuration = provider_configuration_from_state(state)?;
+    // plugin_catalog is immutable and supplies every plugin component in this transaction.
+    // plugin_catalog 不可变，并为本次事务提供全部插件组件。
+    let plugin_catalog = service_system_plugin_runtime(state)?.snapshot();
+    // agent_skills projects ordinary and plugin skills against the exact same plugin revision.
+    // agent_skills 使用完全相同的插件版本投影普通 Skill 与插件 Skill。
+    let agent_skills =
+        agent_skills_catalog_summary(&provider_configuration, Some(plugin_catalog.as_ref()));
+    // subagent_catalog starts from ordinary roots before namespaced plugin agents are merged.
+    // subagent_catalog 先加载普通目录，再合并带命名空间的插件 Agent。
+    let mut subagent_catalog = vulcan_task_session::load_subagent_catalog_from_roots(
+        vulcan_runtime_assets::resolve_system_subagents_resource_directory(),
+        vulcan_workspace_store::data_plane::application_data_root().join("agents"),
+    );
+    subagent_catalog
+        .merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
+        .map_err(|error| format!("合并插件智能体目录失败：{error}"))?;
+    // subagent_summary is derived before the commit so no partial workbench mutation can escape.
+    // subagent_summary 在提交前完成派生，避免任何局部工作台变更外泄。
+    let subagent_summary =
+        subagent_catalog_summary_from_catalog(&subagent_catalog, &provider_configuration);
+    // guard serializes task-runtime replacement and every visible workbench field update.
+    // guard 串行化任务运行时替换与所有可见工作台字段更新。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    // lua_catalog is the committed ordinary LuaSkills snapshot paired with plugin rows.
+    // lua_catalog 是与插件行配对的已提交普通 LuaSkills 快照。
+    let lua_catalog = cached_luaskills_catalog_from_state(&guard);
+    // lua_skills is rebuilt in the transaction so the compatibility RPC response is revision-consistent.
+    // lua_skills 在事务内重建，使兼容 RPC 响应保持版本一致。
+    let lua_skills = lua_skills_catalog_summary(&lua_catalog, &provider_configuration);
+    // plugins combines ordinary LuaSkills rows and the exact immutable plugin snapshot.
+    // plugins 合并普通 LuaSkills 行与完全一致的不可变插件快照。
+    let plugins = plugins_from_catalogs(
+        &lua_catalog,
+        &provider_configuration,
+        Some(plugin_catalog.as_ref()),
+    );
+    if let Some(runtime) = guard.agent_runtime.as_ref() {
+        runtime
+            .task_runtime
+            .replace_subagent_catalog(subagent_catalog)
+            .map_err(|error| format!("刷新运行时插件智能体目录失败：{error}"))?;
+    }
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.revision = guard.workbench_generation;
+    guard.workbench.lua_skills = lua_skills.clone();
+    guard.workbench.plugins = plugins.clone();
+    guard.workbench.agent_skills = agent_skills.clone();
+    guard.workbench.subagent_catalog = subagent_summary.clone();
+    Ok(PluginCatalogProjectionUpdate {
+        revision: guard.workbench_generation,
+        lua_skills,
+        plugins,
+        agent_skills,
+        subagent_catalog: subagent_summary,
+    })
+}
+
 /// Reprojects LuaSkills after a focused tool-registration configuration change.
 /// 在聚焦的工具注册配置变更后重新投影 LuaSkills。
 pub(crate) async fn refresh_luaskills_local_state(
@@ -774,12 +922,11 @@ pub(crate) async fn refresh_luaskills_local_state(
     let system_plugin_catalog = guard
         .agent_runtime
         .as_ref()
-        .and_then(|runtime| runtime.luaskills_runtime.as_ref())
         .map(|runtime| runtime.system_plugin_runtime.snapshot());
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.revision = guard.workbench_generation;
     guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
-    guard.workbench.plugins = plugins_from_luaskills(
+    guard.workbench.plugins = plugins_from_catalogs(
         &catalog,
         &provider_configuration,
         system_plugin_catalog.as_deref(),
@@ -1011,6 +1158,58 @@ mod skills_catalog_delta_tests {
                 }))
             );
         }
+    }
+
+    /// Verifies one plugin catalog update replaces every owned domain in one revisioned event.
+    /// 验证单次插件目录更新会通过一条带版本事件替换全部所有领域。
+    #[test]
+    fn plugin_catalog_update_emits_one_atomic_multi_domain_delta() {
+        // events captures the single connected client's ordered plugin event.
+        // events 捕获单个已连接客户端的有序插件事件。
+        let events = Arc::new(Mutex::new(Vec::new()));
+        // emitter owns the focused test sink.
+        // emitter 持有聚焦测试接收端。
+        let emitter = ServiceEventEmitter::new(vec![Arc::new(CapturingServiceEventSink {
+            events: Arc::clone(&events),
+        })]);
+        // update carries distinct notices so every catalog field can be verified independently.
+        // update 携带不同提示文本，以便独立验证每个目录字段。
+        let update = PluginCatalogProjectionUpdate {
+            revision: 19,
+            lua_skills: LuaSkillsCatalogSummary {
+                notice: String::from("lua"),
+                ..LuaSkillsCatalogSummary::default()
+            },
+            plugins: Vec::new(),
+            agent_skills: AgentSkillsCatalogSummary {
+                notice: String::from("skills"),
+                ..AgentSkillsCatalogSummary::default()
+            },
+            subagent_catalog: SubagentCatalogSummary {
+                notice: String::from("agents"),
+                ..SubagentCatalogSummary::default()
+            },
+        };
+
+        emit_plugin_catalog_delta(&emitter, &update);
+
+        let captured = events
+            .lock()
+            .expect("captured service events should remain lockable");
+        assert_eq!(captured.len(), 1);
+        let ServiceEvent::WorkbenchDelta(envelope) = &captured[0] else {
+            panic!("plugin catalog update must use one focused delta");
+        };
+        assert_eq!(envelope.generation, 19);
+        assert_eq!(
+            envelope.delta,
+            WorkbenchDelta::PluginCatalogChanged(Box::new(PluginCatalogChangedDelta {
+                lua_skills: update.lua_skills.clone(),
+                plugins: update.plugins.clone(),
+                agent_skills: update.agent_skills.clone(),
+                subagent_catalog: update.subagent_catalog.clone(),
+            }))
+        );
     }
 
     /// Verifies managed-runtime progress uses one focused revisioned event.

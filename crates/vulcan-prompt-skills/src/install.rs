@@ -37,10 +37,13 @@ pub fn install_embedded_system_prompt_skills(
 pub fn install_embedded_system_prompt_skills_to_root(
     system_root: PathBuf,
 ) -> Result<SystemPromptSkillsInstallReport, PromptSkillLoadError> {
+    // Validate the literal destination before reading markers or removing an existing tree.
+    // 在读取标记或删除现有目录树前校验字面目标路径。
+    let system_root_exists = validate_system_skill_directory(&system_root, true)?.is_some();
     let skill_names = embedded_system_skill_names();
     let fingerprint = embedded_system_skills_fingerprint();
     let marker_path = system_root.join(SYSTEM_SKILLS_MARKER_FILENAME);
-    if system_root.is_dir() && read_marker(&marker_path).is_ok_and(|marker| marker == fingerprint) {
+    if system_root_exists && read_marker(&marker_path).is_ok_and(|marker| marker == fingerprint) {
         return Ok(SystemPromptSkillsInstallReport {
             system_root,
             installed: false,
@@ -49,7 +52,8 @@ pub fn install_embedded_system_prompt_skills_to_root(
         });
     }
 
-    if system_root.exists() {
+    if system_root_exists {
+        validate_system_skill_removal_tree(&system_root)?;
         fs::remove_dir_all(&system_root).map_err(|error| PromptSkillLoadError {
             path: system_root.clone(),
             message: format!("Failed to remove old system prompt skills: {error}"),
@@ -79,17 +83,15 @@ pub fn install_system_prompt_skills_from_source(
     source_root: PathBuf,
     system_root: PathBuf,
 ) -> Result<SystemPromptSkillsInstallReport, PromptSkillLoadError> {
-    if !source_root.is_dir() {
-        return Err(PromptSkillLoadError {
-            path: source_root,
-            message: String::from("System prompt skills source root is not a directory."),
-        });
-    }
+    // Both literal roots are validated before any recursive read, copy, or removal occurs.
+    // 在进行任何递归读取、复制或删除前校验两个字面根路径。
+    validate_system_skill_directory(&source_root, false)?;
+    let system_root_exists = validate_system_skill_directory(&system_root, true)?.is_some();
 
     let skill_names = system_skill_names_from_source_root(&source_root)?;
     let fingerprint = system_skills_source_fingerprint(&source_root)?;
     let marker_path = system_root.join(SYSTEM_SKILLS_MARKER_FILENAME);
-    if system_root.is_dir() && read_marker(&marker_path).is_ok_and(|marker| marker == fingerprint) {
+    if system_root_exists && read_marker(&marker_path).is_ok_and(|marker| marker == fingerprint) {
         return Ok(SystemPromptSkillsInstallReport {
             system_root,
             installed: false,
@@ -98,7 +100,8 @@ pub fn install_system_prompt_skills_from_source(
         });
     }
 
-    if system_root.exists() {
+    if system_root_exists {
+        validate_system_skill_removal_tree(&system_root)?;
         fs::remove_dir_all(&system_root).map_err(|error| PromptSkillLoadError {
             path: system_root.clone(),
             message: format!("Failed to remove old system prompt skills: {error}"),
@@ -125,6 +128,18 @@ pub fn install_system_prompt_skills_from_source(
 /// Reads a marker file and normalizes its trailing whitespace.
 /// 读取标记文件并规范化尾部空白。
 fn read_marker(path: &Path) -> Result<String, PromptSkillLoadError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| PromptSkillLoadError {
+        path: path.to_path_buf(),
+        message: format!("Failed to inspect system prompt skills marker: {error}"),
+    })?;
+    if crate::metadata_is_link_like(&metadata) || !metadata.is_file() {
+        return Err(PromptSkillLoadError {
+            path: path.to_path_buf(),
+            message: String::from(
+                "System prompt skills marker must be a regular file and cannot be a symbolic link or Windows reparse point.",
+            ),
+        });
+    }
     Ok(fs::read_to_string(path)
         .map_err(|error| PromptSkillLoadError {
             path: path.to_path_buf(),
@@ -158,15 +173,141 @@ fn system_skill_names_from_source_root(root: &Path) -> Result<Vec<String>, Promp
             message: format!("Failed to read system prompt skill source entry: {error}"),
         })?;
         let path = entry.path();
-        if path.is_dir()
-            && path.join(SKILL_FILE_NAME).is_file()
-            && let Some(name) = path.file_name().and_then(|name| name.to_str())
-        {
-            names.push(name.to_string());
+        let metadata = validated_system_skill_source_entry(&path)?;
+        if !metadata.is_dir() {
+            continue;
         }
+        let skill_file = path.join(SKILL_FILE_NAME);
+        let skill_metadata = match fs::symlink_metadata(&skill_file) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(PromptSkillLoadError {
+                    path: skill_file,
+                    message: format!("Failed to inspect packaged system SKILL.md: {error}"),
+                });
+            }
+        };
+        if crate::metadata_is_link_like(&skill_metadata) || !skill_metadata.is_file() {
+            return Err(PromptSkillLoadError {
+                path: skill_file,
+                message: String::from(
+                    "Packaged system SKILL.md must be a regular file and cannot be a symbolic link or Windows reparse point.",
+                ),
+            });
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Err(PromptSkillLoadError {
+                path,
+                message: String::from("Packaged system skill directory name must be valid UTF-8."),
+            });
+        };
+        names.push(name.to_string());
+    }
+    if names.is_empty() {
+        return Err(PromptSkillLoadError {
+            path: root.to_path_buf(),
+            message: String::from(
+                "System prompt skills source root must contain at least one direct skill package.",
+            ),
+        });
     }
     names.sort();
     Ok(names)
+}
+
+/// Validates one system-skill directory root without following links or reparse points.
+/// 在不跟随链接或重解析点的情况下校验一个系统技能目录根。
+fn validate_system_skill_directory(
+    path: &Path,
+    allow_missing: bool,
+) -> Result<Option<fs::Metadata>, PromptSkillLoadError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(PromptSkillLoadError {
+                path: path.to_path_buf(),
+                message: format!("Failed to inspect system prompt skills directory: {error}"),
+            });
+        }
+    };
+    if crate::metadata_is_link_like(&metadata) || !metadata.is_dir() {
+        return Err(PromptSkillLoadError {
+            path: path.to_path_buf(),
+            message: String::from(
+                "System prompt skills directory must be a regular directory and cannot be a symbolic link or Windows reparse point.",
+            ),
+        });
+    }
+    Ok(Some(metadata))
+}
+
+/// Inspects one packaged system-skill entry and rejects links plus unsupported file types.
+/// 检查一个打包系统技能目录项并拒绝链接及不受支持的文件类型。
+fn validated_system_skill_source_entry(path: &Path) -> Result<fs::Metadata, PromptSkillLoadError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| PromptSkillLoadError {
+        path: path.to_path_buf(),
+        message: format!("Failed to inspect system prompt skill source entry: {error}"),
+    })?;
+    if crate::metadata_is_link_like(&metadata) {
+        return Err(PromptSkillLoadError {
+            path: path.to_path_buf(),
+            message: String::from(
+                "Symbolic links and Windows reparse points are not permitted in packaged system prompt skills.",
+            ),
+        });
+    }
+    if !metadata.is_dir() && !metadata.is_file() {
+        return Err(PromptSkillLoadError {
+            path: path.to_path_buf(),
+            message: String::from(
+                "Packaged system prompt skill entries must be regular files or directories.",
+            ),
+        });
+    }
+    Ok(metadata)
+}
+
+/// Validates an existing managed system-skill tree before recursive replacement.
+/// 在递归替换前校验现有的受管系统技能目录树。
+fn validate_system_skill_removal_tree(current: &Path) -> Result<(), PromptSkillLoadError> {
+    let entries = fs::read_dir(current).map_err(|error| PromptSkillLoadError {
+        path: current.to_path_buf(),
+        message: format!("Failed to inspect existing system prompt skills directory: {error}"),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| PromptSkillLoadError {
+            path: current.to_path_buf(),
+            message: format!("Failed to inspect existing system prompt skill entry: {error}"),
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| PromptSkillLoadError {
+            path: path.clone(),
+            message: format!("Failed to inspect existing system prompt skill path: {error}"),
+        })?;
+        if crate::metadata_is_link_like(&metadata) {
+            return Err(PromptSkillLoadError {
+                path,
+                message: String::from(
+                    "Refusing to replace system prompt skills containing a symbolic link or Windows reparse point.",
+                ),
+            });
+        }
+        if metadata.is_dir() {
+            validate_system_skill_removal_tree(&path)?;
+        } else if !metadata.is_file() {
+            return Err(PromptSkillLoadError {
+                path,
+                message: String::from(
+                    "Refusing to replace system prompt skills containing an unsupported file type.",
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Builds one fingerprint for all embedded system skill resources.
@@ -243,15 +384,19 @@ fn collect_source_fingerprint_items(
 
     for entry in entries {
         let path = entry.path();
+        let metadata = validated_system_skill_source_entry(&path)?;
         let relative_path = path
             .strip_prefix(root)
-            .unwrap_or(path.as_path())
+            .map_err(|error| PromptSkillLoadError {
+                path: path.clone(),
+                message: format!("System prompt skill source escaped its root: {error}"),
+            })?
             .to_string_lossy()
             .replace('\\', "/");
-        if path.is_dir() {
+        if metadata.is_dir() {
             items.push((relative_path, None));
             collect_source_fingerprint_items(root, &path, items)?;
-        } else if path.is_file() {
+        } else {
             let contents = fs::read(&path).map_err(|error| PromptSkillLoadError {
                 path: path.clone(),
                 message: format!("Failed to read system prompt skill source file: {error}"),
@@ -309,10 +454,11 @@ fn copy_source_dir_contents(source: &Path, dest: &Path) -> Result<(), PromptSkil
             message: format!("Failed to read system prompt skill source entry: {error}"),
         })?;
         let source_path = entry.path();
+        let metadata = validated_system_skill_source_entry(&source_path)?;
         let dest_path = dest.join(entry.file_name());
-        if source_path.is_dir() {
+        if metadata.is_dir() {
             copy_source_dir_recursive(&source_path, &dest_path)?;
-        } else if source_path.is_file() {
+        } else {
             fs::copy(&source_path, &dest_path).map_err(|error| PromptSkillLoadError {
                 path: source_path,
                 message: format!("Failed to copy system prompt skill source file: {error}"),

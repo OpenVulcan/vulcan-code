@@ -206,6 +206,9 @@ pub enum WorkbenchDelta {
     /// Complete subagent catalog replacement after one committed mutation.
     /// 智能体目录完成一次已提交变更后的完整替换增量。
     SubagentCatalogChanged(Box<SubagentCatalogChangedDelta>),
+    /// Atomic plugin, Agent Skills, and subagent catalog replacement after one plugin lifecycle mutation.
+    /// 插件生命周期完成一次变更后，原子替换插件、Agent Skills 与智能体目录。
+    PluginCatalogChanged(Box<PluginCatalogChangedDelta>),
     /// Project-scoped settings invalidation for dialogs that load data outside the workbench snapshot.
     /// 项目级设置失效通知，用于重新加载工作台快照之外的弹窗数据。
     ProjectSettingsChanged(ProjectSettingsChangedDelta),
@@ -244,6 +247,25 @@ pub struct LuaSkillsCatalogChangedDelta {
 pub struct SubagentCatalogChangedDelta {
     /// Complete subagent catalog committed at the envelope generation.
     /// 在信封版本提交的完整智能体目录。
+    pub subagent_catalog: SubagentCatalogSummary,
+}
+
+/// Replaces every plugin-owned workbench domain from one immutable plugin catalog snapshot.
+/// 使用同一份不可变插件目录快照替换全部插件所有的工作台领域。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCatalogChangedDelta {
+    /// Complete LuaSkills catalog captured during the same plugin transaction.
+    /// 在同一插件事务中捕获的完整 LuaSkills 目录。
+    pub lua_skills: LuaSkillsCatalogSummary,
+    /// Plugin rows projected from the committed plugin catalog snapshot.
+    /// 从已提交插件目录快照投影出的插件行。
+    pub plugins: Vec<PluginSummary>,
+    /// Complete Agent Skills catalog containing the same snapshot's plugin skills.
+    /// 包含同一快照插件 Skill 的完整 Agent Skills 目录。
+    pub agent_skills: AgentSkillsCatalogSummary,
+    /// Complete subagent catalog containing the same snapshot's plugin agents.
+    /// 包含同一快照插件 Agent 的完整智能体目录。
     pub subagent_catalog: SubagentCatalogSummary,
 }
 

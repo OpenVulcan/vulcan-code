@@ -28,7 +28,7 @@ type AgentSkillStatusFilter = "all" | "enabled" | "disabled" | "issues"
 
 // AgentSkillSourceFilter identifies one source-scope filter on the Agent Skills page.
 // AgentSkillSourceFilter 标识 Agent Skills 页面上的一个来源作用域筛选。
-type AgentSkillSourceFilter = "all" | "system" | "user" | "overrides"
+type AgentSkillSourceFilter = "all" | "system" | "user" | "plugin" | "overrides"
 
 // AgentSkillsArea renders the independent source-aware Agent Skills catalog.
 // AgentSkillsArea 渲染独立且来源感知的 Agent Skills 目录。
@@ -115,6 +115,9 @@ export function AgentSkillsArea(props: {
     }
     if (sourceFilter === "user") {
       return props.workbench.agentSkills.records.filter((record) => record.scopeKey === "user")
+    }
+    if (sourceFilter === "plugin") {
+      return props.workbench.agentSkills.records.filter((record) => record.scopeKey === "plugin")
     }
     return props.workbench.agentSkills.records.filter((record) => record.scopeKey === "user" && record.overrideOf)
   }, [effectiveRecords, props.workbench.agentSkills.records, sourceFilter])
@@ -279,6 +282,7 @@ export function AgentSkillsArea(props: {
               <option value="all">{locale.startsWith("zh") ? "全部来源" : "All sources"}</option>
               <option value="system">{locale.startsWith("zh") ? "系统技能" : "System"}</option>
               <option value="user">{locale.startsWith("zh") ? "用户技能" : "User"}</option>
+              <option value="plugin">{locale.startsWith("zh") ? "插件技能" : "Plugins"}</option>
               <option value="overrides">{locale.startsWith("zh") ? "用户覆盖" : "Overrides"}</option>
             </select>
           </div>
@@ -314,6 +318,14 @@ export function AgentSkillsArea(props: {
                       ? <SourceOriginLink origin={record.origin} />
                       : <Badge variant="outline">{localizedAgentSkillOrigin(record, locale)}</Badge>}
                     {record.overrideOf ? <Badge variant="outline">{locale.startsWith("zh") ? "用户覆盖" : "Override"}</Badge> : null}
+                    {record.owningPluginId ? <Badge variant="outline">{record.owningPluginId}</Badge> : null}
+                    {record.owningPluginId ? (
+                      <Badge variant={record.enabled ? "secondary" : "outline"}>
+                        {record.enabled
+                          ? (locale.startsWith("zh") ? "已启用" : "Enabled")
+                          : (locale.startsWith("zh") ? "已停用" : "Disabled")}
+                      </Badge>
+                    ) : null}
                     {!record.effective ? <Badge variant="outline">{locale.startsWith("zh") ? "非生效来源" : "Inactive source"}</Badge> : null}
                   </div>
                 </div>
@@ -321,7 +333,7 @@ export function AgentSkillsArea(props: {
                 <span className="agent-definition-row-path">{record.skillFile}</span>
               </div>
               <div className="agent-definition-row-actions">
-                <button
+                {record.canToggle ? <button
                   aria-checked={record.enabled}
                   aria-label={record.enabled ? (locale.startsWith("zh") ? "停用" : "Disable") : (locale.startsWith("zh") ? "启用" : "Enable")}
                   className={`agent-definition-switch ${record.enabled ? "on" : ""}`}
@@ -332,21 +344,21 @@ export function AgentSkillsArea(props: {
                   type="button"
                 >
                   <span />
-                </button>
-                {record.effective ? (
+                </button> : null}
+                {record.effective && record.canEdit ? (
                   <button className="agent-definition-icon-button" disabled={busyAction !== null} onClick={() => openEditor(record)} title={record.scopeKey === "system" ? (locale.startsWith("zh") ? "创建用户覆盖" : "Create override") : (locale.startsWith("zh") ? "编辑" : "Edit")} type="button">
                     <Pencil size={14} />
                   </button>
                 ) : null}
-                <button className="agent-definition-icon-button" disabled={busyAction !== null} onClick={() => openEditor(record, true)} title={locale.startsWith("zh") ? "复制" : "Copy"} type="button">
+                {record.canCopy ? <button className="agent-definition-icon-button" disabled={busyAction !== null} onClick={() => openEditor(record, true)} title={locale.startsWith("zh") ? "复制" : "Copy"} type="button">
                   <Copy size={14} />
-                </button>
-                {record.scopeKey === "user" && record.overrideOf ? (
+                </button> : null}
+                {record.canRestoreDefault ? (
                   <button className="agent-definition-icon-button" disabled={busyAction !== null} onClick={() => void runCatalogAction(`restore:${record.name}`, () => restoreSystemSkill(record))} title={locale.startsWith("zh") ? "恢复系统版本" : "Restore system version"} type="button">
                     <RotateCcw size={14} />
                   </button>
                 ) : null}
-                {record.scopeKey === "user" && !record.overrideOf ? (
+                {record.canDelete ? (
                   <button className="agent-definition-icon-button danger" disabled={busyAction !== null} onClick={() => void runCatalogAction(`delete:${record.name}`, () => deleteUserSkill(record))} title={locale.startsWith("zh") ? "删除" : "Delete"} type="button">
                     <Trash2 size={14} />
                   </button>
@@ -493,6 +505,7 @@ function AgentSkillDetailDialog(props: {
             <div className="lua-skill-detail-grid">
               <div><span>{chinese ? "当前状态" : "Status"}</span><strong>{record.enabled ? (chinese ? "已启用" : "Enabled") : (chinese ? "已停用" : "Disabled")}</strong></div>
               <div><span>{chinese ? "来源" : "Scope"}</span><strong>{localizedAgentSkillScope(record, props.locale)}</strong></div>
+              {record.owningPluginId ? <div><span>{chinese ? "所属插件" : "Owning plugin"}</span><strong>{record.owningPluginId}</strong></div> : null}
               <div><span>{chinese ? "分类" : "Category"}</span><strong>{localizedAgentSkillCategory(category, props.locale)}</strong></div>
               <div><span>{chinese ? "来源类型" : "Origin"}</span><strong>{hasLinkedGitHubSourceOrigin(record.origin)
                 ? <SourceOriginLink detail origin={record.origin} />
@@ -571,6 +584,9 @@ function localizedAgentSkillOrigin(record: AgentSkillRecordSummary, locale: stri
 // localizedAgentSkillScope resolves the exact source scope for the active interface language.
 // localizedAgentSkillScope 为当前界面语言解析精确来源作用域。
 function localizedAgentSkillScope(record: AgentSkillRecordSummary, locale: string): string {
+  if (record.scopeKey === "plugin") {
+    return locale.startsWith("zh") ? "插件" : "Plugin"
+  }
   if (locale.startsWith("zh")) {
     return record.scopeKey === "system" ? "系统" : "用户"
   }

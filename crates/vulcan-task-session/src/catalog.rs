@@ -28,15 +28,14 @@ use sidecar_protocol::{
     read_definition_sidecar, write_yaml_sidecar_atomically,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
-#[cfg(test)]
-use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
 use vulcan_session_core::{
-    ContextCompactionPolicyRequest, ExecutionRuntimePolicyRequest, PromptSkillSnapshot,
-    ProviderModelSnapshot, ToolExposureSnapshot,
+    CapabilityPolicyMode, CapabilityPolicySnapshot, ContextCompactionPolicyRequest,
+    ExecutionRuntimePolicyRequest, PromptSkillSnapshot, ProviderModelSnapshot,
+    ToolExposureSnapshot, apply_prompt_skill_capability_policy,
 };
 
 /// User-owned shareable definition directory below the agent catalog root.
@@ -63,6 +62,10 @@ const DEFAULT_AGENT_EMOJI: &str = "🤖";
 /// 没有元数据时使用的默认智能体颜色。
 const DEFAULT_AGENT_COLOR: &str = "gray";
 
+/// Stable host-owned category identifier for plugin-contributed agents.
+/// 插件贡献智能体使用的稳定宿主分类标识。
+pub const PLUGIN_SUBAGENT_CATEGORY_ID: &str = "plugins";
+
 /// Subagent mode keys accepted by catalog files and spawn_agent.
 /// 目录文件与 spawn_agent 接受的子代理模式键。
 pub const SUBAGENT_MODE_DEFAULT: &str = "default";
@@ -87,6 +90,9 @@ pub enum SubagentDefinitionScope {
     /// Definition stored in a downloaded package cache.
     /// 存储在已下载包缓存中的定义。
     Package,
+    /// Read-only definition contributed by an enabled Vulcan plugin.
+    /// 由已启用 Vulcan 插件贡献的只读定义。
+    Plugin,
 }
 
 /// Declarative subagent execution mode.
@@ -195,6 +201,21 @@ pub struct SubagentDefinitionSource {
     /// Optional last-updated timestamp string.
     /// 可选最近更新时间戳字符串。
     pub updated_at: Option<String>,
+}
+
+impl SubagentDefinitionSource {
+    /// Returns the owning plugin identifier for a plugin definition.
+    /// 返回插件定义的所属插件标识。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The stable plugin identifier, or `None` for non-plugin definitions.
+    /// 稳定插件标识；非插件定义返回 `None`。
+    pub fn plugin_id(&self) -> Option<&str> {
+        (self.scope == SubagentDefinitionScope::Plugin)
+            .then_some(self.package_id.as_deref())
+            .flatten()
+    }
 }
 
 /// One subagent or expert definition loaded from a Markdown file.
@@ -462,6 +483,9 @@ impl SubagentCatalog {
             .definitions
             .iter()
             .filter(|definition| definition.enabled)
+            // Plugin agents are callable only through their canonical pluginId:localName identity.
+            // 插件智能体只能通过其规范 pluginId:localName 标识调用。
+            .filter(|definition| definition.source.scope != SubagentDefinitionScope::Plugin)
             .filter(|definition| {
                 definition
                     .id
@@ -475,6 +499,117 @@ impl SubagentCatalog {
         } else {
             Some(first)
         }
+    }
+
+    /// Merges validated plugin agents into this effective catalog snapshot.
+    /// 将已验证的插件智能体合并到当前生效目录快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `definitions` contains namespaced plugin records from one immutable plugin catalog.
+    /// `definitions` 包含来自同一不可变插件目录的命名空间插件记录。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns unit, or a deterministic scope, category, or identifier conflict diagnostic.
+    /// 返回空值，或确定性的作用域、分类及标识冲突诊断。
+    pub fn merge_plugin_definitions(
+        &mut self,
+        definitions: impl IntoIterator<Item = SubagentDefinition>,
+    ) -> Result<(), String> {
+        let definitions = definitions.into_iter().collect::<Vec<_>>();
+        let mut known_ids = self
+            .definitions
+            .iter()
+            .map(|definition| definition.id.clone())
+            .collect::<BTreeSet<_>>();
+        for definition in &definitions {
+            if definition.source.scope != SubagentDefinitionScope::Plugin {
+                return Err(format!(
+                    "Subagent `{}` cannot enter the plugin catalog without plugin scope.",
+                    definition.id
+                ));
+            }
+            if definition.source.category_id.as_deref() != Some(PLUGIN_SUBAGENT_CATEGORY_ID) {
+                return Err(format!(
+                    "Plugin subagent `{}` must belong to category `{PLUGIN_SUBAGENT_CATEGORY_ID}`.",
+                    definition.id
+                ));
+            }
+            let plugin_id = definition.source.plugin_id().ok_or_else(|| {
+                format!(
+                    "Plugin subagent `{}` must retain its owning plugin id.",
+                    definition.id
+                )
+            })?;
+            let expected_prefix = format!("{plugin_id}:");
+            if definition
+                .id
+                .strip_prefix(&expected_prefix)
+                .is_none_or(str::is_empty)
+            {
+                return Err(format!(
+                    "Plugin subagent `{}` must use its owning plugin namespace `{plugin_id}`.",
+                    definition.id
+                ));
+            }
+            if !definition.enabled {
+                return Err(format!(
+                    "Plugin subagent `{}` cannot be disabled independently.",
+                    definition.id
+                ));
+            }
+            if definition.prompt_skills.policy.mode != CapabilityPolicyMode::AllowOnly {
+                return Err(format!(
+                    "Plugin subagent `{}` must use an allow-only prompt skill policy.",
+                    definition.id
+                ));
+            }
+            if let Some(foreign_selector) =
+                definition
+                    .prompt_skills
+                    .policy
+                    .selectors
+                    .iter()
+                    .find(|selector| {
+                        selector
+                            .strip_prefix(&expected_prefix)
+                            .is_none_or(|local_name| {
+                                local_name.is_empty() || local_name.contains(':')
+                            })
+                    })
+            {
+                return Err(format!(
+                    "Plugin subagent `{}` references foreign or invalid skill `{foreign_selector}`.",
+                    definition.id
+                ));
+            }
+            if !known_ids.insert(definition.id.clone()) {
+                return Err(format!(
+                    "Plugin subagent identifier `{}` conflicts with an existing catalog record.",
+                    definition.id
+                ));
+            }
+        }
+        // Commit the category and definitions only after the whole batch validates.
+        // 仅在整个批次校验通过后提交分类与定义。
+        if !self
+            .categories
+            .iter()
+            .any(|category| category.id == PLUGIN_SUBAGENT_CATEGORY_ID)
+        {
+            self.categories.push(plugin_subagent_category());
+        }
+        self.definitions.extend(definitions);
+        self.definitions
+            .sort_by(|left, right| left.id.cmp(&right.id));
+        self.categories.sort_by(|left, right| {
+            left.order
+                .unwrap_or(i32::MAX)
+                .cmp(&right.order.unwrap_or(i32::MAX))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(())
     }
 }
 
@@ -549,6 +684,78 @@ pub fn load_subagent_catalog_from_roots(
     catalog.definitions = by_id.into_values().collect();
     catalog.categories = categories.into_values().collect();
     catalog
+}
+
+/// Loads every read-only subagent definition contributed by one plugin package.
+/// 加载单个插件包贡献的全部只读子代理定义。
+///
+/// # Parameters
+/// 参数
+/// - `plugin_id`: Stable owning plugin identifier.
+/// - `plugin_id`：稳定的所属插件标识。
+/// - `agents_root`: Conventional plugin `agents/` directory.
+/// - `agents_root`：插件约定的 `agents/` 目录。
+///
+/// # Returns
+/// 返回值
+/// A plugin-scoped catalog whose definitions use namespaced identifiers and one host category.
+/// 返回使用命名空间标识及唯一宿主分类的插件作用域目录。
+pub fn load_plugin_subagent_catalog(plugin_id: &str, agents_root: PathBuf) -> SubagentCatalog {
+    let mut by_id = BTreeMap::<String, SubagentDefinition>::new();
+    let mut ignored_categories = BTreeMap::<String, SubagentCategoryDefinition>::new();
+    let mut catalog = SubagentCatalog {
+        user_root: PathBuf::new(),
+        system_root: agents_root.clone(),
+        definitions: Vec::new(),
+        categories: vec![plugin_subagent_category()],
+        errors: Vec::new(),
+    };
+    scan_subagent_definition_root(
+        &agents_root,
+        &agents_root,
+        SubagentDefinitionScope::Plugin,
+        Some(plugin_id),
+        &mut by_id,
+        &mut ignored_categories,
+        &mut catalog.errors,
+    );
+    catalog.definitions = by_id.into_values().collect();
+    catalog
+}
+
+/// Builds the immutable host category used by every plugin-contributed agent.
+/// 构建所有插件贡献智能体共用的不可变宿主分类。
+///
+/// # Returns
+/// 返回值
+/// The bilingual plugin category definition.
+/// 双语插件分类定义。
+pub fn plugin_subagent_category() -> SubagentCategoryDefinition {
+    SubagentCategoryDefinition {
+        id: String::from(PLUGIN_SUBAGENT_CATEGORY_ID),
+        name: String::from("Plugins"),
+        description: None,
+        locales: BTreeMap::from([
+            (
+                String::from("en-US"),
+                SubagentCategoryLocaleDefinition {
+                    name: Some(String::from("Plugins")),
+                    description: None,
+                },
+            ),
+            (
+                String::from("zh-CN"),
+                SubagentCategoryLocaleDefinition {
+                    name: Some(String::from("插件")),
+                    description: None,
+                },
+            ),
+        ]),
+        emoji: String::from("🧩"),
+        color: String::from("#6366F1"),
+        order: Some(110),
+        file: None,
+    }
 }
 
 /// Parses one subagent definition Markdown file.
@@ -715,7 +922,63 @@ fn parse_subagent_definition_text_with_metadata(
         })?
     };
     let sidecar = sidecar.unwrap_or_default();
-    let effective_package_id = non_empty_owned(sidecar.package_id.clone()).or(package_id);
+    let explicit_plugin_skills = parsed.skills.clone();
+    let explicit_prompt_skill_policy =
+        parsed.prompt_skills.is_some() || sidecar.prompt_skill_policy.is_some();
+    if explicit_plugin_skills.is_some() && scope != SubagentDefinitionScope::Plugin {
+        return Err(SubagentCatalogLoadError {
+            path: definition_file.to_path_buf(),
+            message: String::from(
+                "Subagent frontmatter field `skills` is reserved for plugin-contributed definitions.",
+            ),
+        });
+    }
+    if explicit_plugin_skills.is_some() && explicit_prompt_skill_policy {
+        return Err(SubagentCatalogLoadError {
+            path: definition_file.to_path_buf(),
+            message: String::from(
+                "Plugin subagent fields `skills` and `promptSkills` cannot be declared together.",
+            ),
+        });
+    }
+    let declared_package_id = non_empty_owned(sidecar.package_id.clone());
+    if scope == SubagentDefinitionScope::Plugin {
+        let owning_plugin_id = package_id
+            .as_deref()
+            .ok_or_else(|| SubagentCatalogLoadError {
+                path: definition_file.to_path_buf(),
+                message: String::from(
+                    "Plugin subagent definition is missing its owning plugin id.",
+                ),
+            })?;
+        if declared_package_id
+            .as_deref()
+            .is_some_and(|declared| declared != owning_plugin_id)
+        {
+            return Err(SubagentCatalogLoadError {
+                path: definition_file.to_path_buf(),
+                message: format!(
+                    "Plugin subagent packageId must match its owning plugin `{owning_plugin_id}`."
+                ),
+            });
+        }
+    }
+    // Plugin ownership is supplied by the trusted package loader and cannot be replaced by sidecar metadata.
+    // 插件所有权由可信包加载器提供，不能被 sidecar 元数据替换。
+    let effective_package_id = if scope == SubagentDefinitionScope::Plugin {
+        package_id
+    } else {
+        declared_package_id.or(package_id)
+    };
+    let declared_enabled = sidecar.enabled.or(parsed.enabled);
+    if scope == SubagentDefinitionScope::Plugin && declared_enabled == Some(false) {
+        return Err(SubagentCatalogLoadError {
+            path: definition_file.to_path_buf(),
+            message: String::from(
+                "Plugin subagent enabled state is owned by the plugin and cannot be disabled individually.",
+            ),
+        });
+    }
     let name = non_empty_owned(sidecar.name)
         .or_else(|| non_empty_owned(parsed.name))
         .unwrap_or_else(|| display_name_from_id(&id));
@@ -737,11 +1000,99 @@ fn parse_subagent_definition_text_with_metadata(
         tool_exposure.policy = tool_policy.into_snapshot();
     }
     normalize_tool_exposure(&mut tool_exposure);
-    let mut prompt_skills = parsed.prompt_skills;
+    let mut prompt_skills = parsed.prompt_skills.unwrap_or_default();
     if let Some(prompt_skill_policy) = sidecar.prompt_skill_policy {
         prompt_skills.policy = prompt_skill_policy.into_snapshot();
     }
     normalize_prompt_skills(&mut prompt_skills);
+    if scope == SubagentDefinitionScope::Plugin {
+        let plugin_id =
+            effective_package_id
+                .as_deref()
+                .ok_or_else(|| SubagentCatalogLoadError {
+                    path: definition_file.to_path_buf(),
+                    message: String::from(
+                        "Plugin subagent definition is missing its owning plugin id.",
+                    ),
+                })?;
+        let selectors = match explicit_plugin_skills {
+            Some(local_skill_names) => {
+                let mut unique_local_names = BTreeSet::new();
+                if local_skill_names.is_empty() {
+                    return Err(SubagentCatalogLoadError {
+                        path: definition_file.to_path_buf(),
+                        message: String::from(
+                            "Plugin subagent field `skills` must not be empty when declared.",
+                        ),
+                    });
+                }
+                let mut selectors = Vec::new();
+                for local_name in local_skill_names {
+                    if local_name != local_name.trim()
+                        || local_name.is_empty()
+                        || local_name.contains(':')
+                        || local_name.contains('/')
+                        || local_name.contains('\\')
+                    {
+                        return Err(SubagentCatalogLoadError {
+                            path: definition_file.to_path_buf(),
+                            message: format!(
+                                "Plugin subagent skill reference `{local_name}` must be one canonical package-local skill name."
+                            ),
+                        });
+                    }
+                    if !unique_local_names.insert(local_name.clone()) {
+                        return Err(SubagentCatalogLoadError {
+                            path: definition_file.to_path_buf(),
+                            message: format!(
+                                "Plugin subagent skill reference `{local_name}` is declared more than once."
+                            ),
+                        });
+                    }
+                    selectors.push(format!("{plugin_id}:{local_name}"));
+                }
+                selectors
+            }
+            None if explicit_prompt_skill_policy => {
+                if prompt_skills.policy.mode != CapabilityPolicyMode::AllowOnly {
+                    return Err(SubagentCatalogLoadError {
+                        path: definition_file.to_path_buf(),
+                        message: String::from(
+                            "Plugin subagent promptSkills policy must use allow_only mode.",
+                        ),
+                    });
+                }
+                let expected_prefix = format!("{plugin_id}:");
+                for selector in &prompt_skills.policy.selectors {
+                    let local_name = selector.strip_prefix(&expected_prefix).ok_or_else(|| {
+                        SubagentCatalogLoadError {
+                            path: definition_file.to_path_buf(),
+                            message: format!(
+                                "Plugin subagent skill selector `{selector}` must belong to plugin `{plugin_id}`."
+                            ),
+                        }
+                    })?;
+                    if local_name.is_empty() || local_name.contains(':') {
+                        return Err(SubagentCatalogLoadError {
+                            path: definition_file.to_path_buf(),
+                            message: format!(
+                                "Plugin subagent skill selector `{selector}` is not a canonical same-plugin skill id."
+                            ),
+                        });
+                    }
+                }
+                prompt_skills.policy.selectors.clone()
+            }
+            None => Vec::new(),
+        };
+        apply_prompt_skill_capability_policy(
+            &mut prompt_skills,
+            CapabilityPolicySnapshot {
+                mode: CapabilityPolicyMode::AllowOnly,
+                selectors,
+            },
+        );
+    }
     let system_prompt = parsed
         .system_prompt
         .and_then(non_empty_string)
@@ -785,7 +1136,11 @@ fn parse_subagent_definition_text_with_metadata(
             sidecar.runtime_policy
         },
         max_depth: sidecar.max_depth.or(parsed.max_depth),
-        enabled: sidecar.enabled.or(parsed.enabled).unwrap_or(true),
+        enabled: if scope == SubagentDefinitionScope::Plugin {
+            true
+        } else {
+            declared_enabled.unwrap_or(true)
+        },
         source: SubagentDefinitionSource {
             scope,
             file: definition_file.to_path_buf(),
@@ -824,6 +1179,12 @@ pub fn write_user_subagent_definition(
     definition: &SubagentDefinition,
 ) -> Result<PathBuf, SubagentCatalogLoadError> {
     let path = user_subagent_definition_path(user_root, &definition.id)?;
+    ensure_non_plugin_definition_avoids_reserved_category(
+        &path,
+        SubagentDefinitionScope::User,
+        &definition.id,
+        definition.source.package_id.as_deref(),
+    )?;
     let body = subagent_definition_to_markdown(definition)?;
     write_catalog_document_atomically(&path, body.as_bytes(), "user subagent definition")?;
     write_user_subagent_sidecar(user_root, definition)?;
@@ -1118,7 +1479,9 @@ fn scan_subagent_definition_root(
         };
         let path = entry.path();
         if file_type.is_dir() {
-            register_category_if_needed(&path, base_root, package_id, categories, errors);
+            if scope != SubagentDefinitionScope::Plugin {
+                register_category_if_needed(&path, base_root, package_id, categories, errors);
+            }
             scan_subagent_definition_root(
                 &path, base_root, scope, package_id, by_id, categories, errors,
             );
@@ -1328,10 +1691,19 @@ fn parse_subagent_definition_file_in_root(
             message: String::from("Subagent definition file must have a valid relative path."),
         }
     })?;
-    let id = package_id
-        .map(|package_id| format!("{package_id}/{relative_id}"))
-        .unwrap_or(relative_id);
-    let category_id = display_subagent_category_id(&id, package_id);
+    let id = match (scope, package_id) {
+        (SubagentDefinitionScope::Plugin, Some(plugin_id)) => {
+            format!("{plugin_id}:{relative_id}")
+        }
+        (_, Some(package_id)) => format!("{package_id}/{relative_id}"),
+        (_, None) => relative_id,
+    };
+    let category_id = if scope == SubagentDefinitionScope::Plugin {
+        Some(String::from(PLUGIN_SUBAGENT_CATEGORY_ID))
+    } else {
+        display_subagent_category_id(&id, package_id)
+    };
+    ensure_non_plugin_definition_avoids_reserved_category(definition_file, scope, &id, package_id)?;
     let sidecar_file = find_definition_sidecar(definition_file);
     let sidecar = match sidecar_file.as_deref() {
         Some(path) => Some(read_definition_sidecar(path)?),
@@ -1347,6 +1719,44 @@ fn parse_subagent_definition_file_in_root(
         sidecar_file,
         sidecar,
     })
+}
+
+/// Rejects non-plugin definitions that attempt to occupy the host-owned plugin category.
+/// 拒绝尝试占用宿主拥有插件分类的非插件定义。
+///
+/// # Parameters
+/// 参数
+/// `path` identifies the rejected definition in diagnostics.
+/// `path` 在诊断中标识被拒绝的定义。
+/// `scope` is the catalog scope supplying the definition.
+/// `scope` 是提供定义的目录作用域。
+/// `id` is the canonical definition identifier.
+/// `id` 是规范定义标识。
+/// `package_id` identifies an optional user package namespace.
+/// `package_id` 标识可选的用户包命名空间。
+///
+/// # Returns
+/// 返回值
+/// Unit for allowed categories, or a structured reserved-category error.
+/// 分类允许时返回空值，否则返回结构化保留分类错误。
+fn ensure_non_plugin_definition_avoids_reserved_category(
+    path: &Path,
+    scope: SubagentDefinitionScope,
+    id: &str,
+    package_id: Option<&str>,
+) -> Result<(), SubagentCatalogLoadError> {
+    if scope != SubagentDefinitionScope::Plugin
+        && display_subagent_category_id(id, package_id).as_deref()
+            == Some(PLUGIN_SUBAGENT_CATEGORY_ID)
+    {
+        return Err(SubagentCatalogLoadError {
+            path: path.to_path_buf(),
+            message: format!(
+                "Subagent category `{PLUGIN_SUBAGENT_CATEGORY_ID}` is reserved for plugin-contributed definitions."
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Registers category metadata for one directory when a category id is available.
@@ -1367,6 +1777,15 @@ fn register_category_if_needed(
     let id = package_id
         .map(|package_id| format!("{package_id}/{raw_id}"))
         .unwrap_or(raw_id);
+    if id == PLUGIN_SUBAGENT_CATEGORY_ID {
+        errors.push(SubagentCatalogLoadError {
+            path: directory.to_path_buf(),
+            message: format!(
+                "Subagent category `{PLUGIN_SUBAGENT_CATEGORY_ID}` is reserved for plugin-contributed definitions."
+            ),
+        });
+        return;
+    }
     if categories.contains_key(&id) {
         return;
     }
@@ -1700,6 +2119,7 @@ fn source_key_for_definition(
         SubagentDefinitionScope::System => format!("system:{id}"),
         SubagentDefinitionScope::User => format!("user:{id}"),
         SubagentDefinitionScope::Package => format!("package:{id}"),
+        SubagentDefinitionScope::Plugin => format!("plugin:{id}"),
     }
 }
 
@@ -1785,10 +2205,14 @@ struct SubagentDefinitionFrontmatter {
     /// 工具可见性覆盖快照。
     #[serde(default)]
     tool_exposure: ToolExposureSnapshot,
-    /// Prompt skill override snapshot.
-    /// 提示词技能覆盖快照。
+    /// Optional prompt skill override snapshot whose presence is preserved for conflict validation.
+    /// 保留显式存在信息以供冲突校验的可选提示词技能覆盖快照。
     #[serde(default)]
-    prompt_skills: PromptSkillSnapshot,
+    prompt_skills: Option<PromptSkillSnapshot>,
+    /// Optional package-local skill names attached by a plugin definition.
+    /// 插件定义附加的可选包内技能名称。
+    #[serde(default)]
+    skills: Option<Vec<String>>,
     /// Context compaction override snapshot.
     /// 上下文压缩覆盖快照。
     #[serde(default)]
@@ -2295,6 +2719,40 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Verifies plugin agents require their complete namespaced identifier even when the local id is unique.
+    /// 验证即使本地标识唯一，插件智能体仍必须使用完整命名空间标识。
+    #[test]
+    fn enabled_definition_requires_exact_plugin_agent_id() {
+        // root owns the isolated conventional plugin agents directory.
+        // root 持有隔离的约定式插件智能体目录。
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-plugin-subagent-exact-id-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("plugin agents root");
+        fs::write(
+            root.join("reviewer.md"),
+            "---\nname: Plugin Reviewer\n---\nReview plugin changes.",
+        )
+        .expect("plugin agent definition");
+        // catalog applies the trusted package namespace before any runtime lookup.
+        // catalog 在任何运行时查询前应用可信包命名空间。
+        let catalog = load_plugin_subagent_catalog("content-plugin", root.clone());
+
+        assert!(catalog.enabled_definition("reviewer").is_none());
+        assert!(
+            catalog
+                .enabled_definition("content-plugin:reviewer")
+                .is_some()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Verifies ambiguous legacy short ids are rejected instead of guessed.
     /// 验证存在歧义的旧版短标识会被拒绝而不是猜测解析。
     #[test]
@@ -2749,6 +3207,67 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Verifies the user writer cannot persist an agent into the host-owned plugin category.
+    /// 验证用户写入器不能将智能体持久化到宿主拥有的插件分类。
+    #[test]
+    fn write_user_definition_rejects_reserved_plugin_category() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-reserved-plugin-category-write-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let user_root = root.join("user");
+        let mut definition = parse_subagent_definition_text(
+            Path::new("reviewer.md"),
+            "---\nname: Reviewer\n---\nReview.",
+            SubagentDefinitionScope::User,
+        )
+        .expect("definition should parse");
+        definition.id = String::from("plugins/reviewer");
+
+        let error = write_user_subagent_definition(&user_root, &definition)
+            .expect_err("reserved plugin category should be rejected");
+        assert!(error.message.contains("reserved for plugin-contributed"));
+        assert!(!user_root.join("definitions/plugins/reviewer.md").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies direct filesystem definitions cannot enter the host-owned plugin category.
+    /// 验证直接写入文件系统的定义不能进入宿主拥有的插件分类。
+    #[test]
+    fn user_catalog_rejects_reserved_plugin_category() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-reserved-plugin-category-load-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let user_root = root.join("user");
+        let reserved_root = user_root.join("definitions/plugins");
+        fs::create_dir_all(&reserved_root).expect("reserved category directory should be created");
+        fs::write(
+            reserved_root.join("reviewer.md"),
+            "---\nname: Reviewer\n---\nReview.",
+        )
+        .expect("reserved category definition should be written");
+
+        let catalog = load_subagent_catalog_from_roots(PathBuf::new(), user_root);
+        assert!(catalog.definitions.is_empty());
+        assert!(catalog.categories.is_empty());
+        assert!(
+            catalog
+                .errors
+                .iter()
+                .any(|error| error.message.contains("reserved for plugin-contributed"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// Verifies current tool and prompt-skill policy objects preserve their semantics after reload.
     /// 验证当前工具与提示词技能策略对象在重新加载后保持原有语义。
     #[test]
@@ -2817,5 +3336,248 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies plugin agents use namespaced identifiers, one host category, and namespaced attached skills.
+    /// 验证插件智能体使用命名空间标识、唯一宿主分类及命名空间化附加技能。
+    #[test]
+    fn plugin_agent_loader_namespaces_attached_skills() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-plugin-agent-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let agents_root = root.join("agents");
+        fs::create_dir_all(agents_root.join("engineering"))
+            .expect("plugin agent directory should be created");
+        fs::write(
+            agents_root.join("engineering/reviewer.md"),
+            "---\nname: Plugin Reviewer\nskills:\n  - review-helper\n---\nReview the requested change.",
+        )
+        .expect("plugin agent should be written");
+
+        let catalog = load_plugin_subagent_catalog("content-plugin", agents_root);
+        assert!(catalog.errors.is_empty(), "{:?}", catalog.errors);
+        assert_eq!(catalog.categories.len(), 1);
+        assert_eq!(catalog.categories[0].id, PLUGIN_SUBAGENT_CATEGORY_ID);
+        let definition = catalog
+            .definitions
+            .first()
+            .expect("one plugin definition should load");
+        assert_eq!(definition.id, "content-plugin:engineering/reviewer");
+        assert_eq!(definition.source.scope, SubagentDefinitionScope::Plugin);
+        assert_eq!(definition.source.plugin_id(), Some("content-plugin"));
+        assert_eq!(
+            definition.source.category_id.as_deref(),
+            Some(PLUGIN_SUBAGENT_CATEGORY_ID)
+        );
+        assert_eq!(
+            definition.prompt_skills.policy.mode,
+            CapabilityPolicyMode::AllowOnly
+        );
+        assert_eq!(
+            definition.prompt_skills.policy.selectors,
+            vec![String::from("content-plugin:review-helper")]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies plugin sidecar metadata cannot replace the owning manifest identity.
+    /// 验证插件 sidecar 元数据不能替换所属清单身份。
+    #[test]
+    fn plugin_agent_rejects_foreign_sidecar_package_id() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-plugin-agent-owner-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let agents_root = root.join("agents");
+        fs::create_dir_all(&agents_root).expect("plugin agent directory should be created");
+        fs::write(
+            agents_root.join("reviewer.md"),
+            "Review the requested change.",
+        )
+        .expect("plugin agent should be written");
+        fs::write(
+            agents_root.join("reviewer.yaml"),
+            "schemaVersion: 1\npackageId: foreign-plugin\n",
+        )
+        .expect("plugin agent sidecar should be written");
+
+        let catalog = load_plugin_subagent_catalog("content-plugin", agents_root);
+
+        assert!(catalog.definitions.is_empty());
+        assert_eq!(catalog.errors.len(), 1);
+        assert!(
+            catalog.errors[0]
+                .message
+                .contains("owning plugin `content-plugin`")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies a plugin agent without attached skills receives an empty allow-only policy.
+    /// 验证未附加技能的插件智能体获得空的仅允许策略。
+    #[test]
+    fn plugin_agent_without_skills_cannot_inherit_global_skills() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-plugin-agent-empty-skills-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let agents_root = root.join("agents");
+        fs::create_dir_all(&agents_root).expect("plugin agent directory should be created");
+        fs::write(
+            agents_root.join("reviewer.md"),
+            "Review the requested change.",
+        )
+        .expect("plugin agent should be written");
+
+        let catalog = load_plugin_subagent_catalog("content-plugin", agents_root);
+
+        assert!(catalog.errors.is_empty(), "{:?}", catalog.errors);
+        let definition = catalog
+            .definitions
+            .first()
+            .expect("one plugin definition should load");
+        assert_eq!(
+            definition.prompt_skills.policy.mode,
+            CapabilityPolicyMode::AllowOnly
+        );
+        assert!(definition.prompt_skills.policy.selectors.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies a failed plugin-agent batch leaves definitions and categories unchanged.
+    /// 验证失败的插件智能体批次保持定义与分类不变。
+    #[test]
+    fn plugin_agent_merge_is_transactional() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-plugin-agent-transaction-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let agents_root = root.join("agents");
+        fs::create_dir_all(&agents_root).expect("plugin agent directory should be created");
+        fs::write(
+            agents_root.join("reviewer.md"),
+            "Review the requested change.",
+        )
+        .expect("plugin agent should be written");
+        let source = load_plugin_subagent_catalog("content-plugin", agents_root);
+        let valid = source
+            .definitions
+            .first()
+            .expect("one plugin definition should load")
+            .clone();
+        let mut invalid = valid.clone();
+        invalid.id = String::from("foreign-plugin:reviewer");
+        let mut target = load_subagent_catalog_from_roots(PathBuf::new(), PathBuf::new());
+
+        let result = target.merge_plugin_definitions([valid, invalid]);
+
+        assert!(result.is_err());
+        assert!(target.definitions.is_empty());
+        assert!(target.categories.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies plugin agents reject foreign skill selectors and component-level disablement.
+    /// 验证插件智能体拒绝外部技能选择器与组件级停用。
+    #[test]
+    fn plugin_agent_rejects_cross_plugin_skills_and_individual_disablement() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-plugin-agent-policy-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let agents_root = root.join("agents");
+        fs::create_dir_all(&agents_root).expect("plugin agent directory should be created");
+        fs::write(
+            agents_root.join("foreign.md"),
+            "---\npromptSkills:\n  policy:\n    mode: allow_only\n    selectors:\n      - foreign-plugin:review-helper\n  enabled: []\n  disabled: []\n---\nReview.",
+        )
+        .expect("foreign-skill plugin agent should be written");
+        fs::write(
+            agents_root.join("disabled.md"),
+            "---\nenabled: false\n---\nReview.",
+        )
+        .expect("disabled plugin agent should be written");
+
+        let catalog = load_plugin_subagent_catalog("content-plugin", agents_root);
+
+        assert!(catalog.definitions.is_empty());
+        assert_eq!(catalog.errors.len(), 2);
+        assert!(
+            catalog.errors.iter().any(|error| {
+                error
+                    .message
+                    .contains("must belong to plugin `content-plugin`")
+            }),
+            "{:?}",
+            catalog.errors
+        );
+        assert!(
+            catalog
+                .errors
+                .iter()
+                .any(|error| error.message.contains("cannot be disabled individually"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies an explicitly default-valued promptSkills object still conflicts with the plugin skills shorthand.
+    /// 验证显式为默认值的 promptSkills 对象仍会与插件 skills 简写发生冲突。
+    #[test]
+    fn plugin_agent_rejects_explicit_default_prompt_skills_with_shorthand() {
+        // Empty selector lists are semantically default-valued but remain an explicit declaration.
+        // 空选择器列表在取值上等于默认值，但仍属于显式声明。
+        let result = parse_subagent_definition_text(
+            Path::new("reviewer.md"),
+            "---\nname: Reviewer\npromptSkills:\n  enabled: []\n  disabled: []\nskills:\n  - review-helper\n---\nReview.",
+            SubagentDefinitionScope::Plugin,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("explicit promptSkills should conflict with skills shorthand")
+                .message
+                .contains("cannot be declared together")
+        );
+    }
+
+    /// Verifies the plugin-only skills shorthand is rejected for ordinary user definitions.
+    /// 验证仅供插件使用的 skills 简写会被普通用户定义拒绝。
+    #[test]
+    fn user_agent_rejects_plugin_skills_shorthand() {
+        let result = parse_subagent_definition_text(
+            Path::new("reviewer.md"),
+            "---\nname: Reviewer\nskills:\n  - review-helper\n---\nReview.",
+            SubagentDefinitionScope::User,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("user skills shorthand should fail")
+                .message
+                .contains("reserved for plugin-contributed definitions")
+        );
     }
 }

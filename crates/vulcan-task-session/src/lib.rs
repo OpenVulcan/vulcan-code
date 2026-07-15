@@ -33,13 +33,13 @@ pub mod segmented_store;
 pub mod store;
 
 pub use catalog::{
-    SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR, SubagentCatalog,
-    SubagentCatalogLoadError, SubagentDefinition, SubagentDefinitionMode, SubagentDefinitionScope,
-    SubagentDefinitionSource, display_subagent_category_id,
-    ensure_user_subagent_category_directories, load_subagent_catalog_from_roots,
-    parse_subagent_definition_file, parse_subagent_definition_text,
-    subagent_definition_to_markdown, user_subagent_definition_path, user_subagent_override_path,
-    user_subagent_sidecar_path, write_user_subagent_definition,
+    PLUGIN_SUBAGENT_CATEGORY_ID, SUBAGENT_MODE_DEFAULT, SUBAGENT_MODE_EXPERT, SUBAGENT_MODE_MIRROR,
+    SubagentCatalog, SubagentCatalogLoadError, SubagentDefinition, SubagentDefinitionMode,
+    SubagentDefinitionScope, SubagentDefinitionSource, display_subagent_category_id,
+    ensure_user_subagent_category_directories, load_plugin_subagent_catalog,
+    load_subagent_catalog_from_roots, parse_subagent_definition_file,
+    parse_subagent_definition_text, subagent_definition_to_markdown, user_subagent_definition_path,
+    user_subagent_override_path, user_subagent_sidecar_path, write_user_subagent_definition,
     write_user_subagent_enabled_override, write_user_subagent_metadata_override,
     write_user_subagent_override,
 };

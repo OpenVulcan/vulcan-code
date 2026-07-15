@@ -63,57 +63,6 @@ pub(crate) fn parse_prompt_skill_detail_tool_arguments(
     Ok(parsed)
 }
 
-/// Samples support files under one prompt-skill directory without reading their contents.
-/// 在单个提示词技能目录下采样支持文件路径但不读取文件内容。
-pub(crate) fn sample_prompt_skill_support_files(
-    base_dir: &Path,
-    skill_file: &Path,
-) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    collect_prompt_skill_support_files(base_dir, skill_file, base_dir, 0, &mut files);
-    files.sort();
-    files.truncate(12);
-    files
-}
-
-/// Recursively collects bounded support-file paths for the prompt-skill detail output.
-/// 为提示词技能详情输出递归收集有界支持文件路径。
-pub(crate) fn collect_prompt_skill_support_files(
-    root: &Path,
-    skill_file: &Path,
-    current: &Path,
-    depth: usize,
-    files: &mut Vec<PathBuf>,
-) {
-    if depth > 2 || files.len() >= 32 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(current) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if files.len() >= 32 {
-            return;
-        }
-        let path = entry.path();
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if file_name.starts_with('.') || file_name.eq_ignore_ascii_case("target") {
-            continue;
-        }
-        if path == skill_file {
-            continue;
-        }
-        if path.is_dir() {
-            collect_prompt_skill_support_files(root, skill_file, &path, depth + 1, files);
-        } else if path.is_file() {
-            files.push(path.strip_prefix(root).unwrap_or(&path).to_path_buf());
-        }
-    }
-}
-
 pub(crate) async fn execute_prompt_skill_detail_tool(
     request: NativeToolExecutionRequest,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
@@ -130,33 +79,15 @@ pub(crate) async fn execute_prompt_skill_detail_tool(
             "Prompt skill `{requested_name}` is not enabled for this execution turn."
         )));
     }
-    let config = PromptSkillsGlobalConfig {
-        user_skill_root: request.prompt_skill_user_root.clone(),
-        system_skill_root: Some(
-            vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory(),
-        ),
-        default_skill_state: PromptSkillState::Enabled,
-        skill_overrides: BTreeMap::new(),
-    };
-    let catalog = vulcan_prompt_skills::load_prompt_skills(&config);
-    let resolved = resolve_prompt_skills(
-        &catalog,
-        &config,
-        &PromptSkillsProjectConfig::default(),
-        &PromptSkillsSessionConfig::default(),
-    );
-    let Some(skill) = resolved
+    let Some(skill) = request
+        .prepared_prompt_skills
         .iter()
-        .find(|skill| {
-            skill.state == PromptSkillState::Enabled
-                && skill.skill.name.eq_ignore_ascii_case(requested_name)
-        })
-        .map(|resolved| &resolved.skill)
+        .find(|skill| skill.name.eq_ignore_ascii_case(requested_name))
     else {
-        let available = resolved
+        let available = request
+            .prepared_prompt_skills
             .iter()
-            .filter(|skill| skill.state == PromptSkillState::Enabled)
-            .map(|skill| skill.skill.name.as_str())
+            .map(|skill| skill.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
         let suffix = if available.is_empty() {
@@ -170,8 +101,10 @@ pub(crate) async fn execute_prompt_skill_detail_tool(
         )));
     };
 
-    let sampled_files = sample_prompt_skill_support_files(&skill.base_dir, &skill.skill_file);
     Ok(VulcanToolInvocationResult::from_model_output(
-        Value::String(render_skill_tool_output(skill, &sampled_files)),
+        Value::String(render_skill_tool_output(
+            skill,
+            &skill.resources.sampled_files,
+        )),
     ))
 }

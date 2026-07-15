@@ -87,7 +87,15 @@ function systemPluginMatchesSearch(
   if (!normalizedQuery) {
     return true;
   }
-  return [plugin.id, plugin.kind, plugin.version ?? "", name, capability]
+  return [
+    plugin.id,
+    plugin.kind,
+    plugin.version ?? "",
+    name,
+    capability,
+    ...(plugin.extension?.skills ?? []),
+    ...(plugin.extension?.agents ?? []),
+  ]
     .some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
 }
 
@@ -113,14 +121,14 @@ function systemPluginHasIssue(plugin: PluginSummary): boolean {
   }
 }
 
-// SystemPluginsPanel renders host-owned LuaSkills System Plugins and lifecycle controls.
-// SystemPluginsPanel 渲染宿主自有 LuaSkills System Plugin 及其生命周期控件。
+// SystemPluginsPanel renders host-owned plugins and their unified content/runtime lifecycle controls.
+// SystemPluginsPanel 渲染宿主自有插件及其统一的内容与运行时生命周期控件。
 export function SystemPluginsPanel(props: {
   // Service-backed plugin lifecycle actions.
   // 服务端支持的插件生命周期动作。
   actions: SkillActionProps;
-  // Plugin rows from the committed LuaSkills domain projection.
-  // 来自已提交 LuaSkills 领域投影的插件行。
+  // Plugin rows from the committed host plugin projection.
+  // 来自已提交宿主插件领域投影的插件行。
   plugins: PluginSummary[];
 }) {
   // locale and t resolve plugin manifest text and stable plugin-page labels.
@@ -182,8 +190,8 @@ export function SystemPluginsPanel(props: {
     const localizedCapability = localizedPluginText(plugin.capabilityByLocale, locale, plugin.capability);
     return systemPluginMatchesSearch(plugin, localizedName, localizedCapability, searchQuery);
   }), [locale, searchQuery, statusFilter, systemPlugins]);
-  // togglePlugin persists one System Plugin state through the LuaSkills catalog transaction.
-  // togglePlugin 通过 LuaSkills 目录事务持久化单个 System Plugin 状态。
+  // togglePlugin persists one plugin state through the unified plugin catalog transaction.
+  // togglePlugin 通过统一插件目录事务持久化单个插件状态。
   //
   // Parameters: plugin is the exact projected row to toggle.
   // 参数：plugin 是需要切换的精确投影行。
@@ -338,6 +346,11 @@ export function SystemPluginsPanel(props: {
               <div><dt>{locale.startsWith("zh") ? "原生进程" : "Native processes"}</dt><dd>{permissionPreview.binaryIds.join("、") || "—"}</dd></div>
               <div><dt>Node.js</dt><dd>{permissionPreview.nodeEntryIds.join("、") || "—"}</dd></div>
               <div><dt>Python</dt><dd>{permissionPreview.pythonEntryIds.join("、") || "—"}</dd></div>
+              <div><dt>{locale.startsWith("zh") ? "插件类型" : "Plugin type"}</dt><dd>{permissionPreview.hasRuntime
+                ? (locale.startsWith("zh") ? "运行时插件" : "Runtime plugin")
+                : (locale.startsWith("zh") ? "内容插件" : "Content plugin")}</dd></div>
+              <div><dt>{locale.startsWith("zh") ? "技能" : "Skills"}</dt><dd>{permissionPreview.skillIds.join("、") || "—"}</dd></div>
+              <div><dt>{locale.startsWith("zh") ? "智能体" : "Agents"}</dt><dd>{permissionPreview.agentIds.join("、") || "—"}</dd></div>
             </dl>
             <label className="system-plugin-permission-consent">
               <input
@@ -439,6 +452,11 @@ export function SystemPluginsPanel(props: {
                       ? (locale.startsWith("zh") ? "用户插件" : "User plugin")
                       : t("skills.plugins.systemKind")}</Badge>
                     {plugin.version ? <Badge variant="secondary">v{plugin.version}</Badge> : null}
+                    <Badge variant="outline">{plugin.extension?.hasRuntime
+                      ? (locale.startsWith("zh") ? "运行时插件" : "Runtime plugin")
+                      : (locale.startsWith("zh") ? "内容插件" : "Content plugin")}</Badge>
+                    <Badge variant="outline">{locale.startsWith("zh") ? "技能" : "Skills"} {plugin.skillCount}</Badge>
+                    <Badge variant="outline">{locale.startsWith("zh") ? "智能体" : "Agents"} {plugin.agentCount}</Badge>
                     <Badge variant="outline">{t("skills.plugins.tools")} {plugin.toolCount}</Badge>
                     <Badge variant="outline">{t("skills.plugins.hooks")} {plugin.hookCount}</Badge>
                     <Badge variant="outline">{t("skills.plugins.sessions")} {plugin.activeSessionCount}</Badge>
@@ -448,6 +466,27 @@ export function SystemPluginsPanel(props: {
                 <span className={`agent-definition-row-path ${plugin.diagnostics.length > 0 ? "warning" : ""}`}>
                   {plugin.diagnostics.length > 0 ? plugin.diagnostics.join("；") : plugin.id}
                 </span>
+                {plugin.skillCount > 0 || plugin.agentCount > 0 ? (
+                  <details className="system-plugin-component-details">
+                    <summary>{locale.startsWith("zh") ? "查看只读组件" : "View read-only components"}</summary>
+                    {plugin.skillCount > 0 ? (
+                      <div className="system-plugin-component-group">
+                        <strong>{locale.startsWith("zh") ? "技能" : "Skills"}</strong>
+                        <div>{plugin.extension?.skills.map((skillId) => (
+                          <Badge key={skillId} variant="secondary">{skillId}</Badge>
+                        ))}</div>
+                      </div>
+                    ) : null}
+                    {plugin.agentCount > 0 ? (
+                      <div className="system-plugin-component-group">
+                        <strong>{locale.startsWith("zh") ? "智能体" : "Agents"}</strong>
+                        <div>{plugin.extension?.agents.map((agentId) => (
+                          <Badge key={agentId} variant="secondary">{agentId}</Badge>
+                        ))}</div>
+                      </div>
+                    ) : null}
+                  </details>
+                ) : null}
               </div>
               <div className="agent-definition-row-actions">
               {plugin.extension?.origin === "userInstalled" ? (

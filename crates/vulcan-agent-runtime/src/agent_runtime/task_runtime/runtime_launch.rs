@@ -324,6 +324,9 @@ pub(super) fn apply_task_prompt_skill_snapshot(
     request: &mut ExecutionPreparationRequest,
     prompt_skills: &PromptSkillSnapshot,
 ) {
+    // Preserve the complete policy so allow-only agents cannot inherit unrelated global skills.
+    // 保留完整策略，避免仅允许模式的智能体继承无关全局技能。
+    request.prompt_skill_policy_override = prompt_skills.policy.clone();
     for skill in &prompt_skills.enabled {
         request
             .session_prompt_skill_overrides

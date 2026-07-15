@@ -7,7 +7,6 @@ use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
-use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
@@ -59,11 +58,42 @@ pub fn stream_runtime_run_with_intervention(
     request: ExecutionPreparationRequest,
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
+    stream_runtime_run_with_intervention_and_plugins(
+        config,
+        agent_profile_catalog,
+        luaskills_runtime,
+        None,
+        mcp_runtime,
+        task_runtime,
+        question_runtime,
+        command_session_runtime,
+        token_budget_runtime,
+        request,
+        prompt_intervention,
+    )
+}
+
+/// Streams one provider run with independently owned LuaSkills and System Plugin runtimes.
+/// 使用相互独立持有的 LuaSkills 与系统插件运行时流式执行一次 Provider 调用。
+pub fn stream_runtime_run_with_intervention_and_plugins(
+    config: ProviderConfigurationFile,
+    agent_profile_catalog: AgentProfileCatalog,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
+    mcp_runtime: Option<McpRuntimeAccess>,
+    task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
+    request: ExecutionPreparationRequest,
+    prompt_intervention: Option<RuntimePromptIntervention>,
+) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     let mcp_runtime_access = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
     stream_runtime_run_with_access(
         config,
         agent_profile_catalog,
         luaskills_runtime,
+        system_plugin_runtime,
         mcp_runtime_access,
         task_runtime,
         question_runtime,
@@ -96,6 +126,7 @@ fn stream_runtime_run_with_access(
     config: ProviderConfigurationFile,
     agent_profile_catalog: AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    system_plugin_runtime: Option<vulcan_plugin_runtime::SystemPluginRuntimeManager>,
     mcp_runtime_access: McpRuntimeAccess,
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
@@ -105,10 +136,11 @@ fn stream_runtime_run_with_access(
     prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
-        let launch = match prepare_runtime_stream_launch(
+        let launch = match crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins(
             &config,
             &agent_profile_catalog,
             luaskills_runtime.clone(),
+            system_plugin_runtime.clone(),
             mcp_runtime_access,
             task_runtime,
             question_runtime,

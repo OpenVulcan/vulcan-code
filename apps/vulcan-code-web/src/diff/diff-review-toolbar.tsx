@@ -412,8 +412,8 @@ function DiffModeMenu(props: {
   // Number of files changed by the current diff source.
   // 当前 diff 来源中发生变动的文件数量。
   changedFileCount: number;
-  // Recent commits available for commit review mode.
-  // 提交审核模式可用的最近提交。
+  // Unpushed commits available for commit review mode.
+  // 提交审核模式可用的未推送提交。
   commits: DiffCommitSummary[];
   // Optional selection change handler.
   // 可选选择变更处理器。

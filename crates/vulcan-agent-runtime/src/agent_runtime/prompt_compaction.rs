@@ -670,6 +670,7 @@ fn build_prompt_compaction_launch_request(
         tool_request_rejection_tool_ids: Vec::new(),
         tool_request_hidden_tool_ids: Vec::new(),
         prompt_purpose,
+        prompt_skill_policy_override: Default::default(),
         project_prompt_skills: Default::default(),
         session_prompt_skill_overrides: Default::default(),
         context_injection: None,

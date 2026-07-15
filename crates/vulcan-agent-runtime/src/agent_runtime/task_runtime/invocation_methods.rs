@@ -1161,6 +1161,7 @@ fn subagent_definition_scope_key(
         vulcan_task_session::SubagentDefinitionScope::System => "system",
         vulcan_task_session::SubagentDefinitionScope::User => "user",
         vulcan_task_session::SubagentDefinitionScope::Package => "package",
+        vulcan_task_session::SubagentDefinitionScope::Plugin => "plugin",
     }
 }
 

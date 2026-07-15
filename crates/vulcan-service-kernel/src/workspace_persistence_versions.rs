@@ -708,7 +708,6 @@ pub(crate) fn store_and_emit_full_workbench_snapshot_for_cold_refresh(
         let system_plugin_catalog = guard
             .agent_runtime
             .as_ref()
-            .and_then(|runtime| runtime.luaskills_runtime.as_ref())
             .map(|runtime| runtime.system_plugin_runtime.snapshot());
         (
             live_context_budgets,
