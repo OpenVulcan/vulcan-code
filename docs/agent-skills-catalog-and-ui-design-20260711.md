@@ -291,29 +291,28 @@ allowed-tools: Bash(python:*) Read
 
 #### 第二层：包内 `vulcan.yaml`
 
-`vulcan.yaml` 升级为带版本的可选 VulcanCode 展示扩展：
+`vulcan.yaml` 当前使用 v3 的可选 VulcanCode 展示扩展：
 
 ```yaml
-schemaVersion: 2
+schema_version: 3
 interface:
-  displayName: "PDF Processing"
-  shortDescription: "Extract, fill, merge, and inspect PDFs"
-  iconSmall: "./assets/icon-small.svg"
-  iconLarge: "./assets/icon-large.png"
-  brandColor: "#DC2626"
+  display_name: "PDF Processing"
+  short_description: "Extract, fill, merge, and inspect PDFs"
+  emoji: "📄"
+  color: "#DC2626"
   locales:
     zh-CN:
-      displayName: "PDF 处理"
-      shortDescription: "提取、填写、合并与检查 PDF"
+      display_name: "PDF 处理"
+      short_description: "提取、填写、合并与检查 PDF"
 catalog:
-  categoryId: "documents"
+  category_id: "documents"
 origin:
   kind: "github"
   label: "example-org/skills"
   url: "https://github.com/example-org/skills/tree/main/pdf-processing"
 ```
 
-兼容期继续读取当前 snake_case 的 `interface` 字段，并在保存时统一写入正式 v2 格式。具体字段命名在实现前应结合仓库现有 YAML 习惯最终确认，不能同时长期维护两套写格式。
+当前实现只读取并写入上述 snake_case v3 字段；技能展示统一使用 `emoji` 与 `color`，不再加载技能包图片作为图标。
 
 #### 第三层：外部目录覆盖索引
 

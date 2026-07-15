@@ -1,0 +1,19 @@
+schema_version: 3
+interface:
+  display_name: "Code Humanizer"
+  short_description: "Remove structural AI-generated code slop without changing behavior"
+  emoji: "🧹"
+  color: "#0F766E"
+  locales:
+    zh-CN:
+      display_name: "代码人性化"
+      short_description: "在保持行为不变的前提下清理 AI 生成代码中的结构性冗余"
+catalog:
+  category_id: "engineering"
+  tags: ["code-quality", "refactoring", "ai-slop", "review"]
+origin:
+  kind: "github"
+  label: "LeonardNJU/code-humanizer"
+  url: "https://github.com/LeonardNJU/code-humanizer"
+  revision: "a75914b75417b1a3f5da1c2553ee8ad924c10b5e"
+  managed: true

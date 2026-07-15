@@ -80,10 +80,10 @@ Every SKILL.md consists of:
 
 - UI-facing metadata for skill lists and chips
 - Read references/vulcan_yaml.md before generating values and follow its descriptions and constraints.
-- Create: human-facing `display_name`, `short_description`, and optional icon fields by reading the skill
+- Create human-facing `display_name`, `short_description`, and optional `emoji` and `color` fields by reading the skill
 - Generate deterministically by passing the values as `--interface key=value` to `scripts/generate_vulcan_yaml.py` or `scripts/init_skill.py`
 - On updates: validate root-level `vulcan.yaml` still matches SKILL.md; regenerate if stale
-- Only include other optional interface fields (icons, brand color) if explicitly provided
+- Only include optional `emoji` and `color` fields when they are explicitly provided
 - See references/vulcan_yaml.md for field definitions and examples
 
 #### Bundled Resources (optional)
@@ -308,13 +308,13 @@ The script:
 
 - Creates the skill directory at the specified path
 - Generates a SKILL.md template with proper frontmatter and TODO placeholders
-- Creates root-level `vulcan.yaml` using agent-generated `display_name`, `short_description`, and optional icon fields passed via `--interface key=value`
+- Creates root-level `vulcan.yaml` using agent-generated `display_name`, `short_description`, and optional `emoji` and `color` fields passed via `--interface key=value`
 - Optionally creates resource directories based on `--resources`
 - Optionally adds example files when `--examples` is set
 
 After initialization, customize the SKILL.md and add resources as needed. If you used `--examples`, replace or delete placeholder files.
 
-Generate `display_name`, `short_description`, and optional icon fields by reading the skill, then pass them as `--interface key=value` to `init_skill.py` or regenerate with:
+Generate `display_name`, `short_description`, and optional `emoji` and `color` fields by reading the skill, then pass them as `--interface key=value` to `init_skill.py` or regenerate with:
 
 ```bash
 scripts/generate_vulcan_yaml.py <path/to/skill-folder> --interface key=value

@@ -101,8 +101,7 @@
 .skill-card,
 .skill-warning-row,
 .skill-meta-grid,
-.skill-tool-row > div,
-.agent-skill-title > div {
+.skill-tool-row > div {
   display: grid;
   gap: 6px;
 }
@@ -2008,35 +2007,6 @@
   color: var(--muted-foreground);
   font-size: 11px;
   text-align: right;
-}
-
-.agent-skill-title {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-}
-
-.agent-skill-icon {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--muted);
-  overflow: hidden;
-}
-
-.agent-skill-icon.fallback {
-  font-weight: 750;
-}
-
-.agent-skill-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 
 .agent-skill-detail-dialog {

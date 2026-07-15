@@ -74,17 +74,19 @@
 - 需要“可选中 / 可复制 / 只读”的 Markdown 预览时，优先使用 WebUI 可选择文本或只读编辑区承载，不要退回不可复制的普通展示文本。
 - 如果只是为了显示 Markdown 外观，但实际需求是“复制测试结果”，不要为了省事退回普通 `text`；这样会丢掉选择与复制能力。
 
-### 10. LuaSkills 0.4.3 对接约定
-- 当前仓库已经对齐 `luaskills = 0.4.3`，不要再按 `0.4.2` 的旧扁平参数推导逻辑修改宿主。
+### 10. LuaSkills 当前版本与对接约定
+- LuaSkills 版本判断必须先读取根 `Cargo.toml` 的 workspace dependency 与根 `Cargo.lock` 中 `name = "luaskills"` 的锁定项，不得依据本节标题、历史计划、完成文档或会话记录推断当前版本。
+- 截至 2026-07-15，当前仓库实际锁定 `luaskills = 0.5.2`；后续版本升级后必须同步更新本条，但任何任务仍应以 `Cargo.toml` 与 `Cargo.lock` 的实时内容为唯一事实来源。
+- 当前版本已经采用 `input_schema` 契约，不要再按早期版本的旧扁平参数推导逻辑修改宿主。
 - `LuaSkills` 工具参数 schema 当前应优先直接复用 `RuntimeEntryDescriptor.input_schema`；实现位于 `crates/vulcan-agent-runtime/src/luaskills_runtime.rs` 的 `luaskills_entry_args_schema`。
 - `LUASKILL_SID` 仍然是宿主管理字段，但处理方式是：
   - 面向模型的可见 schema 里隐藏该字段。
   - 调用执行前由宿主自动注入。
   - 如果 `input_schema.required` 包含该字段，隐藏时必须同步从 `required` 中移除。
 - `crates/vulcan-agent-runtime/src/tooling/bridge.rs` 中判断某个 skill 是否声明 `LUASKILL_SID` 时，优先看 `input_schema.properties`，只把旧版 `parameters` 作为回退。
-- 如果某个 skill 包本身还没升级到 `input_schema` / `input_schema_file`，即使宿主已经升级到 0.4.3，也拿不到完整 schema 能力；此时要去更新 skill 包本身，而不是继续在宿主里手搓特例 schema。
+- 如果某个 skill 包本身还没升级到 `input_schema` / `input_schema_file`，即使宿主使用当前 LuaSkills 版本，也拿不到完整 schema 能力；此时要去更新 skill 包本身，而不是继续在宿主里手搓特例 schema。
 - 当前会触发严格 schema 问题的典型 LuaSkills 技能有 `vulcan-codekit`、`vulcan-curl`、`vulcan-testkit`；排查时优先检查 skill 包是否提供完整 schema。
-- 0.4.3 新增的技能操作进度当前已经接到 WebUI / Service 链路：宿主通过 LuaSkills runtime callback 把事件写入运行时句柄队列，WebUI 按 service snapshot / event 更新展示。
+- LuaSkills 技能操作进度当前已经接到 WebUI / Service 链路：宿主通过 LuaSkills runtime callback 把事件写入运行时句柄队列，WebUI 按 service snapshot / event 更新展示。
 - 当前 WebUI 展示链路位于 `apps/vulcan-code-web/src/components/features/skills/` 与 service kernel 对应 LuaSkills snapshot：
   - 顶部 LuaSkills 面板会显示当前操作、阶段、百分比、字节进度、来源和消息。
   - 对应技能行会显示“安装中 / 更新中”这类紧凑徽标与当前阶段。

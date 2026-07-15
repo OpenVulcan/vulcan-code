@@ -357,6 +357,8 @@ fn loads_user_skill_over_system_skill_with_same_name() {
     assert!(catalog.source_record("package:demo").is_none());
 }
 
+/// Verifies bundled system skills, provenance metadata, emoji presentation, and idempotent installation.
+/// 验证内置系统技能、来源元数据、Emoji 展示与幂等安装行为。
 #[test]
 fn installs_embedded_system_prompt_skills_with_marker_skip() {
     let root = temp_dir().join(SYSTEM_SKILL_DIR_NAME);
@@ -364,6 +366,17 @@ fn installs_embedded_system_prompt_skills_with_marker_skip() {
         .expect("system skills should install");
     assert!(first.installed);
     assert!(root.join("skill-creator").join(SKILL_FILE_NAME).is_file());
+    let code_humanizer_file = root.join("code-humanizer").join(SKILL_FILE_NAME);
+    assert!(code_humanizer_file.is_file());
+    let code_humanizer =
+        parse_prompt_skill_file_with_scope(&code_humanizer_file, PromptSkillScope::System)
+            .expect("code-humanizer metadata should load");
+    assert_eq!(
+        code_humanizer.origin.url.as_deref(),
+        Some("https://github.com/LeonardNJU/code-humanizer")
+    );
+    assert_eq!(code_humanizer.interface.emoji.as_deref(), Some("🧹"));
+    assert_eq!(code_humanizer.resources.assets, 0);
 
     let second = install_embedded_system_prompt_skills_to_root(root)
         .expect("system skills should skip unchanged install");
